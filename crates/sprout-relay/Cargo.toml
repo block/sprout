@@ -1,0 +1,48 @@
+[package]
+name = "sprout-relay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WebSocket relay server for the Sprout communications platform"
+
+[[bin]]
+name = "sprout-relay"
+path = "src/main.rs"
+
+[dependencies]
+sprout-core = { workspace = true }
+sprout-db = { workspace = true }
+sprout-auth = { workspace = true }
+sprout-pubsub = { workspace = true }
+sprout-audit = { workspace = true }
+sprout-search = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+nostr = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+dashmap = { workspace = true }
+futures-util = { workspace = true }
+deadpool-redis = { workspace = true }
+redis = { workspace = true }
+sqlx = { workspace = true }
+base64 = "0.22"
+sprout-workflow = { workspace = true, features = ["reqwest"] }
+serde_yaml      = { workspace = true }
+sha2            = { workspace = true }
+hex             = { workspace = true }
+url             = { workspace = true }
+
+[dev-dependencies]
+sprout-core = { workspace = true, features = ["test-utils"] }

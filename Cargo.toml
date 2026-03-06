@@ -1,0 +1,104 @@
+[workspace]
+members = [
+    "crates/sprout-relay",
+    "crates/sprout-core",
+    "crates/sprout-db",
+    "crates/sprout-pubsub",
+    "crates/sprout-auth",
+    "crates/sprout-search",
+    "crates/sprout-audit",
+    "crates/sprout-mcp",
+    "crates/sprout-proxy",
+    "crates/sprout-huddle",
+    "crates/sprout-test-client",
+    "crates/sprout-admin",
+    "crates/sprout-workflow",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+repository = "https://github.com/sprout-rs/sprout"
+
+[workspace.dependencies]
+# Runtime
+tokio       = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal"] }
+tokio-util  = { version = "0.7", features = ["rt"] }
+
+# HTTP + WebSocket
+axum        = { version = "0.8", features = ["ws", "macros"] }
+tower       = { version = "0.5", features = ["timeout", "util"] }
+tower-http  = { version = "0.6", features = ["trace", "cors", "compression-gzip", "limit"] }
+
+# Database
+sqlx = { version = "0.8", features = [
+    "runtime-tokio-rustls", "mysql", "uuid", "chrono", "json"
+] }
+
+# Redis
+redis        = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+deadpool-redis = { version = "0.18", features = ["rt_tokio_1"] }
+
+# Nostr
+nostr = { version = "0.36" }
+
+# Serialization
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+serde_yaml  = "0.9"
+evalexpr    = "11"
+cron        = "0.12"
+# Observability
+tracing             = "0.1"
+tracing-subscriber  = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "2"
+anyhow    = "1"
+
+# Utilities
+uuid    = { version = "1", features = ["v4", "serde"] }
+chrono  = { version = "0.4", features = ["serde"] }
+
+# HTTP client (webhook delivery, Typesense indexing)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Cryptography
+sha2      = "0.10"
+hex       = "0.4"
+hmac      = "0.12"
+
+# Randomness
+rand = "0.8"
+
+# Concurrent data structures
+dashmap = "6"
+
+# JWT validation (Okta JWKS)
+jsonwebtoken = "9"
+
+# Async stream utilities
+futures-util = "0.3"
+
+# WebSocket client (test client)
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+url = "2"
+
+# MCP SDK
+rmcp = { version = "1.1.0", features = ["server", "transport-io", "macros"] }
+schemars = { version = "1", default-features = false }
+
+# Internal crates
+sprout-core = { path = "crates/sprout-core" }
+sprout-db = { path = "crates/sprout-db" }
+sprout-auth = { path = "crates/sprout-auth" }
+sprout-pubsub = { path = "crates/sprout-pubsub" }
+sprout-search = { path = "crates/sprout-search" }
+sprout-audit = { path = "crates/sprout-audit" }
+sprout-mcp = { path = "crates/sprout-mcp" }
+sprout-proxy = { path = "crates/sprout-proxy" }
+sprout-huddle = { path = "crates/sprout-huddle" }
+sprout-workflow = { path = "crates/sprout-workflow" }

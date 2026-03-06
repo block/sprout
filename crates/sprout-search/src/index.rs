@@ -1,0 +1,328 @@
+//! Event indexing — Nostr events → Typesense documents. Upsert semantics.
+
+use serde_json::{json, Value};
+use tracing::{debug, warn};
+
+use sprout_core::event::StoredEvent;
+
+use crate::error::SearchError;
+
+/// Converts a [`StoredEvent`] into a Typesense document JSON value.
+pub fn event_to_document(event: &StoredEvent) -> Result<Value, SearchError> {
+    let nostr_event = &event.event;
+
+    // Use ASCII unit separator (U+001F) as delimiter to avoid ambiguity with
+    // tag values that contain colons (e.g. URLs in "r" tags).
+    let tags_flat: Vec<String> = nostr_event
+        .tags
+        .iter()
+        .flat_map(|tag| {
+            let tag_vec = tag.as_slice();
+            if tag_vec.len() >= 2 {
+                vec![format!("{}\x1f{}", tag_vec[0], tag_vec[1])]
+            } else if tag_vec.len() == 1 {
+                vec![tag_vec[0].to_string()]
+            } else {
+                vec![]
+            }
+        })
+        .collect();
+
+    let channel_id = event.channel_id.as_ref().map(|id| id.to_string());
+
+    let doc = json!({
+        "id":         nostr_event.id.to_string(),
+        "content":    nostr_event.content.as_str(),
+        // Cast to i32 for Typesense schema (int32 field). nostr Kind is u16; all Sprout kinds fit in i32.
+        "kind":       nostr_event.kind.as_u16() as i32,
+        "pubkey":     nostr_event.pubkey.to_string(),
+        "channel_id": channel_id,
+        "created_at": nostr_event.created_at.as_u64() as i64,
+        "tags_flat":  tags_flat,
+    });
+
+    Ok(doc)
+}
+
+/// Indexes a single event via Typesense upsert.
+pub async fn index_event(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    collection_name: &str,
+    event: &StoredEvent,
+) -> Result<(), SearchError> {
+    let doc = event_to_document(event)?;
+    let url = format!(
+        "{}/collections/{}/documents?action=upsert",
+        base_url, collection_name
+    );
+
+    debug!(event_id = %event.event.id, collection = collection_name, "indexing event");
+
+    let resp = client
+        .post(&url)
+        .header("X-TYPESENSE-API-KEY", api_key)
+        .header("Content-Type", "application/json")
+        .json(&doc)
+        .send()
+        .await?;
+
+    let status = resp.status().as_u16();
+    if status == 200 || status == 201 {
+        Ok(())
+    } else {
+        let body = resp.text().await.unwrap_or_default();
+        Err(SearchError::Api { status, body })
+    }
+}
+
+/// Indexes a batch of events via Typesense JSONL import.
+pub async fn index_batch(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    collection_name: &str,
+    events: &[StoredEvent],
+) -> Result<usize, SearchError> {
+    if events.is_empty() {
+        return Ok(0);
+    }
+
+    let mut jsonl = String::new();
+    for event in events {
+        let doc = event_to_document(event)?;
+        jsonl.push_str(&serde_json::to_string(&doc)?);
+        jsonl.push('\n');
+    }
+
+    let url = format!(
+        "{}/collections/{}/documents/import?action=upsert",
+        base_url, collection_name
+    );
+
+    debug!(
+        count = events.len(),
+        collection = collection_name,
+        "batch indexing events"
+    );
+
+    let resp = client
+        .post(&url)
+        .header("X-TYPESENSE-API-KEY", api_key)
+        .header("Content-Type", "text/plain")
+        .body(jsonl)
+        .send()
+        .await?;
+
+    let status = resp.status().as_u16();
+    if status != 200 {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(SearchError::Api { status, body });
+    }
+
+    let body = resp.text().await.unwrap_or_default();
+    let mut succeeded = 0usize;
+    let mut failed = 0usize;
+
+    for line in body.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Value>(line) {
+            Ok(result) => {
+                if result["success"].as_bool().unwrap_or(false) {
+                    succeeded += 1;
+                } else {
+                    failed += 1;
+                    warn!(
+                        error = result["error"].as_str().unwrap_or("unknown"),
+                        "batch import document failure"
+                    );
+                }
+            }
+            Err(e) => {
+                warn!(line = line, error = %e, "could not parse batch import result line");
+                failed += 1;
+            }
+        }
+    }
+
+    if failed > 0 {
+        Err(SearchError::BatchPartial { succeeded, failed })
+    } else {
+        Ok(succeeded)
+    }
+}
+
+/// Validate that `event_id` is a 64-character lowercase hex string, as
+/// required by the Nostr protocol (SHA-256 of the serialised event).
+///
+/// Rejects the input early to avoid sending a malformed path segment to
+/// Typesense, which could otherwise produce confusing 404 or 400 responses,
+/// or — if the value contains `/` or `?` — accidentally hit a different API
+/// endpoint.
+fn validate_event_id(event_id: &str) -> Result<(), SearchError> {
+    if event_id.len() != 64 {
+        return Err(SearchError::InvalidEventId(format!(
+            "event_id must be 64 hex characters, got {} characters",
+            event_id.len()
+        )));
+    }
+    if !event_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(SearchError::InvalidEventId(
+            "event_id must contain only hex characters (0-9, a-f)".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Deletes an event from the index by event ID hex string.
+pub async fn delete_event(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    collection_name: &str,
+    event_id: &str,
+) -> Result<(), SearchError> {
+    validate_event_id(event_id)?;
+
+    let url = format!(
+        "{}/collections/{}/documents/{}",
+        base_url, collection_name, event_id
+    );
+
+    debug!(
+        event_id = event_id,
+        collection = collection_name,
+        "deleting event from index"
+    );
+
+    let resp = client
+        .delete(&url)
+        .header("X-TYPESENSE-API-KEY", api_key)
+        .send()
+        .await?;
+
+    match resp.status().as_u16() {
+        200 => Ok(()),
+        404 => {
+            debug!(
+                event_id = event_id,
+                "event not found in index (already deleted)"
+            );
+            Ok(())
+        }
+        status => {
+            let body = resp.text().await.unwrap_or_default();
+            Err(SearchError::Api { status, body })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nostr::{EventBuilder, Keys, Kind};
+    use sprout_core::event::StoredEvent;
+    use uuid::Uuid;
+
+    fn make_stored_event(content: &str, kind: Kind, channel_id: Option<Uuid>) -> StoredEvent {
+        let keys = Keys::generate();
+        let event = EventBuilder::new(kind, content, [])
+            .sign_with_keys(&keys)
+            .expect("signing failed");
+        StoredEvent::new(event, channel_id)
+    }
+
+    #[test]
+    fn document_fields_correct() {
+        let channel_id = Uuid::new_v4();
+        let stored = make_stored_event("hello world", Kind::TextNote, Some(channel_id));
+        let doc = event_to_document(&stored).unwrap();
+
+        assert_eq!(doc["id"].as_str().unwrap(), stored.event.id.to_string());
+        assert_eq!(doc["content"].as_str().unwrap(), "hello world");
+        assert_eq!(doc["kind"].as_i64().unwrap(), 1i64);
+        assert_eq!(doc["channel_id"].as_str().unwrap(), channel_id.to_string());
+        assert!(doc["created_at"].as_i64().is_some());
+        assert!(doc["channel_id"].is_string());
+    }
+
+    #[test]
+    fn document_no_channel_id_is_null() {
+        let stored = make_stored_event("no channel", Kind::TextNote, None);
+        let doc = event_to_document(&stored).unwrap();
+        assert!(doc["channel_id"].is_null());
+    }
+
+    #[test]
+    fn tag_flattening_uses_unit_separator() {
+        let keys = Keys::generate();
+        let tag = nostr::Tag::parse(&["e", "abc123def456"]).expect("tag parse");
+        let event = EventBuilder::new(Kind::TextNote, "tagged", [tag])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        let stored = StoredEvent::new(event, None);
+        let doc = event_to_document(&stored).unwrap();
+
+        let tags_flat = doc["tags_flat"].as_array().unwrap();
+        assert!(!tags_flat.is_empty());
+        // Must use \x1f, not colon, to avoid ambiguity with values containing colons.
+        let entry = tags_flat[0].as_str().unwrap();
+        assert!(
+            entry.contains('\x1f'),
+            "expected unit separator in tag entry: {entry:?}"
+        );
+        assert!(
+            !entry.contains(':') || entry.starts_with("http"),
+            "colon used as delimiter"
+        );
+        assert!(entry.contains("abc123def456"));
+    }
+
+    #[test]
+    fn delete_event_rejects_invalid_id() {
+        // Too short
+        assert!(matches!(
+            validate_event_id("abc123"),
+            Err(SearchError::InvalidEventId(_))
+        ));
+        // Right length but non-hex character
+        let bad = "g".repeat(64);
+        assert!(matches!(
+            validate_event_id(&bad),
+            Err(SearchError::InvalidEventId(_))
+        ));
+        // Valid 64-char hex
+        let good = "a".repeat(64);
+        assert!(validate_event_id(&good).is_ok());
+        // Uppercase hex should also be accepted
+        let upper = "A".repeat(64);
+        assert!(validate_event_id(&upper).is_ok());
+        // Path injection attempt
+        assert!(matches!(
+            validate_event_id("../admin"),
+            Err(SearchError::InvalidEventId(_))
+        ));
+    }
+
+    #[test]
+    fn tag_with_colon_value_not_ambiguous() {
+        let keys = Keys::generate();
+        // "r" tag with a URL value containing colons
+        let tag = nostr::Tag::parse(&["r", "wss://relay.example.com"]).expect("tag parse");
+        let event = EventBuilder::new(Kind::TextNote, "relay ref", [tag])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        let stored = StoredEvent::new(event, None);
+        let doc = event_to_document(&stored).unwrap();
+
+        let tags_flat = doc["tags_flat"].as_array().unwrap();
+        let entry = tags_flat[0].as_str().unwrap();
+        // With \x1f delimiter, splitting on \x1f gives exactly ["r", "wss://relay.example.com"]
+        let parts: Vec<&str> = entry.splitn(2, '\x1f').collect();
+        assert_eq!(parts[0], "r");
+        assert_eq!(parts[1], "wss://relay.example.com");
+    }
+}
