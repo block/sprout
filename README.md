@@ -1,4 +1,4 @@
-# $PROJECT_NAME README
+# sprout README
 
 Congrats, project leads! You got a new project to grow!
 

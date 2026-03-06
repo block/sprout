@@ -9,7 +9,7 @@
 # The format is described: https://github.blog/2017-07-06-introducing-code-owners/
 
 # These owners will be the default owners for everything in the repo.
-*       @GITHUB_USER_NAME_GOES_HERE
+*       @wesbillman
 
 
 # -----------------------------------------------
