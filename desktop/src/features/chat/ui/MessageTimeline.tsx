@@ -1,12 +1,16 @@
-import type { Message } from "@/features/chat/data/chatData";
+import type { TimelineMessage } from "@/features/messages/types";
 import { cn } from "@/shared/lib/cn";
 import { Separator } from "@/shared/ui/separator";
+import { Skeleton } from "@/shared/ui/skeleton";
 
 type MessageTimelineProps = {
-  messages: Message[];
+  messages: TimelineMessage[];
+  isLoading?: boolean;
+  emptyTitle?: string;
+  emptyDescription?: string;
 };
 
-function MessageRow({ message }: { message: Message }) {
+function MessageRow({ message }: { message: TimelineMessage }) {
   const initials = message.author
     .split(" ")
     .map((part) => part[0])
@@ -34,6 +38,11 @@ function MessageRow({ message }: { message: Message }) {
             {message.role}
           </p>
           <p className="text-sm text-muted-foreground">{message.time}</p>
+          {message.pending ? (
+            <p className="text-xs font-medium uppercase tracking-[0.2em] text-primary/80">
+              Sending
+            </p>
+          ) : null}
         </div>
         <p className="max-w-3xl break-words text-sm leading-7 text-foreground/90">
           {message.body}
@@ -43,7 +52,31 @@ function MessageRow({ message }: { message: Message }) {
   );
 }
 
-export function MessageTimeline({ messages }: MessageTimelineProps) {
+function TimelineSkeleton() {
+  const skeletonRows = ["first", "second", "third", "fourth"];
+
+  return (
+    <>
+      {skeletonRows.map((row) => (
+        <div className="flex gap-4" key={row}>
+          <Skeleton className="h-11 w-11 rounded-2xl" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-4 w-full max-w-2xl" />
+            <Skeleton className="h-4 w-full max-w-xl" />
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+export function MessageTimeline({
+  messages,
+  isLoading = false,
+  emptyTitle = "No messages yet",
+  emptyDescription = "Send the first message to start the thread.",
+}: MessageTimelineProps) {
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-6 sm:px-6">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
@@ -55,12 +88,24 @@ export function MessageTimeline({ messages }: MessageTimelineProps) {
           <Separator className="flex-1" />
         </div>
 
-        {messages.map((message) => (
-          <MessageRow
-            key={`${message.author}-${message.time}`}
-            message={message}
-          />
-        ))}
+        {isLoading ? <TimelineSkeleton /> : null}
+
+        {!isLoading && messages.length === 0 ? (
+          <div className="rounded-3xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center shadow-sm">
+            <p className="text-base font-semibold tracking-tight">
+              {emptyTitle}
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {emptyDescription}
+            </p>
+          </div>
+        ) : null}
+
+        {!isLoading
+          ? messages.map((message) => (
+              <MessageRow key={message.id} message={message} />
+            ))
+          : null}
       </div>
     </div>
   );
