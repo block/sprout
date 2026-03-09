@@ -317,6 +317,215 @@ async fn test_trigger_workflow_and_check_run() {
     assert_eq!(del_status, 204, "cleanup DELETE should return 204");
 }
 
+// ── Test 5: Event-driven workflow execution ───────────────────────────────────
+
+/// Send a kind:40001 message to a channel that has a `message_posted` workflow.
+/// Verify that the workflow engine creates a run record.
+///
+/// NOTE: Uses `SEEDED_PUBKEY` for workflow ownership due to the FK constraint
+/// on `workflows.owner_pubkey`. The WebSocket sender uses fresh keys.
+#[tokio::test]
+#[ignore = "requires running relay"]
+async fn test_event_driven_workflow_execution() {
+    use nostr::{Kind, Tag};
+    use sprout_test_client::SproutTestClient;
+
+    let client = http_client();
+    let pubkey_hex: &str = SEEDED_PUBKEY;
+    let base = relay_http_url();
+
+    // ── Step 1: Create a message_posted workflow in the general channel ───────
+    let workflow_yaml = r#"name: event-driven-e2e-test
+description: E2E test for message_posted trigger
+trigger:
+  on: message_posted
+steps:
+  - id: step1
+    name: Acknowledge
+    action: send_message
+    text: "Workflow fired by event"
+"#;
+    let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, workflow_yaml).await;
+    let workflow_id = created["id"]
+        .as_str()
+        .expect("created workflow must have 'id'")
+        .to_string();
+
+    // ── Step 2: Connect via WebSocket and send a kind:40001 message ───────────
+    // Use fresh keys for the sender (channel is open, no auth required to post).
+    let sender_keys = Keys::generate();
+    let mut ws_client = SproutTestClient::connect(&relay_ws_url(), &sender_keys)
+        .await
+        .expect("ws connect failed");
+
+    let e_tag = Tag::parse(&["e", CHANNEL_GENERAL]).expect("tag parse failed");
+    let event = nostr::EventBuilder::new(
+        Kind::Custom(40001),
+        "trigger this workflow please",
+        [e_tag],
+    )
+    .sign_with_keys(&sender_keys)
+    .expect("sign event");
+
+    ws_client.send_event(event).await.expect("send event failed");
+
+    // ── Step 3: Wait for the workflow engine to process the event ─────────────
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // ── Step 4: Check that a run was created ──────────────────────────────────
+    let runs_url = format!("{base}/api/workflows/{workflow_id}/runs");
+    let runs_resp = client
+        .get(&runs_url)
+        .header("X-Pubkey", pubkey_hex)
+        .send()
+        .await
+        .expect("GET runs failed");
+    assert_eq!(runs_resp.status(), 200, "GET runs must return 200");
+
+    let runs: Vec<serde_json::Value> = runs_resp.json().await.expect("runs must be JSON array");
+    assert!(
+        !runs.is_empty(),
+        "expected at least one workflow run after sending kind:40001 event"
+    );
+
+    let run = &runs[0];
+    assert!(run.get("id").is_some(), "run missing 'id'");
+    assert!(run.get("workflow_id").is_some(), "run missing 'workflow_id'");
+    assert!(run.get("status").is_some(), "run missing 'status'");
+
+    let status = run["status"].as_str().unwrap_or("");
+    assert!(
+        matches!(status, "pending" | "running" | "completed" | "failed"),
+        "run status '{status}' is not a recognized value"
+    );
+
+    // Clean up.
+    let _ = ws_client.disconnect().await;
+    let del_status = delete_workflow(&client, &base, pubkey_hex, &workflow_id).await;
+    assert_eq!(del_status, 204, "cleanup DELETE should return 204");
+}
+
+// ── Test 6: Event-driven workflow with filter ─────────────────────────────────
+
+/// Verify that a `message_posted` workflow with a filter expression only fires
+/// when the filter matches.
+///
+/// 1. Create a workflow with `filter: "str_contains(trigger_text, \"P1\")"`.
+/// 2. Send a message that does NOT contain "P1" — expect zero runs.
+/// 3. Send a message that DOES contain "P1" — expect one run.
+///
+/// NOTE: Filter evaluation is wired in WF-07. Until then, all matched-kind
+/// events fire the workflow regardless of filter. This test documents the
+/// intended behaviour so it can be un-skipped once WF-07 lands.
+#[tokio::test]
+#[ignore = "requires running relay with WF-07 filter evaluation"]
+async fn test_event_driven_workflow_with_filter() {
+    use nostr::{Kind, Tag};
+    use sprout_test_client::SproutTestClient;
+
+    let client = http_client();
+    let pubkey_hex: &str = SEEDED_PUBKEY;
+    let base = relay_http_url();
+
+    // ── Step 1: Create a filtered message_posted workflow ─────────────────────
+    let workflow_yaml = r#"name: filtered-event-e2e-test
+description: E2E test for message_posted trigger with filter
+trigger:
+  on: message_posted
+  filter: "str_contains(trigger_text, \"P1\")"
+steps:
+  - id: step1
+    name: Notify
+    action: send_message
+    text: "P1 incident detected"
+"#;
+    let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, workflow_yaml).await;
+    let workflow_id = created["id"]
+        .as_str()
+        .expect("created workflow must have 'id'")
+        .to_string();
+
+    let sender_keys = Keys::generate();
+    let mut ws_client = SproutTestClient::connect(&relay_ws_url(), &sender_keys)
+        .await
+        .expect("ws connect failed");
+
+    // ── Step 2: Send a message that does NOT match the filter ─────────────────
+    let e_tag = Tag::parse(&["e", CHANNEL_GENERAL]).expect("tag parse failed");
+    let non_matching = nostr::EventBuilder::new(
+        Kind::Custom(40001),
+        "this is a routine update, nothing urgent",
+        [e_tag.clone()],
+    )
+    .sign_with_keys(&sender_keys)
+    .expect("sign event");
+
+    ws_client
+        .send_event(non_matching)
+        .await
+        .expect("send non-matching event failed");
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let runs_url = format!("{base}/api/workflows/{workflow_id}/runs");
+    let runs_resp = client
+        .get(&runs_url)
+        .header("X-Pubkey", pubkey_hex)
+        .send()
+        .await
+        .expect("GET runs (non-matching) failed");
+    assert_eq!(runs_resp.status(), 200);
+    let runs_after_non_match: Vec<serde_json::Value> =
+        runs_resp.json().await.expect("runs must be JSON array");
+    assert!(
+        runs_after_non_match.is_empty(),
+        "non-matching message must NOT trigger a workflow run, but got {} run(s)",
+        runs_after_non_match.len()
+    );
+
+    // ── Step 3: Send a message that DOES match the filter ─────────────────────
+    let matching = nostr::EventBuilder::new(
+        Kind::Custom(40001),
+        "P1 alert: database is down",
+        [e_tag],
+    )
+    .sign_with_keys(&sender_keys)
+    .expect("sign event");
+
+    ws_client
+        .send_event(matching)
+        .await
+        .expect("send matching event failed");
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let runs_resp2 = client
+        .get(&runs_url)
+        .header("X-Pubkey", pubkey_hex)
+        .send()
+        .await
+        .expect("GET runs (matching) failed");
+    assert_eq!(runs_resp2.status(), 200);
+    let runs_after_match: Vec<serde_json::Value> =
+        runs_resp2.json().await.expect("runs must be JSON array");
+    assert!(
+        !runs_after_match.is_empty(),
+        "matching message must trigger a workflow run"
+    );
+
+    let run = &runs_after_match[0];
+    let status = run["status"].as_str().unwrap_or("");
+    assert!(
+        matches!(status, "pending" | "running" | "completed" | "failed"),
+        "run status '{status}' is not a recognized value"
+    );
+
+    // Clean up.
+    let _ = ws_client.disconnect().await;
+    let del_status = delete_workflow(&client, &base, pubkey_hex, &workflow_id).await;
+    assert_eq!(del_status, 204, "cleanup DELETE should return 204");
+}
+
 // ── Test 4: Workflow CRUD (update + delete) ───────────────────────────────────
 
 /// Full CRUD lifecycle:

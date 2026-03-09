@@ -2848,6 +2848,7 @@ dependencies = [
  "chrono",
  "cron",
  "evalexpr",
+ "nostr",
  "reqwest",
  "serde",
  "serde_json",

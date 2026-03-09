@@ -15,7 +15,7 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! let engine = WorkflowEngine::new(db, WorkflowConfig::default());
+//! let engine = Arc::new(WorkflowEngine::new(db, WorkflowConfig::default()));
 //!
 //! // Parse and validate a YAML definition.
 //! let (def, json) = WorkflowEngine::parse_yaml(yaml_str)?;
@@ -35,9 +35,11 @@ pub use error::WorkflowError;
 pub use executor::ExecutionResult;
 pub use schema::{ActionDef, Step, TriggerDef, WorkflowDef};
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use sprout_core::kind::{is_workflow_execution_kind, event_kind_u32};
+use sprout_core::kind::{is_workflow_execution_kind, event_kind_u32, KIND_REACTION};
+use sprout_db::workflow::RunStatus;
 use sprout_db::Db;
 use tokio::sync::Semaphore;
 
@@ -96,8 +98,18 @@ impl WorkflowEngine {
     /// Checks whether any workflow in the event's channel has a matching trigger.
     /// Workflow execution events (kinds 46001–46012) are excluded to prevent loops.
     ///
-    /// Full trigger matching and execution spawning is wired in WF-07/08.
-    pub async fn on_event(&self, event: &sprout_core::StoredEvent) -> Result<(), WorkflowError> {
+    /// For each matching workflow:
+    /// 1. Evaluates the trigger filter expression (if present).
+    /// 2. Builds a [`executor::TriggerContext`] from the event.
+    /// 3. Creates a `workflow_run` row in the DB (status: `pending`).
+    /// 4. Spawns an async task to execute the run via [`executor::execute_run`].
+    ///
+    /// The method takes `self: &Arc<Self>` so that the spawned task can hold a
+    /// clone of the `Arc` without requiring `'static` on `&self`.
+    pub async fn on_event(
+        self: &Arc<Self>,
+        event: &sprout_core::StoredEvent,
+    ) -> Result<(), WorkflowError> {
         let Some(channel_id) = event.channel_id else {
             return Ok(());
         };
@@ -121,6 +133,10 @@ impl WorkflowEngine {
             return Ok(());
         }
 
+        // Build TriggerContext once — all matching workflows in this channel
+        // share the same triggering event.
+        let trigger_ctx = build_trigger_context(event);
+
         for workflow in &workflows {
             // Parse the stored JSON definition.
             let def: WorkflowDef = match serde_json::from_value(workflow.definition.clone()) {
@@ -143,13 +159,198 @@ impl WorkflowEngine {
                 continue;
             }
 
-            // TODO (WF-07): evaluate trigger filter expression, create workflow_run
-            // in DB, build TriggerContext from event, spawn execute_run().
+            // Evaluate the trigger filter expression (MessagePosted only).
+            // A filter that evaluates to false skips this workflow entirely.
+            if let TriggerDef::MessagePosted { filter: Some(ref expr) } = def.trigger {
+                match executor::evaluate_condition(expr, &trigger_ctx, &HashMap::new()).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        tracing::debug!(
+                            workflow_id = %workflow.id,
+                            "Trigger filter evaluated false — skipping workflow"
+                        );
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            workflow_id = %workflow.id,
+                            "Trigger filter error: {e} — skipping workflow"
+                        );
+                        continue;
+                    }
+                }
+            }
+
+            // Serialize TriggerContext for DB storage.
+            let trigger_ctx_json = match serde_json::to_value(&trigger_ctx) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        workflow_id = %workflow.id,
+                        "Failed to serialize TriggerContext: {e}"
+                    );
+                    continue;
+                }
+            };
+
+            // Create the workflow_run row (status: pending).
+            let trigger_event_id_bytes = event.event.id.as_bytes().to_vec();
+            let run_id = match self
+                .db
+                .create_workflow_run(
+                    workflow.id,
+                    Some(&trigger_event_id_bytes),
+                    Some(&trigger_ctx_json),
+                )
+                .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!(
+                        workflow_id = %workflow.id,
+                        "Failed to create workflow_run: {e}"
+                    );
+                    continue;
+                }
+            };
+
             tracing::debug!(
                 workflow_id = %workflow.id,
-                event_kind = kind_u32,
-                "Workflow trigger matched — execution wired in WF-07"
+                run_id = %run_id,
+                "Workflow triggered — spawning execution"
             );
+
+            // Spawn execution. Clone Arc so the task owns its references.
+            let engine = Arc::clone(self);
+            let def_clone = def.clone();
+            let ctx_clone = trigger_ctx.clone();
+
+            tokio::spawn(async move {
+                // Acquire a concurrency permit before executing.
+                let _permit = match engine.run_semaphore.acquire().await {
+                    Ok(p) => p,
+                    Err(_) => {
+                        tracing::error!(run_id = %run_id, "Semaphore closed — aborting run");
+                        let _ = engine
+                            .db
+                            .update_workflow_run(
+                                run_id,
+                                RunStatus::Failed,
+                                0,
+                                &serde_json::json!([]),
+                                Some("Semaphore closed"),
+                            )
+                            .await;
+                        return;
+                    }
+                };
+
+                // Transition to Running.
+                if let Err(e) = engine
+                    .db
+                    .update_workflow_run(
+                        run_id,
+                        RunStatus::Running,
+                        0,
+                        &serde_json::json!([]),
+                        None,
+                    )
+                    .await
+                {
+                    tracing::error!(run_id = %run_id, "Failed to set run to Running: {e}");
+                    // Mark as Failed so the run doesn't stay in `pending` forever.
+                    let _ = engine
+                        .db
+                        .update_workflow_run(
+                            run_id,
+                            RunStatus::Failed,
+                            0,
+                            &serde_json::json!([]),
+                            Some(&format!("Failed to transition to Running: {e}")),
+                        )
+                        .await;
+                    return;
+                }
+
+                match executor::execute_run(&engine, run_id, &def_clone, &ctx_clone).await {
+                    Ok(result) => {
+                        let trace_json = match serde_json::to_value(&result.trace) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::warn!(run_id = %run_id, "Failed to serialize trace: {e}");
+                                serde_json::json!([])
+                            }
+                        };
+                        let step_count = result.step_index as i32;
+
+                        if let Some(token) = result.approval_token {
+                            // Run suspended awaiting human approval.
+                            tracing::info!(
+                                run_id = %run_id,
+                                step_index = result.step_index,
+                                "Workflow suspended — awaiting approval (token: <redacted>)"
+                            );
+                            // Store the approval record and update run status.
+                            // Full approval wiring (emit kind:46010) is deferred to WF-08.
+                            let _ = token; // token used by WF-08 approval handler
+                            if let Err(e) = engine
+                                .db
+                                .update_workflow_run(
+                                    run_id,
+                                    RunStatus::WaitingApproval,
+                                    step_count,
+                                    &trace_json,
+                                    None,
+                                )
+                                .await
+                            {
+                                tracing::error!(
+                                    run_id = %run_id,
+                                    "Failed to update run to WaitingApproval: {e}"
+                                );
+                            }
+                        } else {
+                            // Normal completion.
+                            tracing::info!(run_id = %run_id, "Workflow run completed");
+                            if let Err(e) = engine
+                                .db
+                                .update_workflow_run(
+                                    run_id,
+                                    RunStatus::Completed,
+                                    step_count,
+                                    &trace_json,
+                                    None,
+                                )
+                                .await
+                            {
+                                tracing::error!(
+                                    run_id = %run_id,
+                                    "Failed to update run to Completed: {e}"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(run_id = %run_id, "Workflow run failed: {e}");
+                        if let Err(db_err) = engine
+                            .db
+                            .update_workflow_run(
+                                run_id,
+                                RunStatus::Failed,
+                                0,
+                                &serde_json::json!([]),
+                                Some(&e.to_string()),
+                            )
+                            .await
+                        {
+                            tracing::error!(
+                                run_id = %run_id,
+                                "Failed to update run to Failed: {db_err}"
+                            );
+                        }
+                    }
+                }
+            });
         }
 
         Ok(())
@@ -157,17 +358,83 @@ impl WorkflowEngine {
 
     /// Background task for scheduled (cron) triggers.
     ///
-    /// Runs indefinitely. Checks cron schedules every minute and fires
-    /// matching workflows.
-    ///
-    /// TODO (WF-07): implement cron schedule matching and execution.
+    /// Runs indefinitely. Cron trigger matching requires a cross-channel
+    /// workflow query (`list_all_enabled_workflows`) that doesn't exist yet.
+    /// Interval triggers need last-run tracking. Both are deferred to WF-09.
     pub async fn run(&self) {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            // TODO (WF-07): load schedule-triggered workflows, check cron expressions,
-            // spawn executions for any that are due.
-            tracing::debug!("WorkflowEngine::run tick — cron check (not yet implemented)");
+            // Cron trigger matching requires a cross-channel workflow query
+            // (list_all_enabled_workflows) that doesn't exist yet. Interval
+            // triggers need last-run tracking. Both are deferred to WF-09.
+            tracing::trace!("WorkflowEngine::run tick — cron/interval triggers not yet wired");
         }
+    }
+}
+
+// ── Trigger context builder ───────────────────────────────────────────────────
+
+/// Build a [`executor::TriggerContext`] from a [`sprout_core::StoredEvent`].
+///
+/// - `text` — event content (message body or reaction emoji character)
+/// - `author` — pubkey hex string
+/// - `channel_id` — channel UUID as string (empty if no channel scope)
+/// - `timestamp` — Unix timestamp as string
+/// - `emoji` — for `KIND_REACTION` events, the content is the emoji; otherwise empty
+/// - `message_id` — for reactions, the target message's event ID (from `e` tag);
+///   for all other events, the event's own ID
+pub fn build_trigger_context(event: &sprout_core::StoredEvent) -> executor::TriggerContext {
+    let kind_u32 = event_kind_u32(&event.event);
+    let content = event.event.content.clone();
+
+    // For reaction events (NIP-25), the content field holds the emoji character
+    // or shortcode (e.g. "👍", "+", "-"). Expose it as `emoji`.
+    let emoji = if kind_u32 == KIND_REACTION {
+        content.clone()
+    } else {
+        String::new()
+    };
+
+    // For reactions (NIP-25), `message_id` should be the target message, not
+    // the reaction event itself. NIP-25 stores the target in an `e` tag whose
+    // value is a 64-char hex event ID (not a UUID channel reference).
+    let message_id = if kind_u32 == KIND_REACTION {
+        event
+            .event
+            .tags
+            .iter()
+            .find_map(|tag| {
+                let key = tag.kind().to_string();
+                if key == "e" {
+                    tag.content().and_then(|v| {
+                        // Distinguish hex event IDs (64 chars) from UUID channel refs.
+                        if v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()) {
+                            Some(v.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                }
+            })
+            // Fallback to the reaction event's own ID if no valid `e` tag found.
+            .unwrap_or_else(|| event.event.id.to_hex())
+    } else {
+        event.event.id.to_hex()
+    };
+
+    executor::TriggerContext {
+        text: content,
+        author: event.event.pubkey.to_hex(),
+        channel_id: event
+            .channel_id
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+        timestamp: event.event.created_at.as_u64().to_string(),
+        emoji,
+        message_id,
+        webhook_fields: HashMap::new(),
     }
 }
 
@@ -364,5 +631,110 @@ steps:
         };
         assert_eq!(cfg.max_concurrent, 50);
         assert_eq!(cfg.default_timeout_secs, 600);
+    }
+
+    // ── build_trigger_context ─────────────────────────────────────────────────
+
+    fn make_message_event() -> sprout_core::StoredEvent {
+        use nostr::{EventBuilder, Keys, Kind};
+        use uuid::Uuid;
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(40001), "hello world", [])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        sprout_core::StoredEvent::new(event, Some(Uuid::new_v4()))
+    }
+
+    /// Create a reaction event with an `e` tag pointing to a target message.
+    fn make_reaction_event() -> (sprout_core::StoredEvent, String) {
+        use nostr::{EventBuilder, Keys, Kind, Tag};
+        use uuid::Uuid;
+        let keys = Keys::generate();
+        // Create a dummy target message ID (64-char hex).
+        let target_keys = Keys::generate();
+        let target_event = EventBuilder::new(Kind::Custom(40001), "target msg", [])
+            .sign_with_keys(&target_keys)
+            .expect("sign target");
+        let target_id_hex = target_event.id.to_hex();
+        // NIP-25: reaction references the target via an `e` tag.
+        let e_tag = Tag::parse(&["e", &target_id_hex]).expect("tag parse");
+        let event = EventBuilder::new(Kind::Reaction, "👍", [e_tag])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        (sprout_core::StoredEvent::new(event, Some(Uuid::new_v4())), target_id_hex)
+    }
+
+    #[test]
+    fn build_trigger_context_message_event() {
+        let stored = make_message_event();
+        let ctx = build_trigger_context(&stored);
+
+        assert_eq!(ctx.text, "hello world");
+        assert_eq!(ctx.author, stored.event.pubkey.to_hex());
+        assert_eq!(
+            ctx.channel_id,
+            stored.channel_id.unwrap().to_string()
+        );
+        assert_eq!(ctx.timestamp, stored.event.created_at.as_u64().to_string());
+        assert_eq!(ctx.message_id, stored.event.id.to_hex());
+        // Non-reaction events have empty emoji.
+        assert_eq!(ctx.emoji, "");
+        assert!(ctx.webhook_fields.is_empty());
+    }
+
+    #[test]
+    fn build_trigger_context_reaction_event() {
+        let (stored, target_id_hex) = make_reaction_event();
+        let ctx = build_trigger_context(&stored);
+
+        // For reactions, content IS the emoji.
+        assert_eq!(ctx.text, "👍");
+        assert_eq!(ctx.emoji, "👍");
+        assert_eq!(ctx.author, stored.event.pubkey.to_hex());
+        // message_id should be the TARGET message, not the reaction event itself.
+        assert_eq!(ctx.message_id, target_id_hex);
+        assert_ne!(ctx.message_id, stored.event.id.to_hex());
+        assert!(ctx.webhook_fields.is_empty());
+    }
+
+    #[test]
+    fn build_trigger_context_no_channel_id() {
+        use nostr::{EventBuilder, Keys, Kind};
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(40001), "msg", [])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        // channel_id = None (global/DM event)
+        let stored = sprout_core::StoredEvent::new(event, None);
+        let ctx = build_trigger_context(&stored);
+
+        assert_eq!(ctx.channel_id, "");
+        assert_eq!(ctx.text, "msg");
+    }
+
+    #[test]
+    fn build_trigger_context_author_is_hex_pubkey() {
+        let stored = make_message_event();
+        let ctx = build_trigger_context(&stored);
+        // Pubkey hex is 64 lowercase hex characters.
+        assert_eq!(ctx.author.len(), 64);
+        assert!(ctx.author.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn build_trigger_context_message_id_is_hex() {
+        let stored = make_message_event();
+        let ctx = build_trigger_context(&stored);
+        // Event ID hex is 64 lowercase hex characters.
+        assert_eq!(ctx.message_id.len(), 64);
+        assert!(ctx.message_id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn build_trigger_context_timestamp_is_numeric_string() {
+        let stored = make_message_event();
+        let ctx = build_trigger_context(&stored);
+        // Timestamp must parse as a u64.
+        ctx.timestamp.parse::<u64>().expect("timestamp should be a u64 string");
     }
 }
