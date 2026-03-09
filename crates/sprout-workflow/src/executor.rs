@@ -842,20 +842,31 @@ pub struct ExecutionResult {
 ///
 /// Enforces `engine.config.max_concurrent` via a semaphore — returns
 /// [`WorkflowError::CapacityExceeded`] immediately if all permits are taken.
+/// Transitions the run to `Running` after acquiring a permit.
 pub async fn execute_run(
     engine: &WorkflowEngine,
     run_id: Uuid,
     def: &WorkflowDef,
     trigger_ctx: &TriggerContext,
 ) -> Result<ExecutionResult, WorkflowError> {
-    // Acquire a concurrency permit. Waits if all permits are in use rather
-    // than failing immediately — event-driven and webhook triggers queue up
-    // during load spikes instead of returning errors.
+    // Fail fast if all concurrency permits are in use — no queuing.
     let _permit = engine
         .run_semaphore
-        .acquire()
-        .await
+        .try_acquire()
         .map_err(|_| WorkflowError::CapacityExceeded)?;
+
+    // Mark run as Running now that we have a permit.
+    engine
+        .db
+        .update_workflow_run(
+            run_id,
+            sprout_db::workflow::RunStatus::Running,
+            0,
+            &serde_json::json!([]),
+            None,
+        )
+        .await
+        .map_err(WorkflowError::from)?;
 
     execute_from_step(engine, run_id, def, trigger_ctx, 0, None).await
 }

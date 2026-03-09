@@ -88,6 +88,15 @@ pub async fn create_workflow(
             )
         })?;
 
+    // Reject schedule/interval triggers until the cron scheduler is implemented.
+    // Accepting them would create workflows that silently never execute.
+    if matches!(def.trigger, sprout_workflow::TriggerDef::Schedule { .. }) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "schedule and interval triggers are not yet supported — use message_posted, reaction_added, or webhook triggers",
+        ));
+    }
+
     validate_webhook_urls(&def)
         .await
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &e))?;
@@ -200,6 +209,15 @@ pub async fn update_workflow(
                 &format!("invalid workflow YAML: {e}"),
             )
         })?;
+
+    // Reject schedule/interval triggers until the cron scheduler is implemented.
+    // Accepting them would create workflows that silently never execute.
+    if matches!(def.trigger, sprout_workflow::TriggerDef::Schedule { .. }) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "schedule and interval triggers are not yet supported — use message_posted, reaction_added, or webhook triggers",
+        ));
+    }
 
     validate_webhook_urls(&def)
         .await

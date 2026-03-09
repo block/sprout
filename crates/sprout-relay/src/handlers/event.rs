@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use hex;
 use tracing::{debug, error, info, warn};
 
 use nostr::Event;
@@ -114,6 +115,14 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     }
 
     let channel_id = extract_channel_id(&event);
+
+    // For NIP-25 reactions (kind 7), derive channel from the target event if
+    // no explicit channel tag was provided.
+    let channel_id = if channel_id.is_none() && event.kind == nostr::Kind::Reaction {
+        derive_reaction_channel(&state.db, &event).await
+    } else {
+        channel_id
+    };
 
     if let Some(ch_id) = channel_id {
         if let Err(msg) =
@@ -344,6 +353,72 @@ async fn check_channel_membership(
                 false,
                 "error: database error",
             ))
+        }
+    }
+}
+
+/// For NIP-25 reactions, derive the channel_id from the target event.
+///
+/// Reactions reference their target via an `e` tag containing a 64-hex event ID.
+/// We look up that event in the DB to find its channel_id.
+async fn derive_reaction_channel(db: &sprout_db::Db, event: &nostr::Event) -> Option<uuid::Uuid> {
+    // Find the target event ID from NIP-25 `e` tags.
+    // Per NIP-25, the last `e` tag is the target (in case of threading).
+    let target_hex = event.tags.iter().rev().find_map(|tag| {
+        let key = tag.kind().to_string();
+        if key == "e" {
+            tag.content().map(|s| s.to_string())
+        } else {
+            None
+        }
+    })?;
+
+    // Must be a 64-char hex string (event ID), not a UUID
+    if target_hex.len() != 64 {
+        return None;
+    }
+
+    // Decode hex to bytes for DB lookup
+    let id_bytes = match hex::decode(&target_hex) {
+        Ok(b) if b.len() == 32 => b,
+        _ => return None,
+    };
+
+    // Look up the target event to get its channel_id
+    match db.get_event_by_id(&id_bytes).await {
+        Ok(Some(target_event)) => {
+            if let Some(ch_id) = target_event.channel_id {
+                tracing::debug!(
+                    reaction_id = %event.id.to_hex(),
+                    target_id = %target_hex,
+                    channel_id = %ch_id,
+                    "Derived reaction channel from target event"
+                );
+                Some(ch_id)
+            } else {
+                tracing::debug!(
+                    reaction_id = %event.id.to_hex(),
+                    target_id = %target_hex,
+                    "Target event has no channel — reaction will be global"
+                );
+                None
+            }
+        }
+        Ok(None) => {
+            tracing::debug!(
+                reaction_id = %event.id.to_hex(),
+                target_id = %target_hex,
+                "Target event not found — reaction will be global"
+            );
+            None
+        }
+        Err(e) => {
+            tracing::warn!(
+                reaction_id = %event.id.to_hex(),
+                target_id = %target_hex,
+                "Failed to look up target event: {e}"
+            );
+            None
         }
     }
 }

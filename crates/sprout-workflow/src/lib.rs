@@ -111,6 +111,11 @@ impl WorkflowEngine {
         event: &sprout_core::StoredEvent,
     ) -> Result<(), WorkflowError> {
         let Some(channel_id) = event.channel_id else {
+            tracing::debug!(
+                event_id = %event.event.id.to_hex(),
+                kind = event_kind_u32(&event.event),
+                "Skipping workflow trigger — event has no channel_id"
+            );
             return Ok(());
         };
 
@@ -248,33 +253,6 @@ impl WorkflowEngine {
             let ctx_clone = trigger_ctx.clone();
 
             tokio::spawn(async move {
-                // Transition to Running.
-                if let Err(e) = engine
-                    .db
-                    .update_workflow_run(
-                        run_id,
-                        RunStatus::Running,
-                        0,
-                        &serde_json::json!([]),
-                        None,
-                    )
-                    .await
-                {
-                    tracing::error!(run_id = %run_id, "Failed to set run to Running: {e}");
-                    // Mark as Failed so the run doesn't stay in `pending` forever.
-                    let _ = engine
-                        .db
-                        .update_workflow_run(
-                            run_id,
-                            RunStatus::Failed,
-                            0,
-                            &serde_json::json!([]),
-                            Some(&format!("Failed to transition to Running: {e}")),
-                        )
-                        .await;
-                    return;
-                }
-
                 match executor::execute_run(&engine, run_id, &def_clone, &ctx_clone).await {
                     Ok(result) => {
                         let trace_json = match serde_json::to_value(&result.trace) {
@@ -286,32 +264,24 @@ impl WorkflowEngine {
                         };
                         let step_count = result.step_index as i32;
 
-                        if let Some(token) = result.approval_token {
-                            // Run suspended awaiting human approval.
-                            tracing::info!(
+                        if result.approval_token.is_some() {
+                            // Approval gates are not yet implemented (WF-08).
+                            // Fail explicitly rather than creating unreachable WaitingApproval rows.
+                            tracing::warn!(
                                 run_id = %run_id,
                                 step_index = result.step_index,
-                                "Workflow suspended — awaiting approval (token: <redacted>)"
+                                "Workflow hit approval gate — not yet implemented, marking as failed"
                             );
-                            // Store the approval record and update run status.
-                            // Full approval wiring (emit kind:46010) is deferred to WF-08.
-                            let _ = token; // token used by WF-08 approval handler
-                            if let Err(e) = engine
+                            let _ = engine
                                 .db
                                 .update_workflow_run(
                                     run_id,
-                                    RunStatus::WaitingApproval,
+                                    RunStatus::Failed,
                                     step_count,
                                     &trace_json,
-                                    None,
+                                    Some("approval gates not yet implemented — see WF-08"),
                                 )
-                                .await
-                            {
-                                tracing::error!(
-                                    run_id = %run_id,
-                                    "Failed to update run to WaitingApproval: {e}"
-                                );
-                            }
+                                .await;
                         } else {
                             // Normal completion.
                             tracing::info!(run_id = %run_id, "Workflow run completed");
