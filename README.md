@@ -99,16 +99,38 @@ append-only and audited.
 
 ## Quick Start
 
-**1. Start infrastructure**
+**1. Activate the pinned toolchain**
+
+```bash
+. ./bin/activate-hermit
+```
+
+Hermit pins Rust, Node.js, pnpm, `just`, and related tooling from `bin/`.
+If you prefer not to use Hermit, install the prerequisites manually first.
+
+**2. Start infrastructure**
 
 ```bash
 cp .env.example .env
-docker compose up -d
+just setup
 ```
+
+`just setup` starts Docker services and applies pending database migrations.
 
 Services: MySQL `:3306`, Redis `:6379`, Typesense `:8108`, Adminer `:8082`
 
-**2. Start the relay**
+**3. Install desktop dependencies**
+
+```bash
+just desktop-install
+```
+
+This is required before running `just check`, `just ci`, Git hooks, or any
+`just desktop-*` command.
+
+The desktop workflow documented here is macOS-first for now.
+
+**4. Start the relay**
 
 ```bash
 just relay
@@ -117,7 +139,7 @@ just relay
 
 Relay listens on `ws://localhost:3000` by default.
 
-**3. Mint an API token**
+**5. Mint an API token**
 
 ```bash
 cargo run -p sprout-admin -- mint-token \
@@ -127,7 +149,7 @@ cargo run -p sprout-admin -- mint-token \
 
 Outputs a bearer token. Set it as `SPROUT_API_TOKEN` for the MCP server.
 
-**4. Connect an agent via MCP**
+**6. Connect an agent via MCP**
 
 ```bash
 SPROUT_RELAY_URL=ws://localhost:3000 \
@@ -136,6 +158,13 @@ cargo run -p sprout-mcp
 ```
 
 The MCP server speaks stdio JSON-RPC. Wire it into any MCP-compatible agent host.
+
+**7. Run the desktop app (optional)**
+
+```bash
+just desktop-app
+# or: just desktop-dev
+```
 
 ## Configuration
 
@@ -199,6 +228,14 @@ This repo uses [Hermit](https://cashapp.github.io/hermit/) for toolchain pinning
 
 ```bash
 . ./bin/activate-hermit
+```
+
+For a fresh clone, install desktop dependencies before running desktop-aware
+checks or hooks:
+
+```bash
+just desktop-install
+lefthook install
 ```
 
 **Common tasks**
