@@ -1,5 +1,6 @@
 import type { TimelineMessage } from "@/features/messages/types";
 import { cn } from "@/shared/lib/cn";
+import { Markdown } from "@/shared/ui/markdown";
 import { Separator } from "@/shared/ui/separator";
 import { Skeleton } from "@/shared/ui/skeleton";
 
@@ -31,7 +32,7 @@ function MessageRow({ message }: { message: TimelineMessage }) {
         {initials}
       </div>
 
-      <div className="min-w-0 flex-1 space-y-1">
+      <div className="min-w-0 flex-1 space-y-2">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h3 className="font-semibold tracking-tight">{message.author}</h3>
           <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
@@ -44,9 +45,7 @@ function MessageRow({ message }: { message: TimelineMessage }) {
             </p>
           ) : null}
         </div>
-        <p className="max-w-3xl break-words text-sm leading-7 text-foreground/90">
-          {message.body}
-        </p>
+        <Markdown className="max-w-3xl" content={message.body} />
       </div>
     </article>
   );
