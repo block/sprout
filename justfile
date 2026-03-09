@@ -111,13 +111,17 @@ relay:
 relay-release:
     cargo run -p sprout-relay --release
 
+# Run the desktop Tauri app in dev mode
+dev *ARGS:
+    cd {{desktop_dir}} && pnpm tauri dev {{ARGS}}
+
 # Run the desktop frontend dev server
 desktop-dev:
     cd {{desktop_dir}} && pnpm dev
 
 # Run the desktop Tauri app
-desktop-app:
-    cd {{desktop_dir}} && pnpm tauri dev
+desktop-app *ARGS:
+    cd {{desktop_dir}} && pnpm tauri dev {{ARGS}}
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 

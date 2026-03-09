@@ -8,22 +8,59 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
+  rust-lint:
+    name: Rust Lint
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+      - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+      - name: Format check
+        run: just fmt-check
+      - name: Clippy
+        run: just clippy
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+      - name: Unit tests
+        run: just test-unit
+
+  desktop:
+    name: Desktop
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
         with:
-          components: rustfmt, clippy
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: desktop/pnpm-lock.yaml
-      - run: sudo apt-get update
-      - run: |
-          sudo apt-get install -y \
+          workspaces: desktop/src-tauri
+      - name: Install Tauri dependencies (Linux)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+          sudo apt-get install -y --no-install-recommends \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o DPkg::Lock::Timeout=120 \
             build-essential \
             curl \
             file \
@@ -35,13 +72,23 @@ jobs:
             libxdo-dev \
             patchelf \
             wget
-      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
-      - run: corepack enable
-      - run: corepack prepare pnpm@10.12.1 --activate
-      - run: cargo install just --locked --version 1.46.0
-      - run: just desktop-install-ci
-      - run: just ci
-      - run: cargo install cargo-audit --locked
-      - run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0384
-      - run: cargo install cargo-deny --locked
-      - run: cargo deny check
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+      - name: Desktop lint and format
+        run: just desktop-check
+      - name: Desktop build
+        run: just desktop-build
+      - name: Desktop Tauri check
+        run: just desktop-tauri-check
+
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+      - name: Dependency policy
+        run: cargo-deny check
