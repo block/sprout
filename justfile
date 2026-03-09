@@ -2,6 +2,9 @@
 
 set dotenv-load := true
 
+desktop_dir := "desktop"
+desktop_tauri_manifest := "desktop/src-tauri/Cargo.toml"
+
 # List all available tasks
 default:
     @just --list
@@ -31,16 +34,16 @@ logs *ARGS:
 
 # ─── Build & Check ───────────────────────────────────────────────────────────
 
-# Build the entire workspace
+# Build the Rust workspace
 build:
     cargo build --workspace
 
-# Build in release mode
+# Build the Rust workspace in release mode
 build-release:
     cargo build --workspace --release
 
-# Run all lints and formatting checks
-check: fmt-check clippy
+# Run repo lint and formatting checks
+check: fmt-check clippy desktop-check
 
 # Format all Rust code
 fmt:
@@ -54,8 +57,35 @@ fmt-check:
 clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
+# Install desktop JS dependencies
+desktop-install:
+    cd {{desktop_dir}} && pnpm install
+
+# Install desktop JS dependencies reproducibly for CI
+desktop-install-ci:
+    cd {{desktop_dir}} && pnpm install --frozen-lockfile
+
+# Run desktop lint and format checks
+desktop-check:
+    cd {{desktop_dir}} && pnpm check
+
+# Run desktop TypeScript checks
+desktop-typecheck:
+    cd {{desktop_dir}} && pnpm typecheck
+
+# Build desktop frontend assets
+desktop-build:
+    cd {{desktop_dir}} && pnpm build
+
+# Check the desktop Tauri Rust crate compiles
+desktop-tauri-check:
+    cargo check --manifest-path {{desktop_tauri_manifest}}
+
+# Run desktop checks suitable for CI / pre-push
+desktop-ci: desktop-check desktop-build desktop-tauri-check
+
 # Run all checks suitable for CI / pre-push (no infra needed)
-ci: fmt-check clippy test-unit
+ci: check test-unit desktop-build desktop-tauri-check
 
 # ─── Test ─────────────────────────────────────────────────────────────────────
 
@@ -81,6 +111,18 @@ relay:
 relay-release:
     cargo run -p sprout-relay --release
 
+# Run the desktop Tauri app in dev mode
+dev *ARGS:
+    cd {{desktop_dir}} && pnpm tauri dev {{ARGS}}
+
+# Run the desktop frontend dev server
+desktop-dev:
+    cd {{desktop_dir}} && pnpm dev
+
+# Run the desktop Tauri app
+desktop-app *ARGS:
+    cd {{desktop_dir}} && pnpm tauri dev {{ARGS}}
+
 # ─── Database ─────────────────────────────────────────────────────────────────
 
 # Run database migrations (uses sqlx CLI if available, falls back to docker exec)
@@ -105,6 +147,6 @@ migrate:
 clean:
     cargo clean
 
-# Check the workspace compiles without producing binaries
+# Check the Rust workspace compiles without producing binaries
 check-compile:
     cargo check --workspace --all-targets

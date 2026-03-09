@@ -14,6 +14,7 @@ members = [
     "crates/sprout-admin",
     "crates/sprout-workflow",
 ]
+exclude = ["desktop/src-tauri"]
 resolver = "2"
 
 [workspace.package]

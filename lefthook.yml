@@ -1,0 +1,22 @@
+pre-commit:
+  commands:
+    rust-fmt:
+      run: just fmt-check
+    desktop-check:
+      run: just desktop-check
+
+pre-push:
+  parallel: true
+  commands:
+    rust-fmt:
+      run: just fmt-check
+    rust-clippy:
+      run: just clippy
+    rust-tests:
+      run: just test-unit
+    desktop-check:
+      run: just desktop-check
+    desktop-build:
+      run: just desktop-build
+    desktop-tauri-check:
+      run: just desktop-tauri-check

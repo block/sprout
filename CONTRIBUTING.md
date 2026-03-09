@@ -39,8 +39,11 @@ unacceptable behavior to **conduct@sprout-relay.org**.
 | Tool | Version | Notes |
 |------|---------|-------|
 | Rust | 1.88+ | Install via [rustup](https://rustup.rs/) |
+| Node.js | 24+ | Required for desktop app commands and `just ci` |
+| pnpm | 10+ | Required for desktop app commands and `just ci` |
 | Docker | 24+ | For MySQL, Redis, Typesense |
 | `just` | latest | Task runner — `cargo install just` |
+| `lefthook` | latest | Optional; run `lefthook install` for local Git hooks |
 | `sqlx-cli` | latest | Optional; `just migrate` falls back to `docker exec` |
 
 This repo uses [Hermit](https://cashapp.github.io/hermit/) for toolchain
@@ -68,6 +71,9 @@ cp .env.example .env
 
 # 4. Start infrastructure + run migrations
 just setup
+
+# 5. Install Git hooks (optional, recommended)
+lefthook install
 ```
 
 `just setup` starts Docker services (MySQL on `:3306`, Redis on `:6379`,
@@ -134,7 +140,7 @@ Before opening a PR, run the full CI gate locally:
 
 ```bash
 just ci
-# Runs: fmt-check + clippy + unit tests
+# Runs: check + unit tests + desktop build + Tauri check
 ```
 
 This is the same check that runs in CI. PRs that fail `just ci` will not be

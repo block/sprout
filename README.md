@@ -193,7 +193,7 @@ Set `SPROUT_PRIVATE_KEY` (nsec format) to use a persistent identity.
 
 ## Development
 
-**Prerequisites:** Rust 1.88+, Docker, [`just`](https://github.com/casey/just)
+**Prerequisites:** Rust 1.88+, Docker, Node.js 24+, pnpm 10+, [`just`](https://github.com/casey/just)
 
 This repo uses [Hermit](https://cashapp.github.io/hermit/) for toolchain pinning. Activate with:
 
@@ -206,11 +206,15 @@ This repo uses [Hermit](https://cashapp.github.io/hermit/) for toolchain pinning
 ```bash
 just setup          # Start Docker services + run migrations
 just relay          # Run the relay (dev mode)
-just build          # Build entire workspace
-just check          # fmt-check + clippy
+just build          # Build the Rust workspace
+just desktop-install # Install desktop dependencies
+just desktop-dev    # Run the desktop web UI only
+just desktop-app    # Run the Tauri desktop app
+just desktop-ci     # Desktop check + build + Tauri Rust check
+just check          # Rust fmt/clippy + desktop check
 just test-unit      # Unit tests (no infra required)
 just test           # All tests (starts services if needed)
-just ci             # fmt-check + clippy + unit tests (CI gate)
+just ci             # check + unit tests + desktop build + Tauri check
 just migrate        # Run pending migrations
 just down           # Stop Docker services (keep data)
 just reset          # ⚠️  Wipe all data and recreate environment
