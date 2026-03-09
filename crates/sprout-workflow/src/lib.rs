@@ -159,6 +159,22 @@ impl WorkflowEngine {
                 continue;
             }
 
+            // Enforce reaction emoji filter: if the workflow specifies a specific
+            // emoji, skip events whose content doesn't match. NIP-25 stores the
+            // emoji character (or shortcode) in the event content field.
+            if let TriggerDef::ReactionAdded { emoji: Some(ref expected) } = def.trigger {
+                let actual = &trigger_ctx.emoji;
+                if actual != expected {
+                    tracing::debug!(
+                        workflow_id = %workflow.id,
+                        expected_emoji = %expected,
+                        actual_emoji = %actual,
+                        "Reaction emoji mismatch — skipping workflow"
+                    );
+                    continue;
+                }
+            }
+
             // Evaluate the trigger filter expression (MessagePosted only).
             // A filter that evaluates to false skips this workflow entirely.
             if let TriggerDef::MessagePosted { filter: Some(ref expr) } = def.trigger {
@@ -226,25 +242,6 @@ impl WorkflowEngine {
             let ctx_clone = trigger_ctx.clone();
 
             tokio::spawn(async move {
-                // Acquire a concurrency permit before executing.
-                let _permit = match engine.run_semaphore.acquire().await {
-                    Ok(p) => p,
-                    Err(_) => {
-                        tracing::error!(run_id = %run_id, "Semaphore closed — aborting run");
-                        let _ = engine
-                            .db
-                            .update_workflow_run(
-                                run_id,
-                                RunStatus::Failed,
-                                0,
-                                &serde_json::json!([]),
-                                Some("Semaphore closed"),
-                            )
-                            .await;
-                        return;
-                    }
-                };
-
                 // Transition to Running.
                 if let Err(e) = engine
                     .db

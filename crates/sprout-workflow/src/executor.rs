@@ -640,13 +640,17 @@ pub(crate) fn parse_duration_secs(duration: &str) -> Result<u64, WorkflowError> 
         let hours: u64 = n.trim().parse().map_err(|_| {
             WorkflowError::InvalidDefinition(format!("invalid duration: {duration}"))
         })?;
-        return Ok(hours * 3600);
+        return hours.checked_mul(3600).ok_or_else(|| {
+            WorkflowError::InvalidDefinition(format!("duration overflow: {duration}"))
+        });
     }
     if let Some(n) = duration.strip_suffix('m') {
         let mins: u64 = n.trim().parse().map_err(|_| {
             WorkflowError::InvalidDefinition(format!("invalid duration: {duration}"))
         })?;
-        return Ok(mins * 60);
+        return mins.checked_mul(60).ok_or_else(|| {
+            WorkflowError::InvalidDefinition(format!("duration overflow: {duration}"))
+        });
     }
     if let Some(n) = duration.strip_suffix('s') {
         let secs: u64 = n.trim().parse().map_err(|_| {
@@ -844,11 +848,13 @@ pub async fn execute_run(
     def: &WorkflowDef,
     trigger_ctx: &TriggerContext,
 ) -> Result<ExecutionResult, WorkflowError> {
-    // Acquire a concurrency permit. `try_acquire` is non-blocking — if all
-    // permits are in use we return CapacityExceeded rather than queuing.
+    // Acquire a concurrency permit. Waits if all permits are in use rather
+    // than failing immediately — event-driven and webhook triggers queue up
+    // during load spikes instead of returning errors.
     let _permit = engine
         .run_semaphore
-        .try_acquire()
+        .acquire()
+        .await
         .map_err(|_| WorkflowError::CapacityExceeded)?;
 
     execute_from_step(engine, run_id, def, trigger_ctx, 0, None).await
