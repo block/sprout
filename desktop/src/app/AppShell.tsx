@@ -5,14 +5,14 @@ import {
   useChannelsQuery,
   useSelectedChannel,
 } from "@/features/channels/hooks";
-import { MessageComposer } from "@/features/chat/ui/MessageComposer";
-import { MessageTimeline } from "@/features/chat/ui/MessageTimeline";
 import {
   useChannelMessagesQuery,
   useChannelSubscription,
   useSendMessageMutation,
 } from "@/features/messages/hooks";
 import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
+import { MessageComposer } from "@/features/messages/ui/MessageComposer";
+import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { SidebarInset, SidebarProvider } from "@/shared/ui/sidebar";
