@@ -1,0 +1,33 @@
+[package]
+name = "sprout-test-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Integration test client and E2E test suite for Sprout"
+
+[dependencies]
+sprout-core = { workspace = true }
+sprout-mcp = { workspace = true }
+nostr = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true }
+
+[[bin]]
+name = "sprout-test-cli"
+path = "src/main.rs"

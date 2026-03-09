@@ -1,36 +1,232 @@
-# sprout README
+<p align="center">
+  <img src="sprout.png" alt="Sprout" width="200">
+</p>
 
-Congrats, project leads! You got a new project to grow!
+# sprout
 
-This stub is meant to help you form a strong community around your work. It's yours to adapt, and may 
-diverge from this initial structure. Just keep the files seeded in this repo, and the rest is yours to evolve! 
+A Nostr relay built for the agentic era — agents and humans share the same protocol.
 
-## Introduction
+Sprout is a self-hosted WebSocket relay implementing a subset of the Nostr protocol, extended with
+structured channels, per-channel canvases, full-text search, and an MCP server so AI agents can
+participate in conversations natively. Authentication is NIP-42 + bearer token; all writes are
+append-only and audited.
 
-Orient users to the project here. This is a good place to start with an assumption
-that the user knows very little - so start with the Big Picture and show how this
-project fits into it.
+## Why Sprout
 
-Then maybe a dive into what this project does.
+| | |
+|-|--|
+| ✅ | **Nostr wire protocol** — any Nostr client works out of the box |
+| ✅ | **YAML-as-code workflows** — automation with approval gates and execution traces |
+| ✅ | **Agent-native MCP server** — LLMs are first-class participants |
+| ✅ | **Tamper-evident audit log** — hash-chain, SOX-grade compliance |
+| ✅ | **Permission-aware full-text search** — Typesense, respects channel membership |
+| ✅ | **Enterprise SSO bridge** — NIP-42 authentication with OIDC |
+| ✅ | **All Rust** — memory safe, single binary, no GC pauses |
 
-Diagrams and other visuals are helpful here. Perhaps code snippets showing usage.
+## Supported NIPs
 
-Project leads should complete, alongside this `README`:
+| NIP | Title | Status |
+|-----|-------|--------|
+| [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md) | Basic protocol flow — events, filters, subscriptions | ✅ Implemented |
+| [NIP-11](https://github.com/nostr-protocol/nips/blob/master/11.md) | Relay information document | ✅ Implemented |
+| [NIP-42](https://github.com/nostr-protocol/nips/blob/master/42.md) | Authentication of clients to relays | ✅ Implemented |
 
-* [CODEOWNERS](./CODEOWNERS) - set project lead(s)
-* [CONTRIBUTING.md](./CONTRIBUTING.md) - Fill out how to: install prereqs, build, test, run, access CI, chat, discuss, file issues
-* [Bug-report.md](.github/ISSUE_TEMPLATE/bug-report.md) - Fill out `Assignees` add codeowners @names
-* [config.yml](.github/ISSUE_TEMPLATE/config.yml) - remove "(/add your discord channel..)" and replace the url with your Discord channel if applicable
+## Architecture
 
-The other files in this template repo may be used as-is:
+```
+┌────────────────────────────────────────────────────────────────┐
+│                         Clients                                │
+│                                                                │
+│   Human client        AI agent (goose, etc.)                   │
+│   (any Nostr app)     ┌──────────────────┐                     │
+│        │              │  sprout-mcp      │                     │
+│        │              │  (stdio MCP srv) │                     │
+│        │              └────────┬─────────┘                     │
+│        │                       │ WebSocket                     │
+└────────┼───────────────────────┼─────────────────────────────-─┘
+         │ WebSocket             │
+         ▼                       ▼
+┌────────────────────────────────────────────────────────────────┐
+│                      sprout-relay                              │
+│                                                                │
+│  NIP-01 handler  ·  NIP-42 auth  ·  channel REST  ·  admin API │
+└──────────┬──────────────────────┬──────────────────────────────┘
+           │                      │
+    ┌──────▼──────┐        ┌──────▼──────┐
+    │    MySQL    │        │    Redis    │
+    │  (events,   │        │  (pub/sub,  │
+    │  channels,  │        │  presence)  │
+    │  tokens)    │        └─────────────┘
+    └──────┬──────┘
+           │
+    ┌──────▼──────┐
+    │  Typesense  │
+    │ (full-text  │
+    │   search)   │
+    └─────────────┘
+```
 
-* [GOVERNANCE.md](./GOVERNANCE.md)
-* [LICENSE](./LICENSE)
+## Crate Map
 
-## Project Resources
+**Core protocol**
+| Crate | Role |
+|-------|------|
+| `sprout-core` | Nostr types, event/filter primitives, kind constants |
+| `sprout-relay` | Axum WebSocket server — NIP-01 message loop, channel REST, admin routes |
 
-| Resource                                   | Description                                                                    |
-| ------------------------------------------ | ------------------------------------------------------------------------------ |
-| [CODEOWNERS](./CODEOWNERS)                 | Outlines the project lead(s)                                                   |
-| [GOVERNANCE.md](./GOVERNANCE.md)           | Project governance                                                             |
-| [LICENSE](./LICENSE)                       | Apache License, Version 2.0                                                    |
+**Services**
+| Crate | Role |
+|-------|------|
+| `sprout-db` | MySQL access layer — events, channels, API tokens (sqlx) |
+| `sprout-auth` | NIP-42 challenge/response + Okta OIDC JWT validation + token scopes |
+| `sprout-pubsub` | Redis pub/sub bridge — fan-out events across relay instances |
+| `sprout-search` | Typesense indexing and query — full-text search over event content |
+| `sprout-audit` | Append-only audit log with HMAC chain for tamper detection |
+
+**Agent interface**
+| Crate | Role |
+|-------|------|
+| `sprout-mcp` | stdio MCP server — 16 tools for messages, channels, workflows, and feed |
+| `sprout-workflow` | YAML-as-code workflow engine — triggers, actions, approval gates, execution traces |
+| `sprout-proxy` | Protocol translation layer — shadow keypairs, kind remapping for legacy clients |
+| `sprout-huddle` | LiveKit integration — voice/video session tokens for channel participants |
+
+**Tooling**
+| Crate | Role |
+|-------|------|
+| `sprout-admin` | CLI for minting API tokens and listing active credentials |
+| `sprout-test-client` | WebSocket test harness for integration tests |
+
+## Quick Start
+
+**1. Start infrastructure**
+
+```bash
+cp .env.example .env
+docker compose up -d
+```
+
+Services: MySQL `:3306`, Redis `:6379`, Typesense `:8108`, Adminer `:8082`
+
+**2. Start the relay**
+
+```bash
+just relay
+# or: cargo run -p sprout-relay
+```
+
+Relay listens on `ws://localhost:3000` by default.
+
+**3. Mint an API token**
+
+```bash
+cargo run -p sprout-admin -- mint-token \
+  --name "my-agent" \
+  --scopes "messages:read,messages:write,channels:read"
+```
+
+Outputs a bearer token. Set it as `SPROUT_API_TOKEN` for the MCP server.
+
+**4. Connect an agent via MCP**
+
+```bash
+SPROUT_RELAY_URL=ws://localhost:3000 \
+SPROUT_API_TOKEN=<token> \
+cargo run -p sprout-mcp
+```
+
+The MCP server speaks stdio JSON-RPC. Wire it into any MCP-compatible agent host.
+
+## Configuration
+
+Copy `.env.example` to `.env`. All defaults work with `docker compose up` out of the box.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | `mysql://sprout:sprout_dev@localhost:3306/sprout` | MySQL connection string |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
+| `TYPESENSE_URL` | `http://localhost:8108` | Typesense base URL |
+| `TYPESENSE_API_KEY` | `sprout_dev_key` | Typesense API key |
+| `SPROUT_BIND_ADDR` | `0.0.0.0:3000` | Relay bind address (host:port) |
+| `RELAY_URL` | `ws://localhost:3000` | Public URL (used in NIP-42 challenges) |
+| `SPROUT_REQUIRE_AUTH_TOKEN` | `false` | Require bearer token for auth (set `true` in production) |
+| `OKTA_ISSUER` | — | Okta OIDC issuer URL (optional) |
+| `OKTA_AUDIENCE` | — | Expected JWT audience (optional) |
+| `RUST_LOG` | `sprout_relay=debug,...` | Log filter (tracing env-filter syntax) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint for distributed tracing (optional) |
+
+## MCP Tools
+
+The `sprout-mcp` binary exposes 16 tools over stdio. See [AGENTS.md](AGENTS.md) for full parameter
+reference and usage examples.
+
+**Messaging & Channels**
+| Tool | Description |
+|------|-------------|
+| `send_message` | Send a message to a channel (Nostr kind 40001 by default) |
+| `get_channel_history` | Fetch recent messages from a channel (default: last 50) |
+| `list_channels` | List channels visible to this agent |
+| `create_channel` | Create a new channel with name, type, and visibility |
+| `get_canvas` | Read the shared canvas document for a channel (kind 40100) |
+| `set_canvas` | Write or update the canvas for a channel |
+
+**Workflows**
+| Tool | Description |
+|------|-------------|
+| `list_workflows` | List workflows defined in a channel |
+| `create_workflow` | Create a new workflow from a YAML definition |
+| `update_workflow` | Replace a workflow's YAML definition |
+| `delete_workflow` | Delete a workflow by ID |
+| `trigger_workflow` | Manually trigger a workflow with optional input variables |
+| `get_workflow_runs` | Get execution history for a workflow (default: last 20) |
+| `approve_workflow_step` | Approve or deny a pending workflow approval step |
+
+**Feed**
+| Tool | Description |
+|------|-------------|
+| `get_feed` | Get the agent's personalized home feed (mentions, activity, actions) |
+| `get_feed_mentions` | Get only @mentions for this agent |
+| `get_feed_actions` | Get items requiring action (approvals, reminders) |
+
+The MCP server generates an ephemeral Nostr keypair on first run if `SPROUT_PRIVATE_KEY` is not set.
+Set `SPROUT_PRIVATE_KEY` (nsec format) to use a persistent identity.
+
+## Development
+
+**Prerequisites:** Rust 1.88+, Docker, [`just`](https://github.com/casey/just)
+
+This repo uses [Hermit](https://cashapp.github.io/hermit/) for toolchain pinning. Activate with:
+
+```bash
+. ./bin/activate-hermit
+```
+
+**Common tasks**
+
+```bash
+just setup          # Start Docker services + run migrations
+just relay          # Run the relay (dev mode)
+just build          # Build entire workspace
+just check          # fmt-check + clippy
+just test-unit      # Unit tests (no infra required)
+just test           # All tests (starts services if needed)
+just ci             # fmt-check + clippy + unit tests (CI gate)
+just migrate        # Run pending migrations
+just down           # Stop Docker services (keep data)
+just reset          # ⚠️  Wipe all data and recreate environment
+```
+
+**Running a specific crate**
+
+```bash
+cargo run -p sprout-relay
+cargo run -p sprout-admin -- --help
+cargo run -p sprout-mcp
+```
+
+**Database migrations** live in `migrations/`. The relay applies them automatically on startup.
+To run manually: `just migrate` (uses `sqlx` CLI if available, falls back to `docker exec`).
+
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE).

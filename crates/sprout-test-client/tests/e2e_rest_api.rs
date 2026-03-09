@@ -1,0 +1,709 @@
+//! E2E tests for the Sprout REST API.
+//!
+//! These tests require a running relay instance with `require_auth_token=false`
+//! (dev mode). By default they are marked `#[ignore]` so that `cargo test`
+//! does not fail in CI when the relay is not available.
+//!
+//! # Running
+//!
+//! Start the relay, then run:
+//!
+//! ```text
+//! RELAY_URL=ws://localhost:3001 cargo test -p sprout-test-client --test e2e_rest_api -- --ignored
+//! ```
+//!
+//! # Auth
+//!
+//! In dev mode (`require_auth_token=false`) the relay accepts an
+//! `X-Pubkey: <hex>` header as authentication. Tests generate fresh
+//! [`nostr::Keys`] per test and pass the hex-encoded public key.
+//!
+//! # Channel setup
+//!
+//! The relay does not expose a REST endpoint to create channels — channels are
+//! created via the DB (seeded at startup). Tests use the pre-seeded open
+//! channels (`general`, `agents`, `projects`, etc.) for read operations and
+//! send messages via WebSocket to set up search / feed data.
+
+use std::time::Duration;
+
+use nostr::{Keys, Kind, Tag};
+use reqwest::Client;
+use sprout_test_client::SproutTestClient;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// WebSocket relay URL (e.g. `ws://localhost:3001`).
+fn relay_ws_url() -> String {
+    std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3001".to_string())
+}
+
+/// HTTP base URL derived from the WebSocket URL.
+fn relay_http_url() -> String {
+    relay_ws_url()
+        .replace("wss://", "https://")
+        .replace("ws://", "http://")
+}
+
+/// Build a `reqwest::Client` with a short timeout.
+fn http_client() -> Client {
+    Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("failed to build HTTP client")
+}
+
+/// Make an authenticated GET request using the `X-Pubkey` dev-mode header.
+async fn authed_get(client: &Client, url: &str, pubkey_hex: &str) -> reqwest::Response {
+    client
+        .get(url)
+        .header("X-Pubkey", pubkey_hex)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("HTTP GET {url} failed: {e}"))
+}
+
+/// Known open channel IDs seeded in the dev database.
+///
+/// These are stable across relay restarts because they are inserted with
+/// explicit UUIDs in the seed migration.
+const CHANNEL_GENERAL: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
+const CHANNEL_PROJECTS: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2";
+
+// ── Channel tests ─────────────────────────────────────────────────────────────
+
+/// GET /api/channels returns a non-empty list with the expected fields.
+#[tokio::test]
+#[ignore]
+async fn test_list_channels_returns_expected_fields() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let url = format!("{}/api/channels", relay_http_url());
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+
+    assert_eq!(resp.status(), 200, "expected 200 OK from /api/channels");
+
+    let body: serde_json::Value = resp.json().await.expect("response must be JSON");
+    let channels = body
+        .as_array()
+        .expect("/api/channels must return a JSON array");
+
+    assert!(
+        !channels.is_empty(),
+        "expected at least one channel in the list"
+    );
+
+    // Every channel must have the required fields.
+    for ch in channels {
+        assert!(ch.get("id").is_some(), "channel missing 'id' field");
+        assert!(ch.get("name").is_some(), "channel missing 'name' field");
+        assert!(
+            ch.get("channel_type").is_some(),
+            "channel missing 'channel_type' field"
+        );
+        assert!(
+            ch.get("description").is_some(),
+            "channel missing 'description' field"
+        );
+    }
+}
+
+/// Open channels are visible to any authenticated user (no prior membership required).
+#[tokio::test]
+#[ignore]
+async fn test_channel_visibility_open_channels_visible_to_all() {
+    let client = http_client();
+
+    // Use two completely independent keypairs — neither has any prior membership.
+    let keys_a = Keys::generate();
+    let keys_b = Keys::generate();
+
+    let url = format!("{}/api/channels", relay_http_url());
+
+    let resp_a = authed_get(&client, &url, &keys_a.public_key().to_hex()).await;
+    let resp_b = authed_get(&client, &url, &keys_b.public_key().to_hex()).await;
+
+    assert_eq!(resp_a.status(), 200);
+    assert_eq!(resp_b.status(), 200);
+
+    let channels_a: Vec<serde_json::Value> = resp_a.json().await.expect("JSON");
+    let channels_b: Vec<serde_json::Value> = resp_b.json().await.expect("JSON");
+
+    // Both users should see the same set of open channels.
+    let ids_a: std::collections::HashSet<String> = channels_a
+        .iter()
+        .filter_map(|c| c["id"].as_str().map(|s| s.to_string()))
+        .collect();
+    let ids_b: std::collections::HashSet<String> = channels_b
+        .iter()
+        .filter_map(|c| c["id"].as_str().map(|s| s.to_string()))
+        .collect();
+
+    assert_eq!(
+        ids_a, ids_b,
+        "two fresh users should see the same set of open channels"
+    );
+
+    // The well-known seeded channels must be present.
+    assert!(
+        ids_a.contains(CHANNEL_GENERAL),
+        "expected seeded 'general' channel (id={CHANNEL_GENERAL})"
+    );
+    assert!(
+        ids_a.contains(CHANNEL_PROJECTS),
+        "expected seeded 'projects' channel (id={CHANNEL_PROJECTS})"
+    );
+}
+
+/// GET /api/channels requires authentication — unauthenticated requests are rejected.
+#[tokio::test]
+#[ignore]
+async fn test_channels_requires_auth() {
+    let client = http_client();
+    let url = format!("{}/api/channels", relay_http_url());
+
+    // No X-Pubkey header.
+    let resp = client.get(&url).send().await.expect("request failed");
+
+    assert_eq!(
+        resp.status(),
+        401,
+        "expected 401 Unauthorized when no auth header is provided"
+    );
+}
+
+// ── Search tests ──────────────────────────────────────────────────────────────
+
+/// GET /api/search returns results scoped to the authenticated user's accessible channels.
+#[tokio::test]
+#[ignore]
+async fn test_search_returns_results_for_open_channels() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // The seeded data contains messages with "Hello" — use a wildcard search
+    // to get all indexed events in accessible channels.
+    let url = format!("{}/api/search?q=*", relay_http_url());
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+
+    assert_eq!(resp.status(), 200, "expected 200 OK from /api/search");
+
+    let body: serde_json::Value = resp.json().await.expect("response must be JSON");
+    assert!(body.get("hits").is_some(), "response missing 'hits' field");
+    assert!(
+        body.get("found").is_some(),
+        "response missing 'found' field"
+    );
+
+    let hits = body["hits"].as_array().expect("'hits' must be an array");
+
+    // Every hit must have the required fields.
+    for hit in hits {
+        assert!(hit.get("event_id").is_some(), "hit missing 'event_id'");
+        assert!(hit.get("content").is_some(), "hit missing 'content'");
+        assert!(hit.get("kind").is_some(), "hit missing 'kind'");
+        assert!(hit.get("pubkey").is_some(), "hit missing 'pubkey'");
+        assert!(hit.get("channel_id").is_some(), "hit missing 'channel_id'");
+    }
+}
+
+/// GET /api/search with a specific query returns only matching events.
+#[tokio::test]
+#[ignore]
+async fn test_search_returns_indexed_event() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+    let ws_url = relay_ws_url();
+
+    // Send a message with a unique token via WebSocket so it gets indexed.
+    let unique_token = format!("e2e-search-{}", uuid::Uuid::new_v4().simple());
+    let content = format!("E2E REST search test marker: {unique_token}");
+
+    // Connect and send the message to an open channel.
+    let mut ws_client = SproutTestClient::connect(&ws_url, &keys)
+        .await
+        .expect("WebSocket connect failed");
+
+    let e_tag = Tag::parse(&["e", CHANNEL_GENERAL]).expect("tag parse failed");
+    let event = nostr::EventBuilder::new(Kind::Custom(40001), &content, [e_tag])
+        .sign_with_keys(&keys)
+        .expect("event sign failed");
+
+    let ok = ws_client
+        .send_event(event)
+        .await
+        .expect("send_event failed");
+    assert!(ok.accepted, "relay rejected event: {}", ok.message);
+
+    ws_client.disconnect().await.ok();
+
+    // Wait briefly for the search index to catch up.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Search for the unique token.
+    // The unique_token is UUID simple format (hex only) — safe to use directly in the URL.
+    let url = format!("{}/api/search?q={unique_token}", relay_http_url());
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    let hits = body["hits"].as_array().expect("hits array");
+
+    assert!(
+        !hits.is_empty(),
+        "expected at least one search hit for unique token '{unique_token}'"
+    );
+
+    // The first hit should contain our unique token.
+    let first_content = hits[0]["content"].as_str().unwrap_or("");
+    assert!(
+        first_content.contains(&unique_token),
+        "expected hit content to contain '{unique_token}', got: '{first_content}'"
+    );
+}
+
+/// GET /api/search with empty query returns all accessible events.
+#[tokio::test]
+#[ignore]
+async fn test_search_empty_query_returns_all() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let url = format!("{}/api/search", relay_http_url());
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    assert!(body["hits"].is_array(), "'hits' must be an array");
+    assert!(body["found"].is_number(), "'found' must be a number");
+}
+
+// ── Presence tests ────────────────────────────────────────────────────────────
+
+/// GET /api/presence returns "offline" for a pubkey with no presence event.
+#[tokio::test]
+#[ignore]
+async fn test_presence_offline_by_default() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let url = format!("{}/api/presence?pubkeys={pubkey_hex}", relay_http_url());
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    let status = body[&pubkey_hex].as_str().expect("expected string status");
+    assert_eq!(status, "offline", "fresh key should be 'offline'");
+}
+
+/// Sending a presence event (kind:20001) via WebSocket updates the presence store.
+#[tokio::test]
+#[ignore]
+async fn test_presence_set_and_query() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+    let ws_url = relay_ws_url();
+
+    // Send a presence event via WebSocket.
+    let mut ws_client = SproutTestClient::connect(&ws_url, &keys)
+        .await
+        .expect("WebSocket connect failed");
+
+    let presence_event = nostr::EventBuilder::new(Kind::Custom(20001), "online", [])
+        .sign_with_keys(&keys)
+        .expect("event sign failed");
+
+    let ok = ws_client
+        .send_event(presence_event)
+        .await
+        .expect("send_event failed");
+    assert!(ok.accepted, "relay rejected presence event: {}", ok.message);
+
+    // Keep the WebSocket connection alive briefly so presence is registered.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Query presence via REST.
+    let url = format!("{}/api/presence?pubkeys={pubkey_hex}", relay_http_url());
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    let status = body[&pubkey_hex].as_str().expect("expected string status");
+    assert_eq!(
+        status, "online",
+        "expected 'online' after sending presence event"
+    );
+
+    // Clean up: send offline presence.
+    let offline_event = nostr::EventBuilder::new(Kind::Custom(20001), "offline", [])
+        .sign_with_keys(&keys)
+        .expect("event sign failed");
+    ws_client.send_event(offline_event).await.ok();
+    ws_client.disconnect().await.ok();
+}
+
+/// GET /api/presence with multiple pubkeys returns a status for each.
+#[tokio::test]
+#[ignore]
+async fn test_presence_bulk_query() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Generate two fresh keys — both should be offline.
+    let keys_a = Keys::generate();
+    let keys_b = Keys::generate();
+    let pk_a = keys_a.public_key().to_hex();
+    let pk_b = keys_b.public_key().to_hex();
+
+    let url = format!("{}/api/presence?pubkeys={pk_a},{pk_b}", relay_http_url());
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    assert!(body.is_object(), "presence response must be an object");
+
+    // Both pubkeys should appear in the response.
+    assert!(
+        body.get(&pk_a).is_some(),
+        "pk_a missing from presence response"
+    );
+    assert!(
+        body.get(&pk_b).is_some(),
+        "pk_b missing from presence response"
+    );
+
+    // Both should be offline.
+    assert_eq!(body[&pk_a].as_str(), Some("offline"));
+    assert_eq!(body[&pk_b].as_str(), Some("offline"));
+}
+
+/// GET /api/presence with no pubkeys returns an empty object.
+#[tokio::test]
+#[ignore]
+async fn test_presence_empty_pubkeys() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let url = format!("{}/api/presence", relay_http_url());
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    assert!(
+        body.as_object().map(|o| o.is_empty()).unwrap_or(false),
+        "expected empty object for no pubkeys"
+    );
+}
+
+// ── Agents tests ──────────────────────────────────────────────────────────────
+
+/// GET /api/agents returns a JSON array with the expected fields.
+#[tokio::test]
+#[ignore]
+async fn test_agents_list() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let url = format!("{}/api/agents", relay_http_url());
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+
+    assert_eq!(resp.status(), 200, "expected 200 OK from /api/agents");
+
+    let body: serde_json::Value = resp.json().await.expect("response must be JSON");
+    let agents = body
+        .as_array()
+        .expect("/api/agents must return a JSON array");
+
+    // Every agent must have the required fields.
+    for agent in agents {
+        assert!(agent.get("pubkey").is_some(), "agent missing 'pubkey'");
+        assert!(agent.get("name").is_some(), "agent missing 'name'");
+        assert!(agent.get("status").is_some(), "agent missing 'status'");
+        assert!(agent.get("channels").is_some(), "agent missing 'channels'");
+        assert!(
+            agent.get("capabilities").is_some(),
+            "agent missing 'capabilities'"
+        );
+
+        // 'channels' must be an array.
+        assert!(
+            agent["channels"].is_array(),
+            "agent 'channels' must be an array"
+        );
+        // 'capabilities' must be an array.
+        assert!(
+            agent["capabilities"].is_array(),
+            "agent 'capabilities' must be an array"
+        );
+        // 'status' must be a string.
+        assert!(
+            agent["status"].is_string(),
+            "agent 'status' must be a string"
+        );
+    }
+}
+
+/// GET /api/agents requires authentication.
+#[tokio::test]
+#[ignore]
+async fn test_agents_requires_auth() {
+    let client = http_client();
+    let url = format!("{}/api/agents", relay_http_url());
+
+    let resp = client.get(&url).send().await.expect("request failed");
+
+    assert_eq!(
+        resp.status(),
+        401,
+        "expected 401 Unauthorized when no auth header is provided"
+    );
+}
+
+/// GET /api/agents only returns agents in channels accessible to the requester.
+#[tokio::test]
+#[ignore]
+async fn test_agents_scoped_to_accessible_channels() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let url = format!("{}/api/agents", relay_http_url());
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+
+    assert_eq!(resp.status(), 200);
+
+    let agents: Vec<serde_json::Value> = resp.json().await.expect("JSON");
+
+    // Get accessible channels for this user.
+    let channels_url = format!("{}/api/channels", relay_http_url());
+    let channels_resp = authed_get(&client, &channels_url, &pubkey_hex).await;
+    let channels: Vec<serde_json::Value> = channels_resp.json().await.expect("JSON");
+    let accessible_names: std::collections::HashSet<String> = channels
+        .iter()
+        .filter_map(|c| c["name"].as_str().map(|s| s.to_string()))
+        .collect();
+
+    // Every channel listed for each agent must be accessible to this user.
+    for agent in &agents {
+        let agent_channels = agent["channels"].as_array().expect("channels array");
+        for ch in agent_channels {
+            let ch_name = ch.as_str().expect("channel name must be a string");
+            assert!(
+                accessible_names.contains(ch_name),
+                "agent channel '{ch_name}' is not in the user's accessible channels"
+            );
+        }
+    }
+}
+
+// ── Feed tests ────────────────────────────────────────────────────────────────
+
+/// GET /api/feed returns a structured feed with the expected shape.
+///
+/// This test is skipped if the relay does not expose `/api/feed` (older builds).
+#[tokio::test]
+#[ignore]
+async fn test_feed_returns_activity() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+    let ws_url = relay_ws_url();
+
+    let url = format!("{}/api/feed", relay_http_url());
+
+    // Probe the endpoint — skip gracefully if the relay doesn't have it yet.
+    let probe = client
+        .get(&url)
+        .header("X-Pubkey", &pubkey_hex)
+        .send()
+        .await
+        .expect("probe request failed");
+
+    if probe.status() == 404 {
+        eprintln!("SKIP test_feed_returns_activity: /api/feed not available on this relay build");
+        return;
+    }
+
+    // Send a message to an open channel so there is activity to return.
+    let unique_token = format!("e2e-feed-{}", uuid::Uuid::new_v4().simple());
+    let content = format!("E2E feed test: {unique_token}");
+
+    let mut ws_client = SproutTestClient::connect(&ws_url, &keys)
+        .await
+        .expect("WebSocket connect failed");
+
+    let e_tag = Tag::parse(&["e", CHANNEL_GENERAL]).expect("tag parse failed");
+    let event = nostr::EventBuilder::new(Kind::Custom(40001), &content, [e_tag])
+        .sign_with_keys(&keys)
+        .expect("event sign failed");
+
+    let ok = ws_client
+        .send_event(event)
+        .await
+        .expect("send_event failed");
+    assert!(ok.accepted, "relay rejected event: {}", ok.message);
+    ws_client.disconnect().await.ok();
+
+    // Small delay to let the event propagate.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Fetch the feed.
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+    assert_eq!(resp.status(), 200, "expected 200 OK from /api/feed");
+
+    let body: serde_json::Value = resp.json().await.expect("response must be JSON");
+
+    // Top-level structure.
+    let feed = body.get("feed").expect("response missing 'feed' key");
+    let meta = body.get("meta").expect("response missing 'meta' key");
+
+    // Feed sections must exist.
+    assert!(feed.get("mentions").is_some(), "feed missing 'mentions'");
+    assert!(
+        feed.get("needs_action").is_some(),
+        "feed missing 'needs_action'"
+    );
+    assert!(feed.get("activity").is_some(), "feed missing 'activity'");
+    assert!(
+        feed.get("agent_activity").is_some(),
+        "feed missing 'agent_activity'"
+    );
+
+    // Meta fields.
+    assert!(meta.get("since").is_some(), "meta missing 'since'");
+    assert!(meta.get("total").is_some(), "meta missing 'total'");
+    assert!(
+        meta.get("generated_at").is_some(),
+        "meta missing 'generated_at'"
+    );
+
+    // Activity must be an array.
+    assert!(
+        feed["activity"].is_array(),
+        "feed 'activity' must be an array"
+    );
+
+    // The activity array should contain our message (it's in an open channel).
+    let activity = feed["activity"].as_array().expect("activity array");
+    let found = activity.iter().any(|item| {
+        item["content"]
+            .as_str()
+            .unwrap_or("")
+            .contains(&unique_token)
+    });
+
+    assert!(
+        found,
+        "expected to find our message '{unique_token}' in feed activity"
+    );
+}
+
+/// GET /api/feed with `types=activity` returns only the activity section.
+#[tokio::test]
+#[ignore]
+async fn test_feed_type_filter() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let url = format!("{}/api/feed?types=activity", relay_http_url());
+
+    let probe = client
+        .get(&url)
+        .header("X-Pubkey", &pubkey_hex)
+        .send()
+        .await
+        .expect("probe request failed");
+
+    if probe.status() == 404 {
+        eprintln!("SKIP test_feed_type_filter: /api/feed not available on this relay build");
+        return;
+    }
+
+    assert_eq!(probe.status(), 200);
+
+    let body: serde_json::Value = probe.json().await.expect("JSON");
+    let feed = &body["feed"];
+
+    // When filtering to 'activity', the other sections should be empty arrays.
+    assert_eq!(
+        feed["mentions"].as_array().map(|a| a.len()),
+        Some(0),
+        "mentions should be empty when types=activity"
+    );
+    assert_eq!(
+        feed["needs_action"].as_array().map(|a| a.len()),
+        Some(0),
+        "needs_action should be empty when types=activity"
+    );
+}
+
+/// GET /api/feed requires authentication.
+#[tokio::test]
+#[ignore]
+async fn test_feed_requires_auth() {
+    let client = http_client();
+    let url = format!("{}/api/feed", relay_http_url());
+
+    let resp = client.get(&url).send().await.expect("request failed");
+
+    // Either 401 (auth required) or 404 (older build without feed route).
+    let status = resp.status().as_u16();
+    assert!(
+        status == 401 || status == 404,
+        "expected 401 or 404, got {status}"
+    );
+}
+
+// ── Auth edge cases ───────────────────────────────────────────────────────────
+
+/// An invalid X-Pubkey header is rejected with 401.
+#[tokio::test]
+#[ignore]
+async fn test_invalid_pubkey_header_rejected() {
+    let client = http_client();
+    let url = format!("{}/api/channels", relay_http_url());
+
+    let resp = client
+        .get(&url)
+        .header("X-Pubkey", "not-a-valid-hex-pubkey")
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(
+        resp.status(),
+        401,
+        "expected 401 for invalid X-Pubkey header"
+    );
+}
+
+/// A valid X-Pubkey header is accepted and returns 200.
+#[tokio::test]
+#[ignore]
+async fn test_valid_pubkey_header_accepted() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let url = format!("{}/api/channels", relay_http_url());
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+
+    assert_eq!(resp.status(), 200, "expected 200 for valid X-Pubkey header");
+}

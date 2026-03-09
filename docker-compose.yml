@@ -1,0 +1,144 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: sprout-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: sprout_dev
+      MYSQL_DATABASE: sprout
+      MYSQL_USER: sprout
+      MYSQL_PASSWORD: sprout_dev
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - sprout-net
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -psprout_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    labels:
+      com.sprout.service: "mysql"
+      com.sprout.env: "dev"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: sprout-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - sprout-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+    labels:
+      com.sprout.service: "redis"
+      com.sprout.env: "dev"
+    restart: unless-stopped
+
+  typesense:
+    image: typesense/typesense:27.1
+    container_name: sprout-typesense
+    environment:
+      TYPESENSE_DATA_DIR: /data
+      TYPESENSE_API_KEY: sprout_dev_key
+      TYPESENSE_ENABLE_CORS: "true"
+    ports:
+      - "8108:8108"
+    volumes:
+      - typesense-data:/data
+    networks:
+      - sprout-net
+    healthcheck:
+      test: ["CMD-SHELL", "ls /proc/1/exe > /dev/null 2>&1 && kill -0 1 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    labels:
+      com.sprout.service: "typesense"
+      com.sprout.env: "dev"
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:latest
+    container_name: sprout-adminer
+    ports:
+      - "8082:8080"
+    networks:
+      - sprout-net
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      ADMINER_DEFAULT_SERVER: mysql
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+    labels:
+      com.sprout.service: "adminer"
+      com.sprout.env: "dev"
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: sprout-keycloak
+    command: start-dev --http-port=8080
+    environment:
+      KC_DB: dev-mem
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8180:8080"
+    networks:
+      - sprout-net
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    labels:
+      com.sprout.service: "keycloak"
+      com.sprout.env: "dev"
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+    name: sprout-mysql-data
+    labels:
+      com.sprout.volume: "mysql"
+  typesense-data:
+    name: sprout-typesense-data
+    labels:
+      com.sprout.volume: "typesense"
+
+networks:
+  sprout-net:
+    name: sprout-net
+    driver: bridge
+    labels:
+      com.sprout.network: "dev"
