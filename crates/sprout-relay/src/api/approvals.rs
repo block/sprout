@@ -142,20 +142,6 @@ async fn resume_workflow_after_approval(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    // Mark the run as Running again before resuming.
-    if let Err(e) = db
-        .update_workflow_run(
-            run_id,
-            sprout_db::workflow::RunStatus::Running,
-            resume_index as i32,
-            &run.execution_trace,
-            None,
-        )
-        .await
-    {
-        tracing::error!("grant_approval: failed to set Running status for run {run_id}: {e}");
-    }
-
     match sprout_workflow::executor::execute_from_step(
         &engine,
         run_id,
@@ -186,65 +172,26 @@ async fn resume_workflow_after_approval(
             }
         }
         Ok(result) => {
-            // Suspended again at another approval gate.
-            let next_token = match result.approval_token {
-                Some(t) => t,
-                None => {
-                    tracing::error!(
-                        "grant_approval: expected approval_token but got None for run {run_id}"
-                    );
-                    return;
-                }
-            };
-            let suspended_step_index = result.step_index;
+            // Chained approval gates are not yet fully implemented (see WF-08).
+            // Mark the run as Failed rather than silently creating a new approval
+            // record that nothing will ever resolve.
             let mut full_trace = run.execution_trace.as_array().cloned().unwrap_or_default();
             full_trace.extend(result.trace);
             let trace_json = serde_json::Value::Array(full_trace);
-
             if let Err(e) = db
                 .update_workflow_run(
                     run_id,
-                    sprout_db::workflow::RunStatus::WaitingApproval,
-                    suspended_step_index as i32,
+                    sprout_db::workflow::RunStatus::Failed,
+                    result.step_index as i32,
                     &trace_json,
-                    None,
+                    Some("approval gates not yet fully implemented — see WF-08"),
                 )
                 .await
             {
                 tracing::error!(
-                    "grant_approval: failed to set WaitingApproval status for run {run_id}: {e}"
+                    "grant_approval: failed to set Failed status for run {run_id}: {e}"
                 );
             }
-
-            if let Some(suspended_step) = def.steps.get(suspended_step_index) {
-                let approver_spec = match &suspended_step.action {
-                    sprout_workflow::ActionDef::RequestApproval { from, .. } => from.clone(),
-                    _ => "any".to_string(),
-                };
-                let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
-                if let Err(e) = db
-                    .create_approval(sprout_db::workflow::CreateApprovalParams {
-                        token: &next_token,
-                        workflow_id,
-                        run_id,
-                        step_id: &suspended_step.id,
-                        step_index: suspended_step_index as i32,
-                        approver_spec: &approver_spec,
-                        expires_at,
-                    })
-                    .await
-                {
-                    tracing::error!(
-                        "grant_approval: failed to create approval record for run {run_id}: {e}"
-                    );
-                }
-            }
-
-            tracing::info!(
-                "workflow run {} suspended again at step {} (token: <redacted>)",
-                run_id,
-                suspended_step_index,
-            );
         }
         Err(e) => {
             tracing::error!("workflow run {run_id} failed after approval resume: {e}");

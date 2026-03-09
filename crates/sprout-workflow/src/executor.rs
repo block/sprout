@@ -868,15 +868,47 @@ pub async fn execute_run(
         .await
         .map_err(WorkflowError::from)?;
 
-    execute_from_step(engine, run_id, def, trigger_ctx, 0, None).await
+    execute_steps(engine, run_id, def, trigger_ctx, 0, None).await
 }
 
-/// Execute starting from a specific step index (used for approval resume).
+/// Resume execution from a specific step index (used for approval resume).
+///
+/// Acquires a concurrency permit from `engine.run_semaphore` before executing —
+/// returns [`WorkflowError::CapacityExceeded`] immediately if all permits are
+/// taken.
 ///
 /// `initial_outputs` should be reconstructed from the execution trace before
 /// calling this function on resume, so that steps after the resume point can
 /// reference `{{steps.PREV_STEP.output.X}}` correctly.
 pub async fn execute_from_step(
+    engine: &WorkflowEngine,
+    run_id: Uuid,
+    def: &WorkflowDef,
+    trigger_ctx: &TriggerContext,
+    start_index: usize,
+    initial_outputs: Option<HashMap<String, JsonValue>>,
+) -> Result<ExecutionResult, WorkflowError> {
+    // Fail fast if all concurrency permits are in use — no queuing.
+    let _permit = engine
+        .run_semaphore
+        .try_acquire()
+        .map_err(|_| WorkflowError::CapacityExceeded)?;
+
+    execute_steps(
+        engine,
+        run_id,
+        def,
+        trigger_ctx,
+        start_index,
+        initial_outputs,
+    )
+    .await
+}
+
+/// Internal: execute workflow steps starting from `start_index`, without
+/// acquiring the semaphore. Called by both [`execute_run`] and
+/// [`execute_from_step`] after they have already acquired a permit.
+async fn execute_steps(
     engine: &WorkflowEngine,
     run_id: Uuid,
     def: &WorkflowDef,

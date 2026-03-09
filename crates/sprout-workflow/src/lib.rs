@@ -371,11 +371,13 @@ pub fn build_trigger_context(event: &sprout_core::StoredEvent) -> executor::Trig
     // For reactions (NIP-25), `message_id` should be the target message, not
     // the reaction event itself. NIP-25 stores the target in an `e` tag whose
     // value is a 64-char hex event ID (not a UUID channel reference).
+    // Per NIP-25, the last `e` tag is the direct target (earlier ones may be thread roots).
     let message_id = if kind_u32 == KIND_REACTION {
         event
             .event
             .tags
             .iter()
+            .rev()
             .find_map(|tag| {
                 let key = tag.kind().to_string();
                 if key == "e" {
@@ -716,5 +718,33 @@ steps:
         ctx.timestamp
             .parse::<u64>()
             .expect("timestamp should be a u64 string");
+    }
+
+    #[test]
+    fn test_build_trigger_context_reaction_multiple_e_tags() {
+        // NIP-25: last e tag is the direct target, first may be thread root
+        use nostr::{EventBuilder, EventId, Keys, Kind, Tag};
+        use uuid::Uuid;
+
+        let keys = Keys::generate();
+        let thread_root_id = EventId::all_zeros();
+        let direct_target_id = EventId::from_byte_array([0x42; 32]);
+
+        let event = EventBuilder::new(
+            Kind::Reaction,
+            "👍",
+            [
+                Tag::parse(&["e", &thread_root_id.to_hex()]).unwrap(),
+                Tag::parse(&["e", &direct_target_id.to_hex()]).unwrap(),
+            ],
+        )
+        .sign_with_keys(&keys)
+        .expect("sign");
+
+        let stored = sprout_core::StoredEvent::new(event, Some(Uuid::new_v4()));
+        let ctx = build_trigger_context(&stored);
+
+        // Should pick the LAST e tag (direct target), not the first (thread root)
+        assert_eq!(ctx.message_id, direct_target_id.to_hex());
     }
 }

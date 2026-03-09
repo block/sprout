@@ -163,26 +163,12 @@ pub(crate) fn definition_hash(json_str: &str) -> Vec<u8> {
 pub(crate) fn spawn_workflow_execution(
     engine: Arc<sprout_workflow::WorkflowEngine>,
     db: sprout_db::Db,
-    workflow_id: uuid::Uuid,
+    _workflow_id: uuid::Uuid,
     run_id: uuid::Uuid,
     workflow_def_value: serde_json::Value,
     trigger_ctx: sprout_workflow::executor::TriggerContext,
 ) {
     tokio::spawn(async move {
-        // Transition to Running first — stamps started_at.
-        if let Err(e) = db
-            .update_workflow_run(
-                run_id,
-                sprout_db::workflow::RunStatus::Running,
-                0,
-                &serde_json::Value::Array(vec![]),
-                None,
-            )
-            .await
-        {
-            tracing::error!("workflow run {run_id}: failed to set Running status: {e}");
-        }
-
         let def: sprout_workflow::WorkflowDef = match serde_json::from_value(workflow_def_value) {
             Ok(d) => d,
             Err(e) => {
@@ -220,7 +206,24 @@ pub(crate) fn spawn_workflow_execution(
                 }
             }
             Ok(result) => {
-                handle_approval_suspension(&db, &def, workflow_id, run_id, result).await;
+                // Approval gates are not yet fully implemented (WF-08).
+                // Fail explicitly rather than creating potentially orphaned WaitingApproval rows.
+                tracing::warn!(
+                    "workflow run {run_id}: hit approval gate — not yet implemented, marking as failed"
+                );
+                let trace_json = serde_json::Value::Array(result.trace);
+                if let Err(e) = db
+                    .update_workflow_run(
+                        run_id,
+                        sprout_db::workflow::RunStatus::Failed,
+                        result.step_index as i32,
+                        &trace_json,
+                        Some("approval gates not yet implemented — see WF-08"),
+                    )
+                    .await
+                {
+                    tracing::error!("workflow run {run_id}: failed to set Failed status: {e}");
+                }
             }
             Err(e) => {
                 tracing::error!("workflow run {run_id} failed: {e}");
@@ -242,6 +245,8 @@ pub(crate) fn spawn_workflow_execution(
 }
 
 /// Persist approval-gate suspension state and create the approval record.
+/// Not called from the execution path yet — will be wired up when WF-08 is implemented.
+#[allow(dead_code)]
 pub(crate) async fn handle_approval_suspension(
     db: &sprout_db::Db,
     def: &sprout_workflow::WorkflowDef,
