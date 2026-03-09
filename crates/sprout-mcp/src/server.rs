@@ -1,4 +1,4 @@
-use sprout_core::kind::{KIND_CANVAS, event_kind_u32};
+use sprout_core::kind::{event_kind_u32, KIND_CANVAS};
 
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -417,8 +417,12 @@ impl SproutMcpServer {
             Err(e) => return format!("Error building tag: {e}"),
         };
 
-        let event = match nostr::EventBuilder::new(nostr::Kind::Custom(KIND_CANVAS as u16), &p.content, [e_tag])
-            .sign_with_keys(&keys)
+        let event = match nostr::EventBuilder::new(
+            nostr::Kind::Custom(KIND_CANVAS as u16),
+            &p.content,
+            [e_tag],
+        )
+        .sign_with_keys(&keys)
         {
             Ok(e) => e,
             Err(e) => return format!("Error signing event: {e}"),

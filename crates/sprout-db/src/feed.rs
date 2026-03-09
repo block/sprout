@@ -407,7 +407,7 @@ mod tests {
             KIND_JOB_RESULT,
         ];
 
-        use sprout_core::kind::{KIND_WORKFLOW_TRIGGERED, KIND_WORKFLOW_APPROVAL_DENIED};
+        use sprout_core::kind::{KIND_WORKFLOW_APPROVAL_DENIED, KIND_WORKFLOW_TRIGGERED};
         for kind in KIND_WORKFLOW_TRIGGERED..=KIND_WORKFLOW_APPROVAL_DENIED {
             assert!(
                 !activity_kinds.contains(&kind),

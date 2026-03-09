@@ -77,8 +77,7 @@ async fn main() -> anyhow::Result<()> {
     let search_config = SearchConfig {
         url: config.typesense_url.clone(),
         api_key: config.typesense_key.clone(),
-        collection: std::env::var("TYPESENSE_COLLECTION")
-            .unwrap_or_else(|_| "events".to_string()),
+        collection: std::env::var("TYPESENSE_COLLECTION").unwrap_or_else(|_| "events".to_string()),
     };
     let search = SearchService::new(search_config);
     if let Err(e) = search.ensure_collection().await {

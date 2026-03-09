@@ -9,7 +9,7 @@ use nostr::Event;
 use sqlx::{MySqlPool, QueryBuilder, Row};
 use uuid::Uuid;
 
-use sprout_core::kind::{KIND_AUTH, is_ephemeral, event_kind_i32};
+use sprout_core::kind::{event_kind_i32, is_ephemeral, KIND_AUTH};
 use sprout_core::StoredEvent;
 
 use crate::error::{DbError, Result};

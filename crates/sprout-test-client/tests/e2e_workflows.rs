@@ -359,15 +359,15 @@ steps:
         .expect("ws connect failed");
 
     let e_tag = Tag::parse(&["e", CHANNEL_GENERAL]).expect("tag parse failed");
-    let event = nostr::EventBuilder::new(
-        Kind::Custom(40001),
-        "trigger this workflow please",
-        [e_tag],
-    )
-    .sign_with_keys(&sender_keys)
-    .expect("sign event");
+    let event =
+        nostr::EventBuilder::new(Kind::Custom(40001), "trigger this workflow please", [e_tag])
+            .sign_with_keys(&sender_keys)
+            .expect("sign event");
 
-    ws_client.send_event(event).await.expect("send event failed");
+    ws_client
+        .send_event(event)
+        .await
+        .expect("send event failed");
 
     // ── Step 3: Wait for the workflow engine to process the event ─────────────
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -390,7 +390,10 @@ steps:
 
     let run = &runs[0];
     assert!(run.get("id").is_some(), "run missing 'id'");
-    assert!(run.get("workflow_id").is_some(), "run missing 'workflow_id'");
+    assert!(
+        run.get("workflow_id").is_some(),
+        "run missing 'workflow_id'"
+    );
     assert!(run.get("status").is_some(), "run missing 'status'");
 
     let status = run["status"].as_str().unwrap_or("");
@@ -484,13 +487,10 @@ steps:
     );
 
     // ── Step 3: Send a message that DOES match the filter ─────────────────────
-    let matching = nostr::EventBuilder::new(
-        Kind::Custom(40001),
-        "P1 alert: database is down",
-        [e_tag],
-    )
-    .sign_with_keys(&sender_keys)
-    .expect("sign event");
+    let matching =
+        nostr::EventBuilder::new(Kind::Custom(40001), "P1 alert: database is down", [e_tag])
+            .sign_with_keys(&sender_keys)
+            .expect("sign event");
 
     ws_client
         .send_event(matching)

@@ -38,7 +38,7 @@ pub use schema::{ActionDef, Step, TriggerDef, WorkflowDef};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sprout_core::kind::{is_workflow_execution_kind, event_kind_u32, KIND_REACTION};
+use sprout_core::kind::{event_kind_u32, is_workflow_execution_kind, KIND_REACTION};
 use sprout_db::workflow::RunStatus;
 use sprout_db::Db;
 use tokio::sync::Semaphore;
@@ -162,7 +162,10 @@ impl WorkflowEngine {
             // Enforce reaction emoji filter: if the workflow specifies a specific
             // emoji, skip events whose content doesn't match. NIP-25 stores the
             // emoji character (or shortcode) in the event content field.
-            if let TriggerDef::ReactionAdded { emoji: Some(ref expected) } = def.trigger {
+            if let TriggerDef::ReactionAdded {
+                emoji: Some(ref expected),
+            } = def.trigger
+            {
                 let actual = &trigger_ctx.emoji;
                 if actual != expected {
                     tracing::debug!(
@@ -177,7 +180,10 @@ impl WorkflowEngine {
 
             // Evaluate the trigger filter expression (MessagePosted only).
             // A filter that evaluates to false skips this workflow entirely.
-            if let TriggerDef::MessagePosted { filter: Some(ref expr) } = def.trigger {
+            if let TriggerDef::MessagePosted {
+                filter: Some(ref expr),
+            } = def.trigger
+            {
                 match executor::evaluate_condition(expr, &trigger_ctx, &HashMap::new()).await {
                     Ok(true) => {}
                     Ok(false) => {
@@ -522,7 +528,10 @@ steps:
             &trigger,
             sprout_core::kind::KIND_REACTION
         ));
-        assert!(!trigger_matches_event(&trigger, sprout_core::kind::KIND_WORKFLOW_TRIGGERED));
+        assert!(!trigger_matches_event(
+            &trigger,
+            sprout_core::kind::KIND_WORKFLOW_TRIGGERED
+        ));
     }
 
     #[test]
@@ -591,7 +600,9 @@ steps:
         let msg_trigger = TriggerDef::MessagePosted { filter: None };
         let react_trigger = TriggerDef::ReactionAdded { emoji: None };
 
-        for kind in sprout_core::kind::KIND_WORKFLOW_TRIGGERED..=sprout_core::kind::KIND_WORKFLOW_APPROVAL_DENIED {
+        for kind in sprout_core::kind::KIND_WORKFLOW_TRIGGERED
+            ..=sprout_core::kind::KIND_WORKFLOW_APPROVAL_DENIED
+        {
             assert!(
                 !trigger_matches_event(&msg_trigger, kind),
                 "message_posted should not match workflow execution kind {kind}"
@@ -658,7 +669,10 @@ steps:
         let event = EventBuilder::new(Kind::Reaction, "👍", [e_tag])
             .sign_with_keys(&keys)
             .expect("sign");
-        (sprout_core::StoredEvent::new(event, Some(Uuid::new_v4())), target_id_hex)
+        (
+            sprout_core::StoredEvent::new(event, Some(Uuid::new_v4())),
+            target_id_hex,
+        )
     }
 
     #[test]
@@ -668,10 +682,7 @@ steps:
 
         assert_eq!(ctx.text, "hello world");
         assert_eq!(ctx.author, stored.event.pubkey.to_hex());
-        assert_eq!(
-            ctx.channel_id,
-            stored.channel_id.unwrap().to_string()
-        );
+        assert_eq!(ctx.channel_id, stored.channel_id.unwrap().to_string());
         assert_eq!(ctx.timestamp, stored.event.created_at.as_u64().to_string());
         assert_eq!(ctx.message_id, stored.event.id.to_hex());
         // Non-reaction events have empty emoji.
@@ -732,6 +743,8 @@ steps:
         let stored = make_message_event();
         let ctx = build_trigger_context(&stored);
         // Timestamp must parse as a u64.
-        ctx.timestamp.parse::<u64>().expect("timestamp should be a u64 string");
+        ctx.timestamp
+            .parse::<u64>()
+            .expect("timestamp should be a u64 string");
     }
 }
