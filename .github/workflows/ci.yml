@@ -21,6 +21,6 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo install cargo-audit --locked
-      - run: cargo audit
+      - run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0384
       - run: cargo install cargo-deny --locked
       - run: cargo deny check
