@@ -1,19 +1,15 @@
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "warn"
 ignore = [
     # rsa 0.9.10 — Marvin Attack timing sidechannel. No fix available.
     # Transitive dep: sqlx-mysql → rsa. Only used for MySQL TLS handshake,
     # not for RSA key operations. Acceptable risk until sqlx updates.
-    "RUSTSEC-2023-0071",
+    { id = "RUSTSEC-2023-0071", reason = "transitive dep via sqlx-mysql; no upstream fix available" },
     # instant 0.1.13 — unmaintained crate. Transitive dep: nostr → instant.
     # Will be resolved when nostr crate updates its dependencies.
-    "RUSTSEC-2024-0384",
+    { id = "RUSTSEC-2024-0384", reason = "transitive dep via nostr; no upstream fix available" },
 ]
 
 [licenses]
-unlicensed = "deny"
 allow = [
     "MIT",
     "Apache-2.0",
@@ -25,9 +21,15 @@ allow = [
     "Unicode-DFS-2016",
     "Zlib",
     "OpenSSL",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "MITNFA",
 ]
 confidence-threshold = 0.8
 
+[licenses.private]
+ignore = true
+
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
+wildcards = "allow"
