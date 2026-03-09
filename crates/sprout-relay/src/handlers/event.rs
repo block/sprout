@@ -7,7 +7,9 @@ use tracing::{debug, error, info, warn};
 use nostr::Event;
 use sprout_audit::{AuditAction, NewAuditEntry};
 use sprout_core::event::StoredEvent;
-use sprout_core::kind::KIND_PRESENCE_UPDATE;
+use sprout_core::kind::{
+    event_kind_u32, is_ephemeral, is_workflow_execution_kind, KIND_AUTH, KIND_PRESENCE_UPDATE,
+};
 use sprout_core::verification::verify_event;
 
 use sprout_auth::Scope;
@@ -16,14 +18,10 @@ use crate::connection::{AuthState, ConnectionState};
 use crate::protocol::RelayMessage;
 use crate::state::AppState;
 
-const KIND_AUTH: u32 = 22242;
-const EPHEMERAL_MIN: u32 = 20000;
-const EPHEMERAL_MAX: u32 = 29999;
-
 /// Handle an EVENT message: authenticate, verify, store, fan-out, index, and audit the event.
 pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<AppState>) {
     let event_id_hex = event.id.to_hex();
-    let kind_u32 = event.kind.as_u16() as u32;
+    let kind_u32 = event_kind_u32(&event);
     debug!(event_id = %event_id_hex, kind = kind_u32, "EVENT");
 
     let (conn_id, pubkey_hex, pubkey_bytes, auth_pubkey) = {
@@ -76,7 +74,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         return;
     }
 
-    if (EPHEMERAL_MIN..=EPHEMERAL_MAX).contains(&kind_u32) {
+    if is_ephemeral(kind_u32) {
         handle_ephemeral_event(
             event,
             conn_id,
@@ -198,7 +196,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     });
 
     // Don't trigger workflows for workflow execution events (prevents infinite loops).
-    let is_workflow_event = (46001..=46012).contains(&kind_u32);
+    let is_workflow_event = is_workflow_execution_kind(kind_u32);
     if !is_workflow_event {
         let wf = Arc::clone(&state.workflow_engine);
         let ev = stored_event.clone();
@@ -254,7 +252,7 @@ async fn handle_ephemeral_event(
 
     // Special handling for presence events (kind:20001).
     // Presence fan-out is local-only. Multi-node would need Redis pub/sub.
-    if event.kind.as_u16() as u32 == KIND_PRESENCE_UPDATE {
+    if event_kind_u32(&event) == KIND_PRESENCE_UPDATE {
         let status = event.content.to_string();
         let status = if status.len() > 128 {
             let mut end = 128;

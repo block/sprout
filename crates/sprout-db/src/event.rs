@@ -9,14 +9,10 @@ use nostr::Event;
 use sqlx::{MySqlPool, QueryBuilder, Row};
 use uuid::Uuid;
 
+use sprout_core::kind::{KIND_AUTH, is_ephemeral, event_kind_i32};
 use sprout_core::StoredEvent;
 
 use crate::error::{DbError, Result};
-
-/// NIP-42 auth event kind — never stored (carries bearer tokens).
-const KIND_AUTH: u32 = 22242;
-const EPHEMERAL_KIND_MIN: u32 = 20000;
-const EPHEMERAL_KIND_MAX: u32 = 29999;
 
 /// Optional filters for [`query_events`].
 #[derive(Debug, Default, Clone)]
@@ -51,7 +47,7 @@ pub async fn insert_event(
     if kind_u32 == KIND_AUTH {
         return Err(DbError::AuthEventRejected);
     }
-    if (EPHEMERAL_KIND_MIN..=EPHEMERAL_KIND_MAX).contains(&kind_u32) {
+    if is_ephemeral(kind_u32) {
         return Err(DbError::EphemeralEventRejected(kind_u16));
     }
 
@@ -60,7 +56,7 @@ pub async fn insert_event(
     let sig_bytes = event.sig.serialize();
     let tags_json = serde_json::to_value(&event.tags)?;
     // Cast chain: nostr Kind (u16) → i32 (MySQL INT column). Safe: all Sprout kinds fit in i32.
-    let kind_i32 = event.kind.as_u16() as i32;
+    let kind_i32 = event_kind_i32(event);
     let created_at_secs = event.created_at.as_u64() as i64;
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(DbError::InvalidTimestamp(created_at_secs))?;

@@ -407,7 +407,8 @@ mod tests {
             KIND_JOB_RESULT,
         ];
 
-        for kind in 46001u32..=46012 {
+        use sprout_core::kind::{KIND_WORKFLOW_TRIGGERED, KIND_WORKFLOW_APPROVAL_DENIED};
+        for kind in KIND_WORKFLOW_TRIGGERED..=KIND_WORKFLOW_APPROVAL_DENIED {
             assert!(
                 !activity_kinds.contains(&kind),
                 "workflow execution kind {kind} must NOT be in activity"

@@ -37,6 +37,7 @@ pub use schema::{ActionDef, Step, TriggerDef, WorkflowDef};
 
 use std::sync::Arc;
 
+use sprout_core::kind::{is_workflow_execution_kind, event_kind_u32};
 use sprout_db::Db;
 use tokio::sync::Semaphore;
 
@@ -101,11 +102,11 @@ impl WorkflowEngine {
             return Ok(());
         };
 
-        let kind_u32 = event.event.kind.as_u16() as u32;
+        let kind_u32 = event_kind_u32(&event.event);
 
         // Exclude workflow execution events to prevent infinite loops.
         // See Decision 10 in PLANS/SPROUT_WORKFLOWS.md.
-        if (46001..=46012).contains(&kind_u32) {
+        if is_workflow_execution_kind(kind_u32) {
             return Ok(());
         }
 
@@ -257,7 +258,7 @@ steps:
             &trigger,
             sprout_core::kind::KIND_REACTION
         ));
-        assert!(!trigger_matches_event(&trigger, 46001));
+        assert!(!trigger_matches_event(&trigger, sprout_core::kind::KIND_WORKFLOW_TRIGGERED));
     }
 
     #[test]
@@ -326,7 +327,7 @@ steps:
         let msg_trigger = TriggerDef::MessagePosted { filter: None };
         let react_trigger = TriggerDef::ReactionAdded { emoji: None };
 
-        for kind in 46001u32..=46012 {
+        for kind in sprout_core::kind::KIND_WORKFLOW_TRIGGERED..=sprout_core::kind::KIND_WORKFLOW_APPROVAL_DENIED {
             assert!(
                 !trigger_matches_event(&msg_trigger, kind),
                 "message_posted should not match workflow execution kind {kind}"

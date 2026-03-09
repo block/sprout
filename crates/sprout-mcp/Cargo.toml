@@ -12,6 +12,9 @@ name = "sprout-mcp-server"
 path = "src/main.rs"
 
 [dependencies]
+# Sprout core types
+sprout-core = { workspace = true }
+
 # MCP SDK
 rmcp = { workspace = true }
 schemars = { workspace = true }

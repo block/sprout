@@ -17,6 +17,8 @@ pub const KIND_REACTION: u32 = 7;
 pub const KIND_GIFT_WRAP: u32 = 1059;
 /// NIP-94: File metadata attachment.
 pub const KIND_FILE_METADATA: u32 = 1063;
+/// NIP-42 auth event — never stored (carries bearer tokens).
+pub const KIND_AUTH: u32 = 22242;
 
 // NIP-29 group admin events
 /// NIP-29: Add a user to a group.
@@ -56,6 +58,11 @@ pub const KIND_NIP29_GROUP_MEMBERS: u32 = 39002;
 /// NIP-29: Addressable group roles definition.
 pub const KIND_NIP29_GROUP_ROLES: u32 = 39003;
 
+/// Lower bound of the ephemeral event range (20000–29999). Never stored.
+pub const EPHEMERAL_KIND_MIN: u32 = 20000;
+/// Upper bound of the ephemeral event range (20000–29999). Never stored.
+pub const EPHEMERAL_KIND_MAX: u32 = 29999;
+
 // Ephemeral events (20000–29999) — Redis pub/sub only, never stored.
 /// Ephemeral: user presence update (online/away/offline).
 pub const KIND_PRESENCE_UPDATE: u32 = 20001;
@@ -77,6 +84,8 @@ pub const KIND_STREAM_MESSAGE_BOOKMARKED: u32 = 40005;
 pub const KIND_STREAM_MESSAGE_SCHEDULED: u32 = 40006;
 /// A reminder attached to a stream message or time.
 pub const KIND_STREAM_REMINDER: u32 = 40007;
+/// Canvas (shared document) for a channel.
+pub const KIND_CANVAS: u32 = 40100;
 
 // Direct messages (41000–41999)
 /// A new direct-message conversation was created.
@@ -215,6 +224,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_STREAM_MESSAGE_BOOKMARKED,
     KIND_STREAM_MESSAGE_SCHEDULED,
     KIND_STREAM_REMINDER,
+    KIND_CANVAS,
     KIND_DM_CREATED,
     KIND_DM_MEMBER_ADDED,
     KIND_DM_MEMBER_REMOVED,
@@ -259,6 +269,35 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_HUDDLE_TRACK_PUBLISHED,
     KIND_HUDDLE_RECORDING_AVAILABLE,
 ];
+
+/// Returns `true` if `kind` is in the ephemeral range (20000–29999).
+pub const fn is_ephemeral(kind: u32) -> bool {
+    kind >= EPHEMERAL_KIND_MIN && kind <= EPHEMERAL_KIND_MAX
+}
+
+/// Returns `true` if `kind` is a workflow execution event (46001–46012).
+/// These must not trigger workflows (prevents infinite loops).
+pub const fn is_workflow_execution_kind(kind: u32) -> bool {
+    kind >= KIND_WORKFLOW_TRIGGERED && kind <= KIND_WORKFLOW_APPROVAL_DENIED
+}
+
+/// Extract the kind from a nostr Event as u32.
+/// NIP-01 specifies kind as an unsigned integer; u32 covers the full range.
+pub fn event_kind_u32(event: &nostr::Event) -> u32 {
+    event.kind.as_u16() as u32
+}
+
+/// Extract the kind from a nostr Event as i32 (for MySQL INT columns).
+/// Safe: all Sprout kinds fit in i32 (max 65535 < i32::MAX).
+pub fn event_kind_i32(event: &nostr::Event) -> i32 {
+    event.kind.as_u16() as i32
+}
+
+// Compile-time: all Sprout kind constants fit in nostr's u16-backed Kind.
+const _: () = assert!(KIND_AUTH <= u16::MAX as u32);
+const _: () = assert!(KIND_CANVAS <= u16::MAX as u32);
+const _: () = assert!(KIND_HUDDLE_RECORDING_AVAILABLE <= u16::MAX as u32);
+const _: () = assert!(EPHEMERAL_KIND_MIN < EPHEMERAL_KIND_MAX);
 
 #[cfg(test)]
 mod tests {

@@ -147,6 +147,7 @@ Copy `.env.example` to `.env`. All defaults work with `docker compose up` out of
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
 | `TYPESENSE_URL` | `http://localhost:8108` | Typesense base URL |
 | `TYPESENSE_API_KEY` | `sprout_dev_key` | Typesense API key |
+| `TYPESENSE_COLLECTION` | `events` | Typesense collection name |
 | `SPROUT_BIND_ADDR` | `0.0.0.0:3000` | Relay bind address (host:port) |
 | `RELAY_URL` | `ws://localhost:3000` | Public URL (used in NIP-42 challenges) |
 | `SPROUT_REQUIRE_AUTH_TOKEN` | `false` | Require bearer token for auth (set `true` in production) |
