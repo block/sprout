@@ -35,7 +35,16 @@ pub async fn ensure_user(pool: &MySqlPool, pubkey: &[u8]) -> Result<()> {
 
 /// Get a single user record by pubkey.
 pub async fn get_user(pool: &MySqlPool, pubkey: &[u8]) -> Result<Option<UserProfile>> {
-    let row = sqlx::query_as::<_, (Vec<u8>, Option<String>, Option<String>, Option<String>, Option<String>)>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            Vec<u8>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
         r#"
         SELECT pubkey, display_name, avatar_url, about, nip05_handle
         FROM users

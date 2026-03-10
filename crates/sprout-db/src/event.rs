@@ -462,7 +462,9 @@ pub async fn insert_event_with_thread_metadata(
                     // Ensure the parent has a thread_metadata row so the UPDATE
                     // below has something to hit. Root (depth=0) messages don't
                     // get a row on first insert, so we create a stub here.
-                    let parent_ts = meta.parent_event_created_at.unwrap_or(meta.event_created_at);
+                    let parent_ts = meta
+                        .parent_event_created_at
+                        .unwrap_or(meta.event_created_at);
                     sqlx::query(
                         r#"
                         INSERT IGNORE INTO thread_metadata
@@ -482,7 +484,8 @@ pub async fn insert_event_with_thread_metadata(
                     // Ensure the root also has a row (may differ from parent for nested replies).
                     if let Some(root_id) = meta.root_event_id {
                         if root_id != pid {
-                            let root_ts = meta.root_event_created_at.unwrap_or(meta.event_created_at);
+                            let root_ts =
+                                meta.root_event_created_at.unwrap_or(meta.event_created_at);
                             sqlx::query(
                                 r#"
                                 INSERT IGNORE INTO thread_metadata

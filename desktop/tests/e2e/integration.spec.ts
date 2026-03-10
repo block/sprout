@@ -158,7 +158,7 @@ test("multiple channels independent", async ({ page }) => {
   // Switch to channel B — message from A should not appear
   await page.getByTestId(`channel-${channelB}`).click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelB);
-  await expect(
-    page.getByTestId("message-timeline"),
-  ).not.toContainText(messageA);
+  await expect(page.getByTestId("message-timeline")).not.toContainText(
+    messageA,
+  );
 });

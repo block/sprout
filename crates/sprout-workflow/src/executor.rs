@@ -538,7 +538,7 @@ pub async fn dispatch_action(
             #[cfg(feature = "reqwest")]
             {
                 let result = send_message_impl(channel_id, text).await?;
-                return Ok(StepResult::Completed(result));
+                Ok(StepResult::Completed(result))
             }
 
             #[cfg(not(feature = "reqwest"))]
@@ -548,9 +548,9 @@ pub async fn dispatch_action(
                     step = step_id,
                     "SendMessage: reqwest feature not enabled, skipping HTTP call"
                 );
-                return Ok(StepResult::Completed(
+                Ok(StepResult::Completed(
                     serde_json::json!({ "sent": false, "skipped": true }),
-                ));
+                ))
             }
         }
 
@@ -892,10 +892,7 @@ async fn send_message_impl(channel_id: &str, text: &str) -> Result<JsonValue, Wo
         )));
     }
 
-    let body_text = resp
-        .text()
-        .await
-        .unwrap_or_else(|_| String::new());
+    let body_text = resp.text().await.unwrap_or_else(|_| String::new());
 
     // Try to parse the response as JSON; fall back to wrapping the raw text.
     let body_json: JsonValue = serde_json::from_str(&body_text)

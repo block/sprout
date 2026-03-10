@@ -147,9 +147,7 @@ test("day divider appears in timeline", async ({ page }) => {
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Welcome to #general",
   );
-  await expect(
-    page.getByTestId("message-timeline-day-divider"),
-  ).toBeVisible();
+  await expect(page.getByTestId("message-timeline-day-divider")).toBeVisible();
 });
 
 test("send message to DM channel", async ({ page }) => {
