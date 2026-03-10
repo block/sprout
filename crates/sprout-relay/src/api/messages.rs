@@ -29,7 +29,44 @@ use serde::Deserialize;
 
 use crate::state::AppState;
 
-use super::{api_error, check_channel_access, extract_auth_pubkey, internal_error, not_found};
+use super::{
+    api_error, check_channel_access, extract_auth_pubkey, forbidden, internal_error, not_found,
+};
+
+/// Extract the effective message author from a stored event.
+///
+/// REST-created messages are signed by the relay keypair and attribute the real
+/// sender via a `p` tag. For user-signed events (WebSocket), `event.pubkey` is
+/// the author. This helper returns the correct author bytes in both cases.
+fn effective_author(event: &nostr::Event, relay_pubkey: &nostr::PublicKey) -> Vec<u8> {
+    if event.pubkey == *relay_pubkey {
+        // Relay-signed: real author is in the first p tag.
+        for tag in event.tags.iter() {
+            if tag.kind().to_string() == "p" {
+                if let Some(hex) = tag.content() {
+                    if let Ok(bytes) = nostr_hex::decode(hex) {
+                        if bytes.len() == 32 {
+                            return bytes;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // User-signed or no p tag found: pubkey is the author.
+    event.pubkey.serialize().to_vec()
+}
+
+/// Serialize a slice of reaction summaries to JSON.
+fn reactions_to_json(reactions: &[sprout_db::reaction::ReactionSummary]) -> serde_json::Value {
+    serde_json::json!(reactions
+        .iter()
+        .map(|r| serde_json::json!({
+            "emoji": r.emoji,
+            "count": r.count,
+        }))
+        .collect::<Vec<_>>())
+}
 
 // ── POST /api/channels/:channel_id/messages ───────────────────────────────────
 
@@ -215,31 +252,25 @@ pub async fn send_message(
         chrono::DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)
     };
 
-    // ── Persist event ─────────────────────────────────────────────────────────
+    // ── Persist event + thread metadata atomically ──────────────────────────
+
+    let thread_meta = Some(sprout_db::event::ThreadMetadataParams {
+        event_id: &event_id_bytes,
+        event_created_at,
+        channel_id,
+        parent_event_id: parent_id_bytes.as_deref(),
+        parent_event_created_at: parent_created_at,
+        root_event_id: root_id_bytes.as_deref(),
+        root_event_created_at: root_created_at,
+        depth,
+        broadcast: body.broadcast_to_channel,
+    });
 
     state
         .db
-        .insert_event(&event, Some(channel_id))
+        .insert_event_with_thread_metadata(&event, Some(channel_id), thread_meta)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
-
-    // ── Persist thread metadata ───────────────────────────────────────────────
-
-    state
-        .db
-        .insert_thread_metadata(
-            &event_id_bytes,
-            event_created_at,
-            channel_id,
-            parent_id_bytes.as_deref(),
-            parent_created_at,
-            root_id_bytes.as_deref(),
-            root_created_at,
-            depth,
-            body.broadcast_to_channel,
-        )
-        .await
-        .map_err(|e| internal_error(&format!("thread metadata error: {e}")))?;
 
     // ── Response ──────────────────────────────────────────────────────────────
 
@@ -250,6 +281,82 @@ pub async fn send_message(
         "depth":           depth,
         "created_at":      event_created_at.timestamp(),
     })))
+}
+
+// ── DELETE /api/messages/:event_id ─────────────────────────────────────────────
+
+/// Soft-delete a message by event ID.
+///
+/// Authorization: the caller must be the message author, or an owner/admin of
+/// the channel the message belongs to. If the deleted event is a thread reply,
+/// parent/root reply counts are decremented.
+pub async fn delete_message(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(event_id_hex): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+
+    let event_id_bytes = nostr_hex::decode(&event_id_hex)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid event_id hex"))?;
+
+    // Look up the event to check ownership and channel.
+    let stored = state
+        .db
+        .get_event_by_id(&event_id_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?
+        .ok_or_else(|| not_found("event not found"))?;
+
+    let channel_id = stored
+        .channel_id
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "event has no channel"))?;
+
+    // Auth: must be the message author OR an owner/admin of the channel.
+    // For relay-signed REST messages, the real author is in the p tag.
+    let author_bytes = effective_author(&stored.event, &state.relay_keypair.public_key());
+    let is_author = author_bytes == pubkey_bytes;
+
+    if !is_author {
+        let role = state
+            .db
+            .get_member_role(channel_id, &pubkey_bytes)
+            .await
+            .map_err(|e| internal_error(&format!("db error: {e}")))?;
+        match role.as_deref() {
+            Some("owner") | Some("admin") => {} // authorized
+            _ => return Err(forbidden("must be message author or channel owner/admin")),
+        }
+    }
+
+    // Look up thread metadata before deleting so we can pass parent/root IDs
+    // to the transactional delete function. Fail hard on DB errors to avoid
+    // deleting the event without decrementing counters.
+    let meta = state
+        .db
+        .get_thread_metadata_by_event(&event_id_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    let parent_id = meta.as_ref().and_then(|m| m.parent_event_id.clone());
+    let root_id = meta.as_ref().and_then(|m| m.root_event_id.clone());
+
+    // Atomically soft-delete the event and decrement thread counters in one transaction.
+    let deleted = state
+        .db
+        .soft_delete_event_and_update_thread(
+            &event_id_bytes,
+            parent_id.as_deref(),
+            root_id.as_deref(),
+        )
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    if !deleted {
+        return Err(api_error(StatusCode::CONFLICT, "event already deleted"));
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true, "deleted": true })))
 }
 
 // ── GET /api/channels/:channel_id/messages ────────────────────────────────────
@@ -297,14 +404,32 @@ pub async fn list_messages(
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
-    // Optionally enrich with thread summaries.
-    if params.with_threads {
-        for msg in &mut messages {
-            if let Ok(summary) = state.db.get_thread_summary(&msg.event_id).await {
-                msg.thread_summary = summary;
-            }
+    // Always enrich with thread summaries for messages that have replies.
+    // The `with_threads` param is kept for backward compatibility but summaries
+    // are now included by default.
+    for msg in &mut messages {
+        if let Ok(summary) = state.db.get_thread_summary(&msg.event_id).await {
+            msg.thread_summary = summary;
         }
     }
+
+    // Bulk-fetch reaction counts for all messages in this page.
+    let event_pairs: Vec<(&[u8], chrono::DateTime<Utc>)> = messages
+        .iter()
+        .map(|m| (m.event_id.as_slice(), m.created_at))
+        .collect();
+    let bulk_reactions = state
+        .db
+        .get_reactions_bulk(&event_pairs)
+        .await
+        .unwrap_or_default();
+
+    // Index reactions by event_id for O(1) lookup during serialization.
+    let reaction_map: std::collections::HashMap<Vec<u8>, &[sprout_db::reaction::ReactionSummary]> =
+        bulk_reactions
+            .iter()
+            .map(|entry| (entry.event_id.clone(), entry.reactions.as_slice()))
+            .collect();
 
     // Determine next_cursor from the oldest message in this page.
     let next_cursor = messages.last().map(|m| m.created_at.timestamp());
@@ -330,6 +455,11 @@ pub async fn list_messages(
                         .map(nostr_hex::encode)
                         .collect::<Vec<_>>(),
                 });
+            }
+
+            // Embed reaction counts if any exist for this message.
+            if let Some(reactions) = reaction_map.get(&m.event_id) {
+                obj["reactions"] = reactions_to_json(reactions);
             }
 
             obj
@@ -443,7 +573,7 @@ pub async fn get_thread(
 
     // Serialize root event.
     let root_created_at = root_event.event.created_at.as_u64() as i64;
-    let root_obj = serde_json::json!({
+    let mut root_obj = serde_json::json!({
         "event_id":   root_event.event.id.to_hex(),
         "pubkey":     root_event.event.pubkey.to_hex(),
         "content":    root_event.event.content,
@@ -460,11 +590,37 @@ pub async fn get_thread(
         })),
     });
 
+    // Bulk-fetch reaction counts for root + all replies.
+    let root_created_at_dt =
+        chrono::DateTime::from_timestamp(root_created_at, 0).unwrap_or_else(Utc::now);
+    let mut thread_event_pairs: Vec<(&[u8], chrono::DateTime<Utc>)> =
+        vec![(root_id_bytes.as_slice(), root_created_at_dt)];
+    for r in &replies {
+        thread_event_pairs.push((r.event_id.as_slice(), r.created_at));
+    }
+    let thread_bulk_reactions = state
+        .db
+        .get_reactions_bulk(&thread_event_pairs)
+        .await
+        .unwrap_or_default();
+    let thread_reaction_map: std::collections::HashMap<
+        Vec<u8>,
+        &[sprout_db::reaction::ReactionSummary],
+    > = thread_bulk_reactions
+        .iter()
+        .map(|entry| (entry.event_id.clone(), entry.reactions.as_slice()))
+        .collect();
+
+    // Attach reactions to root event.
+    if let Some(reactions) = thread_reaction_map.get(&root_id_bytes) {
+        root_obj["reactions"] = reactions_to_json(reactions);
+    }
+
     // Serialize replies.
     let reply_objs: Vec<serde_json::Value> = replies
         .iter()
         .map(|r| {
-            serde_json::json!({
+            let mut obj = serde_json::json!({
                 "event_id":        nostr_hex::encode(&r.event_id),
                 "parent_event_id": r.parent_event_id.as_ref().map(nostr_hex::encode),
                 "root_event_id":   r.root_event_id.as_ref().map(nostr_hex::encode),
@@ -475,7 +631,13 @@ pub async fn get_thread(
                 "depth":           r.depth,
                 "created_at":      r.created_at.timestamp(),
                 "broadcast":       r.broadcast,
-            })
+            });
+
+            if let Some(reactions) = thread_reaction_map.get(&r.event_id) {
+                obj["reactions"] = reactions_to_json(reactions);
+            }
+
+            obj
         })
         .collect();
 

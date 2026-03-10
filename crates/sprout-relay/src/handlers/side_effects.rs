@@ -145,13 +145,55 @@ pub async fn validate_admin_event(
             }
         }
         9005 => {
-            // DELETE_EVENT: owner/admin or event author
-            // For now, just check membership
-            let is_member = state.db.is_member(channel_id, &actor_bytes).await?;
-            if is_member {
-                Ok(())
-            } else {
-                Err(anyhow::anyhow!("not a member"))
+            // DELETE_EVENT: event author OR channel owner/admin.
+            // Extract target event from e tag to check authorship.
+            let target_id = event
+                .tags
+                .iter()
+                .find_map(|tag| {
+                    if tag.kind().to_string() == "e" {
+                        tag.content().and_then(|v| hex::decode(v).ok())
+                    } else {
+                        None
+                    }
+                })
+                .ok_or_else(|| anyhow::anyhow!("missing e tag for target event"))?;
+
+            // Verify the target event belongs to the h-tag channel BEFORE storage.
+            // Without this, an admin of channel A could craft h=A, e=<event-in-B>
+            // and the relay would store the invalid admin event.
+            if let Ok(Some(target_event)) = state.db.get_event_by_id(&target_id).await {
+                match target_event.channel_id {
+                    Some(target_ch) if target_ch != channel_id => {
+                        return Err(anyhow::anyhow!(
+                            "target event belongs to a different channel"
+                        ));
+                    }
+                    None => {
+                        return Err(anyhow::anyhow!("target event has no channel"));
+                    }
+                    _ => {} // Same channel — OK
+                }
+
+                // Check if actor is the event author.
+                // For relay-signed REST messages, the real author is in the p tag.
+                let author = effective_message_author(
+                    &target_event.event,
+                    &state.relay_keypair.public_key(),
+                );
+                if author == actor_bytes {
+                    return Ok(()); // Author can always delete their own messages
+                }
+            }
+
+            // Not the author — must be owner/admin.
+            let members = state.db.get_members(channel_id).await?;
+            let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
+            match actor_member {
+                Some(m) if m.role == "owner" || m.role == "admin" => Ok(()),
+                _ => Err(anyhow::anyhow!(
+                    "must be event author or channel owner/admin"
+                )),
             }
         }
         9008 => {
@@ -378,8 +420,50 @@ async fn handle_delete_event_side_effect(
         })
         .ok_or_else(|| anyhow::anyhow!("missing e tag for target event"))?;
 
-    // TODO: Add soft_delete_event to Db for full implementation
-    tracing::info!(target_event = %hex::encode(&target_id), "Would soft-delete event");
+    // Verify the target event belongs to the same channel as the h-tag.
+    // Without this check, an admin of channel A could delete events in channel B
+    // by sending h=A, e=<event-in-B>.
+    if let Some(target_event) = state
+        .db
+        .get_event_by_id_including_deleted(&target_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("get_event_by_id failed: {e}"))?
+    {
+        match target_event.channel_id {
+            Some(target_ch) if target_ch != channel_id => {
+                return Err(anyhow::anyhow!(
+                    "target event belongs to a different channel"
+                ));
+            }
+            None => {
+                return Err(anyhow::anyhow!("target event has no channel"));
+            }
+            _ => {} // Same channel — OK
+        }
+    }
+
+    // Look up thread metadata so we can pass parent/root IDs to the
+    // transactional delete function.
+    let meta = state
+        .db
+        .get_thread_metadata_by_event(&target_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("get_thread_metadata failed: {e}"))?;
+
+    let parent_id = meta.as_ref().and_then(|m| m.parent_event_id.clone());
+    let root_id = meta.as_ref().and_then(|m| m.root_event_id.clone());
+
+    // Atomically soft-delete the event and decrement thread counters in one transaction.
+    let deleted = state
+        .db
+        .soft_delete_event_and_update_thread(&target_id, parent_id.as_deref(), root_id.as_deref())
+        .await
+        .map_err(|e| anyhow::anyhow!("soft_delete_event failed: {e}"))?;
+
+    if !deleted {
+        warn!(target_event = %hex::encode(&target_id), "event already deleted or not found");
+        return Ok(()); // No-op: skip system message to avoid false audit records.
+    }
 
     let actor_hex = nostr::util::hex::encode(event.pubkey.serialize());
     emit_system_message(
@@ -393,6 +477,7 @@ async fn handle_delete_event_side_effect(
     )
     .await?;
 
+    info!(target_event = %hex::encode(&target_id), "NIP-29 DELETE_EVENT processed");
     Ok(())
 }
 
@@ -436,7 +521,17 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
     let actor_bytes = event.pubkey.serialize().to_vec();
 
-    // TODO: Add soft_delete_channel to Db for full implementation
+    // Soft-delete the channel.
+    let deleted = state
+        .db
+        .soft_delete_channel(channel_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("soft_delete_channel failed: {e}"))?;
+
+    if !deleted {
+        warn!(channel = %channel_id, "channel already deleted or not found");
+    }
+
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
     emit_system_message(
         state,
@@ -447,6 +542,7 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
     )
     .await?;
 
+    info!(channel = %channel_id, "NIP-29 DELETE_GROUP processed");
     Ok(())
 }
 
@@ -579,6 +675,28 @@ fn extract_p_tag(event: &Event) -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+/// Extract the effective message author from a stored event.
+///
+/// REST-created messages are signed by the relay keypair and attribute the real
+/// sender via a `p` tag. For user-signed events (WebSocket), `event.pubkey` is
+/// the author. Returns the correct author bytes in both cases.
+fn effective_message_author(event: &Event, relay_pubkey: &nostr::PublicKey) -> Vec<u8> {
+    if event.pubkey == *relay_pubkey {
+        for tag in event.tags.iter() {
+            if tag.kind().to_string() == "p" {
+                if let Some(hex) = tag.content() {
+                    if let Ok(bytes) = hex::decode(hex) {
+                        if bytes.len() == 32 {
+                            return bytes;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    event.pubkey.serialize().to_vec()
 }
 
 /// Extract value of a named tag.

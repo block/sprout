@@ -511,8 +511,9 @@ pub async fn remove_member(
 pub async fn is_member(pool: &MySqlPool, channel_id: Uuid, pubkey: &[u8]) -> Result<bool> {
     let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
     let row = sqlx::query(
-        "SELECT COUNT(*) as cnt FROM channel_members \
-         WHERE channel_id = ? AND pubkey = ? AND removed_at IS NULL",
+        "SELECT COUNT(*) as cnt FROM channel_members cm \
+         JOIN channels c ON cm.channel_id = c.id AND c.deleted_at IS NULL \
+         WHERE cm.channel_id = ? AND cm.pubkey = ? AND cm.removed_at IS NULL",
     )
     .bind(&channel_id_bytes)
     .bind(pubkey)
@@ -523,14 +524,17 @@ pub async fn is_member(pool: &MySqlPool, channel_id: Uuid, pubkey: &[u8]) -> Res
 }
 
 /// Returns all active members of the given channel.
+///
+/// Returns an empty list if the channel has been soft-deleted.
 pub async fn get_members(pool: &MySqlPool, channel_id: Uuid) -> Result<Vec<MemberRecord>> {
     let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
     let rows = sqlx::query(
         r#"
-        SELECT channel_id, pubkey, role, joined_at, invited_by, removed_at
-        FROM channel_members
-        WHERE channel_id = ? AND removed_at IS NULL
-        ORDER BY joined_at ASC
+        SELECT cm.channel_id, cm.pubkey, cm.role, cm.joined_at, cm.invited_by, cm.removed_at
+        FROM channel_members cm
+        JOIN channels c ON cm.channel_id = c.id AND c.deleted_at IS NULL
+        WHERE cm.channel_id = ? AND cm.removed_at IS NULL
+        ORDER BY cm.joined_at ASC
         LIMIT 1000
         "#,
     )
@@ -547,9 +551,10 @@ pub async fn get_members(pool: &MySqlPool, channel_id: Uuid) -> Result<Vec<Membe
 pub async fn get_accessible_channel_ids(pool: &MySqlPool, pubkey: &[u8]) -> Result<Vec<Uuid>> {
     let rows = sqlx::query(
         r#"
-        SELECT channel_id
-        FROM channel_members
-        WHERE pubkey = ? AND removed_at IS NULL
+        SELECT cm.channel_id
+        FROM channel_members cm
+        JOIN channels c ON cm.channel_id = c.id AND c.deleted_at IS NULL
+        WHERE cm.pubkey = ? AND cm.removed_at IS NULL
         UNION
         SELECT id AS channel_id
         FROM channels
@@ -1008,6 +1013,21 @@ pub async fn unarchive_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<()>
     Ok(())
 }
 
+/// Soft-delete a channel by setting `deleted_at = NOW(6)`.
+///
+/// Returns `Ok(true)` if the channel was deleted, `Ok(false)` if already
+/// deleted or not found.
+pub async fn soft_delete_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<bool> {
+    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
+    let result =
+        sqlx::query("UPDATE channels SET deleted_at = NOW(6) WHERE id = ? AND deleted_at IS NULL")
+            .bind(&id_bytes)
+            .execute(pool)
+            .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// Returns the count of active (non-removed) members in a channel.
 pub async fn get_member_count(pool: &MySqlPool, channel_id: Uuid) -> Result<i64> {
     let id_bytes = channel_id.as_bytes().as_slice().to_vec();
@@ -1020,6 +1040,42 @@ pub async fn get_member_count(pool: &MySqlPool, channel_id: Uuid) -> Result<i64>
     Ok(row.try_get("cnt")?)
 }
 
+/// Bulk-fetch member counts for a set of channel IDs.
+///
+/// Returns a map of `channel_id → count`. Channels with zero members are omitted.
+/// Single query regardless of input size.
+pub async fn get_member_counts_bulk(
+    pool: &MySqlPool,
+    channel_ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, i64>> {
+    use crate::event::uuid_from_bytes;
+
+    if channel_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let mut qb: sqlx::QueryBuilder<sqlx::MySql> = sqlx::QueryBuilder::new(
+        "SELECT channel_id, COUNT(*) as cnt FROM channel_members \
+         WHERE removed_at IS NULL AND channel_id IN (",
+    );
+    let mut sep = qb.separated(", ");
+    for id in channel_ids {
+        sep.push_bind(id.as_bytes().to_vec());
+    }
+    qb.push(") GROUP BY channel_id");
+
+    let rows = qb.build().fetch_all(pool).await?;
+
+    let mut map = std::collections::HashMap::with_capacity(rows.len());
+    for row in rows {
+        let id_bytes: Vec<u8> = row.try_get("channel_id")?;
+        let id = uuid_from_bytes(&id_bytes)?;
+        let cnt: i64 = row.try_get("cnt")?;
+        map.insert(id, cnt);
+    }
+    Ok(map)
+}
+
 /// Get the active role of a pubkey in a channel.
 ///
 /// Returns `None` if the pubkey is not an active member.
@@ -1030,7 +1086,9 @@ pub async fn get_member_role(
 ) -> Result<Option<String>> {
     let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
     let row = sqlx::query(
-        "SELECT role FROM channel_members WHERE channel_id = ? AND pubkey = ? AND removed_at IS NULL",
+        "SELECT cm.role FROM channel_members cm \
+         JOIN channels c ON cm.channel_id = c.id AND c.deleted_at IS NULL \
+         WHERE cm.channel_id = ? AND cm.pubkey = ? AND cm.removed_at IS NULL",
     )
     .bind(&channel_id_bytes)
     .bind(pubkey)

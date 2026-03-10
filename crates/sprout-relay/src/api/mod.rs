@@ -43,13 +43,13 @@ pub use agents::agents_handler;
 pub use approvals::{deny_approval, grant_approval};
 pub use channels::{channels_handler, create_channel};
 pub use channels_metadata::{
-    archive_channel_handler, get_channel_handler, set_purpose_handler, set_topic_handler,
-    unarchive_channel_handler, update_channel_handler,
+    archive_channel_handler, delete_channel_handler, get_channel_handler, set_purpose_handler,
+    set_topic_handler, unarchive_channel_handler, update_channel_handler,
 };
 pub use dms::{add_dm_member_handler, list_dms_handler, open_dm_handler};
 pub use feed::feed_handler;
 pub use members::{add_members, join_channel, leave_channel, list_members, remove_member};
-pub use messages::{get_thread, list_messages, send_message};
+pub use messages::{delete_message, get_thread, list_messages, send_message};
 pub use presence::presence_handler;
 pub use reactions::{add_reaction_handler, list_reactions_handler, remove_reaction_handler};
 pub use search::search_handler;

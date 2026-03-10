@@ -218,6 +218,7 @@ Sprout is designed as a complete platform, not a collection of independent micro
 | ✅ | Nostr proxy (`sprout-proxy`) — guest client compatibility |
 | ✅ | Huddle (`sprout-huddle`) — LiveKit integration |
 | ✅ | Admin CLI (`sprout-admin`) |
+| ✅ | Channel features — messaging, threads, DMs, reactions, NIP-29 group management, soft-delete |
 | 🚧 | Web client (Tauri) — Stream, Forum, DM, Search |
 | ✅ | Workflow engine (`sprout-workflow`) — YAML-as-code, 4 trigger types, 7 action types, approval gates, execution traces |
 | ✅ | Home Feed (`/api/feed`) — @mentions, needs-action, channel activity, agent activity |

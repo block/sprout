@@ -36,6 +36,20 @@ pub async fn channels_handler(
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
+    // Bulk-fetch member counts and last-message timestamps in two queries
+    // instead of 2N queries (one per channel per metric).
+    let channel_ids: Vec<uuid::Uuid> = channels.iter().map(|ch| ch.id).collect();
+    let member_counts = state
+        .db
+        .get_member_counts_bulk(&channel_ids)
+        .await
+        .unwrap_or_default();
+    let last_messages = state
+        .db
+        .get_last_message_at_bulk(&channel_ids)
+        .await
+        .unwrap_or_default();
+
     let mut result = Vec::with_capacity(channels.len());
 
     for ch in &channels {
@@ -45,10 +59,15 @@ pub async fn channels_handler(
             (vec![], vec![])
         };
 
+        let member_count = member_counts.get(&ch.id).copied().unwrap_or(0);
+        let last_message_at = last_messages.get(&ch.id).copied();
+
         result.push(channel_record_to_json(
             ch,
             participants,
             participant_pubkeys,
+            member_count,
+            last_message_at,
         ));
     }
 
@@ -120,7 +139,7 @@ pub async fn create_channel(
 
     Ok((
         StatusCode::CREATED,
-        Json(channel_record_to_json(&channel, vec![], vec![])),
+        Json(channel_record_to_json(&channel, vec![], vec![], 1, None)),
     ))
 }
 
@@ -128,12 +147,23 @@ fn channel_record_to_json(
     channel: &ChannelRecord,
     participants: Vec<String>,
     participant_pubkeys: Vec<String>,
+    member_count: i64,
+    last_message_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> serde_json::Value {
     serde_json::json!({
         "id": channel.id.to_string(),
         "name": &channel.name,
         "channel_type": &channel.channel_type,
+        "visibility": &channel.visibility,
         "description": channel.description.clone().unwrap_or_default(),
+        "topic": channel.topic,
+        "purpose": channel.purpose,
+        "created_by": nostr_hex::encode(&channel.created_by),
+        "created_at": channel.created_at.to_rfc3339(),
+        "updated_at": channel.updated_at.to_rfc3339(),
+        "archived_at": channel.archived_at.map(|t| t.to_rfc3339()),
+        "member_count": member_count,
+        "last_message_at": last_message_at.map(|t| t.to_rfc3339()),
         "participants": participants,
         "participant_pubkeys": participant_pubkeys,
     })
