@@ -19,6 +19,75 @@ use crate::connection::{AuthState, ConnectionState};
 use crate::protocol::RelayMessage;
 use crate::state::AppState;
 
+/// Publish a stored event to subscribers and kick off async side effects.
+pub(crate) async fn dispatch_persistent_event(
+    state: &Arc<AppState>,
+    stored_event: &StoredEvent,
+    kind_u32: u32,
+    actor_pubkey_hex: &str,
+) -> usize {
+    let event_id_hex = stored_event.event.id.to_hex();
+
+    if let Some(ch_id) = stored_event.channel_id {
+        if let Err(e) = state.pubsub.publish_event(ch_id, &stored_event.event).await {
+            warn!(event_id = %event_id_hex, "Redis publish failed: {e}");
+        }
+    }
+
+    let matches = state.sub_registry.fan_out(stored_event);
+    debug!(
+        event_id = %event_id_hex,
+        channel_id = ?stored_event.channel_id,
+        match_count = matches.len(),
+        "Fan-out"
+    );
+
+    let event_json = serde_json::to_string(&stored_event.event)
+        .expect("nostr::Event serialization is infallible for well-formed events");
+    for (target_conn_id, sub_id) in &matches {
+        let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
+        state.conn_manager.send_to(*target_conn_id, msg);
+    }
+
+    let search = Arc::clone(&state.search);
+    let stored_for_search = stored_event.clone();
+    tokio::spawn(async move {
+        if let Err(e) = search.index_event(&stored_for_search).await {
+            error!(event_id = %stored_for_search.event.id.to_hex(), "Search index failed: {e}");
+        }
+    });
+
+    let audit = Arc::clone(&state.audit);
+    let audit_event_id = event_id_hex.clone();
+    let audit_actor_pubkey = actor_pubkey_hex.to_string();
+    let audit_channel_id = stored_event.channel_id;
+    tokio::spawn(async move {
+        let entry = NewAuditEntry {
+            event_id: audit_event_id.clone(),
+            event_kind: kind_u32,
+            actor_pubkey: audit_actor_pubkey,
+            action: AuditAction::EventCreated,
+            channel_id: audit_channel_id,
+            metadata: serde_json::Value::Null,
+        };
+        if let Err(e) = audit.log(entry).await {
+            error!(event_id = %audit_event_id, "Audit log failed: {e}");
+        }
+    });
+
+    if !is_workflow_execution_kind(kind_u32) {
+        let workflow_engine = Arc::clone(&state.workflow_engine);
+        let workflow_event = stored_event.clone();
+        tokio::spawn(async move {
+            if let Err(e) = workflow_engine.on_event(&workflow_event).await {
+                tracing::error!(event_id = ?workflow_event.event.id, "Workflow trigger failed: {e}");
+            }
+        });
+    }
+
+    matches.len()
+}
+
 /// Handle an EVENT message: authenticate, verify, store, fan-out, index, and audit the event.
 pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<AppState>) {
     let event_id_hex = event.id.to_hex();
@@ -248,62 +317,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         }
     }
 
-    if let Some(ch_id) = channel_id {
-        if let Err(e) = state.pubsub.publish_event(ch_id, &event).await {
-            warn!(event_id = %event_id_hex, "Redis publish failed: {e}");
-        }
-    }
-
-    let matches = state.sub_registry.fan_out(&stored_event);
-    debug!(
-        event_id = %event_id_hex,
-        channel_id = ?stored_event.channel_id,
-        match_count = matches.len(),
-        "Fan-out"
-    );
-    let event_json = serde_json::to_string(&stored_event.event)
-        .expect("nostr::Event serialization is infallible for well-formed events");
-    for (target_conn_id, sub_id) in &matches {
-        let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
-        state.conn_manager.send_to(*target_conn_id, msg);
-    }
-
-    let search = Arc::clone(&state.search);
-    let stored_for_search = stored_event.clone();
-    tokio::spawn(async move {
-        if let Err(e) = search.index_event(&stored_for_search).await {
-            error!(event_id = %stored_for_search.event.id.to_hex(), "Search index failed: {e}");
-        }
-    });
-
-    let audit = Arc::clone(&state.audit);
-    let audit_event_id = event_id_hex.clone();
-    let audit_pubkey = pubkey_hex.clone();
-    tokio::spawn(async move {
-        let entry = NewAuditEntry {
-            event_id: audit_event_id.clone(),
-            event_kind: kind_u32,
-            actor_pubkey: audit_pubkey,
-            action: AuditAction::EventCreated,
-            channel_id,
-            metadata: serde_json::Value::Null,
-        };
-        if let Err(e) = audit.log(entry).await {
-            error!(event_id = %audit_event_id, "Audit log failed: {e}");
-        }
-    });
-
-    // Don't trigger workflows for workflow execution events (prevents infinite loops).
-    let is_workflow_event = is_workflow_execution_kind(kind_u32);
-    if !is_workflow_event {
-        let wf = Arc::clone(&state.workflow_engine);
-        let ev = stored_event.clone();
-        tokio::spawn(async move {
-            if let Err(e) = wf.on_event(&ev).await {
-                tracing::error!(event_id = ?ev.event.id, "Workflow trigger failed: {e}");
-            }
-        });
-    }
+    let fan_out = dispatch_persistent_event(&state, &stored_event, kind_u32, &pubkey_hex).await;
 
     conn.send(RelayMessage::ok(&event_id_hex, true, ""));
 
@@ -311,7 +325,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         event_id = %event_id_hex,
         kind = kind_u32,
         conn_id = %conn_id,
-        fan_out = matches.len(),
+        fan_out,
         "Event ingested"
     );
 }
@@ -538,12 +552,12 @@ async fn derive_reaction_channel(
 
 /// Extract a channel UUID from event tags.
 ///
-/// Checks `"channel"` custom tags and `"h"` NIP-29 group tags for a channel UUID.
+/// Checks the `"h"` NIP-29 group tag for a channel UUID.
 /// The `"e"` tag is intentionally NOT checked — it is reserved for event references only.
 fn extract_channel_id(event: &Event) -> Option<uuid::Uuid> {
     for tag in event.tags.iter() {
         let key = tag.kind().to_string();
-        if key == "channel" || key == "h" {
+        if key == "h" {
             if let Some(val) = tag.content() {
                 if let Ok(id) = val.parse::<uuid::Uuid>() {
                     return Some(id);

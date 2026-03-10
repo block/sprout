@@ -35,10 +35,7 @@ function createOptimisticMessage(
     pubkey: identity.pubkey,
     created_at: Math.floor(Date.now() / 1_000),
     kind: 4_0001,
-    tags: [
-      ["channel", channelId],
-      ["e", channelId],
-    ],
+    tags: [["h", channelId]],
     content,
     sig: "",
     pending: true,

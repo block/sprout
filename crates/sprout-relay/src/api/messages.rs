@@ -27,6 +27,7 @@ use nostr::util::hex as nostr_hex;
 use nostr::{EventBuilder, Kind, Tag};
 use serde::Deserialize;
 
+use crate::handlers::event::dispatch_persistent_event;
 use crate::state::AppState;
 
 use super::{
@@ -237,8 +238,9 @@ pub async fn send_message(
         // Attribution to the actual sender.
         Tag::parse(&["p", &user_pubkey_hex])
             .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
-        // Channel tag so Nostr clients can find this event by channel.
-        Tag::custom(nostr::TagKind::custom("channel"), [channel_id.to_string()]),
+        // Channel-scoped messages use the NIP-29 `h` tag.
+        Tag::parse(&["h", &channel_id.to_string()])
+            .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
     ];
 
     // Thread reply tags (NIP-10 style).
@@ -297,11 +299,16 @@ pub async fn send_message(
         broadcast: body.broadcast_to_channel,
     });
 
-    state
+    let (stored_event, was_inserted) = state
         .db
         .insert_event_with_thread_metadata(&event, Some(channel_id), thread_meta)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    if was_inserted {
+        let kind_u32 = u32::from(event.kind.as_u16());
+        let _ = dispatch_persistent_event(&state, &stored_event, kind_u32, &user_pubkey_hex).await;
+    }
 
     // ── Response ──────────────────────────────────────────────────────────────
 

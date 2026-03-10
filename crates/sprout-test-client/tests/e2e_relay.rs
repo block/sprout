@@ -65,7 +65,7 @@ async fn test_send_event_and_receive_via_subscription() {
     let sid = sub_id("send-recv");
     let filter = Filter::new()
         .kind(Kind::Custom(kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::E), [channel.as_str()]);
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
 
     client_a
         .subscribe(&sid, vec![filter])
@@ -124,7 +124,7 @@ async fn test_subscription_filters_by_kind() {
     let sid = sub_id("filter-kind");
     let filter = Filter::new()
         .kind(Kind::Custom(target_kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::E), [channel.as_str()]);
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
 
     client
         .subscribe(&sid, vec![filter])
@@ -194,7 +194,7 @@ async fn test_close_subscription_stops_delivery() {
     let sid = sub_id("close-sub");
     let filter = Filter::new()
         .kind(Kind::Custom(kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::E), [channel.as_str()]);
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
 
     client
         .subscribe(&sid, vec![filter])
@@ -287,7 +287,7 @@ async fn test_multiple_concurrent_clients() {
 
     let filter = Filter::new()
         .kind(Kind::Custom(kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::E), [channel.as_str()]);
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
 
     for (i, client) in clients.iter_mut().enumerate() {
         let sid = format!("multi-{i}");
@@ -350,7 +350,7 @@ async fn test_stored_events_returned_before_eose() {
     let sid = sub_id("stored");
     let filter = Filter::new()
         .kind(Kind::Custom(kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::E), [channel.as_str()]);
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
 
     client
         .subscribe(&sid, vec![filter])
@@ -397,7 +397,7 @@ async fn test_ephemeral_event_not_stored() {
     let sid = sub_id("ephemeral");
     let filter = Filter::new()
         .kind(Kind::Custom(ephemeral_kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::E), [channel.as_str()]);
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
 
     client
         .subscribe(&sid, vec![filter])
@@ -603,7 +603,7 @@ async fn test_eose_sent_for_empty_subscription() {
     let sid = sub_id("empty-eose");
     let filter = Filter::new()
         .kind(Kind::Custom(kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::E), [channel.as_str()])
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()])
         .since(nostr::Timestamp::now());
 
     client

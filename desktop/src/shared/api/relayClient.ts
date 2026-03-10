@@ -9,7 +9,7 @@ import type { RelayEvent } from "@/shared/api/types";
 
 type RelaySubscriptionFilter = {
   kinds: number[];
-  "#e": string[];
+  "#h": string[];
   limit: number;
 };
 
@@ -122,13 +122,8 @@ class RelayClient {
     const event = await signRelayEvent({
       kind: 40001,
       content: content.trim(),
-      // Include both tags for now:
-      // - `channel` lets the relay persist and authorize the event as channel-scoped
-      // - `e` keeps the existing desktop WebSocket history/subscription filters working
-      tags: [
-        ["channel", channelId],
-        ["e", channelId],
-      ],
+      // Channel-scoped events use the NIP-29 `h` tag.
+      tags: [["h", channelId]],
     });
 
     return new Promise<RelayEvent>((resolve, reject) => {
@@ -249,7 +244,7 @@ class RelayClient {
   ): RelaySubscriptionFilter {
     return {
       kinds: [40001],
-      "#e": [channelId],
+      "#h": [channelId],
       limit,
     };
   }
