@@ -185,7 +185,7 @@ pub struct MemberRecord {
     pub removed_at: Option<DateTime<Utc>>,
 }
 
-/// Creates a new channel and returns the resulting record.
+/// Creates a new channel, bootstraps the creator as owner, and returns the record.
 pub async fn create_channel(
     pool: &MySqlPool,
     name: &str,
@@ -220,6 +220,22 @@ pub async fn create_channel(
     .bind(channel_type.as_str())
     .bind(visibility.as_str())
     .bind(description)
+    .bind(created_by)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO channel_members (channel_id, pubkey, role, invited_by)
+        VALUES (?, ?, 'owner', ?)
+        ON DUPLICATE KEY UPDATE
+            removed_at = NULL,
+            removed_by = NULL,
+            role = VALUES(role)
+        "#,
+    )
+    .bind(&id_bytes)
+    .bind(created_by)
     .bind(created_by)
     .execute(&mut *tx)
     .await?;

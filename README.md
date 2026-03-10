@@ -99,16 +99,38 @@ append-only and audited.
 
 ## Quick Start
 
-**1. Start infrastructure**
+**1. Activate the pinned toolchain**
+
+```bash
+. ./bin/activate-hermit
+```
+
+Hermit pins Rust, Node.js, pnpm, `just`, and related tooling from `bin/`.
+If you prefer not to use Hermit, install the prerequisites manually first.
+
+**2. Start infrastructure**
 
 ```bash
 cp .env.example .env
-docker compose up -d
+just setup
 ```
+
+`just setup` starts Docker services and applies pending database migrations.
 
 Services: MySQL `:3306`, Redis `:6379`, Typesense `:8108`, Adminer `:8082`
 
-**2. Start the relay**
+**3. Install desktop dependencies**
+
+```bash
+just desktop-install
+```
+
+This is required before running `just check`, `just ci`, Git hooks, or any
+`just desktop-*` command.
+
+The desktop workflow documented here is macOS-first for now.
+
+**4. Start the relay**
 
 ```bash
 just relay
@@ -117,7 +139,7 @@ just relay
 
 Relay listens on `ws://localhost:3000` by default.
 
-**3. Mint an API token**
+**5. Mint an API token**
 
 ```bash
 cargo run -p sprout-admin -- mint-token \
@@ -125,17 +147,28 @@ cargo run -p sprout-admin -- mint-token \
   --scopes "messages:read,messages:write,channels:read"
 ```
 
-Outputs a bearer token. Set it as `SPROUT_API_TOKEN` for the MCP server.
+Save the `nsec...` private key and API token from the output. They are shown only once.
 
-**4. Connect an agent via MCP**
+**6. Launch an agent with the MCP extension**
 
 ```bash
 SPROUT_RELAY_URL=ws://localhost:3000 \
 SPROUT_API_TOKEN=<token> \
-cargo run -p sprout-mcp
+SPROUT_PRIVATE_KEY=nsec1... \
+goose run --no-profile \
+  --with-extension "cargo run -p sprout-mcp --bin sprout-mcp-server" \
+  --instructions "List available Sprout channels."
 ```
 
-The MCP server speaks stdio JSON-RPC. Wire it into any MCP-compatible agent host.
+`sprout-mcp-server` is a stdio MCP extension, so start it through a host such as Goose rather than
+as a standalone user-facing process. See [TESTING.md](TESTING.md) for the full multi-agent flow.
+
+**7. Run the desktop app (optional)**
+
+```bash
+just desktop-app
+# or: just desktop-dev
+```
 
 ## Configuration
 
@@ -194,7 +227,7 @@ Set `SPROUT_PRIVATE_KEY` (nsec format) to use a persistent identity.
 
 ## Development
 
-**Prerequisites:** Rust 1.88+, Docker, [`just`](https://github.com/casey/just)
+**Prerequisites:** Rust 1.88+, Docker, Node.js 24+, pnpm 10+, [`just`](https://github.com/casey/just)
 
 This repo uses [Hermit](https://cashapp.github.io/hermit/) for toolchain pinning. Activate with:
 
@@ -202,16 +235,28 @@ This repo uses [Hermit](https://cashapp.github.io/hermit/) for toolchain pinning
 . ./bin/activate-hermit
 ```
 
+For a fresh clone, install desktop dependencies before running desktop-aware
+checks or hooks:
+
+```bash
+just desktop-install
+lefthook install
+```
+
 **Common tasks**
 
 ```bash
 just setup          # Start Docker services + run migrations
 just relay          # Run the relay (dev mode)
-just build          # Build entire workspace
-just check          # fmt-check + clippy
+just build          # Build the Rust workspace
+just desktop-install # Install desktop dependencies
+just desktop-dev    # Run the desktop web UI only
+just desktop-app    # Run the Tauri desktop app
+just desktop-ci     # Desktop check + build + Tauri Rust check
+just check          # Rust fmt/clippy + desktop check
 just test-unit      # Unit tests (no infra required)
 just test           # All tests (starts services if needed)
-just ci             # fmt-check + clippy + unit tests (CI gate)
+just ci             # check + unit tests + desktop build + Tauri check
 just migrate        # Run pending migrations
 just down           # Stop Docker services (keep data)
 just reset          # ⚠️  Wipe all data and recreate environment
@@ -222,8 +267,10 @@ just reset          # ⚠️  Wipe all data and recreate environment
 ```bash
 cargo run -p sprout-relay
 cargo run -p sprout-admin -- --help
-cargo run -p sprout-mcp
+cargo run -p sprout-mcp --bin sprout-mcp-server
 ```
+
+`sprout-mcp-server` is normally launched by Goose or another MCP host.
 
 **Database migrations** live in `migrations/`. The relay applies them automatically on startup.
 To run manually: `just migrate` (uses `sqlx` CLI if available, falls back to `docker exec`).

@@ -174,7 +174,7 @@ impl Db {
 
     // ── Channels ─────────────────────────────────────────────────────────────
 
-    /// Creates a new channel and returns the resulting record.
+    /// Creates a new channel, bootstraps the creator as owner, and returns the record.
     pub async fn create_channel(
         &self,
         name: &str,
@@ -802,11 +802,7 @@ mod tests {
             .expect("create");
         assert_eq!(channel.name, "test-membership");
         assert_eq!(channel.description, Some("desc".to_string()));
-
-        // Bootstrap owner
-        db.add_member(channel.id, &owner, channel::MemberRole::Owner, Some(&owner))
-            .await
-            .expect("add owner");
+        assert!(db.is_member(channel.id, &owner).await.unwrap());
 
         // Add member via owner invite
         db.add_member(

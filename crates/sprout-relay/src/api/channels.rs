@@ -1,19 +1,25 @@
-//! GET /api/channels — list accessible channels for the authenticated user.
+//! Channel REST API.
+//!
+//! Endpoints:
+//!   GET  /api/channels — list accessible channels for the authenticated user
+//!   POST /api/channels — create a new channel for the authenticated user
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
+    extract::Json as ExtractJson,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::Json,
 };
-
 use nostr::util::hex as nostr_hex;
+use serde::Deserialize;
+use sprout_db::channel::{ChannelRecord, ChannelType, ChannelVisibility};
 
 use crate::state::AppState;
 
-use super::{extract_auth_pubkey, internal_error};
+use super::{api_error, extract_auth_pubkey, internal_error};
 
 /// Returns all channels accessible to the authenticated user.
 ///
@@ -39,17 +45,98 @@ pub async fn channels_handler(
             (vec![], vec![])
         };
 
-        result.push(serde_json::json!({
-            "id": ch.id.to_string(),
-            "name": ch.name,
-            "channel_type": ch.channel_type,
-            "description": ch.description.clone().unwrap_or_default(),
-            "participants": participants,
-            "participant_pubkeys": participant_pubkeys,
-        }));
+        result.push(channel_record_to_json(
+            ch,
+            participants,
+            participant_pubkeys,
+        ));
     }
 
     Ok(Json(serde_json::json!(result)))
+}
+
+/// Request body for creating a new channel.
+#[derive(Debug, Deserialize)]
+pub struct CreateChannelBody {
+    /// Human-readable channel name.
+    pub name: String,
+    /// Requested channel type (`stream` or `forum`).
+    pub channel_type: String,
+    /// Channel visibility (`open` or `private`).
+    pub visibility: String,
+    /// Optional channel description.
+    pub description: Option<String>,
+}
+
+/// Creates a new stream or forum channel for the authenticated user.
+pub async fn create_channel(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    ExtractJson(body): ExtractJson<CreateChannelBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "channel name is required",
+        ));
+    }
+
+    let channel_type = match body.channel_type.as_str() {
+        "stream" => ChannelType::Stream,
+        "forum" => ChannelType::Forum,
+        _ => {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "channel_type must be 'stream' or 'forum'",
+            ))
+        }
+    };
+
+    let visibility = match body.visibility.as_str() {
+        "open" => ChannelVisibility::Open,
+        "private" => ChannelVisibility::Private,
+        _ => {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "visibility must be 'open' or 'private'",
+            ))
+        }
+    };
+
+    let description = body
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let channel = state
+        .db
+        .create_channel(name, channel_type, visibility, description, &pubkey_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(channel_record_to_json(&channel, vec![], vec![])),
+    ))
+}
+
+fn channel_record_to_json(
+    channel: &ChannelRecord,
+    participants: Vec<String>,
+    participant_pubkeys: Vec<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": channel.id.to_string(),
+        "name": &channel.name,
+        "channel_type": &channel.channel_type,
+        "description": channel.description.clone().unwrap_or_default(),
+        "participants": participants,
+        "participant_pubkeys": participant_pubkeys,
+    })
 }
 
 /// Fetch DM participants and resolve their display names.
