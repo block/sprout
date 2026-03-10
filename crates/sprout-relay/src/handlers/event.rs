@@ -178,6 +178,41 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         }
     }
 
+    // Admin kind validation (9000-9022) must happen BEFORE storage.
+    if crate::handlers::side_effects::is_admin_kind(kind_u32) {
+        if let Err(e) =
+            crate::handlers::side_effects::validate_admin_event(kind_u32, &event, &state).await
+        {
+            conn.send(RelayMessage::ok(
+                &event_id_hex,
+                false,
+                &format!("invalid: {e}"),
+            ));
+            return;
+        }
+    }
+
+    // Reject reactions (kind 7) targeting archived channels before storage.
+    // This prevents invalid events from being stored and fanned out.
+    if kind_u32 == 7 {
+        if let Some(ch_id) = channel_id {
+            match state.db.get_channel(ch_id).await {
+                Ok(channel) if channel.archived_at.is_some() => {
+                    conn.send(RelayMessage::ok(
+                        &event_id_hex,
+                        false,
+                        "invalid: channel is archived",
+                    ));
+                    return;
+                }
+                Err(_) => {
+                    // Channel not found — let it through; the event may still be valid
+                }
+                _ => {} // Channel exists and not archived — OK
+            }
+        }
+    }
+
     let (stored_event, was_inserted) = match state.db.insert_event(&event, channel_id).await {
         Ok(result) => result,
         Err(sprout_db::DbError::AuthEventRejected) => {
@@ -202,6 +237,15 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     if !was_inserted {
         conn.send(RelayMessage::ok(&event_id_hex, true, "duplicate:"));
         return;
+    }
+
+    // Side effects (reactions, thread metadata, NIP-29 membership changes) run after storage.
+    if crate::handlers::side_effects::is_side_effect_kind(kind_u32) {
+        if let Err(e) =
+            crate::handlers::side_effects::handle_side_effects(kind_u32, &event, &state).await
+        {
+            tracing::warn!(event_id = %event_id_hex, kind = kind_u32, "Side effect failed: {e}");
+        }
     }
 
     if let Some(ch_id) = channel_id {
@@ -494,12 +538,12 @@ async fn derive_reaction_channel(
 
 /// Extract a channel UUID from event tags.
 ///
-/// Checks both `"channel"` custom tags and `"e"` reference tags (clients use
-/// `Tag::parse(&["e", channel_id])` — the value is a UUID, not an event hash).
+/// Checks `"channel"` custom tags and `"h"` NIP-29 group tags for a channel UUID.
+/// The `"e"` tag is intentionally NOT checked — it is reserved for event references only.
 fn extract_channel_id(event: &Event) -> Option<uuid::Uuid> {
     for tag in event.tags.iter() {
         let key = tag.kind().to_string();
-        if key == "channel" || key == "e" {
+        if key == "channel" || key == "h" {
             if let Some(val) = tag.content() {
                 if let Ok(id) = val.parse::<uuid::Uuid>() {
                     return Some(id);

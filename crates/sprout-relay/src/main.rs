@@ -90,6 +90,14 @@ async fn main() -> anyhow::Result<()> {
     let wf_cron = Arc::clone(&workflow_engine);
     tokio::spawn(async move { wf_cron.run().await });
 
+    let relay_keypair = if let Some(hex) = &config.relay_private_key {
+        nostr::Keys::parse(hex).expect("invalid SPROUT_RELAY_PRIVATE_KEY")
+    } else {
+        let keys = nostr::Keys::generate();
+        tracing::info!("Generated relay keypair: {}", keys.public_key().to_hex());
+        keys
+    };
+
     let state = Arc::new(AppState::new(
         config.clone(),
         db,
@@ -98,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
         auth,
         search,
         workflow_engine,
+        relay_keypair,
     ));
     let router = build_router(Arc::clone(&state));
 

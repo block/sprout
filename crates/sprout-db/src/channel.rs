@@ -166,6 +166,18 @@ pub struct ChannelRecord {
     pub topic_required: bool,
     /// Optional cap on the number of members.
     pub max_members: Option<i32>,
+    /// Current channel topic (short, visible in header).
+    pub topic: Option<String>,
+    /// Compressed public key bytes of the user who last set the topic.
+    pub topic_set_by: Option<Vec<u8>>,
+    /// When the topic was last set.
+    pub topic_set_at: Option<DateTime<Utc>>,
+    /// Channel purpose / description of intent.
+    pub purpose: Option<String>,
+    /// Compressed public key bytes of the user who last set the purpose.
+    pub purpose_set_by: Option<Vec<u8>>,
+    /// When the purpose was last set.
+    pub purpose_set_at: Option<DateTime<Utc>>,
 }
 
 /// A channel membership row as returned from the database.
@@ -241,7 +253,9 @@ pub async fn create_channel(
         r#"
         SELECT id, name, channel_type, visibility, description, canvas,
                created_by, created_at, updated_at, archived_at, deleted_at,
-               nip29_group_id, topic_required, max_members
+               nip29_group_id, topic_required, max_members,
+               topic, topic_set_by, topic_set_at,
+               purpose, purpose_set_by, purpose_set_at
         FROM channels WHERE id = ?
         "#,
     )
@@ -262,7 +276,9 @@ pub async fn get_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<ChannelRe
         r#"
         SELECT id, name, channel_type, visibility, description, canvas,
                created_by, created_at, updated_at, archived_at, deleted_at,
-               nip29_group_id, topic_required, max_members
+               nip29_group_id, topic_required, max_members,
+               topic, topic_set_by, topic_set_at,
+               purpose, purpose_set_by, purpose_set_at
         FROM channels WHERE id = ? AND deleted_at IS NULL
         "#,
     )
@@ -450,6 +466,26 @@ pub async fn remove_member(
         }
     }
 
+    // Defense-in-depth: prevent removing the last owner regardless of caller.
+    // Callers (REST handlers, NIP-29 handlers) also check this, but the DB
+    // layer enforces it as the final safety net.
+    let target_role = get_active_role_tx(&mut tx, channel_id, pubkey).await?;
+    if target_role.as_deref() == Some("owner") {
+        let row = sqlx::query(
+            "SELECT COUNT(*) as cnt FROM channel_members \
+             WHERE channel_id = ? AND role = 'owner' AND removed_at IS NULL",
+        )
+        .bind(&channel_id_bytes)
+        .fetch_one(&mut *tx)
+        .await?;
+        let owner_count: i64 = row.try_get("cnt")?;
+        if owner_count <= 1 {
+            return Err(DbError::AccessDenied(
+                "cannot remove the last owner — transfer ownership first".to_string(),
+            ));
+        }
+    }
+
     let result = sqlx::query(
         r#"
         UPDATE channel_members
@@ -543,7 +579,9 @@ pub async fn list_channels(
             r#"
             SELECT id, name, channel_type, visibility, description, canvas,
                    created_by, created_at, updated_at, archived_at, deleted_at,
-                   nip29_group_id, topic_required, max_members
+                   nip29_group_id, topic_required, max_members,
+                   topic, topic_set_by, topic_set_at,
+                   purpose, purpose_set_by, purpose_set_at
             FROM channels
             WHERE deleted_at IS NULL AND visibility = ?
             ORDER BY created_at DESC
@@ -558,7 +596,9 @@ pub async fn list_channels(
             r#"
             SELECT id, name, channel_type, visibility, description, canvas,
                    created_by, created_at, updated_at, archived_at, deleted_at,
-                   nip29_group_id, topic_required, max_members
+                   nip29_group_id, topic_required, max_members,
+                   topic, topic_set_by, topic_set_at,
+                   purpose, purpose_set_by, purpose_set_at
             FROM channels
             WHERE deleted_at IS NULL
             ORDER BY created_at DESC
@@ -600,7 +640,9 @@ async fn get_channel_tx(
         r#"
         SELECT id, name, channel_type, visibility, description, canvas,
                created_by, created_at, updated_at, archived_at, deleted_at,
-               nip29_group_id, topic_required, max_members
+               nip29_group_id, topic_required, max_members,
+               topic, topic_set_by, topic_set_at,
+               purpose, purpose_set_by, purpose_set_at
         FROM channels WHERE id = ? AND deleted_at IS NULL
         "#,
     )
@@ -650,7 +692,9 @@ pub async fn get_accessible_channels(
         r#"
         SELECT DISTINCT c.id, c.name, c.channel_type, c.visibility, c.description, c.canvas,
                c.created_by, c.created_at, c.updated_at, c.archived_at, c.deleted_at,
-               c.nip29_group_id, c.topic_required, c.max_members
+               c.nip29_group_id, c.topic_required, c.max_members,
+               c.topic, c.topic_set_by, c.topic_set_at,
+               c.purpose, c.purpose_set_by, c.purpose_set_at
         FROM channels c
         LEFT JOIN channel_members cm
             ON c.id = cm.channel_id AND cm.pubkey = ? AND cm.removed_at IS NULL
@@ -744,6 +788,15 @@ fn row_to_channel_record(row: sqlx::mysql::MySqlRow) -> Result<ChannelRecord> {
     let id = uuid_from_bytes(&id_bytes)?;
     let topic_required: bool = row.try_get("topic_required")?;
 
+    // topic/purpose fields are new — use try_get and fall back to None if the
+    // column is absent (e.g. queries that don't SELECT these columns yet).
+    let topic: Option<String> = row.try_get("topic").unwrap_or(None);
+    let topic_set_by: Option<Vec<u8>> = row.try_get("topic_set_by").unwrap_or(None);
+    let topic_set_at: Option<DateTime<Utc>> = row.try_get("topic_set_at").unwrap_or(None);
+    let purpose: Option<String> = row.try_get("purpose").unwrap_or(None);
+    let purpose_set_by: Option<Vec<u8>> = row.try_get("purpose_set_by").unwrap_or(None);
+    let purpose_set_at: Option<DateTime<Utc>> = row.try_get("purpose_set_at").unwrap_or(None);
+
     Ok(ChannelRecord {
         id,
         name: row.try_get("name")?,
@@ -759,6 +812,12 @@ fn row_to_channel_record(row: sqlx::mysql::MySqlRow) -> Result<ChannelRecord> {
         nip29_group_id: row.try_get("nip29_group_id")?,
         topic_required,
         max_members: row.try_get("max_members")?,
+        topic,
+        topic_set_by,
+        topic_set_at,
+        purpose,
+        purpose_set_by,
+        purpose_set_at,
     })
 }
 
@@ -774,4 +833,208 @@ fn row_to_member_record(row: sqlx::mysql::MySqlRow) -> Result<MemberRecord> {
         invited_by: row.try_get("invited_by")?,
         removed_at: row.try_get("removed_at")?,
     })
+}
+
+// ── Phase 2: Channel Metadata ─────────────────────────────────────────────────
+
+/// Partial update for channel name/description.
+pub struct ChannelUpdate {
+    /// New channel name, or `None` to leave unchanged.
+    pub name: Option<String>,
+    /// New channel description, or `None` to leave unchanged.
+    pub description: Option<String>,
+}
+
+/// Updates channel name and/or description dynamically.
+///
+/// At least one field must be `Some`; returns `InvalidData` otherwise.
+/// Returns the updated `ChannelRecord` on success.
+pub async fn update_channel(
+    pool: &MySqlPool,
+    channel_id: Uuid,
+    updates: ChannelUpdate,
+) -> Result<ChannelRecord> {
+    if updates.name.is_none() && updates.description.is_none() {
+        return Err(DbError::InvalidData(
+            "at least one field must be provided for update".to_string(),
+        ));
+    }
+
+    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
+
+    // Build SET clause dynamically — only include fields that are Some.
+    let mut set_parts: Vec<&str> = Vec::new();
+    if updates.name.is_some() {
+        set_parts.push("name = ?");
+    }
+    if updates.description.is_some() {
+        set_parts.push("description = ?");
+    }
+    let sql = format!(
+        "UPDATE channels SET {}, updated_at = NOW(6) WHERE id = ? AND deleted_at IS NULL",
+        set_parts.join(", ")
+    );
+
+    let mut q = sqlx::query(&sql);
+    if let Some(ref name) = updates.name {
+        q = q.bind(name);
+    }
+    if let Some(ref desc) = updates.description {
+        q = q.bind(desc);
+    }
+    q = q.bind(&id_bytes);
+
+    let result = q.execute(pool).await?;
+    if result.rows_affected() == 0 {
+        return Err(DbError::ChannelNotFound(channel_id));
+    }
+
+    get_channel(pool, channel_id).await
+}
+
+/// Sets the topic for a channel, recording who set it and when.
+pub async fn set_topic(
+    pool: &MySqlPool,
+    channel_id: Uuid,
+    topic: &str,
+    set_by: &[u8],
+) -> Result<()> {
+    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
+    let result = sqlx::query(
+        "UPDATE channels SET topic = ?, topic_set_by = ?, topic_set_at = NOW(6) \
+         WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(topic)
+    .bind(set_by)
+    .bind(&id_bytes)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(DbError::ChannelNotFound(channel_id));
+    }
+    Ok(())
+}
+
+/// Sets the purpose for a channel, recording who set it and when.
+pub async fn set_purpose(
+    pool: &MySqlPool,
+    channel_id: Uuid,
+    purpose: &str,
+    set_by: &[u8],
+) -> Result<()> {
+    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
+    let result = sqlx::query(
+        "UPDATE channels SET purpose = ?, purpose_set_by = ?, purpose_set_at = NOW(6) \
+         WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(purpose)
+    .bind(set_by)
+    .bind(&id_bytes)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(DbError::ChannelNotFound(channel_id));
+    }
+    Ok(())
+}
+
+/// Archives a channel.
+///
+/// Returns `AccessDenied` if the channel is already archived.
+/// Returns `ChannelNotFound` if the channel does not exist or is deleted.
+pub async fn archive_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<()> {
+    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
+
+    // First check: does the channel exist and what is its state?
+    let row = sqlx::query("SELECT archived_at FROM channels WHERE id = ? AND deleted_at IS NULL")
+        .bind(&id_bytes)
+        .fetch_optional(pool)
+        .await?;
+
+    match row {
+        None => return Err(DbError::ChannelNotFound(channel_id)),
+        Some(r) => {
+            let archived_at: Option<DateTime<Utc>> = r.try_get("archived_at")?;
+            if archived_at.is_some() {
+                return Err(DbError::AccessDenied(
+                    "channel is already archived".to_string(),
+                ));
+            }
+        }
+    }
+
+    sqlx::query(
+        "UPDATE channels SET archived_at = NOW(6) \
+         WHERE id = ? AND deleted_at IS NULL AND archived_at IS NULL",
+    )
+    .bind(&id_bytes)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Unarchives a channel.
+///
+/// Returns `AccessDenied` if the channel is not currently archived.
+/// Returns `ChannelNotFound` if the channel does not exist or is deleted.
+pub async fn unarchive_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<()> {
+    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
+
+    // First check: does the channel exist and what is its state?
+    let row = sqlx::query("SELECT archived_at FROM channels WHERE id = ? AND deleted_at IS NULL")
+        .bind(&id_bytes)
+        .fetch_optional(pool)
+        .await?;
+
+    match row {
+        None => return Err(DbError::ChannelNotFound(channel_id)),
+        Some(r) => {
+            let archived_at: Option<DateTime<Utc>> = r.try_get("archived_at")?;
+            if archived_at.is_none() {
+                return Err(DbError::AccessDenied("channel is not archived".to_string()));
+            }
+        }
+    }
+
+    sqlx::query(
+        "UPDATE channels SET archived_at = NULL \
+         WHERE id = ? AND deleted_at IS NULL AND archived_at IS NOT NULL",
+    )
+    .bind(&id_bytes)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Returns the count of active (non-removed) members in a channel.
+pub async fn get_member_count(pool: &MySqlPool, channel_id: Uuid) -> Result<i64> {
+    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
+    let row = sqlx::query(
+        "SELECT COUNT(*) as cnt FROM channel_members WHERE channel_id = ? AND removed_at IS NULL",
+    )
+    .bind(&id_bytes)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.try_get("cnt")?)
+}
+
+/// Get the active role of a pubkey in a channel.
+///
+/// Returns `None` if the pubkey is not an active member.
+pub async fn get_member_role(
+    pool: &MySqlPool,
+    channel_id: Uuid,
+    pubkey: &[u8],
+) -> Result<Option<String>> {
+    let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
+    let row = sqlx::query(
+        "SELECT role FROM channel_members WHERE channel_id = ? AND pubkey = ? AND removed_at IS NULL",
+    )
+    .bind(&channel_id_bytes)
+    .bind(pubkey)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.try_get("role")).transpose()?)
 }
