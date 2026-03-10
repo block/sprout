@@ -162,6 +162,7 @@ export function AppShell() {
                     : "No channel selected"
                 }
                 isLoading={messagesQuery.isLoading}
+                key={activeChannel?.id ?? "no-channel"}
                 messages={timelineMessages}
               />
               <MessageComposer
