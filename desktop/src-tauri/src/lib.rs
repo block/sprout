@@ -2,6 +2,7 @@ use std::sync::Mutex;
 
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, ToBech32};
 use serde::{Deserialize, Serialize};
+use tauri_plugin_window_state::StateFlags;
 
 pub struct AppState {
     pub keys: Mutex<Keys>,
@@ -205,6 +206,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_websocket::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
