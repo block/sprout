@@ -85,6 +85,14 @@ export AGENT_PUBKEY_HEX=ae670a075ac2446f445808ab5a1a796cec37c72c70b25e10ee39f7f0
 export AGENTS_CHANNEL=94a444a4-c0a3-5966-ab05-530c6ddc2301
 ```
 
+**Generating additional keypairs:** Use `sprout-admin mint-token` to create new keypairs for additional agents or harness instances. Each call prints an `nsec` private key and API token — save them immediately.
+
+```bash
+cargo run -p sprout-admin -- mint-token --name "agent-2" --scopes "messages:read,messages:write,channels:read"
+```
+
+**Channel membership:** In local dev mode (`SPROUT_REQUIRE_AUTH_TOKEN=false`), any pubkey can access open channels without explicit membership. For production, add agents to channels via SQL (see the [README](README.md#channel-membership)).
+
 ### 5. MySQL Access
 
 ```bash
@@ -535,6 +543,92 @@ screen -r harness
 # Look for sequential "prompting agent for channel ..." lines
 # Channel A should appear before Channel B
 # No two "prompting agent" lines without a "turn complete" between them
+```
+
+---
+
+### Scenario I: Multi-Agent (3 Agents, 1 Channel)
+
+**Description:** Run three harness instances (goose, codex, claude) simultaneously, all subscribed to the same channel. Send an @mention to one; verify all three see the event and respond.
+
+**Setup:** Each agent needs its own keypair pair (harness + agent). Mint them with `sprout-admin`:
+
+```bash
+# Agent 1 (goose) — use the test keys from Prerequisites, or mint fresh ones
+# Agent 2 (codex)
+cargo run -p sprout-admin -- mint-token --name "harness-codex" --scopes "channels:read"
+cargo run -p sprout-admin -- mint-token --name "agent-codex" --scopes "messages:read,messages:write,channels:read"
+
+# Agent 3 (claude)
+cargo run -p sprout-admin -- mint-token --name "harness-claude" --scopes "channels:read"
+cargo run -p sprout-admin -- mint-token --name "agent-claude" --scopes "messages:read,messages:write,channels:read"
+```
+
+Save all `nsec` keys and pubkey hex values from the output.
+
+**Steps:**
+
+1. Start three harness instances in separate screen sessions:
+
+```bash
+# Goose
+SPROUT_ACP_PRIVATE_KEY=<harness-goose-nsec> \
+SPROUT_AGENT_PRIVATE_KEY=<agent-goose-nsec> \
+GOOSE_MODE=auto \
+screen -dmS harness-goose sprout-acp
+
+# Codex
+OPENAI_API_KEY=$(cat ~/keys/openai.key) \
+SPROUT_ACP_PRIVATE_KEY=<harness-codex-nsec> \
+SPROUT_AGENT_PRIVATE_KEY=<agent-codex-nsec> \
+SPROUT_ACP_AGENT_COMMAND=/path/to/codex-acp/target/release/codex-acp \
+SPROUT_ACP_AGENT_ARGS='-c,permissions.approval_policy="never"' \
+screen -dmS harness-codex sprout-acp
+
+# Claude
+ANTHROPIC_API_KEY=$(cat ~/keys/anthropic.key) \
+SPROUT_ACP_PRIVATE_KEY=<harness-claude-nsec> \
+SPROUT_AGENT_PRIVATE_KEY=<agent-claude-nsec> \
+SPROUT_ACP_AGENT_COMMAND=node \
+SPROUT_ACP_AGENT_ARGS=/path/to/claude-agent-acp/dist/index.js \
+screen -dmS harness-claude sprout-acp
+```
+
+2. Verify all three are subscribed:
+
+```bash
+for s in harness-goose harness-codex harness-claude; do
+  echo "=== $s ==="; screen -S $s -X hardcopy /tmp/$s.txt; grep -c "subscribed" /tmp/$s.txt
+done
+```
+
+3. Send @mentions to each agent:
+
+```bash
+mention 94a444a4-c0a3-5966-ab05-530c6ddc2301 <goose-agent-pubkey-hex> "Hello goose, reply PONG"
+mention 94a444a4-c0a3-5966-ab05-530c6ddc2301 <codex-agent-pubkey-hex> "Hello codex, reply PONG"
+mention 94a444a4-c0a3-5966-ab05-530c6ddc2301 <claude-agent-pubkey-hex> "Hello claude, reply PONG"
+```
+
+**Expected behavior:**
+- Each harness picks up only the @mention targeting its agent pubkey
+- Each agent replies via `send_message`
+- All three replies appear in the DB with different sender pubkeys
+
+**Verify:**
+
+```bash
+docker exec sprout-mysql mysql -u sprout -psprout_dev sprout -e "
+SELECT SUBSTRING(HEX(pubkey), 1, 16) as sender, SUBSTRING(content, 1, 100) as body, created_at
+FROM events WHERE kind = 40001 ORDER BY created_at DESC LIMIT 10;"
+```
+
+Look for three distinct sender pubkey prefixes, each with a PONG reply.
+
+**Cleanup:**
+
+```bash
+for s in harness-goose harness-codex harness-claude; do screen -S $s -X quit; done
 ```
 
 ---
