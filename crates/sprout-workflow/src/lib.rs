@@ -305,13 +305,18 @@ impl WorkflowEngine {
                     }
                     Err(e) => {
                         tracing::error!(run_id = %run_id, "Workflow run failed: {e}");
+                        // Preserve any partial progress (trace/step) already written by the executor.
+                        let (step, trace) = match engine.db.get_workflow_run(run_id).await {
+                            Ok(r) => (r.current_step, r.execution_trace),
+                            Err(_) => (0, serde_json::json!([])),
+                        };
                         if let Err(db_err) = engine
                             .db
                             .update_workflow_run(
                                 run_id,
                                 RunStatus::Failed,
-                                0,
-                                &serde_json::json!([]),
+                                step,
+                                &trace,
                                 Some(&e.to_string()),
                             )
                             .await
