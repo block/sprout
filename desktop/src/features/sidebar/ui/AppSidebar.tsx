@@ -51,11 +51,13 @@ function SidebarSection({
   items,
   selectedChannelId,
   title,
+  testId,
   onSelectChannel,
 }: {
   items: Channel[];
   selectedChannelId: string | null;
   title: string;
+  testId: string;
   onSelectChannel: (channelId: string) => void;
 }) {
   if (items.length === 0) {
@@ -66,10 +68,11 @@ function SidebarSection({
     <SidebarGroup>
       <SidebarGroupLabel>{title}</SidebarGroupLabel>
       <SidebarGroupContent>
-        <SidebarMenu>
+        <SidebarMenu data-testid={testId}>
           {items.map((channel) => (
             <SidebarMenuItem key={channel.id}>
               <SidebarMenuButton
+                data-testid={`channel-${channel.name}`}
                 isActive={selectedChannelId === channel.id}
                 onClick={() => onSelectChannel(channel.id)}
                 tooltip={channel.name}
@@ -139,11 +142,13 @@ function StreamsSection({
         {isCreateOpen ? (
           <form
             className="mb-2 space-y-2 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/60 p-2"
+            data-testid="create-stream-form"
             onSubmit={onCreateChannel}
           >
             <Input
               autoComplete="off"
               className="h-8 bg-background/80"
+              data-testid="create-stream-name"
               disabled={isCreatingChannel}
               onChange={(event) => onChangeName(event.target.value)}
               placeholder="release-notes"
@@ -153,6 +158,7 @@ function StreamsSection({
             <Input
               autoComplete="off"
               className="h-8 bg-background/80"
+              data-testid="create-stream-description"
               disabled={isCreatingChannel}
               onChange={(event) => onChangeDescription(event.target.value)}
               placeholder="What this stream is for"
@@ -183,10 +189,11 @@ function StreamsSection({
         ) : null}
 
         {items.length > 0 ? (
-          <SidebarMenu>
+          <SidebarMenu data-testid="stream-list">
             {items.map((channel) => (
               <SidebarMenuItem key={channel.id}>
                 <SidebarMenuButton
+                  data-testid={`channel-${channel.name}`}
                   isActive={selectedChannelId === channel.id}
                   onClick={() => onSelectChannel(channel.id)}
                   tooltip={channel.name}
@@ -280,7 +287,11 @@ export function AppSidebar({
   }
 
   return (
-    <Sidebar collapsible="offcanvas" variant="sidebar">
+    <Sidebar
+      collapsible="offcanvas"
+      data-testid="app-sidebar"
+      variant="sidebar"
+    >
       <SidebarHeader className="gap-3">
         <div className="flex items-center gap-3 rounded-xl bg-sidebar-accent/80 px-3 py-3">
           <div className="flex h-6 w-6 items-center justify-center rounded-xl text-lg">
@@ -309,7 +320,7 @@ export function AppSidebar({
           <SidebarGroup>
             <SidebarGroupLabel>Channels</SidebarGroupLabel>
             <SidebarGroupContent>
-              <SidebarMenu>
+              <SidebarMenu data-testid="sidebar-loading">
                 {skeletonRows.map((row) => (
                   <SidebarMenuSkeleton key={row} showIcon />
                 ))}
@@ -356,12 +367,14 @@ export function AppSidebar({
               items={forumChannels}
               onSelectChannel={onSelectChannel}
               selectedChannelId={selectedChannelId}
+              testId="forum-list"
               title="Forums"
             />
             <SidebarSection
               items={directMessages}
               onSelectChannel={onSelectChannel}
               selectedChannelId={selectedChannelId}
+              testId="dm-list"
               title="Direct Messages"
             />
           </>

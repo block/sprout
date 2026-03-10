@@ -74,12 +74,106 @@ jobs:
             wget
       - name: Install desktop dependencies
         run: just desktop-install-ci
+      - name: Install Playwright Chromium
+        run: cd desktop && pnpm exec playwright install --with-deps chromium
       - name: Desktop lint and format
         run: just desktop-check
       - name: Desktop build
         run: just desktop-build
+      - name: Desktop smoke e2e
+        run: cd desktop && pnpm exec playwright test --project=smoke
       - name: Desktop Tauri check
         run: just desktop-tauri-check
+      - name: Upload desktop e2e artifacts
+        if: failure()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: desktop-e2e-artifacts
+          path: |
+            desktop/playwright-report
+            desktop/test-results
+          if-no-files-found: ignore
+
+  desktop-e2e-integration:
+    name: Desktop E2E Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+        with:
+          workspaces: desktop/src-tauri
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+      - name: Install Playwright Chromium
+        run: cd desktop && pnpm exec playwright install --with-deps chromium
+      - name: Desktop build
+        run: just desktop-build
+      - name: Start integration services
+        run: docker compose up -d
+      - name: Wait for integration services
+        run: |
+          wait_healthy() {
+            local service="$1"
+            local container="$2"
+            for attempt in $(seq 1 60); do
+              status=$(docker inspect --format='{{.State.Health.Status}}' "${container}" 2>/dev/null || echo "not_found")
+              if [ "${status}" = "healthy" ]; then
+                echo "${service} is healthy"
+                return 0
+              fi
+              sleep 2
+            done
+            docker logs "${container}" || true
+            return 1
+          }
+          wait_healthy "MySQL" "sprout-mysql"
+          wait_healthy "Redis" "sprout-redis"
+          wait_healthy "Typesense" "sprout-typesense"
+      - name: Build relay
+        run: cargo build -p sprout-relay
+      - name: Start relay
+        run: |
+          nohup env \
+            DATABASE_URL=mysql://sprout:sprout_dev@localhost:3306/sprout \
+            REDIS_URL=redis://localhost:6379 \
+            TYPESENSE_URL=http://localhost:8108 \
+            TYPESENSE_API_KEY=sprout_dev_key \
+            RELAY_URL=ws://localhost:3000 \
+            SPROUT_BIND_ADDR=0.0.0.0:3000 \
+            SPROUT_REQUIRE_AUTH_TOKEN=false \
+            ./target/debug/sprout-relay > /tmp/sprout-relay.log 2>&1 &
+          echo $! > /tmp/sprout-relay.pid
+          for attempt in $(seq 1 60); do
+            if ! kill -0 "$(cat /tmp/sprout-relay.pid)" 2>/dev/null; then
+              cat /tmp/sprout-relay.log
+              exit 1
+            fi
+            status_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/api/channels || true)
+            if [ "${status_code}" != "000" ]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/sprout-relay.log
+          exit 1
+      - name: Seed desktop e2e data
+        run: bash scripts/setup-desktop-test-data.sh
+      - name: Desktop relay-backed e2e
+        run: cd desktop && pnpm exec playwright test --project=integration
+      - name: Upload desktop integration artifacts
+        if: failure()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: desktop-e2e-integration-artifacts
+          path: |
+            desktop/playwright-report
+            desktop/test-results
+            /tmp/sprout-relay.log
+          if-no-files-found: ignore
 
   security:
     name: Security

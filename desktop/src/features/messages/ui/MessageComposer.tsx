@@ -46,6 +46,7 @@ export function MessageComposer({
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
         <form
           className="rounded-2xl border border-input bg-card px-3 py-4 shadow-sm sm:px-4"
+          data-testid="message-composer"
           onSubmit={(event) => {
             void handleSubmit(event);
           }}
@@ -53,6 +54,7 @@ export function MessageComposer({
           <Input
             aria-label="Message channel"
             className="h-auto border-0 bg-transparent px-0 py-0 text-sm leading-6 shadow-none focus-visible:ring-0"
+            data-testid="message-input"
             disabled={disabled}
             onChange={(event) => setContent(event.target.value)}
             placeholder={placeholder ?? `Message #${channelName}`}
@@ -71,6 +73,7 @@ export function MessageComposer({
 
             <Button
               className="gap-2"
+              data-testid="send-message"
               disabled={disabled || isSending || content.trim().length === 0}
               type="submit"
             >

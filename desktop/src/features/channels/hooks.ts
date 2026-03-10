@@ -27,7 +27,7 @@ function sortChannels(channels: Channel[]) {
 export function useChannelsQuery() {
   return useQuery({
     queryKey: channelsQueryKey,
-    queryFn: getChannels,
+    queryFn: async () => sortChannels(await getChannels()),
     staleTime: 30_000,
   });
 }

@@ -20,7 +20,7 @@ function MessageRow({ message }: { message: TimelineMessage }) {
     .toUpperCase();
 
   return (
-    <article className="flex gap-3">
+    <article className="flex gap-3" data-testid="message-row">
       <div
         className={cn(
           "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-semibold shadow-sm",
@@ -83,7 +83,10 @@ export function MessageTimeline({
   emptyDescription = "Send the first message to start the thread.",
 }: MessageTimelineProps) {
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-4 sm:px-6">
+    <div
+      className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-4 sm:px-6"
+      data-testid="message-timeline"
+    >
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
         <div className="flex items-center gap-4">
           <Separator className="flex-1" />
@@ -96,7 +99,10 @@ export function MessageTimeline({
         {isLoading ? <TimelineSkeleton /> : null}
 
         {!isLoading && messages.length === 0 ? (
-          <div className="rounded-3xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center shadow-sm">
+          <div
+            className="rounded-3xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center shadow-sm"
+            data-testid="message-empty"
+          >
             <p className="text-base font-semibold tracking-tight">
               {emptyTitle}
             </p>
