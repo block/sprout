@@ -2609,6 +2609,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "sprout-acp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures-util",
+ "nostr",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sprout-core",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "sprout-admin"
 version = "0.1.0"
 dependencies = [
@@ -2824,6 +2845,7 @@ dependencies = [
 name = "sprout-test-client"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "futures-util",
  "nostr",
  "reqwest",

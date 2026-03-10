@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Integration test client and E2E test suite for Sprout"
 
 [dependencies]
+anyhow = { workspace = true }
 sprout-core = { workspace = true }
 sprout-mcp = { workspace = true }
 nostr = { workspace = true }

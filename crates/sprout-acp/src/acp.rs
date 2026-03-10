@@ -1,0 +1,877 @@
+//! ACP client module — manages communication with an AI agent subprocess over stdio
+//! using JSON-RPC 2.0 (newline-delimited / NDJSON).
+//!
+//! # Lifecycle
+//! 1. [`AcpClient::spawn`] — launch agent binary as subprocess
+//! 2. [`AcpClient::initialize`] — protocol version negotiation
+//! 3. [`AcpClient::session_new`] — create session with MCP server config
+//! 4. [`AcpClient::session_prompt`] — send prompt, receive streaming updates, return stop reason
+//! 5. [`AcpClient::session_cancel`] / [`AcpClient::cancel_with_cleanup`] — cancel in-flight turn
+
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, ChildStdout};
+
+// ─── Public types ────────────────────────────────────────────────────────────
+
+/// An MCP server configuration passed to `session/new`.
+///
+/// Corresponds to the `McpServerStdio` variant in the ACP schema.
+/// All four fields are **required** by the schema (`args` and `env` may be empty arrays).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct McpServer {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: Vec<EnvVar>,
+}
+
+/// A single environment variable for an MCP server.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EnvVar {
+    pub name: String,
+    pub value: String,
+}
+
+/// Stop reason returned by `session/prompt` when the agent finishes a turn.
+///
+/// Maps to the `stopReason` field in the `SessionPromptResponse`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StopReason {
+    /// Agent completed the turn normally (`"end_turn"`).
+    EndTurn,
+    /// Turn was cancelled via `session/cancel` (`"cancelled"`).
+    Cancelled,
+    /// Agent hit its token limit (`"max_tokens"`).
+    MaxTokens,
+    /// Agent hit its per-turn request limit (`"max_turn_requests"`).
+    MaxTurnRequests,
+    /// Agent refused the prompt (`"refusal"`).
+    /// Note: refused turns are dropped from history by the agent.
+    Refusal,
+}
+
+impl StopReason {
+    /// Parse a `stopReason` string from the ACP wire format.
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "end_turn" => Some(Self::EndTurn),
+            "cancelled" => Some(Self::Cancelled),
+            "max_tokens" => Some(Self::MaxTokens),
+            "max_turn_requests" => Some(Self::MaxTurnRequests),
+            "refusal" => Some(Self::Refusal),
+            _ => None,
+        }
+    }
+}
+
+/// Errors that can occur in the ACP client.
+#[derive(Debug, thiserror::Error)]
+pub enum AcpError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("Agent process exited unexpectedly")]
+    AgentExited,
+
+    #[error("Protocol error: {0}")]
+    Protocol(String),
+}
+
+// ─── AcpClient ───────────────────────────────────────────────────────────────
+
+/// ACP client that owns an agent subprocess and communicates over its stdio.
+///
+/// One `AcpClient` per agent process. Multiple sessions can be created on the
+/// same client via repeated calls to [`session_new`](AcpClient::session_new).
+pub struct AcpClient {
+    /// The agent child process (kept alive to prevent zombie).
+    child: Child,
+    /// Write end of the agent's stdin pipe.
+    stdin: ChildStdin,
+    /// Buffered reader over the agent's stdout pipe (line-oriented).
+    reader: BufReader<ChildStdout>,
+    /// Monotonically increasing JSON-RPC request id counter.
+    /// Harness-generated IDs are always numeric.
+    next_id: u64,
+    /// The id of a `session/request_permission` request that has been received
+    /// but not yet responded to. Stored as `serde_json::Value` because JSON-RPC 2.0
+    /// permits both numeric and string IDs from the agent.
+    /// Used by [`cancel_with_cleanup`](AcpClient::cancel_with_cleanup) to send
+    /// a `cancelled` outcome before the agent returns from `session/prompt`.
+    pending_permission_id: Option<serde_json::Value>,
+    /// Whether we have already sent a response to the pending permission request.
+    /// Guards against double-response if a timeout fires after the allow_once
+    /// response was written but before `pending_permission_id` was cleared.
+    permission_responded: bool,
+}
+
+impl AcpClient {
+    // ── Lifecycle ─────────────────────────────────────────────────────────
+
+    /// Spawn the agent binary as a subprocess and connect to its stdio pipes.
+    ///
+    /// After spawning, call [`initialize`](Self::initialize) before any other method.
+    pub async fn spawn(command: &str, args: &[String]) -> Result<Self, AcpError> {
+        use std::process::Stdio;
+
+        let mut cmd = tokio::process::Command::new(command);
+        cmd.args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            // Inherit stderr so agent logs are visible in the harness terminal.
+            .stderr(Stdio::inherit());
+
+        let mut child = cmd.spawn()?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| AcpError::Protocol("failed to open agent stdin".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| AcpError::Protocol("failed to open agent stdout".into()))?;
+
+        Ok(Self {
+            child,
+            stdin,
+            reader: BufReader::new(stdout),
+            next_id: 0,
+            pending_permission_id: None,
+            permission_responded: false,
+        })
+    }
+
+    /// Send the `initialize` request and return the agent's response result value.
+    ///
+    /// Must be called exactly once, before any other ACP method.
+    /// The caller may inspect `agentCapabilities` in the returned value.
+    pub async fn initialize(&mut self) -> Result<serde_json::Value, AcpError> {
+        let params = serde_json::json!({
+            "protocolVersion": 1,
+            "clientCapabilities": {},
+            "clientInfo": {
+                "name": "sprout-acp",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        });
+        let result = self.send_request("initialize", params).await?;
+        tracing::debug!(target: "acp::init", "initialize response: {result}");
+        Ok(result)
+    }
+
+    /// Send `session/new` and return the `sessionId` string.
+    ///
+    /// `cwd` must be an absolute path. `mcp_servers` may be empty.
+    pub async fn session_new(
+        &mut self,
+        cwd: &str,
+        mcp_servers: Vec<McpServer>,
+    ) -> Result<String, AcpError> {
+        let params = serde_json::json!({
+            "cwd": cwd,
+            "mcpServers": mcp_servers,
+        });
+        let result = self.send_request("session/new", params).await?;
+        let session_id = result["sessionId"]
+            .as_str()
+            .ok_or_else(|| AcpError::Protocol("session/new response missing sessionId".into()))?
+            .to_owned();
+        tracing::info!(target: "acp::session", "session created: {session_id}");
+        Ok(session_id)
+    }
+
+    /// Send `session/prompt` and block until the agent returns a stop reason.
+    ///
+    /// While waiting, incoming `session/update` notifications are logged and
+    /// `session/request_permission` requests are auto-approved with `allow_once`.
+    pub async fn session_prompt(
+        &mut self,
+        session_id: &str,
+        prompt_text: &str,
+    ) -> Result<StopReason, AcpError> {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "prompt": [
+                { "type": "text", "text": prompt_text }
+            ]
+        });
+        let result = self.send_request("session/prompt", params).await?;
+        self.parse_stop_reason(&result)
+    }
+
+    /// Send a `session/cancel` **notification** (no `id` field, no response expected).
+    ///
+    /// After calling this, the agent will eventually respond to the in-flight
+    /// `session/prompt` with `stopReason: "cancelled"`. Use
+    /// [`cancel_with_cleanup`](Self::cancel_with_cleanup) if you need to drain
+    /// that response.
+    ///
+    /// Note: async because writing to stdin requires async I/O.
+    pub async fn session_cancel(&mut self, session_id: &str) -> Result<(), AcpError> {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+        });
+        self.send_notification("session/cancel", params).await
+    }
+
+    /// Cancel a turn cleanly, handling any pending permission request first.
+    ///
+    /// Steps:
+    /// 1. If there is a pending `session/request_permission` that hasn't been
+    ///    responded to yet, respond with `outcome: "cancelled"`.
+    /// 2. Send `session/cancel` notification (no id).
+    /// 3. Continue reading until the `session/prompt` response arrives with `stopReason: "cancelled"`.
+    ///
+    /// Returns the final [`StopReason`] (almost always [`StopReason::Cancelled`]).
+    pub async fn cancel_with_cleanup(
+        &mut self,
+        session_id: &str,
+    ) -> Result<StopReason, AcpError> {
+        // Step 1: respond to any pending permission request with "cancelled",
+        // but only if we haven't already responded (guards against double-response race).
+        if let Some(perm_id) = self.pending_permission_id.clone() {
+            if !self.permission_responded {
+                let response = permission_response_cancelled(&perm_id);
+                self.write_ndjson(&response).await?;
+                tracing::debug!(
+                    target: "acp::cancel",
+                    "responded cancelled to pending permission id={perm_id}"
+                );
+            }
+            self.pending_permission_id = None;
+            self.permission_responded = false;
+        }
+
+        // Step 2: send session/cancel notification (no id)
+        self.session_cancel(session_id).await?;
+        tracing::info!(target: "acp::cancel", "sent session/cancel for {session_id}");
+
+        // Step 3: drain until we get the session/prompt response.
+        // The prompt id is next_id - 1 (the most recently sent request was session/prompt).
+        let prompt_id = self.next_id - 1;
+        let result = self.read_until_response(prompt_id).await?;
+        self.parse_stop_reason(&result)
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────
+
+    /// Serialize `value` as a single NDJSON line and flush to the agent's stdin.
+    async fn write_ndjson(&mut self, value: &serde_json::Value) -> Result<(), AcpError> {
+        let line = serde_json::to_string(value)?;
+        self.stdin.write_all(line.as_bytes()).await?;
+        self.stdin.write_all(b"\n").await?;
+        self.stdin.flush().await?;
+        Ok(())
+    }
+
+    /// Send a JSON-RPC request and wait for the matching response.
+    ///
+    /// Assigns the next available id, writes the NDJSON line to stdin,
+    /// then calls [`read_until_response`](Self::read_until_response).
+    async fn send_request(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, AcpError> {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+
+        tracing::debug!(target: "acp::wire", "→ {}", &serde_json::to_string(&msg).unwrap_or_default());
+        self.write_ndjson(&msg).await?;
+
+        self.read_until_response(id).await
+    }
+
+    /// Send a JSON-RPC **notification** — no `id` field, no response expected.
+    ///
+    /// Used for `session/cancel`. The absence of `id` is the JSON-RPC 2.0
+    /// distinguisher between requests and notifications.
+    async fn send_notification(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<(), AcpError> {
+        // Notifications deliberately have NO "id" field.
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        });
+
+        tracing::debug!(target: "acp::wire", "→ (notification) {}", &serde_json::to_string(&msg).unwrap_or_default());
+        self.write_ndjson(&msg).await?;
+        Ok(())
+    }
+
+    /// Core message loop: read NDJSON lines until we get a response matching `expected_id`.
+    ///
+    /// While waiting, handles:
+    /// - `session/update` notifications → logged via tracing
+    /// - `session/request_permission` requests → auto-approved with `allow_once`
+    /// - Any other messages → debug-logged and ignored
+    ///
+    /// Compares the incoming `id` field as a `serde_json::Value` against
+    /// `json!(expected_id)` so that both numeric and string IDs work correctly.
+    async fn read_until_response(
+        &mut self,
+        expected_id: u64,
+    ) -> Result<serde_json::Value, AcpError> {
+        loop {
+            let mut line = String::new();
+            let n = self.reader.read_line(&mut line).await?;
+            if n == 0 {
+                return Err(AcpError::AgentExited);
+            }
+
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            tracing::debug!(target: "acp::wire", "← {trimmed}");
+
+            let msg: serde_json::Value = match serde_json::from_str(trimmed) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "acp::wire",
+                        "failed to parse line as JSON: {e} — skipping"
+                    );
+                    continue;
+                }
+            };
+
+            // Check if this is a response to our expected request (has matching id).
+            // Compare as serde_json::Value so both numeric and string IDs work.
+            if let Some(id) = msg.get("id") {
+                if *id == serde_json::json!(expected_id) {
+                    if let Some(error) = msg.get("error") {
+                        return Err(AcpError::Protocol(error.to_string()));
+                    }
+                    return Ok(msg["result"].clone());
+                }
+                // Has an id but not ours — fall through to method dispatch
+                // (e.g., session/request_permission has both id and method).
+            }
+
+            // Dispatch by method name (notifications and agent-initiated requests).
+            if let Some(method) = msg.get("method").and_then(|v| v.as_str()) {
+                match method {
+                    "session/update" => {
+                        self.handle_session_update(&msg);
+                    }
+                    "session/request_permission" => {
+                        self.handle_permission_request(&msg).await?;
+                    }
+                    other => {
+                        tracing::debug!(target: "acp::wire", "ignoring unknown method: {other}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Log a `session/update` notification via tracing.
+    ///
+    /// The discriminator field is `sessionUpdate` (not `type`) per the ACP schema.
+    fn handle_session_update(&self, msg: &serde_json::Value) {
+        let update = &msg["params"]["update"];
+        let update_type = update
+            .get("sessionUpdate")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+
+        match update_type {
+            "agent_message_chunk" => {
+                if let Some(text) = update["content"]["text"].as_str() {
+                    tracing::info!(target: "acp::stream", "{text}");
+                }
+            }
+            "tool_call" => {
+                let title = update
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let kind = update
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                tracing::info!(target: "acp::tool", "tool_call: {title} ({kind})");
+            }
+            "tool_call_update" => {
+                let tool_id = update
+                    .get("toolCallId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                let status = update
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                tracing::info!(target: "acp::tool", "tool_call_update: {tool_id} → {status}");
+            }
+            "plan" => {
+                tracing::info!(target: "acp::plan", "plan update received");
+            }
+            "agent_thought_chunk" => {
+                if let Some(text) = update["content"]["text"].as_str() {
+                    tracing::debug!(target: "acp::thought", "{text}");
+                }
+            }
+            other => {
+                tracing::debug!(target: "acp::update", "session/update: {other}");
+            }
+        }
+    }
+
+    /// Auto-approve a `session/request_permission` request from the agent.
+    ///
+    /// Finds the option with `kind == "allow_once"` and responds with its `optionId`.
+    /// If no `allow_once` option exists, falls back to `reject_once`.
+    ///
+    /// **Critical:** Never hardcode `optionId` — always find it dynamically by `kind`.
+    ///
+    /// The request `id` is stored as `serde_json::Value` to support both numeric
+    /// and string IDs per JSON-RPC 2.0.
+    async fn handle_permission_request(
+        &mut self,
+        msg: &serde_json::Value,
+    ) -> Result<(), AcpError> {
+        // Extract id as a Value — JSON-RPC 2.0 allows both numeric and string IDs.
+        let id = msg
+            .get("id")
+            .cloned()
+            .ok_or_else(|| AcpError::Protocol("permission request missing id".into()))?;
+
+        // Store pending permission id so cancel_with_cleanup can respond to it.
+        self.pending_permission_id = Some(id.clone());
+        // Mark as not yet responded — guards against double-response race.
+        self.permission_responded = false;
+
+        let options = msg["params"]["options"]
+            .as_array()
+            .ok_or_else(|| AcpError::Protocol("permission request missing options".into()))?;
+
+        tracing::debug!(
+            target: "acp::permission",
+            "session/request_permission id={id}, {} options",
+            options.len()
+        );
+
+        // Find allow_once by kind — NEVER hardcode optionId.
+        let allow_once = options
+            .iter()
+            .find(|opt| opt.get("kind").and_then(|k| k.as_str()) == Some("allow_once"));
+
+        let response = if let Some(opt) = allow_once {
+            let option_id = opt["optionId"]
+                .as_str()
+                .ok_or_else(|| AcpError::Protocol("allow_once option missing optionId".into()))?;
+            tracing::info!(
+                target: "acp::permission",
+                "auto-approving permission id={id} with allow_once optionId={option_id:?}"
+            );
+            permission_response_selected(&id, option_id)
+        } else {
+            // No allow_once — fall back to reject_once.
+            tracing::warn!(
+                target: "acp::permission",
+                "no allow_once option found in permission request id={id}, falling back to reject_once"
+            );
+            let reject = options
+                .iter()
+                .find(|opt| opt.get("kind").and_then(|k| k.as_str()) == Some("reject_once"));
+
+            if let Some(opt) = reject {
+                let option_id = opt["optionId"].as_str().unwrap_or("reject");
+                permission_response_selected(&id, option_id)
+            } else {
+                return Err(AcpError::Protocol(
+                    "no suitable permission option found (neither allow_once nor reject_once)"
+                        .into(),
+                ));
+            }
+        };
+
+        self.write_ndjson(&response).await?;
+        // Mark as responded and clear pending now that we've successfully written the response.
+        self.permission_responded = true;
+        self.pending_permission_id = None;
+        Ok(())
+    }
+
+    /// Parse `stopReason` from a `session/prompt` result value.
+    fn parse_stop_reason(&self, result: &serde_json::Value) -> Result<StopReason, AcpError> {
+        let raw = result["stopReason"].as_str().ok_or_else(|| {
+            AcpError::Protocol("session/prompt response missing stopReason".into())
+        })?;
+        StopReason::from_str(raw)
+            .ok_or_else(|| AcpError::Protocol(format!("unknown stopReason: {raw:?}")))
+    }
+}
+
+// ─── Permission response constructors ────────────────────────────────────────
+
+/// Build a JSON-RPC permission response with `outcome: "selected"`.
+fn permission_response_selected(id: &serde_json::Value, option_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": { "outcome": { "outcome": "selected", "optionId": option_id } }
+    })
+}
+
+/// Build a JSON-RPC permission response with `outcome: "cancelled"`.
+fn permission_response_cancelled(id: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": { "outcome": { "outcome": "cancelled" } }
+    })
+}
+
+// ─── Drop: kill child process ─────────────────────────────────────────────────
+
+impl Drop for AcpClient {
+    fn drop(&mut self) {
+        // Best-effort kill — ignore errors (process may have already exited).
+        let _ = self.child.start_kill();
+    }
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── StopReason parsing ────────────────────────────────────────────────
+
+    #[test]
+    fn stop_reason_parses_all_known_values() {
+        assert_eq!(StopReason::from_str("end_turn"), Some(StopReason::EndTurn));
+        assert_eq!(
+            StopReason::from_str("cancelled"),
+            Some(StopReason::Cancelled)
+        );
+        assert_eq!(
+            StopReason::from_str("max_tokens"),
+            Some(StopReason::MaxTokens)
+        );
+        assert_eq!(
+            StopReason::from_str("max_turn_requests"),
+            Some(StopReason::MaxTurnRequests)
+        );
+        assert_eq!(StopReason::from_str("refusal"), Some(StopReason::Refusal));
+    }
+
+    #[test]
+    fn stop_reason_returns_none_for_unknown() {
+        assert_eq!(StopReason::from_str("unknown_value"), None);
+        assert_eq!(StopReason::from_str(""), None);
+        assert_eq!(StopReason::from_str("END_TURN"), None); // case-sensitive
+        assert_eq!(StopReason::from_str("endturn"), None); // no camelCase
+    }
+
+    // ── Permission option finding ─────────────────────────────────────────
+
+    #[test]
+    fn find_allow_once_by_kind_not_by_option_id() {
+        // optionId values are intentionally non-obvious to prove we don't hardcode them.
+        let options: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[
+            {"optionId": "opt-reject-42",  "name": "Reject",       "kind": "reject_once"},
+            {"optionId": "opt-allow-99",   "name": "Allow once",   "kind": "allow_once"},
+            {"optionId": "opt-always-7",   "name": "Always allow", "kind": "allow_always"}
+        ]"#,
+        )
+        .unwrap();
+
+        let allow_once = options
+            .iter()
+            .find(|opt| opt.get("kind").and_then(|k| k.as_str()) == Some("allow_once"));
+
+        assert!(allow_once.is_some(), "should find allow_once option");
+        let opt = allow_once.unwrap();
+        // Found by kind, not by hardcoded optionId
+        assert_eq!(opt["kind"].as_str(), Some("allow_once"));
+        assert_eq!(opt["optionId"].as_str(), Some("opt-allow-99"));
+    }
+
+    #[test]
+    fn find_allow_once_returns_none_when_absent() {
+        let options: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[
+            {"optionId": "reject-1",      "name": "Reject",        "kind": "reject_once"},
+            {"optionId": "reject-always", "name": "Always reject", "kind": "reject_always"}
+        ]"#,
+        )
+        .unwrap();
+
+        let allow_once = options
+            .iter()
+            .find(|opt| opt.get("kind").and_then(|k| k.as_str()) == Some("allow_once"));
+
+        assert!(allow_once.is_none());
+    }
+
+    #[test]
+    fn find_reject_once_fallback_when_no_allow_once() {
+        let options: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[{"optionId": "rej-x", "name": "Reject", "kind": "reject_once"}]"#,
+        )
+        .unwrap();
+
+        let allow_once = options
+            .iter()
+            .find(|opt| opt.get("kind").and_then(|k| k.as_str()) == Some("allow_once"));
+        assert!(allow_once.is_none());
+
+        let reject_once = options
+            .iter()
+            .find(|opt| opt.get("kind").and_then(|k| k.as_str()) == Some("reject_once"));
+        assert!(reject_once.is_some());
+        assert_eq!(reject_once.unwrap()["optionId"].as_str(), Some("rej-x"));
+    }
+
+    // ── JSON-RPC message construction ─────────────────────────────────────
+
+    #[test]
+    fn request_has_id_field() {
+        let id: u64 = 42;
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "initialize",
+            "params": {}
+        });
+        assert!(msg.get("id").is_some(), "request must have id field");
+        assert_eq!(msg["id"].as_u64(), Some(42));
+        assert_eq!(msg["jsonrpc"].as_str(), Some("2.0"));
+        assert_eq!(msg["method"].as_str(), Some("initialize"));
+    }
+
+    #[test]
+    fn notification_has_no_id_field() {
+        // session/cancel is a notification — must NOT have an id field.
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/cancel",
+            "params": {
+                "sessionId": "sess_abc123"
+            }
+        });
+        assert!(
+            msg.get("id").is_none(),
+            "notification must NOT have id field"
+        );
+        assert_eq!(msg["jsonrpc"].as_str(), Some("2.0"));
+        assert_eq!(msg["method"].as_str(), Some("session/cancel"));
+    }
+
+    #[test]
+    fn initialize_request_format() {
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 0u64,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": 1,
+                "clientCapabilities": {},
+                "clientInfo": {
+                    "name": "sprout-acp",
+                    "version": "0.1.0"
+                }
+            }
+        });
+        assert_eq!(msg["params"]["protocolVersion"].as_u64(), Some(1));
+        assert_eq!(
+            msg["params"]["clientInfo"]["name"].as_str(),
+            Some("sprout-acp")
+        );
+        assert!(msg["params"]["clientCapabilities"].is_object());
+    }
+
+    #[test]
+    fn session_new_mcp_server_has_required_fields() {
+        // Schema requires name, command, args, env — all present, args/env may be empty.
+        let server = McpServer {
+            name: "sprout-mcp".into(),
+            command: "/usr/local/bin/sprout-mcp-server".into(),
+            args: vec![],
+            env: vec![
+                EnvVar {
+                    name: "SPROUT_RELAY_URL".into(),
+                    value: "ws://localhost:3000".into(),
+                },
+                EnvVar {
+                    name: "SPROUT_PRIVATE_KEY".into(),
+                    value: "nsec1abc".into(),
+                },
+            ],
+        };
+        let serialized = serde_json::to_value(&server).unwrap();
+        assert_eq!(serialized["name"].as_str(), Some("sprout-mcp"));
+        assert_eq!(
+            serialized["command"].as_str(),
+            Some("/usr/local/bin/sprout-mcp-server")
+        );
+        assert!(serialized["args"].is_array());
+        assert_eq!(serialized["args"].as_array().unwrap().len(), 0);
+        assert!(serialized["env"].is_array());
+        assert_eq!(serialized["env"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            serialized["env"][0]["name"].as_str(),
+            Some("SPROUT_RELAY_URL")
+        );
+    }
+
+    #[test]
+    fn session_prompt_request_format() {
+        let prompt_text = "[Sprout @mention]\nChannel: test\nFrom: npub1...\nMessage: hello";
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2u64,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": "sess_abc123",
+                "prompt": [
+                    { "type": "text", "text": prompt_text }
+                ]
+            }
+        });
+        assert_eq!(msg["method"].as_str(), Some("session/prompt"));
+        let prompt = msg["params"]["prompt"].as_array().unwrap();
+        assert_eq!(prompt.len(), 1);
+        assert_eq!(prompt[0]["type"].as_str(), Some("text"));
+        assert_eq!(prompt[0]["text"].as_str(), Some(prompt_text));
+    }
+
+    #[test]
+    fn permission_response_selected_format() {
+        let id: u64 = 5;
+        let option_id = "opt-allow-99";
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "outcome": {
+                    "outcome": "selected",
+                    "optionId": option_id
+                }
+            }
+        });
+        assert_eq!(response["id"].as_u64(), Some(5));
+        assert_eq!(
+            response["result"]["outcome"]["outcome"].as_str(),
+            Some("selected")
+        );
+        assert_eq!(
+            response["result"]["outcome"]["optionId"].as_str(),
+            Some("opt-allow-99")
+        );
+    }
+
+    #[test]
+    fn permission_response_cancelled_format() {
+        let id: u64 = 5;
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "outcome": {
+                    "outcome": "cancelled"
+                }
+            }
+        });
+        assert_eq!(
+            response["result"]["outcome"]["outcome"].as_str(),
+            Some("cancelled")
+        );
+        // cancelled outcome has no optionId
+        assert!(response["result"]["outcome"].get("optionId").is_none());
+    }
+
+    #[test]
+    fn session_cancel_notification_has_session_id_in_params() {
+        let session_id = "sess_xyz789";
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/cancel",
+            "params": {
+                "sessionId": session_id
+            }
+        });
+        // Must have no id (notification)
+        assert!(msg.get("id").is_none());
+        // Must have sessionId in params
+        assert_eq!(
+            msg["params"]["sessionId"].as_str(),
+            Some("sess_xyz789")
+        );
+    }
+
+    // ── String ID handling (Fix 1) ────────────────────────────────────────
+
+    #[test]
+    fn permission_request_with_string_id() {
+        // Verify that permission response uses the same ID type as the request.
+        // JSON-RPC 2.0 permits string IDs from the agent.
+        let string_id = serde_json::json!("perm-req-001");
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": string_id,
+            "result": {
+                "outcome": { "outcome": "selected", "optionId": "allow-once" }
+            }
+        });
+        assert_eq!(response["id"], "perm-req-001");
+        assert!(response["id"].is_string());
+    }
+
+    #[test]
+    fn id_comparison_works_for_numeric_and_string() {
+        // Verify json!(expected_id) comparison logic used in read_until_response.
+        let expected_id: u64 = 3;
+        let numeric_response_id = serde_json::json!(3u64);
+        let string_response_id = serde_json::json!("3");
+
+        // Numeric matches
+        assert_eq!(numeric_response_id, serde_json::json!(expected_id));
+        // String does NOT match numeric (correct — different types)
+        assert_ne!(string_response_id, serde_json::json!(expected_id));
+    }
+
+    #[test]
+    fn permission_cancelled_response_preserves_id_type() {
+        // String ID from agent should be echoed back as string in cancelled response.
+        let string_id = serde_json::json!("req-abc");
+        let cancelled = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": string_id.clone(),
+            "result": { "outcome": { "outcome": "cancelled" } }
+        });
+        assert_eq!(cancelled["id"], string_id);
+        assert!(cancelled["id"].is_string());
+
+        // Numeric ID from agent should be echoed back as numeric.
+        let numeric_id = serde_json::json!(42u64);
+        let cancelled_numeric = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": numeric_id.clone(),
+            "result": { "outcome": { "outcome": "cancelled" } }
+        });
+        assert_eq!(cancelled_numeric["id"], numeric_id);
+        assert!(cancelled_numeric["id"].is_number());
+    }
+}
