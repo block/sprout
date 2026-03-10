@@ -26,6 +26,32 @@ type RawChannel = {
   participant_pubkeys: string[];
 };
 
+type RawFeedItem = {
+  id: string;
+  kind: number;
+  pubkey: string;
+  content: string;
+  created_at: number;
+  channel_id: string | null;
+  channel_name: string;
+  tags: string[][];
+  category: "mention" | "needs_action" | "activity" | "agent_activity";
+};
+
+type RawHomeFeedResponse = {
+  feed: {
+    mentions: RawFeedItem[];
+    needs_action: RawFeedItem[];
+    activity: RawFeedItem[];
+    agent_activity: RawFeedItem[];
+  };
+  meta: {
+    since: number;
+    total: number;
+    generated_at: number;
+  };
+};
+
 type WsHandler = (message: unknown) => void;
 
 type MockSocket = {
@@ -334,6 +360,139 @@ async function handleCreateChannel(
   return response.json();
 }
 
+async function handleGetFeed(
+  args: {
+    since?: number;
+    limit?: number;
+    types?: string;
+  },
+  config: E2eConfig | undefined,
+): Promise<RawHomeFeedResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const now = Math.floor(Date.now() / 1000);
+    const limit = args.limit ?? 50;
+    const wantedTypes =
+      args.types
+        ?.split(",")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0) ?? [];
+    const includeType = (type: string) =>
+      wantedTypes.length === 0 || wantedTypes.includes(type);
+
+    const mentions = includeType("mentions")
+      ? [
+          {
+            id: "mock-feed-mention",
+            kind: 40001,
+            pubkey:
+              "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+            content: "Please review the release checklist.",
+            created_at: now - 90,
+            channel_id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+            channel_name: "general",
+            tags: [
+              ["e", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
+              ["p", DEFAULT_MOCK_IDENTITY.pubkey],
+            ],
+            category: "mention" as const,
+          },
+        ].slice(0, limit)
+      : [];
+
+    const needsAction = includeType("needs_action")
+      ? [
+          {
+            id: "mock-feed-reminder",
+            kind: 40007,
+            pubkey:
+              "0000000000000000000000000000000000000000000000000000000000000000",
+            content: "Reminder: update the launch plan before lunch.",
+            created_at: now - 15 * 60,
+            channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301",
+            channel_name: "agents",
+            tags: [
+              ["e", "94a444a4-c0a3-5966-ab05-530c6ddc2301"],
+              ["p", DEFAULT_MOCK_IDENTITY.pubkey],
+            ],
+            category: "needs_action" as const,
+          },
+        ].slice(0, limit)
+      : [];
+
+    const activity = includeType("activity")
+      ? [
+          {
+            id: "mock-feed-activity",
+            kind: 40001,
+            pubkey:
+              "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
+            content: "Engineering shipped the desktop build.",
+            created_at: now - 42 * 60,
+            channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
+            channel_name: "engineering",
+            tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
+            category: "activity" as const,
+          },
+        ].slice(0, limit)
+      : [];
+
+    const agentActivity = includeType("agent_activity")
+      ? [
+          {
+            id: "mock-feed-agent",
+            kind: 43003,
+            pubkey:
+              "db0b028cd36f4d3e36c8300cce87252c1f7fc9495ffecc53f393fcac341ffd36",
+            content: "Agent progress: channel index complete.",
+            created_at: now - 2 * 60 * 60,
+            channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301",
+            channel_name: "agents",
+            tags: [["e", "94a444a4-c0a3-5966-ab05-530c6ddc2301"]],
+            category: "agent_activity" as const,
+          },
+        ].slice(0, limit)
+      : [];
+
+    return {
+      feed: {
+        mentions,
+        needs_action: needsAction,
+        activity,
+        agent_activity: agentActivity,
+      },
+      meta: {
+        since: args.since ?? now - 7 * 24 * 60 * 60,
+        total:
+          mentions.length +
+          needsAction.length +
+          activity.length +
+          agentActivity.length,
+        generated_at: now,
+      },
+    };
+  }
+
+  const url = new URL("/api/feed", getRelayHttpUrl(config));
+  if (args.since !== undefined) {
+    url.searchParams.set("since", String(args.since));
+  }
+  if (args.limit !== undefined) {
+    url.searchParams.set("limit", String(args.limit));
+  }
+  if (args.types) {
+    url.searchParams.set("types", args.types);
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      "X-Pubkey": identity.pubkey,
+    },
+  });
+  await assertOk(response);
+  return response.json();
+}
+
 async function connectRealSocket(args: { url?: string; onMessage: unknown }) {
   const wsId = nextSocketId++;
   const ws = new WebSocket(args.url ?? DEFAULT_RELAY_WS_URL);
@@ -516,6 +675,11 @@ export function maybeInstallE2eTauriMocks() {
         return getRelayWsUrl(activeConfig);
       case "get_channels":
         return handleGetChannels(activeConfig);
+      case "get_feed":
+        return handleGetFeed(
+          (payload as Parameters<typeof handleGetFeed>[0]) ?? {},
+          activeConfig,
+        );
       case "create_channel":
         return handleCreateChannel(
           payload as Parameters<typeof handleCreateChannel>[0],

@@ -17,6 +17,20 @@ test("loads channels from the relay", async ({ page }) => {
   await expect(page.getByTestId("dm-list")).toContainText("alice-tyler");
 });
 
+test("loads the home feed from the relay", async ({ page }) => {
+  await installRelayBridge(page, "tyler");
+  await page.goto("/");
+
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
+  await expect(
+    page.getByRole("heading", { name: "Focus queue" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "@Mentions" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Needs Action" }),
+  ).toBeVisible();
+});
+
 test("creates a relay-backed stream", async ({ page }) => {
   const channelName = `desktop-e2e-${Date.now()}`;
 

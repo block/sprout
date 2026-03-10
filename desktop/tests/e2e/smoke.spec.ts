@@ -30,6 +30,29 @@ test("creates a new mocked stream", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 });
 
+test("opens a mocked channel from the home feed", async ({ page }) => {
+  const mentionsSection = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "@Mentions" }),
+  });
+
+  await page.goto("/");
+
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
+  await expect(
+    page.getByRole("heading", { name: "Focus queue" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Please review the release checklist."),
+  ).toBeVisible();
+
+  await mentionsSection.getByRole("button", { name: "Open" }).click();
+
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Welcome to #general",
+  );
+});
+
 test("sends a mocked channel message", async ({ page }) => {
   const message = `Smoke message ${Date.now()}`;
 

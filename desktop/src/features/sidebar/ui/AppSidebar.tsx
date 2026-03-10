@@ -1,4 +1,4 @@
-import { CircleDot, FileText, Hash, Plus } from "lucide-react";
+import { CircleDot, FileText, Hash, Home, Plus } from "lucide-react";
 import * as React from "react";
 
 import type { Channel } from "@/shared/api/types";
@@ -27,11 +27,14 @@ type AppSidebarProps = {
   isLoading: boolean;
   isCreatingChannel: boolean;
   errorMessage?: string;
+  homeUrgentCount?: number;
   selectedChannelId: string | null;
+  selectedView: "home" | "channel";
   onCreateChannel: (input: {
     name: string;
     description?: string;
   }) => Promise<void>;
+  onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
 };
 
@@ -49,12 +52,14 @@ function SidebarChannelIcon({ channel }: { channel: Channel }) {
 
 function SidebarSection({
   items,
+  isActiveChannel,
   selectedChannelId,
   title,
   testId,
   onSelectChannel,
 }: {
   items: Channel[];
+  isActiveChannel: boolean;
   selectedChannelId: string | null;
   title: string;
   testId: string;
@@ -73,7 +78,7 @@ function SidebarSection({
             <SidebarMenuItem key={channel.id}>
               <SidebarMenuButton
                 data-testid={`channel-${channel.name}`}
-                isActive={selectedChannelId === channel.id}
+                isActive={isActiveChannel && selectedChannelId === channel.id}
                 onClick={() => onSelectChannel(channel.id)}
                 tooltip={channel.name}
                 type="button"
@@ -103,6 +108,7 @@ function StreamsSection({
   onCreateChannel,
   onCancelCreate,
   onSelectChannel,
+  isActiveChannel,
   selectedChannelId,
 }: {
   items: Channel[];
@@ -118,6 +124,7 @@ function StreamsSection({
   onCreateChannel: (event: React.FormEvent<HTMLFormElement>) => void;
   onCancelCreate: () => void;
   onSelectChannel: (channelId: string) => void;
+  isActiveChannel: boolean;
   selectedChannelId: string | null;
 }) {
   return (
@@ -194,7 +201,7 @@ function StreamsSection({
               <SidebarMenuItem key={channel.id}>
                 <SidebarMenuButton
                   data-testid={`channel-${channel.name}`}
-                  isActive={selectedChannelId === channel.id}
+                  isActive={isActiveChannel && selectedChannelId === channel.id}
                   onClick={() => onSelectChannel(channel.id)}
                   tooltip={channel.name}
                   type="button"
@@ -216,8 +223,11 @@ export function AppSidebar({
   isLoading,
   isCreatingChannel,
   errorMessage,
+  homeUrgentCount,
   selectedChannelId,
+  selectedView,
   onCreateChannel,
+  onSelectHome,
   onSelectChannel,
 }: AppSidebarProps) {
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
@@ -316,6 +326,29 @@ export function AppSidebar({
       <SidebarSeparator />
 
       <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={selectedView === "home"}
+                  onClick={onSelectHome}
+                  tooltip="Home"
+                  type="button"
+                >
+                  <Home className="h-4 w-4" />
+                  <span>Home</span>
+                  {homeUrgentCount && homeUrgentCount > 0 ? (
+                    <span className="ml-auto rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary-foreground">
+                      {homeUrgentCount}
+                    </span>
+                  ) : null}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
         {isLoading ? (
           <SidebarGroup>
             <SidebarGroupLabel>Channels</SidebarGroupLabel>
@@ -338,6 +371,7 @@ export function AppSidebar({
               draftName={draftName}
               isCreateOpen={isCreateOpen}
               isCreatingChannel={isCreatingChannel}
+              isActiveChannel={selectedView === "channel"}
               items={streamChannels}
               onCancelCreate={() => {
                 setCreateErrorMessage(undefined);
@@ -364,6 +398,7 @@ export function AppSidebar({
               selectedChannelId={selectedChannelId}
             />
             <SidebarSection
+              isActiveChannel={selectedView === "channel"}
               items={forumChannels}
               onSelectChannel={onSelectChannel}
               selectedChannelId={selectedChannelId}
@@ -371,6 +406,7 @@ export function AppSidebar({
               title="Forums"
             />
             <SidebarSection
+              isActiveChannel={selectedView === "channel"}
               items={directMessages}
               onSelectChannel={onSelectChannel}
               selectedChannelId={selectedChannelId}

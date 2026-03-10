@@ -33,6 +33,50 @@ struct CreateChannelBody<'a> {
     description: Option<&'a str>,
 }
 
+#[derive(Serialize)]
+struct GetFeedQuery<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    since: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    types: Option<&'a str>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FeedItemInfo {
+    pub id: String,
+    pub kind: u32,
+    pub pubkey: String,
+    pub content: String,
+    pub created_at: u64,
+    pub channel_id: Option<String>,
+    pub channel_name: String,
+    pub tags: Vec<Vec<String>>,
+    pub category: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FeedSections {
+    pub mentions: Vec<FeedItemInfo>,
+    pub needs_action: Vec<FeedItemInfo>,
+    pub activity: Vec<FeedItemInfo>,
+    pub agent_activity: Vec<FeedItemInfo>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FeedMeta {
+    pub since: i64,
+    pub total: u64,
+    pub generated_at: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FeedResponse {
+    pub feed: FeedSections,
+    pub meta: FeedMeta,
+}
+
 fn relay_ws_url() -> String {
     std::env::var("SPROUT_RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
 }
@@ -197,6 +241,38 @@ async fn create_channel(
         .map_err(|e| format!("parse failed: {e}"))
 }
 
+#[tauri::command]
+async fn get_feed(
+    since: Option<i64>,
+    limit: Option<u32>,
+    types: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<FeedResponse, String> {
+    let pubkey_hex = auth_pubkey_header(&state)?;
+    let url = format!("{}{}", relay_api_base_url(), "/api/feed");
+    let response = state
+        .http_client
+        .get(url)
+        .header("X-Pubkey", pubkey_hex)
+        .query(&GetFeedQuery {
+            since,
+            limit,
+            types: types.as_deref(),
+        })
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(relay_error_message(response).await);
+    }
+
+    response
+        .json::<FeedResponse>()
+        .await
+        .map_err(|e| format!("parse failed: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_state = AppState {
@@ -222,6 +298,7 @@ pub fn run() {
             create_auth_event,
             get_channels,
             create_channel,
+            get_feed,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
