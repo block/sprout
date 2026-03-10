@@ -10,7 +10,7 @@ type MessageQueryContext = {
   queryKey: readonly ["channel-messages", string];
 };
 
-function mergeMessages(
+export function mergeMessages(
   current: RelayEvent[],
   incoming: RelayEvent,
 ): RelayEvent[] {
@@ -35,7 +35,7 @@ function createOptimisticMessage(
     pubkey: identity.pubkey,
     created_at: Math.floor(Date.now() / 1_000),
     kind: 4_0001,
-    tags: [["e", channelId]],
+    tags: [["h", channelId]],
     content,
     sig: "",
     pending: true,

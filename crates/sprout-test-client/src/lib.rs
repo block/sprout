@@ -159,9 +159,9 @@ impl SproutTestClient {
         content: &str,
         kind: u16,
     ) -> Result<OkResponse, TestClientError> {
-        let e_tag = Tag::parse(&["e", channel_id])
+        let h_tag = Tag::parse(&["h", channel_id])
             .map_err(|e| TestClientError::EventBuilder(e.to_string()))?;
-        let event = EventBuilder::new(Kind::Custom(kind), content, [e_tag]).sign_with_keys(keys)?;
+        let event = EventBuilder::new(Kind::Custom(kind), content, [h_tag]).sign_with_keys(keys)?;
         self.send_event(event).await
     }
 
@@ -534,11 +534,11 @@ mod tests {
     }
 
     #[test]
-    fn text_event_carries_e_tag() {
+    fn text_event_carries_h_tag() {
         let keys = Keys::generate();
         let channel_id = "my-channel-123";
-        let e_tag = Tag::parse(&["e", channel_id]).unwrap();
-        let event = EventBuilder::new(Kind::Custom(40001), "hello", [e_tag])
+        let h_tag = Tag::parse(&["h", channel_id]).unwrap();
+        let event = EventBuilder::new(Kind::Custom(40001), "hello", [h_tag])
             .sign_with_keys(&keys)
             .unwrap();
 
@@ -551,8 +551,8 @@ mod tests {
 
         assert!(
             tags.iter()
-                .any(|t| t.len() >= 2 && t[0] == "e" && t[1] == channel_id),
-            "missing e tag"
+                .any(|t| t.len() >= 2 && t[0] == "h" && t[1] == channel_id),
+            "missing h tag"
         );
     }
 }

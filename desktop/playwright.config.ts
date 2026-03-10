@@ -18,14 +18,18 @@ export default defineConfig({
   projects: [
     {
       name: "smoke",
-      testMatch: "**/smoke.spec.ts",
+      testMatch: [
+        "**/smoke.spec.ts",
+        "**/channels.spec.ts",
+        "**/messaging.spec.ts",
+      ],
       use: {
         ...devices["Desktop Chrome"],
       },
     },
     {
       name: "integration",
-      testMatch: "**/stream.spec.ts",
+      testMatch: ["**/stream.spec.ts", "**/integration.spec.ts"],
       use: {
         ...devices["Desktop Chrome"],
       },

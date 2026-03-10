@@ -4,7 +4,7 @@
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS channels (
+CREATE TABLE channels (
     id              BINARY(16)      NOT NULL,
     name            TEXT            NOT NULL,
     channel_type    ENUM('stream','forum','dm','workflow') NOT NULL DEFAULT 'stream',
@@ -30,7 +30,7 @@ CREATE INDEX idx_channels_created_by ON channels (created_by);
 
 -- ─── Channel Members ─────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS channel_members (
+CREATE TABLE channel_members (
     channel_id  BINARY(16)      NOT NULL,
     pubkey      VARBINARY(32)   NOT NULL,
     role        ENUM('owner','admin','member','guest','bot') NOT NULL DEFAULT 'member',
@@ -50,7 +50,7 @@ CREATE INDEX idx_channel_members_channel ON channel_members (channel_id);
 
 -- ─── Users ───────────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE users (
     pubkey              VARBINARY(32)   NOT NULL,
     nip05_handle        VARCHAR(255)    UNIQUE,
     display_name        TEXT,
@@ -83,7 +83,7 @@ CREATE INDEX idx_users_okta       ON users (okta_user_id);
 -- ⚠️  Deduplication by id alone is not enforceable via unique index across
 --     partitions. SHA-256 collision resistance + app-layer INSERT IGNORE used.
 
-CREATE TABLE IF NOT EXISTS events (
+CREATE TABLE events (
     id          VARBINARY(32)   NOT NULL,
     pubkey      VARBINARY(32)   NOT NULL,
     created_at  DATETIME(6)     NOT NULL,
@@ -121,7 +121,7 @@ CREATE INDEX idx_events_kind_created ON events (kind, created_at);
 
 -- ─── Persistent Subscriptions ────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS subscriptions (
+CREATE TABLE subscriptions (
     id                      VARCHAR(255)    NOT NULL,
     name                    TEXT            NOT NULL,
     owner_pubkey            VARBINARY(32)   NOT NULL,
@@ -165,7 +165,7 @@ CREATE INDEX idx_subscriptions_status ON subscriptions (status);
 -- ⚠️  MySQL does not support FK constraints on partitioned tables.
 --     subscription_id → subscriptions(id) enforced at application layer.
 
-CREATE TABLE IF NOT EXISTS delivery_log (
+CREATE TABLE delivery_log (
     id              BIGINT          NOT NULL AUTO_INCREMENT,
     subscription_id VARCHAR(255)    NOT NULL,
     event_id        VARBINARY(32)   NOT NULL,
@@ -192,7 +192,7 @@ CREATE INDEX idx_delivery_log_failures      ON delivery_log (subscription_id, de
 
 -- ─── Workflows ────────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS workflows (
+CREATE TABLE workflows (
     id                  BINARY(16)      NOT NULL,
     name                TEXT            NOT NULL,
     owner_pubkey        VARBINARY(32)   NOT NULL,
@@ -224,7 +224,7 @@ CREATE INDEX idx_workflows_channel ON workflows (channel_id);
 
 -- ─── API Tokens ───────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS api_tokens (
+CREATE TABLE api_tokens (
     id              BINARY(16)      NOT NULL,
     token_hash      VARBINARY(32)   NOT NULL UNIQUE,
     owner_pubkey    VARBINARY(32)   NOT NULL,
@@ -248,7 +248,7 @@ CREATE INDEX idx_api_tokens_hash  ON api_tokens (token_hash);
 
 -- ─── Rate Limit Violations ────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS rate_limit_violations (
+CREATE TABLE rate_limit_violations (
     id              BIGINT          NOT NULL AUTO_INCREMENT,
     pubkey          VARBINARY(32)   NOT NULL,
     violation_at    DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),

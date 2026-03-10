@@ -2,6 +2,7 @@
 //!
 //! Endpoints are split into focused submodules:
 //!   - `channels`  — GET/POST /api/channels
+//!   - `events`    — GET /api/events/:id
 //!   - `search`    — GET /api/search
 //!   - `agents`    — GET /api/agents
 //!   - `presence`  — GET /api/presence
@@ -19,6 +20,8 @@ pub mod channels;
 pub mod channels_metadata;
 /// Direct message endpoints.
 pub mod dms;
+/// Event lookup endpoint.
+pub mod events;
 /// Personalized home feed endpoint.
 pub mod feed;
 /// Channel membership endpoints.
@@ -47,6 +50,7 @@ pub use channels_metadata::{
     set_topic_handler, unarchive_channel_handler, update_channel_handler,
 };
 pub use dms::{add_dm_member_handler, list_dms_handler, open_dm_handler};
+pub use events::get_event;
 pub use feed::feed_handler;
 pub use members::{add_members, join_channel, leave_channel, list_members, remove_member};
 pub use messages::{delete_message, get_thread, list_messages, send_message};
@@ -67,6 +71,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
+use sha2::{Digest, Sha256};
 
 use crate::state::AppState;
 
@@ -107,9 +112,11 @@ fn decode_jwt_payload_unverified(
 /// Extract an authenticated pubkey from the request headers.
 ///
 /// Auth resolution order:
-/// 1. `Authorization: Bearer <jwt>` — validated via JWKS when `require_auth_token=true`,
-///    or decoded unverified (username → derived key) when `require_auth_token=false`.
-/// 2. `X-Pubkey: <hex>` — accepted only when `require_auth_token=false` (dev mode).
+/// 1. `Authorization: Bearer sprout_*` — API token; hashed, looked up in DB.
+/// 2. `Authorization: Bearer eyJ*` — Okta JWT; validated via JWKS when
+///    `require_auth_token=true`, or decoded unverified (username → derived key) when
+///    `require_auth_token=false`.
+/// 3. `X-Pubkey: <hex>` — accepted only when `require_auth_token=false` (dev mode).
 ///
 /// Returns `(nostr::PublicKey, pubkey_bytes)` on success, or a 401 response on failure.
 pub(crate) async fn extract_auth_pubkey(
@@ -118,9 +125,56 @@ pub(crate) async fn extract_auth_pubkey(
 ) -> Result<(nostr::PublicKey, Vec<u8>), (StatusCode, Json<serde_json::Value>)> {
     let require_auth = state.config.require_auth_token;
 
-    // Try Authorization: Bearer <jwt>
+    // Try Authorization: Bearer <token>
     if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         if let Some(token) = auth_header.strip_prefix("Bearer ") {
+            // ── API token path (sprout_*) ─────────────────────────────────
+            // Must be checked before the Okta JWT path: verify_auth_event()
+            // (and validate_bearer_jwt) would reject sprout_ tokens immediately.
+            if token.starts_with("sprout_") {
+                let hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+                let record = match state.db.get_api_token_by_hash(&hash).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::warn!("auth: API token lookup failed: {e}");
+                        return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
+                    }
+                };
+                let owner_pubkey = match nostr::PublicKey::from_slice(&record.owner_pubkey) {
+                    Ok(pk) => pk,
+                    Err(e) => {
+                        tracing::warn!("auth: API token owner pubkey invalid: {e}");
+                        return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
+                    }
+                };
+                // verify_api_token_against_hash checks hash match, expiry, and
+                // pubkey equality. For the REST path there is no "claimed" pubkey
+                // from a Nostr event, so we pass the owner pubkey for both
+                // arguments — we are asserting identity from the DB record itself.
+                match state.auth.verify_api_token_against_hash(
+                    token,
+                    &record.token_hash,
+                    &owner_pubkey,
+                    &owner_pubkey,
+                    record.expires_at,
+                    &record.scopes,
+                ) {
+                    Ok((pubkey, _scopes)) => {
+                        let bytes = pubkey.serialize().to_vec();
+                        if let Err(e) = state.db.ensure_user(&bytes).await {
+                            tracing::warn!("ensure_user failed: {e}");
+                        }
+                        // Update last_used_at — non-fatal.
+                        let _ = state.db.update_token_last_used(&hash).await;
+                        return Ok((pubkey, bytes));
+                    }
+                    Err(_) => {
+                        tracing::warn!("auth: API token verification failed");
+                        return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
+                    }
+                }
+            }
+
             if require_auth {
                 // Production: validate JWT against JWKS
                 match state.auth.validate_bearer_jwt(token).await {

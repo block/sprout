@@ -52,6 +52,22 @@ type RawHomeFeedResponse = {
   };
 };
 
+type RawSearchHit = {
+  event_id: string;
+  content: string;
+  kind: number;
+  pubkey: string;
+  channel_id: string;
+  channel_name: string;
+  created_at: number;
+  score: number;
+};
+
+type RawSearchResponse = {
+  hits: RawSearchHit[];
+  found: number;
+};
+
 type WsHandler = (message: unknown) => void;
 
 type MockSocket = {
@@ -62,6 +78,7 @@ type MockSocket = {
 declare global {
   interface Window {
     __SPROUT_E2E__?: E2eConfig;
+    __SPROUT_E2E_COMMANDS__?: string[];
   }
 }
 
@@ -213,7 +230,7 @@ function sendWsClose(handler: WsHandler) {
 }
 
 function getChannelIdFromTags(tags: string[][]): string | undefined {
-  return tags.find((tag) => tag[0] === "e")?.[1];
+  return tags.find((tag) => tag[0] === "h")?.[1];
 }
 
 function getMockMessageStore(channelId: string): RelayEvent[] {
@@ -230,7 +247,7 @@ function getMockMessageStore(channelId: string): RelayEvent[] {
             pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
             created_at: Math.floor(Date.now() / 1000),
             kind: 40001,
-            tags: [["e", channelId]],
+            tags: [["h", channelId]],
             content: "Welcome to #general",
             sig: "mocksig".repeat(20).slice(0, 128),
           },
@@ -493,6 +510,139 @@ async function handleGetFeed(
   return response.json();
 }
 
+async function handleSearchMessages(
+  args: {
+    q: string;
+    limit?: number;
+  },
+  config: E2eConfig | undefined,
+): Promise<RawSearchResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const query = args.q.trim().toLowerCase();
+    const limit = args.limit ?? 20;
+    const now = Math.floor(Date.now() / 1000);
+
+    const mockHits: RawSearchHit[] = [
+      {
+        event_id: "mock-general-welcome",
+        content: "Welcome to #general",
+        kind: 40001,
+        pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
+        channel_id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+        channel_name: "general",
+        created_at: now - 60,
+        score: 8.5,
+      },
+      {
+        event_id: "mock-engineering-shipped",
+        content: "Engineering shipped the desktop build.",
+        kind: 40001,
+        pubkey:
+          "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
+        channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
+        channel_name: "engineering",
+        created_at: now - 42 * 60,
+        score: 7.2,
+      },
+      {
+        event_id: "mock-forum-release-thread",
+        content: "Release checklist: async feedback thread.",
+        kind: 45001,
+        pubkey:
+          "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+        channel_id: "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11",
+        channel_name: "watercooler",
+        created_at: now - 90 * 60,
+        score: 5.8,
+      },
+    ];
+
+    const hits = mockHits
+      .filter((hit) => {
+        if (!query) {
+          return true;
+        }
+
+        return (
+          hit.content.toLowerCase().includes(query) ||
+          hit.channel_name.toLowerCase().includes(query)
+        );
+      })
+      .slice(0, limit);
+
+    return {
+      hits,
+      found: hits.length,
+    };
+  }
+
+  const url = new URL("/api/search", getRelayHttpUrl(config));
+  url.searchParams.set("q", args.q);
+  if (args.limit !== undefined) {
+    url.searchParams.set("limit", String(args.limit));
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      "X-Pubkey": identity.pubkey,
+    },
+  });
+  await assertOk(response);
+  return response.json();
+}
+
+async function handleGetEvent(
+  args: {
+    eventId: string;
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const knownEvents: RelayEvent[] = [
+      ...Array.from(mockMessages.values()).flat(),
+      {
+        id: "mock-engineering-shipped",
+        pubkey:
+          "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
+        created_at: Math.floor(Date.now() / 1000) - 42 * 60,
+        kind: 40001,
+        tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
+        content: "Engineering shipped the desktop build.",
+        sig: "mocksig".repeat(20).slice(0, 128),
+      },
+      {
+        id: "mock-forum-release-thread",
+        pubkey:
+          "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+        created_at: Math.floor(Date.now() / 1000) - 90 * 60,
+        kind: 45001,
+        tags: [["e", "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11"]],
+        content: "Release checklist: async feedback thread.",
+        sig: "mocksig".repeat(20).slice(0, 128),
+      },
+    ];
+    const event = knownEvents.find((item) => item.id === args.eventId);
+    if (!event) {
+      throw new Error(`Event not found: ${args.eventId}`);
+    }
+
+    return JSON.stringify(event);
+  }
+
+  const response = await fetch(
+    `${getRelayHttpUrl(config)}/api/events/${args.eventId}`,
+    {
+      headers: {
+        "X-Pubkey": identity.pubkey,
+      },
+    },
+  );
+  await assertOk(response);
+  return JSON.stringify(await response.json());
+}
+
 async function connectRealSocket(args: { url?: string; onMessage: unknown }) {
   const wsId = nextSocketId++;
   const ws = new WebSocket(args.url ?? DEFAULT_RELAY_WS_URL);
@@ -594,8 +744,8 @@ function sendToMockSocket(args: {
 
   if (type === "REQ") {
     const subId = rest[0] as string;
-    const filter = rest[1] as { "#e"?: string[] };
-    const channelId = filter["#e"]?.[0];
+    const filter = rest[1] as { "#h"?: string[] };
+    const channelId = filter["#h"]?.[0];
     if (!channelId) {
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
@@ -657,9 +807,11 @@ export function maybeInstallE2eTauriMocks() {
   }
 
   mockWindows("main");
+  window.__SPROUT_E2E_COMMANDS__ = [];
   mockIPC(async (command, payload) => {
     const activeConfig = getConfig();
     const identity = getIdentity(activeConfig);
+    window.__SPROUT_E2E_COMMANDS__?.push(command);
 
     switch (command) {
       case "get_identity":
@@ -683,6 +835,16 @@ export function maybeInstallE2eTauriMocks() {
       case "create_channel":
         return handleCreateChannel(
           payload as Parameters<typeof handleCreateChannel>[0],
+          activeConfig,
+        );
+      case "search_messages":
+        return handleSearchMessages(
+          payload as Parameters<typeof handleSearchMessages>[0],
+          activeConfig,
+        );
+      case "get_event":
+        return handleGetEvent(
+          payload as Parameters<typeof handleGetEvent>[0],
           activeConfig,
         );
       case "sign_event":

@@ -11,19 +11,44 @@ import { HomeView } from "@/features/home/ui/HomeView";
 import {
   useChannelMessagesQuery,
   useChannelSubscription,
+  mergeMessages,
   useSendMessageMutation,
 } from "@/features/messages/hooks";
 import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
+import { SearchDialog } from "@/features/search/ui/SearchDialog";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
+import { getEventById } from "@/shared/api/tauri";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import type { RelayEvent, SearchHit } from "@/shared/api/types";
 import { SidebarInset, SidebarProvider } from "@/shared/ui/sidebar";
 
 type AppView = "home" | "channel";
 
+function createSearchAnchorEvent(hit: SearchHit): RelayEvent {
+  return {
+    id: hit.eventId,
+    pubkey: hit.pubkey,
+    created_at: hit.createdAt,
+    kind: hit.kind,
+    tags: [["h", hit.channelId]],
+    content: hit.content,
+    sig: "",
+  };
+}
+
 export function AppShell() {
   const [selectedView, setSelectedView] = React.useState<AppView>("home");
+  const [isSearchOpen, setIsSearchOpen] = React.useState(false);
+  const [searchAnchor, setSearchAnchor] = React.useState<SearchHit | null>(
+    null,
+  );
+  const [searchAnchorChannelId, setSearchAnchorChannelId] = React.useState<
+    string | null
+  >(null);
+  const [searchAnchorEvent, setSearchAnchorEvent] =
+    React.useState<RelayEvent | null>(null);
   const identityQuery = useIdentityQuery();
   const homeFeedQuery = useHomeFeedQuery();
   const channelsQuery = useChannelsQuery();
@@ -49,15 +74,33 @@ export function AppShell() {
     () => new Set(channels.map((channel) => channel.id)),
     [channels],
   );
+  const resolvedMessages = React.useMemo(() => {
+    const currentMessages = messagesQuery.data ?? [];
+
+    if (
+      !activeChannel ||
+      !searchAnchorEvent ||
+      searchAnchorChannelId !== activeChannel.id
+    ) {
+      return currentMessages;
+    }
+
+    return mergeMessages(currentMessages, searchAnchorEvent);
+  }, [
+    activeChannel,
+    messagesQuery.data,
+    searchAnchorChannelId,
+    searchAnchorEvent,
+  ]);
 
   const timelineMessages = React.useMemo(
     () =>
       formatTimelineMessages(
-        messagesQuery.data ?? [],
+        resolvedMessages,
         activeChannel,
         identityQuery.data?.pubkey,
       ),
-    [activeChannel, identityQuery.data?.pubkey, messagesQuery.data],
+    [activeChannel, identityQuery.data?.pubkey, resolvedMessages],
   );
 
   const channelDescription = activeChannel
@@ -67,6 +110,46 @@ export function AppShell() {
     : "Connect to the relay to browse channels and read messages.";
   const contentPaneKey =
     selectedView === "home" ? "home" : `channel:${activeChannel?.id ?? "none"}`;
+  const isTimelineLoading =
+    messagesQuery.isLoading && resolvedMessages.length === 0;
+
+  const handleOpenChannel = React.useCallback(
+    (channelId: string) => {
+      React.startTransition(() => {
+        setSelectedChannelId(channelId);
+        setSelectedView("channel");
+      });
+    },
+    [setSelectedChannelId],
+  );
+
+  const handleOpenSearchResult = React.useCallback(
+    (hit: SearchHit) => {
+      setSearchAnchor(hit);
+      setSearchAnchorChannelId(hit.channelId);
+      setSearchAnchorEvent(createSearchAnchorEvent(hit));
+      handleOpenChannel(hit.channelId);
+
+      void getEventById(hit.eventId)
+        .then((event) => {
+          setSearchAnchorEvent((current) => {
+            if (current?.id !== hit.eventId) {
+              return current;
+            }
+
+            return event;
+          });
+        })
+        .catch((error) => {
+          console.error(
+            "Failed to load search result event",
+            hit.eventId,
+            error,
+          );
+        });
+    },
+    [handleOpenChannel],
+  );
 
   return (
     <SidebarProvider className="h-dvh overflow-hidden overscroll-none">
@@ -93,6 +176,9 @@ export function AppShell() {
             setSelectedView("channel");
           });
         }}
+        onOpenSearch={() => {
+          setIsSearchOpen(true);
+        }}
         onSelectHome={() => {
           React.startTransition(() => {
             setSelectedView("home");
@@ -100,12 +186,7 @@ export function AppShell() {
 
           void homeFeedQuery.refetch();
         }}
-        onSelectChannel={(channelId) => {
-          React.startTransition(() => {
-            setSelectedChannelId(channelId);
-            setSelectedView("channel");
-          });
-        }}
+        onSelectChannel={handleOpenChannel}
         selectedChannelId={selectedChannel?.id ?? null}
         selectedView={selectedView}
       />
@@ -141,12 +222,7 @@ export function AppShell() {
               feed={homeFeedQuery.data}
               isLoading={homeFeedQuery.isLoading}
               isRefreshing={homeFeedQuery.isRefetching}
-              onOpenChannel={(channelId) => {
-                React.startTransition(() => {
-                  setSelectedChannelId(channelId);
-                  setSelectedView("channel");
-                });
-              }}
+              onOpenChannel={handleOpenChannel}
               onRefresh={() => {
                 void homeFeedQuery.refetch();
               }}
@@ -166,9 +242,19 @@ export function AppShell() {
                       : "No messages yet"
                     : "No channel selected"
                 }
-                isLoading={messagesQuery.isLoading}
+                isLoading={isTimelineLoading}
                 key={activeChannel?.id ?? "no-channel"}
                 messages={timelineMessages}
+                onTargetReached={(messageId) => {
+                  setSearchAnchor((current) =>
+                    current?.eventId === messageId ? null : current,
+                  );
+                }}
+                targetMessageId={
+                  activeChannel && searchAnchor?.channelId === activeChannel.id
+                    ? searchAnchor.eventId
+                    : null
+                }
               />
               <MessageComposer
                 channelName={activeChannel?.name ?? "channel"}
@@ -193,6 +279,13 @@ export function AppShell() {
             </>
           )}
         </div>
+
+        <SearchDialog
+          channels={channels}
+          onOpenResult={handleOpenSearchResult}
+          onOpenChange={setIsSearchOpen}
+          open={isSearchOpen}
+        />
       </SidebarInset>
     </SidebarProvider>
   );

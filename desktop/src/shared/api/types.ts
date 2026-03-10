@@ -74,3 +74,24 @@ export type GetHomeFeedInput = {
   limit?: number;
   types?: string;
 };
+
+export type SearchMessagesInput = {
+  q: string;
+  limit?: number;
+};
+
+export type SearchHit = {
+  eventId: string;
+  content: string;
+  kind: number;
+  pubkey: string;
+  channelId: string;
+  channelName: string;
+  createdAt: number;
+  score: number;
+};
+
+export type SearchMessagesResponse = {
+  hits: SearchHit[];
+  found: number;
+};

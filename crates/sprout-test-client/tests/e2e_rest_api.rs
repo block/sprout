@@ -27,9 +27,9 @@
 
 use std::time::Duration;
 
-use nostr::{Keys, Kind, Tag};
+use nostr::{Alphabet, Filter, Keys, Kind, SingleLetterTag, Tag};
 use reqwest::Client;
-use sprout_test_client::SproutTestClient;
+use sprout_test_client::{RelayMessage, SproutTestClient};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -223,6 +223,83 @@ async fn test_channel_visibility_open_channels_visible_to_all() {
         ids_a.contains(CHANNEL_ENGINEERING),
         "expected seeded 'engineering' channel (id={CHANNEL_ENGINEERING})"
     );
+}
+
+/// REST-created channel messages must fan out to WebSocket subscribers and
+/// carry the canonical channel `h` tag.
+#[tokio::test]
+#[ignore]
+async fn test_rest_send_message_reaches_websocket_channel_subscriptions() {
+    let client = http_client();
+    let subscriber_keys = Keys::generate();
+    let poster_keys = Keys::generate();
+    let ws_url = relay_ws_url();
+
+    let mut subscriber = SproutTestClient::connect(&ws_url, &subscriber_keys)
+        .await
+        .expect("WebSocket connect failed");
+
+    let sid = format!("rest-live-{}", uuid::Uuid::new_v4().simple());
+    let filter = Filter::new()
+        .kind(Kind::Custom(40001))
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [CHANNEL_GENERAL]);
+
+    subscriber
+        .subscribe(&sid, vec![filter])
+        .await
+        .expect("subscribe failed");
+    subscriber
+        .collect_until_eose(&sid, Duration::from_secs(5))
+        .await
+        .expect("EOSE failed");
+
+    let content = format!("E2E REST live message: {}", uuid::Uuid::new_v4().simple());
+    let url = format!(
+        "{}/api/channels/{}/messages",
+        relay_http_url(),
+        CHANNEL_GENERAL
+    );
+    let resp = authed_post_json(
+        &client,
+        &url,
+        &poster_keys.public_key().to_hex(),
+        serde_json::json!({ "content": content }),
+    )
+    .await;
+
+    assert_eq!(resp.status(), 200, "expected 200 OK from REST send_message");
+
+    let message = subscriber
+        .recv_event(Duration::from_secs(5))
+        .await
+        .expect("subscriber did not receive live event");
+
+    match message {
+        RelayMessage::Event { event, .. } => {
+            assert_eq!(event.content, content);
+
+            let tags: Vec<Vec<String>> = event
+                .tags
+                .iter()
+                .map(|tag| tag.as_slice().iter().map(|part| part.to_string()).collect())
+                .collect();
+
+            assert!(
+                tags.iter()
+                    .any(|tag| tag.len() >= 2 && tag[0] == "h" && tag[1] == CHANNEL_GENERAL),
+                "REST-created message is missing the channel h tag: {tags:?}"
+            );
+            assert!(
+                tags.iter().any(|tag| {
+                    tag.len() >= 2 && tag[0] == "p" && tag[1] == poster_keys.public_key().to_hex()
+                }),
+                "REST-created message is missing the sender attribution p tag: {tags:?}"
+            );
+        }
+        other => panic!("expected live EVENT after REST send_message, got {other:?}"),
+    }
+
+    subscriber.disconnect().await.expect("disconnect failed");
 }
 
 /// GET /api/channels requires authentication — unauthenticated requests are rejected.
