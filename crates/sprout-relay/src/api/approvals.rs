@@ -348,25 +348,36 @@ pub async fn deny_approval(
         return Err(api_error(StatusCode::CONFLICT, "approval already acted on"));
     }
 
-    // Mark the workflow run as Cancelled.
+    // Mark the workflow run as Cancelled — only if it's still WaitingApproval.
+    // A run that has already transitioned to Failed/Completed/Cancelled through
+    // another path (e.g., timeout, manual cancel) must not be overwritten.
     let run_id = approval.run_id;
     let pubkey_for_msg = pubkey.to_hex();
     let db = state.db.clone();
     tokio::spawn(async move {
-        let (current_step, trace) = match db.get_workflow_run(run_id).await {
-            Ok(r) => (r.current_step, r.execution_trace),
+        let run = match db.get_workflow_run(run_id).await {
+            Ok(r) => r,
             Err(e) => {
                 tracing::error!("deny_approval: failed to fetch run {run_id}: {e}");
-                (0, serde_json::Value::Array(vec![]))
+                return;
             }
         };
+
+        if run.status != sprout_db::workflow::RunStatus::WaitingApproval {
+            tracing::warn!(
+                "deny_approval: run {run_id} has status '{}', expected 'waiting_approval' — skipping cancellation",
+                run.status
+            );
+            return;
+        }
+
         let cancel_msg = format!("workflow cancelled: approval denied by {pubkey_for_msg}");
         if let Err(e) = db
             .update_workflow_run(
                 run_id,
                 sprout_db::workflow::RunStatus::Cancelled,
-                current_step,
-                &trace,
+                run.current_step,
+                &run.execution_trace,
                 Some(&cancel_msg),
             )
             .await
