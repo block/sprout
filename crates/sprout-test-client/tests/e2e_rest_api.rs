@@ -21,8 +21,9 @@
 //! # Channel setup
 //!
 //! The relay exposes REST endpoints to list and create channels. Tests use the
-//! pre-seeded open channels (`general`, `agents`, `projects`, etc.) for read
+//! pre-seeded open channels (`general`, `agents`, `engineering`, etc.) for read
 //! operations and create temporary channels for write coverage when needed.
+//! Some tests also send messages via WebSocket to set up search / feed data.
 
 use std::time::Duration;
 
@@ -80,10 +81,10 @@ async fn authed_post_json(
 
 /// Known open channel IDs seeded in the dev database.
 ///
-/// These are stable across relay restarts because they are inserted with
-/// explicit UUIDs in the seed migration.
-const CHANNEL_GENERAL: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
-const CHANNEL_PROJECTS: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2";
+/// These are UUID5-derived from the channel name and are stable across relay
+/// restarts as long as the seed data uses the same namespace + name inputs.
+const CHANNEL_GENERAL: &str = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
+const CHANNEL_ENGINEERING: &str = "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9";
 
 // ── Channel tests ─────────────────────────────────────────────────────────────
 
@@ -220,8 +221,8 @@ async fn test_channel_visibility_open_channels_visible_to_all() {
         "expected seeded 'general' channel (id={CHANNEL_GENERAL})"
     );
     assert!(
-        ids_a.contains(CHANNEL_PROJECTS),
-        "expected seeded 'projects' channel (id={CHANNEL_PROJECTS})"
+        ids_a.contains(CHANNEL_ENGINEERING),
+        "expected seeded 'engineering' channel (id={CHANNEL_ENGINEERING})"
     );
 }
 

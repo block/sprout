@@ -184,7 +184,7 @@ pub async fn query_activity(
     );
 
     // Stream messages, forum posts, agent job events.
-    // KIND_JOB_REQUEST = agent job created, KIND_JOB_PROGRESS = agent job completed, KIND_JOB_RESULT = agent job failed.
+    // KIND_JOB_REQUEST = agent job requested, KIND_JOB_PROGRESS = in-flight progress update, KIND_JOB_RESULT = completed result.
     qb.push(format!(
         " AND kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_FORUM_POST}, {KIND_JOB_REQUEST}, {KIND_JOB_PROGRESS}, {KIND_JOB_RESULT})"
     ));
@@ -407,7 +407,8 @@ mod tests {
             KIND_JOB_RESULT,
         ];
 
-        for kind in 46001u32..=46012 {
+        use sprout_core::kind::{KIND_WORKFLOW_APPROVAL_DENIED, KIND_WORKFLOW_TRIGGERED};
+        for kind in KIND_WORKFLOW_TRIGGERED..=KIND_WORKFLOW_APPROVAL_DENIED {
             assert!(
                 !activity_kinds.contains(&kind),
                 "workflow execution kind {kind} must NOT be in activity"

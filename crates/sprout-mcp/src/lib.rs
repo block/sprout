@@ -94,6 +94,10 @@
 //! [Sprout]: https://github.com/sprout-rs/sprout
 //! [NIP-42]: https://github.com/nostr-protocol/nips/blob/master/42.md
 
+// NOTE: `parse_relay_message`, `OkResponse`, and `RelayMessage` from `relay_client`
+// are re-exported by `sprout-test-client`. Changes to these types are a breaking
+// change for the test harness.
+
 /// WebSocket client for the Sprout relay (NIP-42 auth, subscriptions, reconnect).
 pub mod relay_client;
 /// MCP tool implementations backed by the relay client.

@@ -1,3 +1,5 @@
+use sprout_core::kind::{event_kind_u32, KIND_CANVAS};
+
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
@@ -310,7 +312,7 @@ impl SproutMcpServer {
                     "id": event.id.to_hex(),
                     "pubkey": event.pubkey.to_hex(),
                     "content": event.content,
-                    "kind": event.kind.as_u16() as u32,
+                    "kind": event_kind_u32(event),
                     "created_at": event.created_at.as_u64(),
                 })
             })
@@ -381,7 +383,7 @@ impl SproutMcpServer {
                 nostr::SingleLetterTag::lowercase(nostr::Alphabet::E),
                 [p.channel_id.as_str()],
             )
-            .kind(nostr::Kind::Custom(40100))
+            .kind(nostr::Kind::Custom(KIND_CANVAS as u16))
             .limit(1);
 
         let sub_id = format!("canvas-{}", uuid::Uuid::new_v4());
@@ -415,8 +417,12 @@ impl SproutMcpServer {
             Err(e) => return format!("Error building tag: {e}"),
         };
 
-        let event = match nostr::EventBuilder::new(nostr::Kind::Custom(40100), &p.content, [e_tag])
-            .sign_with_keys(&keys)
+        let event = match nostr::EventBuilder::new(
+            nostr::Kind::Custom(KIND_CANVAS as u16),
+            &p.content,
+            [e_tag],
+        )
+        .sign_with_keys(&keys)
         {
             Ok(e) => e,
             Err(e) => return format!("Error signing event: {e}"),

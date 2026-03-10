@@ -158,31 +158,17 @@ pub(crate) fn definition_hash(json_str: &str) -> Vec<u8> {
 
 /// Spawn an async workflow execution task.
 ///
-/// Handles the full lifecycle: Running → Completed / WaitingApproval / Failed.
+/// Handles the full lifecycle: Pending → (executor sets Running) → Completed / Failed.
+/// Uses [`WorkflowEngine::finalize_run`] for the result→DB-status mapping.
 /// Used by trigger and webhook paths to avoid code duplication.
 pub(crate) fn spawn_workflow_execution(
     engine: Arc<sprout_workflow::WorkflowEngine>,
     db: sprout_db::Db,
-    workflow_id: uuid::Uuid,
     run_id: uuid::Uuid,
     workflow_def_value: serde_json::Value,
     trigger_ctx: sprout_workflow::executor::TriggerContext,
 ) {
     tokio::spawn(async move {
-        // Transition to Running first — stamps started_at.
-        if let Err(e) = db
-            .update_workflow_run(
-                run_id,
-                sprout_db::workflow::RunStatus::Running,
-                0,
-                &serde_json::Value::Array(vec![]),
-                None,
-            )
-            .await
-        {
-            tracing::error!("workflow run {run_id}: failed to set Running status: {e}");
-        }
-
         let def: sprout_workflow::WorkflowDef = match serde_json::from_value(workflow_def_value) {
             Ok(d) => d,
             Err(e) => {
@@ -192,7 +178,7 @@ pub(crate) fn spawn_workflow_execution(
                         run_id,
                         sprout_db::workflow::RunStatus::Failed,
                         0,
-                        &serde_json::Value::Null,
+                        &serde_json::json!([]),
                         Some(&format!("definition parse error: {e}")),
                     )
                     .await
@@ -203,102 +189,10 @@ pub(crate) fn spawn_workflow_execution(
             }
         };
 
-        match sprout_workflow::executor::execute_run(&engine, run_id, &def, &trigger_ctx).await {
-            Ok(result) if result.approval_token.is_none() => {
-                let trace_json = serde_json::Value::Array(result.trace);
-                if let Err(e) = db
-                    .update_workflow_run(
-                        run_id,
-                        sprout_db::workflow::RunStatus::Completed,
-                        result.step_index as i32,
-                        &trace_json,
-                        None,
-                    )
-                    .await
-                {
-                    tracing::error!("workflow run {run_id}: failed to set Completed status: {e}");
-                }
-            }
-            Ok(result) => {
-                handle_approval_suspension(&db, &def, workflow_id, run_id, result).await;
-            }
-            Err(e) => {
-                tracing::error!("workflow run {run_id} failed: {e}");
-                if let Err(db_err) = db
-                    .update_workflow_run(
-                        run_id,
-                        sprout_db::workflow::RunStatus::Failed,
-                        0,
-                        &serde_json::Value::Null,
-                        Some(&e.to_string()),
-                    )
-                    .await
-                {
-                    tracing::error!("workflow run {run_id}: failed to set Failed status: {db_err}");
-                }
-            }
-        }
+        let result =
+            sprout_workflow::executor::execute_run(&engine, run_id, &def, &trigger_ctx).await;
+        engine.finalize_run(run_id, result, None).await;
     });
-}
-
-/// Persist approval-gate suspension state and create the approval record.
-pub(crate) async fn handle_approval_suspension(
-    db: &sprout_db::Db,
-    def: &sprout_workflow::WorkflowDef,
-    workflow_id: uuid::Uuid,
-    run_id: uuid::Uuid,
-    result: sprout_workflow::executor::ExecutionResult,
-) {
-    let approval_token = match result.approval_token {
-        Some(token) => token,
-        None => {
-            tracing::error!("workflow run {run_id}: handle_approval_suspension called but approval_token is None");
-            return;
-        }
-    };
-    let suspended_step_index = result.step_index;
-    let trace_json = serde_json::Value::Array(result.trace);
-
-    if let Err(e) = db
-        .update_workflow_run(
-            run_id,
-            sprout_db::workflow::RunStatus::WaitingApproval,
-            suspended_step_index as i32,
-            &trace_json,
-            None,
-        )
-        .await
-    {
-        tracing::error!("workflow run {run_id}: failed to set WaitingApproval status: {e}");
-    }
-
-    if let Some(suspended_step) = def.steps.get(suspended_step_index) {
-        let approver_spec = match &suspended_step.action {
-            sprout_workflow::ActionDef::RequestApproval { from, .. } => from.clone(),
-            _ => "any".to_string(),
-        };
-        let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
-        if let Err(e) = db
-            .create_approval(sprout_db::workflow::CreateApprovalParams {
-                token: &approval_token,
-                workflow_id,
-                run_id,
-                step_id: &suspended_step.id,
-                step_index: suspended_step_index as i32,
-                approver_spec: &approver_spec,
-                expires_at,
-            })
-            .await
-        {
-            tracing::error!("workflow run {run_id}: failed to create approval record: {e}");
-        }
-    }
-
-    tracing::info!(
-        "workflow run {} suspended for approval at step {} (token: <redacted>)",
-        run_id,
-        suspended_step_index,
-    );
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

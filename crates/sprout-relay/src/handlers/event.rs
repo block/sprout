@@ -2,12 +2,15 @@
 
 use std::sync::Arc;
 
+use hex;
 use tracing::{debug, error, info, warn};
 
 use nostr::Event;
 use sprout_audit::{AuditAction, NewAuditEntry};
 use sprout_core::event::StoredEvent;
-use sprout_core::kind::KIND_PRESENCE_UPDATE;
+use sprout_core::kind::{
+    event_kind_u32, is_ephemeral, is_workflow_execution_kind, KIND_AUTH, KIND_PRESENCE_UPDATE,
+};
 use sprout_core::verification::verify_event;
 
 use sprout_auth::Scope;
@@ -16,14 +19,10 @@ use crate::connection::{AuthState, ConnectionState};
 use crate::protocol::RelayMessage;
 use crate::state::AppState;
 
-const KIND_AUTH: u32 = 22242;
-const EPHEMERAL_MIN: u32 = 20000;
-const EPHEMERAL_MAX: u32 = 29999;
-
 /// Handle an EVENT message: authenticate, verify, store, fan-out, index, and audit the event.
 pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<AppState>) {
     let event_id_hex = event.id.to_hex();
-    let kind_u32 = event.kind.as_u16() as u32;
+    let kind_u32 = event_kind_u32(&event);
     debug!(event_id = %event_id_hex, kind = kind_u32, "EVENT");
 
     let (conn_id, pubkey_hex, pubkey_bytes, auth_pubkey) = {
@@ -76,7 +75,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         return;
     }
 
-    if (EPHEMERAL_MIN..=EPHEMERAL_MAX).contains(&kind_u32) {
+    if is_ephemeral(kind_u32) {
         handle_ephemeral_event(
             event,
             conn_id,
@@ -115,7 +114,60 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         }
     }
 
-    let channel_id = extract_channel_id(&event);
+    let channel_id = if event.kind == nostr::Kind::Reaction {
+        // For NIP-25 reactions, always derive channel from the target event.
+        // Client-supplied channel tags are ignored to prevent spoofing.
+        match derive_reaction_channel(&state.db, &event).await {
+            ReactionChannelResult::Channel(ch_id) => Some(ch_id),
+            ReactionChannelResult::NoChannel => {
+                // Target event exists but has no channel (global/DM message).
+                // Allow the reaction to proceed without channel scoping.
+                None
+            }
+            ReactionChannelResult::NotFound => {
+                // Fail closed: reject reactions to events we don't know about.
+                warn!(
+                    event_id = %event_id_hex,
+                    "Rejecting reaction: target event not found in DB"
+                );
+                conn.send(RelayMessage::ok(
+                    &event_id_hex,
+                    false,
+                    "invalid: reaction target event not found",
+                ));
+                return;
+            }
+            ReactionChannelResult::NoTarget => {
+                // Malformed reaction: no valid `e` tag.
+                warn!(
+                    event_id = %event_id_hex,
+                    "Rejecting reaction: no valid e tag referencing target event"
+                );
+                conn.send(RelayMessage::ok(
+                    &event_id_hex,
+                    false,
+                    "invalid: reaction must reference a target event via e tag",
+                ));
+                return;
+            }
+            ReactionChannelResult::DbError(ref err) => {
+                // Fail closed on transient DB errors — don't allow reactions
+                // through when we can't verify the target.
+                error!(
+                    event_id = %event_id_hex,
+                    "Rejecting reaction: database error looking up target: {err}"
+                );
+                conn.send(RelayMessage::ok(
+                    &event_id_hex,
+                    false,
+                    "error: internal error looking up reaction target",
+                ));
+                return;
+            }
+        }
+    } else {
+        extract_channel_id(&event)
+    };
 
     if let Some(ch_id) = channel_id {
         if let Err(msg) =
@@ -198,7 +250,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     });
 
     // Don't trigger workflows for workflow execution events (prevents infinite loops).
-    let is_workflow_event = (46001..=46012).contains(&kind_u32);
+    let is_workflow_event = is_workflow_execution_kind(kind_u32);
     if !is_workflow_event {
         let wf = Arc::clone(&state.workflow_engine);
         let ev = stored_event.clone();
@@ -254,7 +306,7 @@ async fn handle_ephemeral_event(
 
     // Special handling for presence events (kind:20001).
     // Presence fan-out is local-only. Multi-node would need Redis pub/sub.
-    if event.kind.as_u16() as u32 == KIND_PRESENCE_UPDATE {
+    if event_kind_u32(&event) == KIND_PRESENCE_UPDATE {
         let status = event.content.to_string();
         let status = if status.len() > 128 {
             let mut end = 128;
@@ -346,6 +398,98 @@ async fn check_channel_membership(
                 false,
                 "error: database error",
             ))
+        }
+    }
+}
+
+/// Result of resolving a reaction's target channel.
+enum ReactionChannelResult {
+    /// Target event found and has a channel_id.
+    Channel(uuid::Uuid),
+    /// Target event found but has no channel (global/DM message) — allow as global.
+    NoChannel,
+    /// Target event not found in DB — reject (fail closed).
+    NotFound,
+    /// No valid `e` tag on the reaction — reject (malformed).
+    NoTarget,
+    /// DB error during lookup — reject (fail closed on transient errors).
+    DbError(String),
+}
+
+/// For NIP-25 reactions, derive the channel_id from the target event.
+///
+/// Reactions reference their target via an `e` tag containing a 64-hex event ID.
+/// We look up that event in the DB to find its channel_id.
+///
+/// Returns a [`ReactionChannelResult`] so the caller can distinguish between
+/// "target exists but is global" (allow) and "target not found" (reject).
+async fn derive_reaction_channel(
+    db: &sprout_db::Db,
+    event: &nostr::Event,
+) -> ReactionChannelResult {
+    // Find the target event ID from NIP-25 `e` tags.
+    // Per NIP-25, the last `e` tag is the target (in case of threading).
+    // Filter for 64-char hex event IDs inside find_map to skip UUID channel refs,
+    // consistent with build_trigger_context() in sprout-workflow/src/lib.rs.
+    let target_hex = match event.tags.iter().rev().find_map(|tag| {
+        let key = tag.kind().to_string();
+        if key == "e" {
+            tag.content().and_then(|v| {
+                if v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()) {
+                    Some(v.to_string())
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        }
+    }) {
+        Some(h) => h,
+        None => return ReactionChannelResult::NoTarget,
+    };
+
+    // Decode hex to bytes for DB lookup (already validated as 64-char hex above)
+    let id_bytes = match hex::decode(&target_hex) {
+        Ok(b) if b.len() == 32 => b,
+        _ => return ReactionChannelResult::NoTarget,
+    };
+
+    // Look up the target event to get its channel_id
+    match db.get_event_by_id(&id_bytes).await {
+        Ok(Some(target_event)) => {
+            if let Some(ch_id) = target_event.channel_id {
+                tracing::debug!(
+                    reaction_id = %event.id.to_hex(),
+                    target_id = %target_hex,
+                    channel_id = %ch_id,
+                    "Derived reaction channel from target event"
+                );
+                ReactionChannelResult::Channel(ch_id)
+            } else {
+                tracing::debug!(
+                    reaction_id = %event.id.to_hex(),
+                    target_id = %target_hex,
+                    "Target event has no channel — allowing as global reaction"
+                );
+                ReactionChannelResult::NoChannel
+            }
+        }
+        Ok(None) => {
+            tracing::debug!(
+                reaction_id = %event.id.to_hex(),
+                target_id = %target_hex,
+                "Target event not found in DB"
+            );
+            ReactionChannelResult::NotFound
+        }
+        Err(e) => {
+            tracing::warn!(
+                reaction_id = %event.id.to_hex(),
+                target_id = %target_hex,
+                "Failed to look up target event: {e}"
+            );
+            ReactionChannelResult::DbError(e.to_string())
         }
     }
 }
