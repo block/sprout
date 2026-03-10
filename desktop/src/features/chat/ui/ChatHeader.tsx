@@ -27,17 +27,28 @@ export function ChatHeader({
   channelType,
 }: ChatHeaderProps) {
   return (
-    <header className="flex min-w-0 items-center gap-3 border-b border-border/80 bg-background px-4 py-3 sm:px-6">
+    <header
+      className="flex min-w-0 items-center gap-3 border-b border-border/80 bg-background px-4 py-3 sm:px-6"
+      data-testid="chat-header"
+    >
       <SidebarTrigger />
 
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <ChannelIcon channelType={channelType} />
-          <h1 className="truncate text-lg font-semibold tracking-tight">
+          <h1
+            className="truncate text-lg font-semibold tracking-tight"
+            data-testid="chat-title"
+          >
             {title}
           </h1>
         </div>
-        <p className="truncate text-sm text-muted-foreground">{description}</p>
+        <p
+          className="truncate text-sm text-muted-foreground"
+          data-testid="chat-description"
+        >
+          {description}
+        </p>
       </div>
     </header>
   );

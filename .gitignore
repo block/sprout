@@ -21,6 +21,11 @@ Thumbs.db
 # Scratch / working files (AI reviews, notes, drafts)
 .scratch/
 
+# Playwright artifacts
+playwright-report/
+test-results/
+blob-report/
+
 # sqlx offline query data (generated, not portable)
 .sqlx/
 
