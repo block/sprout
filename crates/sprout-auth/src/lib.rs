@@ -339,7 +339,6 @@ impl AuthService {
 /// helpers) in release-mode integration test harnesses. It must **not** be
 /// enabled in production relay deployments. Check `sprout-relay/Cargo.toml` to
 /// ensure `sprout-auth` is not listed with `features = ["dev"]` in production.
-#[cfg(any(test, feature = "dev", debug_assertions))]
 pub fn derive_pubkey_from_username(username: &str) -> Result<nostr::PublicKey, AuthError> {
     use sha2::{Digest, Sha256};
     let seed = format!("sprout-test-key:{username}");

@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN about TEXT DEFAULT NULL AFTER avatar_url;

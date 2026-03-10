@@ -367,6 +367,9 @@ pub struct SetProfileParams {
     /// URL of the agent's avatar image.
     #[serde(default)]
     pub avatar_url: Option<String>,
+    /// Short bio or description.
+    #[serde(default)]
+    pub about: Option<String>,
 }
 
 /// Parameters for the `get_feed` tool.
@@ -444,49 +447,24 @@ impl SproutMcpServer {
             );
         }
 
-        // If a parent_event_id is provided, route through REST (thread reply).
+        // Route all messages through REST — avoids WebSocket timeout (~5 min).
+        // The relay determines kind from channel_type; parent_event_id is optional.
+        let mut body = serde_json::json!({
+            "content": p.content,
+        });
         if let Some(ref parent_id) = p.parent_event_id {
-            let body = serde_json::json!({
-                "content": p.content,
-                "parent_event_id": parent_id,
-            });
-            return match self
-                .client
-                .post(&format!("/api/channels/{}/messages", p.channel_id), &body)
-                .await
-            {
-                Ok(b) => b,
-                Err(e) => format!("Error: {e}"),
-            };
+            body["parent_event_id"] = serde_json::Value::String(parent_id.clone());
         }
-
-        let kind = p.kind.unwrap_or(40001);
-
-        let channel_tag = match nostr::Tag::parse(&["channel", &p.channel_id]) {
-            Ok(t) => t,
-            Err(e) => return format!("Error building channel tag: {e}"),
-        };
-        let event_ref_tag = match nostr::Tag::parse(&["e", &p.channel_id]) {
-            Ok(t) => t,
-            Err(e) => return format!("Error building event-ref tag: {e}"),
-        };
-
-        let keys = self.client.keys().clone();
-        let event = match nostr::EventBuilder::new(
-            nostr::Kind::Custom(kind),
-            &p.content,
-            [channel_tag, event_ref_tag],
-        )
-        .sign_with_keys(&keys)
+        if let Some(kind) = p.kind {
+            body["kind"] = serde_json::json!(kind);
+        }
+        match self
+            .client
+            .post(&format!("/api/channels/{}/messages", p.channel_id), &body)
+            .await
         {
-            Ok(e) => e,
-            Err(e) => return format!("Error signing event: {e}"),
-        };
-
-        match self.client.send_event(event).await {
-            Ok(ok) if ok.accepted => format!("Message sent. Event ID: {}", ok.event_id),
-            Ok(ok) => format!("Message rejected: {}", ok.message),
-            Err(e) => format!("Relay error: {e}"),
+            Ok(b) => b,
+            Err(e) => format!("Error: {e}"),
         }
     }
 
@@ -546,27 +524,15 @@ impl SproutMcpServer {
     /// Create a new Sprout channel.
     #[tool(name = "create_channel", description = "Create a new Sprout channel")]
     pub async fn create_channel(&self, Parameters(p): Parameters<CreateChannelParams>) -> String {
-        let keys = self.client.keys().clone();
-
-        let metadata = serde_json::json!({
+        let body = serde_json::json!({
             "name": p.name,
             "channel_type": p.channel_type,
             "visibility": p.visibility,
             "description": p.description,
         });
-
-        let event =
-            match nostr::EventBuilder::new(nostr::Kind::Custom(40), metadata.to_string(), [])
-                .sign_with_keys(&keys)
-            {
-                Ok(e) => e,
-                Err(e) => return format!("Error signing event: {e}"),
-            };
-
-        match self.client.send_event(event).await {
-            Ok(ok) if ok.accepted => format!("Channel created. Event ID: {}", ok.event_id),
-            Ok(ok) => format!("Channel creation rejected: {}", ok.message),
-            Err(e) => format!("Relay error: {e}"),
+        match self.client.post("/api/channels", &body).await {
+            Ok(b) => b,
+            Err(e) => format!("Error: {e}"),
         }
     }
 
@@ -627,11 +593,15 @@ impl SproutMcpServer {
             Ok(t) => t,
             Err(e) => return format!("Error building tag: {e}"),
         };
+        let event_ref_tag = match nostr::Tag::parse(&["e", &p.channel_id]) {
+            Ok(t) => t,
+            Err(e) => return format!("Error building event-ref tag: {e}"),
+        };
 
         let event = match nostr::EventBuilder::new(
             nostr::Kind::Custom(KIND_CANVAS as u16),
             &p.content,
-            [channel_tag],
+            [channel_tag, event_ref_tag],
         )
         .sign_with_keys(&keys)
         {
@@ -1341,6 +1311,7 @@ impl SproutMcpServer {
         let body = serde_json::json!({
             "display_name": p.display_name,
             "avatar_url": p.avatar_url,
+            "about": p.about,
         });
         match self.client.put("/api/users/me/profile", &body).await {
             Ok(b) => b,

@@ -26,6 +26,8 @@ pub struct ThreadReply {
     pub channel_id: Uuid,
     /// Compressed public key of the reply author.
     pub pubkey: Vec<u8>,
+    /// Nostr event tags (JSON array), used to extract effective author.
+    pub tags: serde_json::Value,
     /// Text content of the reply.
     pub content: String,
     /// Nostr event kind number.
@@ -58,6 +60,8 @@ pub struct TopLevelMessage {
     pub event_id: Vec<u8>,
     /// Compressed public key of the message author.
     pub pubkey: Vec<u8>,
+    /// Nostr event tags (JSON array), used to extract effective author.
+    pub tags: serde_json::Value,
     /// Text content of the message.
     pub content: String,
     /// Nostr event kind number.
@@ -147,6 +151,48 @@ pub async fn insert_thread_metadata(
     // INSERT IGNORE on a duplicate key returns rows_affected = 0.
     if result.rows_affected() > 0 {
         if let Some(pid) = parent_event_id {
+            // Ensure the parent has a thread_metadata row so the UPDATE below
+            // has something to hit. Root (depth=0) messages don't get a row on
+            // first insert, so we create a stub here with INSERT IGNORE.
+            let parent_ts = parent_event_created_at.unwrap_or(event_created_at);
+            sqlx::query(
+                r#"
+                INSERT IGNORE INTO thread_metadata
+                    (event_created_at, event_id, channel_id,
+                     parent_event_id, parent_event_created_at,
+                     root_event_id, root_event_created_at,
+                     depth, broadcast)
+                VALUES (?, ?, ?, NULL, NULL, NULL, NULL, 0, 0)
+                "#,
+            )
+            .bind(parent_ts)
+            .bind(pid)
+            .bind(channel_id_bytes.as_slice())
+            .execute(&mut *tx)
+            .await?;
+
+            // Ensure the root also has a row (may differ from parent for nested replies).
+            if let Some(root_id) = root_event_id {
+                if root_id != pid {
+                    let root_ts = root_event_created_at.unwrap_or(event_created_at);
+                    sqlx::query(
+                        r#"
+                        INSERT IGNORE INTO thread_metadata
+                            (event_created_at, event_id, channel_id,
+                             parent_event_id, parent_event_created_at,
+                             root_event_id, root_event_created_at,
+                             depth, broadcast)
+                        VALUES (?, ?, ?, NULL, NULL, NULL, NULL, 0, 0)
+                        "#,
+                    )
+                    .bind(root_ts)
+                    .bind(root_id)
+                    .bind(channel_id_bytes.as_slice())
+                    .execute(&mut *tx)
+                    .await?;
+                }
+            }
+
             // Increment parent's direct reply count and last_reply_at.
             sqlx::query(
                 r#"
@@ -303,6 +349,7 @@ pub async fn get_thread_replies(
             tm.root_event_id,
             tm.channel_id,
             e.pubkey,
+            e.tags,
             e.content,
             e.kind,
             tm.depth,
@@ -345,6 +392,7 @@ pub async fn get_thread_replies(
         let root_event_id_col: Option<Vec<u8>> = row.try_get("root_event_id")?;
         let channel_id_bytes: Vec<u8> = row.try_get("channel_id")?;
         let pubkey: Vec<u8> = row.try_get("pubkey")?;
+        let tags: serde_json::Value = row.try_get("tags")?;
         let content: String = row.try_get("content")?;
         let kind: i32 = row.try_get("kind")?;
         let depth: i32 = row.try_get("depth")?;
@@ -359,6 +407,7 @@ pub async fn get_thread_replies(
             root_event_id: root_event_id_col,
             channel_id,
             pubkey,
+            tags,
             content,
             kind,
             depth,
@@ -455,6 +504,7 @@ pub async fn get_channel_messages_top_level(
         SELECT
             e.id          AS event_id,
             e.pubkey,
+            e.tags,
             e.content,
             e.kind,
             e.created_at,
@@ -492,6 +542,7 @@ pub async fn get_channel_messages_top_level(
     for row in rows {
         let event_id: Vec<u8> = row.try_get("event_id")?;
         let pubkey: Vec<u8> = row.try_get("pubkey")?;
+        let tags: serde_json::Value = row.try_get("tags")?;
         let content: String = row.try_get("content")?;
         let kind: i32 = row.try_get("kind")?;
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
@@ -501,6 +552,7 @@ pub async fn get_channel_messages_top_level(
         messages.push(TopLevelMessage {
             event_id,
             pubkey,
+            tags,
             content,
             kind,
             created_at,

@@ -320,11 +320,15 @@ impl Db {
 
     /// Returns full channel records for all channels accessible to `pubkey`:
     /// open channels plus channels where the user is an active member.
+    ///
+    /// If `visibility_filter` is `Some("open")` or `Some("private")`, only channels
+    /// with that visibility are returned.
     pub async fn get_accessible_channels(
         &self,
         pubkey: &[u8],
+        visibility_filter: Option<&str>,
     ) -> Result<Vec<channel::ChannelRecord>> {
-        channel::get_accessible_channels(&self.pool, pubkey).await
+        channel::get_accessible_channels(&self.pool, pubkey, visibility_filter).await
     }
 
     /// Returns all bot-role members with aggregated channel names.
@@ -555,14 +559,15 @@ impl Db {
         user::get_user(&self.pool, pubkey).await
     }
 
-    /// Update a user's display_name and/or avatar_url.
+    /// Update a user's display_name, avatar_url, and/or about.
     pub async fn update_user_profile(
         &self,
         pubkey: &[u8],
         display_name: Option<&str>,
         avatar_url: Option<&str>,
+        about: Option<&str>,
     ) -> Result<()> {
-        user::update_user_profile(&self.pool, pubkey, display_name, avatar_url).await
+        user::update_user_profile(&self.pool, pubkey, display_name, avatar_url, about).await
     }
 
     // ── API Tokens ───────────────────────────────────────────────────────────
