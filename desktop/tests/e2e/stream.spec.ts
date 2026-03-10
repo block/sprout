@@ -184,6 +184,60 @@ test("stays pinned to the latest message when new messages arrive at the bottom"
   }
 });
 
+test("stays pinned after you send a message and a remote reply arrives right after", async ({
+  browser,
+}: {
+  browser: Browser;
+}) => {
+  const contextOne = await browser.newContext();
+  const contextTwo = await browser.newContext();
+  const pageOne = await contextOne.newPage();
+  const pageTwo = await contextTwo.newPage();
+  const prefix = `Reply after send ${Date.now()}`;
+  const localMessage = `${prefix} local`;
+  const incomingMessage = `${prefix} incoming`;
+
+  try {
+    await installRelayBridge(pageOne, "tyler");
+    await installRelayBridge(pageTwo, "alice");
+
+    await pageOne.goto("/");
+    await pageTwo.goto("/");
+
+    await pageOne.getByTestId("channel-general").click();
+    await pageTwo.getByTestId("channel-general").click();
+    await expect(pageOne.getByTestId("chat-title")).toHaveText("general");
+    await expect(pageTwo.getByTestId("chat-title")).toHaveText("general");
+
+    await ensureTimelineScrollable(pageOne, pageTwo, prefix);
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeLessThan(8);
+
+    await pageTwo.getByTestId("message-input").fill(localMessage);
+    await pageTwo.getByTestId("send-message").click();
+    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
+      localMessage,
+    );
+
+    await pageOne.getByTestId("message-input").fill(incomingMessage);
+    await pageOne.getByTestId("send-message").click();
+
+    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
+      incomingMessage,
+    );
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeLessThan(8);
+    await expect(pageTwo.getByTestId("message-scroll-to-latest")).toHaveCount(
+      0,
+    );
+  } finally {
+    await contextOne.close();
+    await contextTwo.close();
+  }
+});
+
 test("keeps bottom-pinned scrolling after the composer grows", async ({
   browser,
 }: {

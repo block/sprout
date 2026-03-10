@@ -97,9 +97,11 @@ export function MessageTimeline({
 }: MessageTimelineProps) {
   const timelineRef = React.useRef<HTMLDivElement>(null);
   const contentRef = React.useRef<HTMLDivElement>(null);
+  const bottomAnchorRef = React.useRef<HTMLDivElement>(null);
   const hasInitializedRef = React.useRef(false);
   const shouldStickToBottomRef = React.useRef(true);
   const isAtBottomRef = React.useRef(true);
+  const isProgrammaticBottomScrollRef = React.useRef(false);
   const previousTimelineHeightRef = React.useRef<number | null>(null);
   const previousScrollTopRef = React.useRef(0);
   const lockedScrollTopRef = React.useRef<number | null>(null);
@@ -116,9 +118,40 @@ export function MessageTimeline({
       return;
     }
 
+    const scrollTop = lockedScrollTopRef.current ?? timeline.scrollTop;
     const atBottom = isNearBottom(timeline);
-    previousScrollTopRef.current =
-      lockedScrollTopRef.current ?? timeline.scrollTop;
+    const movedAwayFromBottom = scrollTop + 1 < previousScrollTopRef.current;
+
+    if (isProgrammaticBottomScrollRef.current) {
+      previousScrollTopRef.current = scrollTop;
+
+      if (movedAwayFromBottom) {
+        isProgrammaticBottomScrollRef.current = false;
+      } else if (!atBottom) {
+        shouldStickToBottomRef.current = true;
+        isAtBottomRef.current = true;
+        setIsAtBottom((current) => (current ? current : true));
+        return;
+      } else {
+        isProgrammaticBottomScrollRef.current = false;
+        shouldStickToBottomRef.current = true;
+        isAtBottomRef.current = true;
+        setIsAtBottom((current) => (current ? current : true));
+        setNewMessageCount(0);
+        return;
+      }
+    }
+
+    if (shouldStickToBottomRef.current && !atBottom && !movedAwayFromBottom) {
+      previousScrollTopRef.current = scrollTop;
+      shouldStickToBottomRef.current = true;
+      isAtBottomRef.current = true;
+      setIsAtBottom((current) => (current ? current : true));
+      setNewMessageCount(0);
+      return;
+    }
+
+    previousScrollTopRef.current = scrollTop;
     shouldStickToBottomRef.current = atBottom;
     isAtBottomRef.current = atBottom;
     setIsAtBottom((current) => (current === atBottom ? current : atBottom));
@@ -136,6 +169,7 @@ export function MessageTimeline({
         return;
       }
 
+      isProgrammaticBottomScrollRef.current = false;
       lockedScrollTopRef.current = scrollTop;
 
       const restore = (remainingFrames: number) => {
@@ -166,14 +200,20 @@ export function MessageTimeline({
         return;
       }
 
-      const alignToBottom = () => {
+      isProgrammaticBottomScrollRef.current = true;
+
+      const alignToBottom = (nextBehavior: ScrollBehavior) => {
+        bottomAnchorRef.current?.scrollIntoView({
+          block: "end",
+          behavior: nextBehavior,
+        });
         timeline.scrollTo({
           top: timeline.scrollHeight,
-          behavior,
+          behavior: nextBehavior,
         });
       };
 
-      alignToBottom();
+      alignToBottom(behavior);
       lockedScrollTopRef.current = null;
       previousScrollTopRef.current = timeline.scrollTop;
       shouldStickToBottomRef.current = true;
@@ -181,11 +221,29 @@ export function MessageTimeline({
       setIsAtBottom(true);
       setNewMessageCount(0);
 
-      requestAnimationFrame(() => {
-        alignToBottom();
-        previousScrollTopRef.current = timeline.scrollTop;
-        syncScrollState();
-      });
+      if (behavior === "smooth") {
+        requestAnimationFrame(() => {
+          previousScrollTopRef.current = timeline.scrollTop;
+          syncScrollState();
+        });
+        return;
+      }
+
+      const settleAlignment = (remainingFrames: number) => {
+        requestAnimationFrame(() => {
+          alignToBottom("auto");
+          previousScrollTopRef.current = timeline.scrollTop;
+
+          if (remainingFrames > 0) {
+            settleAlignment(remainingFrames - 1);
+            return;
+          }
+
+          syncScrollState();
+        });
+      };
+
+      settleAlignment(2);
     },
     [syncScrollState],
   );
@@ -237,7 +295,10 @@ export function MessageTimeline({
     const observer = new ResizeObserver(() => {
       if (shouldStickToBottomRef.current) {
         scrollToBottom("auto");
+        return;
       }
+
+      syncScrollState();
     });
 
     observer.observe(content);
@@ -245,7 +306,7 @@ export function MessageTimeline({
     return () => {
       observer.disconnect();
     };
-  }, [scrollToBottom]);
+  }, [scrollToBottom, syncScrollState]);
 
   React.useLayoutEffect(() => {
     if (!hasInitializedRef.current) {
@@ -332,6 +393,7 @@ export function MessageTimeline({
                 <MessageRow key={message.id} message={message} />
               ))
             : null}
+          <div aria-hidden className="h-px" ref={bottomAnchorRef} />
         </div>
       </div>
 
