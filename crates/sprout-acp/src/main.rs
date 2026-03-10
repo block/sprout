@@ -21,8 +21,7 @@ use relay::HarnessRelay;
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("sprout_acp=info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("sprout_acp=info")),
         )
         .compact()
         .init();
@@ -126,11 +125,8 @@ async fn main() -> Result<()> {
                     );
 
                     // Send prompt with turn timeout.
-                    let prompt_result = timeout(
-                        turn_timeout,
-                        acp.session_prompt(&session_id, &prompt_text),
-                    )
-                    .await;
+                    let prompt_result =
+                        timeout(turn_timeout, acp.session_prompt(&session_id, &prompt_text)).await;
 
                     match prompt_result {
                         Ok(Ok(stop_reason)) => {
@@ -149,9 +145,7 @@ async fn main() -> Result<()> {
                             break;
                         }
                         Ok(Err(e)) => {
-                            tracing::error!(
-                                "session_prompt error for channel {channel_id}: {e}"
-                            );
+                            tracing::error!("session_prompt error for channel {channel_id}: {e}");
                             // Re-queue so events aren't lost on transient prompt error.
                             // Break (not continue) to avoid hot-loop on persistent failure.
                             queue.requeue(batch);
@@ -172,9 +166,7 @@ async fn main() -> Result<()> {
                                     log_stop_reason(channel_id, &stop_reason);
                                 }
                                 Err(AcpError::AgentExited) => {
-                                    tracing::error!(
-                                        "agent exited during cancel — respawning"
-                                    );
+                                    tracing::error!("agent exited during cancel — respawning");
                                     sessions.clear();
                                     acp = respawn_agent(&config).await?;
                                 }

@@ -63,7 +63,7 @@ pub struct SproutEvent {
 #[derive(Debug, thiserror::Error)]
 pub enum RelayError {
     #[error("WebSocket error: {0}")]
-    WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
+    WebSocket(Box<tokio_tungstenite::tungstenite::Error>),
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
@@ -129,6 +129,7 @@ enum RelayCommand {
     /// Subscribe to a channel (sends a NIP-01 REQ).
     Subscribe { channel_id: Uuid },
     /// Unsubscribe from a channel (sends a NIP-01 CLOSE).
+    #[allow(dead_code)]
     Unsubscribe { channel_id: Uuid },
     /// Reconnect to the relay (re-authenticate and resubscribe).
     Reconnect,
@@ -163,6 +164,7 @@ pub struct HarnessRelay {
     /// Keys used for NIP-42 signing.
     keys: Keys,
     /// Agent public key (hex) used as the `#p` filter on subscriptions.
+    #[allow(dead_code)]
     agent_pubkey_hex: String,
     /// Handle to the background task (for clean shutdown).
     bg_handle: tokio::task::JoinHandle<()>,
@@ -274,6 +276,7 @@ impl HarnessRelay {
     }
 
     /// Unsubscribe from a channel.
+    #[allow(dead_code)]
     pub async fn unsubscribe_channel(&mut self, channel_id: Uuid) -> Result<(), RelayError> {
         self.cmd_tx
             .send(RelayCommand::Unsubscribe { channel_id })
@@ -624,7 +627,10 @@ async fn wait_for_reconnect(
                 return;
             }
             Err(e) => {
-                warn!("relay reconnect failed: {e} — retrying in {}s", delay.as_secs());
+                warn!(
+                    "relay reconnect failed: {e} — retrying in {}s",
+                    delay.as_secs()
+                );
                 tokio::time::sleep(delay).await;
                 delay = (delay * 2).min(Duration::from_secs(60));
             }
@@ -664,14 +670,20 @@ async fn send_subscribe(
             if let Err(e) = ws.send(Message::Text(text.into())).await {
                 warn!("failed to send REQ for channel {channel_id}: {e}");
             } else {
-                debug!("subscribed to channel {channel_id}{}", if since.is_some() { " (with since filter)" } else { "" });
+                debug!(
+                    "subscribed to channel {channel_id}{}",
+                    if since.is_some() {
+                        " (with since filter)"
+                    } else {
+                        ""
+                    }
+                );
             }
         }
         Err(e) => {
             warn!("failed to serialize REQ for channel {channel_id}: {e}");
         }
     }
-
 }
 
 /// Build and send a NIP-42 AUTH response event.
@@ -688,8 +700,7 @@ async fn send_auth_response(
 
     let auth_event = if let Some(token) = api_token {
         let tags = vec![
-            Tag::parse(&["relay", relay_url])
-                .map_err(|e| RelayError::AuthFailed(e.to_string()))?,
+            Tag::parse(&["relay", relay_url]).map_err(|e| RelayError::AuthFailed(e.to_string()))?,
             Tag::parse(&["challenge", challenge])
                 .map_err(|e| RelayError::AuthFailed(e.to_string()))?,
             Tag::parse(&["auth_token", token])
@@ -701,7 +712,9 @@ async fn send_auth_response(
     };
 
     let auth_msg = serde_json::to_string(&json!(["AUTH", auth_event]))?;
-    ws.send(Message::Text(auth_msg.into())).await?;
+    ws.send(Message::Text(auth_msg.into()))
+        .await
+        .map_err(|e| RelayError::WebSocket(Box::new(e)))?;
     debug!("sent AUTH response for challenge");
     Ok(())
 }
@@ -853,15 +866,16 @@ async fn do_connect(
         .parse::<url::Url>()
         .map_err(|e| RelayError::Http(format!("invalid relay URL: {e}")))?;
 
-    let (ws, _response) = connect_async(parsed.as_str()).await?;
+    let (ws, _response) = connect_async(parsed.as_str())
+        .await
+        .map_err(|e| RelayError::WebSocket(Box::new(e)))?;
     debug!("connected to relay at {relay_url}");
 
     let mut ws = ws;
     let mut buffer: VecDeque<RelayMessage> = VecDeque::new();
 
     // ── Step 1: Wait for AUTH challenge ───────────────────────────────────
-    let challenge =
-        wait_for_auth_challenge(&mut ws, &mut buffer, AUTH_TIMEOUT).await?;
+    let challenge = wait_for_auth_challenge(&mut ws, &mut buffer, AUTH_TIMEOUT).await?;
 
     // ── Step 2: Build and send kind:22242 auth event ──────────────────────
     send_auth_response(&mut ws, &challenge, relay_url, keys, api_token).await?;
@@ -915,7 +929,7 @@ async fn wait_for_auth_challenge(
             .await
             .map_err(|_| RelayError::NoAuthChallenge)?
             .ok_or(RelayError::ConnectionClosed)?
-            .map_err(RelayError::WebSocket)?;
+            .map_err(|e| RelayError::WebSocket(Box::new(e)))?;
 
         match raw {
             Message::Text(text) => {
@@ -926,7 +940,9 @@ async fn wait_for_auth_challenge(
                 }
             }
             Message::Ping(data) => {
-                ws.send(Message::Pong(data)).await?;
+                ws.send(Message::Pong(data))
+                    .await
+                    .map_err(|e| RelayError::WebSocket(Box::new(e)))?;
             }
             Message::Close(_) => return Err(RelayError::ConnectionClosed),
             _ => {}
@@ -981,7 +997,7 @@ async fn wait_for_any_ok(
             .await
             .map_err(|_| RelayError::Timeout)?
             .ok_or(RelayError::ConnectionClosed)?
-            .map_err(RelayError::WebSocket)?;
+            .map_err(|e| RelayError::WebSocket(Box::new(e)))?;
 
         match raw {
             Message::Text(text) => {
@@ -1002,7 +1018,9 @@ async fn wait_for_any_ok(
                 }
             }
             Message::Ping(data) => {
-                ws.send(Message::Pong(data)).await?;
+                ws.send(Message::Pong(data))
+                    .await
+                    .map_err(|e| RelayError::WebSocket(Box::new(e)))?;
             }
             Message::Close(_) => return Err(RelayError::ConnectionClosed),
             _ => {}
@@ -1293,7 +1311,10 @@ mod tests {
         let channel_id = Uuid::new_v4();
         let keys = nostr::Keys::generate();
         let event = make_test_event(&keys, 1_000_000);
-        assert!(state.record_event(channel_id, &event), "first event should be accepted");
+        assert!(
+            state.record_event(channel_id, &event),
+            "first event should be accepted"
+        );
     }
 
     #[test]
@@ -1302,8 +1323,14 @@ mod tests {
         let channel_id = Uuid::new_v4();
         let keys = nostr::Keys::generate();
         let event = make_test_event(&keys, 1_000_000);
-        assert!(state.record_event(channel_id, &event), "first should be accepted");
-        assert!(!state.record_event(channel_id, &event), "duplicate should be rejected");
+        assert!(
+            state.record_event(channel_id, &event),
+            "first should be accepted"
+        );
+        assert!(
+            !state.record_event(channel_id, &event),
+            "duplicate should be rejected"
+        );
     }
 
     #[test]
@@ -1394,7 +1421,11 @@ mod tests {
 
         // First insert: 12_000 entries — no clear triggered yet.
         state.record_event(channel_id, &event1);
-        assert_eq!(state.seen_ids.len(), 12_000, "should be at 12_000 before clear");
+        assert_eq!(
+            state.seen_ids.len(),
+            12_000,
+            "should be at 12_000 before clear"
+        );
 
         // Second insert: 12_001 entries — triggers clear, then re-inserts.
         state.record_event(channel_id, &event2);

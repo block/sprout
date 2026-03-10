@@ -227,10 +227,7 @@ impl AcpClient {
     /// 3. Continue reading until the `session/prompt` response arrives with `stopReason: "cancelled"`.
     ///
     /// Returns the final [`StopReason`] (almost always [`StopReason::Cancelled`]).
-    pub async fn cancel_with_cleanup(
-        &mut self,
-        session_id: &str,
-    ) -> Result<StopReason, AcpError> {
+    pub async fn cancel_with_cleanup(&mut self, session_id: &str) -> Result<StopReason, AcpError> {
         // Step 1: respond to any pending permission request with "cancelled",
         // but only if we haven't already responded (guards against double-response race).
         if let Some(perm_id) = self.pending_permission_id.clone() {
@@ -414,10 +411,7 @@ impl AcpClient {
                     .get("toolCallId")
                     .and_then(|v| v.as_str())
                     .unwrap_or("?");
-                let status = update
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
+                let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("?");
                 tracing::info!(target: "acp::tool", "tool_call_update: {tool_id} → {status}");
             }
             "plan" => {
@@ -443,10 +437,7 @@ impl AcpClient {
     ///
     /// The request `id` is stored as `serde_json::Value` to support both numeric
     /// and string IDs per JSON-RPC 2.0.
-    async fn handle_permission_request(
-        &mut self,
-        msg: &serde_json::Value,
-    ) -> Result<(), AcpError> {
+    async fn handle_permission_request(&mut self, msg: &serde_json::Value) -> Result<(), AcpError> {
         // Extract id as a Value — JSON-RPC 2.0 allows both numeric and string IDs.
         let id = msg
             .get("id")
@@ -815,10 +806,7 @@ mod tests {
         // Must have no id (notification)
         assert!(msg.get("id").is_none());
         // Must have sessionId in params
-        assert_eq!(
-            msg["params"]["sessionId"].as_str(),
-            Some("sess_xyz789")
-        );
+        assert_eq!(msg["params"]["sessionId"].as_str(), Some("sess_xyz789"));
     }
 
     // ── String ID handling (Fix 1) ────────────────────────────────────────

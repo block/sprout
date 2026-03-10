@@ -60,15 +60,15 @@ impl Config {
 
         let harness_api_token = std::env::var("SPROUT_ACP_API_TOKEN").ok();
 
-        let relay_url = std::env::var("SPROUT_RELAY_URL")
-            .unwrap_or_else(|_| "ws://localhost:3000".to_string());
+        let relay_url =
+            std::env::var("SPROUT_RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string());
 
         let agent_keys = parse_keys_var("SPROUT_AGENT_PRIVATE_KEY")?;
 
         let agent_api_token = std::env::var("SPROUT_AGENT_API_TOKEN").ok();
 
-        let agent_command = std::env::var("SPROUT_ACP_AGENT_COMMAND")
-            .unwrap_or_else(|_| "goose".to_string());
+        let agent_command =
+            std::env::var("SPROUT_ACP_AGENT_COMMAND").unwrap_or_else(|_| "goose".to_string());
 
         let agent_args = std::env::var("SPROUT_ACP_AGENT_ARGS")
             .map(|s| s.split(',').map(|a| a.trim().to_string()).collect())

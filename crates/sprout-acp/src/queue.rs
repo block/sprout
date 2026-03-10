@@ -115,10 +115,7 @@ impl EventQueue {
     /// This means a re-queued channel competes fairly with other channels rather
     /// than always winning due to stale timestamps.
     pub fn requeue(&mut self, batch: FlushBatch) {
-        let queue = self
-            .queues
-            .entry(batch.channel_id)
-            .or_insert_with(VecDeque::new);
+        let queue = self.queues.entry(batch.channel_id).or_default();
         // Push to front in reverse order so original order is preserved.
         for event in batch.events.into_iter().rev() {
             queue.push_front(QueuedEvent {
@@ -130,16 +127,19 @@ impl EventQueue {
     }
 
     /// Whether a prompt is currently in flight.
+    #[allow(dead_code)]
     pub fn is_in_flight(&self) -> bool {
         self.prompt_in_flight
     }
 
     /// Total number of pending events across all channels.
+    #[allow(dead_code)]
     pub fn pending_count(&self) -> usize {
         self.queues.values().map(|q| q.len()).sum()
     }
 
     /// Number of channels with pending events.
+    #[allow(dead_code)]
     pub fn pending_channels(&self) -> usize {
         self.queues.len()
     }

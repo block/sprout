@@ -23,8 +23,8 @@ async fn main() -> anyhow::Result<()> {
 
     let e_tag = Tag::parse(&["e", channel_id])?;
     let p_tag = Tag::parse(&["p", target_pubkey])?;
-    let event = EventBuilder::new(Kind::Custom(40001), message, [e_tag, p_tag])
-        .sign_with_keys(&keys)?;
+    let event =
+        EventBuilder::new(Kind::Custom(40001), message, [e_tag, p_tag]).sign_with_keys(&keys)?;
 
     let ok = client.send_event(event).await?;
     if ok.accepted {
