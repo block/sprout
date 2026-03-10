@@ -455,6 +455,9 @@ impl SproutMcpServer {
         if let Some(ref parent_id) = p.parent_event_id {
             body["parent_event_id"] = serde_json::Value::String(parent_id.clone());
         }
+        if let Some(kind) = p.kind {
+            body["kind"] = serde_json::json!(kind);
+        }
         match self
             .client
             .post(&format!("/api/channels/{}/messages", p.channel_id), &body)

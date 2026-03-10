@@ -834,8 +834,17 @@ async fn call_webhook_impl(
 /// POST `{"content": text}` to `POST /api/channels/{channel_id}/messages`.
 ///
 /// Relay base URL is read from `SPROUT_RELAY_BASE_URL` (default: `http://localhost:3000`).
-/// Auth header `X-Pubkey` is set from `SPROUT_RELAY_PUBKEY` when present; omitted
-/// otherwise (works in dev mode when `require_auth_token=false`).
+///
+/// Auth strategy (in priority order):
+/// 1. `SPROUT_API_TOKEN` env var → `Authorization: Bearer <token>` (production)
+/// 2. `SPROUT_RELAY_PUBKEY` env var → `X-Pubkey: <hex>` (dev mode only,
+///    requires `SPROUT_REQUIRE_AUTH_TOKEN=false`)
+///
+/// NOTE: This implementation uses X-Pubkey auth which only works in dev mode
+/// (SPROUT_REQUIRE_AUTH_TOKEN=false). For production, the executor needs to
+/// either: (a) use an API token (SPROUT_API_TOKEN env var), or (b) sign
+/// events directly and submit via WebSocket. See WF-07.
+/// TODO(WF-07): Support production auth for workflow-generated messages.
 ///
 /// This is an internal call — the workflow engine runs inside the relay process,
 /// so `localhost:3000` is always reachable without SSRF concerns.
@@ -859,9 +868,10 @@ async fn send_message_impl(channel_id: &str, text: &str) -> Result<JsonValue, Wo
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({ "content": text }));
 
-    // Attach relay pubkey for server-side auth (dev mode: X-Pubkey header).
-    // In production, SPROUT_RELAY_PUBKEY should be set to the relay's hex pubkey.
-    if let Ok(pubkey) = std::env::var("SPROUT_RELAY_PUBKEY") {
+    // Attach auth header: prefer API token (production), fall back to X-Pubkey (dev mode).
+    if let Ok(token) = std::env::var("SPROUT_API_TOKEN") {
+        req = req.header("Authorization", format!("Bearer {token}"));
+    } else if let Ok(pubkey) = std::env::var("SPROUT_RELAY_PUBKEY") {
         req = req.header("X-Pubkey", pubkey);
     }
 

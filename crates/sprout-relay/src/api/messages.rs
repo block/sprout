@@ -57,6 +57,37 @@ fn effective_author(event: &nostr::Event, relay_pubkey: &nostr::PublicKey) -> Ve
     event.pubkey.serialize().to_vec()
 }
 
+/// Resolve the effective author pubkey from stored (non-Event) data.
+///
+/// REST-created messages are signed by the relay keypair and carry the real
+/// sender in the first `p` tag. This helper mirrors `effective_author` but
+/// works with raw bytes + stored tags JSON rather than a `nostr::Event`.
+fn effective_author_bytes(
+    msg_pubkey: &[u8],
+    tags: &serde_json::Value,
+    relay_pubkey_bytes: &[u8],
+) -> Vec<u8> {
+    if msg_pubkey == relay_pubkey_bytes {
+        // Relay-signed: real author is in the first p tag.
+        if let Some(tags_arr) = tags.as_array() {
+            for tag in tags_arr {
+                if let Some(arr) = tag.as_array() {
+                    if arr.len() >= 2 && arr[0].as_str() == Some("p") {
+                        if let Some(hex) = arr[1].as_str() {
+                            if let Ok(bytes) = nostr_hex::decode(hex) {
+                                if bytes.len() == 32 {
+                                    return bytes;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    msg_pubkey.to_vec()
+}
+
 /// Serialize a slice of reaction summaries to JSON.
 fn reactions_to_json(reactions: &[sprout_db::reaction::ReactionSummary]) -> serde_json::Value {
     serde_json::json!(reactions
@@ -434,12 +465,16 @@ pub async fn list_messages(
     // Determine next_cursor from the oldest message in this page.
     let next_cursor = messages.last().map(|m| m.created_at.timestamp());
 
+    // Compute relay pubkey bytes once for effective-author resolution.
+    let relay_pk_bytes = state.relay_keypair.public_key().serialize().to_vec();
+
     let result: Vec<serde_json::Value> = messages
         .iter()
         .map(|m| {
+            let author = effective_author_bytes(&m.pubkey, &m.tags, &relay_pk_bytes);
             let mut obj = serde_json::json!({
                 "event_id":   nostr_hex::encode(&m.event_id),
-                "pubkey":     nostr_hex::encode(&m.pubkey),
+                "pubkey":     nostr_hex::encode(&author),
                 "content":    m.content,
                 "kind":       m.kind,
                 "created_at": m.created_at.timestamp(),
@@ -573,9 +608,12 @@ pub async fn get_thread(
 
     // Serialize root event.
     let root_created_at = root_event.event.created_at.as_u64() as i64;
+    let relay_pk = state.relay_keypair.public_key();
+    let relay_pk_bytes = relay_pk.serialize().to_vec();
+    let root_author = effective_author(&root_event.event, &relay_pk);
     let mut root_obj = serde_json::json!({
         "event_id":   root_event.event.id.to_hex(),
-        "pubkey":     root_event.event.pubkey.to_hex(),
+        "pubkey":     nostr_hex::encode(&root_author),
         "content":    root_event.event.content,
         "kind":       root_event.event.kind.as_u16(),
         "created_at": root_created_at,
@@ -620,12 +658,13 @@ pub async fn get_thread(
     let reply_objs: Vec<serde_json::Value> = replies
         .iter()
         .map(|r| {
+            let reply_author = effective_author_bytes(&r.pubkey, &r.tags, &relay_pk_bytes);
             let mut obj = serde_json::json!({
                 "event_id":        nostr_hex::encode(&r.event_id),
                 "parent_event_id": r.parent_event_id.as_ref().map(nostr_hex::encode),
                 "root_event_id":   r.root_event_id.as_ref().map(nostr_hex::encode),
                 "channel_id":      r.channel_id.to_string(),
-                "pubkey":          nostr_hex::encode(&r.pubkey),
+                "pubkey":          nostr_hex::encode(&reply_author),
                 "content":         r.content,
                 "kind":            r.kind,
                 "depth":           r.depth,

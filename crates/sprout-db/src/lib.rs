@@ -559,14 +559,15 @@ impl Db {
         user::get_user(&self.pool, pubkey).await
     }
 
-    /// Update a user's display_name and/or avatar_url.
+    /// Update a user's display_name, avatar_url, and/or about.
     pub async fn update_user_profile(
         &self,
         pubkey: &[u8],
         display_name: Option<&str>,
         avatar_url: Option<&str>,
+        about: Option<&str>,
     ) -> Result<()> {
-        user::update_user_profile(&self.pool, pubkey, display_name, avatar_url).await
+        user::update_user_profile(&self.pool, pubkey, display_name, avatar_url, about).await
     }
 
     // ── API Tokens ───────────────────────────────────────────────────────────
