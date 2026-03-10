@@ -158,7 +158,8 @@ pub(crate) fn definition_hash(json_str: &str) -> Vec<u8> {
 
 /// Spawn an async workflow execution task.
 ///
-/// Handles the full lifecycle: Running → Completed / WaitingApproval / Failed.
+/// Handles the full lifecycle: Pending → (executor sets Running) → Completed / Failed.
+/// Approval gates are not yet implemented (WF-08) — runs hitting approval steps are marked Failed.
 /// Used by trigger and webhook paths to avoid code duplication.
 pub(crate) fn spawn_workflow_execution(
     engine: Arc<sprout_workflow::WorkflowEngine>,

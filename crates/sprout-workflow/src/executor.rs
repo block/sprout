@@ -877,6 +877,9 @@ pub async fn execute_run(
 /// returns [`WorkflowError::CapacityExceeded`] immediately if all permits are
 /// taken.
 ///
+/// Transitions the run to `Running` after acquiring a permit, so that
+/// approval-resumed runs correctly reflect their active state.
+///
 /// `initial_outputs` should be reconstructed from the execution trace before
 /// calling this function on resume, so that steps after the resume point can
 /// reference `{{steps.PREV_STEP.output.X}}` correctly.
@@ -893,6 +896,19 @@ pub async fn execute_from_step(
         .run_semaphore
         .try_acquire()
         .map_err(|_| WorkflowError::CapacityExceeded)?;
+
+    // Mark run as Running now that we have a permit (resume from approval).
+    engine
+        .db
+        .update_workflow_run(
+            run_id,
+            sprout_db::workflow::RunStatus::Running,
+            start_index as i32,
+            &serde_json::json!([]),
+            None,
+        )
+        .await
+        .map_err(WorkflowError::from)?;
 
     execute_steps(
         engine,

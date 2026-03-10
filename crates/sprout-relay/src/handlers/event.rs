@@ -114,14 +114,12 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         }
     }
 
-    let channel_id = extract_channel_id(&event);
-
-    // For NIP-25 reactions (kind 7), derive channel from the target event if
-    // no explicit channel tag was provided.
-    let channel_id = if channel_id.is_none() && event.kind == nostr::Kind::Reaction {
+    let channel_id = if event.kind == nostr::Kind::Reaction {
+        // For NIP-25 reactions, always derive channel from the target event.
+        // Client-supplied channel tags are ignored to prevent spoofing.
         derive_reaction_channel(&state.db, &event).await
     } else {
-        channel_id
+        extract_channel_id(&event)
     };
 
     if let Some(ch_id) = channel_id {

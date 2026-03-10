@@ -194,14 +194,19 @@ async fn resume_workflow_after_approval(
             }
         }
         Err(e) => {
-            tracing::error!("workflow run {run_id} failed after approval resume: {e}");
+            tracing::error!(
+                "grant_approval: resume of run {run_id} failed at step >= {resume_index}: {e}"
+            );
+            // Note: partial trace from steps executed after resume is lost on error.
+            // The executor error type does not carry partial results.
+            // TODO(WF-08): Consider returning partial trace in WorkflowError.
             if let Err(db_err) = db
                 .update_workflow_run(
                     run_id,
                     sprout_db::workflow::RunStatus::Failed,
                     resume_index as i32,
-                    &run.execution_trace,
-                    Some(&e.to_string()),
+                    &run.execution_trace, // preserve existing trace
+                    Some(&format!("execution failed after approval resume: {e}")),
                 )
                 .await
             {
