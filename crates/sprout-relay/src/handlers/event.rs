@@ -449,13 +449,11 @@ async fn derive_reaction_channel(
         None => return ReactionChannelResult::NoTarget,
     };
 
-    // Decode hex to bytes for DB lookup (already validated as 64-char hex above)
     let id_bytes = match hex::decode(&target_hex) {
         Ok(b) if b.len() == 32 => b,
         _ => return ReactionChannelResult::NoTarget,
     };
 
-    // Look up the target event to get its channel_id
     match db.get_event_by_id(&id_bytes).await {
         Ok(Some(target_event)) => {
             if let Some(ch_id) = target_event.channel_id {

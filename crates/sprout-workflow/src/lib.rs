@@ -249,7 +249,6 @@ impl WorkflowEngine {
                 continue;
             }
 
-            // Create the workflow_run row (status: pending).
             let trigger_event_id_bytes = event.event.id.as_bytes().to_vec();
             let run_id = match self
                 .db
@@ -314,7 +313,6 @@ async fn should_fire_workflow(
     trigger_ctx: &executor::TriggerContext,
     workflow_id: uuid::Uuid,
 ) -> bool {
-    // Enforce reaction emoji filter.
     if let TriggerDef::ReactionAdded {
         emoji: Some(ref expected),
     } = def.trigger
@@ -330,7 +328,6 @@ async fn should_fire_workflow(
         }
     }
 
-    // Evaluate trigger filter expression (MessagePosted only).
     if let TriggerDef::MessagePosted {
         filter: Some(ref expr),
     } = def.trigger
@@ -465,7 +462,6 @@ steps:
         let (def, json) = WorkflowEngine::parse_yaml(yaml).expect("parse failed");
         assert_eq!(def.name, "Test Workflow");
 
-        // JSON must round-trip.
         let reparsed: WorkflowDef = serde_json::from_str(&json).expect("json round-trip");
         assert_eq!(reparsed.name, def.name);
         assert_eq!(reparsed.steps.len(), 1);

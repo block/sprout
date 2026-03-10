@@ -87,7 +87,6 @@ async fn main() -> anyhow::Result<()> {
     let workflow_config = sprout_workflow::WorkflowConfig::default();
     let workflow_engine = Arc::new(WorkflowEngine::new(db.clone(), workflow_config));
 
-    // Spawn cron scheduler background task.
     let wf_cron = Arc::clone(&workflow_engine);
     tokio::spawn(async move { wf_cron.run().await });
 

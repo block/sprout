@@ -77,7 +77,6 @@ async fn nip11_or_ws_handler(
         return Json(info).into_response();
     }
 
-    // Try WebSocket upgrade from the raw request.
     match WebSocketUpgrade::from_request(req, &state).await {
         Ok(ws) => ws
             .on_upgrade(move |socket| handle_connection(socket, state, addr))

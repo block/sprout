@@ -134,7 +134,6 @@ impl McpSession {
                 continue;
             }
 
-            // Check this is our response.
             if v["id"] == json!(id) {
                 return v;
             }
@@ -416,12 +415,10 @@ async fn test_mcp_send_and_read_message() {
         "get_channel_history returned an error: {history_text}"
     );
 
-    // The history should be a JSON array of events.
     let events: Vec<Value> = serde_json::from_str(&history_text).unwrap_or_else(|e| {
         panic!("get_channel_history response is not valid JSON array: {e}\n{history_text}")
     });
 
-    // Find our message in the history.
     let found = events
         .iter()
         .any(|ev| ev["content"].as_str().unwrap_or("").contains(&unique_token));
@@ -566,7 +563,6 @@ async fn test_mcp_create_and_trigger_workflow() {
         return;
     }
 
-    // Parse the created workflow to get its ID.
     let workflow: Value = serde_json::from_str(&create_text).unwrap_or_else(|e| {
         panic!("create_workflow response is not valid JSON: {e}\n{create_text}")
     });
@@ -577,7 +573,6 @@ async fn test_mcp_create_and_trigger_workflow() {
 
     assert!(!workflow_id.is_empty(), "workflow id must not be empty");
 
-    // Verify the workflow name matches.
     assert_eq!(
         workflow["name"].as_str().unwrap_or(""),
         workflow_name,
@@ -679,7 +674,6 @@ async fn test_mcp_create_and_trigger_workflow() {
         "expected at least one run after triggering workflow '{workflow_id}'"
     );
 
-    // Verify our run is in the list.
     let found_run = runs.iter().any(|r| r["id"].as_str() == Some(run_id));
     assert!(
         found_run,

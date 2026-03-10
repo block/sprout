@@ -52,8 +52,6 @@ pub async fn presence_handler(
         .await
         .unwrap_or_default();
 
-    // Build result: pubkey_hex → status. Include "offline" for any requested
-    // pubkey not found in the presence map.
     let mut result = serde_json::Map::new();
     for pk in &pubkeys {
         let hex = pk.to_hex();

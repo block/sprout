@@ -39,7 +39,6 @@ pub async fn search_handler(
     let query_str = params.q.unwrap_or_default();
     let per_page = params.limit.unwrap_or(20).min(100);
 
-    // Get accessible channel IDs to scope the search.
     let channel_ids = state
         .db
         .get_accessible_channel_ids(&pubkey_bytes)
@@ -74,7 +73,6 @@ pub async fn search_handler(
         }
     };
 
-    // Enrich hits with channel names.
     let all_channels = state.db.list_channels(None).await.unwrap_or_default();
     let channel_name_map: HashMap<String, String> = all_channels
         .into_iter()

@@ -204,9 +204,6 @@ pub async fn create_channel(
     let id = Uuid::new_v4();
     let id_bytes = id.as_bytes().as_slice().to_vec();
 
-    // Use a transaction so the INSERT + SELECT are atomic. Without this, a concurrent
-    // reader could see the channel between the insert and the fetch, or the channel
-    // could be modified before we read it back.
     let mut tx = pool.begin().await?;
 
     sqlx::query(
@@ -329,9 +326,6 @@ pub async fn add_member(
 
     let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
 
-    // Begin transaction: all role checks and the INSERT run atomically.
-    // This prevents a TOCTOU race where the inviter is removed between the
-    // role check and the INSERT.
     let mut tx = pool.begin().await?;
 
     let channel = get_channel_tx(&mut tx, channel_id).await?;
@@ -514,7 +508,6 @@ pub async fn get_members(pool: &MySqlPool, channel_id: Uuid) -> Result<Vec<Membe
 ///
 /// Includes channels where the pubkey is an active member AND all open channels.
 /// Open channels must be included in REQ filter resolution.
-/// Returns IDs of all channels accessible to the given pubkey.
 pub async fn get_accessible_channel_ids(pool: &MySqlPool, pubkey: &[u8]) -> Result<Vec<Uuid>> {
     let rows = sqlx::query(
         r#"

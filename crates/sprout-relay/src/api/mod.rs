@@ -201,7 +201,6 @@ pub(crate) async fn check_channel_access(
     if is_member {
         return Ok(());
     }
-    // Not an explicit member — check if channel is open.
     let is_open = state
         .db
         .get_channel(channel_id)
