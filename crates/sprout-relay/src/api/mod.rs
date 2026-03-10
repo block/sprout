@@ -2,6 +2,7 @@
 //!
 //! Endpoints are split into focused submodules:
 //!   - `channels`  — GET/POST /api/channels
+//!   - `events`    — GET /api/events/:id
 //!   - `search`    — GET /api/search
 //!   - `agents`    — GET /api/agents
 //!   - `presence`  — GET /api/presence
@@ -19,6 +20,8 @@ pub mod channels;
 pub mod channels_metadata;
 /// Direct message endpoints.
 pub mod dms;
+/// Event lookup endpoint.
+pub mod events;
 /// Personalized home feed endpoint.
 pub mod feed;
 /// Channel membership endpoints.
@@ -47,6 +50,7 @@ pub use channels_metadata::{
     set_topic_handler, unarchive_channel_handler, update_channel_handler,
 };
 pub use dms::{add_dm_member_handler, list_dms_handler, open_dm_handler};
+pub use events::get_event;
 pub use feed::feed_handler;
 pub use members::{add_members, join_channel, leave_channel, list_members, remove_member};
 pub use messages::{delete_message, get_thread, list_messages, send_message};

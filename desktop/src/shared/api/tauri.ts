@@ -8,6 +8,8 @@ import type {
   HomeFeedResponse,
   Identity,
   RelayEvent,
+  SearchMessagesInput,
+  SearchMessagesResponse,
 } from "@/shared/api/types";
 
 type RawIdentity = {
@@ -50,6 +52,22 @@ type RawHomeFeedResponse = {
   };
 };
 
+type RawSearchHit = {
+  event_id: string;
+  content: string;
+  kind: number;
+  pubkey: string;
+  channel_id: string;
+  channel_name: string;
+  created_at: number;
+  score: number;
+};
+
+type RawSearchResponse = {
+  hits: RawSearchHit[];
+  found: number;
+};
+
 function fromRawChannel(channel: RawChannel): Channel {
   return {
     id: channel.id,
@@ -72,6 +90,19 @@ function fromRawFeedItem(item: RawFeedItem) {
     channelName: item.channel_name,
     tags: item.tags,
     category: item.category,
+  };
+}
+
+function fromRawSearchHit(hit: RawSearchHit) {
+  return {
+    eventId: hit.event_id,
+    content: hit.content,
+    kind: hit.kind,
+    pubkey: hit.pubkey,
+    channelId: hit.channel_id,
+    channelName: hit.channel_name,
+    createdAt: hit.created_at,
+    score: hit.score,
   };
 }
 
@@ -118,6 +149,22 @@ export async function getHomeFeed(
       generatedAt: response.meta.generated_at,
     },
   };
+}
+
+export async function searchMessages(
+  input: SearchMessagesInput,
+): Promise<SearchMessagesResponse> {
+  const response = await invoke<RawSearchResponse>("search_messages", input);
+
+  return {
+    hits: response.hits.map(fromRawSearchHit),
+    found: response.found,
+  };
+}
+
+export async function getEventById(eventId: string): Promise<RelayEvent> {
+  const eventJson = await invoke<string>("get_event", { eventId });
+  return JSON.parse(eventJson) as RelayEvent;
 }
 
 export async function signRelayEvent(input: {

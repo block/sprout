@@ -10,7 +10,7 @@ type MessageQueryContext = {
   queryKey: readonly ["channel-messages", string];
 };
 
-function mergeMessages(
+export function mergeMessages(
   current: RelayEvent[],
   incoming: RelayEvent,
 ): RelayEvent[] {

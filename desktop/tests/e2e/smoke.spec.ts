@@ -91,6 +91,33 @@ test("opens a mocked channel from the home feed", async ({ page }) => {
   );
 });
 
+test("opens relay-backed search from the sidebar and loads the exact result", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await expect(page.getByTestId("open-search")).toBeVisible();
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+K" : "Control+K",
+  );
+  await expect(page.getByTestId("search-dialog")).toBeVisible();
+
+  await page.getByTestId("search-input").fill("shipped");
+  await expect(page.getByTestId("search-results")).toContainText(
+    "Engineering shipped the desktop build.",
+  );
+
+  await page
+    .getByTestId("search-results")
+    .getByText("Engineering shipped the desktop build.")
+    .click();
+
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Engineering shipped the desktop build.",
+  );
+});
+
 test("replaces the channel pane when switching channels", async ({ page }) => {
   await page.goto("/");
 

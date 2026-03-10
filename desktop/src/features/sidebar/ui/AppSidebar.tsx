@@ -1,4 +1,4 @@
-import { CircleDot, FileText, Hash, Home, Plus } from "lucide-react";
+import { CircleDot, FileText, Hash, Home, Plus, Search } from "lucide-react";
 import * as React from "react";
 
 import type { Channel } from "@/shared/api/types";
@@ -14,7 +14,6 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
-  SidebarInput,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -34,6 +33,7 @@ type AppSidebarProps = {
     name: string;
     description?: string;
   }) => Promise<void>;
+  onOpenSearch: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
 };
@@ -227,37 +227,25 @@ export function AppSidebar({
   selectedChannelId,
   selectedView,
   onCreateChannel,
+  onOpenSearch,
   onSelectHome,
   onSelectChannel,
 }: AppSidebarProps) {
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
-  const [query, setQuery] = React.useState("");
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
   const [draftName, setDraftName] = React.useState("");
   const [draftDescription, setDraftDescription] = React.useState("");
   const [createErrorMessage, setCreateErrorMessage] = React.useState<
     string | undefined
   >();
-  const deferredQuery = React.useDeferredValue(query.trim().toLowerCase());
   const createInputRef = React.useRef<HTMLInputElement>(null);
-
-  const filteredChannels = React.useMemo(() => {
-    if (!deferredQuery) {
-      return channels;
-    }
-
-    return channels.filter((channel) =>
-      channel.name.toLowerCase().includes(deferredQuery),
-    );
-  }, [channels, deferredQuery]);
-
-  const streamChannels = filteredChannels.filter(
+  const streamChannels = channels.filter(
     (channel) => channel.channelType === "stream",
   );
-  const forumChannels = filteredChannels.filter(
+  const forumChannels = channels.filter(
     (channel) => channel.channelType === "forum",
   );
-  const directMessages = filteredChannels.filter(
+  const directMessages = channels.filter(
     (channel) => channel.channelType === "dm",
   );
 
@@ -314,13 +302,22 @@ export function AppSidebar({
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <SidebarInput
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Jump to channel"
-            value={query}
-          />
-        </div>
+        <Button
+          className="w-full justify-between rounded-xl border border-sidebar-border/80 bg-sidebar-accent/60 px-3 text-sidebar-foreground/80 shadow-sm hover:bg-sidebar-accent hover:text-sidebar-foreground"
+          data-testid="open-search"
+          onClick={onOpenSearch}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          <span className="flex items-center gap-2">
+            <Search className="h-4 w-4" />
+            Search messages
+          </span>
+          <span className="rounded-md border border-sidebar-border/80 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/60">
+            Cmd K
+          </span>
+        </Button>
       </SidebarHeader>
 
       <SidebarSeparator />
@@ -416,9 +413,9 @@ export function AppSidebar({
           </>
         ) : null}
 
-        {!isLoading && filteredChannels.length === 0 ? (
+        {!isLoading && channels.length === 0 ? (
           <div className="px-3 py-2 text-sm text-sidebar-foreground/70">
-            No channels match that filter.
+            No channels available yet.
           </div>
         ) : null}
 
