@@ -5,6 +5,7 @@
 .env
 .env.local
 .env.*.local
+.sprout-agent.env
 
 # Editor / IDE
 .idea/

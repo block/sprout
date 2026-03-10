@@ -153,6 +153,19 @@ migrate:
         echo "Migrations applied."
     fi
 
+# ─── Goose (AI agent) ─────────────────────────────────────────────────────────
+
+# Set up agent identity and start a Goose session with Sprout tools
+goose:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./scripts/setup-goose-agent.sh
+    set -o allexport
+    source .sprout-agent.env
+    set +o allexport
+    exec goose session \
+      --with-extension "SPROUT_RELAY_URL=$SPROUT_RELAY_URL SPROUT_PRIVATE_KEY=$SPROUT_PRIVATE_KEY SPROUT_API_TOKEN=$SPROUT_API_TOKEN $(pwd)/target/debug/sprout-mcp-server"
+
 # ─── Utilities ────────────────────────────────────────────────────────────────
 
 # Remove build artifacts
