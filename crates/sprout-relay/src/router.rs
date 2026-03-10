@@ -62,7 +62,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // Channel detail + metadata routes
         .route(
             "/api/channels/{channel_id}",
-            get(api::get_channel_handler).put(api::update_channel_handler),
+            get(api::get_channel_handler)
+                .put(api::update_channel_handler)
+                .delete(api::delete_channel_handler),
         )
         .route(
             "/api/channels/{channel_id}/topic",
@@ -98,6 +100,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/dms/{channel_id}/members",
             post(api::add_dm_member_handler),
         )
+        // Message delete route
+        .route("/api/messages/{event_id}", delete(api::delete_message))
         // Reaction routes
         .route(
             "/api/messages/{event_id}/reactions",

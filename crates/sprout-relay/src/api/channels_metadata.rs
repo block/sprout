@@ -428,3 +428,54 @@ pub async fn unarchive_channel_handler(
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
+
+/// DELETE /api/channels/{channel_id} — Soft-delete a channel.
+///
+/// Requires owner role. Sets `deleted_at` on the channel record; the channel
+/// becomes invisible to all queries that filter on `deleted_at IS NULL`.
+pub async fn delete_channel_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(channel_id_str): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let channel_id = parse_channel_id(&channel_id_str)?;
+
+    // Only channel owners may delete.
+    let role = state
+        .db
+        .get_member_role(channel_id, &pubkey_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+    match role.as_deref() {
+        Some("owner") => {}
+        Some(_) => return Err(forbidden("only channel owner can delete")),
+        None => return Err(forbidden("not a member of this channel")),
+    }
+
+    let deleted = state
+        .db
+        .soft_delete_channel(channel_id)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    if !deleted {
+        return Err(api_error(StatusCode::CONFLICT, "channel already deleted"));
+    }
+
+    let actor_hex = nostr_hex::encode(&pubkey_bytes);
+    if let Err(e) = emit_system_message(
+        &state,
+        channel_id,
+        serde_json::json!({
+            "type": "channel_deleted",
+            "actor": actor_hex,
+        }),
+    )
+    .await
+    {
+        tracing::warn!("Failed to emit system message: {e}");
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true, "deleted": true })))
+}

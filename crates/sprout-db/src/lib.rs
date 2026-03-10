@@ -139,9 +139,68 @@ impl Db {
         event::query_events(&self.pool, q).await
     }
 
-    /// Fetches a single event by its raw ID bytes. Returns `None` if not found.
+    /// Fetches a single non-deleted event by its raw ID bytes.
+    ///
+    /// Returns `None` if the event does not exist or has been soft-deleted.
     pub async fn get_event_by_id(&self, id_bytes: &[u8]) -> Result<Option<StoredEvent>> {
         event::get_event_by_id(&self.pool, id_bytes).await
+    }
+
+    /// Fetches a single event by ID, **including soft-deleted rows**.
+    ///
+    /// Most callers should use [`get_event_by_id`] instead.
+    pub async fn get_event_by_id_including_deleted(
+        &self,
+        id_bytes: &[u8],
+    ) -> Result<Option<StoredEvent>> {
+        event::get_event_by_id_including_deleted(&self.pool, id_bytes).await
+    }
+
+    /// Atomically insert an event and its thread metadata in one transaction.
+    ///
+    /// Prevents the race where a concurrent delete between separate insert calls
+    /// could leave reply counters permanently inflated.
+    pub async fn insert_event_with_thread_metadata(
+        &self,
+        ev: &nostr::Event,
+        channel_id: Option<Uuid>,
+        thread_meta: Option<event::ThreadMetadataParams<'_>>,
+    ) -> Result<(StoredEvent, bool)> {
+        event::insert_event_with_thread_metadata(&self.pool, ev, channel_id, thread_meta).await
+    }
+
+    /// Soft-delete an event. Returns `true` if the event was deleted.
+    pub async fn soft_delete_event(&self, event_id: &[u8]) -> Result<bool> {
+        event::soft_delete_event(&self.pool, event_id).await
+    }
+
+    /// Atomically soft-delete an event and decrement thread counters in one transaction.
+    pub async fn soft_delete_event_and_update_thread(
+        &self,
+        event_id: &[u8],
+        parent_event_id: Option<&[u8]>,
+        root_event_id: Option<&[u8]>,
+    ) -> Result<bool> {
+        event::soft_delete_event_and_update_thread(
+            &self.pool,
+            event_id,
+            parent_event_id,
+            root_event_id,
+        )
+        .await
+    }
+
+    /// Returns the timestamp of the most recent non-deleted event in a channel.
+    pub async fn get_last_message_at(&self, channel_id: Uuid) -> Result<Option<DateTime<Utc>>> {
+        event::get_last_message_at(&self.pool, channel_id).await
+    }
+
+    /// Bulk-fetch last message timestamps for multiple channels in one query.
+    pub async fn get_last_message_at_bulk(
+        &self,
+        channel_ids: &[Uuid],
+    ) -> Result<std::collections::HashMap<Uuid, DateTime<Utc>>> {
+        event::get_last_message_at_bulk(&self.pool, channel_ids).await
     }
 
     // ── Feed ─────────────────────────────────────────────────────────────────
@@ -309,9 +368,22 @@ impl Db {
         channel::unarchive_channel(&self.pool, channel_id).await
     }
 
+    /// Soft-delete a channel. Returns `true` if the channel was deleted.
+    pub async fn soft_delete_channel(&self, channel_id: Uuid) -> Result<bool> {
+        channel::soft_delete_channel(&self.pool, channel_id).await
+    }
+
     /// Returns the count of active members in a channel.
     pub async fn get_member_count(&self, channel_id: Uuid) -> Result<i64> {
         channel::get_member_count(&self.pool, channel_id).await
+    }
+
+    /// Bulk-fetch member counts for multiple channels in one query.
+    pub async fn get_member_counts_bulk(
+        &self,
+        channel_ids: &[Uuid],
+    ) -> Result<std::collections::HashMap<Uuid, i64>> {
+        channel::get_member_counts_bulk(&self.pool, channel_ids).await
     }
 
     /// Returns the active role of a pubkey in a channel.
@@ -377,6 +449,18 @@ impl Db {
         before: Option<DateTime<Utc>>,
     ) -> Result<Vec<thread::TopLevelMessage>> {
         thread::get_channel_messages_top_level(&self.pool, channel_id, limit, before).await
+    }
+
+    /// Decrement reply counts when a thread reply is deleted.
+    ///
+    /// Decrements `reply_count` on the parent and `descendant_count` on the root
+    /// (floor at 0). Mirrors [`thread::increment_reply_count`] exactly.
+    pub async fn decrement_reply_count(
+        &self,
+        parent_event_id: &[u8],
+        root_event_id: Option<&[u8]>,
+    ) -> Result<()> {
+        thread::decrement_reply_count(&self.pool, parent_event_id, root_event_id).await
     }
 
     /// Fetch a raw thread_metadata row by event ID.

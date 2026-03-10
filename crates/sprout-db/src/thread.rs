@@ -186,6 +186,11 @@ pub async fn insert_thread_metadata(
 /// root — even when root == parent (direct reply to root). This is correct
 /// because `reply_count` tracks direct children only, while `descendant_count`
 /// tracks ALL descendants at every nesting level.
+///
+/// NOTE: The primary increment path is inlined inside [`insert_thread_metadata`]'s
+/// transaction. This standalone version exists for future use cases where
+/// incrementing outside of insert is needed (e.g., event re-parenting).
+#[allow(dead_code)]
 pub async fn increment_reply_count(
     pool: &MySqlPool,
     parent_event_id: &[u8],
