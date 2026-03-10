@@ -32,7 +32,7 @@ function createSearchAnchorEvent(hit: SearchHit): RelayEvent {
     pubkey: hit.pubkey,
     created_at: hit.createdAt,
     kind: hit.kind,
-    tags: [["e", hit.channelId]],
+    tags: [["h", hit.channelId]],
     content: hit.content,
     sig: "",
   };

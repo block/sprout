@@ -195,7 +195,7 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
 /// Extract a single channel UUID from filter generic tags, or `None` if the
 /// subscription is logically global.
 ///
-/// Checks both `"channel"` and `"e"` tag keys — clients use `#e` with a UUID value.
+/// Checks the `"h"` tag key — channel-scoped subscriptions use `#h = <uuid>`.
 ///
 /// Returns `None` when:
 /// - Any filter has no channel tag (that filter matches all channels → global sub), or
@@ -208,7 +208,7 @@ fn extract_channel_id_from_filters(filters: &[Filter]) -> Option<uuid::Uuid> {
         let mut filter_has_channel = false;
         for (tag_key, tag_values) in f.generic_tags.iter() {
             let key = tag_key.to_string();
-            if key == "channel" || key == "e" {
+            if key == "h" {
                 for val in tag_values {
                     if let Ok(id) = val.parse::<uuid::Uuid>() {
                         filter_has_channel = true;
@@ -238,7 +238,7 @@ mod tests {
 
     fn filter_with_channel(channel_id: uuid::Uuid) -> Filter {
         Filter::new().custom_tag(
-            SingleLetterTag::lowercase(Alphabet::E),
+            SingleLetterTag::lowercase(Alphabet::H),
             [channel_id.to_string()],
         )
     }

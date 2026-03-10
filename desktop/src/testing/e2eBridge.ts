@@ -230,7 +230,7 @@ function sendWsClose(handler: WsHandler) {
 }
 
 function getChannelIdFromTags(tags: string[][]): string | undefined {
-  return tags.find((tag) => tag[0] === "e")?.[1];
+  return tags.find((tag) => tag[0] === "h")?.[1];
 }
 
 function getMockMessageStore(channelId: string): RelayEvent[] {
@@ -247,7 +247,7 @@ function getMockMessageStore(channelId: string): RelayEvent[] {
             pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
             created_at: Math.floor(Date.now() / 1000),
             kind: 40001,
-            tags: [["e", channelId]],
+            tags: [["h", channelId]],
             content: "Welcome to #general",
             sig: "mocksig".repeat(20).slice(0, 128),
           },
@@ -744,8 +744,8 @@ function sendToMockSocket(args: {
 
   if (type === "REQ") {
     const subId = rest[0] as string;
-    const filter = rest[1] as { "#e"?: string[] };
-    const channelId = filter["#e"]?.[0];
+    const filter = rest[1] as { "#h"?: string[] };
+    const channelId = filter["#h"]?.[0];
     if (!channelId) {
       sendWsText(socket.handler, ["EOSE", subId]);
       return;

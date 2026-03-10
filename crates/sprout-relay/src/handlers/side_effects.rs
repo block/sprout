@@ -233,7 +233,7 @@ pub async fn emit_system_message(
     channel_id: Uuid,
     content: serde_json::Value,
 ) -> anyhow::Result<()> {
-    let channel_tag = Tag::custom(nostr::TagKind::custom("channel"), [channel_id.to_string()]);
+    let channel_tag = Tag::parse(&["h", &channel_id.to_string()])?;
 
     let event = EventBuilder::new(Kind::Custom(40099), content.to_string(), [channel_tag])
         .sign_with_keys(&state.relay_keypair)

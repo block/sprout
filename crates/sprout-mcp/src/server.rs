@@ -484,8 +484,8 @@ impl SproutMcpServer {
         const MAX_HISTORY_LIMIT: u32 = 200;
         let limit = p.limit.unwrap_or(50).min(MAX_HISTORY_LIMIT);
 
-        // Always use the REST endpoint — the channel tag is multi-character ("channel")
-        // and cannot be filtered via WebSocket subscription SingleLetterTag filters.
+        // Use the REST endpoint so callers get the canonical history payload,
+        // including thread metadata when requested.
         let with_threads = p.with_threads.unwrap_or(false);
         let path = if with_threads {
             format!(
@@ -546,11 +546,12 @@ impl SproutMcpServer {
             return format!("Error: {e}");
         }
 
-        // The "channel" tag is multi-character and cannot be used in WebSocket
-        // subscription filters (nostr::Filter::custom_tag only accepts SingleLetterTag).
-        // Subscribe to all KIND_CANVAS events and filter client-side by channel tag.
         let filter = nostr::Filter::new()
             .kind(nostr::Kind::Custom(KIND_CANVAS as u16))
+            .custom_tag(
+                nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+                [p.channel_id.as_str()],
+            )
             .limit(50);
 
         let sub_id = format!("canvas-{}", uuid::Uuid::new_v4());
@@ -560,15 +561,7 @@ impl SproutMcpServer {
         };
         let _ = self.client.close_subscription(&sub_id).await;
 
-        // Filter client-side: find the most recent canvas event for this channel.
-        let canvas_event = events.iter().rev().find(|event| {
-            event
-                .tags
-                .find(nostr::TagKind::custom("channel"))
-                .and_then(|t| t.content())
-                .map(|v| v == p.channel_id.as_str())
-                .unwrap_or(false)
-        });
+        let canvas_event = events.iter().max_by_key(|event| event.created_at.as_u64());
 
         if let Some(event) = canvas_event {
             event.content.clone()
@@ -589,19 +582,15 @@ impl SproutMcpServer {
 
         let keys = self.client.keys().clone();
 
-        let channel_tag = match nostr::Tag::parse(&["channel", &p.channel_id]) {
+        let channel_tag = match nostr::Tag::parse(&["h", &p.channel_id]) {
             Ok(t) => t,
             Err(e) => return format!("Error building tag: {e}"),
-        };
-        let event_ref_tag = match nostr::Tag::parse(&["e", &p.channel_id]) {
-            Ok(t) => t,
-            Err(e) => return format!("Error building event-ref tag: {e}"),
         };
 
         let event = match nostr::EventBuilder::new(
             nostr::Kind::Custom(KIND_CANVAS as u16),
             &p.content,
-            [channel_tag, event_ref_tag],
+            [channel_tag],
         )
         .sign_with_keys(&keys)
         {
