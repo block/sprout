@@ -91,21 +91,18 @@ mod tests {
         let past = Timestamp::from(now_ts.as_u64() - 3600);
         let future = Timestamp::from(now_ts.as_u64() + 3600);
 
-        // kind
         assert!(filters_match(&[Filter::new().kind(Kind::TextNote)], &ev));
         assert!(!filters_match(
             &[Filter::new().kind(Kind::ContactList)],
             &ev
         ));
 
-        // author
         assert!(filters_match(&[Filter::new().author(pubkey)], &ev));
         assert!(!filters_match(
             &[Filter::new().author(Keys::generate().public_key())],
             &ev
         ));
 
-        // compound AND
         assert!(filters_match(
             &[Filter::new().kind(Kind::TextNote).author(pubkey)],
             &ev
@@ -115,7 +112,6 @@ mod tests {
             &ev
         ));
 
-        // since / until
         assert!(filters_match(&[Filter::new().since(past)], &ev));
         assert!(!filters_match(&[Filter::new().since(future)], &ev));
         assert!(filters_match(&[Filter::new().until(future)], &ev));

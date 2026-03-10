@@ -204,7 +204,6 @@ impl JwksCache {
         ttl_secs: u64,
         client: &reqwest::Client,
     ) -> Result<CachedJwks, AuthError> {
-        // Fast path: read lock, return if fresh.
         {
             let guard = self.inner.read().await;
             if let Some(cached) = guard.as_ref() {
@@ -244,7 +243,6 @@ impl JwksCache {
             fetched_at: Instant::now(),
         };
 
-        // Re-acquire write lock to store the result.
         // Final re-check: another thread may have stored a fresh entry while
         // we were fetching. If so, discard our result and return theirs.
         let mut guard = self.inner.write().await;

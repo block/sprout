@@ -151,7 +151,6 @@ async fn resolve_dm_participants(
 
     let member_pubkeys: Vec<Vec<u8>> = members.iter().map(|m| m.pubkey.clone()).collect();
 
-    // Bulk-fetch user records for name resolution.
     let user_records = state
         .db
         .get_users_bulk(&member_pubkeys)

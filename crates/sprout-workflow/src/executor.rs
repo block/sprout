@@ -73,7 +73,6 @@ pub fn resolve_template(
     trigger_ctx: &TriggerContext,
     step_outputs: &HashMap<String, JsonValue>,
 ) -> Result<String, WorkflowError> {
-    // Fast path: no template markers.
     if !template.contains("{{") {
         return Ok(template.to_owned());
     }
@@ -82,11 +81,9 @@ pub fn resolve_template(
     let mut remaining = template;
 
     while let Some(start) = remaining.find("{{") {
-        // Append everything before the `{{`.
         result.push_str(&remaining[..start]);
         remaining = &remaining[start + 2..];
 
-        // Find the closing `}}`.
         let end = match remaining.find("}}") {
             Some(e) => e,
             None => {
@@ -105,10 +102,8 @@ pub fn resolve_template(
         let var_path = parts.next().unwrap_or("").trim();
         let filter = parts.next().map(|s| s.trim());
 
-        // Resolve the variable.
         let raw_value = resolve_variable(var_path, trigger_ctx, step_outputs);
 
-        // Apply filter (if any).
         let value = match (raw_value, filter) {
             (Some(v), Some(f)) => apply_filter(v, f)?,
             (Some(v), None) => v,
@@ -124,7 +119,6 @@ pub fn resolve_template(
         result.push_str(&value);
     }
 
-    // Append any trailing text after the last `}}`.
     result.push_str(remaining);
     Ok(result)
 }
@@ -141,7 +135,6 @@ fn resolve_variable(
 
     // Pattern: `steps.STEP_ID.output.FIELD`
     if let Some(rest) = path.strip_prefix("steps.") {
-        // rest = "STEP_ID.output.FIELD"
         let mut parts = rest.splitn(3, '.');
         let step_id = parts.next()?;
         let middle = parts.next()?; // must be "output"
@@ -184,7 +177,6 @@ fn json_to_string(v: &JsonValue) -> String {
 fn apply_filter(value: String, filter: &str) -> Result<String, WorkflowError> {
     let filter = filter.trim();
 
-    // `truncate(N)` — truncate to N characters.
     if let Some(inner) = filter
         .strip_prefix("truncate(")
         .and_then(|s| s.strip_suffix(')'))
@@ -331,7 +323,6 @@ pub fn build_eval_context(
     }
 
     // ── Step outputs ──────────────────────────────────────────────────────────
-    // Register as `steps_STEP_ID_output_FIELD`.
 
     for (step_id, output) in step_outputs {
         if let JsonValue::Object(map) = output {
@@ -589,7 +580,6 @@ pub async fn dispatch_action(
                 "RequestApproval from={from} timeout={timeout_str}: {message}"
             );
 
-            // Generate an approval token.
             let token = generate_approval_token(run_id, step_id);
 
             // TODO (WF-08): create approval record in DB, emit kind:46010.
@@ -723,7 +713,6 @@ async fn call_webhook_impl(
     use std::time::Duration;
 
     // ── SSRF check ────────────────────────────────────────────────────────────
-    // Parse the URL to extract host and port before making any connection.
     let parsed_url = reqwest::Url::parse(url)
         .map_err(|e| WorkflowError::WebhookError(format!("invalid URL: {e}")))?;
 
@@ -857,7 +846,6 @@ pub async fn execute_run(
         )
     })?;
 
-    // Mark run as Running now that we have a permit.
     engine
         .db
         .update_workflow_run(
@@ -969,7 +957,6 @@ async fn execute_steps(
             continue;
         }
 
-        // 1. Evaluate `if:` condition.
         if let Some(expr) = &step.if_expr {
             match evaluate_condition(expr, trigger_ctx, &step_outputs).await {
                 Ok(true) => {
@@ -994,7 +981,6 @@ async fn execute_steps(
             }
         }
 
-        // 2. Resolve template variables.
         let resolved_action = match resolve_step_templates(step, trigger_ctx, &step_outputs) {
             Ok(a) => a,
             Err(e) => {
@@ -1006,7 +992,6 @@ async fn execute_steps(
             }
         };
 
-        // 3. Dispatch action (with per-step timeout).
         let timeout_secs = step
             .timeout_secs
             .unwrap_or(engine.config.default_timeout_secs);
@@ -1139,8 +1124,7 @@ mod tests {
         let ctx = make_trigger();
         let out =
             resolve_template("{{trigger.text | truncate(5)}}", &ctx, &HashMap::new()).unwrap();
-        assert_eq!(out, "P1 in"); // "P1 incident in production" truncated to 5 chars = "P1 in"
-                                  // Actually "P1 in" is 5 chars: 'P','1',' ','i','n'
+        assert_eq!(out, "P1 in");
         assert_eq!(out.chars().count(), 5);
     }
 
@@ -1153,7 +1137,6 @@ mod tests {
             &HashMap::new(),
         )
         .unwrap();
-        // "abc123def456" → "abc123...def456"
         assert_eq!(out, "abc123...def456");
     }
 

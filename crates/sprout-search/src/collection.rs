@@ -29,7 +29,6 @@ pub async fn ensure_collection(
     api_key: &str,
     collection_name: &str,
 ) -> Result<(), SearchError> {
-    // First, check if the collection already exists.
     let check_url = format!("{}/collections/{}", base_url, collection_name);
     let resp = client
         .get(&check_url)
@@ -43,7 +42,6 @@ pub async fn ensure_collection(
             return Ok(());
         }
         404 => {
-            // Collection doesn't exist — create it.
             debug!(
                 collection = collection_name,
                 "Collection not found, creating"
@@ -55,7 +53,6 @@ pub async fn ensure_collection(
         }
     }
 
-    // Create the collection.
     let schema = events_schema(collection_name);
     let create_url = format!("{}/collections", base_url);
     let resp = client

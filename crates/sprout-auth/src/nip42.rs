@@ -27,7 +27,6 @@ fn normalize_relay_url(raw: &str) -> String {
             let _ = parsed.set_host(Some("127.0.0.1"));
         }
     }
-    // Remove trailing slash from the path component.
     let path = parsed.path().trim_end_matches('/').to_string();
     parsed.set_path(&path);
     parsed.to_string()

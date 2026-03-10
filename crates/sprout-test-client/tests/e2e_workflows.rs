@@ -157,7 +157,6 @@ async fn test_list_workflows_empty_channel() {
     let body: serde_json::Value = resp.json().await.expect("response must be JSON");
     assert!(body.is_array(), "expected JSON array, got: {body}");
 
-    // Every workflow in the list must have required fields.
     let arr = body.as_array().unwrap();
     for wf in arr {
         assert!(wf.get("id").is_some(), "workflow missing 'id' field");
@@ -180,7 +179,6 @@ async fn test_create_and_list_workflow() {
     let yaml = webhook_workflow_yaml("e2e-create-list-test");
     let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, &yaml).await;
 
-    // Response must include id, name, channel_id, definition fields.
     let workflow_id = created["id"]
         .as_str()
         .expect("created workflow must have 'id'");
@@ -199,7 +197,6 @@ async fn test_create_and_list_workflow() {
         "webhook workflow must return 'webhook_secret' on creation"
     );
 
-    // Verify it appears in the list.
     let list_url = format!("{base}/api/channels/{CHANNEL_GENERAL}/workflows");
     let list_resp = client
         .get(&list_url)
@@ -216,7 +213,6 @@ async fn test_create_and_list_workflow() {
         "newly created workflow {workflow_id} not found in list"
     );
 
-    // Clean up.
     let status = delete_workflow(&client, &base, pubkey_hex, workflow_id).await;
     assert_eq!(status, 204, "cleanup DELETE should return 204");
 }
@@ -235,7 +231,6 @@ async fn test_trigger_workflow_and_check_run() {
     let pubkey_hex: &str = SEEDED_PUBKEY;
     let base = relay_http_url();
 
-    // Create a webhook workflow.
     let yaml = webhook_workflow_yaml("e2e-trigger-test");
     let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, &yaml).await;
     let workflow_id = created["id"]
@@ -243,7 +238,6 @@ async fn test_trigger_workflow_and_check_run() {
         .expect("workflow must have 'id'")
         .to_string();
 
-    // Manually trigger the workflow via POST /api/workflows/:id/trigger.
     let trigger_url = format!("{base}/api/workflows/{workflow_id}/trigger");
     let trigger_resp = client
         .post(&trigger_url)
@@ -297,7 +291,6 @@ async fn test_trigger_workflow_and_check_run() {
 
     let run = found_run.expect("run must appear in GET /api/workflows/:id/runs within 1 second");
 
-    // Run must have required fields.
     assert!(run.get("id").is_some(), "run missing 'id'");
     assert!(
         run.get("workflow_id").is_some(),
@@ -305,14 +298,12 @@ async fn test_trigger_workflow_and_check_run() {
     );
     assert!(run.get("status").is_some(), "run missing 'status'");
 
-    // Status must be one of the valid terminal or in-progress values.
     let status = run["status"].as_str().unwrap_or("");
     assert!(
         matches!(status, "pending" | "running" | "completed" | "failed"),
         "run status '{status}' is not a recognized value"
     );
 
-    // Clean up.
     let del_status = delete_workflow(&client, &base, pubkey_hex, &workflow_id).await;
     assert_eq!(del_status, 204, "cleanup DELETE should return 204");
 }
@@ -402,7 +393,6 @@ steps:
         "run status '{status}' is not a recognized value"
     );
 
-    // Clean up.
     let _ = ws_client.disconnect().await;
     let del_status = delete_workflow(&client, &base, pubkey_hex, &workflow_id).await;
     assert_eq!(del_status, 204, "cleanup DELETE should return 204");
@@ -520,7 +510,6 @@ steps:
         "run status '{status}' is not a recognized value"
     );
 
-    // Clean up.
     let _ = ws_client.disconnect().await;
     let del_status = delete_workflow(&client, &base, pubkey_hex, &workflow_id).await;
     assert_eq!(del_status, 204, "cleanup DELETE should return 204");

@@ -606,7 +606,6 @@ mod tests {
         let conn_id = Uuid::new_v4();
         let channel_id = Uuid::new_v4();
 
-        // Build a filter with an explicit empty kinds list.
         let filter_empty_kinds = Filter::new().kinds(vec![] as Vec<Kind>);
         registry.register(
             conn_id,
@@ -615,13 +614,11 @@ mod tests {
             Some(channel_id),
         );
 
-        // The subscription should not appear in the wildcard index.
         assert!(
             registry.channel_wildcard_index.get(&channel_id).is_none(),
             "kinds:[] sub must NOT be in the wildcard index"
         );
 
-        // The subscription should not appear in any kind-specific index.
         let key = IndexKey {
             channel_id,
             kind: Kind::TextNote,
@@ -631,7 +628,6 @@ mod tests {
             "kinds:[] sub must NOT be in the kind-specific index"
         );
 
-        // Fan-out should produce zero matches for any event kind.
         let event = make_stored_event(Kind::TextNote, Some(channel_id));
         let matches = registry.fan_out(&event);
         assert!(
@@ -657,7 +653,6 @@ mod tests {
         let conn_id = Uuid::new_v4();
         let channel_id = Uuid::new_v4();
 
-        // Register a global (channel-less) subscription that matches all TextNote events.
         registry.register(
             conn_id,
             "global_sub".to_string(),
@@ -665,7 +660,6 @@ mod tests {
             None, // global — no channel scope
         );
 
-        // A channel-scoped event must NOT be delivered to the global subscription.
         let channel_event = make_stored_event(Kind::TextNote, Some(channel_id));
         let matches = registry.fan_out(&channel_event);
         assert!(
@@ -674,7 +668,6 @@ mod tests {
             matches
         );
 
-        // A non-channel event SHOULD still be delivered to the global subscription.
         let global_event = make_stored_event(Kind::TextNote, None);
         let matches = registry.fan_out(&global_event);
         assert_eq!(
@@ -700,10 +693,8 @@ mod tests {
             Some(channel_id),
         );
 
-        // Should not panic.
         registry.remove_subscription(conn_id, "sub_empty");
 
-        // Indexes remain clean.
         assert!(registry.channel_wildcard_index.get(&channel_id).is_none());
         let key = IndexKey {
             channel_id,

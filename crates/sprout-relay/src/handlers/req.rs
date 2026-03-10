@@ -121,7 +121,6 @@ pub async fn handle_req(
         };
 
         for stored in &events {
-            // Deduplicate across filters by event ID.
             if !seen_ids.insert(stored.event.id) {
                 continue;
             }
@@ -255,7 +254,6 @@ mod tests {
     fn test_extract_channel_id_mixed_channels_returns_none() {
         let channel_a = uuid::Uuid::new_v4();
         let channel_b = uuid::Uuid::new_v4();
-        // Two filters each with a different channel ID — can't index under one channel.
         let filters = vec![
             filter_with_channel(channel_a),
             filter_with_channel(channel_b),
@@ -265,7 +263,6 @@ mod tests {
 
     #[test]
     fn test_extract_channel_id_no_channel_tag_returns_none() {
-        // A filter with no channel tag means "global subscription".
         let filters = vec![Filter::new()];
         assert_eq!(extract_channel_id_from_filters(&filters), None);
     }
@@ -274,16 +271,12 @@ mod tests {
     fn test_extract_channel_id_one_filter_missing_channel_returns_none() {
         // Even if one filter has a channel, a second filter without one makes it global.
         let channel_id = uuid::Uuid::new_v4();
-        let filters = vec![
-            filter_with_channel(channel_id),
-            Filter::new(), // no channel tag → global
-        ];
+        let filters = vec![filter_with_channel(channel_id), Filter::new()];
         assert_eq!(extract_channel_id_from_filters(&filters), None);
     }
 
     #[test]
     fn test_extract_channel_id_same_channel_multiple_filters() {
-        // Two filters both scoped to the same channel → returns that channel.
         let channel_id = uuid::Uuid::new_v4();
         let filters = vec![
             filter_with_channel(channel_id),

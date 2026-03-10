@@ -175,7 +175,6 @@ impl WorkflowDef {
                 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         };
 
-        // Step IDs must be unique and non-empty.
         let mut seen_ids: HashSet<&str> = HashSet::new();
         for step in &self.steps {
             if step.id.trim().is_empty() {
@@ -197,28 +196,23 @@ impl WorkflowDef {
             }
         }
 
-        // Validate schedule trigger fields.
         if let TriggerDef::Schedule { cron, interval } = &self.trigger {
-            // Must have cron or interval (not neither).
             if cron.is_none() && interval.is_none() {
                 return Err(WorkflowError::InvalidDefinition(
                     "schedule trigger requires either 'cron' or 'interval'".into(),
                 ));
             }
 
-            // Must not have both cron and interval simultaneously.
             if cron.is_some() && interval.is_some() {
                 return Err(WorkflowError::InvalidDefinition(
                     "schedule trigger cannot specify both 'cron' and 'interval'; use one or the other".into(),
                 ));
             }
 
-            // Validate cron expression syntax.
             if let Some(expr) = cron {
                 validate_cron(expr)?;
             }
 
-            // Validate interval format (e.g. "30m", "1h", "60s").
             if let Some(dur) = interval {
                 crate::executor::parse_duration_secs(dur).map_err(|_| {
                     WorkflowError::InvalidDefinition(format!(
@@ -290,7 +284,6 @@ mod tests {
         assert_eq!(def.steps.len(), 1);
         assert_eq!(def.steps[0].id, "notify");
 
-        // Canonical JSON must round-trip.
         let reparsed: WorkflowDef = serde_json::from_str(&json).expect("json round-trip");
         assert_eq!(reparsed.name, def.name);
     }
@@ -360,7 +353,6 @@ mod tests {
         let (def, _) = parse_yaml(yaml).expect("parse failed");
         assert_eq!(def.steps.len(), 7);
 
-        // Verify each action type deserialized correctly.
         assert!(matches!(
             &def.steps[0].action,
             ActionDef::SendMessage { .. }
@@ -672,7 +664,6 @@ mod tests {
         );
         let (def, json) = parse_yaml(yaml).expect("parse failed");
 
-        // Round-trip through JSON.
         let reparsed: WorkflowDef = serde_json::from_str(&json).expect("json round-trip");
 
         assert_eq!(reparsed.name, def.name);

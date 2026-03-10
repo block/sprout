@@ -205,7 +205,6 @@ async fn test_close_subscription_stops_delivery() {
         .await
         .expect("EOSE");
 
-    // Close the subscription.
     client
         .close_subscription(&sid)
         .await
@@ -302,7 +301,6 @@ async fn test_multiple_concurrent_clients() {
             .expect("EOSE");
     }
 
-    // Client 0 sends the event.
     let content = format!("broadcast-{}", uuid::Uuid::new_v4());
     let ok = clients[0]
         .send_text_message(&keys[0], &channel, &content, kind)
@@ -342,7 +340,6 @@ async fn test_stored_events_returned_before_eose() {
         .await
         .expect("connect");
 
-    // Send an event first.
     let content = format!("stored-{}", uuid::Uuid::new_v4());
     let ok = client
         .send_text_message(&keys, &channel, &content, kind)

@@ -804,7 +804,6 @@ mod tests {
         assert_eq!(channel.description, Some("desc".to_string()));
         assert!(db.is_member(channel.id, &owner).await.unwrap());
 
-        // Add member via owner invite
         db.add_member(
             channel.id,
             &member,
@@ -818,7 +817,6 @@ mod tests {
         let members = db.get_members(channel.id).await.expect("get members");
         assert_eq!(members.len(), 2);
 
-        // Owner removes member
         db.remove_member(channel.id, &member, &owner)
             .await
             .expect("remove");
@@ -919,17 +917,14 @@ mod tests {
         .await
         .expect("add rando");
 
-        // Rando cannot remove member
         let result = db.remove_member(channel.id, &member, &rando).await;
         assert!(matches!(result, Err(DbError::AccessDenied(_))));
 
-        // Owner can remove member
         db.remove_member(channel.id, &member, &owner)
             .await
             .expect("owner removes");
         assert!(!db.is_member(channel.id, &member).await.unwrap());
 
-        // Member can remove themselves
         db.remove_member(channel.id, &rando, &rando)
             .await
             .expect("self-remove");

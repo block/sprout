@@ -111,7 +111,6 @@ async fn test_list_channels_returns_expected_fields() {
         "expected at least one channel in the list"
     );
 
-    // Every channel must have the required fields.
     for ch in channels {
         assert!(ch.get("id").is_some(), "channel missing 'id' field");
         assert!(ch.get("name").is_some(), "channel missing 'name' field");
@@ -269,7 +268,6 @@ async fn test_search_returns_results_for_open_channels() {
 
     let hits = body["hits"].as_array().expect("'hits' must be an array");
 
-    // Every hit must have the required fields.
     for hit in hits {
         assert!(hit.get("event_id").is_some(), "hit missing 'event_id'");
         assert!(hit.get("content").is_some(), "hit missing 'content'");
@@ -288,11 +286,9 @@ async fn test_search_returns_indexed_event() {
     let pubkey_hex = keys.public_key().to_hex();
     let ws_url = relay_ws_url();
 
-    // Send a message with a unique token via WebSocket so it gets indexed.
     let unique_token = format!("e2e-search-{}", uuid::Uuid::new_v4().simple());
     let content = format!("E2E REST search test marker: {unique_token}");
 
-    // Connect and send the message to an open channel.
     let mut ws_client = SproutTestClient::connect(&ws_url, &keys)
         .await
         .expect("WebSocket connect failed");
@@ -313,7 +309,6 @@ async fn test_search_returns_indexed_event() {
     // Wait briefly for the search index to catch up.
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Search for the unique token.
     // The unique_token is UUID simple format (hex only) — safe to use directly in the URL.
     let url = format!("{}/api/search?q={unique_token}", relay_http_url());
     let resp = authed_get(&client, &url, &pubkey_hex).await;
@@ -328,7 +323,6 @@ async fn test_search_returns_indexed_event() {
         "expected at least one search hit for unique token '{unique_token}'"
     );
 
-    // The first hit should contain our unique token.
     let first_content = hits[0]["content"].as_str().unwrap_or("");
     assert!(
         first_content.contains(&unique_token),
@@ -383,7 +377,6 @@ async fn test_presence_set_and_query() {
     let pubkey_hex = keys.public_key().to_hex();
     let ws_url = relay_ws_url();
 
-    // Send a presence event via WebSocket.
     let mut ws_client = SproutTestClient::connect(&ws_url, &keys)
         .await
         .expect("WebSocket connect failed");
@@ -401,7 +394,6 @@ async fn test_presence_set_and_query() {
     // Keep the WebSocket connection alive briefly so presence is registered.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // Query presence via REST.
     let url = format!("{}/api/presence?pubkeys={pubkey_hex}", relay_http_url());
     let resp = authed_get(&client, &url, &pubkey_hex).await;
 
@@ -414,7 +406,6 @@ async fn test_presence_set_and_query() {
         "expected 'online' after sending presence event"
     );
 
-    // Clean up: send offline presence.
     let offline_event = nostr::EventBuilder::new(Kind::Custom(20001), "offline", [])
         .sign_with_keys(&keys)
         .expect("event sign failed");
@@ -444,7 +435,6 @@ async fn test_presence_bulk_query() {
     let body: serde_json::Value = resp.json().await.expect("JSON");
     assert!(body.is_object(), "presence response must be an object");
 
-    // Both pubkeys should appear in the response.
     assert!(
         body.get(&pk_a).is_some(),
         "pk_a missing from presence response"
@@ -454,7 +444,6 @@ async fn test_presence_bulk_query() {
         "pk_b missing from presence response"
     );
 
-    // Both should be offline.
     assert_eq!(body[&pk_a].as_str(), Some("offline"));
     assert_eq!(body[&pk_b].as_str(), Some("offline"));
 }
@@ -499,7 +488,6 @@ async fn test_agents_list() {
         .as_array()
         .expect("/api/agents must return a JSON array");
 
-    // Every agent must have the required fields.
     for agent in agents {
         assert!(agent.get("pubkey").is_some(), "agent missing 'pubkey'");
         assert!(agent.get("name").is_some(), "agent missing 'name'");
@@ -559,7 +547,6 @@ async fn test_agents_scoped_to_accessible_channels() {
 
     let agents: Vec<serde_json::Value> = resp.json().await.expect("JSON");
 
-    // Get accessible channels for this user.
     let channels_url = format!("{}/api/channels", relay_http_url());
     let channels_resp = authed_get(&client, &channels_url, &pubkey_hex).await;
     let channels: Vec<serde_json::Value> = channels_resp.json().await.expect("JSON");
@@ -632,17 +619,14 @@ async fn test_feed_returns_activity() {
     // Small delay to let the event propagate.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // Fetch the feed.
     let resp = authed_get(&client, &url, &pubkey_hex).await;
     assert_eq!(resp.status(), 200, "expected 200 OK from /api/feed");
 
     let body: serde_json::Value = resp.json().await.expect("response must be JSON");
 
-    // Top-level structure.
     let feed = body.get("feed").expect("response missing 'feed' key");
     let meta = body.get("meta").expect("response missing 'meta' key");
 
-    // Feed sections must exist.
     assert!(feed.get("mentions").is_some(), "feed missing 'mentions'");
     assert!(
         feed.get("needs_action").is_some(),
@@ -654,7 +638,6 @@ async fn test_feed_returns_activity() {
         "feed missing 'agent_activity'"
     );
 
-    // Meta fields.
     assert!(meta.get("since").is_some(), "meta missing 'since'");
     assert!(meta.get("total").is_some(), "meta missing 'total'");
     assert!(
@@ -662,7 +645,6 @@ async fn test_feed_returns_activity() {
         "meta missing 'generated_at'"
     );
 
-    // Activity must be an array.
     assert!(
         feed["activity"].is_array(),
         "feed 'activity' must be an array"

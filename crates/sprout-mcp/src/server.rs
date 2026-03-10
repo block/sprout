@@ -239,12 +239,10 @@ impl SproutMcpServer {
         description = "Send a message to a Sprout channel"
     )]
     pub async fn send_message(&self, Parameters(p): Parameters<SendMessageParams>) -> String {
-        // Validate channel_id is a well-formed UUID at the tool boundary.
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
 
-        // Guard against excessively large message content.
         if p.content.len() > MAX_CONTENT_BYTES {
             return format!(
                 "Error: content exceeds maximum size of {} bytes (got {})",

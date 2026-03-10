@@ -435,13 +435,11 @@ impl RelayClient {
         let new_inner =
             Self::connect_with_retry(&self.relay_url, &self.keys, self.api_token.as_deref()).await;
 
-        // Swap the inner connection.
         {
             let mut inner = self.inner.lock().await;
             *inner = new_inner;
         }
 
-        // Resubscribe to all active subscriptions.
         let subs = self.active_subscriptions.lock().await.clone();
         if !subs.is_empty() {
             tracing::info!("resubscribing to {} active subscription(s)", subs.len());
@@ -879,7 +877,6 @@ mod tests {
         let text = "not json at all";
         let result = parse_relay_message(text);
         assert!(result.is_err());
-        // Should be a JSON parse error.
         assert!(matches!(result.unwrap_err(), RelayClientError::Json(_)));
     }
 

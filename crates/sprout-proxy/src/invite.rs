@@ -74,7 +74,6 @@ mod tests {
 
     #[test]
     fn test_invite_token_validation() {
-        // Valid token
         let token = InviteToken::new("tok-valid", vec![], future(3600), 5);
         assert!(token.validate(Utc::now()).is_ok());
         assert!(token.is_valid(Utc::now()));
@@ -108,7 +107,6 @@ mod tests {
         // Still valid (uses < max_uses)
         assert!(token.is_valid(Utc::now()));
         token.consume();
-        // Now exhausted
         assert!(!token.is_valid(Utc::now()));
     }
 

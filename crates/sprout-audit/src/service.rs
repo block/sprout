@@ -75,7 +75,6 @@ impl AuditService {
             .catch_unwind()
             .await;
 
-        // Always release the lock before returning the connection to the pool.
         let _ = sqlx::query("DO RELEASE_LOCK(?)")
             .bind(AUDIT_LOCK_NAME)
             .execute(&mut *conn)

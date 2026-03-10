@@ -940,14 +940,12 @@ mod tests {
         let mut cloned = record.clone();
         cloned.name = "Cloned".to_owned();
 
-        // Original is unchanged.
         assert_eq!(record.name, "Original");
         assert_eq!(cloned.name, "Cloned");
     }
 
     #[test]
     fn workflow_record_status_variants() {
-        // Verify all WorkflowStatus variants can be stored in the struct.
         let now = Utc::now();
         for status in &[
             WorkflowStatus::Active,
@@ -1093,7 +1091,6 @@ mod tests {
             created_at: now,
         };
 
-        // Trace is a JSON array with 2 entries.
         assert!(record.execution_trace.is_array());
         assert_eq!(record.execution_trace.as_array().unwrap().len(), 2);
     }
