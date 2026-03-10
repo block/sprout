@@ -82,10 +82,13 @@ pub struct AppState {
     pub handler_semaphore: Arc<Semaphore>,
     /// Workflow engine for background processing.
     pub workflow_engine: Arc<WorkflowEngine>,
+    /// Relay signing keypair — used to sign system messages (kind 40099).
+    pub relay_keypair: nostr::Keys,
 }
 
 impl AppState {
     /// Constructs `AppState` from its component services.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Config,
         db: Db,
@@ -94,6 +97,7 @@ impl AppState {
         auth: AuthService,
         search: SearchService,
         workflow_engine: Arc<WorkflowEngine>,
+        relay_keypair: nostr::Keys,
     ) -> Self {
         let max_connections = config.max_connections;
         let max_concurrent_handlers = config.max_concurrent_handlers;
@@ -109,6 +113,7 @@ impl AppState {
             conn_semaphore: Arc::new(Semaphore::new(max_connections)),
             handler_semaphore: Arc::new(Semaphore::new(max_concurrent_handlers)),
             workflow_engine,
+            relay_keypair,
         }
     }
 }

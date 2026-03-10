@@ -15,12 +15,24 @@ pub mod agents;
 pub mod approvals;
 /// Channel CRUD and membership endpoints.
 pub mod channels;
+/// Channel metadata endpoints (get, update, topic, purpose, archive).
+pub mod channels_metadata;
+/// Direct message endpoints.
+pub mod dms;
 /// Personalized home feed endpoint.
 pub mod feed;
+/// Channel membership endpoints.
+pub mod members;
+/// Message and thread endpoints.
+pub mod messages;
 /// Presence status endpoints.
 pub mod presence;
+/// Reaction endpoints.
+pub mod reactions;
 /// Full-text search endpoint.
 pub mod search;
+/// User profile endpoints.
+pub mod users;
 /// Shared helpers for workflow API handlers.
 pub mod workflow_helpers;
 /// Workflow CRUD, trigger, and webhook endpoints.
@@ -30,9 +42,18 @@ pub mod workflows;
 pub use agents::agents_handler;
 pub use approvals::{deny_approval, grant_approval};
 pub use channels::{channels_handler, create_channel};
+pub use channels_metadata::{
+    archive_channel_handler, get_channel_handler, set_purpose_handler, set_topic_handler,
+    unarchive_channel_handler, update_channel_handler,
+};
+pub use dms::{add_dm_member_handler, list_dms_handler, open_dm_handler};
 pub use feed::feed_handler;
+pub use members::{add_members, join_channel, leave_channel, list_members, remove_member};
+pub use messages::{get_thread, list_messages, send_message};
 pub use presence::presence_handler;
+pub use reactions::{add_reaction_handler, list_reactions_handler, remove_reaction_handler};
 pub use search::search_handler;
+pub use users::{get_profile, update_profile};
 pub use workflows::{
     create_workflow, delete_workflow, get_workflow, list_channel_workflows, list_workflow_runs,
     trigger_workflow, update_workflow, workflow_webhook,

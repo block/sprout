@@ -86,6 +86,8 @@ pub const KIND_STREAM_MESSAGE_SCHEDULED: u32 = 40006;
 pub const KIND_STREAM_REMINDER: u32 = 40007;
 /// Canvas (shared document) for a channel.
 pub const KIND_CANVAS: u32 = 40100;
+/// System message for channel state changes (join, leave, rename, etc.).
+pub const KIND_SYSTEM_MESSAGE: u32 = 40099;
 
 // Direct messages (41000–41999)
 /// A new direct-message conversation was created.
@@ -225,6 +227,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_STREAM_MESSAGE_SCHEDULED,
     KIND_STREAM_REMINDER,
     KIND_CANVAS,
+    KIND_SYSTEM_MESSAGE,
     KIND_DM_CREATED,
     KIND_DM_MEMBER_ADDED,
     KIND_DM_MEMBER_REMOVED,

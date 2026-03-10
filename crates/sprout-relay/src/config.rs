@@ -42,6 +42,9 @@ pub struct Config {
     /// If empty, permissive CORS is used (dev mode).
     /// Example: "tauri://localhost,http://localhost:3000"
     pub cors_origins: Vec<String>,
+    /// Optional hex-encoded private key for the relay's signing keypair.
+    /// If absent, a fresh keypair is generated at startup.
+    pub relay_private_key: Option<String>,
 }
 
 impl Config {
@@ -113,6 +116,8 @@ impl Config {
             .filter(|s| !s.is_empty())
             .collect();
 
+        let relay_private_key = std::env::var("SPROUT_RELAY_PRIVATE_KEY").ok();
+
         Ok(Self {
             bind_addr,
             database_url,
@@ -126,6 +131,7 @@ impl Config {
             auth,
             require_auth_token,
             cors_origins,
+            relay_private_key,
         })
     }
 }
