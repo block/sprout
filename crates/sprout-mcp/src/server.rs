@@ -464,17 +464,24 @@ impl SproutMcpServer {
 
         let channel_tag = match nostr::Tag::parse(&["channel", &p.channel_id]) {
             Ok(t) => t,
-            Err(e) => return format!("Error building tag: {e}"),
+            Err(e) => return format!("Error building channel tag: {e}"),
+        };
+        let event_ref_tag = match nostr::Tag::parse(&["e", &p.channel_id]) {
+            Ok(t) => t,
+            Err(e) => return format!("Error building event-ref tag: {e}"),
         };
 
         let keys = self.client.keys().clone();
-        let event =
-            match nostr::EventBuilder::new(nostr::Kind::Custom(kind), &p.content, [channel_tag])
-                .sign_with_keys(&keys)
-            {
-                Ok(e) => e,
-                Err(e) => return format!("Error signing event: {e}"),
-            };
+        let event = match nostr::EventBuilder::new(
+            nostr::Kind::Custom(kind),
+            &p.content,
+            [channel_tag, event_ref_tag],
+        )
+        .sign_with_keys(&keys)
+        {
+            Ok(e) => e,
+            Err(e) => return format!("Error signing event: {e}"),
+        };
 
         match self.client.send_event(event).await {
             Ok(ok) if ok.accepted => format!("Message sent. Event ID: {}", ok.event_id),

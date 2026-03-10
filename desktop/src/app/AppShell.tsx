@@ -167,7 +167,6 @@ export function AppShell() {
                     : "No channel selected"
                 }
                 isLoading={messagesQuery.isLoading}
-                key={activeChannel?.id ?? "no-channel"}
                 messages={timelineMessages}
               />
               <MessageComposer
@@ -178,7 +177,6 @@ export function AppShell() {
                   sendMessageMutation.isPending
                 }
                 isSending={sendMessageMutation.isPending}
-                key={activeChannel?.id ?? "no-channel"}
                 onSend={async (content) => {
                   await sendMessageMutation.mutateAsync(content);
                 }}

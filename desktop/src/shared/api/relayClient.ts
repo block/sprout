@@ -122,7 +122,13 @@ class RelayClient {
     const event = await signRelayEvent({
       kind: 40001,
       content: content.trim(),
-      tags: [["e", channelId]],
+      // Include both tags for now:
+      // - `channel` lets the relay persist and authorize the event as channel-scoped
+      // - `e` keeps the existing desktop WebSocket history/subscription filters working
+      tags: [
+        ["channel", channelId],
+        ["e", channelId],
+      ],
     });
 
     return new Promise<RelayEvent>((resolve, reject) => {
