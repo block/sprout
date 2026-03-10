@@ -6,4 +6,5 @@ export type TimelineMessage = {
   body: string;
   accent?: boolean;
   pending?: boolean;
+  highlighted?: boolean;
 };

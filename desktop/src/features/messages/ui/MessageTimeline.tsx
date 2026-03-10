@@ -13,6 +13,8 @@ type MessageTimelineProps = {
   isLoading?: boolean;
   emptyTitle?: string;
   emptyDescription?: string;
+  targetMessageId?: string | null;
+  onTargetReached?: (messageId: string) => void;
 };
 
 const BOTTOM_THRESHOLD_PX = 72;
@@ -33,7 +35,14 @@ function MessageRow({ message }: { message: TimelineMessage }) {
     .toUpperCase();
 
   return (
-    <article className="flex gap-3" data-testid="message-row">
+    <article
+      className={cn(
+        "flex gap-3 rounded-2xl px-2 py-2 transition-colors",
+        message.highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
+      )}
+      data-message-id={message.id}
+      data-testid="message-row"
+    >
       <div
         className={cn(
           "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-semibold shadow-sm",
@@ -94,6 +103,8 @@ export function MessageTimeline({
   isLoading = false,
   emptyTitle = "No messages yet",
   emptyDescription = "Send the first message to start the thread.",
+  targetMessageId = null,
+  onTargetReached,
 }: MessageTimelineProps) {
   const timelineRef = React.useRef<HTMLDivElement>(null);
   const contentRef = React.useRef<HTMLDivElement>(null);
@@ -107,7 +118,11 @@ export function MessageTimeline({
   const lockedScrollTopRef = React.useRef<number | null>(null);
   const previousLastMessageIdRef = React.useRef<string | undefined>(undefined);
   const previousMessageCountRef = React.useRef(0);
+  const handledTargetMessageIdRef = React.useRef<string | null>(null);
   const [isAtBottom, setIsAtBottom] = React.useState(true);
+  const [highlightedMessageId, setHighlightedMessageId] = React.useState<
+    string | null
+  >(null);
   const [newMessageCount, setNewMessageCount] = React.useState(0);
   const latestMessage =
     messages.length > 0 ? messages[messages.length - 1] : undefined;
@@ -352,6 +367,54 @@ export function MessageTimeline({
     previousMessageCountRef.current = messages.length;
   }, [isLoading, latestMessage, messages.length, scrollToBottom]);
 
+  React.useEffect(() => {
+    if (!targetMessageId) {
+      handledTargetMessageIdRef.current = null;
+      setHighlightedMessageId(null);
+      return;
+    }
+
+    if (handledTargetMessageIdRef.current === targetMessageId || isLoading) {
+      return;
+    }
+
+    const timeline = timelineRef.current;
+    if (!timeline) {
+      return;
+    }
+
+    const targetElement = timeline.querySelector<HTMLElement>(
+      `[data-message-id="${targetMessageId}"]`,
+    );
+    if (!targetElement) {
+      return;
+    }
+
+    handledTargetMessageIdRef.current = targetMessageId;
+    shouldStickToBottomRef.current = false;
+    isAtBottomRef.current = false;
+    isProgrammaticBottomScrollRef.current = false;
+    targetElement.scrollIntoView({
+      block: "center",
+      behavior: "smooth",
+    });
+    previousScrollTopRef.current = timeline.scrollTop;
+    setIsAtBottom(false);
+    setHighlightedMessageId(targetMessageId);
+    setNewMessageCount(0);
+    onTargetReached?.(targetMessageId);
+
+    const timeout = window.setTimeout(() => {
+      setHighlightedMessageId((current) =>
+        current === targetMessageId ? null : current,
+      );
+    }, 2_000);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [isLoading, onTargetReached, targetMessageId]);
+
   return (
     <div className="relative flex-1 min-h-0">
       <div
@@ -393,7 +456,13 @@ export function MessageTimeline({
 
           {!isLoading
             ? messages.map((message) => (
-                <MessageRow key={message.id} message={message} />
+                <MessageRow
+                  key={message.id}
+                  message={{
+                    ...message,
+                    highlighted: message.id === highlightedMessageId,
+                  }}
+                />
               ))
             : null}
           <div aria-hidden className="h-px" ref={bottomAnchorRef} />

@@ -43,6 +43,13 @@ struct GetFeedQuery<'a> {
     types: Option<&'a str>,
 }
 
+#[derive(Serialize)]
+struct SearchQueryParams<'a> {
+    q: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<u32>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct FeedItemInfo {
     pub id: String,
@@ -75,6 +82,24 @@ pub struct FeedMeta {
 pub struct FeedResponse {
     pub feed: FeedSections,
     pub meta: FeedMeta,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SearchHitInfo {
+    pub event_id: String,
+    pub content: String,
+    pub kind: u32,
+    pub pubkey: String,
+    pub channel_id: String,
+    pub channel_name: String,
+    pub created_at: u64,
+    pub score: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SearchResponse {
+    pub hits: Vec<SearchHitInfo>,
+    pub found: u64,
 }
 
 fn relay_ws_url() -> String {
@@ -273,6 +298,56 @@ async fn get_feed(
         .map_err(|e| format!("parse failed: {e}"))
 }
 
+#[tauri::command]
+async fn search_messages(
+    q: String,
+    limit: Option<u32>,
+    state: tauri::State<'_, AppState>,
+) -> Result<SearchResponse, String> {
+    let pubkey_hex = auth_pubkey_header(&state)?;
+    let url = format!("{}{}", relay_api_base_url(), "/api/search");
+    let response = state
+        .http_client
+        .get(url)
+        .header("X-Pubkey", pubkey_hex)
+        .query(&SearchQueryParams {
+            q: q.trim(),
+            limit,
+        })
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(relay_error_message(response).await);
+    }
+
+    response
+        .json::<SearchResponse>()
+        .await
+        .map_err(|e| format!("parse failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_event(event_id: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let request = build_authed_request(
+        &state.http_client,
+        &format!("/api/events/{event_id}"),
+        &state,
+    )
+    .await?;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(relay_error_message(response).await);
+    }
+
+    response.text().await.map_err(|e| format!("parse failed: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_state = AppState {
@@ -299,6 +374,8 @@ pub fn run() {
             get_channels,
             create_channel,
             get_feed,
+            search_messages,
+            get_event,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
