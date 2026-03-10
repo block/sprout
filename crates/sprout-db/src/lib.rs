@@ -320,11 +320,15 @@ impl Db {
 
     /// Returns full channel records for all channels accessible to `pubkey`:
     /// open channels plus channels where the user is an active member.
+    ///
+    /// If `visibility_filter` is `Some("open")` or `Some("private")`, only channels
+    /// with that visibility are returned.
     pub async fn get_accessible_channels(
         &self,
         pubkey: &[u8],
+        visibility_filter: Option<&str>,
     ) -> Result<Vec<channel::ChannelRecord>> {
-        channel::get_accessible_channels(&self.pool, pubkey).await
+        channel::get_accessible_channels(&self.pool, pubkey, visibility_filter).await
     }
 
     /// Returns all bot-role members with aggregated channel names.

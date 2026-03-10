@@ -459,6 +459,48 @@ pub async fn insert_event_with_thread_metadata(
             // Only bump reply counts if the metadata row was actually inserted.
             if tm_result.rows_affected() > 0 {
                 if let Some(pid) = meta.parent_event_id {
+                    // Ensure the parent has a thread_metadata row so the UPDATE
+                    // below has something to hit. Root (depth=0) messages don't
+                    // get a row on first insert, so we create a stub here.
+                    let parent_ts = meta.parent_event_created_at.unwrap_or(meta.event_created_at);
+                    sqlx::query(
+                        r#"
+                        INSERT IGNORE INTO thread_metadata
+                            (event_created_at, event_id, channel_id,
+                             parent_event_id, parent_event_created_at,
+                             root_event_id, root_event_created_at,
+                             depth, broadcast)
+                        VALUES (?, ?, ?, NULL, NULL, NULL, NULL, 0, 0)
+                        "#,
+                    )
+                    .bind(parent_ts)
+                    .bind(pid)
+                    .bind(ch_bytes.as_slice())
+                    .execute(&mut *tx)
+                    .await?;
+
+                    // Ensure the root also has a row (may differ from parent for nested replies).
+                    if let Some(root_id) = meta.root_event_id {
+                        if root_id != pid {
+                            let root_ts = meta.root_event_created_at.unwrap_or(meta.event_created_at);
+                            sqlx::query(
+                                r#"
+                                INSERT IGNORE INTO thread_metadata
+                                    (event_created_at, event_id, channel_id,
+                                     parent_event_id, parent_event_created_at,
+                                     root_event_id, root_event_created_at,
+                                     depth, broadcast)
+                                VALUES (?, ?, ?, NULL, NULL, NULL, NULL, 0, 0)
+                                "#,
+                            )
+                            .bind(root_ts)
+                            .bind(root_id)
+                            .bind(ch_bytes.as_slice())
+                            .execute(&mut *tx)
+                            .await?;
+                        }
+                    }
+
                     sqlx::query(
                         r#"
                         UPDATE thread_metadata

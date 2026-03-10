@@ -507,15 +507,51 @@ pub async fn dispatch_action(
     action: &ActionDef,
     _engine: &WorkflowEngine,
     run_id: Uuid,
+    trigger_ctx: &TriggerContext,
 ) -> Result<StepResult, WorkflowError> {
     use ActionDef::*;
 
     match action {
         SendMessage { text, channel } => {
-            let target = channel.as_deref().unwrap_or("<workflow channel>");
-            info!(run_id = %run_id, step = step_id, "SendMessage → {target}: {text}");
-            // TODO (WF-07): emit kind:40001 event via engine's event emitter.
-            Ok(StepResult::Completed(serde_json::json!({ "sent": true })))
+            // Use explicit channel override if provided; otherwise fall back to
+            // the channel that triggered this workflow run.
+            let channel_id = channel
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&trigger_ctx.channel_id);
+
+            info!(
+                run_id = %run_id,
+                step = step_id,
+                channel = %channel_id,
+                "SendMessage → {channel_id}: {text}"
+            );
+
+            if channel_id.is_empty() {
+                return Err(WorkflowError::InvalidDefinition(
+                    "SendMessage: no channel_id available (trigger has no channel context and \
+                     no channel override was specified)"
+                        .into(),
+                ));
+            }
+
+            #[cfg(feature = "reqwest")]
+            {
+                let result = send_message_impl(channel_id, text).await?;
+                return Ok(StepResult::Completed(result));
+            }
+
+            #[cfg(not(feature = "reqwest"))]
+            {
+                warn!(
+                    run_id = %run_id,
+                    step = step_id,
+                    "SendMessage: reqwest feature not enabled, skipping HTTP call"
+                );
+                return Ok(StepResult::Completed(
+                    serde_json::json!({ "sent": false, "skipped": true }),
+                ));
+            }
         }
 
         SendDm { to, text } => {
@@ -793,6 +829,75 @@ async fn call_webhook_impl(
     }))
 }
 
+// ── send_message implementation (feature-gated) ──────────────────────────────
+
+/// POST `{"content": text}` to `POST /api/channels/{channel_id}/messages`.
+///
+/// Relay base URL is read from `SPROUT_RELAY_BASE_URL` (default: `http://localhost:3000`).
+/// Auth header `X-Pubkey` is set from `SPROUT_RELAY_PUBKEY` when present; omitted
+/// otherwise (works in dev mode when `require_auth_token=false`).
+///
+/// This is an internal call — the workflow engine runs inside the relay process,
+/// so `localhost:3000` is always reachable without SSRF concerns.
+#[cfg(feature = "reqwest")]
+async fn send_message_impl(channel_id: &str, text: &str) -> Result<JsonValue, WorkflowError> {
+    use reqwest::Client;
+    use std::time::Duration;
+
+    let base_url = std::env::var("SPROUT_RELAY_BASE_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_owned());
+
+    let url = format!("{base_url}/api/channels/{channel_id}/messages");
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| WorkflowError::WebhookError(format!("failed to build HTTP client: {e}")))?;
+
+    let mut req = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "content": text }));
+
+    // Attach relay pubkey for server-side auth (dev mode: X-Pubkey header).
+    // In production, SPROUT_RELAY_PUBKEY should be set to the relay's hex pubkey.
+    if let Ok(pubkey) = std::env::var("SPROUT_RELAY_PUBKEY") {
+        req = req.header("X-Pubkey", pubkey);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| WorkflowError::WebhookError(format!("SendMessage HTTP error: {e}")))?;
+
+    let status = resp.status();
+
+    if !status.is_success() {
+        let body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<unreadable>".to_owned());
+        return Err(WorkflowError::WebhookError(format!(
+            "SendMessage: relay returned {status} for channel {channel_id}: {body}"
+        )));
+    }
+
+    let body_text = resp
+        .text()
+        .await
+        .unwrap_or_else(|_| String::new());
+
+    // Try to parse the response as JSON; fall back to wrapping the raw text.
+    let body_json: JsonValue = serde_json::from_str(&body_text)
+        .unwrap_or_else(|_| serde_json::json!({ "raw": body_text }));
+
+    Ok(serde_json::json!({
+        "sent": true,
+        "status": status.as_u16(),
+        "response": body_json,
+    }))
+}
+
 // ── Execution result ──────────────────────────────────────────────────────────
 
 /// Rich return type from `execute_run` / `execute_from_step`.
@@ -997,7 +1102,7 @@ async fn execute_steps(
             .unwrap_or(engine.config.default_timeout_secs);
         let dispatch_result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
-            dispatch_action(&step.id, &resolved_action, engine, run_id),
+            dispatch_action(&step.id, &resolved_action, engine, run_id, trigger_ctx),
         )
         .await;
 

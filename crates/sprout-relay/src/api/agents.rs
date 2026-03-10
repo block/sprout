@@ -27,7 +27,7 @@ pub async fn agents_handler(
     // Get requester's accessible channels to filter bot channel visibility.
     let accessible_channels = state
         .db
-        .get_accessible_channels(&pubkey_bytes)
+        .get_accessible_channels(&pubkey_bytes, None)
         .await
         .map_err(|e| {
             tracing::error!("agents: failed to load accessible channels: {e}");

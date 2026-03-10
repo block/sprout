@@ -131,9 +131,12 @@ pub struct UpdateChannelBody {
     pub description: Option<String>,
 }
 
-/// PUT /api/channels/{channel_id} — Update channel name and/or description.
+/// Update channel properties (name, description).
 ///
-/// Requires owner or admin role.
+/// Requires owner or admin role. Topic and purpose are settable by any member
+/// via separate endpoints — see `channels_metadata.rs`. This asymmetry is
+/// intentional: name and description are structural metadata, while topic and
+/// purpose are collaborative content metadata (NIP-29 parity).
 pub async fn update_channel_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

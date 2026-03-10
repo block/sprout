@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::Json as ExtractJson,
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::Json,
 };
@@ -21,18 +21,26 @@ use crate::state::AppState;
 
 use super::{api_error, extract_auth_pubkey, internal_error};
 
+/// Query parameters for `GET /api/channels`.
+#[derive(Debug, Deserialize)]
+pub struct ListChannelsParams {
+    /// Optional visibility filter: `"open"` or `"private"`.
+    pub visibility: Option<String>,
+}
+
 /// Returns all channels accessible to the authenticated user.
 ///
 /// For DM channels, resolves participant display names and pubkeys.
 pub async fn channels_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Query(params): Query<ListChannelsParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
 
     let channels = state
         .db
-        .get_accessible_channels(&pubkey_bytes)
+        .get_accessible_channels(&pubkey_bytes, params.visibility.as_deref())
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 

@@ -689,12 +689,15 @@ pub struct UserRecord {
 ///
 /// Uses DISTINCT + LEFT JOIN so a user who is a member of an open channel does not
 /// see it twice. Results are ordered stream → forum → dm, then alphabetically by name.
+///
+/// If `visibility_filter` is `Some("open")` or `Some("private")`, only channels with
+/// that visibility value are returned. `None` returns all accessible channels.
 pub async fn get_accessible_channels(
     pool: &MySqlPool,
     pubkey: &[u8],
+    visibility_filter: Option<&str>,
 ) -> Result<Vec<ChannelRecord>> {
-    let rows = sqlx::query(
-        r#"
+    let base = r#"
         SELECT DISTINCT c.id, c.name, c.channel_type, c.visibility, c.description, c.canvas,
                c.created_by, c.created_at, c.updated_at, c.archived_at, c.deleted_at,
                c.nip29_group_id, c.topic_required, c.max_members,
@@ -705,14 +708,22 @@ pub async fn get_accessible_channels(
             ON c.id = cm.channel_id AND cm.pubkey = ? AND cm.removed_at IS NULL
         WHERE c.deleted_at IS NULL
           AND (c.visibility = 'open' OR cm.channel_id IS NOT NULL)
-        ORDER BY FIELD(c.channel_type, 'stream', 'forum', 'dm'), c.name
-        LIMIT 1000
-        "#,
-    )
-    .bind(pubkey)
-    .fetch_all(pool)
-    .await?;
+    "#;
 
+    let sql = if visibility_filter.is_some() {
+        format!("{base}  AND c.visibility = ?\n        ORDER BY FIELD(c.channel_type, 'stream', 'forum', 'dm'), c.name\n        LIMIT 1000")
+    } else {
+        format!("{base}        ORDER BY FIELD(c.channel_type, 'stream', 'forum', 'dm'), c.name\n        LIMIT 1000")
+    };
+
+    let query = sqlx::query(&sql).bind(pubkey);
+    let query = if let Some(vis) = visibility_filter {
+        query.bind(vis)
+    } else {
+        query
+    };
+
+    let rows = query.fetch_all(pool).await?;
     rows.into_iter().map(row_to_channel_record).collect()
 }
 
