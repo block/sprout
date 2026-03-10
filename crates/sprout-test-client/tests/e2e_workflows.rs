@@ -626,3 +626,109 @@ async fn test_workflow_update_and_delete() {
         "GET after DELETE must return 404"
     );
 }
+
+// ── Test 7: Approval gate (WF-08 stub) ────────────────────────────────────────
+
+/// Create a workflow with a `request_approval` step, trigger it, and verify
+/// the run fails with the "approval gates not yet implemented" message.
+///
+/// This test documents the current stub behavior. When WF-08 is implemented,
+/// this test should be updated to verify the full approval round-trip:
+/// create → trigger → poll for waiting_approval → grant → verify completed.
+#[tokio::test]
+#[ignore]
+async fn test_approval_gate_stub_fails_gracefully() {
+    let client = http_client();
+    let pubkey_hex: &str = SEEDED_PUBKEY;
+    let base = relay_http_url();
+
+    // ── Step 1: Create a workflow with a request_approval step ────────────────
+    let workflow_yaml = r#"name: approval-test
+description: Test approval gate
+trigger:
+  on: webhook
+steps:
+  - id: step1
+    name: Pre-approval step
+    action: send_message
+    text: "Before approval"
+  - id: approve
+    action: request_approval
+    from: "any"
+    message: "Please approve this workflow"
+  - id: step3
+    name: Post-approval step
+    action: send_message
+    text: "After approval"
+"#;
+    let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, workflow_yaml).await;
+    let workflow_id = created["id"]
+        .as_str()
+        .expect("created workflow must have 'id'")
+        .to_string();
+
+    // ── Step 2: Trigger the workflow ──────────────────────────────────────────
+    let trigger_url = format!("{base}/api/workflows/{workflow_id}/trigger");
+    let trigger_resp = client
+        .post(&trigger_url)
+        .header("X-Pubkey", pubkey_hex)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("POST {trigger_url} failed: {e}"));
+
+    assert_eq!(
+        trigger_resp.status(),
+        202,
+        "trigger endpoint must return 202 Accepted"
+    );
+
+    let trigger_body: serde_json::Value = trigger_resp
+        .json()
+        .await
+        .expect("trigger response must be JSON");
+    let run_id = trigger_body["run_id"]
+        .as_str()
+        .expect("trigger response must include 'run_id'")
+        .to_string();
+
+    // ── Step 3: Poll until the run reaches a terminal status ──────────────────
+    let runs_url = format!("{base}/api/workflows/{workflow_id}/runs");
+    let mut final_run: Option<serde_json::Value> = None;
+    for _ in 0..10 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let runs_resp = client
+            .get(&runs_url)
+            .header("X-Pubkey", pubkey_hex)
+            .send()
+            .await
+            .expect("GET runs failed");
+        assert_eq!(runs_resp.status(), 200, "GET runs must return 200");
+        let runs: Vec<serde_json::Value> = runs_resp.json().await.expect("runs must be JSON array");
+        if let Some(run) = runs.iter().find(|r| r["id"].as_str() == Some(&run_id)) {
+            let status = run["status"].as_str().unwrap_or("");
+            if matches!(status, "completed" | "failed" | "cancelled") {
+                final_run = Some(run.clone());
+                break;
+            }
+        }
+    }
+
+    // ── Step 4: Assert the run failed with the expected stub error ────────────
+    let run = final_run.expect("run must reach a terminal status within 1 second");
+
+    assert_eq!(
+        run["status"].as_str().unwrap_or(""),
+        "failed",
+        "approval gate stub must cause the run to fail"
+    );
+
+    let error_msg = run["error"].as_str().unwrap_or("");
+    assert!(
+        error_msg.contains("approval gates not yet implemented"),
+        "run error must contain 'approval gates not yet implemented', got: {error_msg:?}"
+    );
+
+    // ── Step 5: Clean up ──────────────────────────────────────────────────────
+    let del_status = delete_workflow(&client, &base, pubkey_hex, &workflow_id).await;
+    assert_eq!(del_status, 204, "cleanup DELETE should return 204");
+}

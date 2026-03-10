@@ -224,6 +224,14 @@ impl WorkflowEngine {
 
         let trigger_ctx = build_trigger_context(event);
 
+        let trigger_ctx_json: serde_json::Value = match serde_json::to_value(&trigger_ctx) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!("Failed to serialize trigger context: {e}");
+                return Ok(());
+            }
+        };
+
         for workflow in &workflows {
             let def: WorkflowDef = match serde_json::from_value(workflow.definition.clone()) {
                 Ok(d) => d,
@@ -240,15 +248,6 @@ impl WorkflowEngine {
             if !should_fire_workflow(&def, &trigger_ctx, workflow.id).await {
                 continue;
             }
-
-            // Serialize TriggerContext for DB storage.
-            let trigger_ctx_json = match serde_json::to_value(&trigger_ctx) {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(workflow_id = %workflow.id, "Failed to serialize ctx: {e}");
-                    continue;
-                }
-            };
 
             // Create the workflow_run row (status: pending).
             let trigger_event_id_bytes = event.event.id.as_bytes().to_vec();

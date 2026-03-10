@@ -163,6 +163,8 @@ pub async fn get_workflow(
 
     if let Some(channel_id) = workflow.channel_id {
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
+    } else if workflow.owner_pubkey != pubkey_bytes {
+        return Err(forbidden("not authorized to access this workflow"));
     }
 
     Ok(Json(workflow_record_to_json(&workflow)))
@@ -200,6 +202,8 @@ pub async fn update_workflow(
 
     if let Some(channel_id) = existing.channel_id {
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
+    } else if existing.owner_pubkey != pubkey_bytes {
+        return Err(forbidden("not authorized to access this workflow"));
     }
 
     let (def, definition_json_str) =

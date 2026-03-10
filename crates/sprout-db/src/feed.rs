@@ -184,7 +184,7 @@ pub async fn query_activity(
     );
 
     // Stream messages, forum posts, agent job events.
-    // KIND_JOB_REQUEST = agent job created, KIND_JOB_PROGRESS = agent job completed, KIND_JOB_RESULT = agent job failed.
+    // KIND_JOB_REQUEST = agent job requested, KIND_JOB_PROGRESS = in-flight progress update, KIND_JOB_RESULT = completed result.
     qb.push(format!(
         " AND kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_FORUM_POST}, {KIND_JOB_REQUEST}, {KIND_JOB_PROGRESS}, {KIND_JOB_RESULT})"
     ));

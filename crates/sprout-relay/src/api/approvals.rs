@@ -49,9 +49,9 @@ fn check_approver_spec(
         return Ok(());
     }
 
-    // Exact pubkey match (64-char lowercase hex).
+    // Exact pubkey match (64-char hex, case-insensitive).
     if spec.len() == 64 && spec.chars().all(|c| c.is_ascii_hexdigit()) {
-        if requester_hex == spec {
+        if requester_hex.to_lowercase() == spec.to_lowercase() {
             return Ok(());
         }
         return Err(forbidden(
@@ -177,7 +177,7 @@ pub async fn grant_approval(
     headers: HeaderMap,
     Path(token): Path<String>,
     body: Option<Json<ApprovalBody>>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let (pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
 
     let approval = state
@@ -228,12 +228,15 @@ pub async fn grant_approval(
         resume_workflow_after_approval(engine, db, run_id, workflow_id, resume_index).await;
     });
 
-    Ok(Json(serde_json::json!({
-        "token": token,
-        "status": "granted",
-        "run_id": approval.run_id.to_string(),
-        "workflow_id": approval.workflow_id.to_string(),
-    })))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "token": token,
+            "status": "granted",
+            "run_id": approval.run_id.to_string(),
+            "workflow_id": approval.workflow_id.to_string(),
+        })),
+    ))
 }
 
 // ── POST /api/approvals/:token/deny ──────────────────────────────────────────
@@ -246,7 +249,7 @@ pub async fn deny_approval(
     headers: HeaderMap,
     Path(token): Path<String>,
     body: Option<Json<ApprovalBody>>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let (pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
 
     let approval = state
@@ -323,12 +326,15 @@ pub async fn deny_approval(
         }
     });
 
-    Ok(Json(serde_json::json!({
-        "token": token,
-        "status": "denied",
-        "run_id": approval.run_id.to_string(),
-        "workflow_id": approval.workflow_id.to_string(),
-    })))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "token": token,
+            "status": "denied",
+            "run_id": approval.run_id.to_string(),
+            "workflow_id": approval.workflow_id.to_string(),
+        })),
+    ))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -412,13 +418,10 @@ mod tests {
     }
 
     #[test]
-    fn uppercase_hex_spec_is_rejected_as_unrecognised() {
-        // Spec must be lowercase hex — uppercase fails the `is_ascii_hexdigit` path length check
-        // (it IS hex digits, but the spec says 64-char lowercase; uppercase passes hexdigit but
-        // won't match a lowercase requester_hex, so it falls through to the role branch).
+    fn uppercase_hex_spec_is_accepted_case_insensitive() {
+        // Uppercase hex spec should now succeed — comparison is case-insensitive.
         let upper = ALICE_HEX.to_uppercase();
         let result = check_approver_spec(&upper, &upper.to_lowercase());
-        // Either forbidden (no match) or forbidden (unrecognised spec) — both are errors.
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 }

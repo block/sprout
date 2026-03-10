@@ -602,10 +602,10 @@ pub async fn dispatch_action(
 
         Delay { duration } => {
             let secs = parse_duration_secs(duration)?;
-            // Cap delay at 300 seconds (5 minutes) to prevent tasks from holding
-            // a Tokio worker thread for extended periods. Long delays (hours/days)
+            // Cap delay at 270 seconds (4.5 minutes) — must be less than default_timeout_secs (300s)
+            // to avoid non-deterministic StepTimeout. Long delays (hours/days)
             // should use the scheduled resume pattern (future work: WF-09).
-            const MAX_DELAY_SECS: u64 = 300;
+            const MAX_DELAY_SECS: u64 = 270;
             if secs > MAX_DELAY_SECS {
                 return Err(WorkflowError::InvalidDefinition(format!(
                     "delay exceeds maximum of {MAX_DELAY_SECS} seconds (got {secs}s); \
