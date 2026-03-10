@@ -898,13 +898,20 @@ pub async fn execute_from_step(
         .map_err(|_| WorkflowError::CapacityExceeded)?;
 
     // Mark run as Running now that we have a permit (resume from approval).
+    // Preserve the existing execution trace from pre-approval steps.
+    let existing_trace = engine
+        .db
+        .get_workflow_run(run_id)
+        .await
+        .map(|r| r.execution_trace)
+        .unwrap_or_else(|_| serde_json::json!([]));
     engine
         .db
         .update_workflow_run(
             run_id,
             sprout_db::workflow::RunStatus::Running,
             start_index as i32,
-            &serde_json::json!([]),
+            &existing_trace,
             None,
         )
         .await

@@ -117,7 +117,22 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     let channel_id = if event.kind == nostr::Kind::Reaction {
         // For NIP-25 reactions, always derive channel from the target event.
         // Client-supplied channel tags are ignored to prevent spoofing.
-        derive_reaction_channel(&state.db, &event).await
+        // Fail closed: reject the reaction if the target cannot be resolved.
+        match derive_reaction_channel(&state.db, &event).await {
+            Some(ch_id) => Some(ch_id),
+            None => {
+                warn!(
+                    event_id = %event_id_hex,
+                    "Rejecting reaction: target event not found or has no channel"
+                );
+                conn.send(RelayMessage::ok(
+                    &event_id_hex,
+                    false,
+                    "invalid: reaction target event not found or not in a channel",
+                ));
+                return;
+            }
+        }
     } else {
         extract_channel_id(&event)
     };
