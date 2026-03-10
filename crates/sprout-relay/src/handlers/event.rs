@@ -429,10 +429,18 @@ async fn derive_reaction_channel(
 ) -> ReactionChannelResult {
     // Find the target event ID from NIP-25 `e` tags.
     // Per NIP-25, the last `e` tag is the target (in case of threading).
+    // Filter for 64-char hex event IDs inside find_map to skip UUID channel refs,
+    // consistent with build_trigger_context() in sprout-workflow/src/lib.rs.
     let target_hex = match event.tags.iter().rev().find_map(|tag| {
         let key = tag.kind().to_string();
         if key == "e" {
-            tag.content().map(|s| s.to_string())
+            tag.content().and_then(|v| {
+                if v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()) {
+                    Some(v.to_string())
+                } else {
+                    None
+                }
+            })
         } else {
             None
         }
@@ -441,12 +449,7 @@ async fn derive_reaction_channel(
         None => return ReactionChannelResult::NoTarget,
     };
 
-    // Must be a 64-char hex string (event ID), not a UUID
-    if target_hex.len() != 64 {
-        return ReactionChannelResult::NoTarget;
-    }
-
-    // Decode hex to bytes for DB lookup
+    // Decode hex to bytes for DB lookup (already validated as 64-char hex above)
     let id_bytes = match hex::decode(&target_hex) {
         Ok(b) if b.len() == 32 => b,
         _ => return ReactionChannelResult::NoTarget,

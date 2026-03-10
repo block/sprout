@@ -55,16 +55,6 @@ pub enum WorkflowError {
     Database(String),
 }
 
-impl WorkflowError {
-    /// Attach partial execution progress to this error.
-    ///
-    /// Returns a `(WorkflowError, PartialProgress)` tuple that callers can
-    /// destructure to persist the trace before marking the run as failed.
-    pub fn with_progress(self, progress: PartialProgress) -> (Self, PartialProgress) {
-        (self, progress)
-    }
-}
-
 impl From<sprout_db::error::DbError> for WorkflowError {
     fn from(e: sprout_db::error::DbError) -> Self {
         WorkflowError::Database(e.to_string())

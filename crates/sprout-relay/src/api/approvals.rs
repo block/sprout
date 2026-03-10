@@ -87,6 +87,16 @@ async fn resume_workflow_after_approval(
         }
     };
 
+    // Guard: only resume runs that are actually waiting for approval.
+    // A stale approval token could otherwise resurrect a cancelled/failed/completed run.
+    if run.status != sprout_db::workflow::RunStatus::WaitingApproval {
+        tracing::warn!(
+            "grant_approval: run {run_id} has status '{}', expected 'waiting_approval' — ignoring stale approval",
+            run.status
+        );
+        return;
+    }
+
     let workflow = match db.get_workflow(workflow_id).await {
         Ok(w) => w,
         Err(e) => {

@@ -908,12 +908,16 @@ pub async fn execute_from_step(
 
     // Mark run as Running now that we have a permit (resume from approval).
     // Preserve the existing execution trace from pre-approval steps.
-    let existing_trace = engine
-        .db
-        .get_workflow_run(run_id)
-        .await
-        .map(|r| r.execution_trace)
-        .unwrap_or_else(|_| serde_json::json!([]));
+    let existing_trace = match engine.db.get_workflow_run(run_id).await {
+        Ok(r) => r.execution_trace,
+        Err(e) => {
+            warn!(
+                run_id = %run_id,
+                "Failed to read existing trace for resume — pre-approval trace will be lost: {e}"
+            );
+            serde_json::json!([])
+        }
+    };
     engine
         .db
         .update_workflow_run(
