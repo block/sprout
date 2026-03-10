@@ -12,12 +12,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TIMEOUT=120  # seconds to wait for services to become healthy
-DB_USER="${SPROUT_DB_USER:-sprout}"
-DB_PASS="${SPROUT_DB_PASS:-sprout_dev}"
-DB_NAME="${SPROUT_DB_NAME:-sprout}"
-DOCKER_DB_HOST="${SPROUT_DOCKER_DB_HOST:-mysql}"
-DOCKER_NETWORK="${SPROUT_DOCKER_NETWORK:-sprout-net}"
-MYSQL_CLIENT_IMAGE="${SPROUT_DB_CLIENT_IMAGE:-mysql:8.0}"
 
 # Colors
 RED='\033[0;31m'
@@ -44,13 +38,6 @@ if ! docker info &>/dev/null; then
 fi
 
 cd "${REPO_ROOT}"
-
-run_mysql_in_container() {
-  docker run --rm -i --network "${DOCKER_NETWORK}" \
-    -e MYSQL_PWD="${DB_PASS}" \
-    "${MYSQL_CLIENT_IMAGE}" \
-    mysql -h"${DOCKER_DB_HOST}" -u"${DB_USER}" "${DB_NAME}" "$@"
-}
 
 # ---- Start services ---------------------------------------------------------
 
@@ -118,22 +105,9 @@ else
       sqlx migrate run --source "${MIGRATION_DIR}"
     success "Migrations applied via sqlx"
   else
-    # Fallback: run SQL files directly via mysql in the container
-    log "sqlx CLI not found — applying migrations via mysql CLI..."
-    shopt -s nullglob
-    SQL_FILES=("${MIGRATION_DIR}"/*.sql)
-    shopt -u nullglob
-
-    if [[ ${#SQL_FILES[@]} -eq 0 ]]; then
-      warn "No .sql files found in ${MIGRATION_DIR}. Skipping."
-    else
-      for sql_file in "${SQL_FILES[@]}"; do
-        filename="$(basename "${sql_file}")"
-        log "  Applying ${filename}..."
-        run_mysql_in_container < "${sql_file}"
-      done
-      success "Migrations applied via mysql"
-    fi
+    error "sqlx CLI not found. Install it with: cargo install sqlx-cli --no-default-features --features mysql"
+    error "Running migrations directly via mysql bypasses migration tracking and causes errors."
+    exit 1
   fi
 fi
 
