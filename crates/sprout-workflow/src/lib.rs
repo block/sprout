@@ -93,16 +93,102 @@ impl WorkflowEngine {
         schema::parse_yaml(yaml)
     }
 
+    /// Finalize a workflow run after execution completes or fails.
+    ///
+    /// This is the **single** place that maps an executor result to a DB status
+    /// update. All execution paths (event-triggered, manual trigger/webhook,
+    /// approval resume) call this instead of duplicating the 3-way match.
+    ///
+    /// `existing_trace` is prepended to the executor's trace — used by the
+    /// approval-resume path where pre-approval steps already have trace entries.
+    pub async fn finalize_run(
+        &self,
+        run_id: uuid::Uuid,
+        result: Result<ExecutionResult, (WorkflowError, PartialProgress)>,
+        existing_trace: Option<Vec<serde_json::Value>>,
+    ) {
+        let prefix = existing_trace.unwrap_or_default();
+
+        match result {
+            Ok(result) => {
+                let mut full_trace = prefix;
+                full_trace.extend(result.trace);
+                let trace_json = serde_json::Value::Array(full_trace);
+                let step_count = result.step_index as i32;
+
+                if result.approval_token.is_some() {
+                    // Approval gates are not yet implemented (WF-08).
+                    // Fail explicitly rather than creating unreachable WaitingApproval rows.
+                    tracing::warn!(
+                        run_id = %run_id,
+                        step_index = result.step_index,
+                        "Workflow hit approval gate — not yet implemented, marking as failed"
+                    );
+                    if let Err(e) = self
+                        .db
+                        .update_workflow_run(
+                            run_id,
+                            RunStatus::Failed,
+                            step_count,
+                            &trace_json,
+                            Some("approval gates not yet implemented — see WF-08"),
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            run_id = %run_id,
+                            "Failed to update run to Failed (approval gate): {e}"
+                        );
+                    }
+                } else {
+                    tracing::info!(run_id = %run_id, "Workflow run completed");
+                    if let Err(e) = self
+                        .db
+                        .update_workflow_run(
+                            run_id,
+                            RunStatus::Completed,
+                            step_count,
+                            &trace_json,
+                            None,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            run_id = %run_id,
+                            "Failed to update run to Completed: {e}"
+                        );
+                    }
+                }
+            }
+            Err((e, progress)) => {
+                tracing::error!(run_id = %run_id, "Workflow run failed: {e}");
+                let mut full_trace = prefix;
+                full_trace.extend(progress.trace);
+                let trace_json = serde_json::Value::Array(full_trace);
+                if let Err(db_err) = self
+                    .db
+                    .update_workflow_run(
+                        run_id,
+                        RunStatus::Failed,
+                        progress.step_index as i32,
+                        &trace_json,
+                        Some(&e.to_string()),
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        run_id = %run_id,
+                        "Failed to update run to Failed: {db_err}"
+                    );
+                }
+            }
+        }
+    }
+
     /// Called from the event handler post-store hook for every stored event.
     ///
     /// Checks whether any workflow in the event's channel has a matching trigger.
     /// Workflow execution events (kinds 46001–46012) are excluded to prevent loops.
-    ///
-    /// For each matching workflow:
-    /// 1. Evaluates the trigger filter expression (if present).
-    /// 2. Builds a [`executor::TriggerContext`] from the event.
-    /// 3. Creates a `workflow_run` row in the DB (status: `pending`).
-    /// 4. Spawns an async task to execute the run via [`executor::execute_run`].
     ///
     /// The method takes `self: &Arc<Self>` so that the spawned task can hold a
     /// clone of the `Arc` without requiring `'static` on `&self`.
@@ -122,12 +208,10 @@ impl WorkflowEngine {
         let kind_u32 = event_kind_u32(&event.event);
 
         // Exclude workflow execution events to prevent infinite loops.
-        // See Decision 10 in PLANS/SPROUT_WORKFLOWS.md.
         if is_workflow_execution_kind(kind_u32) {
             return Ok(());
         }
 
-        // Load enabled workflows for this channel.
         let workflows = self
             .db
             .list_enabled_channel_workflows(channel_id)
@@ -138,84 +222,30 @@ impl WorkflowEngine {
             return Ok(());
         }
 
-        // Build TriggerContext once — all matching workflows in this channel
-        // share the same triggering event.
         let trigger_ctx = build_trigger_context(event);
 
         for workflow in &workflows {
-            // Parse the stored JSON definition.
             let def: WorkflowDef = match serde_json::from_value(workflow.definition.clone()) {
                 Ok(d) => d,
                 Err(e) => {
-                    tracing::warn!(
-                        workflow_id = %workflow.id,
-                        "Failed to parse workflow definition: {e}"
-                    );
+                    tracing::warn!(workflow_id = %workflow.id, "Failed to parse definition: {e}");
                     continue;
                 }
             };
 
-            if !def.enabled {
+            if !def.enabled || !trigger_matches_event(&def.trigger, kind_u32) {
                 continue;
             }
 
-            // Check if the trigger type matches the event kind.
-            if !trigger_matches_event(&def.trigger, kind_u32) {
+            if !should_fire_workflow(&def, &trigger_ctx, workflow.id).await {
                 continue;
-            }
-
-            // Enforce reaction emoji filter: if the workflow specifies a specific
-            // emoji, skip events whose content doesn't match. NIP-25 stores the
-            // emoji character (or shortcode) in the event content field.
-            if let TriggerDef::ReactionAdded {
-                emoji: Some(ref expected),
-            } = def.trigger
-            {
-                let actual = &trigger_ctx.emoji;
-                if actual != expected {
-                    tracing::debug!(
-                        workflow_id = %workflow.id,
-                        expected_emoji = %expected,
-                        actual_emoji = %actual,
-                        "Reaction emoji mismatch — skipping workflow"
-                    );
-                    continue;
-                }
-            }
-
-            // Evaluate the trigger filter expression (MessagePosted only).
-            // A filter that evaluates to false skips this workflow entirely.
-            if let TriggerDef::MessagePosted {
-                filter: Some(ref expr),
-            } = def.trigger
-            {
-                match executor::evaluate_condition(expr, &trigger_ctx, &HashMap::new()).await {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        tracing::debug!(
-                            workflow_id = %workflow.id,
-                            "Trigger filter evaluated false — skipping workflow"
-                        );
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            workflow_id = %workflow.id,
-                            "Trigger filter error: {e} — skipping workflow"
-                        );
-                        continue;
-                    }
-                }
             }
 
             // Serialize TriggerContext for DB storage.
             let trigger_ctx_json = match serde_json::to_value(&trigger_ctx) {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!(
-                        workflow_id = %workflow.id,
-                        "Failed to serialize TriggerContext: {e}"
-                    );
+                    tracing::warn!(workflow_id = %workflow.id, "Failed to serialize ctx: {e}");
                     continue;
                 }
             };
@@ -233,10 +263,7 @@ impl WorkflowEngine {
             {
                 Ok(id) => id,
                 Err(e) => {
-                    tracing::error!(
-                        workflow_id = %workflow.id,
-                        "Failed to create workflow_run: {e}"
-                    );
+                    tracing::error!(workflow_id = %workflow.id, "Failed to create run: {e}");
                     continue;
                 }
             };
@@ -247,85 +274,13 @@ impl WorkflowEngine {
                 "Workflow triggered — spawning execution"
             );
 
-            // Spawn execution. Clone Arc so the task owns its references.
             let engine = Arc::clone(self);
             let def_clone = def.clone();
             let ctx_clone = trigger_ctx.clone();
 
             tokio::spawn(async move {
-                match executor::execute_run(&engine, run_id, &def_clone, &ctx_clone).await {
-                    Ok(result) => {
-                        let trace_json = serde_json::Value::Array(result.trace);
-                        let step_count = result.step_index as i32;
-
-                        if result.approval_token.is_some() {
-                            // Approval gates are not yet implemented (WF-08).
-                            // Fail explicitly rather than creating unreachable WaitingApproval rows.
-                            tracing::warn!(
-                                run_id = %run_id,
-                                step_index = result.step_index,
-                                "Workflow hit approval gate — not yet implemented, marking as failed"
-                            );
-                            if let Err(e) = engine
-                                .db
-                                .update_workflow_run(
-                                    run_id,
-                                    RunStatus::Failed,
-                                    step_count,
-                                    &trace_json,
-                                    Some("approval gates not yet implemented — see WF-08"),
-                                )
-                                .await
-                            {
-                                tracing::error!(
-                                    run_id = %run_id,
-                                    "Failed to update run to Failed (approval gate): {e}"
-                                );
-                            }
-                        } else {
-                            // Normal completion.
-                            tracing::info!(run_id = %run_id, "Workflow run completed");
-                            if let Err(e) = engine
-                                .db
-                                .update_workflow_run(
-                                    run_id,
-                                    RunStatus::Completed,
-                                    step_count,
-                                    &trace_json,
-                                    None,
-                                )
-                                .await
-                            {
-                                tracing::error!(
-                                    run_id = %run_id,
-                                    "Failed to update run to Completed: {e}"
-                                );
-                            }
-                        }
-                    }
-                    Err((e, progress)) => {
-                        tracing::error!(run_id = %run_id, "Workflow run failed: {e}");
-                        // Use partial trace from the executor — contains steps
-                        // completed/skipped before the failure.
-                        let trace_json = serde_json::Value::Array(progress.trace);
-                        if let Err(db_err) = engine
-                            .db
-                            .update_workflow_run(
-                                run_id,
-                                RunStatus::Failed,
-                                progress.step_index as i32,
-                                &trace_json,
-                                Some(&e.to_string()),
-                            )
-                            .await
-                        {
-                            tracing::error!(
-                                run_id = %run_id,
-                                "Failed to update run to Failed: {db_err}"
-                            );
-                        }
-                    }
-                }
+                let result = executor::execute_run(&engine, run_id, &def_clone, &ctx_clone).await;
+                engine.finalize_run(run_id, result, None).await;
             });
         }
 
@@ -346,6 +301,61 @@ impl WorkflowEngine {
             tracing::trace!("WorkflowEngine::run tick — cron/interval triggers not yet wired");
         }
     }
+}
+
+// ── Pre-trigger filtering ─────────────────────────────────────────────────────
+
+/// Check emoji and filter-expression conditions that determine whether a
+/// matched workflow should actually fire. Extracted from `on_event` to keep
+/// the per-workflow loop body small.
+///
+/// Returns `true` if the workflow should fire, `false` to skip.
+async fn should_fire_workflow(
+    def: &WorkflowDef,
+    trigger_ctx: &executor::TriggerContext,
+    workflow_id: uuid::Uuid,
+) -> bool {
+    // Enforce reaction emoji filter.
+    if let TriggerDef::ReactionAdded {
+        emoji: Some(ref expected),
+    } = def.trigger
+    {
+        if &trigger_ctx.emoji != expected {
+            tracing::debug!(
+                workflow_id = %workflow_id,
+                expected_emoji = %expected,
+                actual_emoji = %trigger_ctx.emoji,
+                "Reaction emoji mismatch — skipping workflow"
+            );
+            return false;
+        }
+    }
+
+    // Evaluate trigger filter expression (MessagePosted only).
+    if let TriggerDef::MessagePosted {
+        filter: Some(ref expr),
+    } = def.trigger
+    {
+        match executor::evaluate_condition(expr, trigger_ctx, &HashMap::new()).await {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::debug!(
+                    workflow_id = %workflow_id,
+                    "Trigger filter evaluated false — skipping workflow"
+                );
+                return false;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    workflow_id = %workflow_id,
+                    "Trigger filter error: {e} — skipping workflow"
+                );
+                return false;
+            }
+        }
+    }
+
+    true
 }
 
 // ── Trigger context builder ───────────────────────────────────────────────────

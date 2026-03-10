@@ -159,12 +159,11 @@ pub(crate) fn definition_hash(json_str: &str) -> Vec<u8> {
 /// Spawn an async workflow execution task.
 ///
 /// Handles the full lifecycle: Pending → (executor sets Running) → Completed / Failed.
-/// Approval gates are not yet implemented (WF-08) — runs hitting approval steps are marked Failed.
+/// Uses [`WorkflowEngine::finalize_run`] for the result→DB-status mapping.
 /// Used by trigger and webhook paths to avoid code duplication.
 pub(crate) fn spawn_workflow_execution(
     engine: Arc<sprout_workflow::WorkflowEngine>,
     db: sprout_db::Db,
-    _workflow_id: uuid::Uuid,
     run_id: uuid::Uuid,
     workflow_def_value: serde_json::Value,
     trigger_ctx: sprout_workflow::executor::TriggerContext,
@@ -190,124 +189,10 @@ pub(crate) fn spawn_workflow_execution(
             }
         };
 
-        match sprout_workflow::executor::execute_run(&engine, run_id, &def, &trigger_ctx).await {
-            Ok(result) if result.approval_token.is_none() => {
-                let trace_json = serde_json::Value::Array(result.trace);
-                if let Err(e) = db
-                    .update_workflow_run(
-                        run_id,
-                        sprout_db::workflow::RunStatus::Completed,
-                        result.step_index as i32,
-                        &trace_json,
-                        None,
-                    )
-                    .await
-                {
-                    tracing::error!("workflow run {run_id}: failed to set Completed status: {e}");
-                }
-            }
-            Ok(result) => {
-                // Approval gates are not yet fully implemented (WF-08).
-                // Fail explicitly rather than creating potentially orphaned WaitingApproval rows.
-                tracing::warn!(
-                    "workflow run {run_id}: hit approval gate — not yet implemented, marking as failed"
-                );
-                let trace_json = serde_json::Value::Array(result.trace);
-                if let Err(e) = db
-                    .update_workflow_run(
-                        run_id,
-                        sprout_db::workflow::RunStatus::Failed,
-                        result.step_index as i32,
-                        &trace_json,
-                        Some("approval gates not yet implemented — see WF-08"),
-                    )
-                    .await
-                {
-                    tracing::error!("workflow run {run_id}: failed to set Failed status: {e}");
-                }
-            }
-            Err((e, progress)) => {
-                tracing::error!("workflow run {run_id} failed: {e}");
-                // Use partial trace from the executor — contains steps
-                // completed/skipped before the failure.
-                let trace_json = serde_json::Value::Array(progress.trace);
-                if let Err(db_err) = db
-                    .update_workflow_run(
-                        run_id,
-                        sprout_db::workflow::RunStatus::Failed,
-                        progress.step_index as i32,
-                        &trace_json,
-                        Some(&e.to_string()),
-                    )
-                    .await
-                {
-                    tracing::error!("workflow run {run_id}: failed to set Failed status: {db_err}");
-                }
-            }
-        }
+        let result =
+            sprout_workflow::executor::execute_run(&engine, run_id, &def, &trigger_ctx).await;
+        engine.finalize_run(run_id, result, None).await;
     });
-}
-
-/// Persist approval-gate suspension state and create the approval record.
-/// Not called from the execution path yet — will be wired up when WF-08 is implemented.
-#[allow(dead_code)]
-pub(crate) async fn handle_approval_suspension(
-    db: &sprout_db::Db,
-    def: &sprout_workflow::WorkflowDef,
-    workflow_id: uuid::Uuid,
-    run_id: uuid::Uuid,
-    result: sprout_workflow::executor::ExecutionResult,
-) {
-    let approval_token = match result.approval_token {
-        Some(token) => token,
-        None => {
-            tracing::error!("workflow run {run_id}: handle_approval_suspension called but approval_token is None");
-            return;
-        }
-    };
-    let suspended_step_index = result.step_index;
-    let trace_json = serde_json::Value::Array(result.trace);
-
-    if let Err(e) = db
-        .update_workflow_run(
-            run_id,
-            sprout_db::workflow::RunStatus::WaitingApproval,
-            suspended_step_index as i32,
-            &trace_json,
-            None,
-        )
-        .await
-    {
-        tracing::error!("workflow run {run_id}: failed to set WaitingApproval status: {e}");
-    }
-
-    if let Some(suspended_step) = def.steps.get(suspended_step_index) {
-        let approver_spec = match &suspended_step.action {
-            sprout_workflow::ActionDef::RequestApproval { from, .. } => from.clone(),
-            _ => "any".to_string(),
-        };
-        let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
-        if let Err(e) = db
-            .create_approval(sprout_db::workflow::CreateApprovalParams {
-                token: &approval_token,
-                workflow_id,
-                run_id,
-                step_id: &suspended_step.id,
-                step_index: suspended_step_index as i32,
-                approver_spec: &approver_spec,
-                expires_at,
-            })
-            .await
-        {
-            tracing::error!("workflow run {run_id}: failed to create approval record: {e}");
-        }
-    }
-
-    tracing::info!(
-        "workflow run {} suspended for approval at step {} (token: <redacted>)",
-        run_id,
-        suspended_step_index,
-    );
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

@@ -382,7 +382,6 @@ pub async fn trigger_workflow(
     spawn_workflow_execution(
         Arc::clone(&state.workflow_engine),
         state.db.clone(),
-        id,
         run_id,
         workflow.definition.clone(),
         trigger_ctx,
@@ -495,7 +494,6 @@ pub async fn workflow_webhook(
     spawn_workflow_execution(
         Arc::clone(&state.workflow_engine),
         state.db.clone(),
-        id,
         run_id,
         workflow.definition.clone(),
         trigger_ctx,

@@ -152,7 +152,10 @@ async fn resume_workflow_after_approval(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    match sprout_workflow::executor::execute_from_step(
+    // Execute remaining steps and finalize the run.
+    // Pass existing trace so finalize_run merges pre-approval + post-approval entries.
+    let existing_trace = run.execution_trace.as_array().cloned();
+    let result = sprout_workflow::executor::execute_from_step(
         &engine,
         run_id,
         &def,
@@ -160,74 +163,8 @@ async fn resume_workflow_after_approval(
         resume_index,
         Some(initial_outputs),
     )
-    .await
-    {
-        Ok(result) if result.approval_token.is_none() => {
-            let mut full_trace = run.execution_trace.as_array().cloned().unwrap_or_default();
-            full_trace.extend(result.trace);
-            let trace_json = serde_json::Value::Array(full_trace);
-            if let Err(e) = db
-                .update_workflow_run(
-                    run_id,
-                    sprout_db::workflow::RunStatus::Completed,
-                    result.step_index as i32,
-                    &trace_json,
-                    None,
-                )
-                .await
-            {
-                tracing::error!(
-                    "grant_approval: failed to set Completed status for run {run_id}: {e}"
-                );
-            }
-        }
-        Ok(result) => {
-            // Chained approval gates are not yet fully implemented (see WF-08).
-            // Mark the run as Failed rather than silently creating a new approval
-            // record that nothing will ever resolve.
-            let mut full_trace = run.execution_trace.as_array().cloned().unwrap_or_default();
-            full_trace.extend(result.trace);
-            let trace_json = serde_json::Value::Array(full_trace);
-            if let Err(e) = db
-                .update_workflow_run(
-                    run_id,
-                    sprout_db::workflow::RunStatus::Failed,
-                    result.step_index as i32,
-                    &trace_json,
-                    Some("approval gates not yet fully implemented — see WF-08"),
-                )
-                .await
-            {
-                tracing::error!(
-                    "grant_approval: failed to set Failed status for run {run_id}: {e}"
-                );
-            }
-        }
-        Err((e, progress)) => {
-            tracing::error!(
-                "grant_approval: resume of run {run_id} failed at step {}: {e}",
-                progress.step_index
-            );
-            // Merge pre-approval trace with partial post-approval trace from the executor.
-            let mut full_trace = run.execution_trace.as_array().cloned().unwrap_or_default();
-            full_trace.extend(progress.trace);
-            let trace_json = serde_json::Value::Array(full_trace);
-            if let Err(db_err) = db
-                .update_workflow_run(
-                    run_id,
-                    sprout_db::workflow::RunStatus::Failed,
-                    progress.step_index as i32,
-                    &trace_json,
-                    Some(&format!("execution failed after approval resume: {e}")),
-                )
-                .await
-            {
-                tracing::error!(
-                    "grant_approval: failed to set Failed status for run {run_id}: {db_err}"
-                );
-            }
-        }
-    }
+    .await;
+    engine.finalize_run(run_id, result, existing_trace).await;
 }
 
 // ── POST /api/approvals/:token/grant ─────────────────────────────────────────
