@@ -79,19 +79,18 @@ export PATH="$PWD/target/release:$PATH"
 These keys are for local development only — never use in production.
 
 ```bash
-export HARNESS_NSEC=nsec14xmptmamx2x3adrsrca8dng42xhdh9afgvsjajtutyr5dcw4pxcqr5ccq5
-export AGENT_NSEC=nsec1ddyp0fufd6ejerfqkxcfqlmkktwzx7w45emalvgtcvyafefusj5q8fyllm
+export SPROUT_PRIVATE_KEY=nsec1ddyp0fufd6ejerfqkxcfqlmkktwzx7w45emalvgtcvyafefusj5q8fyllm
 export AGENT_PUBKEY_HEX=ae670a075ac2446f445808ab5a1a796cec37c72c70b25e10ee39f7f0eab50feb
 export AGENTS_CHANNEL=94a444a4-c0a3-5966-ab05-530c6ddc2301
 ```
 
-**Generating additional keypairs:** Use `sprout-admin mint-token` to create new keypairs for additional agents or harness instances. Each call prints an `nsec` private key and API token — save them immediately.
+**Generating additional keypairs:** Use `sprout-admin mint-token` to create new keypairs for additional agents. Each call prints an `nsec` private key and API token — save them immediately.
 
 ```bash
-cargo run -p sprout-admin -- mint-token --name "agent-2" --scopes "messages:read,messages:write,channels:read"
+cargo run -p sprout-admin -- mint-token --name "my-agent" --scopes "messages:read,messages:write,channels:read"
 ```
 
-**Channel membership:** In local dev mode (`SPROUT_REQUIRE_AUTH_TOKEN=false`), any pubkey can access open channels without explicit membership. For production, add agents to channels via SQL (see the [README](README.md#channel-membership)).
+**Channels:** Open channels (the default for local dev) are accessible to any authenticated pubkey — no extra setup needed. See the [README](README.md#channels) for details.
 
 ### 5. MySQL Access
 
@@ -110,11 +109,8 @@ Minimal path: run harness with goose, send a test `@mention`, verify reply.
 
 ```bash
 export PATH="$PWD/target/release:$PATH"
-export SPROUT_ACP_PRIVATE_KEY=nsec14xmptmamx2x3adrsrca8dng42xhdh9afgvsjajtutyr5dcw4pxcqr5ccq5
-export SPROUT_AGENT_PRIVATE_KEY=nsec1ddyp0fufd6ejerfqkxcfqlmkktwzx7w45emalvgtcvyafefusj5q8fyllm
+export SPROUT_PRIVATE_KEY=nsec1ddyp0fufd6ejerfqkxcfqlmkktwzx7w45emalvgtcvyafefusj5q8fyllm
 export SPROUT_RELAY_URL=ws://localhost:3000
-export SPROUT_ACP_AGENT_COMMAND=goose
-export SPROUT_ACP_AGENT_ARGS=acp
 export GOOSE_MODE=auto
 ```
 
@@ -412,8 +408,7 @@ screen -r harness
 ```bash
 screen -S harness -X quit
 SPROUT_ACP_TURN_TIMEOUT=5 \
-SPROUT_ACP_PRIVATE_KEY=nsec14xmptmamx2x3adrsrca8dng42xhdh9afgvsjajtutyr5dcw4pxcqr5ccq5 \
-SPROUT_AGENT_PRIVATE_KEY=nsec1ddyp0fufd6ejerfqkxcfqlmkktwzx7w45emalvgtcvyafefusj5q8fyllm \
+SPROUT_PRIVATE_KEY=nsec1ddyp0fufd6ejerfqkxcfqlmkktwzx7w45emalvgtcvyafefusj5q8fyllm \
 SPROUT_ACP_AGENT_COMMAND=goose \
 SPROUT_ACP_AGENT_ARGS=acp \
 GOOSE_MODE=auto \
@@ -551,20 +546,18 @@ screen -r harness
 
 **Description:** Run three harness instances (goose, codex, claude) simultaneously, all subscribed to the same channel. Send an @mention to one; verify all three see the event and respond.
 
-**Setup:** Each agent needs its own keypair pair (harness + agent). Mint them with `sprout-admin`:
+**Setup:** Each agent needs its own keypair. Mint them with `sprout-admin`:
 
 ```bash
-# Agent 1 (goose) — use the test keys from Prerequisites, or mint fresh ones
+# Agent 1 (goose) — use the test key from Prerequisites, or mint a fresh one
 # Agent 2 (codex)
-cargo run -p sprout-admin -- mint-token --name "harness-codex" --scopes "channels:read"
 cargo run -p sprout-admin -- mint-token --name "agent-codex" --scopes "messages:read,messages:write,channels:read"
 
 # Agent 3 (claude)
-cargo run -p sprout-admin -- mint-token --name "harness-claude" --scopes "channels:read"
 cargo run -p sprout-admin -- mint-token --name "agent-claude" --scopes "messages:read,messages:write,channels:read"
 ```
 
-Save all `nsec` keys and pubkey hex values from the output.
+Save the `nsec` keys and pubkey hex values from the output.
 
 **Steps:**
 
@@ -572,23 +565,20 @@ Save all `nsec` keys and pubkey hex values from the output.
 
 ```bash
 # Goose
-SPROUT_ACP_PRIVATE_KEY=<harness-goose-nsec> \
-SPROUT_AGENT_PRIVATE_KEY=<agent-goose-nsec> \
+SPROUT_PRIVATE_KEY=<goose-nsec> \
 GOOSE_MODE=auto \
 screen -dmS harness-goose sprout-acp
 
 # Codex
 OPENAI_API_KEY=$(cat ~/keys/openai.key) \
-SPROUT_ACP_PRIVATE_KEY=<harness-codex-nsec> \
-SPROUT_AGENT_PRIVATE_KEY=<agent-codex-nsec> \
+SPROUT_PRIVATE_KEY=<codex-nsec> \
 SPROUT_ACP_AGENT_COMMAND=/path/to/codex-acp/target/release/codex-acp \
 SPROUT_ACP_AGENT_ARGS='-c,permissions.approval_policy="never"' \
 screen -dmS harness-codex sprout-acp
 
 # Claude
 ANTHROPIC_API_KEY=$(cat ~/keys/anthropic.key) \
-SPROUT_ACP_PRIVATE_KEY=<harness-claude-nsec> \
-SPROUT_AGENT_PRIVATE_KEY=<agent-claude-nsec> \
+SPROUT_PRIVATE_KEY=<claude-nsec> \
 SPROUT_ACP_AGENT_COMMAND=node \
 SPROUT_ACP_AGENT_ARGS=/path/to/claude-agent-acp/dist/index.js \
 screen -dmS harness-claude sprout-acp
@@ -729,11 +719,10 @@ screen -ls
 
 **Cause:** Missing required env vars.
 
-**Fix:** Ensure both `SPROUT_ACP_PRIVATE_KEY` and `SPROUT_AGENT_PRIVATE_KEY` are set:
+**Fix:** Ensure `SPROUT_PRIVATE_KEY` is set:
 
 ```bash
-echo $SPROUT_ACP_PRIVATE_KEY
-echo $SPROUT_AGENT_PRIVATE_KEY
+echo $SPROUT_PRIVATE_KEY
 ```
 
 Both must be valid `nsec1...` bech32 strings.
@@ -942,9 +931,7 @@ RELAY_PID=$!
 sleep 3
 
 # Start harness
-SPROUT_ACP_PRIVATE_KEY=nsec14xmptmamx2x3adrsrca8dng42xhdh9afgvsjajtutyr5dcw4pxcqr5ccq5 \
-SPROUT_AGENT_PRIVATE_KEY=nsec1ddyp0fufd6ejerfqkxcfqlmkktwzx7w45emalvgtcvyafefusj5q8fyllm \
-SPROUT_ACP_AGENT_COMMAND=goose \
+SPROUT_PRIVATE_KEY=nsec1ddyp0fufd6ejerfqkxcfqlmkktwzx7w45emalvgtcvyafefusj5q8fyllm \
 SPROUT_ACP_AGENT_ARGS=acp \
 GOOSE_MODE=auto \
 ./target/release/sprout-acp > /tmp/harness.log 2>&1 &

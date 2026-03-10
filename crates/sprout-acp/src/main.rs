@@ -33,12 +33,12 @@ async fn main() -> Result<()> {
     let mut acp = spawn_and_init(&config).await?;
 
     // ── Step 2: Connect to Sprout relay ──────────────────────────────────────
-    let agent_pubkey_hex = config.agent_keys.public_key().to_hex();
+    let pubkey_hex = config.keys.public_key().to_hex();
     let mut relay = HarnessRelay::connect(
         &config.relay_url,
-        &config.harness_keys,
-        config.harness_api_token.as_deref(),
-        &agent_pubkey_hex,
+        &config.keys,
+        config.api_token.as_deref(),
+        &pubkey_hex,
     )
     .await
     .map_err(|e| anyhow::anyhow!("relay connect error: {e}"))?;
@@ -111,8 +111,6 @@ async fn main() -> Result<()> {
                             tracing::error!(
                                 "failed to create session for channel {channel_id}: {e}"
                             );
-                            // Re-queue so events aren't lost on transient session failure.
-                            // Break (not continue) to avoid hot-loop on persistent failure.
                             queue.requeue(batch);
                             queue.mark_complete();
                             break;
@@ -136,27 +134,19 @@ async fn main() -> Result<()> {
                         Ok(Err(AcpError::AgentExited)) => {
                             tracing::error!("agent process exited — respawning");
                             sessions.clear();
-                            // Re-queue so events are retried after respawn.
                             queue.requeue(batch);
                             queue.mark_complete();
-
                             acp = respawn_agent(&config).await?;
-                            // Break inner drain loop — sessions are gone, will recreate on next event
                             break;
                         }
                         Ok(Err(e)) => {
                             tracing::error!("session_prompt error for channel {channel_id}: {e}");
-                            // Re-queue so events aren't lost on transient prompt error.
-                            // Break (not continue) to avoid hot-loop on persistent failure.
                             queue.requeue(batch);
                             queue.mark_complete();
                             sessions.remove(&channel_id);
                             break;
                         }
                         Err(_elapsed) => {
-                            // Turn timeout — cancel the in-flight prompt.
-                            // On timeout the events have been "processed" (agent was working on them)
-                            // so we do NOT requeue — the turn was attempted and timed out.
                             tracing::warn!(
                                 "turn timeout ({}s) for channel {channel_id} — cancelling",
                                 config.turn_timeout_secs
@@ -205,10 +195,6 @@ async fn main() -> Result<()> {
 
 // ── Helper: respawn agent after exit ─────────────────────────────────────────
 
-/// Spawn a fresh agent process, initialize it, and return the new [`AcpClient`].
-///
-/// Logs success/failure at the appropriate level. Returns `Err` only if the
-/// spawn or initialize step fails fatally (caller should propagate to `main`).
 async fn respawn_agent(config: &Config) -> Result<AcpClient> {
     match spawn_and_init(config).await {
         Ok(new_acp) => {
@@ -276,14 +262,10 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                 },
                 EnvVar {
                     name: "SPROUT_PRIVATE_KEY".into(),
-                    value: config
-                        .agent_keys
-                        .secret_key()
-                        .to_bech32()
-                        .unwrap_or_default(),
+                    value: config.keys.secret_key().to_bech32().unwrap_or_default(),
                 },
             ];
-            if let Some(ref token) = config.agent_api_token {
+            if let Some(ref token) = config.api_token {
                 env.push(EnvVar {
                     name: "SPROUT_API_TOKEN".into(),
                     value: token.clone(),

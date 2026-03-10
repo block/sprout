@@ -18,19 +18,15 @@ pub enum ConfigError {
 /// Configuration for the sprout-acp harness.
 #[derive(Debug)]
 pub struct Config {
-    // --- Harness identity (relay WebSocket connection) ---
-    /// Harness's nostr keypair, parsed from `SPROUT_ACP_PRIVATE_KEY`.
-    pub harness_keys: Keys,
-    /// Harness's API token (`SPROUT_ACP_API_TOKEN`), optional.
-    pub harness_api_token: Option<String>,
+    /// Agent's nostr keypair — used for both relay auth and agent identity.
+    ///
+    /// Parsed from `SPROUT_PRIVATE_KEY` (preferred) or the legacy
+    /// `SPROUT_ACP_PRIVATE_KEY` + `SPROUT_AGENT_PRIVATE_KEY` pair.
+    pub keys: Keys,
+    /// API token, optional. Required if the relay enforces token auth.
+    pub api_token: Option<String>,
     /// Relay WebSocket URL (`SPROUT_RELAY_URL`). Default: `ws://localhost:3000`.
     pub relay_url: String,
-
-    // --- Agent identity (passed to MCP server via env vars) ---
-    /// Agent's nostr keypair, parsed from `SPROUT_AGENT_PRIVATE_KEY`.
-    pub agent_keys: Keys,
-    /// Agent's API token (`SPROUT_AGENT_API_TOKEN`), optional.
-    pub agent_api_token: Option<String>,
 
     // --- Agent binary ---
     /// Agent command (`SPROUT_ACP_AGENT_COMMAND`). Default: `goose`.
@@ -55,17 +51,20 @@ fn parse_keys_var(var: &'static str) -> Result<Keys, ConfigError> {
 
 impl Config {
     /// Load configuration from environment variables.
+    ///
+    /// Key resolution order:
+    /// 1. `SPROUT_PRIVATE_KEY` — single key for everything (preferred)
+    /// 2. `SPROUT_ACP_PRIVATE_KEY` — legacy harness key (fallback)
     pub fn from_env() -> Result<Self, ConfigError> {
-        let harness_keys = parse_keys_var("SPROUT_ACP_PRIVATE_KEY")?;
+        let keys = parse_keys_var("SPROUT_PRIVATE_KEY")
+            .or_else(|_| parse_keys_var("SPROUT_ACP_PRIVATE_KEY"))?;
 
-        let harness_api_token = std::env::var("SPROUT_ACP_API_TOKEN").ok();
+        let api_token = std::env::var("SPROUT_API_TOKEN")
+            .or_else(|_| std::env::var("SPROUT_ACP_API_TOKEN"))
+            .ok();
 
         let relay_url =
             std::env::var("SPROUT_RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string());
-
-        let agent_keys = parse_keys_var("SPROUT_AGENT_PRIVATE_KEY")?;
-
-        let agent_api_token = std::env::var("SPROUT_AGENT_API_TOKEN").ok();
 
         let agent_command =
             std::env::var("SPROUT_ACP_AGENT_COMMAND").unwrap_or_else(|_| "goose".to_string());
@@ -83,11 +82,9 @@ impl Config {
             .unwrap_or(300);
 
         Ok(Config {
-            harness_keys,
-            harness_api_token,
+            keys,
+            api_token,
             relay_url,
-            agent_keys,
-            agent_api_token,
             agent_command,
             agent_args,
             mcp_command,
@@ -98,10 +95,9 @@ impl Config {
     /// Return a human-readable summary (no secrets).
     pub fn summary(&self) -> String {
         format!(
-            "relay={} harness_pubkey={} agent_pubkey={} agent_cmd={} {} mcp_cmd={} turn_timeout={}s",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} turn_timeout={}s",
             self.relay_url,
-            self.harness_keys.public_key().to_hex(),
-            self.agent_keys.public_key().to_hex(),
+            self.keys.public_key().to_hex(),
             self.agent_command,
             self.agent_args.join(" "),
             self.mcp_command,
