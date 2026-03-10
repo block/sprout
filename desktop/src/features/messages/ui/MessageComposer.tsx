@@ -1,4 +1,4 @@
-import { Paperclip, SmilePlus } from "lucide-react";
+import { Paperclip, SendHorizontal, SmilePlus } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/shared/ui/button";
@@ -23,14 +23,7 @@ export function MessageComposer({
 }: MessageComposerProps) {
   const [content, setContent] = React.useState("");
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
-  const shortcutHint = React.useMemo(() => {
-    const platform = typeof navigator === "undefined" ? "" : navigator.platform;
-    return /(Mac|iPhone|iPad|iPod)/i.test(platform) ? "⌘↵" : "Ctrl↵";
-  }, []);
-  const shortcutTitle = React.useMemo(
-    () => (shortcutHint === "⌘↵" ? "Cmd+Enter" : "Ctrl+Enter"),
-    [shortcutHint],
-  );
+  const pendingSelectionRef = React.useRef<number | null>(null);
 
   const submitMessage = React.useCallback(async () => {
     const trimmed = content.trim();
@@ -57,7 +50,22 @@ export function MessageComposer({
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) {
+      if (event.key !== "Enter" || event.nativeEvent.isComposing) {
+        return;
+      }
+
+      if (event.ctrlKey) {
+        const textarea = event.currentTarget;
+        const { selectionEnd, selectionStart, value } = textarea;
+        const nextContent = `${value.slice(0, selectionStart)}\n${value.slice(selectionEnd)}`;
+
+        event.preventDefault();
+        pendingSelectionRef.current = selectionStart + 1;
+        setContent(nextContent);
+        return;
+      }
+
+      if (event.metaKey || event.altKey || event.shiftKey) {
         return;
       }
 
@@ -85,6 +93,12 @@ export function MessageComposer({
     textarea.style.height = `${nextHeight}px`;
     textarea.style.overflowY =
       textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+
+    const pendingSelection = pendingSelectionRef.current;
+    if (pendingSelection !== null) {
+      textarea.setSelectionRange(pendingSelection, pendingSelection);
+      pendingSelectionRef.current = null;
+    }
   });
 
   return (
@@ -121,22 +135,14 @@ export function MessageComposer({
             </div>
 
             <Button
-              aria-keyshortcuts="Meta+Enter Control+Enter"
-              className="gap-1.5"
+              className="gap-2"
               data-testid="send-message"
               disabled={disabled || isSending || content.trim().length === 0}
-              title={`Send (${shortcutTitle})`}
+              title="Send (Enter)"
               type="submit"
             >
+              <SendHorizontal className="h-4 w-4" />
               {isSending ? "Sending" : "Send"}
-              {!isSending ? (
-                <span
-                  aria-hidden
-                  className="text-[11px] font-medium leading-none tracking-tight text-primary-foreground/70"
-                >
-                  {shortcutHint}
-                </span>
-              ) : null}
             </Button>
           </div>
         </form>
