@@ -91,6 +91,31 @@ test("opens a mocked channel from the home feed", async ({ page }) => {
   );
 });
 
+test("replaces the channel pane when switching channels", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Welcome to #general",
+  );
+
+  await page.getByTestId("channel-random").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("random");
+  await expect(page.getByTestId("message-empty")).toBeVisible();
+  await expect(page.getByTestId("message-timeline")).not.toContainText(
+    "Welcome to #general",
+  );
+  await expect(page.getByTestId("message-timeline")).toHaveCount(1);
+  await expect(page.getByTestId("message-timeline-day-divider")).toHaveCount(1);
+
+  await page.getByTestId("channel-engineering").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
+  await expect(page.getByTestId("message-empty")).toBeVisible();
+  await expect(page.getByTestId("message-timeline")).toHaveCount(1);
+  await expect(page.getByTestId("message-timeline-day-divider")).toHaveCount(1);
+});
+
 test("sends a mocked channel message", async ({ page }) => {
   const message = `Smoke message ${Date.now()}`;
 

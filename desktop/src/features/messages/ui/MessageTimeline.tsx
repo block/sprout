@@ -364,7 +364,10 @@ export function MessageTimeline({
           className="mx-auto flex w-full max-w-4xl flex-col gap-4"
           ref={contentRef}
         >
-          <div className="flex items-center gap-4">
+          <div
+            className="flex items-center gap-4"
+            data-testid="message-timeline-day-divider"
+          >
             <Separator className="flex-1" />
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
               Today

@@ -65,6 +65,8 @@ export function AppShell() {
       ? `${activeChannel.description} Forum channels are listed, but this first pass only wires message streams and DMs.`
       : activeChannel.description
     : "Connect to the relay to browse channels and read messages.";
+  const contentPaneKey =
+    selectedView === "home" ? "home" : `channel:${activeChannel?.id ?? "none"}`;
 
   return (
     <SidebarProvider className="h-dvh overflow-hidden overscroll-none">
@@ -108,7 +110,10 @@ export function AppShell() {
         selectedView={selectedView}
       />
 
-      <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
+      <SidebarInset
+        className="min-h-0 min-w-0 overflow-hidden"
+        key={contentPaneKey}
+      >
         {selectedView === "home" ? (
           <ChatHeader
             description="Personalized feed for mentions, reminders, channel activity, and agent work."
