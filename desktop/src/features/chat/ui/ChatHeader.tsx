@@ -1,4 +1,4 @@
-import { CircleDot, FileText, Hash } from "lucide-react";
+import { CircleDot, FileText, Hash, Home } from "lucide-react";
 
 import type { ChannelType } from "@/shared/api/types";
 import { SidebarTrigger } from "@/shared/ui/sidebar";
@@ -7,9 +7,20 @@ type ChatHeaderProps = {
   title: string;
   description: string;
   channelType?: ChannelType;
+  mode?: "home" | "channel";
 };
 
-function ChannelIcon({ channelType }: { channelType?: ChannelType }) {
+function ChannelIcon({
+  channelType,
+  mode = "channel",
+}: {
+  channelType?: ChannelType;
+  mode?: "home" | "channel";
+}) {
+  if (mode === "home") {
+    return <Home className="h-5 w-5 text-primary" />;
+  }
+
   if (channelType === "dm") {
     return <CircleDot className="h-5 w-5 text-primary" />;
   }
@@ -25,6 +36,7 @@ export function ChatHeader({
   title,
   description,
   channelType,
+  mode = "channel",
 }: ChatHeaderProps) {
   return (
     <header
@@ -35,7 +47,7 @@ export function ChatHeader({
 
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
-          <ChannelIcon channelType={channelType} />
+          <ChannelIcon channelType={channelType} mode={mode} />
           <h1
             className="truncate text-lg font-semibold tracking-tight"
             data-testid="chat-title"
