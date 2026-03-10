@@ -9,7 +9,11 @@ use nostr::Event;
 use sprout_audit::{AuditAction, NewAuditEntry};
 use sprout_core::event::StoredEvent;
 use sprout_core::kind::{
-    event_kind_u32, is_ephemeral, is_workflow_execution_kind, KIND_AUTH, KIND_PRESENCE_UPDATE,
+    event_kind_u32, is_ephemeral, is_workflow_execution_kind, KIND_AUTH, KIND_CANVAS,
+    KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE,
+    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_EDIT,
+    KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2,
+    KIND_STREAM_REMINDER,
 };
 use sprout_core::verification::verify_event;
 
@@ -237,6 +241,15 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     } else {
         extract_channel_id(&event)
     };
+
+    if requires_h_channel_scope(kind_u32) && channel_id.is_none() {
+        conn.send(RelayMessage::ok(
+            &event_id_hex,
+            false,
+            "invalid: channel-scoped events must include an h tag",
+        ));
+        return;
+    }
 
     if let Some(ch_id) = channel_id {
         if let Err(msg) =
@@ -566,4 +579,58 @@ fn extract_channel_id(event: &Event) -> Option<uuid::Uuid> {
         }
     }
     None
+}
+
+fn requires_h_channel_scope(kind: u32) -> bool {
+    matches!(
+        kind,
+        KIND_STREAM_MESSAGE
+            | KIND_STREAM_MESSAGE_V2
+            | KIND_STREAM_MESSAGE_EDIT
+            | KIND_STREAM_MESSAGE_PINNED
+            | KIND_STREAM_MESSAGE_BOOKMARKED
+            | KIND_STREAM_MESSAGE_SCHEDULED
+            | KIND_STREAM_REMINDER
+            | KIND_CANVAS
+            | KIND_FORUM_POST
+            | KIND_FORUM_VOTE
+            | KIND_FORUM_COMMENT
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requires_h_channel_scope;
+    use sprout_core::kind::{
+        KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE,
+        KIND_STREAM_MESSAGE,
+    };
+
+    #[test]
+    fn channel_scoped_content_kinds_require_h_tags() {
+        for kind in [
+            KIND_STREAM_MESSAGE,
+            KIND_CANVAS,
+            KIND_FORUM_POST,
+            KIND_FORUM_VOTE,
+            KIND_FORUM_COMMENT,
+        ] {
+            assert!(
+                requires_h_channel_scope(kind),
+                "kind {kind} should require h"
+            );
+        }
+    }
+
+    #[test]
+    fn non_channel_kinds_do_not_require_h_tags() {
+        assert!(
+            !requires_h_channel_scope(nostr::Kind::Reaction.as_u16().into()),
+            "reactions derive channel from the target event"
+        );
+        assert!(
+            !requires_h_channel_scope(KIND_PRESENCE_UPDATE),
+            "presence updates are global/ephemeral"
+        );
+    }
 }
