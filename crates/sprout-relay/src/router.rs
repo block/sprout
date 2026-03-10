@@ -25,7 +25,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/info", get(relay_info_handler))
         .route("/.well-known/nostr.json", get(nip05_handler))
         .route("/health", get(health_handler))
-        .route("/api/channels", get(api::channels_handler))
+        .route(
+            "/api/channels",
+            get(api::channels_handler).post(api::create_channel),
+        )
         .route("/api/search", get(api::search_handler))
         .route("/api/agents", get(api::agents_handler))
         .route("/api/presence", get(api::presence_handler))

@@ -1,13 +1,16 @@
-import { CircleDot, FileText, Hash } from "lucide-react";
+import { CircleDot, FileText, Hash, Plus } from "lucide-react";
 import * as React from "react";
 
 import type { Channel } from "@/shared/api/types";
 import { ThemeToggle } from "@/shared/theme/ThemeToggle";
+import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
+  SidebarGroupAction,
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
@@ -22,8 +25,13 @@ import {
 type AppSidebarProps = {
   channels: Channel[];
   isLoading: boolean;
+  isCreatingChannel: boolean;
   errorMessage?: string;
   selectedChannelId: string | null;
+  onCreateChannel: (input: {
+    name: string;
+    description?: string;
+  }) => Promise<void>;
   onSelectChannel: (channelId: string) => void;
 };
 
@@ -78,16 +86,143 @@ function SidebarSection({
   );
 }
 
+function StreamsSection({
+  items,
+  isCreateOpen,
+  isCreatingChannel,
+  draftName,
+  draftDescription,
+  createInputRef,
+  createErrorMessage,
+  onToggleCreate,
+  onChangeName,
+  onChangeDescription,
+  onCreateChannel,
+  onCancelCreate,
+  onSelectChannel,
+  selectedChannelId,
+}: {
+  items: Channel[];
+  isCreateOpen: boolean;
+  isCreatingChannel: boolean;
+  draftName: string;
+  draftDescription: string;
+  createInputRef: React.RefObject<HTMLInputElement | null>;
+  createErrorMessage?: string;
+  onToggleCreate: () => void;
+  onChangeName: (value: string) => void;
+  onChangeDescription: (value: string) => void;
+  onCreateChannel: (event: React.FormEvent<HTMLFormElement>) => void;
+  onCancelCreate: () => void;
+  onSelectChannel: (channelId: string) => void;
+  selectedChannelId: string | null;
+}) {
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>Streams</SidebarGroupLabel>
+      <SidebarGroupAction
+        aria-expanded={isCreateOpen}
+        aria-label={isCreateOpen ? "Close new stream form" : "Create a stream"}
+        className="top-3 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+        onClick={onToggleCreate}
+        type="button"
+      >
+        <Plus
+          className={
+            isCreateOpen
+              ? "rotate-45 transition-transform"
+              : "transition-transform"
+          }
+        />
+      </SidebarGroupAction>
+      <SidebarGroupContent>
+        {isCreateOpen ? (
+          <form
+            className="mb-2 space-y-2 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/60 p-2"
+            onSubmit={onCreateChannel}
+          >
+            <Input
+              autoComplete="off"
+              className="h-8 bg-background/80"
+              disabled={isCreatingChannel}
+              onChange={(event) => onChangeName(event.target.value)}
+              placeholder="release-notes"
+              ref={createInputRef}
+              value={draftName}
+            />
+            <Input
+              autoComplete="off"
+              className="h-8 bg-background/80"
+              disabled={isCreatingChannel}
+              onChange={(event) => onChangeDescription(event.target.value)}
+              placeholder="What this stream is for"
+              value={draftDescription}
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                disabled={isCreatingChannel || draftName.trim().length === 0}
+                size="sm"
+                type="submit"
+              >
+                {isCreatingChannel ? "Creating..." : "Create"}
+              </Button>
+              <Button
+                disabled={isCreatingChannel}
+                onClick={onCancelCreate}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                Cancel
+              </Button>
+            </div>
+            {createErrorMessage ? (
+              <p className="text-sm text-destructive">{createErrorMessage}</p>
+            ) : null}
+          </form>
+        ) : null}
+
+        {items.length > 0 ? (
+          <SidebarMenu>
+            {items.map((channel) => (
+              <SidebarMenuItem key={channel.id}>
+                <SidebarMenuButton
+                  isActive={selectedChannelId === channel.id}
+                  onClick={() => onSelectChannel(channel.id)}
+                  tooltip={channel.name}
+                  type="button"
+                >
+                  <SidebarChannelIcon channel={channel} />
+                  <span>{channel.name}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        ) : null}
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
+}
+
 export function AppSidebar({
   channels,
   isLoading,
+  isCreatingChannel,
   errorMessage,
   selectedChannelId,
+  onCreateChannel,
   onSelectChannel,
 }: AppSidebarProps) {
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
   const [query, setQuery] = React.useState("");
+  const [isCreateOpen, setIsCreateOpen] = React.useState(false);
+  const [draftName, setDraftName] = React.useState("");
+  const [draftDescription, setDraftDescription] = React.useState("");
+  const [createErrorMessage, setCreateErrorMessage] = React.useState<
+    string | undefined
+  >();
   const deferredQuery = React.useDeferredValue(query.trim().toLowerCase());
+  const createInputRef = React.useRef<HTMLInputElement>(null);
 
   const filteredChannels = React.useMemo(() => {
     if (!deferredQuery) {
@@ -109,6 +244,41 @@ export function AppSidebar({
     (channel) => channel.channelType === "dm",
   );
 
+  React.useEffect(() => {
+    if (!isCreateOpen) {
+      return;
+    }
+
+    createInputRef.current?.focus();
+  }, [isCreateOpen]);
+
+  async function handleCreateChannel(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const name = draftName.trim();
+    const description = draftDescription.trim();
+    if (!name) {
+      return;
+    }
+
+    setCreateErrorMessage(undefined);
+
+    try {
+      await onCreateChannel({
+        name,
+        description: description || undefined,
+      });
+
+      setDraftName("");
+      setDraftDescription("");
+      setIsCreateOpen(false);
+    } catch (error) {
+      setCreateErrorMessage(
+        error instanceof Error ? error.message : "Failed to create stream.",
+      );
+    }
+  }
+
   return (
     <Sidebar collapsible="offcanvas" variant="sidebar">
       <SidebarHeader className="gap-3">
@@ -123,11 +293,13 @@ export function AppSidebar({
             </p>
           </div>
         </div>
-        <SidebarInput
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Jump to channel"
-          value={query}
-        />
+        <div className="flex items-center gap-2">
+          <SidebarInput
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Jump to channel"
+            value={query}
+          />
+        </div>
       </SidebarHeader>
 
       <SidebarSeparator />
@@ -148,11 +320,37 @@ export function AppSidebar({
 
         {!isLoading ? (
           <>
-            <SidebarSection
+            <StreamsSection
+              createErrorMessage={createErrorMessage}
+              createInputRef={createInputRef}
+              draftDescription={draftDescription}
+              draftName={draftName}
+              isCreateOpen={isCreateOpen}
+              isCreatingChannel={isCreatingChannel}
               items={streamChannels}
+              onCancelCreate={() => {
+                setCreateErrorMessage(undefined);
+                setDraftName("");
+                setDraftDescription("");
+                setIsCreateOpen(false);
+              }}
+              onChangeDescription={(value) => {
+                setCreateErrorMessage(undefined);
+                setDraftDescription(value);
+              }}
+              onChangeName={(value) => {
+                setCreateErrorMessage(undefined);
+                setDraftName(value);
+              }}
+              onCreateChannel={(event) => {
+                void handleCreateChannel(event);
+              }}
               onSelectChannel={onSelectChannel}
+              onToggleCreate={() => {
+                setCreateErrorMessage(undefined);
+                setIsCreateOpen((current) => !current);
+              }}
               selectedChannelId={selectedChannelId}
-              title="Streams"
             />
             <SidebarSection
               items={forumChannels}

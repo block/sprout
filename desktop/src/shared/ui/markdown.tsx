@@ -7,6 +7,7 @@ import { cn } from "@/shared/lib/cn";
 
 type MarkdownProps = {
   className?: string;
+  compact?: boolean;
   content: string;
 };
 
@@ -121,7 +122,11 @@ const markdownComponents: Components = {
   ),
 };
 
-export function Markdown({ className, content }: MarkdownProps) {
+export function Markdown({
+  className,
+  compact = false,
+  content,
+}: MarkdownProps) {
   let processedContent = content;
 
   if (/^(?:\s{2}\n)+/.test(content)) {
@@ -135,7 +140,9 @@ export function Markdown({ className, content }: MarkdownProps) {
   return (
     <div
       className={cn(
-        "max-w-none break-words text-sm leading-7 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-3",
+        compact
+          ? "max-w-none break-words text-[15px] leading-6 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-1.5"
+          : "max-w-none break-words text-sm leading-7 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-3",
         className,
       )}
     >

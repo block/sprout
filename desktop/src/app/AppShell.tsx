@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
+  useCreateChannelMutation,
   useChannelsQuery,
   useSelectedChannel,
 } from "@/features/channels/hooks";
@@ -25,6 +26,7 @@ export function AppShell() {
     channels,
     null,
   );
+  const createChannelMutation = useCreateChannelMutation();
 
   const messagesQuery = useChannelMessagesQuery(selectedChannel);
   useChannelSubscription(selectedChannel);
@@ -60,6 +62,17 @@ export function AppShell() {
             : undefined
         }
         isLoading={channelsQuery.isLoading}
+        isCreatingChannel={createChannelMutation.isPending}
+        onCreateChannel={async ({ description, name }) => {
+          const createdChannel = await createChannelMutation.mutateAsync({
+            name,
+            description,
+            channelType: "stream",
+            visibility: "open",
+          });
+
+          React.startTransition(() => setSelectedChannelId(createdChannel.id));
+        }}
         onSelectChannel={(channelId) => {
           React.startTransition(() => setSelectedChannelId(channelId));
         }}

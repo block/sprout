@@ -1,4 +1,5 @@
 export type ChannelType = "stream" | "forum" | "dm";
+export type ChannelVisibility = "open" | "private";
 
 export type Channel = {
   id: string;
@@ -7,6 +8,13 @@ export type Channel = {
   description: string;
   participants: string[];
   participantPubkeys: string[];
+};
+
+export type CreateChannelInput = {
+  name: string;
+  channelType: Exclude<ChannelType, "dm">;
+  visibility: ChannelVisibility;
+  description?: string;
 };
 
 export type Identity = {

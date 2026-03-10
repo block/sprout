@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Channel,
   ChannelType,
+  CreateChannelInput,
   Identity,
   RelayEvent,
 } from "@/shared/api/types";
@@ -21,6 +22,17 @@ type RawChannel = {
   participant_pubkeys: string[];
 };
 
+function fromRawChannel(channel: RawChannel): Channel {
+  return {
+    id: channel.id,
+    name: channel.name,
+    channelType: channel.channel_type,
+    description: channel.description,
+    participants: channel.participants,
+    participantPubkeys: channel.participant_pubkeys,
+  };
+}
+
 export async function getIdentity(): Promise<Identity> {
   const identity = await invoke<RawIdentity>("get_identity");
 
@@ -36,15 +48,14 @@ export function getRelayWsUrl(): Promise<string> {
 
 export async function getChannels(): Promise<Channel[]> {
   const channels = await invoke<RawChannel[]>("get_channels");
+  return channels.map(fromRawChannel);
+}
 
-  return channels.map((channel) => ({
-    id: channel.id,
-    name: channel.name,
-    channelType: channel.channel_type,
-    description: channel.description,
-    participants: channel.participants,
-    participantPubkeys: channel.participant_pubkeys,
-  }));
+export async function createChannel(
+  input: CreateChannelInput,
+): Promise<Channel> {
+  const channel = await invoke<RawChannel>("create_channel", input);
+  return fromRawChannel(channel);
 }
 
 export async function signRelayEvent(input: {
