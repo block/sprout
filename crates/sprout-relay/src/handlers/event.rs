@@ -117,18 +117,50 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     let channel_id = if event.kind == nostr::Kind::Reaction {
         // For NIP-25 reactions, always derive channel from the target event.
         // Client-supplied channel tags are ignored to prevent spoofing.
-        // Fail closed: reject the reaction if the target cannot be resolved.
         match derive_reaction_channel(&state.db, &event).await {
-            Some(ch_id) => Some(ch_id),
-            None => {
+            ReactionChannelResult::Channel(ch_id) => Some(ch_id),
+            ReactionChannelResult::NoChannel => {
+                // Target event exists but has no channel (global/DM message).
+                // Allow the reaction to proceed without channel scoping.
+                None
+            }
+            ReactionChannelResult::NotFound => {
+                // Fail closed: reject reactions to events we don't know about.
                 warn!(
                     event_id = %event_id_hex,
-                    "Rejecting reaction: target event not found or has no channel"
+                    "Rejecting reaction: target event not found in DB"
                 );
                 conn.send(RelayMessage::ok(
                     &event_id_hex,
                     false,
-                    "invalid: reaction target event not found or not in a channel",
+                    "invalid: reaction target event not found",
+                ));
+                return;
+            }
+            ReactionChannelResult::NoTarget => {
+                // Malformed reaction: no valid `e` tag.
+                warn!(
+                    event_id = %event_id_hex,
+                    "Rejecting reaction: no valid e tag referencing target event"
+                );
+                conn.send(RelayMessage::ok(
+                    &event_id_hex,
+                    false,
+                    "invalid: reaction must reference a target event via e tag",
+                ));
+                return;
+            }
+            ReactionChannelResult::DbError(ref err) => {
+                // Fail closed on transient DB errors — don't allow reactions
+                // through when we can't verify the target.
+                error!(
+                    event_id = %event_id_hex,
+                    "Rejecting reaction: database error looking up target: {err}"
+                );
+                conn.send(RelayMessage::ok(
+                    &event_id_hex,
+                    false,
+                    "error: internal error looking up reaction target",
                 ));
                 return;
             }
@@ -370,31 +402,54 @@ async fn check_channel_membership(
     }
 }
 
+/// Result of resolving a reaction's target channel.
+enum ReactionChannelResult {
+    /// Target event found and has a channel_id.
+    Channel(uuid::Uuid),
+    /// Target event found but has no channel (global/DM message) — allow as global.
+    NoChannel,
+    /// Target event not found in DB — reject (fail closed).
+    NotFound,
+    /// No valid `e` tag on the reaction — reject (malformed).
+    NoTarget,
+    /// DB error during lookup — reject (fail closed on transient errors).
+    DbError(String),
+}
+
 /// For NIP-25 reactions, derive the channel_id from the target event.
 ///
 /// Reactions reference their target via an `e` tag containing a 64-hex event ID.
 /// We look up that event in the DB to find its channel_id.
-async fn derive_reaction_channel(db: &sprout_db::Db, event: &nostr::Event) -> Option<uuid::Uuid> {
+///
+/// Returns a [`ReactionChannelResult`] so the caller can distinguish between
+/// "target exists but is global" (allow) and "target not found" (reject).
+async fn derive_reaction_channel(
+    db: &sprout_db::Db,
+    event: &nostr::Event,
+) -> ReactionChannelResult {
     // Find the target event ID from NIP-25 `e` tags.
     // Per NIP-25, the last `e` tag is the target (in case of threading).
-    let target_hex = event.tags.iter().rev().find_map(|tag| {
+    let target_hex = match event.tags.iter().rev().find_map(|tag| {
         let key = tag.kind().to_string();
         if key == "e" {
             tag.content().map(|s| s.to_string())
         } else {
             None
         }
-    })?;
+    }) {
+        Some(h) => h,
+        None => return ReactionChannelResult::NoTarget,
+    };
 
     // Must be a 64-char hex string (event ID), not a UUID
     if target_hex.len() != 64 {
-        return None;
+        return ReactionChannelResult::NoTarget;
     }
 
     // Decode hex to bytes for DB lookup
     let id_bytes = match hex::decode(&target_hex) {
         Ok(b) if b.len() == 32 => b,
-        _ => return None,
+        _ => return ReactionChannelResult::NoTarget,
     };
 
     // Look up the target event to get its channel_id
@@ -407,23 +462,23 @@ async fn derive_reaction_channel(db: &sprout_db::Db, event: &nostr::Event) -> Op
                     channel_id = %ch_id,
                     "Derived reaction channel from target event"
                 );
-                Some(ch_id)
+                ReactionChannelResult::Channel(ch_id)
             } else {
                 tracing::debug!(
                     reaction_id = %event.id.to_hex(),
                     target_id = %target_hex,
-                    "Target event has no channel — reaction will be global"
+                    "Target event has no channel — allowing as global reaction"
                 );
-                None
+                ReactionChannelResult::NoChannel
             }
         }
         Ok(None) => {
             tracing::debug!(
                 reaction_id = %event.id.to_hex(),
                 target_id = %target_hex,
-                "Target event not found — reaction will be global"
+                "Target event not found in DB"
             );
-            None
+            ReactionChannelResult::NotFound
         }
         Err(e) => {
             tracing::warn!(
@@ -431,7 +486,7 @@ async fn derive_reaction_channel(db: &sprout_db::Db, event: &nostr::Event) -> Op
                 target_id = %target_hex,
                 "Failed to look up target event: {e}"
             );
-            None
+            ReactionChannelResult::DbError(e.to_string())
         }
     }
 }

@@ -2,6 +2,18 @@
 
 use thiserror::Error;
 
+/// Partial execution progress captured when a workflow step fails mid-run.
+///
+/// This allows callers to persist whatever trace was accumulated before the
+/// error, rather than losing it when the in-memory `Vec` is dropped.
+#[derive(Debug, Default)]
+pub struct PartialProgress {
+    /// Index of the step that failed (0-based).
+    pub step_index: usize,
+    /// Trace entries for steps completed/skipped before the failure.
+    pub trace: Vec<serde_json::Value>,
+}
+
 /// Errors produced by the workflow engine.
 #[derive(Debug, Error)]
 pub enum WorkflowError {
@@ -41,6 +53,16 @@ pub enum WorkflowError {
     /// A database operation failed.
     #[error("database error: {0}")]
     Database(String),
+}
+
+impl WorkflowError {
+    /// Attach partial execution progress to this error.
+    ///
+    /// Returns a `(WorkflowError, PartialProgress)` tuple that callers can
+    /// destructure to persist the trace before marking the run as failed.
+    pub fn with_progress(self, progress: PartialProgress) -> (Self, PartialProgress) {
+        (self, progress)
+    }
 }
 
 impl From<sprout_db::error::DbError> for WorkflowError {

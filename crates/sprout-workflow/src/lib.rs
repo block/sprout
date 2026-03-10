@@ -31,7 +31,7 @@ pub mod error;
 pub mod executor;
 pub mod schema;
 
-pub use error::WorkflowError;
+pub use error::{PartialProgress, WorkflowError};
 pub use executor::ExecutionResult;
 pub use schema::{ActionDef, Step, TriggerDef, WorkflowDef};
 
@@ -255,13 +255,7 @@ impl WorkflowEngine {
             tokio::spawn(async move {
                 match executor::execute_run(&engine, run_id, &def_clone, &ctx_clone).await {
                     Ok(result) => {
-                        let trace_json = match serde_json::to_value(&result.trace) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::warn!(run_id = %run_id, "Failed to serialize trace: {e}");
-                                serde_json::json!([])
-                            }
-                        };
+                        let trace_json = serde_json::Value::Array(result.trace);
                         let step_count = result.step_index as i32;
 
                         if result.approval_token.is_some() {
@@ -272,7 +266,7 @@ impl WorkflowEngine {
                                 step_index = result.step_index,
                                 "Workflow hit approval gate — not yet implemented, marking as failed"
                             );
-                            let _ = engine
+                            if let Err(e) = engine
                                 .db
                                 .update_workflow_run(
                                     run_id,
@@ -281,7 +275,13 @@ impl WorkflowEngine {
                                     &trace_json,
                                     Some("approval gates not yet implemented — see WF-08"),
                                 )
-                                .await;
+                                .await
+                            {
+                                tracing::error!(
+                                    run_id = %run_id,
+                                    "Failed to update run to Failed (approval gate): {e}"
+                                );
+                            }
                         } else {
                             // Normal completion.
                             tracing::info!(run_id = %run_id, "Workflow run completed");
@@ -303,20 +303,18 @@ impl WorkflowEngine {
                             }
                         }
                     }
-                    Err(e) => {
+                    Err((e, progress)) => {
                         tracing::error!(run_id = %run_id, "Workflow run failed: {e}");
-                        // Preserve any partial progress (trace/step) already written by the executor.
-                        let (step, trace) = match engine.db.get_workflow_run(run_id).await {
-                            Ok(r) => (r.current_step, r.execution_trace),
-                            Err(_) => (0, serde_json::json!([])),
-                        };
+                        // Use partial trace from the executor — contains steps
+                        // completed/skipped before the failure.
+                        let trace_json = serde_json::Value::Array(progress.trace);
                         if let Err(db_err) = engine
                             .db
                             .update_workflow_run(
                                 run_id,
                                 RunStatus::Failed,
-                                step,
-                                &trace,
+                                progress.step_index as i32,
+                                &trace_json,
                                 Some(&e.to_string()),
                             )
                             .await

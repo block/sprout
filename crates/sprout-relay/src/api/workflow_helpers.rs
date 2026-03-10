@@ -179,7 +179,7 @@ pub(crate) fn spawn_workflow_execution(
                         run_id,
                         sprout_db::workflow::RunStatus::Failed,
                         0,
-                        &serde_json::Value::Null,
+                        &serde_json::json!([]),
                         Some(&format!("definition parse error: {e}")),
                     )
                     .await
@@ -226,19 +226,17 @@ pub(crate) fn spawn_workflow_execution(
                     tracing::error!("workflow run {run_id}: failed to set Failed status: {e}");
                 }
             }
-            Err(e) => {
+            Err((e, progress)) => {
                 tracing::error!("workflow run {run_id} failed: {e}");
-                // Preserve any partial progress (trace/step) already written by the executor.
-                let (step, trace) = match db.get_workflow_run(run_id).await {
-                    Ok(r) => (r.current_step, r.execution_trace),
-                    Err(_) => (0, serde_json::json!([])),
-                };
+                // Use partial trace from the executor — contains steps
+                // completed/skipped before the failure.
+                let trace_json = serde_json::Value::Array(progress.trace);
                 if let Err(db_err) = db
                     .update_workflow_run(
                         run_id,
                         sprout_db::workflow::RunStatus::Failed,
-                        step,
-                        &trace,
+                        progress.step_index as i32,
+                        &trace_json,
                         Some(&e.to_string()),
                     )
                     .await

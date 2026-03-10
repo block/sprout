@@ -848,12 +848,14 @@ pub async fn execute_run(
     run_id: Uuid,
     def: &WorkflowDef,
     trigger_ctx: &TriggerContext,
-) -> Result<ExecutionResult, WorkflowError> {
+) -> Result<ExecutionResult, (WorkflowError, crate::error::PartialProgress)> {
     // Fail fast if all concurrency permits are in use — no queuing.
-    let _permit = engine
-        .run_semaphore
-        .try_acquire()
-        .map_err(|_| WorkflowError::CapacityExceeded)?;
+    let _permit = engine.run_semaphore.try_acquire().map_err(|_| {
+        (
+            WorkflowError::CapacityExceeded,
+            crate::error::PartialProgress::default(),
+        )
+    })?;
 
     // Mark run as Running now that we have a permit.
     engine
@@ -866,7 +868,12 @@ pub async fn execute_run(
             None,
         )
         .await
-        .map_err(WorkflowError::from)?;
+        .map_err(|e| {
+            (
+                WorkflowError::from(e),
+                crate::error::PartialProgress::default(),
+            )
+        })?;
 
     execute_steps(engine, run_id, def, trigger_ctx, 0, None).await
 }
@@ -890,12 +897,14 @@ pub async fn execute_from_step(
     trigger_ctx: &TriggerContext,
     start_index: usize,
     initial_outputs: Option<HashMap<String, JsonValue>>,
-) -> Result<ExecutionResult, WorkflowError> {
+) -> Result<ExecutionResult, (WorkflowError, crate::error::PartialProgress)> {
     // Fail fast if all concurrency permits are in use — no queuing.
-    let _permit = engine
-        .run_semaphore
-        .try_acquire()
-        .map_err(|_| WorkflowError::CapacityExceeded)?;
+    let _permit = engine.run_semaphore.try_acquire().map_err(|_| {
+        (
+            WorkflowError::CapacityExceeded,
+            crate::error::PartialProgress::default(),
+        )
+    })?;
 
     // Mark run as Running now that we have a permit (resume from approval).
     // Preserve the existing execution trace from pre-approval steps.
@@ -915,7 +924,12 @@ pub async fn execute_from_step(
             None,
         )
         .await
-        .map_err(WorkflowError::from)?;
+        .map_err(|e| {
+            (
+                WorkflowError::from(e),
+                crate::error::PartialProgress::default(),
+            )
+        })?;
 
     execute_steps(
         engine,
@@ -931,6 +945,9 @@ pub async fn execute_from_step(
 /// Internal: execute workflow steps starting from `start_index`, without
 /// acquiring the semaphore. Called by both [`execute_run`] and
 /// [`execute_from_step`] after they have already acquired a permit.
+///
+/// On error, returns `(WorkflowError, PartialProgress)` so callers can persist
+/// the trace of steps completed before the failure.
 async fn execute_steps(
     engine: &WorkflowEngine,
     run_id: Uuid,
@@ -938,7 +955,7 @@ async fn execute_steps(
     trigger_ctx: &TriggerContext,
     start_index: usize,
     initial_outputs: Option<HashMap<String, JsonValue>>,
-) -> Result<ExecutionResult, WorkflowError> {
+) -> Result<ExecutionResult, (WorkflowError, crate::error::PartialProgress)> {
     let mut step_outputs: HashMap<String, JsonValue> = initial_outputs.unwrap_or_default();
     let mut trace: Vec<JsonValue> = Vec::new();
 
@@ -964,27 +981,60 @@ async fn execute_steps(
                 }
                 Err(e) => {
                     warn!(run_id = %run_id, step = %step.id, "Condition error: {e}");
-                    return Err(e);
+                    let progress = crate::error::PartialProgress {
+                        step_index: i,
+                        trace,
+                    };
+                    return Err((e, progress));
                 }
             }
         }
 
         // 2. Resolve template variables.
-        let resolved_action = resolve_step_templates(step, trigger_ctx, &step_outputs)?;
+        let resolved_action = match resolve_step_templates(step, trigger_ctx, &step_outputs) {
+            Ok(a) => a,
+            Err(e) => {
+                let progress = crate::error::PartialProgress {
+                    step_index: i,
+                    trace,
+                };
+                return Err((e, progress));
+            }
+        };
 
         // 3. Dispatch action (with per-step timeout).
         let timeout_secs = step
             .timeout_secs
             .unwrap_or(engine.config.default_timeout_secs);
-        let result = tokio::time::timeout(
+        let dispatch_result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
             dispatch_action(&step.id, &resolved_action, engine, run_id),
         )
-        .await
-        .map_err(|_| WorkflowError::StepTimeout {
-            step_id: step.id.clone(),
-            timeout_secs,
-        })??;
+        .await;
+
+        let result = match dispatch_result {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                let progress = crate::error::PartialProgress {
+                    step_index: i,
+                    trace,
+                };
+                return Err((e, progress));
+            }
+            Err(_timeout) => {
+                let progress = crate::error::PartialProgress {
+                    step_index: i,
+                    trace,
+                };
+                return Err((
+                    WorkflowError::StepTimeout {
+                        step_id: step.id.clone(),
+                        timeout_secs,
+                    },
+                    progress,
+                ));
+            }
+        };
 
         match result {
             StepResult::Completed(output) => {
