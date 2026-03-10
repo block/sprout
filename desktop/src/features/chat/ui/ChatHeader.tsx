@@ -1,9 +1,11 @@
 import { CircleDot, FileText, Hash, Home } from "lucide-react";
+import type * as React from "react";
 
 import type { ChannelType } from "@/shared/api/types";
 import { SidebarTrigger } from "@/shared/ui/sidebar";
 
 type ChatHeaderProps = {
+  actions?: React.ReactNode;
   title: string;
   description: string;
   channelType?: ChannelType;
@@ -33,6 +35,7 @@ function ChannelIcon({
 }
 
 export function ChatHeader({
+  actions,
   title,
   description,
   channelType,
@@ -62,6 +65,8 @@ export function ChatHeader({
           {description}
         </p>
       </div>
+
+      {actions ? <div className="shrink-0">{actions}</div> : null}
     </header>
   );
 }

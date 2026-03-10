@@ -1,7 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  AddChannelMembersInput,
+  AddChannelMembersResult,
   Channel,
+  ChannelDetail,
+  ChannelMember,
   ChannelType,
   CreateChannelInput,
   GetHomeFeedInput,
@@ -10,6 +14,9 @@ import type {
   RelayEvent,
   SearchMessagesInput,
   SearchMessagesResponse,
+  SetChannelPurposeInput,
+  SetChannelTopicInput,
+  UpdateChannelInput,
 } from "@/shared/api/types";
 
 type RawIdentity = {
@@ -21,9 +28,48 @@ type RawChannel = {
   id: string;
   name: string;
   channel_type: ChannelType;
+  visibility: "open" | "private";
   description: string;
+  topic: string | null;
+  purpose: string | null;
+  member_count: number;
+  last_message_at: string | null;
+  archived_at: string | null;
   participants: string[];
   participant_pubkeys: string[];
+};
+
+type RawChannelDetail = RawChannel & {
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  topic_set_by: string | null;
+  topic_set_at: string | null;
+  purpose_set_by: string | null;
+  purpose_set_at: string | null;
+  topic_required: boolean;
+  max_members: number | null;
+  nip29_group_id: string | null;
+};
+
+type RawChannelMember = {
+  pubkey: string;
+  role: ChannelMember["role"];
+  joined_at: string;
+  display_name: string | null;
+};
+
+type RawChannelMembersResponse = {
+  members: RawChannelMember[];
+  next_cursor: string | null;
+};
+
+type RawAddChannelMembersResult = {
+  added: string[];
+  errors: Array<{
+    pubkey: string;
+    error: string;
+  }>;
 };
 
 type RawFeedItem = {
@@ -73,9 +119,40 @@ function fromRawChannel(channel: RawChannel): Channel {
     id: channel.id,
     name: channel.name,
     channelType: channel.channel_type,
+    visibility: channel.visibility,
     description: channel.description,
+    topic: channel.topic,
+    purpose: channel.purpose,
+    memberCount: channel.member_count,
+    lastMessageAt: channel.last_message_at,
+    archivedAt: channel.archived_at,
     participants: channel.participants,
     participantPubkeys: channel.participant_pubkeys,
+  };
+}
+
+function fromRawChannelDetail(channel: RawChannelDetail): ChannelDetail {
+  return {
+    ...fromRawChannel(channel),
+    createdBy: channel.created_by,
+    createdAt: channel.created_at,
+    updatedAt: channel.updated_at,
+    topicSetBy: channel.topic_set_by,
+    topicSetAt: channel.topic_set_at,
+    purposeSetBy: channel.purpose_set_by,
+    purposeSetAt: channel.purpose_set_at,
+    topicRequired: channel.topic_required,
+    maxMembers: channel.max_members,
+    nip29GroupId: channel.nip29_group_id,
+  };
+}
+
+function fromRawChannelMember(member: RawChannelMember): ChannelMember {
+  return {
+    pubkey: member.pubkey,
+    role: member.role,
+    joinedAt: member.joined_at,
+    displayName: member.display_name,
   };
 }
 
@@ -129,6 +206,79 @@ export async function createChannel(
 ): Promise<Channel> {
   const channel = await invoke<RawChannel>("create_channel", input);
   return fromRawChannel(channel);
+}
+
+export async function getChannelDetails(
+  channelId: string,
+): Promise<ChannelDetail> {
+  const channel = await invoke<RawChannelDetail>("get_channel_details", {
+    channelId,
+  });
+  return fromRawChannelDetail(channel);
+}
+
+export async function getChannelMembers(
+  channelId: string,
+): Promise<ChannelMember[]> {
+  const response = await invoke<RawChannelMembersResponse>(
+    "get_channel_members",
+    {
+      channelId,
+    },
+  );
+  return response.members.map(fromRawChannelMember);
+}
+
+export async function updateChannel(
+  input: UpdateChannelInput,
+): Promise<ChannelDetail> {
+  const channel = await invoke<RawChannelDetail>("update_channel", input);
+  return fromRawChannelDetail(channel);
+}
+
+export async function setChannelTopic(
+  input: SetChannelTopicInput,
+): Promise<void> {
+  await invoke("set_channel_topic", input);
+}
+
+export async function setChannelPurpose(
+  input: SetChannelPurposeInput,
+): Promise<void> {
+  await invoke("set_channel_purpose", input);
+}
+
+export async function archiveChannel(channelId: string): Promise<void> {
+  await invoke("archive_channel", { channelId });
+}
+
+export async function unarchiveChannel(channelId: string): Promise<void> {
+  await invoke("unarchive_channel", { channelId });
+}
+
+export async function deleteChannel(channelId: string): Promise<void> {
+  await invoke("delete_channel", { channelId });
+}
+
+export async function addChannelMembers(
+  input: AddChannelMembersInput,
+): Promise<AddChannelMembersResult> {
+  return invoke<RawAddChannelMembersResult>("add_channel_members", input);
+}
+
+export async function removeChannelMember(
+  channelId: string,
+  pubkey: string,
+): Promise<void> {
+  await invoke("remove_channel_member", { channelId, pubkey });
+}
+
+export async function joinChannel(channelId: string): Promise<void> {
+  await invoke("join_channel", { channelId });
+}
+
+export async function leaveChannel(channelId: string): Promise<void> {
+  await invoke("leave_channel", { channelId });
 }
 
 export async function getHomeFeed(

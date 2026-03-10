@@ -1,10 +1,37 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { createChannel, getChannels } from "@/shared/api/tauri";
-import type { Channel, CreateChannelInput } from "@/shared/api/types";
+import {
+  addChannelMembers,
+  archiveChannel,
+  createChannel,
+  deleteChannel,
+  getChannelDetails,
+  getChannelMembers,
+  getChannels,
+  joinChannel,
+  leaveChannel,
+  removeChannelMember,
+  setChannelPurpose,
+  setChannelTopic,
+  unarchiveChannel,
+  updateChannel,
+} from "@/shared/api/tauri";
+import type {
+  AddChannelMembersInput,
+  Channel,
+  ChannelDetail,
+  CreateChannelInput,
+  SetChannelPurposeInput,
+  SetChannelTopicInput,
+  UpdateChannelInput,
+} from "@/shared/api/types";
 
 const channelsQueryKey = ["channels"] as const;
+const channelDetailQueryKey = (channelId: string) =>
+  ["channels", channelId, "detail"] as const;
+const channelMembersQueryKey = (channelId: string) =>
+  ["channels", channelId, "members"] as const;
 const channelTypeOrder = {
   stream: 0,
   forum: 1,
@@ -22,6 +49,26 @@ function sortChannels(channels: Channel[]) {
 
     return left.name.localeCompare(right.name);
   });
+}
+
+async function invalidateChannelState(
+  queryClient: ReturnType<typeof useQueryClient>,
+  channelId: string | null | undefined,
+) {
+  await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+
+  if (!channelId) {
+    return;
+  }
+
+  await Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: channelDetailQueryKey(channelId),
+    }),
+    queryClient.invalidateQueries({
+      queryKey: channelMembersQueryKey(channelId),
+    }),
+  ]);
 }
 
 export function useChannelsQuery() {
@@ -47,6 +94,244 @@ export function useCreateChannelMutation() {
     },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+    },
+  });
+}
+
+export function useChannelDetailsQuery(
+  channelId: string | null,
+  enabled = true,
+) {
+  return useQuery({
+    enabled: enabled && channelId !== null,
+    queryKey: ["channels", channelId ?? "none", "detail"],
+    queryFn: async () => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      return getChannelDetails(channelId);
+    },
+    staleTime: 30_000,
+  });
+}
+
+export function useChannelMembersQuery(
+  channelId: string | null,
+  enabled = true,
+) {
+  return useQuery({
+    enabled: enabled && channelId !== null,
+    queryKey: ["channels", channelId ?? "none", "members"],
+    queryFn: async () => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      return getChannelMembers(channelId);
+    },
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdateChannelMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: Omit<UpdateChannelInput, "channelId">) => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      return updateChannel({ ...input, channelId });
+    },
+    onSuccess: (updatedChannel) => {
+      if (!channelId) {
+        return;
+      }
+
+      queryClient.setQueryData<ChannelDetail>(
+        channelDetailQueryKey(channelId),
+        updatedChannel,
+      );
+      queryClient.setQueryData<Channel[]>(channelsQueryKey, (current = []) =>
+        sortChannels(
+          current.map((channel) =>
+            channel.id === updatedChannel.id ? updatedChannel : channel,
+          ),
+        ),
+      );
+    },
+    onSettled: async () => {
+      await invalidateChannelState(queryClient, channelId);
+    },
+  });
+}
+
+export function useSetChannelTopicMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: Omit<SetChannelTopicInput, "channelId">) => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      return setChannelTopic({ ...input, channelId });
+    },
+    onSettled: async () => {
+      await invalidateChannelState(queryClient, channelId);
+    },
+  });
+}
+
+export function useSetChannelPurposeMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: Omit<SetChannelPurposeInput, "channelId">) => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      return setChannelPurpose({ ...input, channelId });
+    },
+    onSettled: async () => {
+      await invalidateChannelState(queryClient, channelId);
+    },
+  });
+}
+
+export function useArchiveChannelMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      await archiveChannel(channelId);
+    },
+    onSettled: async () => {
+      await invalidateChannelState(queryClient, channelId);
+    },
+  });
+}
+
+export function useUnarchiveChannelMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      await unarchiveChannel(channelId);
+    },
+    onSettled: async () => {
+      await invalidateChannelState(queryClient, channelId);
+    },
+  });
+}
+
+export function useDeleteChannelMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      await deleteChannel(channelId);
+    },
+    onSuccess: () => {
+      if (!channelId) {
+        return;
+      }
+
+      queryClient.setQueryData<Channel[]>(channelsQueryKey, (current = []) =>
+        current.filter((channel) => channel.id !== channelId),
+      );
+      queryClient.removeQueries({
+        queryKey: channelDetailQueryKey(channelId),
+      });
+      queryClient.removeQueries({
+        queryKey: channelMembersQueryKey(channelId),
+      });
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+    },
+  });
+}
+
+export function useAddChannelMembersMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: Omit<AddChannelMembersInput, "channelId">) => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      return addChannelMembers({ ...input, channelId });
+    },
+    onSettled: async () => {
+      await invalidateChannelState(queryClient, channelId);
+    },
+  });
+}
+
+export function useRemoveChannelMemberMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (pubkey: string) => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      await removeChannelMember(channelId, pubkey);
+    },
+    onSettled: async () => {
+      await invalidateChannelState(queryClient, channelId);
+    },
+  });
+}
+
+export function useJoinChannelMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      await joinChannel(channelId);
+    },
+    onSettled: async () => {
+      await invalidateChannelState(queryClient, channelId);
+    },
+  });
+}
+
+export function useLeaveChannelMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      await leaveChannel(channelId);
+    },
+    onSettled: async () => {
+      await invalidateChannelState(queryClient, channelId);
     },
   });
 }

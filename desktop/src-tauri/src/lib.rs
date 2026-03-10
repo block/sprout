@@ -1,7 +1,8 @@
 use std::sync::Mutex;
 
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, ToBech32};
-use serde::{Deserialize, Serialize};
+use reqwest::Method;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tauri_plugin_window_state::StateFlags;
 
 pub struct AppState {
@@ -20,9 +21,58 @@ pub struct ChannelInfo {
     pub id: String,
     pub name: String,
     pub channel_type: String,
+    pub visibility: String,
     pub description: String,
+    pub topic: Option<String>,
+    pub purpose: Option<String>,
+    pub member_count: i64,
+    pub last_message_at: Option<String>,
+    pub archived_at: Option<String>,
     pub participants: Vec<String>,
     pub participant_pubkeys: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ChannelDetailInfo {
+    pub id: String,
+    pub name: String,
+    pub channel_type: String,
+    pub visibility: String,
+    pub description: String,
+    pub topic: Option<String>,
+    pub topic_set_by: Option<String>,
+    pub topic_set_at: Option<String>,
+    pub purpose: Option<String>,
+    pub purpose_set_by: Option<String>,
+    pub purpose_set_at: Option<String>,
+    pub created_by: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub archived_at: Option<String>,
+    pub member_count: i64,
+    pub topic_required: bool,
+    pub max_members: Option<i32>,
+    pub nip29_group_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ChannelMemberInfo {
+    pub pubkey: String,
+    pub role: String,
+    pub joined_at: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ChannelMembersResponse {
+    pub members: Vec<ChannelMemberInfo>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AddMembersResponse {
+    pub added: Vec<String>,
+    pub errors: Vec<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -31,6 +81,31 @@ struct CreateChannelBody<'a> {
     channel_type: &'a str,
     visibility: &'a str,
     description: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct UpdateChannelBody<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct SetTopicBody<'a> {
+    topic: &'a str,
+}
+
+#[derive(Serialize)]
+struct SetPurposeBody<'a> {
+    purpose: &'a str,
+}
+
+#[derive(Serialize)]
+struct AddMembersBody<'a> {
+    pubkeys: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -116,15 +191,16 @@ fn relay_api_base_url() -> String {
         .replace("ws://", "http://")
 }
 
-async fn build_authed_request(
+fn build_authed_request(
     client: &reqwest::Client,
+    method: Method,
     path: &str,
     state: &AppState,
 ) -> Result<reqwest::RequestBuilder, String> {
     let pubkey_hex = auth_pubkey_header(state)?;
     let url = format!("{}{}", relay_api_base_url(), path);
 
-    Ok(client.get(url).header("X-Pubkey", pubkey_hex))
+    Ok(client.request(method, url).header("X-Pubkey", pubkey_hex))
 }
 
 fn auth_pubkey_header(state: &AppState) -> Result<String, String> {
@@ -143,6 +219,38 @@ async fn relay_error_message(response: reqwest::Response) -> String {
     }
 
     format!("relay returned {status}: {body}")
+}
+
+async fn send_json_request<T>(request: reqwest::RequestBuilder) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(relay_error_message(response).await);
+    }
+
+    response
+        .json::<T>()
+        .await
+        .map_err(|e| format!("parse failed: {e}"))
+}
+
+async fn send_empty_request(request: reqwest::RequestBuilder) -> Result<(), String> {
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(relay_error_message(response).await);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -216,20 +324,8 @@ fn create_auth_event(
 
 #[tauri::command]
 async fn get_channels(state: tauri::State<'_, AppState>) -> Result<Vec<ChannelInfo>, String> {
-    let request = build_authed_request(&state.http_client, "/api/channels", &state).await?;
-    let response = request
-        .send()
-        .await
-        .map_err(|e| format!("request failed: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(relay_error_message(response).await);
-    }
-
-    response
-        .json::<Vec<ChannelInfo>>()
-        .await
-        .map_err(|e| format!("parse failed: {e}"))
+    let request = build_authed_request(&state.http_client, Method::GET, "/api/channels", &state)?;
+    send_json_request(request).await
 }
 
 #[tauri::command]
@@ -240,30 +336,154 @@ async fn create_channel(
     description: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<ChannelInfo, String> {
-    let pubkey_hex = auth_pubkey_header(&state)?;
-    let url = format!("{}{}", relay_api_base_url(), "/api/channels");
-    let response = state
-        .http_client
-        .post(url)
-        .header("X-Pubkey", pubkey_hex)
+    let request = build_authed_request(&state.http_client, Method::POST, "/api/channels", &state)?
         .json(&CreateChannelBody {
             name: &name,
             channel_type: &channel_type,
             visibility: &visibility,
             description: description.as_deref(),
-        })
-        .send()
-        .await
-        .map_err(|e| format!("request failed: {e}"))?;
+        });
 
-    if !response.status().is_success() {
-        return Err(relay_error_message(response).await);
-    }
+    send_json_request(request).await
+}
 
-    response
-        .json::<ChannelInfo>()
-        .await
-        .map_err(|e| format!("parse failed: {e}"))
+#[tauri::command]
+async fn get_channel_details(
+    channel_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ChannelDetailInfo, String> {
+    let path = format!("/api/channels/{channel_id}");
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
+    send_json_request(request).await
+}
+
+#[tauri::command]
+async fn get_channel_members(
+    channel_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ChannelMembersResponse, String> {
+    let path = format!("/api/channels/{channel_id}/members");
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
+    send_json_request(request).await
+}
+
+#[tauri::command]
+async fn update_channel(
+    channel_id: String,
+    name: Option<String>,
+    description: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<ChannelDetailInfo, String> {
+    let path = format!("/api/channels/{channel_id}");
+    let request = build_authed_request(&state.http_client, Method::PUT, &path, &state)?
+        .json(&UpdateChannelBody {
+            name: name.as_deref(),
+            description: description.as_deref(),
+        });
+
+    send_json_request(request).await
+}
+
+#[tauri::command]
+async fn set_channel_topic(
+    channel_id: String,
+    topic: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let path = format!("/api/channels/{channel_id}/topic");
+    let request = build_authed_request(&state.http_client, Method::PUT, &path, &state)?
+        .json(&SetTopicBody { topic: &topic });
+    send_empty_request(request).await
+}
+
+#[tauri::command]
+async fn set_channel_purpose(
+    channel_id: String,
+    purpose: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let path = format!("/api/channels/{channel_id}/purpose");
+    let request = build_authed_request(&state.http_client, Method::PUT, &path, &state)?
+        .json(&SetPurposeBody { purpose: &purpose });
+    send_empty_request(request).await
+}
+
+#[tauri::command]
+async fn archive_channel(
+    channel_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let path = format!("/api/channels/{channel_id}/archive");
+    let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?;
+    send_empty_request(request).await
+}
+
+#[tauri::command]
+async fn unarchive_channel(
+    channel_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let path = format!("/api/channels/{channel_id}/unarchive");
+    let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?;
+    send_empty_request(request).await
+}
+
+#[tauri::command]
+async fn delete_channel(
+    channel_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let path = format!("/api/channels/{channel_id}");
+    let request = build_authed_request(&state.http_client, Method::DELETE, &path, &state)?;
+    send_empty_request(request).await
+}
+
+#[tauri::command]
+async fn add_channel_members(
+    channel_id: String,
+    pubkeys: Vec<String>,
+    role: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<AddMembersResponse, String> {
+    let path = format!("/api/channels/{channel_id}/members");
+    let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?
+        .json(&AddMembersBody {
+            pubkeys: &pubkeys,
+            role: role.as_deref(),
+        });
+
+    send_json_request(request).await
+}
+
+#[tauri::command]
+async fn remove_channel_member(
+    channel_id: String,
+    pubkey: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let path = format!("/api/channels/{channel_id}/members/{pubkey}");
+    let request = build_authed_request(&state.http_client, Method::DELETE, &path, &state)?;
+    send_empty_request(request).await
+}
+
+#[tauri::command]
+async fn join_channel(
+    channel_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let path = format!("/api/channels/{channel_id}/join");
+    let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?;
+    send_empty_request(request).await
+}
+
+#[tauri::command]
+async fn leave_channel(
+    channel_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let path = format!("/api/channels/{channel_id}/leave");
+    let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?;
+    send_empty_request(request).await
 }
 
 #[tauri::command]
@@ -273,29 +493,14 @@ async fn get_feed(
     types: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<FeedResponse, String> {
-    let pubkey_hex = auth_pubkey_header(&state)?;
-    let url = format!("{}{}", relay_api_base_url(), "/api/feed");
-    let response = state
-        .http_client
-        .get(url)
-        .header("X-Pubkey", pubkey_hex)
+    let request = build_authed_request(&state.http_client, Method::GET, "/api/feed", &state)?
         .query(&GetFeedQuery {
             since,
             limit,
             types: types.as_deref(),
-        })
-        .send()
-        .await
-        .map_err(|e| format!("request failed: {e}"))?;
+        });
 
-    if !response.status().is_success() {
-        return Err(relay_error_message(response).await);
-    }
-
-    response
-        .json::<FeedResponse>()
-        .await
-        .map_err(|e| format!("parse failed: {e}"))
+    send_json_request(request).await
 }
 
 #[tauri::command]
@@ -304,38 +509,23 @@ async fn search_messages(
     limit: Option<u32>,
     state: tauri::State<'_, AppState>,
 ) -> Result<SearchResponse, String> {
-    let pubkey_hex = auth_pubkey_header(&state)?;
-    let url = format!("{}{}", relay_api_base_url(), "/api/search");
-    let response = state
-        .http_client
-        .get(url)
-        .header("X-Pubkey", pubkey_hex)
+    let request = build_authed_request(&state.http_client, Method::GET, "/api/search", &state)?
         .query(&SearchQueryParams {
             q: q.trim(),
             limit,
-        })
-        .send()
-        .await
-        .map_err(|e| format!("request failed: {e}"))?;
+        });
 
-    if !response.status().is_success() {
-        return Err(relay_error_message(response).await);
-    }
-
-    response
-        .json::<SearchResponse>()
-        .await
-        .map_err(|e| format!("parse failed: {e}"))
+    send_json_request(request).await
 }
 
 #[tauri::command]
 async fn get_event(event_id: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
     let request = build_authed_request(
         &state.http_client,
+        Method::GET,
         &format!("/api/events/{event_id}"),
         &state,
-    )
-    .await?;
+    )?;
     let response = request
         .send()
         .await
@@ -373,6 +563,18 @@ pub fn run() {
             create_auth_event,
             get_channels,
             create_channel,
+            get_channel_details,
+            get_channel_members,
+            update_channel,
+            set_channel_topic,
+            set_channel_purpose,
+            archive_channel,
+            unarchive_channel,
+            delete_channel,
+            add_channel_members,
+            remove_channel_member,
+            join_channel,
+            leave_channel,
             get_feed,
             search_messages,
             get_event,

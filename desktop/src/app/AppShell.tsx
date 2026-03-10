@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Settings2 } from "lucide-react";
 
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
@@ -6,6 +7,7 @@ import {
   useChannelsQuery,
   useSelectedChannel,
 } from "@/features/channels/hooks";
+import { ChannelManagementSheet } from "@/features/channels/ui/ChannelManagementSheet";
 import { useHomeFeedQuery } from "@/features/home/hooks";
 import { HomeView } from "@/features/home/ui/HomeView";
 import {
@@ -22,6 +24,7 @@ import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { getEventById } from "@/shared/api/tauri";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { RelayEvent, SearchHit } from "@/shared/api/types";
+import { Button } from "@/shared/ui/button";
 import { SidebarInset, SidebarProvider } from "@/shared/ui/sidebar";
 
 type AppView = "home" | "channel";
@@ -40,6 +43,8 @@ function createSearchAnchorEvent(hit: SearchHit): RelayEvent {
 
 export function AppShell() {
   const [selectedView, setSelectedView] = React.useState<AppView>("home");
+  const [isChannelManagementOpen, setIsChannelManagementOpen] =
+    React.useState(false);
   const [isSearchOpen, setIsSearchOpen] = React.useState(false);
   const [searchAnchor, setSearchAnchor] = React.useState<SearchHit | null>(
     null,
@@ -104,9 +109,17 @@ export function AppShell() {
   );
 
   const channelDescription = activeChannel
-    ? activeChannel.channelType === "forum"
-      ? `${activeChannel.description} Forum channels are listed, but this first pass only wires message streams and DMs.`
-      : activeChannel.description
+    ? [
+        activeChannel.archivedAt ? "Archived." : null,
+        activeChannel.topic,
+        activeChannel.description,
+        activeChannel.purpose,
+        activeChannel.channelType === "forum"
+          ? "Forum channels are listed, but this first pass only wires message streams and DMs."
+          : null,
+      ]
+        .filter((value) => value && value.trim().length > 0)
+        .join(" ") || "Channel details and activity."
     : "Connect to the relay to browse channels and read messages.";
   const contentPaneKey =
     selectedView === "home" ? "home" : `channel:${activeChannel?.id ?? "none"}`;
@@ -203,6 +216,22 @@ export function AppShell() {
           />
         ) : (
           <ChatHeader
+            actions={
+              activeChannel ? (
+                <Button
+                  data-testid="channel-management-trigger"
+                  onClick={() => {
+                    setIsChannelManagementOpen(true);
+                  }}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <Settings2 className="h-4 w-4" />
+                  Manage
+                </Button>
+              ) : null
+            }
             channelType={activeChannel?.channelType}
             description={channelDescription}
             title={activeChannel?.name ?? "Channels"}
@@ -260,6 +289,7 @@ export function AppShell() {
                 channelName={activeChannel?.name ?? "channel"}
                 disabled={
                   !activeChannel ||
+                  activeChannel.archivedAt !== null ||
                   activeChannel.channelType === "forum" ||
                   sendMessageMutation.isPending
                 }
@@ -269,11 +299,13 @@ export function AppShell() {
                   await sendMessageMutation.mutateAsync(content);
                 }}
                 placeholder={
-                  activeChannel?.channelType === "forum"
-                    ? "Forum posting is not wired in this pass."
-                    : activeChannel
-                      ? `Message #${activeChannel.name}`
-                      : "Select a channel"
+                  activeChannel?.archivedAt
+                    ? "Archived channels are read-only."
+                    : activeChannel?.channelType === "forum"
+                      ? "Forum posting is not wired in this pass."
+                      : activeChannel
+                        ? `Message #${activeChannel.name}`
+                        : "Select a channel"
                 }
               />
             </>
@@ -285,6 +317,19 @@ export function AppShell() {
           onOpenResult={handleOpenSearchResult}
           onOpenChange={setIsSearchOpen}
           open={isSearchOpen}
+        />
+
+        <ChannelManagementSheet
+          channel={activeChannel}
+          currentPubkey={identityQuery.data?.pubkey}
+          onDeleted={() => {
+            React.startTransition(() => {
+              setIsChannelManagementOpen(false);
+              setSelectedView("home");
+            });
+          }}
+          onOpenChange={setIsChannelManagementOpen}
+          open={isChannelManagementOpen && activeChannel !== null}
         />
       </SidebarInset>
     </SidebarProvider>
