@@ -73,7 +73,6 @@ pub fn resolve_template(
     trigger_ctx: &TriggerContext,
     step_outputs: &HashMap<String, JsonValue>,
 ) -> Result<String, WorkflowError> {
-    // Fast path: no template markers.
     if !template.contains("{{") {
         return Ok(template.to_owned());
     }
@@ -82,11 +81,9 @@ pub fn resolve_template(
     let mut remaining = template;
 
     while let Some(start) = remaining.find("{{") {
-        // Append everything before the `{{`.
         result.push_str(&remaining[..start]);
         remaining = &remaining[start + 2..];
 
-        // Find the closing `}}`.
         let end = match remaining.find("}}") {
             Some(e) => e,
             None => {
@@ -105,10 +102,8 @@ pub fn resolve_template(
         let var_path = parts.next().unwrap_or("").trim();
         let filter = parts.next().map(|s| s.trim());
 
-        // Resolve the variable.
         let raw_value = resolve_variable(var_path, trigger_ctx, step_outputs);
 
-        // Apply filter (if any).
         let value = match (raw_value, filter) {
             (Some(v), Some(f)) => apply_filter(v, f)?,
             (Some(v), None) => v,
@@ -124,7 +119,6 @@ pub fn resolve_template(
         result.push_str(&value);
     }
 
-    // Append any trailing text after the last `}}`.
     result.push_str(remaining);
     Ok(result)
 }
@@ -141,7 +135,6 @@ fn resolve_variable(
 
     // Pattern: `steps.STEP_ID.output.FIELD`
     if let Some(rest) = path.strip_prefix("steps.") {
-        // rest = "STEP_ID.output.FIELD"
         let mut parts = rest.splitn(3, '.');
         let step_id = parts.next()?;
         let middle = parts.next()?; // must be "output"
@@ -184,7 +177,6 @@ fn json_to_string(v: &JsonValue) -> String {
 fn apply_filter(value: String, filter: &str) -> Result<String, WorkflowError> {
     let filter = filter.trim();
 
-    // `truncate(N)` — truncate to N characters.
     if let Some(inner) = filter
         .strip_prefix("truncate(")
         .and_then(|s| s.strip_suffix(')'))
@@ -331,7 +323,6 @@ pub fn build_eval_context(
     }
 
     // ── Step outputs ──────────────────────────────────────────────────────────
-    // Register as `steps_STEP_ID_output_FIELD`.
 
     for (step_id, output) in step_outputs {
         if let JsonValue::Object(map) = output {
@@ -589,7 +580,6 @@ pub async fn dispatch_action(
                 "RequestApproval from={from} timeout={timeout_str}: {message}"
             );
 
-            // Generate an approval token.
             let token = generate_approval_token(run_id, step_id);
 
             // TODO (WF-08): create approval record in DB, emit kind:46010.
@@ -602,10 +592,10 @@ pub async fn dispatch_action(
 
         Delay { duration } => {
             let secs = parse_duration_secs(duration)?;
-            // Cap delay at 300 seconds (5 minutes) to prevent tasks from holding
-            // a Tokio worker thread for extended periods. Long delays (hours/days)
+            // Cap delay at 270 seconds (4.5 minutes) — must be less than default_timeout_secs (300s)
+            // to avoid non-deterministic StepTimeout. Long delays (hours/days)
             // should use the scheduled resume pattern (future work: WF-09).
-            const MAX_DELAY_SECS: u64 = 300;
+            const MAX_DELAY_SECS: u64 = 270;
             if secs > MAX_DELAY_SECS {
                 return Err(WorkflowError::InvalidDefinition(format!(
                     "delay exceeds maximum of {MAX_DELAY_SECS} seconds (got {secs}s); \
@@ -640,13 +630,17 @@ pub(crate) fn parse_duration_secs(duration: &str) -> Result<u64, WorkflowError> 
         let hours: u64 = n.trim().parse().map_err(|_| {
             WorkflowError::InvalidDefinition(format!("invalid duration: {duration}"))
         })?;
-        return Ok(hours * 3600);
+        return hours.checked_mul(3600).ok_or_else(|| {
+            WorkflowError::InvalidDefinition(format!("duration overflow: {duration}"))
+        });
     }
     if let Some(n) = duration.strip_suffix('m') {
         let mins: u64 = n.trim().parse().map_err(|_| {
             WorkflowError::InvalidDefinition(format!("invalid duration: {duration}"))
         })?;
-        return Ok(mins * 60);
+        return mins.checked_mul(60).ok_or_else(|| {
+            WorkflowError::InvalidDefinition(format!("duration overflow: {duration}"))
+        });
     }
     if let Some(n) = duration.strip_suffix('s') {
         let secs: u64 = n.trim().parse().map_err(|_| {
@@ -719,7 +713,6 @@ async fn call_webhook_impl(
     use std::time::Duration;
 
     // ── SSRF check ────────────────────────────────────────────────────────────
-    // Parse the URL to extract host and port before making any connection.
     let parsed_url = reqwest::Url::parse(url)
         .map_err(|e| WorkflowError::WebhookError(format!("invalid URL: {e}")))?;
 
@@ -838,23 +831,49 @@ pub struct ExecutionResult {
 ///
 /// Enforces `engine.config.max_concurrent` via a semaphore — returns
 /// [`WorkflowError::CapacityExceeded`] immediately if all permits are taken.
+/// Transitions the run to `Running` after acquiring a permit.
 pub async fn execute_run(
     engine: &WorkflowEngine,
     run_id: Uuid,
     def: &WorkflowDef,
     trigger_ctx: &TriggerContext,
-) -> Result<ExecutionResult, WorkflowError> {
-    // Acquire a concurrency permit. `try_acquire` is non-blocking — if all
-    // permits are in use we return CapacityExceeded rather than queuing.
-    let _permit = engine
-        .run_semaphore
-        .try_acquire()
-        .map_err(|_| WorkflowError::CapacityExceeded)?;
+) -> Result<ExecutionResult, (WorkflowError, crate::error::PartialProgress)> {
+    // Fail fast if all concurrency permits are in use — no queuing.
+    let _permit = engine.run_semaphore.try_acquire().map_err(|_| {
+        (
+            WorkflowError::CapacityExceeded,
+            crate::error::PartialProgress::default(),
+        )
+    })?;
 
-    execute_from_step(engine, run_id, def, trigger_ctx, 0, None).await
+    engine
+        .db
+        .update_workflow_run(
+            run_id,
+            sprout_db::workflow::RunStatus::Running,
+            0,
+            &serde_json::json!([]),
+            None,
+        )
+        .await
+        .map_err(|e| {
+            (
+                WorkflowError::from(e),
+                crate::error::PartialProgress::default(),
+            )
+        })?;
+
+    execute_steps(engine, run_id, def, trigger_ctx, 0, None).await
 }
 
-/// Execute starting from a specific step index (used for approval resume).
+/// Resume execution from a specific step index (used for approval resume).
+///
+/// Acquires a concurrency permit from `engine.run_semaphore` before executing —
+/// returns [`WorkflowError::CapacityExceeded`] immediately if all permits are
+/// taken.
+///
+/// Transitions the run to `Running` after acquiring a permit, so that
+/// approval-resumed runs correctly reflect their active state.
 ///
 /// `initial_outputs` should be reconstructed from the execution trace before
 /// calling this function on resume, so that steps after the resume point can
@@ -866,7 +885,69 @@ pub async fn execute_from_step(
     trigger_ctx: &TriggerContext,
     start_index: usize,
     initial_outputs: Option<HashMap<String, JsonValue>>,
-) -> Result<ExecutionResult, WorkflowError> {
+) -> Result<ExecutionResult, (WorkflowError, crate::error::PartialProgress)> {
+    // Fail fast if all concurrency permits are in use — no queuing.
+    let _permit = engine.run_semaphore.try_acquire().map_err(|_| {
+        (
+            WorkflowError::CapacityExceeded,
+            crate::error::PartialProgress::default(),
+        )
+    })?;
+
+    // Mark run as Running now that we have a permit (resume from approval).
+    // Preserve the existing execution trace from pre-approval steps.
+    let existing_trace = match engine.db.get_workflow_run(run_id).await {
+        Ok(r) => r.execution_trace,
+        Err(e) => {
+            warn!(
+                run_id = %run_id,
+                "Failed to read existing trace for resume — pre-approval trace will be lost: {e}"
+            );
+            serde_json::json!([])
+        }
+    };
+    engine
+        .db
+        .update_workflow_run(
+            run_id,
+            sprout_db::workflow::RunStatus::Running,
+            start_index as i32,
+            &existing_trace,
+            None,
+        )
+        .await
+        .map_err(|e| {
+            (
+                WorkflowError::from(e),
+                crate::error::PartialProgress::default(),
+            )
+        })?;
+
+    execute_steps(
+        engine,
+        run_id,
+        def,
+        trigger_ctx,
+        start_index,
+        initial_outputs,
+    )
+    .await
+}
+
+/// Internal: execute workflow steps starting from `start_index`, without
+/// acquiring the semaphore. Called by both [`execute_run`] and
+/// [`execute_from_step`] after they have already acquired a permit.
+///
+/// On error, returns `(WorkflowError, PartialProgress)` so callers can persist
+/// the trace of steps completed before the failure.
+async fn execute_steps(
+    engine: &WorkflowEngine,
+    run_id: Uuid,
+    def: &WorkflowDef,
+    trigger_ctx: &TriggerContext,
+    start_index: usize,
+    initial_outputs: Option<HashMap<String, JsonValue>>,
+) -> Result<ExecutionResult, (WorkflowError, crate::error::PartialProgress)> {
     let mut step_outputs: HashMap<String, JsonValue> = initial_outputs.unwrap_or_default();
     let mut trace: Vec<JsonValue> = Vec::new();
 
@@ -876,7 +957,6 @@ pub async fn execute_from_step(
             continue;
         }
 
-        // 1. Evaluate `if:` condition.
         if let Some(expr) = &step.if_expr {
             match evaluate_condition(expr, trigger_ctx, &step_outputs).await {
                 Ok(true) => {
@@ -892,27 +972,58 @@ pub async fn execute_from_step(
                 }
                 Err(e) => {
                     warn!(run_id = %run_id, step = %step.id, "Condition error: {e}");
-                    return Err(e);
+                    let progress = crate::error::PartialProgress {
+                        step_index: i,
+                        trace,
+                    };
+                    return Err((e, progress));
                 }
             }
         }
 
-        // 2. Resolve template variables.
-        let resolved_action = resolve_step_templates(step, trigger_ctx, &step_outputs)?;
+        let resolved_action = match resolve_step_templates(step, trigger_ctx, &step_outputs) {
+            Ok(a) => a,
+            Err(e) => {
+                let progress = crate::error::PartialProgress {
+                    step_index: i,
+                    trace,
+                };
+                return Err((e, progress));
+            }
+        };
 
-        // 3. Dispatch action (with per-step timeout).
         let timeout_secs = step
             .timeout_secs
             .unwrap_or(engine.config.default_timeout_secs);
-        let result = tokio::time::timeout(
+        let dispatch_result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
             dispatch_action(&step.id, &resolved_action, engine, run_id),
         )
-        .await
-        .map_err(|_| WorkflowError::StepTimeout {
-            step_id: step.id.clone(),
-            timeout_secs,
-        })??;
+        .await;
+
+        let result = match dispatch_result {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                let progress = crate::error::PartialProgress {
+                    step_index: i,
+                    trace,
+                };
+                return Err((e, progress));
+            }
+            Err(_timeout) => {
+                let progress = crate::error::PartialProgress {
+                    step_index: i,
+                    trace,
+                };
+                return Err((
+                    WorkflowError::StepTimeout {
+                        step_id: step.id.clone(),
+                        timeout_secs,
+                    },
+                    progress,
+                ));
+            }
+        };
 
         match result {
             StepResult::Completed(output) => {
@@ -1013,8 +1124,7 @@ mod tests {
         let ctx = make_trigger();
         let out =
             resolve_template("{{trigger.text | truncate(5)}}", &ctx, &HashMap::new()).unwrap();
-        assert_eq!(out, "P1 in"); // "P1 incident in production" truncated to 5 chars = "P1 in"
-                                  // Actually "P1 in" is 5 chars: 'P','1',' ','i','n'
+        assert_eq!(out, "P1 in");
         assert_eq!(out.chars().count(), 5);
     }
 
@@ -1027,7 +1137,6 @@ mod tests {
             &HashMap::new(),
         )
         .unwrap();
-        // "abc123def456" → "abc123...def456"
         assert_eq!(out, "abc123...def456");
     }
 

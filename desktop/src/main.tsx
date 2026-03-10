@@ -4,6 +4,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "@/app/App";
 import "@/shared/styles/globals.css";
 import { ThemeProvider } from "@/shared/theme/ThemeProvider";
+import { maybeInstallE2eTauriMocks } from "@/testing/e2eBridge";
+
+maybeInstallE2eTauriMocks();
 
 const queryClient = new QueryClient({
   defaultOptions: {

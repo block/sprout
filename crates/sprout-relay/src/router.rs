@@ -6,7 +6,7 @@ use axum::{
     extract::{ConnectInfo, FromRequest, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
-    routing::{get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -25,7 +25,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/info", get(relay_info_handler))
         .route("/.well-known/nostr.json", get(nip05_handler))
         .route("/health", get(health_handler))
-        .route("/api/channels", get(api::channels_handler))
+        .route(
+            "/api/channels",
+            get(api::channels_handler).post(api::create_channel),
+        )
         .route("/api/search", get(api::search_handler))
         .route("/api/agents", get(api::agents_handler))
         .route("/api/presence", get(api::presence_handler))
@@ -45,6 +48,74 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/workflows/{id}/webhook", post(api::workflow_webhook))
         .route("/api/approvals/{token}/grant", post(api::grant_approval))
         .route("/api/approvals/{token}/deny", post(api::deny_approval))
+        // Membership routes
+        .route(
+            "/api/channels/{channel_id}/members",
+            get(api::list_members).post(api::add_members),
+        )
+        .route(
+            "/api/channels/{channel_id}/members/{pubkey}",
+            delete(api::remove_member),
+        )
+        .route("/api/channels/{channel_id}/join", post(api::join_channel))
+        .route("/api/channels/{channel_id}/leave", post(api::leave_channel))
+        // Channel detail + metadata routes
+        .route(
+            "/api/channels/{channel_id}",
+            get(api::get_channel_handler)
+                .put(api::update_channel_handler)
+                .delete(api::delete_channel_handler),
+        )
+        .route(
+            "/api/channels/{channel_id}/topic",
+            put(api::set_topic_handler),
+        )
+        .route(
+            "/api/channels/{channel_id}/purpose",
+            put(api::set_purpose_handler),
+        )
+        .route(
+            "/api/channels/{channel_id}/archive",
+            post(api::archive_channel_handler),
+        )
+        .route(
+            "/api/channels/{channel_id}/unarchive",
+            post(api::unarchive_channel_handler),
+        )
+        // Message + thread routes
+        .route(
+            "/api/channels/{channel_id}/messages",
+            get(api::list_messages).post(api::send_message),
+        )
+        .route(
+            "/api/channels/{channel_id}/threads/{event_id}",
+            get(api::get_thread),
+        )
+        // DM routes
+        .route(
+            "/api/dms",
+            get(api::list_dms_handler).post(api::open_dm_handler),
+        )
+        .route(
+            "/api/dms/{channel_id}/members",
+            post(api::add_dm_member_handler),
+        )
+        // Message delete route
+        .route("/api/messages/{event_id}", delete(api::delete_message))
+        // Reaction routes
+        .route(
+            "/api/messages/{event_id}/reactions",
+            get(api::list_reactions_handler).post(api::add_reaction_handler),
+        )
+        .route(
+            "/api/messages/{event_id}/reactions/{emoji}",
+            delete(api::remove_reaction_handler),
+        )
+        // User profile routes
+        .route(
+            "/api/users/me/profile",
+            get(api::get_profile).put(api::update_profile),
+        )
         // Feed route
         .route("/api/feed", get(api::feed_handler))
         .layer(TraceLayer::new_for_http())
@@ -74,7 +145,6 @@ async fn nip11_or_ws_handler(
         return Json(info).into_response();
     }
 
-    // Try WebSocket upgrade from the raw request.
     match WebSocketUpgrade::from_request(req, &state).await {
         Ok(ws) => ws
             .on_upgrade(move |socket| handle_connection(socket, state, addr))

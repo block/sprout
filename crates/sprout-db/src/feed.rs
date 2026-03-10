@@ -72,12 +72,10 @@ pub async fn query_mentions(
         .push_bind(serde_json::json!([["p", pubkey_hex]]).to_string())
         .push(", '$')");
 
-    // Kinds: stream messages, stream replies, forum posts, forum comments
     qb.push(format!(
         " AND kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_FORUM_POST}, {KIND_FORUM_COMMENT})"
     ));
 
-    // Channel access filter
     if !accessible_channel_ids.is_empty() {
         qb.push(" AND channel_id IN (");
         let mut sep = qb.separated(", ");
@@ -130,16 +128,12 @@ pub async fn query_needs_action(
         " AND kind IN ({KIND_WORKFLOW_APPROVAL_REQUESTED}, {KIND_STREAM_REMINDER})"
     ));
 
-    // Tag filter: must be tagged to this user.
     // Wrap in outer array so MySQL checks for exact sub-array membership — see
     // query_mentions for a full explanation of the JSON_CONTAINS semantics.
     qb.push(" AND JSON_CONTAINS(tags, ")
         .push_bind(serde_json::json!([["p", pubkey_hex]]).to_string())
         .push(", '$')");
 
-    // Access control: only return events from channels the user can access.
-    // Identical pattern to query_mentions — prevents leaking events from
-    // channels the user has been removed from.
     if !accessible_channel_ids.is_empty() {
         qb.push(" AND channel_id IN (");
         let mut sep = qb.separated(", ");
@@ -183,8 +177,6 @@ pub async fn query_activity(
          FROM events WHERE 1=1",
     );
 
-    // Stream messages, forum posts, agent job events.
-    // KIND_JOB_REQUEST = agent job created, KIND_JOB_PROGRESS = agent job completed, KIND_JOB_RESULT = agent job failed.
     qb.push(format!(
         " AND kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_FORUM_POST}, {KIND_JOB_REQUEST}, {KIND_JOB_PROGRESS}, {KIND_JOB_RESULT})"
     ));
@@ -233,7 +225,6 @@ mod tests {
 
     #[test]
     fn pubkey_hex_encoding_32_byte_key() {
-        // Simulate a full 32-byte Nostr pubkey.
         let pubkey_bytes: Vec<u8> = (0u8..32).collect();
         let hex = hex::encode(&pubkey_bytes);
         assert_eq!(hex.len(), 64);
@@ -308,8 +299,6 @@ mod tests {
         use sprout_core::kind::{
             KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
         };
-        // query_mentions filters for: KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
-        //   KIND_FORUM_POST, KIND_FORUM_COMMENT
         let mention_kinds: &[u32] = &[
             KIND_STREAM_MESSAGE,
             KIND_STREAM_MESSAGE_V2,
@@ -338,7 +327,6 @@ mod tests {
     #[test]
     fn needs_action_query_includes_approval_and_reminder_kinds() {
         use sprout_core::kind::{KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED};
-        // query_needs_action filters for: KIND_WORKFLOW_APPROVAL_REQUESTED, KIND_STREAM_REMINDER
         let needs_action_kinds: &[u32] = &[KIND_WORKFLOW_APPROVAL_REQUESTED, KIND_STREAM_REMINDER];
 
         assert!(
@@ -357,8 +345,6 @@ mod tests {
             KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
             KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
         };
-        // query_activity filters for: KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
-        //   KIND_FORUM_POST, KIND_JOB_REQUEST, KIND_JOB_PROGRESS, KIND_JOB_RESULT
         let activity_kinds: &[u32] = &[
             KIND_STREAM_MESSAGE,
             KIND_STREAM_MESSAGE_V2,
@@ -407,7 +393,8 @@ mod tests {
             KIND_JOB_RESULT,
         ];
 
-        for kind in 46001u32..=46012 {
+        use sprout_core::kind::{KIND_WORKFLOW_APPROVAL_DENIED, KIND_WORKFLOW_TRIGGERED};
+        for kind in KIND_WORKFLOW_TRIGGERED..=KIND_WORKFLOW_APPROVAL_DENIED {
             assert!(
                 !activity_kinds.contains(&kind),
                 "workflow execution kind {kind} must NOT be in activity"
@@ -422,7 +409,6 @@ mod tests {
             KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
             KIND_WORKFLOW_APPROVAL_REQUESTED,
         };
-        // The two queries serve different purposes — their kind sets should not overlap.
         let needs_action_kinds: &[u32] = &[KIND_WORKFLOW_APPROVAL_REQUESTED, KIND_STREAM_REMINDER];
         let activity_kinds: &[u32] = &[
             KIND_STREAM_MESSAGE,

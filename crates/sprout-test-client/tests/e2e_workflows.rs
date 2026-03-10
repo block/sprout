@@ -47,9 +47,9 @@ fn http_client() -> Client {
 
 /// Known open channel IDs seeded in the dev database.
 ///
-/// These are stable across relay restarts because they are inserted with
-/// explicit UUIDs in the seed migration.
-const CHANNEL_GENERAL: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
+/// These are UUID5-derived from the channel name and are stable across relay
+/// restarts as long as the seed data uses the same namespace + name inputs.
+const CHANNEL_GENERAL: &str = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 
 /// A seeded user pubkey that exists in the `users` table.
 ///
@@ -157,7 +157,6 @@ async fn test_list_workflows_empty_channel() {
     let body: serde_json::Value = resp.json().await.expect("response must be JSON");
     assert!(body.is_array(), "expected JSON array, got: {body}");
 
-    // Every workflow in the list must have required fields.
     let arr = body.as_array().unwrap();
     for wf in arr {
         assert!(wf.get("id").is_some(), "workflow missing 'id' field");
@@ -180,7 +179,6 @@ async fn test_create_and_list_workflow() {
     let yaml = webhook_workflow_yaml("e2e-create-list-test");
     let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, &yaml).await;
 
-    // Response must include id, name, channel_id, definition fields.
     let workflow_id = created["id"]
         .as_str()
         .expect("created workflow must have 'id'");
@@ -199,7 +197,6 @@ async fn test_create_and_list_workflow() {
         "webhook workflow must return 'webhook_secret' on creation"
     );
 
-    // Verify it appears in the list.
     let list_url = format!("{base}/api/channels/{CHANNEL_GENERAL}/workflows");
     let list_resp = client
         .get(&list_url)
@@ -216,7 +213,6 @@ async fn test_create_and_list_workflow() {
         "newly created workflow {workflow_id} not found in list"
     );
 
-    // Clean up.
     let status = delete_workflow(&client, &base, pubkey_hex, workflow_id).await;
     assert_eq!(status, 204, "cleanup DELETE should return 204");
 }
@@ -235,7 +231,6 @@ async fn test_trigger_workflow_and_check_run() {
     let pubkey_hex: &str = SEEDED_PUBKEY;
     let base = relay_http_url();
 
-    // Create a webhook workflow.
     let yaml = webhook_workflow_yaml("e2e-trigger-test");
     let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, &yaml).await;
     let workflow_id = created["id"]
@@ -243,7 +238,6 @@ async fn test_trigger_workflow_and_check_run() {
         .expect("workflow must have 'id'")
         .to_string();
 
-    // Manually trigger the workflow via POST /api/workflows/:id/trigger.
     let trigger_url = format!("{base}/api/workflows/{workflow_id}/trigger");
     let trigger_resp = client
         .post(&trigger_url)
@@ -297,7 +291,6 @@ async fn test_trigger_workflow_and_check_run() {
 
     let run = found_run.expect("run must appear in GET /api/workflows/:id/runs within 1 second");
 
-    // Run must have required fields.
     assert!(run.get("id").is_some(), "run missing 'id'");
     assert!(
         run.get("workflow_id").is_some(),
@@ -305,14 +298,219 @@ async fn test_trigger_workflow_and_check_run() {
     );
     assert!(run.get("status").is_some(), "run missing 'status'");
 
-    // Status must be one of the valid terminal or in-progress values.
     let status = run["status"].as_str().unwrap_or("");
     assert!(
         matches!(status, "pending" | "running" | "completed" | "failed"),
         "run status '{status}' is not a recognized value"
     );
 
-    // Clean up.
+    let del_status = delete_workflow(&client, &base, pubkey_hex, &workflow_id).await;
+    assert_eq!(del_status, 204, "cleanup DELETE should return 204");
+}
+
+// ── Test 5: Event-driven workflow execution ───────────────────────────────────
+
+/// Send a kind:40001 message to a channel that has a `message_posted` workflow.
+/// Verify that the workflow engine creates a run record.
+///
+/// NOTE: Uses `SEEDED_PUBKEY` for workflow ownership due to the FK constraint
+/// on `workflows.owner_pubkey`. The WebSocket sender uses fresh keys.
+#[tokio::test]
+#[ignore = "requires running relay"]
+async fn test_event_driven_workflow_execution() {
+    use nostr::{Kind, Tag};
+    use sprout_test_client::SproutTestClient;
+
+    let client = http_client();
+    let pubkey_hex: &str = SEEDED_PUBKEY;
+    let base = relay_http_url();
+
+    // ── Step 1: Create a message_posted workflow in the general channel ───────
+    let workflow_yaml = r#"name: event-driven-e2e-test
+description: E2E test for message_posted trigger
+trigger:
+  on: message_posted
+steps:
+  - id: step1
+    name: Acknowledge
+    action: send_message
+    text: "Workflow fired by event"
+"#;
+    let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, workflow_yaml).await;
+    let workflow_id = created["id"]
+        .as_str()
+        .expect("created workflow must have 'id'")
+        .to_string();
+
+    // ── Step 2: Connect via WebSocket and send a kind:40001 message ───────────
+    // Use fresh keys for the sender (channel is open, no auth required to post).
+    let sender_keys = Keys::generate();
+    let mut ws_client = SproutTestClient::connect(&relay_ws_url(), &sender_keys)
+        .await
+        .expect("ws connect failed");
+
+    let e_tag = Tag::parse(&["e", CHANNEL_GENERAL]).expect("tag parse failed");
+    let event =
+        nostr::EventBuilder::new(Kind::Custom(40001), "trigger this workflow please", [e_tag])
+            .sign_with_keys(&sender_keys)
+            .expect("sign event");
+
+    ws_client
+        .send_event(event)
+        .await
+        .expect("send event failed");
+
+    // ── Step 3: Wait for the workflow engine to process the event ─────────────
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // ── Step 4: Check that a run was created ──────────────────────────────────
+    let runs_url = format!("{base}/api/workflows/{workflow_id}/runs");
+    let runs_resp = client
+        .get(&runs_url)
+        .header("X-Pubkey", pubkey_hex)
+        .send()
+        .await
+        .expect("GET runs failed");
+    assert_eq!(runs_resp.status(), 200, "GET runs must return 200");
+
+    let runs: Vec<serde_json::Value> = runs_resp.json().await.expect("runs must be JSON array");
+    assert!(
+        !runs.is_empty(),
+        "expected at least one workflow run after sending kind:40001 event"
+    );
+
+    let run = &runs[0];
+    assert!(run.get("id").is_some(), "run missing 'id'");
+    assert!(
+        run.get("workflow_id").is_some(),
+        "run missing 'workflow_id'"
+    );
+    assert!(run.get("status").is_some(), "run missing 'status'");
+
+    let status = run["status"].as_str().unwrap_or("");
+    assert!(
+        matches!(status, "pending" | "running" | "completed" | "failed"),
+        "run status '{status}' is not a recognized value"
+    );
+
+    let _ = ws_client.disconnect().await;
+    let del_status = delete_workflow(&client, &base, pubkey_hex, &workflow_id).await;
+    assert_eq!(del_status, 204, "cleanup DELETE should return 204");
+}
+
+// ── Test 6: Event-driven workflow with filter ─────────────────────────────────
+
+/// Verify that a `message_posted` workflow with a filter expression only fires
+/// when the filter matches.
+///
+/// 1. Create a workflow with `filter: "str_contains(trigger_text, \"P1\")"`.
+/// 2. Send a message that does NOT contain "P1" — expect zero runs.
+/// 3. Send a message that DOES contain "P1" — expect one run.
+///
+/// NOTE: Filter evaluation is wired in WF-07. Until then, all matched-kind
+/// events fire the workflow regardless of filter. This test documents the
+/// intended behaviour so it can be un-skipped once WF-07 lands.
+#[tokio::test]
+#[ignore = "requires running relay with WF-07 filter evaluation"]
+async fn test_event_driven_workflow_with_filter() {
+    use nostr::{Kind, Tag};
+    use sprout_test_client::SproutTestClient;
+
+    let client = http_client();
+    let pubkey_hex: &str = SEEDED_PUBKEY;
+    let base = relay_http_url();
+
+    // ── Step 1: Create a filtered message_posted workflow ─────────────────────
+    let workflow_yaml = r#"name: filtered-event-e2e-test
+description: E2E test for message_posted trigger with filter
+trigger:
+  on: message_posted
+  filter: "str_contains(trigger_text, \"P1\")"
+steps:
+  - id: step1
+    name: Notify
+    action: send_message
+    text: "P1 incident detected"
+"#;
+    let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, workflow_yaml).await;
+    let workflow_id = created["id"]
+        .as_str()
+        .expect("created workflow must have 'id'")
+        .to_string();
+
+    let sender_keys = Keys::generate();
+    let mut ws_client = SproutTestClient::connect(&relay_ws_url(), &sender_keys)
+        .await
+        .expect("ws connect failed");
+
+    // ── Step 2: Send a message that does NOT match the filter ─────────────────
+    let e_tag = Tag::parse(&["e", CHANNEL_GENERAL]).expect("tag parse failed");
+    let non_matching = nostr::EventBuilder::new(
+        Kind::Custom(40001),
+        "this is a routine update, nothing urgent",
+        [e_tag.clone()],
+    )
+    .sign_with_keys(&sender_keys)
+    .expect("sign event");
+
+    ws_client
+        .send_event(non_matching)
+        .await
+        .expect("send non-matching event failed");
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let runs_url = format!("{base}/api/workflows/{workflow_id}/runs");
+    let runs_resp = client
+        .get(&runs_url)
+        .header("X-Pubkey", pubkey_hex)
+        .send()
+        .await
+        .expect("GET runs (non-matching) failed");
+    assert_eq!(runs_resp.status(), 200);
+    let runs_after_non_match: Vec<serde_json::Value> =
+        runs_resp.json().await.expect("runs must be JSON array");
+    assert!(
+        runs_after_non_match.is_empty(),
+        "non-matching message must NOT trigger a workflow run, but got {} run(s)",
+        runs_after_non_match.len()
+    );
+
+    // ── Step 3: Send a message that DOES match the filter ─────────────────────
+    let matching =
+        nostr::EventBuilder::new(Kind::Custom(40001), "P1 alert: database is down", [e_tag])
+            .sign_with_keys(&sender_keys)
+            .expect("sign event");
+
+    ws_client
+        .send_event(matching)
+        .await
+        .expect("send matching event failed");
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let runs_resp2 = client
+        .get(&runs_url)
+        .header("X-Pubkey", pubkey_hex)
+        .send()
+        .await
+        .expect("GET runs (matching) failed");
+    assert_eq!(runs_resp2.status(), 200);
+    let runs_after_match: Vec<serde_json::Value> =
+        runs_resp2.json().await.expect("runs must be JSON array");
+    assert!(
+        !runs_after_match.is_empty(),
+        "matching message must trigger a workflow run"
+    );
+
+    let run = &runs_after_match[0];
+    let status = run["status"].as_str().unwrap_or("");
+    assert!(
+        matches!(status, "pending" | "running" | "completed" | "failed"),
+        "run status '{status}' is not a recognized value"
+    );
+
+    let _ = ws_client.disconnect().await;
     let del_status = delete_workflow(&client, &base, pubkey_hex, &workflow_id).await;
     assert_eq!(del_status, 204, "cleanup DELETE should return 204");
 }
@@ -416,4 +614,110 @@ async fn test_workflow_update_and_delete() {
         404,
         "GET after DELETE must return 404"
     );
+}
+
+// ── Test 7: Approval gate (WF-08 stub) ────────────────────────────────────────
+
+/// Create a workflow with a `request_approval` step, trigger it, and verify
+/// the run fails with the "approval gates not yet implemented" message.
+///
+/// This test documents the current stub behavior. When WF-08 is implemented,
+/// this test should be updated to verify the full approval round-trip:
+/// create → trigger → poll for waiting_approval → grant → verify completed.
+#[tokio::test]
+#[ignore]
+async fn test_approval_gate_stub_fails_gracefully() {
+    let client = http_client();
+    let pubkey_hex: &str = SEEDED_PUBKEY;
+    let base = relay_http_url();
+
+    // ── Step 1: Create a workflow with a request_approval step ────────────────
+    let workflow_yaml = r#"name: approval-test
+description: Test approval gate
+trigger:
+  on: webhook
+steps:
+  - id: step1
+    name: Pre-approval step
+    action: send_message
+    text: "Before approval"
+  - id: approve
+    action: request_approval
+    from: "any"
+    message: "Please approve this workflow"
+  - id: step3
+    name: Post-approval step
+    action: send_message
+    text: "After approval"
+"#;
+    let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, workflow_yaml).await;
+    let workflow_id = created["id"]
+        .as_str()
+        .expect("created workflow must have 'id'")
+        .to_string();
+
+    // ── Step 2: Trigger the workflow ──────────────────────────────────────────
+    let trigger_url = format!("{base}/api/workflows/{workflow_id}/trigger");
+    let trigger_resp = client
+        .post(&trigger_url)
+        .header("X-Pubkey", pubkey_hex)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("POST {trigger_url} failed: {e}"));
+
+    assert_eq!(
+        trigger_resp.status(),
+        202,
+        "trigger endpoint must return 202 Accepted"
+    );
+
+    let trigger_body: serde_json::Value = trigger_resp
+        .json()
+        .await
+        .expect("trigger response must be JSON");
+    let run_id = trigger_body["run_id"]
+        .as_str()
+        .expect("trigger response must include 'run_id'")
+        .to_string();
+
+    // ── Step 3: Poll until the run reaches a terminal status ──────────────────
+    let runs_url = format!("{base}/api/workflows/{workflow_id}/runs");
+    let mut final_run: Option<serde_json::Value> = None;
+    for _ in 0..10 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let runs_resp = client
+            .get(&runs_url)
+            .header("X-Pubkey", pubkey_hex)
+            .send()
+            .await
+            .expect("GET runs failed");
+        assert_eq!(runs_resp.status(), 200, "GET runs must return 200");
+        let runs: Vec<serde_json::Value> = runs_resp.json().await.expect("runs must be JSON array");
+        if let Some(run) = runs.iter().find(|r| r["id"].as_str() == Some(&run_id)) {
+            let status = run["status"].as_str().unwrap_or("");
+            if matches!(status, "completed" | "failed" | "cancelled") {
+                final_run = Some(run.clone());
+                break;
+            }
+        }
+    }
+
+    // ── Step 4: Assert the run failed with the expected stub error ────────────
+    let run = final_run.expect("run must reach a terminal status within 1 second");
+
+    assert_eq!(
+        run["status"].as_str().unwrap_or(""),
+        "failed",
+        "approval gate stub must cause the run to fail"
+    );
+
+    let error_msg = run["error"].as_str().unwrap_or("");
+    assert!(
+        error_msg.contains("approval gates not yet implemented"),
+        "run error must contain 'approval gates not yet implemented', got: {error_msg:?}"
+    );
+
+    // ── Step 5: Clean up ──────────────────────────────────────────────────────
+    let del_status = delete_workflow(&client, &base, pubkey_hex, &workflow_id).await;
+    assert_eq!(del_status, 204, "cleanup DELETE should return 204");
 }

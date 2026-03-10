@@ -17,7 +17,7 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
-use sprout_core::kind;
+use sprout_core::kind::{self, event_kind_u32};
 
 use crate::state::AppState;
 
@@ -62,14 +62,12 @@ pub async fn feed_handler(
         .and_then(|ts| DateTime::from_timestamp(ts, 0))
         .unwrap_or_else(|| Utc::now() - Duration::days(7));
 
-    // Parse optional type filter.
     let type_filter: Option<std::collections::HashSet<&str>> = params
         .types
         .as_deref()
         .map(|t| t.split(',').map(|s| s.trim()).collect());
     let wants = |cat: &str| -> bool { type_filter.as_ref().is_none_or(|f| f.contains(cat)) };
 
-    // 1. Get accessible channel IDs for this user.
     let accessible_ids = state
         .db
         .get_accessible_channel_ids(&pubkey_bytes)
@@ -93,7 +91,6 @@ pub async fn feed_handler(
         })));
     }
 
-    // 2. Run queries in parallel.
     let (mentions_res, needs_action_res, activity_res) = tokio::join!(
         state
             .db
@@ -111,12 +108,10 @@ pub async fn feed_handler(
     let needs_action = needs_action_res.map_err(|e| internal_error(&format!("db error: {e}")))?;
     let activity_all = activity_res.map_err(|e| internal_error(&format!("db error: {e}")))?;
 
-    // 3. Partition activity into agent activity vs channel activity.
     let (agent_activity, channel_activity): (Vec<_>, Vec<_>) = activity_all
         .into_iter()
-        .partition(|e| AGENT_KINDS.contains(&(e.event.kind.as_u16() as u32)));
+        .partition(|e| AGENT_KINDS.contains(&event_kind_u32(&e.event)));
 
-    // 4. Enrich events with channel names (batch lookup).
     let all_channels = state.db.list_channels(None).await.unwrap_or_else(|e| {
         tracing::warn!("feed: failed to load channel names for enrichment: {e}");
         vec![]
@@ -124,7 +119,6 @@ pub async fn feed_handler(
     let channel_name_map: HashMap<uuid::Uuid, String> =
         all_channels.into_iter().map(|c| (c.id, c.name)).collect();
 
-    // Helper: convert a StoredEvent to a FeedItem JSON value.
     let to_feed_item = |event: &sprout_core::StoredEvent, category: &str| -> serde_json::Value {
         let channel_name = event
             .channel_id
@@ -144,7 +138,7 @@ pub async fn feed_handler(
 
         serde_json::json!({
             "id": event.event.id.to_hex(),
-            "kind": event.event.kind.as_u16() as u32,
+            "kind": event_kind_u32(&event.event),
             "pubkey": event.event.pubkey.to_hex(),
             "content": event.event.content,
             "created_at": event.event.created_at.as_u64(),
@@ -155,7 +149,6 @@ pub async fn feed_handler(
         })
     };
 
-    // 5. Build feed sections (apply type filter).
     let mentions_items: Vec<serde_json::Value> = if wants("mentions") {
         mentions
             .iter()

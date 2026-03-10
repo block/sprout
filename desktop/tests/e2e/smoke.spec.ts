@@ -1,0 +1,208 @@
+import { expect, test } from "@playwright/test";
+
+import { installMockBridge } from "../helpers/bridge";
+
+async function getTimelineMetrics(page: import("@playwright/test").Page) {
+  return page.getByTestId("message-timeline").evaluate((element) => {
+    const timeline = element as HTMLDivElement;
+
+    return {
+      clientHeight: timeline.clientHeight,
+      scrollHeight: timeline.scrollHeight,
+      scrollTop: timeline.scrollTop,
+      distanceFromBottom:
+        timeline.scrollHeight - timeline.clientHeight - timeline.scrollTop,
+    };
+  });
+}
+
+async function ensureTimelineScrollable(
+  page: import("@playwright/test").Page,
+  prefix: string,
+) {
+  const input = page.getByTestId("message-input");
+  const sendButton = page.getByTestId("send-message");
+
+  for (let index = 0; index < 24; index += 1) {
+    const metrics = await getTimelineMetrics(page);
+    if (metrics.scrollHeight > metrics.clientHeight + 160) {
+      return;
+    }
+
+    const message = `${prefix} seed ${index}`;
+
+    await input.fill(message);
+    await sendButton.click();
+    await expect(page.getByTestId("message-timeline")).toContainText(message);
+  }
+
+  const metrics = await getTimelineMetrics(page);
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight + 160);
+}
+
+test.beforeEach(async ({ page }) => {
+  await installMockBridge(page);
+});
+
+test("loads the app shell with mocked channels", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+  await expect(page.getByTestId("stream-list")).toContainText("general");
+  await expect(page.getByTestId("forum-list")).toContainText("watercooler");
+  await expect(page.getByTestId("dm-list")).toContainText("alice-tyler");
+});
+
+test("creates a new mocked stream", async ({ page }) => {
+  const channelName = `release-notes-${Date.now()}`;
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Create a stream" }).click();
+  await page.getByTestId("create-stream-name").fill(channelName);
+  await page
+    .getByTestId("create-stream-description")
+    .fill("Release coordination");
+  await page.getByRole("button", { name: "Create" }).click();
+
+  await expect(page.getByTestId("stream-list")).toContainText(channelName);
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+});
+
+test("opens a mocked channel from the home feed", async ({ page }) => {
+  const mentionsSection = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "@Mentions" }),
+  });
+
+  await page.goto("/");
+
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
+  await expect(
+    page.getByRole("heading", { name: "Focus queue" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Please review the release checklist."),
+  ).toBeVisible();
+
+  await mentionsSection.getByRole("button", { name: "Open" }).click();
+
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Welcome to #general",
+  );
+});
+
+test("replaces the channel pane when switching channels", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Welcome to #general",
+  );
+
+  await page.getByTestId("channel-random").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("random");
+  await expect(page.getByTestId("message-empty")).toBeVisible();
+  await expect(page.getByTestId("message-timeline")).not.toContainText(
+    "Welcome to #general",
+  );
+  await expect(page.getByTestId("message-timeline")).toHaveCount(1);
+  await expect(page.getByTestId("message-timeline-day-divider")).toHaveCount(1);
+
+  await page.getByTestId("channel-engineering").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
+  await expect(page.getByTestId("message-empty")).toBeVisible();
+  await expect(page.getByTestId("message-timeline")).toHaveCount(1);
+  await expect(page.getByTestId("message-timeline-day-divider")).toHaveCount(1);
+});
+
+test("sends a mocked channel message", async ({ page }) => {
+  const message = `Smoke message ${Date.now()}`;
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await page.getByTestId("message-input").fill(message);
+  await page.getByTestId("send-message").click();
+
+  await expect(page.getByTestId("message-timeline")).toContainText(message);
+});
+
+test("supports multiline drafts with Ctrl+Enter and sends with Enter", async ({
+  page,
+}) => {
+  const firstLine = `Shortcut smoke line one ${Date.now()}`;
+  const restOfLines = [
+    "Shortcut smoke line two",
+    "Shortcut smoke line three",
+    "Shortcut smoke line four",
+    "Shortcut smoke line five",
+  ];
+  const input = page.getByTestId("message-input");
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("send-message")).toContainText("Send");
+  const initialInputHeight = await input.evaluate(
+    (element) => (element as HTMLTextAreaElement).clientHeight,
+  );
+  expect(initialInputHeight).toBeLessThan(40);
+  await input.fill(firstLine);
+  for (const line of restOfLines) {
+    await input.press("Control+Enter");
+    await input.type(line);
+  }
+  await expect(input).toHaveValue([firstLine, ...restOfLines].join("\n"));
+  const expandedInputHeight = await input.evaluate(
+    (element) => (element as HTMLTextAreaElement).clientHeight,
+  );
+  expect(expandedInputHeight).toBeLessThanOrEqual(100);
+  await expect(page.getByTestId("message-timeline")).not.toContainText(
+    firstLine,
+  );
+  await input.press("Enter");
+
+  await expect(page.getByTestId("message-timeline")).toContainText(firstLine);
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    restOfLines[restOfLines.length - 1],
+  );
+});
+
+test("does not shift the timeline when the composer grows", async ({
+  page,
+}) => {
+  const input = page.getByTestId("message-input");
+  const prefix = `Composer growth ${Date.now()}`;
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  await ensureTimelineScrollable(page, prefix);
+  await page.waitForTimeout(400);
+  await page.getByTestId("message-timeline").evaluate((element) => {
+    const timeline = element as HTMLDivElement;
+    timeline.scrollTop = 0;
+    timeline.dispatchEvent(new Event("scroll"));
+  });
+  await expect
+    .poll(async () => (await getTimelineMetrics(page)).distanceFromBottom)
+    .toBeGreaterThan(160);
+  const before = await getTimelineMetrics(page);
+
+  await input.fill("Composer growth line one");
+  await input.press("Control+Enter");
+  await input.type("Composer growth line two");
+  await input.press("Control+Enter");
+  await input.type("Composer growth line three");
+  await input.press("Control+Enter");
+  await input.type("Composer growth line four");
+
+  await page.waitForTimeout(1200);
+
+  const after = await getTimelineMetrics(page);
+  expect(after.clientHeight).toBeLessThan(before.clientHeight);
+  expect(Math.abs(after.scrollTop - before.scrollTop)).toBeLessThanOrEqual(2);
+  expect(after.distanceFromBottom).toBeGreaterThan(160);
+});

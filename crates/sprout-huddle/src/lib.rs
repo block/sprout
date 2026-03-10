@@ -139,7 +139,6 @@ mod tests {
             HuddleService::create_room_name(id),
             "sprout-550e8400-e29b-41d4-a716-446655440000"
         );
-        // Deterministic
         assert_eq!(
             HuddleService::create_room_name(id),
             HuddleService::create_room_name(id)

@@ -290,7 +290,6 @@ mod tests {
     fn parse_req_too_many_filters_is_rejected() {
         let filter = Filter::new().kind(Kind::TextNote);
         let filter_val = serde_json::to_value(&filter).unwrap();
-        // Build a REQ with MAX_FILTERS_PER_REQ + 1 filters.
         let mut arr: Vec<serde_json::Value> = vec![
             serde_json::Value::String("REQ".to_string()),
             serde_json::Value::String("sub3".to_string()),

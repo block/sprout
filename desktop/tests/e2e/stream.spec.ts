@@ -1,0 +1,358 @@
+import { expect, test, type Browser, type Page } from "@playwright/test";
+
+import { installRelayBridge } from "../helpers/bridge";
+import { assertRelaySeeded } from "../helpers/seed";
+
+async function getTimelineMetrics(page: Page) {
+  return page.getByTestId("message-timeline").evaluate((element) => {
+    const timeline = element as HTMLDivElement;
+
+    return {
+      clientHeight: timeline.clientHeight,
+      scrollHeight: timeline.scrollHeight,
+      scrollTop: timeline.scrollTop,
+      distanceFromBottom:
+        timeline.scrollHeight - timeline.clientHeight - timeline.scrollTop,
+    };
+  });
+}
+
+async function ensureTimelineScrollable(
+  senderPage: Page,
+  receiverPage: Page,
+  prefix: string,
+) {
+  const input = senderPage.getByTestId("message-input");
+  const sendButton = senderPage.getByTestId("send-message");
+
+  for (let index = 0; index < 24; index += 1) {
+    const metrics = await getTimelineMetrics(receiverPage);
+    if (metrics.scrollHeight > metrics.clientHeight + 160) {
+      return;
+    }
+
+    const message = `${prefix} seed ${index}`;
+
+    await expect(input).toBeEnabled();
+    await input.fill(message);
+    await sendButton.click();
+    await expect(receiverPage.getByTestId("message-timeline")).toContainText(
+      message,
+    );
+  }
+
+  const metrics = await getTimelineMetrics(receiverPage);
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight + 160);
+}
+
+test.beforeAll(async () => {
+  await assertRelaySeeded();
+});
+
+test("loads channels from the relay", async ({ page }) => {
+  await installRelayBridge(page, "tyler");
+  await page.goto("/");
+
+  await expect(page.getByTestId("stream-list")).toContainText("general");
+  await expect(page.getByTestId("stream-list")).toContainText("random");
+  await expect(page.getByTestId("forum-list")).toContainText("watercooler");
+  await expect(page.getByTestId("dm-list")).toContainText("alice-tyler");
+});
+
+test("loads the home feed from the relay", async ({ page }) => {
+  await installRelayBridge(page, "tyler");
+  await page.goto("/");
+
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
+  await expect(
+    page.getByRole("heading", { name: "Focus queue" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "@Mentions" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Needs Action" }),
+  ).toBeVisible();
+});
+
+test("creates a relay-backed stream", async ({ page }) => {
+  const channelName = `desktop-e2e-${Date.now()}`;
+
+  await installRelayBridge(page, "tyler");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Create a stream" }).click();
+  await page.getByTestId("create-stream-name").fill(channelName);
+  await page
+    .getByTestId("create-stream-description")
+    .fill("Created from Playwright");
+  await page.getByRole("button", { name: "Create" }).click();
+
+  await expect(page.getByTestId("stream-list")).toContainText(channelName);
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+});
+
+test("sends a message through the real relay", async ({ page }) => {
+  const message = `Integration message ${Date.now()}`;
+
+  await installRelayBridge(page, "tyler");
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await page.getByTestId("message-input").fill(message);
+  await page.getByTestId("send-message").click();
+
+  await expect(page.getByTestId("message-timeline")).toContainText(message);
+});
+
+test("delivers a message to a second browser context in real time", async ({
+  browser,
+}: {
+  browser: Browser;
+}) => {
+  const contextOne = await browser.newContext();
+  const contextTwo = await browser.newContext();
+  const pageOne = await contextOne.newPage();
+  const pageTwo = await contextTwo.newPage();
+  const message = `Realtime message ${Date.now()}`;
+
+  try {
+    await installRelayBridge(pageOne, "tyler");
+    await installRelayBridge(pageTwo, "alice");
+
+    await pageOne.goto("/");
+    await pageTwo.goto("/");
+
+    await pageOne.getByTestId("channel-general").click();
+    await pageTwo.getByTestId("channel-general").click();
+    await expect(pageOne.getByTestId("chat-title")).toHaveText("general");
+    await expect(pageTwo.getByTestId("chat-title")).toHaveText("general");
+
+    await pageOne.getByTestId("message-input").fill(message);
+    await pageOne.getByTestId("send-message").click();
+
+    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
+      message,
+    );
+  } finally {
+    await contextOne.close();
+    await contextTwo.close();
+  }
+});
+
+test("stays pinned to the latest message when new messages arrive at the bottom", async ({
+  browser,
+}: {
+  browser: Browser;
+}) => {
+  const contextOne = await browser.newContext();
+  const contextTwo = await browser.newContext();
+  const pageOne = await contextOne.newPage();
+  const pageTwo = await contextTwo.newPage();
+  const prefix = `Pinned scroll ${Date.now()}`;
+  const incomingMessage = `${prefix} incoming`;
+
+  try {
+    await installRelayBridge(pageOne, "tyler");
+    await installRelayBridge(pageTwo, "alice");
+
+    await pageOne.goto("/");
+    await pageTwo.goto("/");
+
+    await pageOne.getByTestId("channel-general").click();
+    await pageTwo.getByTestId("channel-general").click();
+    await expect(pageOne.getByTestId("chat-title")).toHaveText("general");
+    await expect(pageTwo.getByTestId("chat-title")).toHaveText("general");
+
+    await ensureTimelineScrollable(pageOne, pageTwo, prefix);
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeLessThan(8);
+
+    await pageOne.getByTestId("message-input").fill(incomingMessage);
+    await pageOne.getByTestId("send-message").click();
+
+    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
+      incomingMessage,
+    );
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeLessThan(8);
+    await expect(pageTwo.getByTestId("message-scroll-to-latest")).toHaveCount(
+      0,
+    );
+  } finally {
+    await contextOne.close();
+    await contextTwo.close();
+  }
+});
+
+test("stays pinned after you send a message and a remote reply arrives right after", async ({
+  browser,
+}: {
+  browser: Browser;
+}) => {
+  const contextOne = await browser.newContext();
+  const contextTwo = await browser.newContext();
+  const pageOne = await contextOne.newPage();
+  const pageTwo = await contextTwo.newPage();
+  const prefix = `Reply after send ${Date.now()}`;
+  const localMessage = `${prefix} local`;
+  const incomingMessage = `${prefix} incoming`;
+
+  try {
+    await installRelayBridge(pageOne, "tyler");
+    await installRelayBridge(pageTwo, "alice");
+
+    await pageOne.goto("/");
+    await pageTwo.goto("/");
+
+    await pageOne.getByTestId("channel-general").click();
+    await pageTwo.getByTestId("channel-general").click();
+    await expect(pageOne.getByTestId("chat-title")).toHaveText("general");
+    await expect(pageTwo.getByTestId("chat-title")).toHaveText("general");
+
+    await ensureTimelineScrollable(pageOne, pageTwo, prefix);
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeLessThan(8);
+
+    await pageTwo.getByTestId("message-input").fill(localMessage);
+    await pageTwo.getByTestId("send-message").click();
+    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
+      localMessage,
+    );
+
+    await pageOne.getByTestId("message-input").fill(incomingMessage);
+    await pageOne.getByTestId("send-message").click();
+
+    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
+      incomingMessage,
+    );
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeLessThan(8);
+    await expect(pageTwo.getByTestId("message-scroll-to-latest")).toHaveCount(
+      0,
+    );
+  } finally {
+    await contextOne.close();
+    await contextTwo.close();
+  }
+});
+
+test("keeps bottom-pinned scrolling after the composer grows", async ({
+  browser,
+}: {
+  browser: Browser;
+}) => {
+  const contextOne = await browser.newContext();
+  const contextTwo = await browser.newContext();
+  const pageOne = await contextOne.newPage();
+  const pageTwo = await contextTwo.newPage();
+  const prefix = `Composer pinned ${Date.now()}`;
+  const incomingMessage = `${prefix} incoming`;
+  const receiverInput = pageTwo.getByTestId("message-input");
+
+  try {
+    await installRelayBridge(pageOne, "tyler");
+    await installRelayBridge(pageTwo, "alice");
+
+    await pageOne.goto("/");
+    await pageTwo.goto("/");
+
+    await pageOne.getByTestId("channel-general").click();
+    await pageTwo.getByTestId("channel-general").click();
+    await expect(pageOne.getByTestId("chat-title")).toHaveText("general");
+    await expect(pageTwo.getByTestId("chat-title")).toHaveText("general");
+
+    await ensureTimelineScrollable(pageOne, pageTwo, prefix);
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeLessThan(8);
+
+    await receiverInput.fill("Composer pinned line one");
+    await receiverInput.press("Enter");
+    await receiverInput.type("Composer pinned line two");
+    await receiverInput.press("Enter");
+    await receiverInput.type("Composer pinned line three");
+    await receiverInput.press("Enter");
+    await receiverInput.type("Composer pinned line four");
+
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeLessThan(8);
+
+    await pageOne.getByTestId("message-input").fill(incomingMessage);
+    await pageOne.getByTestId("send-message").click();
+
+    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
+      incomingMessage,
+    );
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeLessThan(8);
+    await expect(pageTwo.getByTestId("message-scroll-to-latest")).toHaveCount(
+      0,
+    );
+  } finally {
+    await contextOne.close();
+    await contextTwo.close();
+  }
+});
+
+test("keeps scroll position when new messages arrive above the fold", async ({
+  browser,
+}: {
+  browser: Browser;
+}) => {
+  const contextOne = await browser.newContext();
+  const contextTwo = await browser.newContext();
+  const pageOne = await contextOne.newPage();
+  const pageTwo = await contextTwo.newPage();
+  const prefix = `Scroll behavior ${Date.now()}`;
+  const incomingMessage = `${prefix} incoming`;
+
+  try {
+    await installRelayBridge(pageOne, "tyler");
+    await installRelayBridge(pageTwo, "alice");
+
+    await pageOne.goto("/");
+    await pageTwo.goto("/");
+
+    await pageOne.getByTestId("channel-general").click();
+    await pageTwo.getByTestId("channel-general").click();
+    await expect(pageOne.getByTestId("chat-title")).toHaveText("general");
+    await expect(pageTwo.getByTestId("chat-title")).toHaveText("general");
+
+    await ensureTimelineScrollable(pageOne, pageTwo, prefix);
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeLessThan(8);
+
+    await pageTwo.getByTestId("message-timeline").evaluate((element) => {
+      const timeline = element as HTMLDivElement;
+      timeline.scrollTop = 0;
+    });
+
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeGreaterThan(160);
+
+    await pageOne.getByTestId("message-input").fill(incomingMessage);
+    await pageOne.getByTestId("send-message").click();
+
+    await expect(pageTwo.getByTestId("message-scroll-to-latest")).toContainText(
+      "1 new message",
+    );
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeGreaterThan(160);
+
+    await pageTwo.getByTestId("message-scroll-to-latest").click();
+
+    await expect
+      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
+      .toBeLessThan(8);
+  } finally {
+    await contextOne.close();
+    await contextTwo.close();
+  }
+});

@@ -35,12 +35,6 @@ export function formatTimelineMessages(
   return events.map((event) => ({
     id: event.id,
     author: formatMessageAuthor(event, channel, currentPubkey),
-    role:
-      currentPubkey && event.pubkey === currentPubkey
-        ? "Local"
-        : channel?.channelType === "dm"
-          ? "Participant"
-          : "Pubkey",
     time: new Intl.DateTimeFormat("en-US", {
       hour: "numeric",
       minute: "2-digit",

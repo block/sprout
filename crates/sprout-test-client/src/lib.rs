@@ -14,7 +14,6 @@ use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tracing::debug;
 
-// Re-export shared relay wire types from sprout-mcp.
 pub use sprout_mcp::relay_client::{parse_relay_message, OkResponse, RelayMessage};
 
 /// Errors returned by [`SproutTestClient`] operations.

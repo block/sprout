@@ -13,6 +13,8 @@
 pub mod api_token;
 /// Channel and membership persistence.
 pub mod channel;
+/// Direct message channel persistence.
+pub mod dm;
 /// Database error types.
 pub mod error;
 /// Event storage and retrieval.
@@ -21,6 +23,10 @@ pub mod event;
 pub mod feed;
 /// Monthly table partition management.
 pub mod partition;
+/// Reaction persistence.
+pub mod reaction;
+/// Thread metadata persistence.
+pub mod thread;
 /// User profile persistence.
 pub mod user;
 /// Workflow, run, and approval persistence.
@@ -133,9 +139,68 @@ impl Db {
         event::query_events(&self.pool, q).await
     }
 
-    /// Fetches a single event by its raw ID bytes. Returns `None` if not found.
+    /// Fetches a single non-deleted event by its raw ID bytes.
+    ///
+    /// Returns `None` if the event does not exist or has been soft-deleted.
     pub async fn get_event_by_id(&self, id_bytes: &[u8]) -> Result<Option<StoredEvent>> {
         event::get_event_by_id(&self.pool, id_bytes).await
+    }
+
+    /// Fetches a single event by ID, **including soft-deleted rows**.
+    ///
+    /// Most callers should use [`get_event_by_id`] instead.
+    pub async fn get_event_by_id_including_deleted(
+        &self,
+        id_bytes: &[u8],
+    ) -> Result<Option<StoredEvent>> {
+        event::get_event_by_id_including_deleted(&self.pool, id_bytes).await
+    }
+
+    /// Atomically insert an event and its thread metadata in one transaction.
+    ///
+    /// Prevents the race where a concurrent delete between separate insert calls
+    /// could leave reply counters permanently inflated.
+    pub async fn insert_event_with_thread_metadata(
+        &self,
+        ev: &nostr::Event,
+        channel_id: Option<Uuid>,
+        thread_meta: Option<event::ThreadMetadataParams<'_>>,
+    ) -> Result<(StoredEvent, bool)> {
+        event::insert_event_with_thread_metadata(&self.pool, ev, channel_id, thread_meta).await
+    }
+
+    /// Soft-delete an event. Returns `true` if the event was deleted.
+    pub async fn soft_delete_event(&self, event_id: &[u8]) -> Result<bool> {
+        event::soft_delete_event(&self.pool, event_id).await
+    }
+
+    /// Atomically soft-delete an event and decrement thread counters in one transaction.
+    pub async fn soft_delete_event_and_update_thread(
+        &self,
+        event_id: &[u8],
+        parent_event_id: Option<&[u8]>,
+        root_event_id: Option<&[u8]>,
+    ) -> Result<bool> {
+        event::soft_delete_event_and_update_thread(
+            &self.pool,
+            event_id,
+            parent_event_id,
+            root_event_id,
+        )
+        .await
+    }
+
+    /// Returns the timestamp of the most recent non-deleted event in a channel.
+    pub async fn get_last_message_at(&self, channel_id: Uuid) -> Result<Option<DateTime<Utc>>> {
+        event::get_last_message_at(&self.pool, channel_id).await
+    }
+
+    /// Bulk-fetch last message timestamps for multiple channels in one query.
+    pub async fn get_last_message_at_bulk(
+        &self,
+        channel_ids: &[Uuid],
+    ) -> Result<std::collections::HashMap<Uuid, DateTime<Utc>>> {
+        event::get_last_message_at_bulk(&self.pool, channel_ids).await
     }
 
     // ── Feed ─────────────────────────────────────────────────────────────────
@@ -174,7 +239,7 @@ impl Db {
 
     // ── Channels ─────────────────────────────────────────────────────────────
 
-    /// Creates a new channel and returns the resulting record.
+    /// Creates a new channel, bootstraps the creator as owner, and returns the record.
     pub async fn create_channel(
         &self,
         name: &str,
@@ -272,11 +337,232 @@ impl Db {
         channel::get_users_bulk(&self.pool, pubkeys).await
     }
 
+    // ── Channel Metadata ─────────────────────────────────────────────────────
+
+    /// Updates a channel's name and/or description.
+    pub async fn update_channel(
+        &self,
+        channel_id: Uuid,
+        updates: channel::ChannelUpdate,
+    ) -> Result<channel::ChannelRecord> {
+        channel::update_channel(&self.pool, channel_id, updates).await
+    }
+
+    /// Sets the topic for a channel.
+    pub async fn set_topic(&self, channel_id: Uuid, topic: &str, set_by: &[u8]) -> Result<()> {
+        channel::set_topic(&self.pool, channel_id, topic, set_by).await
+    }
+
+    /// Sets the purpose for a channel.
+    pub async fn set_purpose(&self, channel_id: Uuid, purpose: &str, set_by: &[u8]) -> Result<()> {
+        channel::set_purpose(&self.pool, channel_id, purpose, set_by).await
+    }
+
+    /// Archives a channel.
+    pub async fn archive_channel(&self, channel_id: Uuid) -> Result<()> {
+        channel::archive_channel(&self.pool, channel_id).await
+    }
+
+    /// Unarchives a channel.
+    pub async fn unarchive_channel(&self, channel_id: Uuid) -> Result<()> {
+        channel::unarchive_channel(&self.pool, channel_id).await
+    }
+
+    /// Soft-delete a channel. Returns `true` if the channel was deleted.
+    pub async fn soft_delete_channel(&self, channel_id: Uuid) -> Result<bool> {
+        channel::soft_delete_channel(&self.pool, channel_id).await
+    }
+
+    /// Returns the count of active members in a channel.
+    pub async fn get_member_count(&self, channel_id: Uuid) -> Result<i64> {
+        channel::get_member_count(&self.pool, channel_id).await
+    }
+
+    /// Bulk-fetch member counts for multiple channels in one query.
+    pub async fn get_member_counts_bulk(
+        &self,
+        channel_ids: &[Uuid],
+    ) -> Result<std::collections::HashMap<Uuid, i64>> {
+        channel::get_member_counts_bulk(&self.pool, channel_ids).await
+    }
+
+    /// Returns the active role of a pubkey in a channel.
+    pub async fn get_member_role(&self, channel_id: Uuid, pubkey: &[u8]) -> Result<Option<String>> {
+        channel::get_member_role(&self.pool, channel_id, pubkey).await
+    }
+
+    // ── Threads ───────────────────────────────────────────────────────────────
+
+    /// Insert a row into `thread_metadata`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_thread_metadata(
+        &self,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        channel_id: Uuid,
+        parent_event_id: Option<&[u8]>,
+        parent_event_created_at: Option<DateTime<Utc>>,
+        root_event_id: Option<&[u8]>,
+        root_event_created_at: Option<DateTime<Utc>>,
+        depth: i32,
+        broadcast: bool,
+    ) -> Result<()> {
+        thread::insert_thread_metadata(
+            &self.pool,
+            event_id,
+            event_created_at,
+            channel_id,
+            parent_event_id,
+            parent_event_created_at,
+            root_event_id,
+            root_event_created_at,
+            depth,
+            broadcast,
+        )
+        .await
+    }
+
+    /// Fetch replies within a thread, optionally limited by depth.
+    pub async fn get_thread_replies(
+        &self,
+        root_event_id: &[u8],
+        depth_limit: Option<u32>,
+        limit: u32,
+        cursor: Option<&[u8]>,
+    ) -> Result<Vec<thread::ThreadReply>> {
+        thread::get_thread_replies(&self.pool, root_event_id, depth_limit, limit, cursor).await
+    }
+
+    /// Get aggregated thread statistics for a root message.
+    pub async fn get_thread_summary(
+        &self,
+        event_id: &[u8],
+    ) -> Result<Option<thread::ThreadSummary>> {
+        thread::get_thread_summary(&self.pool, event_id).await
+    }
+
+    /// Get top-level channel messages with optional thread summaries.
+    pub async fn get_channel_messages_top_level(
+        &self,
+        channel_id: Uuid,
+        limit: u32,
+        before: Option<DateTime<Utc>>,
+    ) -> Result<Vec<thread::TopLevelMessage>> {
+        thread::get_channel_messages_top_level(&self.pool, channel_id, limit, before).await
+    }
+
+    /// Decrement reply counts when a thread reply is deleted.
+    ///
+    /// Decrements `reply_count` on the parent and `descendant_count` on the root
+    /// (floor at 0). Mirrors [`thread::increment_reply_count`] exactly.
+    pub async fn decrement_reply_count(
+        &self,
+        parent_event_id: &[u8],
+        root_event_id: Option<&[u8]>,
+    ) -> Result<()> {
+        thread::decrement_reply_count(&self.pool, parent_event_id, root_event_id).await
+    }
+
+    /// Fetch a raw thread_metadata row by event ID.
+    pub async fn get_thread_metadata_by_event(
+        &self,
+        event_id: &[u8],
+    ) -> Result<Option<thread::ThreadMetadataRecord>> {
+        thread::get_thread_metadata_by_event(&self.pool, event_id).await
+    }
+
+    // ── DMs ───────────────────────────────────────────────────────────────────
+
+    /// Open (or find existing) a DM channel for the given set of pubkeys.
+    pub async fn open_dm(
+        &self,
+        pubkeys: &[&[u8]],
+        created_by: &[u8],
+    ) -> Result<(channel::ChannelRecord, bool)> {
+        dm::open_dm(&self.pool, pubkeys, created_by).await
+    }
+
+    /// List all DM conversations for a given user.
+    pub async fn list_dms_for_user(
+        &self,
+        pubkey: &[u8],
+        limit: u32,
+        cursor: Option<Uuid>,
+    ) -> Result<Vec<dm::DmRecord>> {
+        dm::list_dms_for_user(&self.pool, pubkey, limit, cursor).await
+    }
+
+    /// Find an existing DM by its participant hash.
+    pub async fn find_dm_by_participants(
+        &self,
+        participant_hash: &[u8],
+    ) -> Result<Option<channel::ChannelRecord>> {
+        dm::find_dm_by_participants(&self.pool, participant_hash).await
+    }
+
+    // ── Reactions ─────────────────────────────────────────────────────────────
+
+    /// Add (or re-activate) a reaction.
+    pub async fn add_reaction(
+        &self,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        pubkey: &[u8],
+        emoji: &str,
+    ) -> Result<bool> {
+        reaction::add_reaction(&self.pool, event_id, event_created_at, pubkey, emoji).await
+    }
+
+    /// Soft-delete a reaction.
+    pub async fn remove_reaction(
+        &self,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        pubkey: &[u8],
+        emoji: &str,
+    ) -> Result<bool> {
+        reaction::remove_reaction(&self.pool, event_id, event_created_at, pubkey, emoji).await
+    }
+
+    /// Get all active reactions for an event, grouped by emoji.
+    pub async fn get_reactions(
+        &self,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> Result<Vec<reaction::ReactionGroup>> {
+        reaction::get_reactions(&self.pool, event_id, event_created_at, limit, cursor).await
+    }
+
+    /// Batch-fetch emoji counts for a set of (event_id, event_created_at) pairs.
+    pub async fn get_reactions_bulk(
+        &self,
+        event_ids: &[(&[u8], DateTime<Utc>)],
+    ) -> Result<Vec<reaction::BulkReactionEntry>> {
+        reaction::get_reactions_bulk(&self.pool, event_ids).await
+    }
+
     // ── Users ────────────────────────────────────────────────────────────────
 
     /// Ensures a user row exists for the given pubkey (upsert).
     pub async fn ensure_user(&self, pubkey: &[u8]) -> Result<()> {
         user::ensure_user(&self.pool, pubkey).await
+    }
+
+    /// Fetch a user profile by pubkey.
+    pub async fn get_user(&self, pubkey: &[u8]) -> Result<Option<user::UserProfile>> {
+        user::get_user(&self.pool, pubkey).await
+    }
+
+    /// Update a user's display_name and/or avatar_url.
+    pub async fn update_user_profile(
+        &self,
+        pubkey: &[u8],
+        display_name: Option<&str>,
+        avatar_url: Option<&str>,
+    ) -> Result<()> {
+        user::update_user_profile(&self.pool, pubkey, display_name, avatar_url).await
     }
 
     // ── API Tokens ───────────────────────────────────────────────────────────
@@ -802,13 +1088,8 @@ mod tests {
             .expect("create");
         assert_eq!(channel.name, "test-membership");
         assert_eq!(channel.description, Some("desc".to_string()));
+        assert!(db.is_member(channel.id, &owner).await.unwrap());
 
-        // Bootstrap owner
-        db.add_member(channel.id, &owner, channel::MemberRole::Owner, Some(&owner))
-            .await
-            .expect("add owner");
-
-        // Add member via owner invite
         db.add_member(
             channel.id,
             &member,
@@ -822,7 +1103,6 @@ mod tests {
         let members = db.get_members(channel.id).await.expect("get members");
         assert_eq!(members.len(), 2);
 
-        // Owner removes member
         db.remove_member(channel.id, &member, &owner)
             .await
             .expect("remove");
@@ -923,17 +1203,14 @@ mod tests {
         .await
         .expect("add rando");
 
-        // Rando cannot remove member
         let result = db.remove_member(channel.id, &member, &rando).await;
         assert!(matches!(result, Err(DbError::AccessDenied(_))));
 
-        // Owner can remove member
         db.remove_member(channel.id, &member, &owner)
             .await
             .expect("owner removes");
         assert!(!db.is_member(channel.id, &member).await.unwrap());
 
-        // Member can remove themselves
         db.remove_member(channel.id, &rando, &rando)
             .await
             .expect("self-remove");

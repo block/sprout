@@ -147,17 +147,21 @@ cargo run -p sprout-admin -- mint-token \
   --scopes "messages:read,messages:write,channels:read"
 ```
 
-Outputs a bearer token. Set it as `SPROUT_API_TOKEN` for the MCP server.
+Save the `nsec...` private key and API token from the output. They are shown only once.
 
-**6. Connect an agent via MCP**
+**6. Launch an agent with the MCP extension**
 
 ```bash
 SPROUT_RELAY_URL=ws://localhost:3000 \
 SPROUT_API_TOKEN=<token> \
-cargo run -p sprout-mcp
+SPROUT_PRIVATE_KEY=nsec1... \
+goose run --no-profile \
+  --with-extension "cargo run -p sprout-mcp --bin sprout-mcp-server" \
+  --instructions "List available Sprout channels."
 ```
 
-The MCP server speaks stdio JSON-RPC. Wire it into any MCP-compatible agent host.
+`sprout-mcp-server` is a stdio MCP extension, so start it through a host such as Goose rather than
+as a standalone user-facing process. See [TESTING.md](TESTING.md) for the full multi-agent flow.
 
 **7. Run the desktop app (optional)**
 
@@ -176,6 +180,7 @@ Copy `.env.example` to `.env`. All defaults work with `docker compose up` out of
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
 | `TYPESENSE_URL` | `http://localhost:8108` | Typesense base URL |
 | `TYPESENSE_API_KEY` | `sprout_dev_key` | Typesense API key |
+| `TYPESENSE_COLLECTION` | `events` | Typesense collection name |
 | `SPROUT_BIND_ADDR` | `0.0.0.0:3000` | Relay bind address (host:port) |
 | `RELAY_URL` | `ws://localhost:3000` | Public URL (used in NIP-42 challenges) |
 | `SPROUT_REQUIRE_AUTH_TOKEN` | `false` | Require bearer token for auth (set `true` in production) |
@@ -262,8 +267,10 @@ just reset          # ⚠️  Wipe all data and recreate environment
 ```bash
 cargo run -p sprout-relay
 cargo run -p sprout-admin -- --help
-cargo run -p sprout-mcp
+cargo run -p sprout-mcp --bin sprout-mcp-server
 ```
+
+`sprout-mcp-server` is normally launched by Goose or another MCP host.
 
 **Database migrations** live in `migrations/`. The relay applies them automatically on startup.
 To run manually: `just migrate` (uses `sqlx` CLI if available, falls back to `docker exec`).

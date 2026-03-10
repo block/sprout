@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use tracing::{debug, warn};
 
 use sprout_core::event::StoredEvent;
+use sprout_core::kind::event_kind_i32;
 
 use crate::error::SearchError;
 
@@ -34,7 +35,7 @@ pub fn event_to_document(event: &StoredEvent) -> Result<Value, SearchError> {
         "id":         nostr_event.id.to_string(),
         "content":    nostr_event.content.as_str(),
         // Cast to i32 for Typesense schema (int32 field). nostr Kind is u16; all Sprout kinds fit in i32.
-        "kind":       nostr_event.kind.as_u16() as i32,
+        "kind":       event_kind_i32(nostr_event),
         "pubkey":     nostr_event.pubkey.to_string(),
         "channel_id": channel_id,
         "created_at": nostr_event.created_at.as_u64() as i64,

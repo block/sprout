@@ -84,6 +84,18 @@ desktop-tauri-check:
 # Run desktop checks suitable for CI / pre-push
 desktop-ci: desktop-check desktop-build desktop-tauri-check
 
+# Seed deterministic channel data for desktop Playwright tests
+desktop-e2e-seed:
+    ./scripts/setup-desktop-test-data.sh
+
+# Run desktop browser smoke tests
+desktop-e2e-smoke:
+    cd {{desktop_dir}} && pnpm test:e2e:smoke
+
+# Run desktop relay-backed e2e tests
+desktop-e2e-integration:
+    cd {{desktop_dir}} && pnpm test:e2e:integration
+
 # Run all checks suitable for CI / pre-push (no infra needed)
 ci: check test-unit desktop-build desktop-tauri-check
 
@@ -136,7 +148,7 @@ migrate:
         echo "sqlx CLI not found — applying migrations via docker exec..."
         for sql_file in migrations/*.sql; do
             echo "  Applying $(basename "$sql_file")..."
-            docker exec -i sprout-mysql mysql -u sprout -psprout_dev sprout < "$sql_file" 2>/dev/null || true
+            docker run --rm -i --network "${SPROUT_DOCKER_NETWORK:-sprout-net}" -e MYSQL_PWD="${SPROUT_DB_PASS:-sprout_dev}" "${SPROUT_DB_CLIENT_IMAGE:-mysql:8.0}" mysql -h"${SPROUT_DOCKER_DB_HOST:-mysql}" -u"${SPROUT_DB_USER:-sprout}" "${SPROUT_DB_NAME:-sprout}" < "$sql_file" 2>/dev/null || true
         done
         echo "Migrations applied."
     fi

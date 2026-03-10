@@ -11,7 +11,11 @@ node_modules
 .pnpm-store
 dist
 dist-ssr
+playwright-report
+test-results
 *.local
+playwright-report
+test-results
 
 # Editor directories and files
 .vscode/*

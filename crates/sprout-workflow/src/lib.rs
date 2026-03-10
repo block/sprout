@@ -15,7 +15,7 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! let engine = WorkflowEngine::new(db, WorkflowConfig::default());
+//! let engine = Arc::new(WorkflowEngine::new(db, WorkflowConfig::default()));
 //!
 //! // Parse and validate a YAML definition.
 //! let (def, json) = WorkflowEngine::parse_yaml(yaml_str)?;
@@ -31,12 +31,15 @@ pub mod error;
 pub mod executor;
 pub mod schema;
 
-pub use error::WorkflowError;
+pub use error::{PartialProgress, WorkflowError};
 pub use executor::ExecutionResult;
 pub use schema::{ActionDef, Step, TriggerDef, WorkflowDef};
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use sprout_core::kind::{event_kind_u32, is_workflow_execution_kind, KIND_REACTION};
+use sprout_db::workflow::RunStatus;
 use sprout_db::Db;
 use tokio::sync::Semaphore;
 
@@ -90,26 +93,125 @@ impl WorkflowEngine {
         schema::parse_yaml(yaml)
     }
 
+    /// Finalize a workflow run after execution completes or fails.
+    ///
+    /// This is the **single** place that maps an executor result to a DB status
+    /// update. All execution paths (event-triggered, manual trigger/webhook,
+    /// approval resume) call this instead of duplicating the 3-way match.
+    ///
+    /// `existing_trace` is prepended to the executor's trace — used by the
+    /// approval-resume path where pre-approval steps already have trace entries.
+    pub async fn finalize_run(
+        &self,
+        run_id: uuid::Uuid,
+        result: Result<ExecutionResult, (WorkflowError, PartialProgress)>,
+        existing_trace: Option<Vec<serde_json::Value>>,
+    ) {
+        let prefix = existing_trace.unwrap_or_default();
+
+        match result {
+            Ok(result) => {
+                let mut full_trace = prefix;
+                full_trace.extend(result.trace);
+                let trace_json = serde_json::Value::Array(full_trace);
+                let step_count = result.step_index as i32;
+
+                if result.approval_token.is_some() {
+                    // Approval gates are not yet implemented (WF-08).
+                    // Fail explicitly rather than creating unreachable WaitingApproval rows.
+                    tracing::warn!(
+                        run_id = %run_id,
+                        step_index = result.step_index,
+                        "Workflow hit approval gate — not yet implemented, marking as failed"
+                    );
+                    if let Err(e) = self
+                        .db
+                        .update_workflow_run(
+                            run_id,
+                            RunStatus::Failed,
+                            step_count,
+                            &trace_json,
+                            Some("approval gates not yet implemented — see WF-08"),
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            run_id = %run_id,
+                            "Failed to update run to Failed (approval gate): {e}"
+                        );
+                    }
+                } else {
+                    tracing::info!(run_id = %run_id, "Workflow run completed");
+                    if let Err(e) = self
+                        .db
+                        .update_workflow_run(
+                            run_id,
+                            RunStatus::Completed,
+                            step_count,
+                            &trace_json,
+                            None,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            run_id = %run_id,
+                            "Failed to update run to Completed: {e}"
+                        );
+                    }
+                }
+            }
+            Err((e, progress)) => {
+                tracing::error!(run_id = %run_id, "Workflow run failed: {e}");
+                let mut full_trace = prefix;
+                full_trace.extend(progress.trace);
+                let trace_json = serde_json::Value::Array(full_trace);
+                if let Err(db_err) = self
+                    .db
+                    .update_workflow_run(
+                        run_id,
+                        RunStatus::Failed,
+                        progress.step_index as i32,
+                        &trace_json,
+                        Some(&e.to_string()),
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        run_id = %run_id,
+                        "Failed to update run to Failed: {db_err}"
+                    );
+                }
+            }
+        }
+    }
+
     /// Called from the event handler post-store hook for every stored event.
     ///
     /// Checks whether any workflow in the event's channel has a matching trigger.
     /// Workflow execution events (kinds 46001–46012) are excluded to prevent loops.
     ///
-    /// Full trigger matching and execution spawning is wired in WF-07/08.
-    pub async fn on_event(&self, event: &sprout_core::StoredEvent) -> Result<(), WorkflowError> {
+    /// The method takes `self: &Arc<Self>` so that the spawned task can hold a
+    /// clone of the `Arc` without requiring `'static` on `&self`.
+    pub async fn on_event(
+        self: &Arc<Self>,
+        event: &sprout_core::StoredEvent,
+    ) -> Result<(), WorkflowError> {
         let Some(channel_id) = event.channel_id else {
+            tracing::debug!(
+                event_id = %event.event.id.to_hex(),
+                kind = event_kind_u32(&event.event),
+                "Skipping workflow trigger — event has no channel_id"
+            );
             return Ok(());
         };
 
-        let kind_u32 = event.event.kind.as_u16() as u32;
+        let kind_u32 = event_kind_u32(&event.event);
 
         // Exclude workflow execution events to prevent infinite loops.
-        // See Decision 10 in PLANS/SPROUT_WORKFLOWS.md.
-        if (46001..=46012).contains(&kind_u32) {
+        if is_workflow_execution_kind(kind_u32) {
             return Ok(());
         }
 
-        // Load enabled workflows for this channel.
         let workflows = self
             .db
             .list_enabled_channel_workflows(channel_id)
@@ -120,35 +222,64 @@ impl WorkflowEngine {
             return Ok(());
         }
 
+        let trigger_ctx = build_trigger_context(event);
+
+        let trigger_ctx_json: serde_json::Value = match serde_json::to_value(&trigger_ctx) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!("Failed to serialize trigger context: {e}");
+                return Ok(());
+            }
+        };
+
         for workflow in &workflows {
-            // Parse the stored JSON definition.
             let def: WorkflowDef = match serde_json::from_value(workflow.definition.clone()) {
                 Ok(d) => d,
                 Err(e) => {
-                    tracing::warn!(
-                        workflow_id = %workflow.id,
-                        "Failed to parse workflow definition: {e}"
-                    );
+                    tracing::warn!(workflow_id = %workflow.id, "Failed to parse definition: {e}");
                     continue;
                 }
             };
 
-            if !def.enabled {
+            if !def.enabled || !trigger_matches_event(&def.trigger, kind_u32) {
                 continue;
             }
 
-            // Check if the trigger type matches the event kind.
-            if !trigger_matches_event(&def.trigger, kind_u32) {
+            if !should_fire_workflow(&def, &trigger_ctx, workflow.id).await {
                 continue;
             }
 
-            // TODO (WF-07): evaluate trigger filter expression, create workflow_run
-            // in DB, build TriggerContext from event, spawn execute_run().
+            let trigger_event_id_bytes = event.event.id.as_bytes().to_vec();
+            let run_id = match self
+                .db
+                .create_workflow_run(
+                    workflow.id,
+                    Some(&trigger_event_id_bytes),
+                    Some(&trigger_ctx_json),
+                )
+                .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!(workflow_id = %workflow.id, "Failed to create run: {e}");
+                    continue;
+                }
+            };
+
             tracing::debug!(
                 workflow_id = %workflow.id,
-                event_kind = kind_u32,
-                "Workflow trigger matched — execution wired in WF-07"
+                run_id = %run_id,
+                "Workflow triggered — spawning execution"
             );
+
+            let engine = Arc::clone(self);
+            let def_clone = def.clone();
+            let ctx_clone = trigger_ctx.clone();
+
+            tokio::spawn(async move {
+                let result = executor::execute_run(&engine, run_id, &def_clone, &ctx_clone).await;
+                engine.finalize_run(run_id, result, None).await;
+            });
         }
 
         Ok(())
@@ -156,17 +287,138 @@ impl WorkflowEngine {
 
     /// Background task for scheduled (cron) triggers.
     ///
-    /// Runs indefinitely. Checks cron schedules every minute and fires
-    /// matching workflows.
-    ///
-    /// TODO (WF-07): implement cron schedule matching and execution.
+    /// Runs indefinitely. Cron trigger matching requires a cross-channel
+    /// workflow query (`list_all_enabled_workflows`) that doesn't exist yet.
+    /// Interval triggers need last-run tracking. Both are deferred to WF-09.
     pub async fn run(&self) {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            // TODO (WF-07): load schedule-triggered workflows, check cron expressions,
-            // spawn executions for any that are due.
-            tracing::debug!("WorkflowEngine::run tick — cron check (not yet implemented)");
+            // Cron trigger matching requires a cross-channel workflow query
+            // (list_all_enabled_workflows) that doesn't exist yet. Interval
+            // triggers need last-run tracking. Both are deferred to WF-09.
+            tracing::trace!("WorkflowEngine::run tick — cron/interval triggers not yet wired");
         }
+    }
+}
+
+// ── Pre-trigger filtering ─────────────────────────────────────────────────────
+
+/// Check emoji and filter-expression conditions that determine whether a
+/// matched workflow should actually fire. Extracted from `on_event` to keep
+/// the per-workflow loop body small.
+///
+/// Returns `true` if the workflow should fire, `false` to skip.
+async fn should_fire_workflow(
+    def: &WorkflowDef,
+    trigger_ctx: &executor::TriggerContext,
+    workflow_id: uuid::Uuid,
+) -> bool {
+    if let TriggerDef::ReactionAdded {
+        emoji: Some(ref expected),
+    } = def.trigger
+    {
+        if &trigger_ctx.emoji != expected {
+            tracing::debug!(
+                workflow_id = %workflow_id,
+                expected_emoji = %expected,
+                actual_emoji = %trigger_ctx.emoji,
+                "Reaction emoji mismatch — skipping workflow"
+            );
+            return false;
+        }
+    }
+
+    if let TriggerDef::MessagePosted {
+        filter: Some(ref expr),
+    } = def.trigger
+    {
+        match executor::evaluate_condition(expr, trigger_ctx, &HashMap::new()).await {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::debug!(
+                    workflow_id = %workflow_id,
+                    "Trigger filter evaluated false — skipping workflow"
+                );
+                return false;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    workflow_id = %workflow_id,
+                    "Trigger filter error: {e} — skipping workflow"
+                );
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+// ── Trigger context builder ───────────────────────────────────────────────────
+
+/// Build a [`executor::TriggerContext`] from a [`sprout_core::StoredEvent`].
+///
+/// - `text` — event content (message body or reaction emoji character)
+/// - `author` — pubkey hex string
+/// - `channel_id` — channel UUID as string (empty if no channel scope)
+/// - `timestamp` — Unix timestamp as string
+/// - `emoji` — for `KIND_REACTION` events, the content is the emoji; otherwise empty
+/// - `message_id` — for reactions, the target message's event ID (from `e` tag);
+///   for all other events, the event's own ID
+pub fn build_trigger_context(event: &sprout_core::StoredEvent) -> executor::TriggerContext {
+    let kind_u32 = event_kind_u32(&event.event);
+    let content = event.event.content.clone();
+
+    // For reaction events (NIP-25), the content field holds the emoji character
+    // or shortcode (e.g. "👍", "+", "-"). Expose it as `emoji`.
+    let emoji = if kind_u32 == KIND_REACTION {
+        content.clone()
+    } else {
+        String::new()
+    };
+
+    // For reactions (NIP-25), `message_id` should be the target message, not
+    // the reaction event itself. NIP-25 stores the target in an `e` tag whose
+    // value is a 64-char hex event ID (not a UUID channel reference).
+    // Per NIP-25, the last `e` tag is the direct target (earlier ones may be thread roots).
+    let message_id = if kind_u32 == KIND_REACTION {
+        event
+            .event
+            .tags
+            .iter()
+            .rev()
+            .find_map(|tag| {
+                let key = tag.kind().to_string();
+                if key == "e" {
+                    tag.content().and_then(|v| {
+                        // Distinguish hex event IDs (64 chars) from UUID channel refs.
+                        if v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()) {
+                            Some(v.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                }
+            })
+            // Fallback to the reaction event's own ID if no valid `e` tag found.
+            .unwrap_or_else(|| event.event.id.to_hex())
+    } else {
+        event.event.id.to_hex()
+    };
+
+    executor::TriggerContext {
+        text: content,
+        author: event.event.pubkey.to_hex(),
+        channel_id: event
+            .channel_id
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+        timestamp: event.event.created_at.as_u64().to_string(),
+        emoji,
+        message_id,
+        webhook_fields: HashMap::new(),
     }
 }
 
@@ -210,7 +462,6 @@ steps:
         let (def, json) = WorkflowEngine::parse_yaml(yaml).expect("parse failed");
         assert_eq!(def.name, "Test Workflow");
 
-        // JSON must round-trip.
         let reparsed: WorkflowDef = serde_json::from_str(&json).expect("json round-trip");
         assert_eq!(reparsed.name, def.name);
         assert_eq!(reparsed.steps.len(), 1);
@@ -257,7 +508,10 @@ steps:
             &trigger,
             sprout_core::kind::KIND_REACTION
         ));
-        assert!(!trigger_matches_event(&trigger, 46001));
+        assert!(!trigger_matches_event(
+            &trigger,
+            sprout_core::kind::KIND_WORKFLOW_TRIGGERED
+        ));
     }
 
     #[test]
@@ -326,7 +580,9 @@ steps:
         let msg_trigger = TriggerDef::MessagePosted { filter: None };
         let react_trigger = TriggerDef::ReactionAdded { emoji: None };
 
-        for kind in 46001u32..=46012 {
+        for kind in sprout_core::kind::KIND_WORKFLOW_TRIGGERED
+            ..=sprout_core::kind::KIND_WORKFLOW_APPROVAL_DENIED
+        {
             assert!(
                 !trigger_matches_event(&msg_trigger, kind),
                 "message_posted should not match workflow execution kind {kind}"
@@ -363,5 +619,140 @@ steps:
         };
         assert_eq!(cfg.max_concurrent, 50);
         assert_eq!(cfg.default_timeout_secs, 600);
+    }
+
+    // ── build_trigger_context ─────────────────────────────────────────────────
+
+    fn make_message_event() -> sprout_core::StoredEvent {
+        use nostr::{EventBuilder, Keys, Kind};
+        use uuid::Uuid;
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(40001), "hello world", [])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        sprout_core::StoredEvent::new(event, Some(Uuid::new_v4()))
+    }
+
+    /// Create a reaction event with an `e` tag pointing to a target message.
+    fn make_reaction_event() -> (sprout_core::StoredEvent, String) {
+        use nostr::{EventBuilder, Keys, Kind, Tag};
+        use uuid::Uuid;
+        let keys = Keys::generate();
+        // Create a dummy target message ID (64-char hex).
+        let target_keys = Keys::generate();
+        let target_event = EventBuilder::new(Kind::Custom(40001), "target msg", [])
+            .sign_with_keys(&target_keys)
+            .expect("sign target");
+        let target_id_hex = target_event.id.to_hex();
+        // NIP-25: reaction references the target via an `e` tag.
+        let e_tag = Tag::parse(&["e", &target_id_hex]).expect("tag parse");
+        let event = EventBuilder::new(Kind::Reaction, "👍", [e_tag])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        (
+            sprout_core::StoredEvent::new(event, Some(Uuid::new_v4())),
+            target_id_hex,
+        )
+    }
+
+    #[test]
+    fn build_trigger_context_message_event() {
+        let stored = make_message_event();
+        let ctx = build_trigger_context(&stored);
+
+        assert_eq!(ctx.text, "hello world");
+        assert_eq!(ctx.author, stored.event.pubkey.to_hex());
+        assert_eq!(ctx.channel_id, stored.channel_id.unwrap().to_string());
+        assert_eq!(ctx.timestamp, stored.event.created_at.as_u64().to_string());
+        assert_eq!(ctx.message_id, stored.event.id.to_hex());
+        // Non-reaction events have empty emoji.
+        assert_eq!(ctx.emoji, "");
+        assert!(ctx.webhook_fields.is_empty());
+    }
+
+    #[test]
+    fn build_trigger_context_reaction_event() {
+        let (stored, target_id_hex) = make_reaction_event();
+        let ctx = build_trigger_context(&stored);
+
+        // For reactions, content IS the emoji.
+        assert_eq!(ctx.text, "👍");
+        assert_eq!(ctx.emoji, "👍");
+        assert_eq!(ctx.author, stored.event.pubkey.to_hex());
+        // message_id should be the TARGET message, not the reaction event itself.
+        assert_eq!(ctx.message_id, target_id_hex);
+        assert_ne!(ctx.message_id, stored.event.id.to_hex());
+        assert!(ctx.webhook_fields.is_empty());
+    }
+
+    #[test]
+    fn build_trigger_context_no_channel_id() {
+        use nostr::{EventBuilder, Keys, Kind};
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(40001), "msg", [])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        // channel_id = None (global/DM event)
+        let stored = sprout_core::StoredEvent::new(event, None);
+        let ctx = build_trigger_context(&stored);
+
+        assert_eq!(ctx.channel_id, "");
+        assert_eq!(ctx.text, "msg");
+    }
+
+    #[test]
+    fn build_trigger_context_author_is_hex_pubkey() {
+        let stored = make_message_event();
+        let ctx = build_trigger_context(&stored);
+        // Pubkey hex is 64 lowercase hex characters.
+        assert_eq!(ctx.author.len(), 64);
+        assert!(ctx.author.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn build_trigger_context_message_id_is_hex() {
+        let stored = make_message_event();
+        let ctx = build_trigger_context(&stored);
+        // Event ID hex is 64 lowercase hex characters.
+        assert_eq!(ctx.message_id.len(), 64);
+        assert!(ctx.message_id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn build_trigger_context_timestamp_is_numeric_string() {
+        let stored = make_message_event();
+        let ctx = build_trigger_context(&stored);
+        // Timestamp must parse as a u64.
+        ctx.timestamp
+            .parse::<u64>()
+            .expect("timestamp should be a u64 string");
+    }
+
+    #[test]
+    fn test_build_trigger_context_reaction_multiple_e_tags() {
+        // NIP-25: last e tag is the direct target, first may be thread root
+        use nostr::{EventBuilder, EventId, Keys, Kind, Tag};
+        use uuid::Uuid;
+
+        let keys = Keys::generate();
+        let thread_root_id = EventId::all_zeros();
+        let direct_target_id = EventId::from_byte_array([0x42; 32]);
+
+        let event = EventBuilder::new(
+            Kind::Reaction,
+            "👍",
+            [
+                Tag::parse(&["e", &thread_root_id.to_hex()]).unwrap(),
+                Tag::parse(&["e", &direct_target_id.to_hex()]).unwrap(),
+            ],
+        )
+        .sign_with_keys(&keys)
+        .expect("sign");
+
+        let stored = sprout_core::StoredEvent::new(event, Some(Uuid::new_v4()));
+        let ctx = build_trigger_context(&stored);
+
+        // Should pick the LAST e tag (direct target), not the first (thread root)
+        assert_eq!(ctx.message_id, direct_target_id.to_hex());
     }
 }

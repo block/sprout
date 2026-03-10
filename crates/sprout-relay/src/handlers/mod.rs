@@ -4,3 +4,5 @@ pub mod auth;
 pub mod close;
 pub mod event;
 pub mod req;
+/// NIP-29 and NIP-25 side-effect handlers.
+pub mod side_effects;

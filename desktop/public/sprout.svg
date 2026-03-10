@@ -1,69 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
-  <defs>
-    <linearGradient id="sprout-bg" x1="92" y1="72" x2="432" y2="448" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#225E39" />
-      <stop offset="1" stop-color="#112C1C" />
-    </linearGradient>
-    <radialGradient id="sprout-glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(380 126) rotate(119.845) scale(152.955)">
-      <stop stop-color="#B6F06B" stop-opacity=".4" />
-      <stop offset="1" stop-color="#B6F06B" stop-opacity="0" />
-    </radialGradient>
-    <linearGradient id="sprout-leaf-left" x1="123" y1="188" x2="252" y2="282" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#B9F173" />
-      <stop offset="1" stop-color="#63BD43" />
-    </linearGradient>
-    <linearGradient id="sprout-leaf-right" x1="270" y1="169" x2="421" y2="274" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#97E45F" />
-      <stop offset="1" stop-color="#4FA53A" />
-    </linearGradient>
-    <linearGradient id="sprout-soil" x1="171" y1="309" x2="341" y2="403" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#D89747" />
-      <stop offset="1" stop-color="#8D5228" />
-    </linearGradient>
-  </defs>
-  <rect x="32" y="32" width="448" height="448" rx="112" fill="url(#sprout-bg)" />
-  <circle cx="380" cy="126" r="124" fill="url(#sprout-glow)" />
-  <path
-    d="M149 346c0-31 25-56 56-56h102c31 0 56 25 56 56 0 49-43 70-107 70s-107-21-107-70Z"
-    fill="#714121"
-  />
-  <ellipse cx="256" cy="347" rx="80" ry="32" fill="url(#sprout-soil)" />
-  <path
-    d="M256 339c-8-39-7-83 12-125"
-    stroke="#DAF9B8"
-    stroke-linecap="round"
-    stroke-width="22"
-  />
-  <path
-    d="M259 239c-33-43-80-60-136-54 2 52 33 90 87 100 24 4 44-9 49-46Z"
-    fill="url(#sprout-leaf-left)"
-  />
-  <path
-    d="M270 220c39-46 91-66 153-56-4 57-38 92-98 99-24 3-43-11-55-43Z"
-    fill="url(#sprout-leaf-right)"
-  />
-  <path
-    d="M210 252c-14-18-30-33-50-45"
-    stroke="#E7FBD0"
-    stroke-linecap="round"
-    stroke-width="10"
-    opacity=".75"
-  />
-  <path
-    d="M315 242c22-26 46-43 73-55"
-    stroke="#D8F5B8"
-    stroke-linecap="round"
-    stroke-width="10"
-    opacity=".65"
-  />
-  <path
-    d="M231 316c2 17 15 31 32 31 18 0 33-15 35-34 2-17-8-31-24-35-18-5-39 8-43 27Z"
-    fill="#E09A49"
-  />
-  <path
-    d="M244 308c6-7 15-11 24-10"
-    stroke="#F7C97C"
-    stroke-linecap="round"
-    stroke-width="8"
-  />
+<svg width="360" height="360" viewBox="0 0 360 360" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g transform="translate(32.4 32.4) scale(0.82)">
+<path d="M180 160V170H170V160H180Z" fill="black"/>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M270 0C319.706 0 360 40.2944 360 90V270C360 319.706 319.706 360 270 360H200V350H190V290H200V280H210V270H260V260H270V250H280V240H290V230H300V220H310V210H330V200H310V190H240V200H220V210H210V220H200V240H220V230H230V220H250V210H270V220H250V230H230V240H220V250H210V260H200V270H190V200H180V260H170V250H160V240H140V230H160V240H170V220H160V210H150V200H140V190H120V180H50V190H30V200H40V210H50V220H60V230H70V240H80V250H90V260H160V280H170V360H90C40.2944 360 0 319.706 0 270V90C0 40.2944 40.2944 0 90 0H270ZM150 110V130H160V150H150V180H160V190H170V200H180V170H190V200H200V190H210V170H200V150H190V140H180V130H170V120H160V110H150Z" fill="black"/>
+<path d="M140 220V230H130V220H140Z" fill="black"/>
+<path d="M130 210V220H110V210H130Z" fill="black"/>
+<path d="M110 200V210H90V200H110Z" fill="black"/>
+</g>
 </svg>

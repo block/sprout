@@ -68,15 +68,16 @@ async fn main() -> anyhow::Result<()> {
     );
     info!("Redis pub/sub connected");
 
-    let pubsub_clone = Arc::clone(&pubsub);
-    tokio::spawn(async move { pubsub_clone.run_subscriber().await });
+    // TODO: spawn pubsub.run_subscriber() for multi-node fan-out.
+    // Currently no consumer calls subscribe_local(), so the subscriber
+    // would process Redis messages into a broadcast channel with zero receivers.
 
     let auth = AuthService::new(config.auth.clone());
 
     let search_config = SearchConfig {
         url: config.typesense_url.clone(),
         api_key: config.typesense_key.clone(),
-        collection: "events".to_string(),
+        collection: std::env::var("TYPESENSE_COLLECTION").unwrap_or_else(|_| "events".to_string()),
     };
     let search = SearchService::new(search_config);
     if let Err(e) = search.ensure_collection().await {
@@ -86,9 +87,16 @@ async fn main() -> anyhow::Result<()> {
     let workflow_config = sprout_workflow::WorkflowConfig::default();
     let workflow_engine = Arc::new(WorkflowEngine::new(db.clone(), workflow_config));
 
-    // Spawn cron scheduler background task
-    let wf_clone = Arc::clone(&workflow_engine);
-    tokio::spawn(async move { wf_clone.run().await });
+    let wf_cron = Arc::clone(&workflow_engine);
+    tokio::spawn(async move { wf_cron.run().await });
+
+    let relay_keypair = if let Some(hex) = &config.relay_private_key {
+        nostr::Keys::parse(hex).expect("invalid SPROUT_RELAY_PRIVATE_KEY")
+    } else {
+        let keys = nostr::Keys::generate();
+        tracing::info!("Generated relay keypair: {}", keys.public_key().to_hex());
+        keys
+    };
 
     let state = Arc::new(AppState::new(
         config.clone(),
@@ -98,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
         auth,
         search,
         workflow_engine,
+        relay_keypair,
     ));
     let router = build_router(Arc::clone(&state));
 

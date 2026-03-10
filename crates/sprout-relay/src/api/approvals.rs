@@ -49,9 +49,9 @@ fn check_approver_spec(
         return Ok(());
     }
 
-    // Exact pubkey match (64-char lowercase hex).
+    // Exact pubkey match (64-char hex, case-insensitive).
     if spec.len() == 64 && spec.chars().all(|c| c.is_ascii_hexdigit()) {
-        if requester_hex == spec {
+        if requester_hex.to_lowercase() == spec.to_lowercase() {
             return Ok(());
         }
         return Err(forbidden(
@@ -86,6 +86,16 @@ async fn resume_workflow_after_approval(
             return;
         }
     };
+
+    // Guard: only resume runs that are actually waiting for approval.
+    // A stale approval token could otherwise resurrect a cancelled/failed/completed run.
+    if run.status != sprout_db::workflow::RunStatus::WaitingApproval {
+        tracing::warn!(
+            "grant_approval: run {run_id} has status '{}', expected 'waiting_approval' — ignoring stale approval",
+            run.status
+        );
+        return;
+    }
 
     let workflow = match db.get_workflow(workflow_id).await {
         Ok(w) => w,
@@ -142,21 +152,10 @@ async fn resume_workflow_after_approval(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    // Mark the run as Running again before resuming.
-    if let Err(e) = db
-        .update_workflow_run(
-            run_id,
-            sprout_db::workflow::RunStatus::Running,
-            resume_index as i32,
-            &run.execution_trace,
-            None,
-        )
-        .await
-    {
-        tracing::error!("grant_approval: failed to set Running status for run {run_id}: {e}");
-    }
-
-    match sprout_workflow::executor::execute_from_step(
+    // Execute remaining steps and finalize the run.
+    // Pass existing trace so finalize_run merges pre-approval + post-approval entries.
+    let existing_trace = run.execution_trace.as_array().cloned();
+    let result = sprout_workflow::executor::execute_from_step(
         &engine,
         run_id,
         &def,
@@ -164,106 +163,8 @@ async fn resume_workflow_after_approval(
         resume_index,
         Some(initial_outputs),
     )
-    .await
-    {
-        Ok(result) if result.approval_token.is_none() => {
-            let mut full_trace = run.execution_trace.as_array().cloned().unwrap_or_default();
-            full_trace.extend(result.trace);
-            let trace_json = serde_json::Value::Array(full_trace);
-            if let Err(e) = db
-                .update_workflow_run(
-                    run_id,
-                    sprout_db::workflow::RunStatus::Completed,
-                    result.step_index as i32,
-                    &trace_json,
-                    None,
-                )
-                .await
-            {
-                tracing::error!(
-                    "grant_approval: failed to set Completed status for run {run_id}: {e}"
-                );
-            }
-        }
-        Ok(result) => {
-            // Suspended again at another approval gate.
-            let next_token = match result.approval_token {
-                Some(t) => t,
-                None => {
-                    tracing::error!(
-                        "grant_approval: expected approval_token but got None for run {run_id}"
-                    );
-                    return;
-                }
-            };
-            let suspended_step_index = result.step_index;
-            let mut full_trace = run.execution_trace.as_array().cloned().unwrap_or_default();
-            full_trace.extend(result.trace);
-            let trace_json = serde_json::Value::Array(full_trace);
-
-            if let Err(e) = db
-                .update_workflow_run(
-                    run_id,
-                    sprout_db::workflow::RunStatus::WaitingApproval,
-                    suspended_step_index as i32,
-                    &trace_json,
-                    None,
-                )
-                .await
-            {
-                tracing::error!(
-                    "grant_approval: failed to set WaitingApproval status for run {run_id}: {e}"
-                );
-            }
-
-            if let Some(suspended_step) = def.steps.get(suspended_step_index) {
-                let approver_spec = match &suspended_step.action {
-                    sprout_workflow::ActionDef::RequestApproval { from, .. } => from.clone(),
-                    _ => "any".to_string(),
-                };
-                let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
-                if let Err(e) = db
-                    .create_approval(sprout_db::workflow::CreateApprovalParams {
-                        token: &next_token,
-                        workflow_id,
-                        run_id,
-                        step_id: &suspended_step.id,
-                        step_index: suspended_step_index as i32,
-                        approver_spec: &approver_spec,
-                        expires_at,
-                    })
-                    .await
-                {
-                    tracing::error!(
-                        "grant_approval: failed to create approval record for run {run_id}: {e}"
-                    );
-                }
-            }
-
-            tracing::info!(
-                "workflow run {} suspended again at step {} (token: <redacted>)",
-                run_id,
-                suspended_step_index,
-            );
-        }
-        Err(e) => {
-            tracing::error!("workflow run {run_id} failed after approval resume: {e}");
-            if let Err(db_err) = db
-                .update_workflow_run(
-                    run_id,
-                    sprout_db::workflow::RunStatus::Failed,
-                    resume_index as i32,
-                    &run.execution_trace,
-                    Some(&e.to_string()),
-                )
-                .await
-            {
-                tracing::error!(
-                    "grant_approval: failed to set Failed status for run {run_id}: {db_err}"
-                );
-            }
-        }
-    }
+    .await;
+    engine.finalize_run(run_id, result, existing_trace).await;
 }
 
 // ── POST /api/approvals/:token/grant ─────────────────────────────────────────
@@ -276,7 +177,7 @@ pub async fn grant_approval(
     headers: HeaderMap,
     Path(token): Path<String>,
     body: Option<Json<ApprovalBody>>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let (pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
 
     let approval = state
@@ -327,12 +228,15 @@ pub async fn grant_approval(
         resume_workflow_after_approval(engine, db, run_id, workflow_id, resume_index).await;
     });
 
-    Ok(Json(serde_json::json!({
-        "token": token,
-        "status": "granted",
-        "run_id": approval.run_id.to_string(),
-        "workflow_id": approval.workflow_id.to_string(),
-    })))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "token": token,
+            "status": "granted",
+            "run_id": approval.run_id.to_string(),
+            "workflow_id": approval.workflow_id.to_string(),
+        })),
+    ))
 }
 
 // ── POST /api/approvals/:token/deny ──────────────────────────────────────────
@@ -345,7 +249,7 @@ pub async fn deny_approval(
     headers: HeaderMap,
     Path(token): Path<String>,
     body: Option<Json<ApprovalBody>>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let (pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
 
     let approval = state
@@ -384,25 +288,36 @@ pub async fn deny_approval(
         return Err(api_error(StatusCode::CONFLICT, "approval already acted on"));
     }
 
-    // Mark the workflow run as Cancelled.
+    // Mark the workflow run as Cancelled — only if it's still WaitingApproval.
+    // A run that has already transitioned to Failed/Completed/Cancelled through
+    // another path (e.g., timeout, manual cancel) must not be overwritten.
     let run_id = approval.run_id;
     let pubkey_for_msg = pubkey.to_hex();
     let db = state.db.clone();
     tokio::spawn(async move {
-        let (current_step, trace) = match db.get_workflow_run(run_id).await {
-            Ok(r) => (r.current_step, r.execution_trace),
+        let run = match db.get_workflow_run(run_id).await {
+            Ok(r) => r,
             Err(e) => {
                 tracing::error!("deny_approval: failed to fetch run {run_id}: {e}");
-                (0, serde_json::Value::Array(vec![]))
+                return;
             }
         };
+
+        if run.status != sprout_db::workflow::RunStatus::WaitingApproval {
+            tracing::warn!(
+                "deny_approval: run {run_id} has status '{}', expected 'waiting_approval' — skipping cancellation",
+                run.status
+            );
+            return;
+        }
+
         let cancel_msg = format!("workflow cancelled: approval denied by {pubkey_for_msg}");
         if let Err(e) = db
             .update_workflow_run(
                 run_id,
                 sprout_db::workflow::RunStatus::Cancelled,
-                current_step,
-                &trace,
+                run.current_step,
+                &run.execution_trace,
                 Some(&cancel_msg),
             )
             .await
@@ -411,12 +326,15 @@ pub async fn deny_approval(
         }
     });
 
-    Ok(Json(serde_json::json!({
-        "token": token,
-        "status": "denied",
-        "run_id": approval.run_id.to_string(),
-        "workflow_id": approval.workflow_id.to_string(),
-    })))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "token": token,
+            "status": "denied",
+            "run_id": approval.run_id.to_string(),
+            "workflow_id": approval.workflow_id.to_string(),
+        })),
+    ))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -500,13 +418,10 @@ mod tests {
     }
 
     #[test]
-    fn uppercase_hex_spec_is_rejected_as_unrecognised() {
-        // Spec must be lowercase hex — uppercase fails the `is_ascii_hexdigit` path length check
-        // (it IS hex digits, but the spec says 64-char lowercase; uppercase passes hexdigit but
-        // won't match a lowercase requester_hex, so it falls through to the role branch).
+    fn uppercase_hex_spec_is_accepted_case_insensitive() {
+        // Uppercase hex spec should now succeed — comparison is case-insensitive.
         let upper = ALICE_HEX.to_uppercase();
         let result = check_approver_spec(&upper, &upper.to_lowercase());
-        // Either forbidden (no match) or forbidden (unrecognised spec) — both are errors.
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 }

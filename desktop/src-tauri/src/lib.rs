@@ -2,6 +2,7 @@ use std::sync::Mutex;
 
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, ToBech32};
 use serde::{Deserialize, Serialize};
+use tauri_plugin_window_state::StateFlags;
 
 pub struct AppState {
     pub keys: Mutex<Keys>,
@@ -24,6 +25,58 @@ pub struct ChannelInfo {
     pub participant_pubkeys: Vec<String>,
 }
 
+#[derive(Serialize)]
+struct CreateChannelBody<'a> {
+    name: &'a str,
+    channel_type: &'a str,
+    visibility: &'a str,
+    description: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct GetFeedQuery<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    since: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    types: Option<&'a str>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FeedItemInfo {
+    pub id: String,
+    pub kind: u32,
+    pub pubkey: String,
+    pub content: String,
+    pub created_at: u64,
+    pub channel_id: Option<String>,
+    pub channel_name: String,
+    pub tags: Vec<Vec<String>>,
+    pub category: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FeedSections {
+    pub mentions: Vec<FeedItemInfo>,
+    pub needs_action: Vec<FeedItemInfo>,
+    pub activity: Vec<FeedItemInfo>,
+    pub agent_activity: Vec<FeedItemInfo>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FeedMeta {
+    pub since: i64,
+    pub total: u64,
+    pub generated_at: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FeedResponse {
+    pub feed: FeedSections,
+    pub meta: FeedMeta,
+}
+
 fn relay_ws_url() -> String {
     std::env::var("SPROUT_RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
 }
@@ -43,11 +96,28 @@ async fn build_authed_request(
     path: &str,
     state: &AppState,
 ) -> Result<reqwest::RequestBuilder, String> {
-    let keys = state.keys.lock().map_err(|e| e.to_string())?;
-    let pubkey_hex = keys.public_key().to_hex();
+    let pubkey_hex = auth_pubkey_header(state)?;
     let url = format!("{}{}", relay_api_base_url(), path);
 
     Ok(client.get(url).header("X-Pubkey", pubkey_hex))
+}
+
+fn auth_pubkey_header(state: &AppState) -> Result<String, String> {
+    let keys = state.keys.lock().map_err(|e| e.to_string())?;
+    Ok(keys.public_key().to_hex())
+}
+
+async fn relay_error_message(response: reqwest::Response) -> String {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
+        if let Some(message) = value.get("error").and_then(serde_json::Value::as_str) {
+            return format!("relay returned {status}: {message}");
+        }
+    }
+
+    format!("relay returned {status}: {body}")
 }
 
 #[tauri::command]
@@ -128,13 +198,77 @@ async fn get_channels(state: tauri::State<'_, AppState>) -> Result<Vec<ChannelIn
         .map_err(|e| format!("request failed: {e}"))?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("relay returned {status}: {body}"));
+        return Err(relay_error_message(response).await);
     }
 
     response
         .json::<Vec<ChannelInfo>>()
+        .await
+        .map_err(|e| format!("parse failed: {e}"))
+}
+
+#[tauri::command]
+async fn create_channel(
+    name: String,
+    channel_type: String,
+    visibility: String,
+    description: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<ChannelInfo, String> {
+    let pubkey_hex = auth_pubkey_header(&state)?;
+    let url = format!("{}{}", relay_api_base_url(), "/api/channels");
+    let response = state
+        .http_client
+        .post(url)
+        .header("X-Pubkey", pubkey_hex)
+        .json(&CreateChannelBody {
+            name: &name,
+            channel_type: &channel_type,
+            visibility: &visibility,
+            description: description.as_deref(),
+        })
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(relay_error_message(response).await);
+    }
+
+    response
+        .json::<ChannelInfo>()
+        .await
+        .map_err(|e| format!("parse failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_feed(
+    since: Option<i64>,
+    limit: Option<u32>,
+    types: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<FeedResponse, String> {
+    let pubkey_hex = auth_pubkey_header(&state)?;
+    let url = format!("{}{}", relay_api_base_url(), "/api/feed");
+    let response = state
+        .http_client
+        .get(url)
+        .header("X-Pubkey", pubkey_hex)
+        .query(&GetFeedQuery {
+            since,
+            limit,
+            types: types.as_deref(),
+        })
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(relay_error_message(response).await);
+    }
+
+    response
+        .json::<FeedResponse>()
         .await
         .map_err(|e| format!("parse failed: {e}"))
 }
@@ -148,6 +282,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_websocket::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
@@ -156,6 +297,8 @@ pub fn run() {
             sign_event,
             create_auth_event,
             get_channels,
+            create_channel,
+            get_feed,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

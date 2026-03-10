@@ -186,15 +186,12 @@ mod tests {
 
     #[test]
     fn test_webhook_event_variants() {
-        // room_started
         let ev = signed_parse(r#"{"event":"room_started","room":{"name":"r1"}}"#).unwrap();
         assert_eq!(ev, WebhookEvent::RoomStarted { room: "r1".into() });
 
-        // room_finished
         let ev = signed_parse(r#"{"event":"room_finished","room":{"name":"r1"}}"#).unwrap();
         assert_eq!(ev, WebhookEvent::RoomFinished { room: "r1".into() });
 
-        // participant_joined
         let ev = signed_parse(
             r#"{"event":"participant_joined","room":{"name":"r1"},"participant":{"identity":"alice"}}"#,
         )
@@ -207,7 +204,6 @@ mod tests {
             }
         );
 
-        // participant_left
         let ev = signed_parse(
             r#"{"event":"participant_left","room":{"name":"r1"},"participant":{"identity":"alice"}}"#,
         )
@@ -220,7 +216,6 @@ mod tests {
             }
         );
 
-        // track_published — audio (default)
         let ev = signed_parse(
             r#"{"event":"track_published","room":{"name":"r1"},"participant":{"identity":"alice"},"track":{"type":"audio"}}"#,
         )
@@ -234,7 +229,6 @@ mod tests {
             }
         );
 
-        // track_published — video
         let ev = signed_parse(
             r#"{"event":"track_published","room":{"name":"r1"},"participant":{"identity":"alice"},"track":{"type":"video"}}"#,
         )
@@ -248,7 +242,6 @@ mod tests {
             }
         );
 
-        // track_published — screen_share
         let ev = signed_parse(
             r#"{"event":"track_published","room":{"name":"r1"},"participant":{"identity":"alice"},"track":{"type":"screen_share"}}"#,
         )

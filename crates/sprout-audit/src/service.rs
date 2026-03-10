@@ -3,6 +3,8 @@ use futures_util::FutureExt as _;
 use sqlx::{Acquire, MySqlPool, Row};
 use tracing::{debug, instrument, warn};
 
+use sprout_core::kind::KIND_AUTH;
+
 use crate::{
     action::AuditAction,
     entry::{AuditEntry, NewAuditEntry},
@@ -11,7 +13,6 @@ use crate::{
     schema::AUDIT_SCHEMA_SQL,
 };
 
-const KIND_AUTH: u32 = 22242;
 const AUDIT_LOCK_NAME: &str = "sprout_audit";
 const AUDIT_LOCK_TIMEOUT_SECS: i64 = 10;
 
@@ -74,7 +75,6 @@ impl AuditService {
             .catch_unwind()
             .await;
 
-        // Always release the lock before returning the connection to the pool.
         let _ = sqlx::query("DO RELEASE_LOCK(?)")
             .bind(AUDIT_LOCK_NAME)
             .execute(&mut *conn)

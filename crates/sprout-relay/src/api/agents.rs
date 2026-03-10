@@ -42,7 +42,6 @@ pub async fn agents_handler(
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
-    // Collect pubkeys for bulk presence lookup.
     let mut pubkeys_for_presence: Vec<nostr::PublicKey> = Vec::new();
     let mut bot_pubkey_hexes: Vec<String> = Vec::new();
 
@@ -64,7 +63,6 @@ pub async fn agents_handler(
             Default::default()
         });
 
-    // Fetch user records for name resolution.
     let user_records = state
         .db
         .get_users_bulk(&bots.iter().map(|b| b.pubkey.clone()).collect::<Vec<_>>())
@@ -85,7 +83,6 @@ pub async fn agents_handler(
     let mut result = Vec::with_capacity(bots.len());
 
     for (bot, hex) in bots.iter().zip(bot_pubkey_hexes.iter()) {
-        // Resolve display name: users table → bot record → test mapping → fallback.
         let name = user_name_map
             .get(hex.as_str())
             .cloned()
@@ -95,7 +92,6 @@ pub async fn agents_handler(
                 format!("agent-{}", &hex[..end])
             });
 
-        // Parse channel names from comma-separated string, filtered to requester's access.
         let channels: Vec<&str> = bot
             .channel_names
             .split(',')
@@ -103,7 +99,6 @@ pub async fn agents_handler(
             .filter(|s| !s.is_empty() && accessible_names.contains(*s))
             .collect();
 
-        // Parse capabilities from JSON value.
         let capabilities: Vec<String> = bot
             .capabilities
             .as_ref()
@@ -115,7 +110,6 @@ pub async fn agents_handler(
             })
             .unwrap_or_default();
 
-        // Presence status.
         let status = presence_map
             .get(hex.as_str())
             .map(|s| s.as_str())

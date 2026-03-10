@@ -222,7 +222,7 @@ Steps 10–12 are fire-and-forget: they are spawned as independent async tasks. 
 
 Step 9 (fan-out) also checks global subscriptions (no `channel_id` constraint) — broad subscriptions receive channel-scoped events if their filters match.
 
-Workflow loop prevention: kinds 46001–46012 (workflow execution events) are excluded from triggering workflows. Exception: stream message kinds (40001, 40002) always trigger regardless of other exclusion rules.
+Workflow loop prevention: kinds 46001–46012 (workflow execution events) are excluded from triggering workflows. Exception: stream message kind 40001 (`KIND_STREAM_MESSAGE`) always triggers regardless of other exclusion rules. Kind 40002 (`KIND_STREAM_MESSAGE_V2`) does not trigger workflows.
 
 ### Ephemeral Sub-Pipeline (kinds 20000–29999)
 
