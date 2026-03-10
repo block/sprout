@@ -1,7 +1,7 @@
 //! HTTP REST API handlers for the Sprout relay.
 //!
 //! Endpoints are split into focused submodules:
-//!   - `channels`  — GET /api/channels
+//!   - `channels`  — GET/POST /api/channels
 //!   - `search`    — GET /api/search
 //!   - `agents`    — GET /api/agents
 //!   - `presence`  — GET /api/presence
@@ -29,7 +29,7 @@ pub mod workflows;
 // Re-export all public handlers so router.rs can use `api::*_handler` unchanged.
 pub use agents::agents_handler;
 pub use approvals::{deny_approval, grant_approval};
-pub use channels::channels_handler;
+pub use channels::{channels_handler, create_channel};
 pub use feed::feed_handler;
 pub use presence::presence_handler;
 pub use search::search_handler;

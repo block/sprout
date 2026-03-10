@@ -20,10 +20,10 @@ function MessageRow({ message }: { message: TimelineMessage }) {
     .toUpperCase();
 
   return (
-    <article className="flex gap-4">
+    <article className="flex gap-3">
       <div
         className={cn(
-          "flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-sm font-semibold shadow-sm",
+          "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-semibold shadow-sm",
           message.accent
             ? "bg-primary text-primary-foreground"
             : "bg-secondary text-secondary-foreground",
@@ -32,20 +32,26 @@ function MessageRow({ message }: { message: TimelineMessage }) {
         {initials}
       </div>
 
-      <div className="min-w-0 flex-1 space-y-2">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h3 className="font-semibold tracking-tight">{message.author}</h3>
-          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-            {message.role}
-          </p>
-          <p className="text-sm text-muted-foreground">{message.time}</p>
-          {message.pending ? (
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-primary/80">
-              Sending
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h3 className="truncate text-sm font-semibold tracking-tight">
+            {message.author}
+          </h3>
+          {message.role ? (
+            <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+              {message.role}
             </p>
           ) : null}
+          <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+            {message.pending ? (
+              <p className="font-medium uppercase tracking-[0.14em] text-primary/80">
+                Sending
+              </p>
+            ) : null}
+            <p className="whitespace-nowrap">{message.time}</p>
+          </div>
         </div>
-        <Markdown className="max-w-3xl" content={message.body} />
+        <Markdown className="max-w-3xl" compact content={message.body} />
       </div>
     </article>
   );
@@ -57,10 +63,10 @@ function TimelineSkeleton() {
   return (
     <>
       {skeletonRows.map((row) => (
-        <div className="flex gap-4" key={row}>
-          <Skeleton className="h-11 w-11 rounded-2xl" />
-          <div className="min-w-0 flex-1 space-y-2">
-            <Skeleton className="h-4 w-40" />
+        <div className="flex gap-3" key={row}>
+          <Skeleton className="h-9 w-9 rounded-xl" />
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <Skeleton className="h-3.5 w-44" />
             <Skeleton className="h-4 w-full max-w-2xl" />
             <Skeleton className="h-4 w-full max-w-xl" />
           </div>
@@ -77,8 +83,8 @@ export function MessageTimeline({
   emptyDescription = "Send the first message to start the thread.",
 }: MessageTimelineProps) {
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-6 sm:px-6">
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+    <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-4 sm:px-6">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
         <div className="flex items-center gap-4">
           <Separator className="flex-1" />
           <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">

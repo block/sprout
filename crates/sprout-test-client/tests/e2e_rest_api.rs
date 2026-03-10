@@ -20,10 +20,9 @@
 //!
 //! # Channel setup
 //!
-//! The relay does not expose a REST endpoint to create channels — channels are
-//! created via the DB (seeded at startup). Tests use the pre-seeded open
-//! channels (`general`, `agents`, `projects`, etc.) for read operations and
-//! send messages via WebSocket to set up search / feed data.
+//! The relay exposes REST endpoints to list and create channels. Tests use the
+//! pre-seeded open channels (`general`, `agents`, `projects`, etc.) for read
+//! operations and create temporary channels for write coverage when needed.
 
 use std::time::Duration;
 
@@ -61,6 +60,22 @@ async fn authed_get(client: &Client, url: &str, pubkey_hex: &str) -> reqwest::Re
         .send()
         .await
         .unwrap_or_else(|e| panic!("HTTP GET {url} failed: {e}"))
+}
+
+/// Make an authenticated POST request using the `X-Pubkey` dev-mode header.
+async fn authed_post_json(
+    client: &Client,
+    url: &str,
+    pubkey_hex: &str,
+    body: serde_json::Value,
+) -> reqwest::Response {
+    client
+        .post(url)
+        .header("X-Pubkey", pubkey_hex)
+        .json(&body)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("HTTP POST {url} failed: {e}"))
 }
 
 /// Known open channel IDs seeded in the dev database.
@@ -108,6 +123,59 @@ async fn test_list_channels_returns_expected_fields() {
             "channel missing 'description' field"
         );
     }
+}
+
+/// POST /api/channels creates a new channel owned by the requester.
+#[tokio::test]
+#[ignore]
+async fn test_create_channel_returns_channel_record() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+    let url = format!("{}/api/channels", relay_http_url());
+    let channel_name = format!("desktop-create-{}", uuid::Uuid::new_v4());
+
+    let resp = authed_post_json(
+        &client,
+        &url,
+        &pubkey_hex,
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "private",
+            "description": "Created by the REST API test"
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        resp.status(),
+        201,
+        "expected 201 Created from POST /api/channels"
+    );
+
+    let created: serde_json::Value = resp.json().await.expect("response must be JSON");
+    assert!(created.get("id").is_some(), "channel missing 'id' field");
+    assert_eq!(created["name"].as_str(), Some(channel_name.as_str()));
+    assert_eq!(created["channel_type"].as_str(), Some("stream"));
+    assert_eq!(
+        created["description"].as_str(),
+        Some("Created by the REST API test")
+    );
+
+    let list_resp = authed_get(&client, &url, &pubkey_hex).await;
+    assert_eq!(
+        list_resp.status(),
+        200,
+        "expected 200 OK from /api/channels"
+    );
+    let channels: Vec<serde_json::Value> = list_resp.json().await.expect("response must be JSON");
+    assert!(
+        channels
+            .iter()
+            .any(|channel| channel["id"] == created["id"] && channel["name"] == created["name"]),
+        "newly-created private channel should be visible to its creator"
+    );
 }
 
 /// Open channels are visible to any authenticated user (no prior membership required).
