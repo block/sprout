@@ -47,9 +47,9 @@ fn http_client() -> Client {
 
 /// Known open channel IDs seeded in the dev database.
 ///
-/// These are stable across relay restarts because they are inserted with
-/// explicit UUIDs in the seed migration.
-const CHANNEL_GENERAL: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
+/// These are UUID5-derived from the channel name and are stable across relay
+/// restarts as long as the seed data uses the same namespace + name inputs.
+const CHANNEL_GENERAL: &str = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 
 /// A seeded user pubkey that exists in the `users` table.
 ///

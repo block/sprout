@@ -29,10 +29,10 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-// ── Seeded channel IDs (stable across relay restarts) ─────────────────────────
+// ── Seeded channel IDs (UUID5-derived, stable across relay restarts) ──────────
 
-const CHANNEL_GENERAL: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
-const CHANNEL_PROJECTS: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2";
+const CHANNEL_GENERAL: &str = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
+const CHANNEL_ENGINEERING: &str = "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -546,7 +546,7 @@ async fn test_mcp_create_and_trigger_workflow() {
     let create_resp = session.call_tool(
         "create_workflow",
         json!({
-            "channel_id": CHANNEL_PROJECTS,
+            "channel_id": CHANNEL_ENGINEERING,
             "yaml_definition": yaml_definition,
         }),
     );
@@ -588,7 +588,7 @@ async fn test_mcp_create_and_trigger_workflow() {
     let list_resp = session.call_tool(
         "list_workflows",
         json!({
-            "channel_id": CHANNEL_PROJECTS,
+            "channel_id": CHANNEL_ENGINEERING,
         }),
     );
 
