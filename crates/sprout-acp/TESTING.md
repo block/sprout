@@ -497,11 +497,12 @@ The harness calls the relay's REST API to discover channels associated with the 
 
 ```sql
 -- Check agent channel membership
-SELECT c.uuid, c.name
-FROM channels c
-JOIN channel_members cm ON cm.channel_id = c.id
-JOIN nostr_keys nk ON nk.id = cm.nostr_key_id
-WHERE HEX(nk.pubkey) = 'ae670a075ac2446f445808ab5a1a796cec37c72c70b25e10ee39f7f0eab50feb';
+SELECT HEX(c.id) as channel_id, c.name
+
+
+
+FROM channels c JOIN channel_members cm ON cm.channel_id = c.id
+WHERE HEX(cm.pubkey) = 'ae670a075ac2446f445808ab5a1a796cec37c72c70b25e10ee39f7f0eab50feb';
 ```
 
 ---
@@ -678,8 +679,8 @@ ORDER BY e.created_at DESC LIMIT 20;
 SELECT c.uuid, c.name
 FROM channels c
 JOIN channel_members cm ON cm.channel_id = c.id
-JOIN nostr_keys nk ON nk.id = cm.nostr_key_id
-WHERE HEX(nk.pubkey) = 'ae670a075ac2446f445808ab5a1a796cec37c72c70b25e10ee39f7f0eab50feb';
+
+WHERE HEX(cm.pubkey) = 'ae670a075ac2446f445808ab5a1a796cec37c72c70b25e10ee39f7f0eab50feb';
 ```
 
 ### Relay Health
@@ -801,8 +802,8 @@ Restart harness after setting.
 SELECT c.uuid, c.name
 FROM channels c
 JOIN channel_members cm ON cm.channel_id = c.id
-JOIN nostr_keys nk ON nk.id = cm.nostr_key_id
-WHERE HEX(nk.pubkey) = 'ae670a075ac2446f445808ab5a1a796cec37c72c70b25e10ee39f7f0eab50feb';
+
+WHERE HEX(cm.pubkey) = 'ae670a075ac2446f445808ab5a1a796cec37c72c70b25e10ee39f7f0eab50feb';
 ```
 
 ---

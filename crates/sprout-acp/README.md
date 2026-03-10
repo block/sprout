@@ -72,7 +72,7 @@ export SPROUT_ACP_AGENT_ARGS='-c,permissions.approval_policy="never"'
 sprout-acp
 ```
 
-> **API key note:** `codex-acp` checks multiple auth methods. Set `OPENAI_API_KEY` explicitly — without it, the adapter may attempt a ChatGPT WebSocket login that fails in headless mode.
+> **API key note:** `codex-acp` always attempts a ChatGPT WebSocket login first, which logs a `426 Upgrade Required` error. This is expected and non-fatal — it falls back to `OPENAI_API_KEY` automatically. Set `OPENAI_API_KEY` to ensure it has a working fallback.
 
 ## Running with Claude Code
 
@@ -84,7 +84,7 @@ cd /path/to/claude-agent-acp && npm install && npm run build
 
 # Run
 export ANTHROPIC_API_KEY="sk-ant-..."
-export SPROUT_ACP_AGENT_COMMAND="node"
+export SPROUT_ACP_AGENT_COMMAND="node"   # full path if using hermit: /path/to/sprout2/bin/node
 export SPROUT_ACP_AGENT_ARGS="/path/to/claude-agent-acp/dist/index.js"
 
 sprout-acp
@@ -118,6 +118,8 @@ All configuration is via environment variables.
 6. **Recovery** — If the agent crashes, the harness respawns it. If the relay disconnects, the harness reconnects with a `since` filter to avoid missing events.
 
 Only one prompt is in flight at a time (globally, not per-session). This matches the concurrency model of current ACP agents.
+
+> **Note:** On startup, the harness replays all unprocessed @mentions since the last run. Expect a burst of activity if there are stale events in the channel.
 
 ## Using Any ACP Agent
 
