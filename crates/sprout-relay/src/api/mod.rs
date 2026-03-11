@@ -14,6 +14,8 @@
 pub mod agents;
 /// Workflow approval grant/deny endpoints.
 pub mod approvals;
+/// Canvas (shared document) endpoints.
+pub mod canvas;
 /// Channel CRUD and membership endpoints.
 pub mod channels;
 /// Channel metadata endpoints (get, update, topic, purpose, archive).
@@ -44,6 +46,7 @@ pub mod workflows;
 // Re-export all public handlers so router.rs can use `api::*_handler` unchanged.
 pub use agents::agents_handler;
 pub use approvals::{deny_approval, grant_approval};
+pub use canvas::{get_canvas, set_canvas};
 pub use channels::{channels_handler, create_channel};
 pub use channels_metadata::{
     archive_channel_handler, delete_channel_handler, get_channel_handler, set_purpose_handler,

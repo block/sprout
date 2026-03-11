@@ -83,6 +83,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/channels/{channel_id}/unarchive",
             post(api::unarchive_channel_handler),
         )
+        // Canvas routes
+        .route(
+            "/api/channels/{channel_id}/canvas",
+            get(api::get_canvas).put(api::set_canvas),
+        )
         // Message + thread routes
         .route(
             "/api/channels/{channel_id}/messages",

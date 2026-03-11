@@ -134,7 +134,7 @@ Set `SPROUT_ACP_AGENT_COMMAND` and `SPROUT_ACP_AGENT_ARGS` to point at your agen
 
 ## Testing
 
-See [TESTING.md](TESTING.md) for the full integration testing guide — 9 test scenarios, verification commands, troubleshooting, and CI integration notes.
+See the [root TESTING.md](../../TESTING.md) for the full integration testing guide — automated test suites, multi-agent E2E testing via the ACP harness, and troubleshooting.
 
 ## License
 

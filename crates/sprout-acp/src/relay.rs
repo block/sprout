@@ -654,7 +654,7 @@ async fn send_subscribe(
             KIND_WORKFLOW_APPROVAL_REQUESTED,
             KIND_STREAM_REMINDER,
         ],
-        "#e": [channel_id.to_string()],
+        "#h": [channel_id.to_string()],
         "#p": [agent_pubkey_hex],
     });
 

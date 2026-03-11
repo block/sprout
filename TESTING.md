@@ -1,322 +1,1271 @@
-# Sprout — Local Testing Guide
+# Sprout Testing Guide
 
-How to run a local Sprout instance and test it with multiple goose agents communicating over the relay.
+This guide enables an AI agent (the **operator**) to run the full Sprout test suite: automated `cargo test` suites and a three-agent multi-agent E2E run that exercises all 36 MCP tools against a live relay.
 
----
+## Two Test Modes
 
-## 1. Overview
+| Mode | What It Does | When to Use |
+|------|-------------|-------------|
+| **Automated** (`cargo test`) | Unit tests + REST/WebSocket/MCP integration tests | Fast CI check; verify no unit regressions |
+| **Multi-Agent E2E** | Three agents (Alice, Bob, Charlie) run via `sprout-acp` harness, exercising all 36 MCP tools via real Nostr identities | Before merging relay/MCP/auth changes; full regression run; exploring new features |
 
-This guide walks through:
-1. Starting the backing services (MySQL, Redis, Typesense) via Docker Compose
-2. Building and running the relay server
-3. Creating test channels and adding members via SQL
-4. Minting API tokens for each agent via `sprout-admin`
-5. Launching goose agents with the `sprout-mcp` extension
-6. Verifying that agents can send and receive messages
-7. Running the automated test suite (unit + integration + e2e)
-
-**Outcome:** Two or more goose agents connected to a local relay, exchanging messages through a shared channel, with all traffic verifiable in relay logs and the database.
+Run both modes for a complete regression check. Run automated-only for a fast sanity check.
 
 ---
 
-## 2. Prerequisites
+## Table of Contents
 
-| Requirement | Version | Notes |
-|-------------|---------|-------|
-| Docker + Docker Compose | 24+ | `docker compose` (v2 plugin) |
-| Rust toolchain | 1.88+ | via [Hermit](https://cashapp.github.io/hermit/) or `rustup` |
-| goose CLI | latest | `goose --version` |
-| `mysql` client | any | for running SQL commands; or use Adminer at http://localhost:8082 |
-
-**Hermit (recommended):** If the repo has a `.hermit/` directory, activate it with `. bin/activate-hermit` — this pins the exact Rust version.
+1. [Prerequisites](#1-prerequisites)
+2. [Quick Start: Automated Tests Only](#2-quick-start-automated-tests-only)
+3. [Multi-Agent E2E Testing](#3-multi-agent-e2e-testing)
+   - [3.1 Architecture](#31-architecture)
+   - [3.2 Infrastructure Setup](#32-infrastructure-setup)
+   - [3.3 Mint Agent Keys](#33-mint-agent-keys)
+   - [3.4 Launch Harness Instances](#34-launch-harness-instances)
+   - [3.5 Test Exercises](#35-test-exercises)
+   - [3.6 Monitoring & Verification](#36-monitoring--verification)
+   - [3.7 Expected Results](#37-expected-results)
+4. [Advanced: ACP Harness Scenarios](#4-advanced-acp-harness-scenarios)
+5. [Workflow YAML Reference](#5-workflow-yaml-reference)
+6. [The 36 MCP Tools](#6-the-36-mcp-tools)
+7. [Cleanup](#7-cleanup)
+8. [Known Issues / Troubleshooting](#8-known-issues--troubleshooting)
 
 ---
 
-## 3. Start Infrastructure
+## 1. Prerequisites
+
+Verify each requirement before proceeding. All commands must succeed.
+
+### Docker
 
 ```bash
-cd REPOS/sprout
+docker --version
+# Required: any recent version
 
-# Copy env config (only needed once)
-cp .env.example .env
+docker compose version
+# Required: v2+ (uses "docker compose", not "docker-compose")
+```
 
-# Start MySQL, Redis, Typesense, and Adminer
+### Rust 1.88+
+
+```bash
+# From the sprout repo root — use Hermit if system Rust is older than 1.88
+. bin/activate-hermit
+
+rustc --version
+# Required: rustc 1.88.0 or newer
+```
+
+### goose CLI
+
+```bash
+goose --version
+# Must be on $PATH and configured with a valid provider/model
+
+goose run --help | head -5
+# Must not error
+```
+
+### sqlx-cli
+
+```bash
+sqlx --version
+# If missing:
+cargo install sqlx-cli --no-default-features --features mysql
+```
+
+### screen
+
+```bash
+screen --version
+# Must print a version string (note: on macOS this exits with code 1 — that's fine)
+# If missing: brew install screen
+```
+
+### All clear
+
+If all commands above print version info, proceed. If any binary is missing, install it first — the tests will not work without all prerequisites.
+
+---
+
+## 2. Quick Start: Automated Tests Only
+
+Run this when you want a fast check without spinning up multi-agent infrastructure.
+
+```bash
+# Enter the repo and activate toolchain FIRST — all subsequent commands
+# assume you are in the sprout repo root with hermit activated.
+cd /path/to/sprout   # e.g. ~/Development/goosetown_oss/REPOS/sprout
+. bin/activate-hermit
+```
+
+### Check for existing infrastructure
+
+If Docker services or a relay are already running from a previous session, you can
+leave the Docker services up and just reset the database and relay:
+
+```bash
+# Kill any existing relay
+screen -S relay -X quit 2>/dev/null
+lsof -ti :3000 | xargs kill -9 2>/dev/null
+
+# Check Docker services — if already running, skip `docker compose up`
+docker compose ps --format '{{.Name}} {{.Status}}' 2>/dev/null
+# If mysql/redis/typesense show "Up", you can skip to "Setup and build" below.
+# If not running:
 docker compose up -d
+```
 
-# Verify all services are healthy
+> **Port conflicts:** If `docker compose up -d` fails with "port already allocated",
+> a container from another project may be using the port. Find it with
+> `docker ps --format '{{.Names}} {{.Ports}}'` and stop it manually.
+
+> **Keycloak:** You may see `sprout-keycloak` as `unhealthy` or `starting` — this
+> is fine. Keycloak is only needed for token-based auth and is not required for
+> automated tests (which use dev-mode `X-Pubkey` header auth). You may also see
+> extra containers like `sprout-postgres` from other projects — ignore them.
+
+### Setup and build
+
+```bash
+# Configure environment
+[ -f .env ] || cp .env.example .env
+# Load env vars — ALWAYS required, even if .env already existed
+export $(cat .env | grep -v "^#" | grep -v "^$" | xargs) 2>/dev/null
+
+# Reset database (fresh state for tests)
+docker exec sprout-mysql mysql -u root -psprout_dev -e \
+  "DROP DATABASE IF EXISTS sprout; CREATE DATABASE sprout;" 2>/dev/null
+sqlx migrate run --database-url "$DATABASE_URL"
+
+# Build the full workspace (relay, MCP server, ACP harness, test client, etc.)
+cargo build --release --workspace
+
+# Run unit tests
+cargo test --workspace
+```
+
+### Integration Tests (require running relay)
+
+Start the relay (kill any stale instance first):
+
+```bash
+screen -S relay -X quit 2>/dev/null
+lsof -ti :3000 | xargs kill -9 2>/dev/null; sleep 1
+screen -dmS relay bash -c \
+  'export $(cat .env | grep -v "^#" | grep -v "^$" | xargs) 2>/dev/null; \
+   ./target/release/sprout-relay 2>&1 | tee /tmp/sprout-relay.log'
+sleep 3 && curl -s http://localhost:3000/health
+# Must print: ok
+```
+
+Then run the integration suites:
+
+```bash
+# REST API integration tests (20 tests)
+RELAY_URL=ws://localhost:3000 \
+  cargo test -p sprout-test-client --test e2e_rest_api -- --ignored
+
+# WebSocket relay integration tests (13 tests)
+RELAY_URL=ws://localhost:3000 \
+  cargo test -p sprout-test-client --test e2e_relay -- --ignored
+
+# MCP server integration tests (7 tests)
+RELAY_URL=ws://localhost:3000 \
+  cargo test -p sprout-test-client --test e2e_mcp -- --ignored
+```
+
+### Expected Results
+
+```
+test result: ok. 20 passed; 0 failed; 0 ignored   ← REST API
+test result: ok. 13 passed; 0 failed; 0 ignored   ← relay
+test result: ok.  7 passed; 0 failed; 0 ignored   ← MCP
+```
+
+All 40 integration tests pass. If any fail, check that the relay is running and Docker services are healthy before proceeding to E2E.
+
+---
+
+## 3. Multi-Agent E2E Testing
+
+### 3.1 Architecture
+
+The E2E suite uses the `sprout-acp` harness — a process that bridges Sprout relay events to AI agents over the ACP protocol. The operator sends `@mention` events via the `mention` binary; each harness instance picks up mentions targeting its agent's pubkey and forwards them to a goose session with Sprout MCP tools pre-configured.
+
+```
+Operator (you)
+    │
+    │  mention <channel> <pubkey> "task instructions"
+    ▼
+Sprout Relay  ──WS (NIP-01)──►  sprout-acp (harness)  ──stdio (ACP)──►  goose
+                                                                            │
+                                                                       sprout-mcp-server
+                                                                        (36 MCP tools)
+                                                                            │
+                                                                       Sprout Relay
+                                                                    (send_message, etc.)
+```
+
+Three harness instances run simultaneously — one each for Alice, Bob, and Charlie. Each has its own Nostr keypair (identity) and responds only to `@mentions` targeting its pubkey.
+
+**Key properties of the harness:**
+- Discovers and subscribes to all accessible channels on startup
+- Queues events per channel; one prompt in flight globally at a time
+- Batches multiple rapid `@mentions` into a single prompt
+- Auto-respawns the agent subprocess on crash
+- Reconnects to the relay with a `since` filter on disconnect (no missed events)
+- `GOOSE_MODE=auto` is **mandatory** — prevents goose from pausing for permission prompts
+
+### 3.2 Infrastructure Setup
+
+Run all commands from the sprout repo root.
+
+```bash
+cd /path/to/sprout
+. bin/activate-hermit
+
+# 1. Start Docker services (MySQL, Redis, Typesense, Keycloak)
+docker compose down -v && docker compose up -d
+docker compose ps   # All services should show "Up"
+
+# 2. Configure environment
+[ -f .env ] || cp .env.example .env
+export $(cat .env | grep -v "^#" | grep -v "^$" | xargs) 2>/dev/null
+
+# 3. Run database migrations
+sqlx migrate run --database-url "$DATABASE_URL"
+
+# 4. Build all binaries (sprout-acp, sprout-mcp-server, mention, sprout-admin)
+cargo build --release --workspace
+
+# 5. Add release binaries to PATH
+export PATH="$PWD/target/release:$PATH"
+
+# 6. Verify key binaries are present
+ls -la target/release/sprout-acp target/release/sprout-mcp-server \
+        target/release/mention target/release/sprout-admin
+
+# 7. Start the relay
+lsof -ti :3000 | xargs kill -9 2>/dev/null; sleep 1
+screen -dmS relay bash -c \
+  'export $(cat .env | grep -v "^#" | grep -v "^$" | xargs) 2>/dev/null; \
+   ./target/release/sprout-relay 2>&1 | tee /tmp/sprout-relay.log'
+sleep 3
+
+# 8. Verify relay is up
+curl -s http://localhost:3000/health
+# Expected: {"status":"ok"} or similar
+```
+
+### 3.3 Mint Agent Keys
+
+Each agent needs its own Nostr keypair. Use `sprout-admin` to mint them — it handles all database interaction internally.
+
+```bash
+# Mint keys for all three agents
+for agent in alice bob charlie; do
+  echo "=== $agent ==="
+  cargo run -p sprout-admin -- mint-token \
+    --name "$agent" \
+    --scopes "messages:read,messages:write,channels:read"
+  echo ""
+done
+```
+
+Each invocation prints an `nsec1...` private key, the corresponding pubkey hex, and an API token. **Save all three sets immediately — they are shown only once.**
+
+Set environment variables for the session:
+
+```bash
+# Replace with actual values from mint-token output
+export ALICE_NSEC="nsec1..."
+export ALICE_PUBKEY="<alice-pubkey-hex>"
+
+export BOB_NSEC="nsec1..."
+export BOB_PUBKEY="<bob-pubkey-hex>"
+
+export CHARLIE_NSEC="nsec1..."
+export CHARLIE_PUBKEY="<charlie-pubkey-hex>"
+```
+
+> **Tip:** Pipe the mint output to a temp file during setup:
+> `cargo run -p sprout-admin -- mint-token --name alice ... | tee /tmp/alice-keys.txt`
+
+### 3.4 Launch Harness Instances
+
+Start one `sprout-acp` instance per agent in a dedicated screen session. `GOOSE_MODE=auto` is required on all three.
+
+```bash
+# Alice's harness
+SPROUT_PRIVATE_KEY="$ALICE_NSEC" \
+SPROUT_RELAY_URL="ws://localhost:3000" \
+GOOSE_MODE=auto \
+  screen -dmS agent-alice bash -c \
+    'sprout-acp 2>&1 | tee /tmp/agent-alice.log'
+
+# Bob's harness
+SPROUT_PRIVATE_KEY="$BOB_NSEC" \
+SPROUT_RELAY_URL="ws://localhost:3000" \
+GOOSE_MODE=auto \
+  screen -dmS agent-bob bash -c \
+    'sprout-acp 2>&1 | tee /tmp/agent-bob.log'
+
+# Charlie's harness
+SPROUT_PRIVATE_KEY="$CHARLIE_NSEC" \
+SPROUT_RELAY_URL="ws://localhost:3000" \
+GOOSE_MODE=auto \
+  screen -dmS agent-charlie bash -c \
+    'sprout-acp 2>&1 | tee /tmp/agent-charlie.log'
+```
+
+Wait ~5 seconds for all three to connect, then verify:
+
+```bash
+sleep 5
+
+for agent in alice bob charlie; do
+  echo "=== agent-$agent ==="
+  grep -E "connected|discovered|subscribed|error" /tmp/agent-$agent.log 2>/dev/null \
+    || echo "(no log yet)"
+  echo ""
+done
+```
+
+Expected startup output for each harness:
+
+```
+sprout-acp starting: relay=ws://localhost:3000 harness_pubkey=... agent_pubkey=<hex>
+agent initialized: ...
+connected to relay at ws://localhost:3000
+discovered N channel(s)
+subscribed to channel <uuid>
+```
+
+If you see `discovered 0 channel(s)`, the agent is not yet a member of any channels. Alice will create channels in the first exercise — after that, all three will discover them on subsequent subscriptions (open channels are accessible to any authenticated pubkey).
+
+---
+
+### 3.5 Test Exercises
+
+All exercises are delivered via `@mention` events using the `mention` binary:
+
+```
+mention <channel_uuid> <target_pubkey_hex> "task instructions"
+```
+
+The `mention` binary generates ephemeral sender keys — it does not need its own nsec. It requires `SPROUT_RELAY_URL` (defaults to `ws://localhost:3000`).
+
+**Important:** Channel UUIDs are dynamic. Alice creates the channels in Exercise A-1. After that step completes, query the REST API to get the UUIDs before proceeding with other exercises.
+
+```bash
+# Helper: get channel UUID by name (run after Alice creates channels)
+get_channel_uuid() {
+  local name="$1"
+  curl -s -H "X-Pubkey: $ALICE_PUBKEY" \
+    "http://localhost:3000/api/channels" \
+    | jq -r ".[] | select(.name == \"$name\") | .id"
+}
+```
+
+---
+
+#### Alice — Infrastructure Creator
+
+Alice sets up the shared environment that Bob and Charlie will use.
+
+**A-1: Create channels and seed messages**
+
+Alice needs a bootstrap channel to receive her first `@mention`. Use the default test channel from the relay, or create one via the REST API first:
+
+```bash
+# Create a bootstrap channel for Alice's first mention
+BOOTSTRAP_CHANNEL=$(curl -s -X POST \
+  -H "Content-Type: application/json" \
+  -H "X-Pubkey: $ALICE_PUBKEY" \
+  "http://localhost:3000/api/channels" \
+  -d '{"name":"bootstrap","channel_type":"stream","visibility":"open"}' \
+  | jq -r '.id')
+echo "Bootstrap channel: $BOOTSTRAP_CHANNEL"
+```
+
+Then send Alice her first task:
+
+```bash
+mention "$BOOTSTRAP_CHANNEL" "$ALICE_PUBKEY" \
+  "Create 3 channels: 'general' (stream/open), 'alice-testing' (stream/open), and 'private-ops' (stream/private). Then send 3 messages to the 'general' channel introducing yourself and describing what you're testing."
+```
+
+Wait for Alice to complete (~30–60s), then capture channel UUIDs:
+
+```bash
+sleep 60
+export GENERAL=$(get_channel_uuid "general")
+export ALICE_TESTING=$(get_channel_uuid "alice-testing")
+export PRIVATE_OPS=$(get_channel_uuid "private-ops")
+echo "general=$GENERAL  alice-testing=$ALICE_TESTING  private-ops=$PRIVATE_OPS"
+```
+
+**A-2: Channel metadata and canvas**
+
+```bash
+mention "$GENERAL" "$ALICE_PUBKEY" \
+  "Set the topic on the 'general' channel to 'Sprout E2E Testing'. Set the purpose to 'Multi-agent integration test run'. Then set the canvas on 'general' to a markdown document with a header '# Test Run Notes' and a bullet list of the 3 channels you created."
+```
+
+**A-3: Thread and reactions**
+
+```bash
+mention "$GENERAL" "$ALICE_PUBKEY" \
+  "Get the history of the 'general' channel. Reply to your first message there with a thread reply saying 'This is a thread reply from Alice'. Then add a 👍 reaction and a 🚀 reaction to your own first message."
+```
+
+**A-4: Workflow creation**
+
+```bash
+mention "$GENERAL" "$ALICE_PUBKEY" \
+  "Create a workflow named 'alice-notify' with a message_posted trigger on the 'general' channel. The workflow should have one step: send a message to the 'general' channel saying 'Workflow fired!'. Save the workflow ID and report it back."
+```
+
+**A-5: Profile and presence**
+
+```bash
+mention "$GENERAL" "$ALICE_PUBKEY" \
+  "Set your display name to 'Alice (Test Agent)'. Set your about/bio to 'I am Alice, the infrastructure creator for the Sprout E2E test suite.' Set your presence to online."
+```
+
+**A-6: Feed, search, and membership**
+
+```bash
+mention "$GENERAL" "$ALICE_PUBKEY" \
+  "Get your feed and the channel feed for 'general'. Search for messages containing the word 'Alice'. List the members of the 'general' channel. Then invite Bob (pubkey: $BOB_PUBKEY) to the 'private-ops' channel."
+```
+
+---
+
+#### Bob — Discoverer and Reactor
+
+Bob explores the environment Alice created and interacts with her content.
+
+**B-1: Discovery and history**
+
+```bash
+mention "$GENERAL" "$BOB_PUBKEY" \
+  "List all channels you have access to. Get the message history from the 'general' channel (last 20 messages). Report what you find — how many channels exist, and what did Alice write in general?"
+```
+
+**B-2: Reactions and DM**
+
+```bash
+mention "$GENERAL" "$BOB_PUBKEY" \
+  "React to the first message in the 'general' channel with a ❤️ reaction. Then send a direct message to Alice (pubkey: $ALICE_PUBKEY) saying 'Hi Alice, Bob here — I can see your channels and messages. The setup looks great!'"
+```
+
+**B-3: DM history and canvas**
+
+```bash
+mention "$GENERAL" "$BOB_PUBKEY" \
+  "Get your DM conversation history with Alice. Read the canvas on the 'general' channel and report what it says. List all your DM conversations."
+```
+
+**B-4: Thread participation**
+
+```bash
+mention "$GENERAL" "$BOB_PUBKEY" \
+  "Find Alice's thread in the 'general' channel (a message that has replies). Add a thread reply saying 'Bob joining the thread — everything looks good from my end.' Then get the thread replies and report how many there are."
+```
+
+**B-5: Channel join and profile**
+
+```bash
+mention "$GENERAL" "$BOB_PUBKEY" \
+  "Join the 'alice-testing' channel. Get your own profile and set your display name to 'Bob (Test Agent)'. Search for any messages mentioning 'workflow' or 'canvas'."
+```
+
+**B-6: Private channel access test**
+
+```bash
+mention "$GENERAL" "$BOB_PUBKEY" \
+  "Try to get the message history from the 'private-ops' channel (ID: $PRIVATE_OPS). Report whether you can access it or get an error. Then try again — Alice should have invited you by now."
+```
+
+**B-7: Get presence**
+
+```bash
+mention "$GENERAL" "$BOB_PUBKEY" \
+  "Get the presence status for Alice (pubkey: $ALICE_PUBKEY). Get your own presence status. Report both."
+```
+
+---
+
+#### Charlie — Edge Case Specialist
+
+Charlie tests error handling, idempotency, and lifecycle operations.
+
+**C-1: Non-existent channel error**
+
+```bash
+mention "$GENERAL" "$CHARLIE_PUBKEY" \
+  "Try to send a message to channel UUID '00000000-0000-0000-0000-000000000000'. Report the exact error you receive."
+```
+
+**C-2: Unauthorized archive attempt**
+
+```bash
+mention "$GENERAL" "$CHARLIE_PUBKEY" \
+  "Try to archive the 'general' channel (ID: $GENERAL). You did not create it — report what error you get."
+```
+
+**C-3: Canvas overwrite**
+
+```bash
+mention "$GENERAL" "$CHARLIE_PUBKEY" \
+  "Set the canvas on the 'general' channel to a new markdown document: '# Charlie Was Here\n\nCharlie overwrote the canvas on $(date -u +%Y-%m-%dT%H:%M:%SZ)'. Then immediately read the canvas back and confirm it shows your content."
+```
+
+**C-4: Reaction idempotency**
+
+```bash
+mention "$GENERAL" "$CHARLIE_PUBKEY" \
+  "Find the first message in the 'general' channel. Add a 🎉 reaction to it. Then try to add the same 🎉 reaction again. Report what happens the second time — does it error or succeed silently?"
+```
+
+**C-5: Channel lifecycle (create → archive → send → unarchive → send)**
+
+```bash
+mention "$GENERAL" "$CHARLIE_PUBKEY" \
+  "Create a new channel named 'charlie-lifecycle' (stream/open). Send a message to it saying 'Before archive'. Archive the channel. Try to send another message — report the error. Unarchive the channel. Send a message saying 'After unarchive'. Confirm the final message was accepted."
+```
+
+**C-6: Join, send, leave, verify**
+
+```bash
+mention "$GENERAL" "$CHARLIE_PUBKEY" \
+  "Join the 'alice-testing' channel. Send a message there saying 'Charlie was here'. Then leave the channel. Try to send another message to 'alice-testing' — report whether it succeeds or fails after leaving."
+```
+
+**C-7: Workflow trigger and cross-agent summary**
+
+```bash
+mention "$GENERAL" "$CHARLIE_PUBKEY" \
+  "Get the list of workflows. Find Alice's 'alice-notify' workflow and trigger it via webhook if it has a webhook trigger, or note that it uses message_posted. Then get the presence for both Alice (pubkey: $ALICE_PUBKEY) and Bob (pubkey: $BOB_PUBKEY). Finally, produce a summary report in the 'general' channel listing: (1) all channels created during this test run, (2) total messages sent, (3) any errors encountered."
+```
+
+---
+
+### 3.6 Monitoring & Verification
+
+#### Watch harness logs live
+
+```bash
+# Tail the log files (agent-safe — no TTY required)
+tail -f /tmp/agent-alice.log &
+tail -f /tmp/agent-bob.log &
+tail -f /tmp/agent-charlie.log &
+
+# Or view recent output from a specific agent
+tail -50 /tmp/agent-alice.log
+```
+
+> **Note:** Do NOT use `screen -r` to attach to harness sessions if you are an
+> AI agent — it requires an interactive TTY and will hang indefinitely. Always
+> use `tail` on the log files or `grep` for specific patterns instead.
+
+Key log patterns to watch for:
+
+```
+# Good — turn completed
+turn complete for channel <uuid>: end_turn
+
+# Good — agent is working
+prompting agent for channel <uuid> (session ..., N event(s))
+
+# Investigate — agent had trouble
+turn complete for channel <uuid>: max_tokens
+turn timeout (300s) for channel <uuid> — cancelling
+
+# Bad — needs attention
+agent process exited — respawning
+relay connection lost — reconnecting
+```
+
+#### Tail log files
+
+```bash
+# All three agents at once
+tail -f /tmp/agent-alice.log /tmp/agent-bob.log /tmp/agent-charlie.log
+
+# Filter for completions only
+grep "turn complete\|turn timeout\|turn cancelled" \
+  /tmp/agent-alice.log /tmp/agent-bob.log /tmp/agent-charlie.log
+```
+
+#### REST API verification
+
+```bash
+# List all channels (use any agent's pubkey)
+curl -s -H "X-Pubkey: $ALICE_PUBKEY" \
+  "http://localhost:3000/api/channels" \
+  | jq '.[] | {id: .id, name: .name, visibility: .visibility}'
+
+# Recent messages in general
+curl -s -H "X-Pubkey: $ALICE_PUBKEY" \
+  "http://localhost:3000/api/channels/$GENERAL/messages?limit=20" \
+  | jq '.[] | {sender: .pubkey[:16], body: .content[:120]}'
+
+# Messages from a specific agent
+curl -s -H "X-Pubkey: $ALICE_PUBKEY" \
+  "http://localhost:3000/api/channels/$GENERAL/messages?limit=50" \
+  | jq --arg pk "$CHARLIE_PUBKEY" \
+    '[.[] | select(.pubkey == $pk)] | {count: length, messages: [.[] | .content[:100]]}'
+
+# Channel members
+curl -s -H "X-Pubkey: $ALICE_PUBKEY" \
+  "http://localhost:3000/api/channels/$GENERAL/members" \
+  | jq '.[] | {pubkey: .pubkey[:16], role: .role}'
+
+# Check private-ops membership (Bob should be there after A-6)
+curl -s -H "X-Pubkey: $ALICE_PUBKEY" \
+  "http://localhost:3000/api/channels/$PRIVATE_OPS/members" \
+  | jq '.[] | .pubkey[:16]'
+```
+
+#### Screen session management
+
+```bash
+# List all active sessions
+screen -ls
+
+# Check if a session is still running
+screen -ls | grep agent-alice
+
+# Capture current screen contents to file (non-destructive)
+screen -S agent-alice -X hardcopy /tmp/alice-snapshot.txt
+cat /tmp/alice-snapshot.txt
+```
+
+### 3.7 Expected Results
+
+After all exercises complete, the following should be true:
+
+| Check | Expected |
+|-------|----------|
+| Channels created | At least 5: general, alice-testing, private-ops, charlie-lifecycle, bootstrap |
+| Messages in general | 10+ messages from Alice, Bob, and Charlie |
+| Thread replies | At least 2 replies on Alice's first message |
+| Reactions | 👍 🚀 (Alice), ❤️ (Bob), 🎉 (Charlie) on general messages |
+| Canvas | Charlie's content (last writer wins) |
+| DM conversation | Alice ↔ Bob DM exists |
+| Bob in private-ops | Yes (Alice invited him in A-6) |
+| Workflow | alice-notify created with message_posted trigger |
+| Display names | Alice and Bob have display names set |
+| Error handling | Charlie's C-1, C-2, C-5 exercises report correct errors |
+| charlie-lifecycle | Unarchived and final message sent successfully |
+
+**Verify the full picture:**
+
+```bash
+# Channel count
+curl -s -H "X-Pubkey: $ALICE_PUBKEY" \
+  "http://localhost:3000/api/channels" | jq 'length'
+
+# Message count in general
+curl -s -H "X-Pubkey: $ALICE_PUBKEY" \
+  "http://localhost:3000/api/channels/$GENERAL/messages?limit=200" | jq 'length'
+
+# Workflow list
+curl -s -H "X-Pubkey: $ALICE_PUBKEY" \
+  "http://localhost:3000/api/workflows" \
+  | jq '.[] | {name: .name, trigger: .trigger.on}'
+```
+
+---
+
+## 4. Advanced: ACP Harness Scenarios
+
+These scenarios test the `sprout-acp` harness itself — crash recovery, relay reconnection, turn timeout, and concurrent multi-agent operation. Run them independently from the main E2E suite.
+
+### Prerequisites for Advanced Scenarios
+
+```bash
+# Use the single-agent test key from sprout-acp TESTING.md
+export SPROUT_PRIVATE_KEY=nsec1ddyp0fufd6ejerfqkxcfqlmkktwzx7w45emalvgtcvyafefusj5q8fyllm
+export AGENT_PUBKEY=ae670a075ac2446f445808ab5a1a796cec37c72c70b25e10ee39f7f0eab50feb
+export TEST_CHANNEL=94a444a4-c0a3-5966-ab05-530c6ddc2301
+
+# Start a single harness
+SPROUT_PRIVATE_KEY="$SPROUT_PRIVATE_KEY" \
+SPROUT_RELAY_URL="ws://localhost:3000" \
+GOOSE_MODE=auto \
+  screen -dmS harness bash -c 'sprout-acp 2>&1 | tee /tmp/harness.log'
+sleep 5
+```
+
+### Scenario A: Basic @mention → Agent Replies
+
+```bash
+mention "$TEST_CHANNEL" "$AGENT_PUBKEY" "What is 2 + 2? Reply with just the number."
+sleep 30
+
+# Verify reply via REST API
+curl -s -H "X-Pubkey: $AGENT_PUBKEY" \
+  "http://localhost:3000/api/channels/$TEST_CHANNEL/messages?limit=5" \
+  | jq --arg pk "$AGENT_PUBKEY" \
+    '.[] | select(.pubkey == $pk) | {body: .content[:200]}'
+```
+
+Expected: agent replies with "4" via `send_message`.
+
+### Scenario B: Multi-Event Batch
+
+```bash
+# Send 3 mentions in rapid succession
+for i in 1 2 3; do
+  mention "$TEST_CHANNEL" "$AGENT_PUBKEY" "Batch message $i" &
+done
+wait
+sleep 30
+
+# Check harness log for batch size
+grep "prompting agent" /tmp/harness.log | tail -5
+# Look for "(session ..., N event(s))" where N > 1
+```
+
+### Scenario C: Agent Crash Recovery
+
+```bash
+# Kill the agent subprocess
+kill -9 $(pgrep -f "goose acp") 2>/dev/null
+
+# Send a new mention
+sleep 2
+mention "$TEST_CHANNEL" "$AGENT_PUBKEY" "Are you still alive after the crash?"
+sleep 30
+
+# Verify recovery in logs
+grep -E "agent process exited|agent respawned|turn complete" /tmp/harness.log | tail -10
+```
+
+Expected log sequence: `agent process exited — respawning` → `agent respawned successfully` → `agent initialized` → `turn complete`.
+
+### Scenario D: Relay Disconnect Recovery
+
+```bash
+# Stop the relay
+screen -S relay -X stuff $'\003'   # Ctrl-C
+sleep 2
+
+# Watch harness detect disconnect
+grep "relay connection lost\|reconnecting" /tmp/harness.log
+
+# Restart relay
+screen -dmS relay bash -c \
+  'export $(cat .env | grep -v "^#" | grep -v "^$" | xargs) 2>/dev/null; \
+   ./target/release/sprout-relay 2>&1 | tee /tmp/sprout-relay.log'
+sleep 5
+
+# Verify reconnection
+grep "relay reconnected\|subscribed" /tmp/harness.log | tail -5
+
+# Confirm harness is functional again
+mention "$TEST_CHANNEL" "$AGENT_PUBKEY" "Post-reconnect test — reply with OK"
+sleep 30
+grep "turn complete" /tmp/harness.log | tail -3
+```
+
+### Scenario E: Turn Timeout
+
+```bash
+# Restart harness with 5-second timeout
+screen -S harness -X quit
+SPROUT_PRIVATE_KEY="$SPROUT_PRIVATE_KEY" \
+SPROUT_RELAY_URL="ws://localhost:3000" \
+SPROUT_ACP_TURN_TIMEOUT=5 \
+GOOSE_MODE=auto \
+  screen -dmS harness bash -c 'sprout-acp 2>&1 | tee /tmp/harness.log'
+sleep 3
+
+# Send a prompt that will take longer than 5 seconds
+mention "$TEST_CHANNEL" "$AGENT_PUBKEY" \
+  "Write a detailed 500-word essay on the history of computing, then list 50 prime numbers."
+sleep 15
+
+# Verify timeout was triggered
+grep "turn timeout\|turn cancelled" /tmp/harness.log | tail -5
+
+# Reset to normal timeout
+screen -S harness -X quit
+SPROUT_PRIVATE_KEY="$SPROUT_PRIVATE_KEY" \
+SPROUT_RELAY_URL="ws://localhost:3000" \
+GOOSE_MODE=auto \
+  screen -dmS harness bash -c 'sprout-acp 2>&1 | tee /tmp/harness.log'
+```
+
+Expected: `turn timeout (5s) for channel ... — cancelling` then `turn cancelled for channel ...`. Harness continues running.
+
+### Scenario F: Permission Handling (GOOSE_MODE=auto)
+
+```bash
+mention "$TEST_CHANNEL" "$AGENT_PUBKEY" \
+  "Use your tools to get the last 5 messages from this channel and summarize them."
+sleep 60
+
+# Verify no permission prompts appeared
+grep -i "permission\|approval\|waiting" /tmp/harness.log | head -5
+# Should return nothing
+
+grep "turn complete" /tmp/harness.log | tail -3
+# Should show end_turn
+```
+
+### Scenario G: Channel Discovery
+
+```bash
+# Restart harness fresh and watch discovery
+screen -S harness -X quit
+SPROUT_PRIVATE_KEY="$SPROUT_PRIVATE_KEY" \
+SPROUT_RELAY_URL="ws://localhost:3000" \
+GOOSE_MODE=auto \
+  screen -dmS harness bash -c 'sprout-acp 2>&1 | tee /tmp/harness.log'
+sleep 5
+
+grep "discovered\|subscribed" /tmp/harness.log
+# Expected: "discovered N channel(s)" then "subscribed to channel <uuid>" for each
+```
+
+Verify channel membership via REST API:
+
+```bash
+curl -s -H "X-Pubkey: $AGENT_PUBKEY" \
+  "http://localhost:3000/api/channels" \
+  | jq '.[] | {id: .id, name: .name}'
+```
+
+### Scenario H: Concurrent Channels (FIFO Fairness)
+
+```bash
+# Get a second channel UUID (create one if needed)
+CHANNEL_B=$(curl -s -X POST \
+  -H "Content-Type: application/json" \
+  -H "X-Pubkey: $AGENT_PUBKEY" \
+  "http://localhost:3000/api/channels" \
+  -d '{"name":"channel-b-test","channel_type":"stream","visibility":"open"}' \
+  | jq -r '.id')
+
+# Send to channel A first, then B immediately
+mention "$TEST_CHANNEL" "$AGENT_PUBKEY" "Channel A message — process me first"
+mention "$CHANNEL_B" "$AGENT_PUBKEY" "Channel B message — process me second"
+sleep 60
+
+# Verify FIFO ordering in logs
+grep "prompting agent for channel" /tmp/harness.log | tail -5
+# Channel A should appear before Channel B
+# No two "prompting agent" lines without a "turn complete" between them
+```
+
+### Scenario I: Multi-Agent (3 Agents, 1 Channel)
+
+```bash
+# Mint two additional keypairs
+cargo run -p sprout-admin -- mint-token \
+  --name "agent-b" --scopes "messages:read,messages:write,channels:read" \
+  | tee /tmp/agent-b-keys.txt
+
+cargo run -p sprout-admin -- mint-token \
+  --name "agent-c" --scopes "messages:read,messages:write,channels:read" \
+  | tee /tmp/agent-c-keys.txt
+
+# Extract keys (adjust parsing as needed based on output format)
+AGENT_B_NSEC=$(grep "nsec1" /tmp/agent-b-keys.txt | awk '{print $NF}')
+AGENT_B_PUBKEY=$(grep "pubkey" /tmp/agent-b-keys.txt | awk '{print $NF}')
+AGENT_C_NSEC=$(grep "nsec1" /tmp/agent-c-keys.txt | awk '{print $NF}')
+AGENT_C_PUBKEY=$(grep "pubkey" /tmp/agent-c-keys.txt | awk '{print $NF}')
+
+# Start three harnesses
+SPROUT_PRIVATE_KEY="$SPROUT_PRIVATE_KEY" GOOSE_MODE=auto \
+  screen -dmS harness-a bash -c 'sprout-acp 2>&1 | tee /tmp/harness-a.log'
+
+SPROUT_PRIVATE_KEY="$AGENT_B_NSEC" GOOSE_MODE=auto \
+  screen -dmS harness-b bash -c 'sprout-acp 2>&1 | tee /tmp/harness-b.log'
+
+SPROUT_PRIVATE_KEY="$AGENT_C_NSEC" GOOSE_MODE=auto \
+  screen -dmS harness-c bash -c 'sprout-acp 2>&1 | tee /tmp/harness-c.log'
+
+sleep 5
+
+# Send a targeted @mention to each agent
+mention "$TEST_CHANNEL" "$AGENT_PUBKEY"  "Hello agent-a, reply with PONG-A"
+mention "$TEST_CHANNEL" "$AGENT_B_PUBKEY" "Hello agent-b, reply with PONG-B"
+mention "$TEST_CHANNEL" "$AGENT_C_PUBKEY" "Hello agent-c, reply with PONG-C"
+sleep 60
+
+# Verify three distinct replies
+curl -s -H "X-Pubkey: $AGENT_PUBKEY" \
+  "http://localhost:3000/api/channels/$TEST_CHANNEL/messages?limit=20" \
+  | jq '.[] | {sender: (.pubkey[:16] + "..."), body: .content[:100]}'
+# Look for three distinct sender prefixes, each with a PONG reply
+
+# Cleanup
+for s in harness-a harness-b harness-c; do screen -S $s -X quit; done
+```
+
+---
+
+## 5. Workflow YAML Reference
+
+Workflows are created via the `create_workflow` MCP tool. The YAML structure:
+
+```yaml
+name: My Workflow
+trigger:
+  on: message_posted     # Valid: message_posted | reaction_added | webhook
+  channel_id: "<uuid>"   # Optional: scope to a specific channel
+steps:
+  - id: notify           # Required: alphanumeric + underscores only
+    action: send_message # Action type
+    channel_id: "<uuid>" # Action-specific fields are DIRECT properties (not nested)
+    text: "Workflow fired!"
+```
+
+**Valid triggers:**
+- `message_posted` — fires when any message is posted (optionally scoped to a channel)
+- `reaction_added` — fires when a reaction is added to a message
+- `webhook` — fires when the webhook URL is called via HTTP POST
+
+**Step field rules:**
+- `id` is required on every step (alphanumeric and underscores)
+- Action fields (`channel_id`, `text`, etc.) are **direct properties** of the step object — do NOT nest them under a `params` key
+- `create_workflow` tool accepts the YAML as a string parameter
+
+**Example: message_posted workflow**
+
+```yaml
+name: welcome-new-messages
+trigger:
+  on: message_posted
+  channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301"
+steps:
+  - id: echo_reply
+    action: send_message
+    channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301"
+    text: "New message detected!"
+```
+
+**Example: webhook workflow**
+
+```yaml
+name: external-trigger
+trigger:
+  on: webhook
+steps:
+  - id: notify_channel
+    action: send_message
+    channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301"
+    text: "Webhook triggered this workflow!"
+```
+
+---
+
+## 6. The 36 MCP Tools
+
+The `sprout-mcp-server` exposes 36 tools covering the full Sprout feature surface. All are available to agents running via the `sprout-acp` harness.
+
+### Channels (8)
+
+| Tool | Description |
+|------|-------------|
+| `list_channels` | List all channels accessible to the agent |
+| `get_channel_info` | Get metadata for a specific channel |
+| `create_channel` | Create a new channel (`channel_type`: stream\|forum, `visibility`: open\|private) |
+| `update_channel` | Update channel name or metadata |
+| `archive_channel` | Archive a channel (creator only) |
+| `unarchive_channel` | Restore an archived channel |
+| `join_channel` | Join an open channel |
+| `leave_channel` | Leave a channel |
+
+### Messages (4)
+
+| Tool | Description |
+|------|-------------|
+| `send_message` | Post a message to a channel |
+| `get_channel_history` | Get recent messages from a channel |
+| `send_thread_reply` | Reply within a message thread |
+| `get_thread_replies` | Get replies in a thread |
+
+### Reactions (3)
+
+| Tool | Description |
+|------|-------------|
+| `add_reaction` | Add an emoji reaction to a message |
+| `remove_reaction` | Remove a reaction |
+| `get_message_reactions` | List all reactions on a message |
+
+### Direct Messages (3)
+
+| Tool | Description |
+|------|-------------|
+| `send_dm` | Send a direct message to a user |
+| `get_dm_history` | Get DM conversation history |
+| `list_dm_conversations` | List all DM conversations |
+
+### Canvas (2)
+
+| Tool | Description |
+|------|-------------|
+| `get_canvas` | Read the canvas document for a channel |
+| `set_canvas` | Write/overwrite the canvas document (last writer wins) |
+
+### Workflows (3)
+
+| Tool | Description |
+|------|-------------|
+| `create_workflow` | Create a new workflow with trigger and steps |
+| `list_workflows` | List all workflows |
+| `trigger_workflow` | Manually trigger a webhook workflow |
+
+### Feed (2)
+
+| Tool | Description |
+|------|-------------|
+| `get_feed` | Get the agent's personal activity feed |
+| `get_channel_feed` | Get the activity feed for a specific channel |
+
+### Search (1)
+
+| Tool | Description |
+|------|-------------|
+| `search` | Full-text search across messages and channels |
+
+### Profile (3)
+
+| Tool | Description |
+|------|-------------|
+| `get_profile` | Get the agent's profile |
+| `set_display_name` | Set the agent's display name |
+| `set_about` | Set the agent's bio/about text |
+
+### Presence (2)
+
+| Tool | Description |
+|------|-------------|
+| `set_presence` | Set the agent's presence status (online/away/etc.) |
+| `get_presence` | Get presence status for a user |
+
+### Members (2)
+
+| Tool | Description |
+|------|-------------|
+| `list_channel_members` | List members of a channel |
+| `get_user_channels` | Get channels a user belongs to |
+
+### Admin (3)
+
+| Tool | Description |
+|------|-------------|
+| `set_channel_topic` | Set the topic for a channel |
+| `set_channel_purpose` | Set the purpose for a channel |
+| `invite_to_channel` | Invite a user (by pubkey) to a channel |
+
+---
+
+## 7. Cleanup
+
+### Stop harness instances
+
+```bash
+# E2E test harnesses
+for s in agent-alice agent-bob agent-charlie; do
+  screen -S $s -X quit 2>/dev/null && echo "stopped $s" || echo "$s not running"
+done
+
+# Advanced scenario harnesses
+for s in harness harness-a harness-b harness-c; do
+  screen -S $s -X quit 2>/dev/null
+done
+```
+
+### Stop relay
+
+```bash
+screen -S relay -X quit 2>/dev/null && echo "relay stopped"
+```
+
+### Verify all sessions gone
+
+```bash
+screen -ls
+# Should show "No Sockets found" or only unrelated sessions
+```
+
+### Tear down Docker services
+
+```bash
+# Stop services and remove volumes (full reset)
+docker compose down -v
+
+# Stop services only (preserve data for next run)
+docker compose down
+```
+
+### Clean up temp files
+
+```bash
+rm -f /tmp/agent-alice.log /tmp/agent-bob.log /tmp/agent-charlie.log
+rm -f /tmp/harness.log /tmp/harness-a.log /tmp/harness-b.log /tmp/harness-c.log
+rm -f /tmp/sprout-relay.log
+rm -f /tmp/alice-keys.txt /tmp/agent-b-keys.txt /tmp/agent-c-keys.txt
+```
+
+---
+
+## 8. Known Issues / Troubleshooting
+
+### Current Status
+
+All automated tests pass as of 2026-03-10:
+
+- ✅ 20/20 REST API integration tests
+- ✅ 13/13 WebSocket relay integration tests
+- ✅ 7/7 MCP server integration tests
+- ✅ Multi-agent E2E (Alice/Bob/Charlie) via sprout-acp harness
+
+---
+
+### Harness exits immediately with "configuration error"
+
+**Cause:** `SPROUT_PRIVATE_KEY` not set or invalid.
+
+```bash
+echo $SPROUT_PRIVATE_KEY
+# Must be a valid nsec1... bech32 string
+```
+
+---
+
+### "relay connect error" on startup
+
+**Cause:** Relay not running or wrong URL.
+
+```bash
+# Check relay session
+screen -ls | grep relay
+
+# If missing, start it
+screen -dmS relay bash -c \
+  'export $(cat .env | grep -v "^#" | grep -v "^$" | xargs) 2>/dev/null; \
+   ./target/release/sprout-relay 2>&1 | tee /tmp/sprout-relay.log'
+
+# Verify
+curl -s http://localhost:3000/health
+```
+
+---
+
+### "discovered 0 channel(s)"
+
+**Cause:** Agent pubkey is not a member of any open channels.
+
+```bash
+# Check what channels are accessible
+curl -s -H "X-Pubkey: $ALICE_PUBKEY" \
+  "http://localhost:3000/api/channels" | jq 'length'
+```
+
+Open channels are accessible to any authenticated pubkey. If the relay has no open channels yet, Alice's bootstrap channel creation (Exercise A-1) will fix this. After Alice creates channels, restart Bob's and Charlie's harnesses so they rediscover.
+
+---
+
+### "failed to spawn agent"
+
+**Cause:** `goose` binary not found or not on `$PATH`.
+
+```bash
+which goose
+goose --version
+```
+
+Ensure goose is installed and configured with a valid provider/model before starting the harness.
+
+---
+
+### Agent hangs, turn never completes
+
+**Cause:** `GOOSE_MODE=auto` not set — goose is waiting for permission approval.
+
+```bash
+# Kill and restart with GOOSE_MODE=auto
+screen -S agent-alice -X quit
+SPROUT_PRIVATE_KEY="$ALICE_NSEC" \
+SPROUT_RELAY_URL="ws://localhost:3000" \
+GOOSE_MODE=auto \
+  screen -dmS agent-alice bash -c 'sprout-acp 2>&1 | tee /tmp/agent-alice.log'
+```
+
+`GOOSE_MODE=auto` is **mandatory** for all harness instances. Without it, the first MCP tool call will hang indefinitely.
+
+---
+
+### No agent reply after @mention
+
+Checklist:
+
+1. Is the harness running? `pgrep -a sprout-acp`
+2. Is the harness subscribed to the target channel? `grep "subscribed" /tmp/agent-alice.log`
+3. Did `mention` use the correct pubkey hex? Check `$ALICE_PUBKEY` is set correctly.
+4. Check harness logs for errors: `tail -50 /tmp/agent-alice.log`
+5. Verify via REST API that the @mention event arrived:
+
+```bash
+curl -s -H "X-Pubkey: $ALICE_PUBKEY" \
+  "http://localhost:3000/api/channels/$GENERAL/messages?limit=10" \
+  | jq '.[] | {kind: .kind, sender: .pubkey[:16], body: .content[:100]}'
+```
+
+---
+
+### MCP tool calls failing
+
+**Cause:** `sprout-mcp-server` binary not found, or wrong relay URL passed to MCP.
+
+```bash
+which sprout-mcp-server
+# If missing: cargo build --release -p sprout-mcp-server
+# Then: export PATH="$PWD/target/release:$PATH"
+```
+
+---
+
+### Channel UUIDs not set after Alice's first exercise
+
+If `$GENERAL`, `$ALICE_TESTING`, or `$PRIVATE_OPS` are empty, Alice may not have finished yet. Wait longer, then re-query:
+
+```bash
+sleep 30
+export GENERAL=$(curl -s -H "X-Pubkey: $ALICE_PUBKEY" \
+  "http://localhost:3000/api/channels" \
+  | jq -r '.[] | select(.name == "general") | .id')
+echo "GENERAL=$GENERAL"
+```
+
+If still empty, check Alice's harness logs for errors: `tail -50 /tmp/agent-alice.log`.
+
+---
+
+### Stale events replayed on harness restart
+
+**Expected behavior.** On startup, the harness replays all unprocessed `@mentions` since the last run. If you restart a harness mid-test, expect a burst of activity as it catches up on stale events. This is correct — the harness uses a `since` filter on reconnect to avoid missing events.
+
+To start fresh with no stale events, use a new keypair (mint a new token) for the harness instance.
+
+---
+
+### Docker services unhealthy
+
+```bash
 docker compose ps
+# If any service is not "Up":
+docker compose down -v && docker compose up -d
+# Wait 30s then re-run migrations:
+sqlx migrate run --database-url "$DATABASE_URL"
 ```
-
-Expected output — all services should show `healthy`:
-```
-NAME                STATUS
-sprout-mysql        running (healthy)
-sprout-redis        running (healthy)
-sprout-typesense    running (healthy)
-sprout-adminer      running
-```
-
-> **Tip:** If services aren't healthy after ~30 seconds, check logs:
-> `docker compose logs mysql` or `docker compose logs redis`
-
-**Run migrations:**
-```bash
-just migrate
-```
-
-Expected:
-```
-Running migrations via sqlx...
-Applied 1 migration(s).
-```
-
-> **Alternative (no sqlx CLI):** `just migrate` falls back to `docker exec` automatically.
-
----
-
-## 4. Build and Run the Relay
-
-> ⚠️ **Port 3000 conflict:** The relay binds to `0.0.0.0:3000` by default. If another process is using port 3000 (e.g., a Node.js dev server), set `SPROUT_BIND_ADDR=0.0.0.0:3001` in `.env` and update `RELAY_URL=ws://localhost:3001`.
-
-> ⚠️ **`.env` and `cargo run`:** `just relay` uses `set dotenv-load := true` so env vars are loaded automatically. If you run `cargo run -p sprout-relay` directly, the `.env` file is **not** loaded — export vars manually or use `just relay`.
-
-```bash
-# Build the workspace first (catches compile errors early)
-cargo build --workspace
-
-# Run the relay in a detached screen session
-screen -dmS sprout-relay just relay
-```
-
-Verify the relay is listening:
-```bash
-screen -r sprout-relay
-# Press Ctrl-A D to detach without stopping
-```
-
-Expected log output:
-```
-INFO sprout_relay: listening on 0.0.0.0:3000
-WARN sprout_relay: SPROUT_REQUIRE_AUTH_TOKEN is false — relay accepts unauthenticated connections.
-```
-
-> The auth warning is expected in local dev. Set `SPROUT_REQUIRE_AUTH_TOKEN=true` in `.env` to enforce token auth.
-
----
-
-## 5. Create Test Channels
-
-Connect to MySQL and create a channel, then add members after minting tokens (step 6 gives you pubkeys).
-
-```bash
-mysql -u sprout -psprout_dev -h 127.0.0.1 sprout
-```
-
-```sql
--- Create a test channel (channel ID must be a 16-byte UUID stored as BINARY(16))
-INSERT INTO channels (id, name, channel_type, visibility, created_by)
-VALUES (
-    UNHEX(REPLACE(UUID(), '-', '')),
-    'agent-test',
-    'stream',
-    'open',
-    X'0000000000000000000000000000000000000000000000000000000000000001'
-);
-
--- Capture the channel ID for later steps
-SELECT HEX(id) AS channel_id, name FROM channels WHERE name = 'agent-test';
-```
-
-> **Note:** `channel_members` entries require a valid `pubkey` (32-byte Nostr public key). Add members **after** minting tokens in step 6.
-
----
-
-## 6. Mint Agent Tokens
-
-`sprout-admin` creates API tokens and optionally generates a new Nostr keypair per agent. Run once per agent.
-
-> ⚠️ **Save the output immediately** — the raw token and private key (`nsec`) are shown only once.
-
-```bash
-# Agent 1
-cargo run -p sprout-admin -- mint-token \
-  --name "agent-alice" \
-  --scopes "messages:read,messages:write,channels:read"
-```
-
-```bash
-# Agent 2
-cargo run -p sprout-admin -- mint-token \
-  --name "agent-bob" \
-  --scopes "messages:read,messages:write,channels:read"
-```
-
-Expected output (per agent):
-```
-╔══════════════════════════════════════════════════════════════╗
-║  Token minted successfully!                                 ║
-╠══════════════════════════════════════════════════════════════╣
-║  Token ID:    <uuid>                                        ║
-║  Name:        agent-alice                                   ║
-║  Scopes:      messages:read,messages:write,channels:read    ║
-║  Pubkey:      <first 48 hex chars>...                       ║
-╠══════════════════════════════════════════════════════════════╣
-║  ⚠️  SAVE THESE — shown only once!                          ║
-╠══════════════════════════════════════════════════════════════╣
-║  Private key (nsec):                                        ║
-║  nsec1...                                                   ║
-║                                                              ║
-║  API Token:                                                  ║
-║  spr_...                                                     ║
-╚══════════════════════════════════════════════════════════════╝
-```
-
-**Add agents as channel members** (using the full pubkey hex from the output):
-```sql
--- In mysql client — replace <PUBKEY_HEX> with each agent's full 64-char hex pubkey
-INSERT INTO channel_members (channel_id, pubkey, role)
-SELECT id, UNHEX('<ALICE_PUBKEY_HEX>'), 'member'
-FROM channels WHERE name = 'agent-test';
-
-INSERT INTO channel_members (channel_id, pubkey, role)
-SELECT id, UNHEX('<BOB_PUBKEY_HEX>'), 'member'
-FROM channels WHERE name = 'agent-test';
-```
-
-**List all tokens** to verify:
-```bash
-cargo run -p sprout-admin -- list-tokens
-```
-
----
-
-## 7. Launch Agents
-
-Each agent runs in its own terminal with its own token and private key. The `sprout-mcp` extension connects to the relay via stdio transport.
-
-**Environment variables for `sprout-mcp`:**
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `SPROUT_RELAY_URL` | WebSocket URL of the relay | `ws://localhost:3000` |
-| `SPROUT_API_TOKEN` | API token from step 6 | (none — unauthenticated) |
-| `SPROUT_PRIVATE_KEY` | Nostr private key (`nsec1...`) | generates ephemeral key |
-
-**Terminal 1 — Agent Alice:**
-```bash
-SPROUT_RELAY_URL=ws://localhost:3000 \
-SPROUT_API_TOKEN=spr_<alice-token> \
-SPROUT_PRIVATE_KEY=nsec1<alice-key> \
-goose run --no-profile \
-  --with-extension "cargo run -p sprout-mcp" \
-  --instructions "You are Alice. Join the agent-test channel and say hello."
-```
-
-**Terminal 2 — Agent Bob:**
-```bash
-SPROUT_RELAY_URL=ws://localhost:3000 \
-SPROUT_API_TOKEN=spr_<bob-token> \
-SPROUT_PRIVATE_KEY=nsec1<bob-key> \
-goose run --no-profile \
-  --with-extension "cargo run -p sprout-mcp" \
-  --instructions "You are Bob. Join the agent-test channel and respond to Alice."
-```
-
-> **Note:** `cargo run -p sprout-mcp` builds and runs the MCP server inline. For faster startup after the first build, use the compiled binary: `./target/debug/sprout-mcp-server`.
-
----
-
-## 8. Verify Conversations
-
-**Check relay logs** (in the screen session):
-```bash
-screen -r sprout-relay
-```
-Look for lines like:
-```
-DEBUG sprout_relay: authenticated pubkey=<hex>
-DEBUG sprout_relay: EVENT accepted kind=40001 channel=<id>
-DEBUG sprout_relay: delivered to 2 subscriber(s)
-```
-
-**Query the database for messages:**
-```sql
-SELECT
-    HEX(channel_id) AS channel,
-    content,
-    created_at
-FROM events
-WHERE channel_id = (SELECT id FROM channels WHERE name = 'agent-test')
-ORDER BY created_at DESC
-LIMIT 20;
-```
-
-**Read channel history via MCP** (from within a goose session with sprout-mcp loaded):
-```
-Use the sprout MCP tool to list messages in the agent-test channel.
-```
-
----
-
-## 9. Running the Test Suite
-
-### Unit tests (no infrastructure required)
-
-```bash
-just test-unit
-# or equivalently:
-./scripts/run-tests.sh unit
-```
-
-Runs `sprout-core` and `sprout-auth` unit tests. No Docker needed.
-
-### Integration tests (requires running services)
-
-```bash
-just test-integration
-# or equivalently:
-./scripts/run-tests.sh integration
-```
-
-Starts services if not running, applies migrations, then tests `sprout-db` and `sprout-auth` integration.
-
-### All tests
-
-```bash
-just test
-```
-
-### E2E relay tests (requires running relay)
-
-The e2e tests in `crates/sprout-test-client/tests/e2e_relay.rs` are marked `#[ignore]` by default. Run them explicitly with a live relay:
-
-```bash
-# Relay must be running (step 4)
-cargo test --test e2e_relay -- --ignored --nocapture
-
-# Override relay URL if not on default port:
-RELAY_URL=ws://localhost:3001 cargo test --test e2e_relay -- --ignored --nocapture
-```
-
-Key e2e tests:
-- `test_connect_and_authenticate` — NIP-42 auth handshake
-- `test_send_event_and_receive_via_subscription` — pub/sub round-trip
-- `test_multiple_concurrent_clients` — 3 clients, 1 sender, all receive
-- `test_unauthenticated_rejected` — auth enforcement
-- `test_pubkey_mismatch_rejected` — impersonation prevention
-
----
-
-## 10. Troubleshooting
-
-| Symptom | Likely Cause | Fix |
-|---------|-------------|-----|
-| `Connection refused` on port 3000 | Relay not running | `screen -r sprout-relay` to check; restart with `screen -dmS sprout-relay just relay` |
-| Port 3000 already in use | Another process (Node, etc.) | Set `SPROUT_BIND_ADDR=0.0.0.0:3001` and `RELAY_URL=ws://localhost:3001` in `.env` |
-| `auth: invalid token` | Wrong or missing `SPROUT_API_TOKEN` | Re-run `mint-token`; verify token in `SPROUT_API_TOKEN` env var |
-| Agent connects but can't post | Not a channel member | Run the `INSERT INTO channel_members` SQL from step 6 |
-| `DATABASE_URL` errors in `cargo run` | `.env` not loaded | Use `just relay` instead of `cargo run` directly, or `export $(cat .env | xargs)` |
-| MySQL unhealthy after `docker compose up` | Slow start | Wait 30s; check `docker compose logs mysql` for errors |
-| `sprout-mcp` generates ephemeral key | `SPROUT_PRIVATE_KEY` not set | Set `SPROUT_PRIVATE_KEY=nsec1...` so the agent's identity persists across restarts |
-| E2e tests time out | Relay not running or wrong URL | Check `RELAY_URL` env var; confirm relay is listening with `curl http://localhost:3000/info` |
-| `SQLX_OFFLINE` errors in CI | Missing `.sqlx/` query cache | Run `cargo sqlx prepare --workspace` locally and commit the `.sqlx/` directory |

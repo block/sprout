@@ -51,7 +51,7 @@
 //!
 //! ### Channels
 //! - **`list_channels`** — List channels accessible to this agent, optionally filtered by
-//!   visibility (`public` / `private`).
+//!   visibility (`open` / `private`).
 //! - **`create_channel`** — Create a new channel with a given name, type, and visibility.
 //!
 //! ### Canvas

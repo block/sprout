@@ -31,8 +31,33 @@ fn sub_id(name: &str) -> String {
     format!("e2e-{name}-{}", uuid::Uuid::new_v4())
 }
 
-fn channel_id(name: &str) -> String {
-    format!("test-channel-{name}-{}", uuid::Uuid::new_v4())
+fn relay_http_url() -> String {
+    relay_url()
+        .replace("wss://", "https://")
+        .replace("ws://", "http://")
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Create a real channel in the DB via REST so the relay accepts events for it.
+async fn create_test_channel(keys: &Keys) -> String {
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/channels", relay_http_url());
+    let pubkey_hex = keys.public_key().to_hex();
+    let resp = client
+        .post(&url)
+        .header("X-Pubkey", &pubkey_hex)
+        .json(&serde_json::json!({
+            "name": format!("relay-e2e-{}", uuid::Uuid::new_v4()),
+            "channel_type": "stream",
+            "visibility": "open",
+        }))
+        .send()
+        .await
+        .expect("create channel request");
+    assert_eq!(resp.status(), 201, "channel creation failed");
+    let body: serde_json::Value = resp.json().await.expect("parse channel response");
+    body["id"].as_str().expect("channel id").to_string()
 }
 
 #[tokio::test]
@@ -52,11 +77,11 @@ async fn test_connect_and_authenticate() {
 #[ignore]
 async fn test_send_event_and_receive_via_subscription() {
     let url = relay_url();
-    let channel = channel_id("send-recv");
     let kind: u16 = 40001;
 
     let keys_a = Keys::generate();
     let keys_b = Keys::generate();
+    let channel = create_test_channel(&keys_a).await;
 
     let mut client_a = SproutTestClient::connect(&url, &keys_a)
         .await
@@ -111,11 +136,11 @@ async fn test_send_event_and_receive_via_subscription() {
 #[ignore]
 async fn test_subscription_filters_by_kind() {
     let url = relay_url();
-    let channel = channel_id("filter-kind");
     let target_kind: u16 = 40001;
     let other_kind: u16 = 40002;
 
     let keys = Keys::generate();
+    let channel = create_test_channel(&keys).await;
 
     let mut client = SproutTestClient::connect(&url, &keys)
         .await
@@ -183,10 +208,10 @@ async fn test_subscription_filters_by_kind() {
 #[ignore]
 async fn test_close_subscription_stops_delivery() {
     let url = relay_url();
-    let channel = channel_id("close-sub");
     let kind: u16 = 40001;
 
     let keys = Keys::generate();
+    let channel = create_test_channel(&keys).await;
     let mut client = SproutTestClient::connect(&url, &keys)
         .await
         .expect("connect");
@@ -275,10 +300,10 @@ async fn test_unauthenticated_rejected() {
 #[ignore]
 async fn test_multiple_concurrent_clients() {
     let url = relay_url();
-    let channel = channel_id("multi-client");
     let kind: u16 = 40001;
 
     let keys: Vec<Keys> = (0..3).map(|_| Keys::generate()).collect();
+    let channel = create_test_channel(&keys[0]).await;
 
     let mut clients: Vec<SproutTestClient> =
         futures_util::future::try_join_all(keys.iter().map(|k| SproutTestClient::connect(&url, k)))
@@ -332,10 +357,10 @@ async fn test_multiple_concurrent_clients() {
 #[ignore]
 async fn test_stored_events_returned_before_eose() {
     let url = relay_url();
-    let channel = channel_id("stored-events");
     let kind: u16 = 40001;
 
     let keys = Keys::generate();
+    let channel = create_test_channel(&keys).await;
     let mut client = SproutTestClient::connect(&url, &keys)
         .await
         .expect("connect");
@@ -376,10 +401,10 @@ async fn test_stored_events_returned_before_eose() {
 #[ignore]
 async fn test_ephemeral_event_not_stored() {
     let url = relay_url();
-    let channel = channel_id("ephemeral");
     let ephemeral_kind: u16 = 20001;
 
     let keys = Keys::generate();
+    let channel = create_test_channel(&keys).await;
     let mut client = SproutTestClient::connect(&url, &keys)
         .await
         .expect("connect");
@@ -566,10 +591,10 @@ async fn test_nip11_relay_info() {
 #[ignore]
 async fn test_pubkey_mismatch_rejected() {
     let url = relay_url();
-    let channel = channel_id("pubkey-mismatch");
 
     let keys_a = Keys::generate();
     let keys_b = Keys::generate();
+    let channel = create_test_channel(&keys_a).await;
 
     let mut client = SproutTestClient::connect(&url, &keys_a)
         .await
@@ -592,10 +617,10 @@ async fn test_pubkey_mismatch_rejected() {
 #[ignore]
 async fn test_eose_sent_for_empty_subscription() {
     let url = relay_url();
-    let channel = channel_id("empty-eose");
     let kind: u16 = 40001;
 
     let keys = Keys::generate();
+    let channel = create_test_channel(&keys).await;
     let mut client = SproutTestClient::connect(&url, &keys)
         .await
         .expect("connect");

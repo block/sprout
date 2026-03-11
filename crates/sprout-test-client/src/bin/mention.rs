@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let channel_id = &args[1];
     let target_pubkey = &args[2];
-    let message = &args[3];
+    let message = args[3..].join(" ");
 
     let url = std::env::var("SPROUT_RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".into());
     let keys = Keys::generate();
@@ -21,10 +21,10 @@ async fn main() -> anyhow::Result<()> {
 
     let mut client = SproutTestClient::connect(&url, &keys).await?;
 
-    let e_tag = Tag::parse(&["e", channel_id])?;
+    let h_tag = Tag::parse(&["h", channel_id])?;
     let p_tag = Tag::parse(&["p", target_pubkey])?;
     let event =
-        EventBuilder::new(Kind::Custom(40001), message, [e_tag, p_tag]).sign_with_keys(&keys)?;
+        EventBuilder::new(Kind::Custom(40001), message, [h_tag, p_tag]).sign_with_keys(&keys)?;
 
     let ok = client.send_event(event).await?;
     if ok.accepted {

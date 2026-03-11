@@ -543,6 +543,19 @@ impl RelayClient {
         Ok(resp.text().await?)
     }
 
+    /// Get the canvas content for a channel via REST.
+    pub async fn get_canvas(&self, channel_id: &str) -> anyhow::Result<String> {
+        self.get(&format!("/api/channels/{}/canvas", channel_id))
+            .await
+    }
+
+    /// Set the canvas content for a channel via REST.
+    pub async fn set_canvas(&self, channel_id: &str, content: &str) -> anyhow::Result<String> {
+        let body = serde_json::json!({ "content": content });
+        self.put(&format!("/api/channels/{}/canvas", channel_id), &body)
+            .await
+    }
+
     /// Authenticated GET to a full URL (for feed tools that build the URL themselves).
     pub async fn get_api(&self, url: &str) -> anyhow::Result<String> {
         let resp = self.apply_auth(self.http.get(url)).send().await?;
