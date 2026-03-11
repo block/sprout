@@ -69,7 +69,7 @@ function MessageRow({ message }: { message: TimelineMessage }) {
         </div>
       )}
 
-      <div className="min-w-0 flex-1 space-y-1">
+      <div className="min-w-0 flex-1 space-y-0">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h3 className="truncate text-sm font-semibold tracking-tight">
             {message.author}
@@ -88,7 +88,7 @@ function MessageRow({ message }: { message: TimelineMessage }) {
             <p className="whitespace-nowrap">{message.time}</p>
           </div>
         </div>
-        <Markdown className="max-w-3xl" compact content={message.body} />
+        <Markdown className="max-w-3xl" content={message.body} tight />
       </div>
     </article>
   );

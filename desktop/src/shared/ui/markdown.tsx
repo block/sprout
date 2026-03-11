@@ -9,6 +9,7 @@ type MarkdownProps = {
   className?: string;
   compact?: boolean;
   content: string;
+  tight?: boolean;
 };
 
 const markdownComponents: Components = {
@@ -126,6 +127,7 @@ export function Markdown({
   className,
   compact = false,
   content,
+  tight = false,
 }: MarkdownProps) {
   let processedContent = content;
 
@@ -140,9 +142,11 @@ export function Markdown({
   return (
     <div
       className={cn(
-        compact
-          ? "max-w-none break-words text-[15px] leading-6 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-1.5"
-          : "max-w-none break-words text-sm leading-7 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-3",
+        tight
+          ? "max-w-none break-words text-sm leading-5 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-1"
+          : compact
+            ? "max-w-none break-words text-[15px] leading-6 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-1.5"
+            : "max-w-none break-words text-sm leading-7 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-3",
         className,
       )}
     >
