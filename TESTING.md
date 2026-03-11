@@ -1,13 +1,13 @@
 # Sprout Testing Guide
 
-This guide enables an AI agent (the **operator**) to run the full Sprout test suite: automated `cargo test` suites and a three-agent multi-agent E2E run that exercises all 36 MCP tools against a live relay.
+This guide enables an AI agent (the **operator**) to run the full Sprout test suite: automated `cargo test` suites and a three-agent multi-agent E2E run that exercises all 38 MCP tools against a live relay.
 
 ## Two Test Modes
 
 | Mode | What It Does | When to Use |
 |------|-------------|-------------|
 | **Automated** (`cargo test`) | Unit tests + REST/WebSocket/MCP integration tests | Fast CI check; verify no unit regressions |
-| **Multi-Agent E2E** | Three agents (Alice, Bob, Charlie) run via `sprout-acp` harness, exercising all 36 MCP tools via real Nostr identities | Before merging relay/MCP/auth changes; full regression run; exploring new features |
+| **Multi-Agent E2E** | Three agents (Alice, Bob, Charlie) run via `sprout-acp` harness, exercising all 38 MCP tools via real Nostr identities | Before merging relay/MCP/auth changes; full regression run; exploring new features |
 
 Run both modes for a complete regression check. Run automated-only for a fast sanity check.
 
@@ -27,7 +27,7 @@ Run both modes for a complete regression check. Run automated-only for a fast sa
    - [3.7 Expected Results](#37-expected-results)
 4. [Advanced: ACP Harness Scenarios](#4-advanced-acp-harness-scenarios)
 5. [Workflow YAML Reference](#5-workflow-yaml-reference)
-6. [The 36 MCP Tools](#6-the-36-mcp-tools)
+6. [The 38 MCP Tools](#6-the-38-mcp-tools)
 7. [Cleanup](#7-cleanup)
 8. [Known Issues / Troubleshooting](#8-known-issues--troubleshooting)
 
@@ -163,7 +163,7 @@ sleep 3 && curl -s http://localhost:3000/health
 Then run the integration suites:
 
 ```bash
-# REST API integration tests (20 tests)
+# REST API integration tests (32 tests)
 RELAY_URL=ws://localhost:3000 \
   cargo test -p sprout-test-client --test e2e_rest_api -- --ignored
 
@@ -171,7 +171,7 @@ RELAY_URL=ws://localhost:3000 \
 RELAY_URL=ws://localhost:3000 \
   cargo test -p sprout-test-client --test e2e_relay -- --ignored
 
-# MCP server integration tests (7 tests)
+# MCP server integration tests (10 tests)
 RELAY_URL=ws://localhost:3000 \
   cargo test -p sprout-test-client --test e2e_mcp -- --ignored
 ```
@@ -179,12 +179,12 @@ RELAY_URL=ws://localhost:3000 \
 ### Expected Results
 
 ```
-test result: ok. 20 passed; 0 failed; 0 ignored   ← REST API
+test result: ok. 32 passed; 0 failed; 0 ignored   ← REST API
 test result: ok. 13 passed; 0 failed; 0 ignored   ← relay
-test result: ok.  7 passed; 0 failed; 0 ignored   ← MCP
+test result: ok. 10 passed; 0 failed; 0 ignored   ← MCP
 ```
 
-All 40 integration tests pass. If any fail, check that the relay is running and Docker services are healthy before proceeding to E2E.
+All 55 integration tests pass (across the three suites above). An additional 7 workflow integration tests exist in `e2e_workflows.rs` — run them separately if workflow changes are involved. If any fail, check that the relay is running and Docker services are healthy before proceeding to E2E.
 
 ---
 
@@ -202,7 +202,7 @@ Operator (you)
 Sprout Relay  ──WS (NIP-01)──►  sprout-acp (harness)  ──stdio (ACP)──►  goose
                                                                             │
                                                                        sprout-mcp-server
-                                                                        (36 MCP tools)
+                                                                        (38 MCP tools)
                                                                             │
                                                                        Sprout Relay
                                                                     (send_message, etc.)
@@ -428,11 +428,11 @@ mention "$GENERAL" "$ALICE_PUBKEY" \
   "Create a workflow named 'alice-notify' with a message_posted trigger on the 'general' channel. The workflow should have one step: send a message to the 'general' channel saying 'Workflow fired!'. Save the workflow ID and report it back."
 ```
 
-**A-5: Profile and presence**
+**A-5: Profile, NIP-05 identity, and presence**
 
 ```bash
 mention "$GENERAL" "$ALICE_PUBKEY" \
-  "Set your display name to 'Alice (Test Agent)'. Set your about/bio to 'I am Alice, the infrastructure creator for the Sprout E2E test suite.' Set your presence to online."
+  "Set your display name to 'Alice (Test Agent)'. Set your about/bio to 'I am Alice, the infrastructure creator for the Sprout E2E test suite.' Set your NIP-05 handle to 'alice@localhost' using set_profile. Set your presence to online."
 ```
 
 **A-6: Feed, search, and membership**
@@ -497,6 +497,13 @@ mention "$GENERAL" "$BOB_PUBKEY" \
   "Get the presence status for Alice (pubkey: $ALICE_PUBKEY). Get your own presence status. Report both."
 ```
 
+**B-8: Profile resolution (public profiles)**
+
+```bash
+mention "$GENERAL" "$BOB_PUBKEY" \
+  "Use get_user_profile to look up Alice's profile (pubkey: $ALICE_PUBKEY). Report her display name and about text. Then use get_users_batch with all three pubkeys (yours: $BOB_PUBKEY, Alice: $ALICE_PUBKEY, Charlie: $CHARLIE_PUBKEY). Report which ones have display names set and which are in the missing list."
+```
+
 ---
 
 #### Charlie — Edge Case Specialist
@@ -550,6 +557,24 @@ mention "$GENERAL" "$CHARLIE_PUBKEY" \
 ```bash
 mention "$GENERAL" "$CHARLIE_PUBKEY" \
   "Get the list of workflows. Find Alice's 'alice-notify' workflow and trigger it via webhook if it has a webhook trigger, or note that it uses message_posted. Then get the presence for both Alice (pubkey: $ALICE_PUBKEY) and Bob (pubkey: $BOB_PUBKEY). Finally, produce a summary report in the 'general' channel listing: (1) all channels created during this test run, (2) total messages sent, (3) any errors encountered."
+```
+
+---
+
+**C-8: NIP-05 identity verification**
+
+```bash
+mention "$GENERAL" "$CHARLIE_PUBKEY" \
+  "Verify the NIP-05 endpoint. Alice set her NIP-05 handle to 'alice@localhost' in exercise A-5. Use curl or an HTTP request to GET http://localhost:3000/.well-known/nostr.json?name=alice — it should return her pubkey in the 'names' map and a relay URL in the 'relays' map. Also try ?name=nonexistent and confirm it returns empty names/relays. Check that the response includes an Access-Control-Allow-Origin: * header. Report your findings."
+```
+
+---
+
+**C-9: Profile edge cases**
+
+```bash
+mention "$GENERAL" "$CHARLIE_PUBKEY" \
+  "Test profile edge cases. Use get_user_profile with a pubkey that doesn't exist — report the error. Use get_users_batch with a mix of valid pubkeys, an invalid-length string like 'tooshort', and a string that is 64 chars but not valid hex. Report what ends up in the profiles map vs the missing list."
 ```
 
 ---
@@ -660,6 +685,9 @@ After all exercises complete, the following should be true:
 | Bob in private-ops | Yes (Alice invited him in A-6) |
 | Workflow | alice-notify created with message_posted trigger |
 | Display names | Alice and Bob have display names set |
+| Profile resolution | Bob can read Alice's profile via `get_user_profile`; `get_users_batch` returns Alice and Bob in profiles, Charlie in missing |
+| NIP-05 verification | Charlie queries `/.well-known/nostr.json?name=alice` and gets Alice's pubkey (Alice set `alice@localhost` in A-5) |
+| Profile edge cases | Charlie gets appropriate errors for invalid/unknown pubkeys |
 | Error handling | Charlie's C-1, C-2, C-5 exercises report correct errors |
 | charlie-lifecycle | Unarchived and final message sent successfully |
 
@@ -967,9 +995,9 @@ steps:
 
 ---
 
-## 6. The 36 MCP Tools
+## 6. The 38 MCP Tools
 
-The `sprout-mcp-server` exposes 36 tools covering the full Sprout feature surface. All are available to agents running via the `sprout-acp` harness.
+The `sprout-mcp-server` exposes 38 tools covering the full Sprout feature surface. All are available to agents running via the `sprout-acp` harness.
 
 ### Channels (8)
 
@@ -1037,11 +1065,13 @@ The `sprout-mcp-server` exposes 36 tools covering the full Sprout feature surfac
 |------|-------------|
 | `search` | Full-text search across messages and channels |
 
-### Profile (3)
+### Profile (5)
 
 | Tool | Description |
 |------|-------------|
-| `get_profile` | Get the agent's profile |
+| `get_profile` | Get the agent's own profile |
+| `get_user_profile` | Get any user's profile by pubkey (omit pubkey for own profile) |
+| `get_users_batch` | Resolve display names and NIP-05 handles for multiple pubkeys |
 | `set_display_name` | Set the agent's display name |
 | `set_about` | Set the agent's bio/about text |
 
@@ -1123,11 +1153,11 @@ rm -f /tmp/alice-keys.txt /tmp/agent-b-keys.txt /tmp/agent-c-keys.txt
 
 ### Current Status
 
-All automated tests pass as of 2026-03-10:
+All automated tests pass as of 2026-03-11:
 
-- ✅ 20/20 REST API integration tests
+- ✅ 32/32 REST API integration tests
 - ✅ 13/13 WebSocket relay integration tests
-- ✅ 7/7 MCP server integration tests
+- ✅ 10/10 MCP server integration tests
 - ✅ Multi-agent E2E (Alice/Bob/Charlie) via sprout-acp harness
 
 ---
