@@ -79,6 +79,22 @@ async fn authed_post_json(
         .unwrap_or_else(|e| panic!("HTTP POST {url} failed: {e}"))
 }
 
+/// Make an authenticated PUT request using the `X-Pubkey` dev-mode header.
+async fn authed_put(
+    client: &Client,
+    url: &str,
+    pubkey_hex: &str,
+    body: serde_json::Value,
+) -> reqwest::Response {
+    client
+        .put(url)
+        .header("X-Pubkey", pubkey_hex)
+        .json(&body)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("HTTP PUT {url} failed: {e}"))
+}
+
 // ── Channel tests ─────────────────────────────────────────────────────────────
 
 /// GET /api/channels returns a non-empty list with the expected fields.
@@ -1222,4 +1238,139 @@ async fn test_nip05_has_cors_header() {
     let cors = resp.headers().get("access-control-allow-origin");
     assert!(cors.is_some(), "NIP-05 must have Access-Control-Allow-Origin header");
     assert_eq!(cors.unwrap().to_str().unwrap(), "*");
+}
+
+/// Full round-trip: set nip05_handle via PUT, then verify via /.well-known/nostr.json.
+#[tokio::test]
+#[ignore]
+async fn test_nip05_round_trip_set_and_lookup() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Set NIP-05 handle — use "testuser@localhost" since relay_url is ws://localhost:3000
+    let unique_name = format!("nip05test{}", &pubkey_hex[..8]);
+    let handle = format!("{}@localhost", unique_name);
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/profile", relay_http_url()),
+        &pubkey_hex,
+        serde_json::json!({"nip05_handle": handle}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "set nip05_handle should succeed");
+
+    // Query NIP-05 endpoint
+    let resp = client
+        .get(format!(
+            "{}/.well-known/nostr.json?name={}",
+            relay_http_url(),
+            unique_name
+        ))
+        .send()
+        .await
+        .expect("nip05 request");
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let names = body["names"].as_object().expect("names map");
+    assert!(
+        names.contains_key(&unique_name),
+        "NIP-05 should resolve the name. Got: {:?}",
+        names
+    );
+    let resolved_pubkey = names[&unique_name].as_str().expect("pubkey string");
+    assert_eq!(
+        resolved_pubkey, pubkey_hex,
+        "NIP-05 resolved pubkey should match"
+    );
+}
+
+/// Setting nip05_handle to empty string clears it.
+#[tokio::test]
+#[ignore]
+async fn test_nip05_clear_handle() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let unique_name = format!("cleartest{}", &pubkey_hex[..8]);
+    let handle = format!("{}@localhost", unique_name);
+
+    // Set handle
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/profile", relay_http_url()),
+        &pubkey_hex,
+        serde_json::json!({"nip05_handle": handle}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    // Clear handle
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/profile", relay_http_url()),
+        &pubkey_hex,
+        serde_json::json!({"nip05_handle": ""}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    // Verify cleared — NIP-05 should no longer resolve
+    let resp = client
+        .get(format!(
+            "{}/.well-known/nostr.json?name={}",
+            relay_http_url(),
+            unique_name
+        ))
+        .send()
+        .await
+        .expect("nip05 request");
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let names = body["names"].as_object().expect("names map");
+    assert!(
+        !names.contains_key(&unique_name),
+        "NIP-05 should NOT resolve after clearing. Got: {:?}",
+        names
+    );
+}
+
+/// Duplicate nip05_handle returns 409 Conflict.
+#[tokio::test]
+#[ignore]
+async fn test_nip05_duplicate_handle_conflict() {
+    let client = http_client();
+    let keys_a = Keys::generate();
+    let pubkey_a = keys_a.public_key().to_hex();
+    let keys_b = Keys::generate();
+    let pubkey_b = keys_b.public_key().to_hex();
+
+    let unique_name = format!("duptest{}", &pubkey_a[..8]);
+    let handle = format!("{}@localhost", unique_name);
+
+    // User A sets handle
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/profile", relay_http_url()),
+        &pubkey_a,
+        serde_json::json!({"nip05_handle": handle}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    // User B tries same handle → 409
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/profile", relay_http_url()),
+        &pubkey_b,
+        serde_json::json!({"nip05_handle": handle}),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        409,
+        "duplicate nip05_handle should return 409 Conflict"
+    );
 }

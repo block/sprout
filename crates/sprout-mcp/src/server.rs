@@ -1394,7 +1394,7 @@ impl SproutMcpServer {
         description = "Get presence status (online/away/offline) for one or more users by pubkey. Pass comma-separated hex pubkeys."
     )]
     pub async fn get_presence(&self, Parameters(p): Parameters<GetPresenceParams>) -> String {
-        let path = format!("/api/presence?pubkeys={}", p.pubkeys);
+        let path = format!("/api/presence?pubkeys={}", percent_encode(&p.pubkeys));
         match self.client.get(&path).await {
             Ok(body) => body,
             Err(e) => format!("Error fetching presence: {e}"),

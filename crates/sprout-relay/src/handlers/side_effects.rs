@@ -277,8 +277,19 @@ async fn handle_kind0_profile(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
+    // Validate NIP-05 handle: must be user@domain where domain matches this relay.
+    // Invalid or off-domain handles are silently cleared (treated as absent) rather
+    // than stored, since the event is already persisted and can't be rejected.
+    let relay_domain = crate::api::nip05::extract_domain(&state.config.relay_url);
     let nip05_handle = content.get("nip05")
         .and_then(|v| v.as_str())
+        .filter(|h| {
+            let parts: Vec<&str> = h.splitn(2, '@').collect();
+            parts.len() == 2
+                && !parts[0].is_empty()
+                && !parts[1].is_empty()
+                && parts[1].to_lowercase() == relay_domain
+        })
         .unwrap_or("");
 
     let pubkey_bytes = event.pubkey.serialize().to_vec();

@@ -55,7 +55,7 @@ pub async fn nostr_nip05(
 
 /// Extract the domain (host) from a URL string.
 /// e.g. "ws://localhost:3000" → "localhost", "wss://sprout.block.xyz" → "sprout.block.xyz"
-fn extract_domain(url: &str) -> String {
+pub(crate) fn extract_domain(url: &str) -> String {
     url.trim_start_matches("wss://")
         .trim_start_matches("ws://")
         .trim_start_matches("https://")

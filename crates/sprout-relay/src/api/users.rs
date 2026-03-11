@@ -2,7 +2,7 @@
 //!
 //! Endpoints:
 //!   GET /api/users/me/profile      — get own profile
-//!   PUT /api/users/me/profile      — update own profile (display_name, avatar_url, about)
+//!   PUT /api/users/me/profile      — update own profile (display_name, avatar_url, about, nip05_handle)
 //!   GET /api/users/{pubkey}/profile — get any user's profile by pubkey hex
 //!   POST /api/users/batch          — resolve display names for multiple pubkeys
 
@@ -19,6 +19,7 @@ use serde::Deserialize;
 use crate::state::AppState;
 
 use super::{api_error, extract_auth_pubkey, internal_error};
+use super::nip05::extract_domain;
 
 /// Request body for updating a user's profile.
 /// All fields are optional — at least one must be present.
@@ -36,7 +37,7 @@ pub struct UpdateProfileBody {
 
 /// `PUT /api/users/me/profile` — update the authenticated user's profile.
 ///
-/// Body: `{ "display_name": "Alice", "avatar_url": "https://...", "about": "..." }` (all optional, at least one required)
+/// Body: `{ "display_name": "Alice", "avatar_url": "https://...", "about": "...", "nip05_handle": "alice@relay.example" }` (all optional, at least one required)
 /// Returns: `{ "updated": true }`
 pub async fn update_profile(
     State(state): State<Arc<AppState>>,
@@ -60,11 +61,9 @@ pub async fn update_profile(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let nip05_handle = body
-        .nip05_handle
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    // nip05_handle: empty string means "clear", None means "leave unchanged"
+    let nip05_handle = body.nip05_handle.as_deref().map(str::trim);
+    // Don't filter empty — empty string means "clear to NULL" via empty_to_none in DB layer
 
     if display_name.is_none() && avatar_url.is_none() && about.is_none() && nip05_handle.is_none() {
         return Err(api_error(
@@ -73,11 +72,43 @@ pub async fn update_profile(
         ));
     }
 
+    // Validate NIP-05 format: must be "local@domain"
+    if let Some(handle) = nip05_handle {
+        if !handle.is_empty() {  // empty = clear, skip validation
+            let parts: Vec<&str> = handle.splitn(2, '@').collect();
+            if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    "nip05_handle must be in user@domain format",
+                ));
+            }
+            // Domain must match this relay's domain
+            let relay_domain = extract_domain(&state.config.relay_url);
+            let handle_domain = parts[1].to_lowercase();
+            if handle_domain != relay_domain {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!(
+                        "nip05_handle domain must match this relay ({})",
+                        relay_domain
+                    ),
+                ));
+            }
+        }
+    }
+
     state
         .db
         .update_user_profile(&pubkey_bytes, display_name, avatar_url, about, nip05_handle)
         .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+        .map_err(|e| {
+            let msg = format!("{e}");
+            if msg.contains("Duplicate entry") || msg.contains("1062") {
+                api_error(StatusCode::CONFLICT, "nip05_handle is already claimed by another user")
+            } else {
+                internal_error(&format!("db error: {e}"))
+            }
+        })?;
 
     Ok(Json(serde_json::json!({ "updated": true })))
 }
