@@ -415,34 +415,29 @@ export function AppSidebar({
           </span>
           <span className="text-xs text-sidebar-foreground/50">&#x2318;K</span>
         </Button>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={selectedView === "home"}
+              onClick={onSelectHome}
+              tooltip="Home"
+              type="button"
+            >
+              <Home className="h-4 w-4" />
+              <span>Home</span>
+              {homeUrgentCount && homeUrgentCount > 0 ? (
+                <span className="ml-auto rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary-foreground">
+                  {homeUrgentCount}
+                </span>
+              ) : null}
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarHeader>
 
       <SidebarSeparator />
 
       <SidebarContent>
-        <SidebarGroup className="pb-1">
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={selectedView === "home"}
-                  onClick={onSelectHome}
-                  tooltip="Home"
-                  type="button"
-                >
-                  <Home className="h-4 w-4" />
-                  <span>Home</span>
-                  {homeUrgentCount && homeUrgentCount > 0 ? (
-                    <span className="ml-auto rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary-foreground">
-                      {homeUrgentCount}
-                    </span>
-                  ) : null}
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
         {isLoading ? (
           <SidebarGroup>
             <SidebarGroupLabel>Channels</SidebarGroupLabel>
