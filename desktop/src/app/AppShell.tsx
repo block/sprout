@@ -1,4 +1,3 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as React from "react";
 import { Settings2 } from "lucide-react";
 
@@ -301,20 +300,9 @@ export function AppShell() {
       />
 
       <SidebarInset
-        className="relative min-h-0 min-w-0 overflow-hidden pt-7"
+        className="min-h-0 min-w-0 overflow-hidden"
         key={contentPaneKey}
       >
-        {/* Drag strip covering the traffic-light inset area */}
-        <div
-          className="absolute inset-x-0 top-0 flex h-7 items-center px-2"
-          onPointerDown={(e) => {
-            if (e.button !== 0) return;
-            const target = e.target as HTMLElement;
-            if (target.closest('button, a, input, [role="button"]')) return;
-            e.preventDefault();
-            getCurrentWindow().startDragging();
-          }}
-        />
         {selectedView === "home" ? (
           <ChatHeader
             description="Personalized feed for mentions, reminders, channel activity, and agent work."
