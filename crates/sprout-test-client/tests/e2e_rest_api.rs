@@ -79,6 +79,22 @@ async fn authed_post_json(
         .unwrap_or_else(|e| panic!("HTTP POST {url} failed: {e}"))
 }
 
+/// Make an authenticated PUT request using the `X-Pubkey` dev-mode header.
+async fn authed_put(
+    client: &Client,
+    url: &str,
+    pubkey_hex: &str,
+    body: serde_json::Value,
+) -> reqwest::Response {
+    client
+        .put(url)
+        .header("X-Pubkey", pubkey_hex)
+        .json(&body)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("HTTP PUT {url} failed: {e}"))
+}
+
 // ── Channel tests ─────────────────────────────────────────────────────────────
 
 /// GET /api/channels returns a non-empty list with the expected fields.
@@ -925,4 +941,481 @@ async fn test_valid_pubkey_header_accepted() {
     let resp = authed_get(&client, &url, &pubkey_hex).await;
 
     assert_eq!(resp.status(), 200, "expected 200 for valid X-Pubkey header");
+}
+
+// ── Public profile tests ──────────────────────────────────────────────────────
+
+/// GET /api/users/:pubkey/profile returns the profile for a known user.
+#[tokio::test]
+#[ignore]
+async fn test_get_user_profile_returns_known_user() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Set a profile first
+    let put_resp = client
+        .put(format!("{}/api/users/me/profile", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .json(&serde_json::json!({
+            "display_name": "Profile Test User",
+            "about": "Testing public profile endpoint"
+        }))
+        .send()
+        .await
+        .expect("PUT profile");
+    assert_eq!(put_resp.status(), 200);
+
+    // Read it back via the new public endpoint (using a different reader)
+    let reader_keys = Keys::generate();
+    let reader_hex = reader_keys.public_key().to_hex();
+
+    let resp = authed_get(
+        &client,
+        &format!("{}/api/users/{}/profile", relay_http_url(), pubkey_hex),
+        &reader_hex,
+    )
+    .await;
+
+    assert_eq!(resp.status(), 200, "expected 200 for known user profile");
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(body["pubkey"].as_str(), Some(pubkey_hex.as_str()));
+    assert_eq!(body["display_name"].as_str(), Some("Profile Test User"));
+    assert_eq!(
+        body["about"].as_str(),
+        Some("Testing public profile endpoint")
+    );
+}
+
+/// GET /api/users/:pubkey/profile returns 404 for an unknown user.
+#[tokio::test]
+#[ignore]
+async fn test_get_user_profile_returns_404_for_unknown() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+    // Use a pubkey that has never been registered
+    let unknown_hex = Keys::generate().public_key().to_hex();
+
+    let resp = authed_get(
+        &client,
+        &format!("{}/api/users/{}/profile", relay_http_url(), unknown_hex),
+        &pubkey_hex,
+    )
+    .await;
+
+    assert_eq!(resp.status(), 404, "expected 404 for unknown user");
+}
+
+/// GET /api/users/:pubkey/profile returns 401 without authentication.
+#[tokio::test]
+#[ignore]
+async fn test_get_user_profile_requires_auth() {
+    let client = http_client();
+    let some_pubkey = Keys::generate().public_key().to_hex();
+
+    let resp = client
+        .get(format!(
+            "{}/api/users/{}/profile",
+            relay_http_url(),
+            some_pubkey
+        ))
+        .send()
+        .await
+        .expect("GET profile");
+
+    assert_eq!(resp.status(), 401, "expected 401 without auth");
+}
+
+/// GET /api/users/:pubkey/profile returns 400 for an invalid pubkey.
+#[tokio::test]
+#[ignore]
+async fn test_get_user_profile_rejects_invalid_pubkey() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let resp = authed_get(
+        &client,
+        &format!(
+            "{}/api/users/{}/profile",
+            relay_http_url(),
+            "not-a-valid-hex"
+        ),
+        &pubkey_hex,
+    )
+    .await;
+
+    assert_eq!(resp.status(), 400, "expected 400 for invalid pubkey hex");
+}
+
+/// POST /api/users/batch returns found profiles and a missing list.
+#[tokio::test]
+#[ignore]
+async fn test_batch_profiles_known_and_unknown() {
+    let client = http_client();
+
+    // Create two users with profiles
+    let keys_a = Keys::generate();
+    let hex_a = keys_a.public_key().to_hex();
+    let keys_b = Keys::generate();
+    let hex_b = keys_b.public_key().to_hex();
+    let unknown_hex = Keys::generate().public_key().to_hex();
+
+    client
+        .put(format!("{}/api/users/me/profile", relay_http_url()))
+        .header("X-Pubkey", &hex_a)
+        .json(&serde_json::json!({"display_name": "Alice Batch"}))
+        .send()
+        .await
+        .expect("PUT alice");
+
+    client
+        .put(format!("{}/api/users/me/profile", relay_http_url()))
+        .header("X-Pubkey", &hex_b)
+        .json(&serde_json::json!({"display_name": "Bob Batch"}))
+        .send()
+        .await
+        .expect("PUT bob");
+
+    // Batch lookup
+    let resp = authed_post_json(
+        &client,
+        &format!("{}/api/users/batch", relay_http_url()),
+        &hex_a,
+        serde_json::json!({
+            "pubkeys": [hex_a, hex_b, unknown_hex]
+        }),
+    )
+    .await;
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("json");
+
+    let profiles = body["profiles"].as_object().expect("profiles map");
+    assert_eq!(profiles.len(), 2, "expected 2 found profiles");
+    assert_eq!(
+        profiles[&hex_a.to_lowercase()]["display_name"].as_str(),
+        Some("Alice Batch")
+    );
+    assert_eq!(
+        profiles[&hex_b.to_lowercase()]["display_name"].as_str(),
+        Some("Bob Batch")
+    );
+
+    let missing = body["missing"].as_array().expect("missing array");
+    assert!(
+        missing
+            .iter()
+            .any(|v| v.as_str() == Some(&unknown_hex.to_lowercase())),
+        "unknown pubkey should be in missing"
+    );
+}
+
+/// POST /api/users/batch returns 400 when more than 200 pubkeys are submitted.
+#[tokio::test]
+#[ignore]
+async fn test_batch_profiles_rejects_over_200() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let pubkeys: Vec<String> = (0..201).map(|i| format!("{:064x}", i)).collect();
+
+    let resp = authed_post_json(
+        &client,
+        &format!("{}/api/users/batch", relay_http_url()),
+        &pubkey_hex,
+        serde_json::json!({"pubkeys": pubkeys}),
+    )
+    .await;
+
+    assert_eq!(resp.status(), 400, "expected 400 for >200 pubkeys");
+}
+
+/// POST /api/users/batch returns 401 without authentication.
+#[tokio::test]
+#[ignore]
+async fn test_batch_profiles_requires_auth() {
+    let client = http_client();
+
+    let resp = client
+        .post(format!("{}/api/users/batch", relay_http_url()))
+        .json(&serde_json::json!({"pubkeys": ["abc"]}))
+        .send()
+        .await
+        .expect("POST batch");
+
+    assert_eq!(resp.status(), 401, "expected 401 without auth");
+}
+
+/// POST /api/users/batch places invalid-length inputs in the missing list.
+/// Also verifies that 64-char non-hex strings (e.g. "g" * 64) go to missing.
+#[tokio::test]
+#[ignore]
+async fn test_batch_profiles_invalid_length_in_missing() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let non_hex_64 = "g".repeat(64);
+    let resp = authed_post_json(
+        &client,
+        &format!("{}/api/users/batch", relay_http_url()),
+        &pubkey_hex,
+        serde_json::json!({"pubkeys": ["tooshort", "x".repeat(100), non_hex_64]}),
+    )
+    .await;
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let missing = body["missing"].as_array().expect("missing");
+    assert_eq!(
+        missing.len(),
+        3,
+        "wrong-length and 64-char non-hex inputs should all be in missing"
+    );
+
+    let missing_strs: Vec<&str> = missing.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        missing_strs.contains(&"tooshort"),
+        "short input should be in missing"
+    );
+    assert!(
+        missing_strs.iter().any(|s| s.len() == 100),
+        "too-long input should be in missing"
+    );
+    assert!(
+        missing_strs.contains(&"g".repeat(64).as_str()),
+        "64-char non-hex should be in missing"
+    );
+}
+
+/// POST /api/users/batch normalizes pubkey case before lookup.
+#[tokio::test]
+#[ignore]
+async fn test_batch_profiles_case_normalized() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Set profile
+    client
+        .put(format!("{}/api/users/me/profile", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .json(&serde_json::json!({"display_name": "Case Test"}))
+        .send()
+        .await
+        .expect("PUT");
+
+    // Query with uppercase version
+    let upper_hex = pubkey_hex.to_uppercase();
+    let resp = authed_post_json(
+        &client,
+        &format!("{}/api/users/batch", relay_http_url()),
+        &pubkey_hex,
+        serde_json::json!({"pubkeys": [upper_hex]}),
+    )
+    .await;
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let profiles = body["profiles"].as_object().expect("profiles");
+    assert_eq!(profiles.len(), 1, "uppercase pubkey should match");
+}
+
+// ── NIP-05 tests ──────────────────────────────────────────────────────────────
+
+/// GET /.well-known/nostr.json?name=nonexistent returns empty names and relays.
+#[tokio::test]
+#[ignore]
+async fn test_nip05_returns_empty_for_unknown_name() {
+    let client = http_client();
+
+    let resp = client
+        .get(format!(
+            "{}/.well-known/nostr.json?name=nonexistent",
+            relay_http_url()
+        ))
+        .send()
+        .await
+        .expect("GET nip05");
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(body["names"].as_object().unwrap().len(), 0);
+    assert_eq!(body["relays"].as_object().unwrap().len(), 0);
+}
+
+/// GET /.well-known/nostr.json with no name param returns empty names.
+#[tokio::test]
+#[ignore]
+async fn test_nip05_no_name_returns_empty() {
+    let client = http_client();
+
+    let resp = client
+        .get(format!("{}/.well-known/nostr.json", relay_http_url()))
+        .send()
+        .await
+        .expect("GET nip05");
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(body["names"].as_object().unwrap().len(), 0);
+}
+
+/// GET /.well-known/nostr.json includes the required CORS header.
+#[tokio::test]
+#[ignore]
+async fn test_nip05_has_cors_header() {
+    let client = http_client();
+
+    let resp = client
+        .get(format!("{}/.well-known/nostr.json", relay_http_url()))
+        .send()
+        .await
+        .expect("GET nip05");
+
+    assert_eq!(resp.status(), 200);
+    let cors = resp.headers().get("access-control-allow-origin");
+    assert!(
+        cors.is_some(),
+        "NIP-05 must have Access-Control-Allow-Origin header"
+    );
+    assert_eq!(cors.unwrap().to_str().unwrap(), "*");
+}
+
+/// Full round-trip: set nip05_handle via PUT, then verify via /.well-known/nostr.json.
+#[tokio::test]
+#[ignore]
+async fn test_nip05_round_trip_set_and_lookup() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Set NIP-05 handle — use "testuser@localhost" since relay_url is ws://localhost:3000
+    let unique_name = format!("nip05test{}", &pubkey_hex[..8]);
+    let handle = format!("{}@localhost", unique_name);
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/profile", relay_http_url()),
+        &pubkey_hex,
+        serde_json::json!({"nip05_handle": handle}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "set nip05_handle should succeed");
+
+    // Query NIP-05 endpoint
+    let resp = client
+        .get(format!(
+            "{}/.well-known/nostr.json?name={}",
+            relay_http_url(),
+            unique_name
+        ))
+        .send()
+        .await
+        .expect("nip05 request");
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let names = body["names"].as_object().expect("names map");
+    assert!(
+        names.contains_key(&unique_name),
+        "NIP-05 should resolve the name. Got: {:?}",
+        names
+    );
+    let resolved_pubkey = names[&unique_name].as_str().expect("pubkey string");
+    assert_eq!(
+        resolved_pubkey, pubkey_hex,
+        "NIP-05 resolved pubkey should match"
+    );
+}
+
+/// Setting nip05_handle to empty string clears it.
+#[tokio::test]
+#[ignore]
+async fn test_nip05_clear_handle() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let unique_name = format!("cleartest{}", &pubkey_hex[..8]);
+    let handle = format!("{}@localhost", unique_name);
+
+    // Set handle
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/profile", relay_http_url()),
+        &pubkey_hex,
+        serde_json::json!({"nip05_handle": handle}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    // Clear handle
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/profile", relay_http_url()),
+        &pubkey_hex,
+        serde_json::json!({"nip05_handle": ""}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    // Verify cleared — NIP-05 should no longer resolve
+    let resp = client
+        .get(format!(
+            "{}/.well-known/nostr.json?name={}",
+            relay_http_url(),
+            unique_name
+        ))
+        .send()
+        .await
+        .expect("nip05 request");
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let names = body["names"].as_object().expect("names map");
+    assert!(
+        !names.contains_key(&unique_name),
+        "NIP-05 should NOT resolve after clearing. Got: {:?}",
+        names
+    );
+}
+
+/// Duplicate nip05_handle returns 409 Conflict.
+#[tokio::test]
+#[ignore]
+async fn test_nip05_duplicate_handle_conflict() {
+    let client = http_client();
+    let keys_a = Keys::generate();
+    let pubkey_a = keys_a.public_key().to_hex();
+    let keys_b = Keys::generate();
+    let pubkey_b = keys_b.public_key().to_hex();
+
+    let unique_name = format!("duptest{}", &pubkey_a[..8]);
+    let handle = format!("{}@localhost", unique_name);
+
+    // User A sets handle
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/profile", relay_http_url()),
+        &pubkey_a,
+        serde_json::json!({"nip05_handle": handle}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    // User B tries same handle → 409
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/profile", relay_http_url()),
+        &pubkey_b,
+        serde_json::json!({"nip05_handle": handle}),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        409,
+        "duplicate nip05_handle should return 409 Conflict"
+    );
 }

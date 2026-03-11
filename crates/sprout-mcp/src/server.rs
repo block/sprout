@@ -380,6 +380,41 @@ pub struct SetProfileParams {
     /// Short bio or description.
     #[serde(default)]
     pub about: Option<String>,
+    /// NIP-05 identifier (e.g. "alice@example.com"), or None to leave unchanged.
+    #[serde(default)]
+    pub nip05_handle: Option<String>,
+}
+
+/// Parameters for the `get_user_profile` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetUserProfileParams {
+    /// Hex-encoded pubkey to look up. Omit to get your own profile.
+    #[serde(default)]
+    pub pubkey: Option<String>,
+}
+
+/// Parameters for the `get_users_batch` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetUsersBatchParams {
+    /// List of hex-encoded pubkeys to look up (max 200).
+    pub pubkeys: Vec<String>,
+}
+
+/// Parameters for the `search` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SearchParams {
+    /// Full-text search query string.
+    pub q: String,
+    /// Maximum results to return (default 20, max 100).
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// Parameters for the `get_presence` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetPresenceParams {
+    /// Comma-separated hex-encoded public keys to look up presence for (max 200).
+    pub pubkeys: String,
 }
 
 /// Parameters for the `get_feed` tool.
@@ -1289,17 +1324,77 @@ impl SproutMcpServer {
     /// Update the agent's user profile.
     #[tool(
         name = "set_profile",
-        description = "Update the agent's user profile (display name and/or avatar URL)."
+        description = "Update the agent's user profile (display name, about, avatar URL, and/or NIP-05 handle)."
     )]
     pub async fn set_profile(&self, Parameters(p): Parameters<SetProfileParams>) -> String {
         let body = serde_json::json!({
             "display_name": p.display_name,
             "avatar_url": p.avatar_url,
             "about": p.about,
+            "nip05_handle": p.nip05_handle,
         });
         match self.client.put("/api/users/me/profile", &body).await {
             Ok(b) => b,
             Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Read a user's profile by pubkey.
+    #[tool(
+        name = "get_user_profile",
+        description = "Get a user's profile by pubkey. Omit pubkey to get your own profile. Returns display name, avatar URL, about text, and NIP-05 handle."
+    )]
+    pub async fn get_user_profile(
+        &self,
+        Parameters(p): Parameters<GetUserProfileParams>,
+    ) -> String {
+        let path = match p.pubkey {
+            None => "/api/users/me/profile".to_string(),
+            Some(pk) => format!("/api/users/{}/profile", pk),
+        };
+        match self.client.get(&path).await {
+            Ok(body) => body,
+            Err(e) => format!("Error fetching profile: {e}"),
+        }
+    }
+
+    /// Resolve display names for multiple pubkeys.
+    #[tool(
+        name = "get_users_batch",
+        description = "Resolve display names and NIP-05 handles for multiple pubkeys at once. Returns a map of pubkey to profile info, plus a list of unknown pubkeys. Useful for identifying message senders in bulk."
+    )]
+    pub async fn get_users_batch(&self, Parameters(p): Parameters<GetUsersBatchParams>) -> String {
+        let body = serde_json::json!({ "pubkeys": p.pubkeys });
+        match self.client.post("/api/users/batch", &body).await {
+            Ok(resp) => resp,
+            Err(e) => format!("Error fetching profiles: {e}"),
+        }
+    }
+
+    /// Full-text search across messages.
+    #[tool(
+        name = "search",
+        description = "Full-text search across messages in accessible channels. Returns matching messages with channel context. Powered by Typesense."
+    )]
+    pub async fn search(&self, Parameters(p): Parameters<SearchParams>) -> String {
+        let limit = p.limit.unwrap_or(20).min(100);
+        let path = format!("/api/search?q={}&limit={}", percent_encode(&p.q), limit);
+        match self.client.get(&path).await {
+            Ok(body) => body,
+            Err(e) => format!("Error searching: {e}"),
+        }
+    }
+
+    /// Get presence status for one or more users.
+    #[tool(
+        name = "get_presence",
+        description = "Get presence status (online/away/offline) for one or more users by pubkey. Pass comma-separated hex pubkeys."
+    )]
+    pub async fn get_presence(&self, Parameters(p): Parameters<GetPresenceParams>) -> String {
+        let path = format!("/api/presence?pubkeys={}", percent_encode(&p.pubkeys));
+        match self.client.get(&path).await {
+            Ok(body) => body,
+            Err(e) => format!("Error fetching presence: {e}"),
         }
     }
 }

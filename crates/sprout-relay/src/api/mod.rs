@@ -30,6 +30,8 @@ pub mod feed;
 pub mod members;
 /// Message and thread endpoints.
 pub mod messages;
+/// NIP-05 identity verification endpoint.
+pub mod nip05;
 /// Presence status endpoints.
 pub mod presence;
 /// Reaction endpoints.
@@ -60,7 +62,7 @@ pub use messages::{delete_message, get_thread, list_messages, send_message};
 pub use presence::presence_handler;
 pub use reactions::{add_reaction_handler, list_reactions_handler, remove_reaction_handler};
 pub use search::search_handler;
-pub use users::{get_profile, update_profile};
+pub use users::{get_profile, get_user_profile, get_users_batch, update_profile};
 pub use workflows::{
     create_workflow, delete_workflow, get_workflow, list_channel_workflows, list_workflow_runs,
     trigger_workflow, update_workflow, workflow_webhook,

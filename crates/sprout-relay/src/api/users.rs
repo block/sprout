@@ -1,13 +1,15 @@
 //! User profile REST API.
 //!
 //! Endpoints:
-//!   GET /api/users/me/profile  — get own profile
-//!   PUT /api/users/me/profile  — update own profile (display_name, avatar_url, about)
+//!   GET /api/users/me/profile      — get own profile
+//!   PUT /api/users/me/profile      — update own profile (display_name, avatar_url, about, nip05_handle)
+//!   GET /api/users/{pubkey}/profile — get any user's profile by pubkey hex
+//!   POST /api/users/batch          — resolve display names for multiple pubkeys
 
 use std::sync::Arc;
 
 use axum::{
-    extract::{Json as ExtractJson, State},
+    extract::{Json as ExtractJson, Path, State},
     http::{HeaderMap, StatusCode},
     response::Json,
 };
@@ -28,11 +30,13 @@ pub struct UpdateProfileBody {
     pub avatar_url: Option<String>,
     /// Short bio or description, or `None` to leave unchanged.
     pub about: Option<String>,
+    /// NIP-05 identifier (e.g. "alice@example.com"), or `None` to leave unchanged.
+    pub nip05_handle: Option<String>,
 }
 
 /// `PUT /api/users/me/profile` — update the authenticated user's profile.
 ///
-/// Body: `{ "display_name": "Alice", "avatar_url": "https://...", "about": "..." }` (all optional, at least one required)
+/// Body: `{ "display_name": "Alice", "avatar_url": "https://...", "about": "...", "nip05_handle": "alice@relay.example" }` (all optional, at least one required)
 /// Returns: `{ "updated": true }`
 pub async fn update_profile(
     State(state): State<Arc<AppState>>,
@@ -56,19 +60,43 @@ pub async fn update_profile(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    // nip05_handle: empty string means "clear", None means "leave unchanged"
+    let nip05_handle_raw = body.nip05_handle.as_deref().map(str::trim);
+    // Don't filter empty — empty string means "clear to NULL" via empty_to_none in DB layer
 
-    if display_name.is_none() && avatar_url.is_none() && about.is_none() {
+    // Validate and canonicalize NIP-05 handle (if non-empty)
+    let canonical_nip05: Option<String> = match nip05_handle_raw {
+        Some("") => Some(String::new()), // empty = clear to NULL
+        Some(h) => Some(
+            super::nip05::canonicalize_nip05(h, &state.config.relay_url)
+                .map_err(|msg| api_error(StatusCode::BAD_REQUEST, &msg))?,
+        ),
+        None => None,
+    };
+    let nip05_handle = canonical_nip05.as_deref();
+
+    if display_name.is_none() && avatar_url.is_none() && about.is_none() && nip05_handle.is_none() {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
-            "at least one of display_name, avatar_url, or about is required",
+            "at least one of display_name, avatar_url, about, or nip05_handle is required",
         ));
     }
 
     state
         .db
-        .update_user_profile(&pubkey_bytes, display_name, avatar_url, about)
+        .update_user_profile(&pubkey_bytes, display_name, avatar_url, about, nip05_handle)
         .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+        .map_err(|e| {
+            let msg = format!("{e}");
+            if msg.contains("Duplicate entry") || msg.contains("1062") {
+                api_error(
+                    StatusCode::CONFLICT,
+                    "nip05_handle is already claimed by another user",
+                )
+            } else {
+                internal_error(&format!("db error: {e}"))
+            }
+        })?;
 
     Ok(Json(serde_json::json!({ "updated": true })))
 }
@@ -98,4 +126,125 @@ pub async fn get_profile(
         }))),
         None => Err(api_error(StatusCode::NOT_FOUND, "user not found")),
     }
+}
+
+/// `GET /api/users/{pubkey}/profile` — get any user's profile by pubkey hex.
+pub async fn get_user_profile(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(pubkey_hex): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _ = extract_auth_pubkey(&headers, &state).await?;
+
+    let pubkey_bytes = nostr_hex::decode(&pubkey_hex)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid pubkey hex"))?;
+    if pubkey_bytes.len() != 32 {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "pubkey must be 32 bytes",
+        ));
+    }
+
+    let profile = state
+        .db
+        .get_user(&pubkey_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "user not found"))?;
+
+    Ok(Json(serde_json::json!({
+        "pubkey": nostr_hex::encode(&profile.pubkey),
+        "display_name": profile.display_name,
+        "avatar_url": profile.avatar_url,
+        "about": profile.about,
+        "nip05_handle": profile.nip05_handle,
+    })))
+}
+
+/// Request body for the batch profile resolution endpoint.
+#[derive(Debug, Deserialize)]
+pub struct BatchProfilesRequest {
+    /// List of pubkey hex strings to resolve (max 200).
+    pub pubkeys: Vec<String>,
+}
+
+/// `POST /api/users/batch` — resolve display names for multiple pubkeys.
+pub async fn get_users_batch(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    ExtractJson(body): ExtractJson<BatchProfilesRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _ = extract_auth_pubkey(&headers, &state).await?;
+
+    if body.pubkeys.len() > 200 {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "max 200 pubkeys per request",
+        ));
+    }
+
+    // Partition inputs: valid hex (64 chars, valid hex) vs invalid (wrong length or bad hex).
+    // Both wrong-length and 64-char-non-hex inputs go to the missing list.
+    let mut invalid_inputs: Vec<String> = Vec::new();
+    let mut valid_hex_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for p in &body.pubkeys {
+        if p.len() != 64 {
+            invalid_inputs.push(p.clone());
+        } else {
+            let lower = p.to_lowercase();
+            if nostr_hex::decode(&lower)
+                .map(|b| b.len() == 32)
+                .unwrap_or(false)
+            {
+                valid_hex_set.insert(lower);
+            } else {
+                invalid_inputs.push(p.clone());
+            }
+        }
+    }
+
+    let mut normalized: Vec<String> = valid_hex_set.into_iter().collect();
+    normalized.sort();
+
+    let pubkey_bytes: Vec<Vec<u8>> = normalized
+        .iter()
+        .filter_map(|h| nostr_hex::decode(h).ok())
+        .filter(|b| b.len() == 32)
+        .collect();
+
+    let records = state
+        .db
+        .get_users_bulk(&pubkey_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    let found_pubkeys: std::collections::HashSet<String> = records
+        .iter()
+        .map(|r| nostr_hex::encode(&r.pubkey))
+        .collect();
+
+    let mut profiles = serde_json::Map::new();
+    for r in records {
+        let hex = nostr_hex::encode(&r.pubkey);
+        profiles.insert(
+            hex,
+            serde_json::json!({
+                "display_name": r.display_name,
+                "nip05_handle": r.nip05_handle,
+            }),
+        );
+    }
+
+    let mut missing: Vec<String> = normalized
+        .iter()
+        .filter(|p| !found_pubkeys.contains(p.as_str()))
+        .cloned()
+        .collect();
+    missing.extend(invalid_inputs);
+
+    Ok(Json(serde_json::json!({
+        "profiles": profiles,
+        "missing": missing,
+    })))
 }

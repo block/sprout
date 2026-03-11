@@ -559,15 +559,33 @@ impl Db {
         user::get_user(&self.pool, pubkey).await
     }
 
-    /// Update a user's display_name, avatar_url, and/or about.
+    /// Update a user's display_name, avatar_url, about, and/or nip05_handle.
     pub async fn update_user_profile(
         &self,
         pubkey: &[u8],
         display_name: Option<&str>,
         avatar_url: Option<&str>,
         about: Option<&str>,
+        nip05_handle: Option<&str>,
     ) -> Result<()> {
-        user::update_user_profile(&self.pool, pubkey, display_name, avatar_url, about).await
+        user::update_user_profile(
+            &self.pool,
+            pubkey,
+            display_name,
+            avatar_url,
+            about,
+            nip05_handle,
+        )
+        .await
+    }
+
+    /// Look up a user by their full NIP-05 handle (exact match).
+    pub async fn get_user_by_nip05(
+        &self,
+        local_part: &str,
+        domain: &str,
+    ) -> Result<Option<user::UserProfile>> {
+        user::get_user_by_nip05(&self.pool, local_part, domain).await
     }
 
     // ── API Tokens ───────────────────────────────────────────────────────────

@@ -246,7 +246,7 @@ impl McpSession {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// Spawn the MCP server, complete the initialize handshake, and verify that
-/// all 36 expected tools are listed by `tools/list`.
+/// all 40 expected tools are listed by `tools/list`.
 #[tokio::test]
 #[ignore]
 async fn test_mcp_initialize_and_list_tools() {
@@ -295,8 +295,8 @@ async fn test_mcp_initialize_and_list_tools() {
 
     assert_eq!(
         tools.len(),
-        36,
-        "expected exactly 36 tools, got {}. Tools: {:?}",
+        40,
+        "expected exactly 40 tools, got {}. Tools: {:?}",
         tools.len(),
         tools
             .iter()
@@ -344,6 +344,10 @@ async fn test_mcp_initialize_and_list_tools() {
         "remove_reaction",
         "get_reactions",
         "set_profile",
+        "get_user_profile",
+        "get_users_batch",
+        "search",
+        "get_presence",
     ];
 
     for expected in &expected_tools {
@@ -933,6 +937,129 @@ async fn test_mcp_canvas_set_and_get() {
     assert_eq!(
         get_text, unique_content,
         "expected exact canvas content '{unique_content}' from get_canvas, got: {get_text}"
+    );
+
+    session.stop();
+}
+
+// ── Public profile MCP tests ──────────────────────────────────────────────────
+
+/// Call `get_user_profile` with no arguments to retrieve the authenticated user's own profile.
+#[tokio::test]
+#[ignore]
+async fn test_mcp_get_user_profile_self() {
+    let keys = generate_test_keys();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Set profile via REST first
+    let client = reqwest::Client::new();
+    client
+        .put(format!("{}/api/users/me/profile", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .json(&json!({"display_name": "MCP Self Test", "about": "Testing MCP profile"}))
+        .send()
+        .await
+        .expect("PUT profile");
+
+    let mut session = McpSession::start(&keys).await;
+    session.initialize();
+
+    // Get own profile (no pubkey arg)
+    let resp = session.send_request(
+        "tools/call",
+        json!({
+            "name": "get_user_profile",
+            "arguments": {}
+        }),
+    );
+
+    let content = &resp["result"]["content"];
+    let text = content[0]["text"].as_str().expect("text");
+    let profile: serde_json::Value = serde_json::from_str(text).expect("parse profile json");
+    assert_eq!(profile["display_name"].as_str(), Some("MCP Self Test"));
+    assert_eq!(profile["about"].as_str(), Some("Testing MCP profile"));
+
+    session.stop();
+}
+
+/// Call `get_user_profile` with a pubkey argument to retrieve another user's profile.
+#[tokio::test]
+#[ignore]
+async fn test_mcp_get_user_profile_other() {
+    let keys = generate_test_keys();
+
+    // Create another user with a profile
+    let other_keys = Keys::generate();
+    let other_hex = other_keys.public_key().to_hex();
+    let client = reqwest::Client::new();
+    client
+        .put(format!("{}/api/users/me/profile", relay_http_url()))
+        .header("X-Pubkey", &other_hex)
+        .json(&json!({"display_name": "Other User MCP"}))
+        .send()
+        .await
+        .expect("PUT other profile");
+
+    let mut session = McpSession::start(&keys).await;
+    session.initialize();
+
+    let resp = session.send_request(
+        "tools/call",
+        json!({
+            "name": "get_user_profile",
+            "arguments": {"pubkey": other_hex}
+        }),
+    );
+
+    let content = &resp["result"]["content"];
+    let text = content[0]["text"].as_str().expect("text");
+    let profile: serde_json::Value = serde_json::from_str(text).expect("parse profile json");
+    assert_eq!(profile["display_name"].as_str(), Some("Other User MCP"));
+
+    session.stop();
+}
+
+/// Call `get_users_batch` with a mix of known and unknown pubkeys.
+#[tokio::test]
+#[ignore]
+async fn test_mcp_get_users_batch() {
+    let keys = generate_test_keys();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Set own profile
+    let client = reqwest::Client::new();
+    client
+        .put(format!("{}/api/users/me/profile", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .json(&json!({"display_name": "Batch MCP User"}))
+        .send()
+        .await
+        .expect("PUT profile");
+
+    let unknown_hex = Keys::generate().public_key().to_hex();
+
+    let mut session = McpSession::start(&keys).await;
+    session.initialize();
+
+    let resp = session.send_request(
+        "tools/call",
+        json!({
+            "name": "get_users_batch",
+            "arguments": {"pubkeys": [pubkey_hex, unknown_hex]}
+        }),
+    );
+
+    let content = &resp["result"]["content"];
+    let text = content[0]["text"].as_str().expect("text");
+    let batch: serde_json::Value = serde_json::from_str(text).expect("parse batch json");
+
+    assert!(
+        batch["profiles"].as_object().is_some(),
+        "profiles map present"
+    );
+    assert!(
+        batch["missing"].as_array().is_some(),
+        "missing array present"
     );
 
     session.stop();
