@@ -6,12 +6,11 @@ import {
   Home,
   Plus,
   Search,
-  UserRound,
+  Settings2,
 } from "lucide-react";
 import * as React from "react";
 
 import type { Channel } from "@/shared/api/types";
-import { ThemeToggle } from "@/shared/theme/ThemeToggle";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import {
@@ -37,15 +36,15 @@ type AppSidebarProps = {
   errorMessage?: string;
   homeUrgentCount?: number;
   selectedChannelId: string | null;
-  selectedView: "home" | "channel";
+  selectedView: "home" | "channel" | "settings";
   onCreateChannel: (input: {
     name: string;
     description?: string;
   }) => Promise<void>;
-  onOpenProfile: () => void;
   onOpenSearch: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
+  onSelectSettings: () => void;
 };
 
 function SidebarChannelIcon({ channel }: { channel: Channel }) {
@@ -237,10 +236,10 @@ export function AppSidebar({
   selectedChannelId,
   selectedView,
   onCreateChannel,
-  onOpenProfile,
   onOpenSearch,
   onSelectHome,
   onSelectChannel,
+  onSelectSettings,
 }: AppSidebarProps) {
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
@@ -448,23 +447,21 @@ export function AppSidebar({
 
       <SidebarFooter>
         <div className="w-full border-t border-sidebar-border/70 pt-2">
-          <div className="flex items-center justify-between gap-2 px-1">
-            <SidebarMenu className="w-auto">
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  className="size-8 rounded-lg p-0 text-sidebar-foreground/55 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
-                  data-testid="open-profile"
-                  onClick={onOpenProfile}
-                  tooltip="Profile"
-                  type="button"
-                >
-                  <UserRound className="h-4 w-4" />
-                  <span className="sr-only">Open profile</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-            <ThemeToggle className="shrink-0 text-sidebar-foreground/55 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground" />
-          </div>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                className="rounded-xl"
+                data-testid="open-settings"
+                isActive={selectedView === "settings"}
+                onClick={onSelectSettings}
+                tooltip="Settings"
+                type="button"
+              >
+                <Settings2 className="h-4 w-4" />
+                <span>Settings</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
         </div>
       </SidebarFooter>
     </Sidebar>

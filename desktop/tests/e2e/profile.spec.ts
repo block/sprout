@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
 
-test("updates the relay-backed profile from the sidebar", async ({ page }) => {
+test("updates the relay-backed profile from settings", async ({ page }) => {
   const stamp = Date.now();
   const displayName = `Tyler QA ${stamp}`;
   const avatarUrl = `https://example.com/avatar-${stamp}.png`;
@@ -14,8 +14,9 @@ test("updates the relay-backed profile from the sidebar", async ({ page }) => {
 
   await page.goto("/");
 
-  await page.getByTestId("open-profile").click();
-  await expect(page.getByTestId("profile-sheet")).toBeVisible();
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("settings-view")).toBeVisible();
+  await expect(page.getByTestId("chat-title")).toHaveText("Settings");
 
   await expect(page.getByTestId("profile-pubkey")).toContainText("deadbeef");
   await expect(page.getByTestId("profile-nip05")).toContainText("Not set");
@@ -31,14 +32,33 @@ test("updates the relay-backed profile from the sidebar", async ({ page }) => {
   await expect(page.getByTestId("profile-avatar-url")).toHaveValue(avatarUrl);
   await expect(page.getByTestId("profile-about")).toHaveValue(about);
 
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("profile-sheet")).not.toBeVisible();
+  await page.getByRole("button", { name: "Home" }).click();
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
 
-  await page.getByTestId("open-profile").click();
-  await expect(page.getByTestId("profile-sheet")).toBeVisible();
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("settings-view")).toBeVisible();
   await expect(page.getByTestId("profile-display-name")).toHaveValue(
     displayName,
   );
   await expect(page.getByTestId("profile-avatar-url")).toHaveValue(avatarUrl);
   await expect(page.getByTestId("profile-about")).toHaveValue(about);
+});
+
+test("opens settings with the keyboard shortcut and updates theme", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+," : "Control+,",
+  );
+
+  await expect(page.getByTestId("settings-view")).toBeVisible();
+  await page.getByTestId("theme-option-dark").click();
+
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.documentElement.classList.contains("dark")),
+    )
+    .toBe(true);
 });
