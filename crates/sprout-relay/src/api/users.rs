@@ -1,13 +1,15 @@
 //! User profile REST API.
 //!
 //! Endpoints:
-//!   GET /api/users/me/profile  — get own profile
-//!   PUT /api/users/me/profile  — update own profile (display_name, avatar_url, about)
+//!   GET /api/users/me/profile      — get own profile
+//!   PUT /api/users/me/profile      — update own profile (display_name, avatar_url, about)
+//!   GET /api/users/{pubkey}/profile — get any user's profile by pubkey hex
+//!   POST /api/users/batch          — resolve display names for multiple pubkeys
 
 use std::sync::Arc;
 
 use axum::{
-    extract::{Json as ExtractJson, State},
+    extract::{Json as ExtractJson, Path, State},
     http::{HeaderMap, StatusCode},
     response::Json,
 };
@@ -66,7 +68,7 @@ pub async fn update_profile(
 
     state
         .db
-        .update_user_profile(&pubkey_bytes, display_name, avatar_url, about)
+        .update_user_profile(&pubkey_bytes, display_name, avatar_url, about, None)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
@@ -98,4 +100,112 @@ pub async fn get_profile(
         }))),
         None => Err(api_error(StatusCode::NOT_FOUND, "user not found")),
     }
+}
+
+/// `GET /api/users/{pubkey}/profile` — get any user's profile by pubkey hex.
+pub async fn get_user_profile(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(pubkey_hex): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _ = extract_auth_pubkey(&headers, &state).await?;
+
+    let pubkey_bytes = nostr_hex::decode(&pubkey_hex)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid pubkey hex"))?;
+    if pubkey_bytes.len() != 32 {
+        return Err(api_error(StatusCode::BAD_REQUEST, "pubkey must be 32 bytes"));
+    }
+
+    let profile = state
+        .db
+        .get_user(&pubkey_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "user not found"))?;
+
+    Ok(Json(serde_json::json!({
+        "pubkey": nostr_hex::encode(&profile.pubkey),
+        "display_name": profile.display_name,
+        "avatar_url": profile.avatar_url,
+        "about": profile.about,
+        "nip05_handle": profile.nip05_handle,
+    })))
+}
+
+/// Request body for the batch profile resolution endpoint.
+#[derive(Debug, Deserialize)]
+pub struct BatchProfilesRequest {
+    /// List of pubkey hex strings to resolve (max 200).
+    pub pubkeys: Vec<String>,
+}
+
+/// `POST /api/users/batch` — resolve display names for multiple pubkeys.
+pub async fn get_users_batch(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    ExtractJson(body): ExtractJson<BatchProfilesRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _ = extract_auth_pubkey(&headers, &state).await?;
+
+    if body.pubkeys.len() > 200 {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "max 200 pubkeys per request",
+        ));
+    }
+
+    let valid_inputs: Vec<&str> = body.pubkeys
+        .iter()
+        .filter(|p| p.len() == 64)
+        .map(|p| p.as_str())
+        .collect();
+
+    let normalized: std::collections::HashSet<String> = valid_inputs
+        .iter()
+        .map(|p| p.to_lowercase())
+        .collect();
+    let mut normalized: Vec<String> = normalized.into_iter().collect();
+    normalized.sort();
+
+    let pubkey_bytes: Vec<Vec<u8>> = normalized.iter()
+        .filter_map(|h| nostr_hex::decode(h).ok())
+        .filter(|b| b.len() == 32)
+        .collect();
+
+    let records = state
+        .db
+        .get_users_bulk(&pubkey_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    let found_pubkeys: std::collections::HashSet<String> = records
+        .iter()
+        .map(|r| nostr_hex::encode(&r.pubkey))
+        .collect();
+
+    let mut profiles = serde_json::Map::new();
+    for r in records {
+        let hex = nostr_hex::encode(&r.pubkey);
+        profiles.insert(hex, serde_json::json!({
+            "display_name": r.display_name,
+            "nip05_handle": r.nip05_handle,
+        }));
+    }
+
+    let mut missing: Vec<String> = normalized
+        .iter()
+        .filter(|p| !found_pubkeys.contains(p.as_str()))
+        .cloned()
+        .collect();
+    missing.extend(
+        body.pubkeys
+            .iter()
+            .filter(|p| p.len() != 64)
+            .cloned(),
+    );
+
+    Ok(Json(serde_json::json!({
+        "profiles": profiles,
+        "missing": missing,
+    })))
 }

@@ -382,6 +382,21 @@ pub struct SetProfileParams {
     pub about: Option<String>,
 }
 
+/// Parameters for the `get_user_profile` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetUserProfileParams {
+    /// Hex-encoded pubkey to look up. Omit to get your own profile.
+    #[serde(default)]
+    pub pubkey: Option<String>,
+}
+
+/// Parameters for the `get_users_batch` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetUsersBatchParams {
+    /// List of hex-encoded pubkeys to look up (max 200).
+    pub pubkeys: Vec<String>,
+}
+
 /// Parameters for the `get_feed` tool.
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GetFeedParams {
@@ -1300,6 +1315,41 @@ impl SproutMcpServer {
         match self.client.put("/api/users/me/profile", &body).await {
             Ok(b) => b,
             Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Read a user's profile by pubkey.
+    #[tool(
+        name = "get_user_profile",
+        description = "Get a user's profile by pubkey. Omit pubkey to get your own profile. Returns display name, avatar URL, about text, and NIP-05 handle."
+    )]
+    pub async fn get_user_profile(
+        &self,
+        Parameters(p): Parameters<GetUserProfileParams>,
+    ) -> String {
+        let path = match p.pubkey {
+            None => "/api/users/me/profile".to_string(),
+            Some(pk) => format!("/api/users/{}/profile", pk),
+        };
+        match self.client.get(&path).await {
+            Ok(body) => body,
+            Err(e) => format!("Error fetching profile: {e}"),
+        }
+    }
+
+    /// Resolve display names for multiple pubkeys.
+    #[tool(
+        name = "get_users_batch",
+        description = "Resolve display names and NIP-05 handles for multiple pubkeys at once. Returns a map of pubkey to profile info, plus a list of unknown pubkeys. Useful for identifying message senders in bulk."
+    )]
+    pub async fn get_users_batch(
+        &self,
+        Parameters(p): Parameters<GetUsersBatchParams>,
+    ) -> String {
+        let body = serde_json::json!({ "pubkeys": p.pubkeys });
+        match self.client.post("/api/users/batch", &body).await {
+            Ok(resp) => resp,
+            Err(e) => format!("Error fetching profiles: {e}"),
         }
     }
 }

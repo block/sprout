@@ -23,7 +23,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(nip11_or_ws_handler))
         .route("/info", get(relay_info_handler))
-        .route("/.well-known/nostr.json", get(nip05_handler))
+        .route("/.well-known/nostr.json", get(api::nip05::nostr_nip05))
         .route("/health", get(health_handler))
         .route(
             "/api/channels",
@@ -122,6 +122,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/users/me/profile",
             get(api::get_profile).put(api::update_profile),
         )
+        .route("/api/users/{pubkey}/profile", get(api::get_user_profile))
+        .route("/api/users/batch", post(api::get_users_batch))
         // Feed route
         .route("/api/feed", get(api::feed_handler))
         .layer(TraceLayer::new_for_http())
@@ -161,14 +163,6 @@ async fn nip11_or_ws_handler(
             Json(info).into_response()
         }
     }
-}
-
-// NIP-05 stub: returns empty names/relays. Full NIP-05 verification is planned.
-async fn nip05_handler() -> impl IntoResponse {
-    Json(serde_json::json!({
-        "names": {},
-        "relays": {}
-    }))
 }
 
 async fn health_handler() -> impl IntoResponse {

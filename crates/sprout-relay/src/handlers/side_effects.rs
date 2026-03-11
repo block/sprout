@@ -17,7 +17,7 @@ pub fn is_admin_kind(kind: u32) -> bool {
 
 /// Check if a kind triggers side effects after storage.
 pub fn is_side_effect_kind(kind: u32) -> bool {
-    matches!(kind, 7 | 9000..=9022 | 41001..=41003 | 40099)
+    matches!(kind, 0 | 7 | 9000..=9022 | 41001..=41003 | 40099)
 }
 
 /// Dispatch side effects for a stored event.
@@ -27,6 +27,7 @@ pub async fn handle_side_effects(
     state: &Arc<AppState>,
 ) -> anyhow::Result<()> {
     match kind {
+        0 => handle_kind0_profile(event, state).await,
         9000 => handle_put_user(event, state).await,
         9001 => handle_remove_user(event, state).await,
         9002 => handle_edit_metadata(event, state).await,
@@ -246,6 +247,55 @@ pub async fn emit_system_message(
         warn!("System message fan-out failed: {e}");
     }
 
+    Ok(())
+}
+
+// ── NIP-01 Kind:0 Handler ────────────────────────────────────────────────────
+
+/// Kind:0 (NIP-01 profile metadata) side effect — sync profile fields to users table.
+async fn handle_kind0_profile(
+    event: &Event,
+    state: &Arc<AppState>,
+) -> anyhow::Result<()> {
+    let content: serde_json::Value = serde_json::from_str(&event.content)
+        .map_err(|e| anyhow::anyhow!("kind:0 content parse error: {e}"))?;
+
+    // Kind:0 is absolute state (NIP-01 replaceable event). Fields present in the
+    // event are set; fields absent are cleared. We use Some("") to clear absent
+    // fields, since update_user_profile only writes Some values.
+    let display_name = content.get("display_name")
+        .or_else(|| content.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let avatar_url = content.get("picture")
+        .or_else(|| content.get("image"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let about = content.get("about")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let nip05_handle = content.get("nip05")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let pubkey_bytes = event.pubkey.serialize().to_vec();
+
+    state.db.ensure_user(&pubkey_bytes).await?;
+
+    // Pass all fields as Some — empty string clears the field in the DB.
+    // This ensures kind:0 is treated as absolute state, not a partial update.
+    state.db.update_user_profile(
+        &pubkey_bytes,
+        Some(display_name),
+        Some(avatar_url),
+        Some(about),
+        Some(nip05_handle),
+    ).await?;
+
+    info!(pubkey = %nostr::util::hex::encode(&pubkey_bytes), "kind:0 profile synced to users table");
     Ok(())
 }
 
