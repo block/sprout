@@ -21,9 +21,52 @@ type RawChannel = {
   id: string;
   name: string;
   channel_type: "stream" | "forum" | "dm";
+  visibility: "open" | "private";
   description: string;
+  topic: string | null;
+  purpose: string | null;
+  member_count: number;
+  last_message_at: string | null;
+  archived_at: string | null;
   participants: string[];
   participant_pubkeys: string[];
+};
+
+type RawChannelDetail = RawChannel & {
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  topic_set_by: string | null;
+  topic_set_at: string | null;
+  purpose_set_by: string | null;
+  purpose_set_at: string | null;
+  topic_required: boolean;
+  max_members: number | null;
+  nip29_group_id: string | null;
+};
+
+type RawChannelMember = {
+  pubkey: string;
+  role: "owner" | "admin" | "member" | "guest" | "bot";
+  joined_at: string;
+  display_name: string | null;
+};
+
+type RawChannelMembersResponse = {
+  members: RawChannelMember[];
+  next_cursor: string | null;
+};
+
+type RawAddChannelMembersResponse = {
+  added: string[];
+  errors: Array<{
+    pubkey: string;
+    error: string;
+  }>;
+};
+
+type MockChannel = RawChannelDetail & {
+  members: RawChannelMember[];
 };
 
 type RawFeedItem = {
@@ -95,77 +138,373 @@ const DEFAULT_REAL_IDENTITY = {
   username: "tyler",
 } satisfies TestIdentity;
 
-const mockChannels: RawChannel[] = [
-  {
+const ALICE_PUBKEY =
+  "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f";
+const BOB_PUBKEY =
+  "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260";
+const CHARLIE_PUBKEY =
+  "554cef57437abac34522ac2c9f0490d685b72c80478cf9f7ed6f9570ee8624ea";
+const OUTSIDER_PUBKEY =
+  "df8e91b86fda13a9a67896df77232f7bdab2ba9c3e165378e1ba3d24c13a328e";
+const MOCK_IDENTITY_PUBKEY = DEFAULT_MOCK_IDENTITY.pubkey;
+
+const mockDisplayNames = new Map<string, string>([
+  [MOCK_IDENTITY_PUBKEY, DEFAULT_MOCK_IDENTITY.display_name],
+  [ALICE_PUBKEY, "alice"],
+  [BOB_PUBKEY, "bob"],
+  [CHARLIE_PUBKEY, "charlie"],
+  [OUTSIDER_PUBKEY, "outsider"],
+  [DEFAULT_REAL_IDENTITY.pubkey, DEFAULT_REAL_IDENTITY.username],
+]);
+
+function isoMinutesAgo(minutesAgo: number): string {
+  return new Date(Date.now() - minutesAgo * 60_000).toISOString();
+}
+
+function cloneMembers(members: RawChannelMember[]): RawChannelMember[] {
+  return members.map((member) => ({ ...member }));
+}
+
+function toRawChannel(channel: MockChannel): RawChannel {
+  return {
+    id: channel.id,
+    name: channel.name,
+    channel_type: channel.channel_type,
+    visibility: channel.visibility,
+    description: channel.description,
+    topic: channel.topic,
+    purpose: channel.purpose,
+    member_count: channel.member_count,
+    last_message_at: channel.last_message_at,
+    archived_at: channel.archived_at,
+    participants: [...channel.participants],
+    participant_pubkeys: [...channel.participant_pubkeys],
+  };
+}
+
+function toRawChannelDetail(channel: MockChannel): RawChannelDetail {
+  return {
+    ...toRawChannel(channel),
+    created_by: channel.created_by,
+    created_at: channel.created_at,
+    updated_at: channel.updated_at,
+    topic_set_by: channel.topic_set_by,
+    topic_set_at: channel.topic_set_at,
+    purpose_set_by: channel.purpose_set_by,
+    purpose_set_at: channel.purpose_set_at,
+    topic_required: channel.topic_required,
+    max_members: channel.max_members,
+    nip29_group_id: channel.nip29_group_id,
+  };
+}
+
+function createMockMember(
+  pubkey: string,
+  role: RawChannelMember["role"],
+  joinedMinutesAgo: number,
+): RawChannelMember {
+  return {
+    pubkey,
+    role,
+    joined_at: isoMinutesAgo(joinedMinutesAgo),
+    display_name: mockDisplayNames.get(pubkey) ?? null,
+  };
+}
+
+function createMockChannel(
+  seed: Omit<
+    MockChannel,
+    | "created_at"
+    | "member_count"
+    | "members"
+    | "updated_at"
+    | "participant_pubkeys"
+    | "participants"
+  > & {
+    created_minutes_ago: number;
+    members: RawChannelMember[];
+    participant_pubkeys?: string[];
+    participants?: string[];
+    updated_minutes_ago?: number;
+  },
+): MockChannel {
+  return {
+    ...seed,
+    created_at: isoMinutesAgo(seed.created_minutes_ago),
+    member_count: seed.members.length,
+    members: cloneMembers(seed.members),
+    participant_pubkeys: [...(seed.participant_pubkeys ?? [])],
+    participants: [...(seed.participants ?? [])],
+    updated_at: isoMinutesAgo(
+      seed.updated_minutes_ago ?? seed.created_minutes_ago,
+    ),
+  };
+}
+
+function syncMockChannel(channel: MockChannel) {
+  channel.member_count = channel.members.length;
+
+  if (channel.channel_type !== "dm") {
+    return;
+  }
+
+  channel.participant_pubkeys = channel.members.map((member) => member.pubkey);
+  channel.participants = channel.members.map(
+    (member) => member.display_name ?? member.pubkey.slice(0, 8),
+  );
+}
+
+function touchMockChannel(channel: MockChannel) {
+  channel.updated_at = new Date().toISOString();
+}
+
+function getMockIdentity() {
+  return {
+    pubkey: MOCK_IDENTITY_PUBKEY,
+    displayName: DEFAULT_MOCK_IDENTITY.display_name,
+  };
+}
+
+function listMockChannels(): RawChannel[] {
+  return mockChannels.map(toRawChannel);
+}
+
+function getMockChannel(channelId: string): MockChannel {
+  const channel = mockChannels.find((candidate) => candidate.id === channelId);
+  if (!channel) {
+    throw new Error(`Channel ${channelId} not found.`);
+  }
+
+  return channel;
+}
+
+function getMockMemberPubkey(config: E2eConfig | undefined): string {
+  return getIdentity(config)?.pubkey ?? getMockIdentity().pubkey;
+}
+
+function getMockMemberDisplayName(config: E2eConfig | undefined): string {
+  return getIdentity(config)?.username ?? getMockIdentity().displayName;
+}
+
+function createCurrentMember(
+  config: E2eConfig | undefined,
+  role: RawChannelMember["role"],
+): RawChannelMember {
+  return {
+    pubkey: getMockMemberPubkey(config),
+    role,
+    joined_at: new Date().toISOString(),
+    display_name: getMockMemberDisplayName(config),
+  };
+}
+
+const mockChannels: MockChannel[] = [
+  createMockChannel({
     id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
     name: "general",
     channel_type: "stream",
+    visibility: "open",
     description: "General discussion for everyone",
-    participants: [],
-    participant_pubkeys: [],
-  },
-  {
+    topic: "Company-wide updates",
+    purpose: "Coordinate day-to-day work and unblock the team.",
+    last_message_at: isoMinutesAgo(5),
+    archived_at: null,
+    created_by: MOCK_IDENTITY_PUBKEY,
+    topic_set_by: MOCK_IDENTITY_PUBKEY,
+    topic_set_at: isoMinutesAgo(90),
+    purpose_set_by: MOCK_IDENTITY_PUBKEY,
+    purpose_set_at: isoMinutesAgo(80),
+    topic_required: false,
+    max_members: null,
+    nip29_group_id: null,
+    created_minutes_ago: 1440,
+    updated_minutes_ago: 5,
+    members: [
+      createMockMember(MOCK_IDENTITY_PUBKEY, "owner", 1440),
+      createMockMember(ALICE_PUBKEY, "admin", 1200),
+      createMockMember(BOB_PUBKEY, "member", 960),
+    ],
+  }),
+  createMockChannel({
     id: "9dae0116-799b-5071-a0a8-fdd30a91a35d",
     name: "random",
     channel_type: "stream",
+    visibility: "open",
     description: "Off-topic, fun stuff",
-    participants: [],
-    participant_pubkeys: [],
-  },
-  {
+    topic: null,
+    purpose: null,
+    last_message_at: null,
+    archived_at: null,
+    created_by: ALICE_PUBKEY,
+    topic_set_by: null,
+    topic_set_at: null,
+    purpose_set_by: null,
+    purpose_set_at: null,
+    topic_required: false,
+    max_members: null,
+    nip29_group_id: null,
+    created_minutes_ago: 1400,
+    updated_minutes_ago: 1400,
+    members: [
+      createMockMember(ALICE_PUBKEY, "owner", 1400),
+      createMockMember(BOB_PUBKEY, "member", 1000),
+    ],
+  }),
+  createMockChannel({
     id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
     name: "engineering",
     channel_type: "stream",
+    visibility: "open",
     description: "Engineering discussions",
-    participants: [],
-    participant_pubkeys: [],
-  },
-  {
+    topic: "Desktop release train",
+    purpose: "Track implementation details and release readiness.",
+    last_message_at: isoMinutesAgo(42),
+    archived_at: null,
+    created_by: ALICE_PUBKEY,
+    topic_set_by: ALICE_PUBKEY,
+    topic_set_at: isoMinutesAgo(120),
+    purpose_set_by: ALICE_PUBKEY,
+    purpose_set_at: isoMinutesAgo(130),
+    topic_required: false,
+    max_members: null,
+    nip29_group_id: null,
+    created_minutes_ago: 1320,
+    updated_minutes_ago: 42,
+    members: [
+      createMockMember(ALICE_PUBKEY, "owner", 1320),
+      createMockMember(MOCK_IDENTITY_PUBKEY, "member", 1180),
+      createMockMember(BOB_PUBKEY, "member", 900),
+    ],
+  }),
+  createMockChannel({
     id: "94a444a4-c0a3-5966-ab05-530c6ddc2301",
     name: "agents",
     channel_type: "stream",
+    visibility: "open",
     description: "AI agent testing and collaboration",
-    participants: [],
-    participant_pubkeys: [],
-  },
-  {
+    topic: "Coordination board",
+    purpose: "Track agent work and relay activity.",
+    last_message_at: isoMinutesAgo(15),
+    archived_at: null,
+    created_by: MOCK_IDENTITY_PUBKEY,
+    topic_set_by: MOCK_IDENTITY_PUBKEY,
+    topic_set_at: isoMinutesAgo(60),
+    purpose_set_by: MOCK_IDENTITY_PUBKEY,
+    purpose_set_at: isoMinutesAgo(65),
+    topic_required: false,
+    max_members: null,
+    nip29_group_id: null,
+    created_minutes_ago: 1000,
+    updated_minutes_ago: 15,
+    members: [
+      createMockMember(MOCK_IDENTITY_PUBKEY, "owner", 1000),
+      createMockMember(CHARLIE_PUBKEY, "bot", 800),
+    ],
+  }),
+  createMockChannel({
     id: "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11",
     name: "watercooler",
     channel_type: "forum",
+    visibility: "open",
     description: "Casual forum for async discussions",
-    participants: [],
-    participant_pubkeys: [],
-  },
-  {
+    topic: null,
+    purpose: null,
+    last_message_at: null,
+    archived_at: null,
+    created_by: ALICE_PUBKEY,
+    topic_set_by: null,
+    topic_set_at: null,
+    purpose_set_by: null,
+    purpose_set_at: null,
+    topic_required: false,
+    max_members: null,
+    nip29_group_id: null,
+    created_minutes_ago: 900,
+    updated_minutes_ago: 900,
+    members: [
+      createMockMember(ALICE_PUBKEY, "owner", 900),
+      createMockMember(MOCK_IDENTITY_PUBKEY, "member", 750),
+    ],
+  }),
+  createMockChannel({
     id: "1be1dcdb-4c31-5a8c-81de-ac102552ca10",
     name: "announcements",
     channel_type: "forum",
+    visibility: "private",
     description: "Company announcements",
-    participants: [],
-    participant_pubkeys: [],
-  },
-  {
+    topic: "Leadership updates",
+    purpose: "Read-only announcements for the workspace.",
+    last_message_at: null,
+    archived_at: null,
+    created_by: ALICE_PUBKEY,
+    topic_set_by: ALICE_PUBKEY,
+    topic_set_at: isoMinutesAgo(200),
+    purpose_set_by: ALICE_PUBKEY,
+    purpose_set_at: isoMinutesAgo(210),
+    topic_required: false,
+    max_members: null,
+    nip29_group_id: null,
+    created_minutes_ago: 880,
+    updated_minutes_ago: 200,
+    members: [
+      createMockMember(ALICE_PUBKEY, "owner", 880),
+      createMockMember(MOCK_IDENTITY_PUBKEY, "guest", 700),
+    ],
+  }),
+  createMockChannel({
     id: "f48efb06-0c93-5025-aac9-2e646bb6bfa8",
     name: "alice-tyler",
     channel_type: "dm",
+    visibility: "private",
     description: "DM between alice and tyler",
+    topic: null,
+    purpose: null,
+    last_message_at: null,
+    archived_at: null,
+    created_by: ALICE_PUBKEY,
+    topic_set_by: null,
+    topic_set_at: null,
+    purpose_set_by: null,
+    purpose_set_at: null,
+    topic_required: false,
+    max_members: 2,
+    nip29_group_id: null,
+    created_minutes_ago: 720,
+    updated_minutes_ago: 720,
     participants: ["alice", "tyler"],
-    participant_pubkeys: [
-      "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
-      "e5ebc6cdb579be112e336cc319b5989b4bb6af11786ea90dbe52b5f08d741b34",
+    participant_pubkeys: [ALICE_PUBKEY, DEFAULT_REAL_IDENTITY.pubkey],
+    members: [
+      createMockMember(ALICE_PUBKEY, "member", 720),
+      createMockMember(DEFAULT_REAL_IDENTITY.pubkey, "member", 720),
     ],
-  },
-  {
+  }),
+  createMockChannel({
     id: "7eb9f239-9393-50b0-bd76-d85eef0511c7",
     name: "bob-tyler",
     channel_type: "dm",
+    visibility: "private",
     description: "DM between bob and tyler",
+    topic: null,
+    purpose: null,
+    last_message_at: null,
+    archived_at: null,
+    created_by: BOB_PUBKEY,
+    topic_set_by: null,
+    topic_set_at: null,
+    purpose_set_by: null,
+    purpose_set_at: null,
+    topic_required: false,
+    max_members: 2,
+    nip29_group_id: null,
+    created_minutes_ago: 700,
+    updated_minutes_ago: 700,
     participants: ["bob", "tyler"],
-    participant_pubkeys: [
-      "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
-      "e5ebc6cdb579be112e336cc319b5989b4bb6af11786ea90dbe52b5f08d741b34",
+    participant_pubkeys: [BOB_PUBKEY, DEFAULT_REAL_IDENTITY.pubkey],
+    members: [
+      createMockMember(BOB_PUBKEY, "member", 700),
+      createMockMember(DEFAULT_REAL_IDENTITY.pubkey, "member", 700),
     ],
-  },
+  }),
 ];
 
 const mockMessages = new Map<string, RelayEvent[]>();
@@ -322,19 +661,63 @@ async function assertOk(response: Response) {
   throw new Error(body || `Request failed with ${response.status}`);
 }
 
+function getRelayIdentity(config: E2eConfig | undefined): TestIdentity {
+  const identity = getIdentity(config);
+  if (!identity) {
+    throw new Error("Relay identity required.");
+  }
+
+  return identity;
+}
+
+async function relayJsonRequest<T>(
+  config: E2eConfig | undefined,
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const identity = getRelayIdentity(config);
+  const headers = new Headers(init.headers);
+
+  headers.set("X-Pubkey", identity.pubkey);
+  if (init.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const response = await fetch(`${getRelayHttpUrl(config)}${path}`, {
+    ...init,
+    headers,
+  });
+  await assertOk(response);
+  return response.json() as Promise<T>;
+}
+
+async function relayEmptyRequest(
+  config: E2eConfig | undefined,
+  path: string,
+  init: RequestInit = {},
+) {
+  const identity = getRelayIdentity(config);
+  const headers = new Headers(init.headers);
+
+  headers.set("X-Pubkey", identity.pubkey);
+  if (init.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const response = await fetch(`${getRelayHttpUrl(config)}${path}`, {
+    ...init,
+    headers,
+  });
+  await assertOk(response);
+}
+
 async function handleGetChannels(config: E2eConfig | undefined) {
   const identity = getIdentity(config);
   if (!identity) {
-    return mockChannels;
+    return listMockChannels();
   }
 
-  const response = await fetch(`${getRelayHttpUrl(config)}/api/channels`, {
-    headers: {
-      "X-Pubkey": identity.pubkey,
-    },
-  });
-  await assertOk(response);
-  return response.json();
+  return relayJsonRequest<RawChannel[]>(config, "/api/channels");
 }
 
 async function handleCreateChannel(
@@ -348,24 +731,35 @@ async function handleCreateChannel(
 ) {
   const identity = getIdentity(config);
   if (!identity) {
-    const channel: RawChannel = {
+    const owner = createCurrentMember(config, "owner");
+    const channel = createMockChannel({
       id: crypto.randomUUID(),
       name: args.name,
       channel_type: args.channelType,
+      visibility: args.visibility,
       description: args.description ?? "",
-      participants: [],
-      participant_pubkeys: [],
-    };
+      topic: null,
+      purpose: null,
+      last_message_at: null,
+      archived_at: null,
+      created_by: owner.pubkey,
+      topic_set_by: null,
+      topic_set_at: null,
+      purpose_set_by: null,
+      purpose_set_at: null,
+      topic_required: false,
+      max_members: null,
+      nip29_group_id: null,
+      created_minutes_ago: 0,
+      updated_minutes_ago: 0,
+      members: [owner],
+    });
     mockChannels.push(channel);
-    return channel;
+    return toRawChannel(channel);
   }
 
-  const response = await fetch(`${getRelayHttpUrl(config)}/api/channels`, {
+  return relayJsonRequest<RawChannel>(config, "/api/channels", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Pubkey": identity.pubkey,
-    },
     body: JSON.stringify({
       name: args.name,
       channel_type: args.channelType,
@@ -373,8 +767,315 @@ async function handleCreateChannel(
       description: args.description,
     }),
   });
-  await assertOk(response);
-  return response.json();
+}
+
+async function handleGetChannelDetails(
+  args: { channelId: string },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    return toRawChannelDetail(getMockChannel(args.channelId));
+  }
+
+  return relayJsonRequest<RawChannelDetail>(
+    config,
+    `/api/channels/${args.channelId}`,
+  );
+}
+
+async function handleGetChannelMembers(
+  args: { channelId: string },
+  config: E2eConfig | undefined,
+): Promise<RawChannelMembersResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const channel = getMockChannel(args.channelId);
+    return {
+      members: cloneMembers(channel.members),
+      next_cursor: null,
+    };
+  }
+
+  return relayJsonRequest<RawChannelMembersResponse>(
+    config,
+    `/api/channels/${args.channelId}/members`,
+  );
+}
+
+async function handleUpdateChannel(
+  args: {
+    channelId: string;
+    name?: string;
+    description?: string;
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const channel = getMockChannel(args.channelId);
+    if (args.name !== undefined) {
+      channel.name = args.name;
+    }
+    if (args.description !== undefined) {
+      channel.description = args.description;
+    }
+    touchMockChannel(channel);
+    return toRawChannelDetail(channel);
+  }
+
+  return relayJsonRequest<RawChannelDetail>(
+    config,
+    `/api/channels/${args.channelId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        name: args.name,
+        description: args.description,
+      }),
+    },
+  );
+}
+
+async function handleSetChannelTopic(
+  args: {
+    channelId: string;
+    topic: string;
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const channel = getMockChannel(args.channelId);
+    const nextTopic = args.topic.trim();
+
+    channel.topic = nextTopic.length > 0 ? nextTopic : null;
+    channel.topic_set_by = getMockMemberPubkey(config);
+    channel.topic_set_at = new Date().toISOString();
+    touchMockChannel(channel);
+    return;
+  }
+
+  await relayEmptyRequest(config, `/api/channels/${args.channelId}/topic`, {
+    method: "PUT",
+    body: JSON.stringify({
+      topic: args.topic,
+    }),
+  });
+}
+
+async function handleSetChannelPurpose(
+  args: {
+    channelId: string;
+    purpose: string;
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const channel = getMockChannel(args.channelId);
+    const nextPurpose = args.purpose.trim();
+
+    channel.purpose = nextPurpose.length > 0 ? nextPurpose : null;
+    channel.purpose_set_by = getMockMemberPubkey(config);
+    channel.purpose_set_at = new Date().toISOString();
+    touchMockChannel(channel);
+    return;
+  }
+
+  await relayEmptyRequest(config, `/api/channels/${args.channelId}/purpose`, {
+    method: "PUT",
+    body: JSON.stringify({
+      purpose: args.purpose,
+    }),
+  });
+}
+
+async function handleArchiveChannel(
+  args: { channelId: string },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const channel = getMockChannel(args.channelId);
+    channel.archived_at = new Date().toISOString();
+    touchMockChannel(channel);
+    return;
+  }
+
+  await relayEmptyRequest(config, `/api/channels/${args.channelId}/archive`, {
+    method: "POST",
+  });
+}
+
+async function handleUnarchiveChannel(
+  args: { channelId: string },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const channel = getMockChannel(args.channelId);
+    channel.archived_at = null;
+    touchMockChannel(channel);
+    return;
+  }
+
+  await relayEmptyRequest(config, `/api/channels/${args.channelId}/unarchive`, {
+    method: "POST",
+  });
+}
+
+async function handleDeleteChannel(
+  args: { channelId: string },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const index = mockChannels.findIndex(
+      (channel) => channel.id === args.channelId,
+    );
+    if (index === -1) {
+      throw new Error(`Channel ${args.channelId} not found.`);
+    }
+
+    mockChannels.splice(index, 1);
+    mockMessages.delete(args.channelId);
+    return;
+  }
+
+  await relayEmptyRequest(config, `/api/channels/${args.channelId}`, {
+    method: "DELETE",
+  });
+}
+
+async function handleAddChannelMembers(
+  args: {
+    channelId: string;
+    pubkeys: string[];
+    role?: RawChannelMember["role"];
+  },
+  config: E2eConfig | undefined,
+): Promise<RawAddChannelMembersResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const channel = getMockChannel(args.channelId);
+    const added: string[] = [];
+    const errors: RawAddChannelMembersResponse["errors"] = [];
+
+    for (const pubkey of args.pubkeys) {
+      if (channel.members.some((member) => member.pubkey === pubkey)) {
+        errors.push({
+          pubkey,
+          error: "Already a member.",
+        });
+        continue;
+      }
+
+      channel.members.push({
+        pubkey,
+        role: args.role ?? "member",
+        joined_at: new Date().toISOString(),
+        display_name: mockDisplayNames.get(pubkey) ?? null,
+      });
+      added.push(pubkey);
+    }
+
+    syncMockChannel(channel);
+    touchMockChannel(channel);
+    return {
+      added,
+      errors,
+    };
+  }
+
+  return relayJsonRequest<RawAddChannelMembersResponse>(
+    config,
+    `/api/channels/${args.channelId}/members`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        pubkeys: args.pubkeys,
+        role: args.role,
+      }),
+    },
+  );
+}
+
+async function handleRemoveChannelMember(
+  args: {
+    channelId: string;
+    pubkey: string;
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const channel = getMockChannel(args.channelId);
+    channel.members = channel.members.filter(
+      (member) => member.pubkey !== args.pubkey,
+    );
+    syncMockChannel(channel);
+    touchMockChannel(channel);
+    return;
+  }
+
+  await relayEmptyRequest(
+    config,
+    `/api/channels/${args.channelId}/members/${args.pubkey}`,
+    {
+      method: "DELETE",
+    },
+  );
+}
+
+async function handleJoinChannel(
+  args: {
+    channelId: string;
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const channel = getMockChannel(args.channelId);
+    const currentPubkey = getMockMemberPubkey(config);
+
+    if (channel.members.some((member) => member.pubkey === currentPubkey)) {
+      return;
+    }
+
+    channel.members.push(createCurrentMember(config, "member"));
+    syncMockChannel(channel);
+    touchMockChannel(channel);
+    return;
+  }
+
+  await relayEmptyRequest(config, `/api/channels/${args.channelId}/join`, {
+    method: "POST",
+  });
+}
+
+async function handleLeaveChannel(
+  args: {
+    channelId: string;
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const channel = getMockChannel(args.channelId);
+    const currentPubkey = getMockMemberPubkey(config);
+
+    channel.members = channel.members.filter(
+      (member) => member.pubkey !== currentPubkey,
+    );
+    syncMockChannel(channel);
+    touchMockChannel(channel);
+    return;
+  }
+
+  await relayEmptyRequest(config, `/api/channels/${args.channelId}/leave`, {
+    method: "POST",
+  });
 }
 
 async function handleGetFeed(
@@ -835,6 +1536,66 @@ export function maybeInstallE2eTauriMocks() {
       case "create_channel":
         return handleCreateChannel(
           payload as Parameters<typeof handleCreateChannel>[0],
+          activeConfig,
+        );
+      case "get_channel_details":
+        return handleGetChannelDetails(
+          payload as Parameters<typeof handleGetChannelDetails>[0],
+          activeConfig,
+        );
+      case "get_channel_members":
+        return handleGetChannelMembers(
+          payload as Parameters<typeof handleGetChannelMembers>[0],
+          activeConfig,
+        );
+      case "update_channel":
+        return handleUpdateChannel(
+          payload as Parameters<typeof handleUpdateChannel>[0],
+          activeConfig,
+        );
+      case "set_channel_topic":
+        return handleSetChannelTopic(
+          payload as Parameters<typeof handleSetChannelTopic>[0],
+          activeConfig,
+        );
+      case "set_channel_purpose":
+        return handleSetChannelPurpose(
+          payload as Parameters<typeof handleSetChannelPurpose>[0],
+          activeConfig,
+        );
+      case "archive_channel":
+        return handleArchiveChannel(
+          payload as Parameters<typeof handleArchiveChannel>[0],
+          activeConfig,
+        );
+      case "unarchive_channel":
+        return handleUnarchiveChannel(
+          payload as Parameters<typeof handleUnarchiveChannel>[0],
+          activeConfig,
+        );
+      case "delete_channel":
+        return handleDeleteChannel(
+          payload as Parameters<typeof handleDeleteChannel>[0],
+          activeConfig,
+        );
+      case "add_channel_members":
+        return handleAddChannelMembers(
+          payload as Parameters<typeof handleAddChannelMembers>[0],
+          activeConfig,
+        );
+      case "remove_channel_member":
+        return handleRemoveChannelMember(
+          payload as Parameters<typeof handleRemoveChannelMember>[0],
+          activeConfig,
+        );
+      case "join_channel":
+        return handleJoinChannel(
+          payload as Parameters<typeof handleJoinChannel>[0],
+          activeConfig,
+        );
+      case "leave_channel":
+        return handleLeaveChannel(
+          payload as Parameters<typeof handleLeaveChannel>[0],
           activeConfig,
         );
       case "search_messages":

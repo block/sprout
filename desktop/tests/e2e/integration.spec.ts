@@ -3,6 +3,32 @@ import { expect, test, type Browser } from "@playwright/test";
 import { installRelayBridge } from "../helpers/bridge";
 import { assertRelaySeeded } from "../helpers/seed";
 
+async function createStream(
+  page: import("@playwright/test").Page,
+  channelName: string,
+  description?: string,
+) {
+  await page.getByRole("button", { name: "Create a stream" }).click();
+  await page.getByTestId("create-stream-name").fill(channelName);
+  if (description !== undefined) {
+    await page.getByTestId("create-stream-description").fill(description);
+  }
+  await page.getByRole("button", { name: "Create" }).click();
+
+  await expect(page.getByTestId("stream-list")).toContainText(channelName);
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+}
+
+async function openChannelManagement(page: import("@playwright/test").Page) {
+  await page.getByTestId("channel-management-trigger").click();
+  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+}
+
+async function closeChannelManagement(page: import("@playwright/test").Page) {
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("channel-management-sheet")).not.toBeVisible();
+}
+
 test.beforeAll(async () => {
   await assertRelaySeeded();
 });
@@ -118,13 +144,8 @@ test("create channel with description", async ({ page }) => {
 
   await installRelayBridge(page, "tyler");
   await page.goto("/");
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelName);
-  await page.getByTestId("create-stream-description").fill(description);
-  await page.getByRole("button", { name: "Create" }).click();
+  await createStream(page, channelName, description);
 
-  await expect(page.getByTestId("stream-list")).toContainText(channelName);
-  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
   await expect(page.getByTestId("chat-description")).toContainText(description);
 });
 
@@ -161,4 +182,107 @@ test("multiple channels independent", async ({ page }) => {
   await expect(page.getByTestId("message-timeline")).not.toContainText(
     messageA,
   );
+});
+
+test("manage sheet updates channel details and context through the relay", async ({
+  page,
+}) => {
+  const stamp = Date.now();
+  const initialName = `manage-integration-${stamp}`;
+  const renamedChannel = `manage-renamed-${stamp}`;
+  const initialDescription = `Initial description ${stamp}`;
+  const updatedDescription = `Updated description ${stamp}`;
+  const updatedTopic = `Updated topic ${stamp}`;
+  const updatedPurpose = `Updated purpose ${stamp}`;
+
+  await installRelayBridge(page, "tyler");
+  await page.goto("/");
+  await createStream(page, initialName, initialDescription);
+
+  await openChannelManagement(page);
+  await page.getByTestId("channel-management-name").fill(renamedChannel);
+  await page
+    .getByTestId("channel-management-description")
+    .fill(updatedDescription);
+  await page.getByTestId("channel-management-save-details").click();
+
+  await expect(page.getByTestId("chat-title")).toHaveText(renamedChannel);
+  await expect(page.getByTestId("stream-list")).toContainText(renamedChannel);
+
+  const saveTopicButton = page.getByTestId("channel-management-save-topic");
+  const savePurposeButton = page.getByTestId("channel-management-save-purpose");
+
+  await page.getByTestId("channel-management-topic").fill(updatedTopic);
+  await saveTopicButton.click();
+  await expect(saveTopicButton).toHaveText("Save topic");
+  await expect(page.getByTestId("channel-management-topic")).toHaveValue(
+    updatedTopic,
+  );
+
+  await page.getByTestId("channel-management-purpose").fill(updatedPurpose);
+  await savePurposeButton.click();
+  await expect(savePurposeButton).toHaveText("Save purpose");
+  await expect(page.getByTestId("channel-management-purpose")).toHaveValue(
+    updatedPurpose,
+  );
+
+  await closeChannelManagement(page);
+  await page.reload();
+
+  await page.getByTestId(`channel-${renamedChannel}`).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(renamedChannel);
+  await expect(page.getByTestId("chat-description")).toContainText(
+    updatedTopic,
+  );
+  await expect(page.getByTestId("chat-description")).toContainText(
+    updatedDescription,
+  );
+  await expect(page.getByTestId("chat-description")).toContainText(
+    updatedPurpose,
+  );
+
+  await openChannelManagement(page);
+  await expect(page.getByTestId("channel-management-name")).toHaveValue(
+    renamedChannel,
+  );
+  await expect(page.getByTestId("channel-management-description")).toHaveValue(
+    updatedDescription,
+  );
+  await expect(page.getByTestId("channel-management-topic")).toHaveValue(
+    updatedTopic,
+  );
+  await expect(page.getByTestId("channel-management-purpose")).toHaveValue(
+    updatedPurpose,
+  );
+});
+
+test("manage sheet archive and unarchive survives a reload through the relay", async ({
+  page,
+}) => {
+  const channelName = `archive-integration-${Date.now()}`;
+
+  await installRelayBridge(page, "tyler");
+  await page.goto("/");
+  await createStream(page, channelName, "Archive integration channel");
+
+  await openChannelManagement(page);
+  await page.getByTestId("channel-management-archive").click();
+  await expect(page.getByTestId("channel-management-unarchive")).toBeVisible();
+  await closeChannelManagement(page);
+
+  await expect(page.getByTestId("message-input")).toBeDisabled();
+  await expect(page.getByTestId("send-message")).toBeDisabled();
+
+  await page.reload();
+
+  await page.getByTestId(`channel-${channelName}`).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await expect(page.getByTestId("message-input")).toBeDisabled();
+
+  await openChannelManagement(page);
+  await page.getByTestId("channel-management-unarchive").click();
+  await expect(page.getByTestId("channel-management-archive")).toBeVisible();
+  await closeChannelManagement(page);
+
+  await expect(page.getByTestId("message-input")).toBeEnabled();
 });
