@@ -46,6 +46,32 @@ test("sidebar shows all channel types", async ({ page }) => {
   await expect(dmList).toContainText("bob-tyler");
 });
 
+test("shows presence in sidebar, DM header, and member list", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await expect(page.getByTestId("sidebar-profile-card")).toBeVisible();
+  await expect(page.getByTestId("self-presence-badge")).toHaveAttribute(
+    "aria-label",
+    "Offline",
+  );
+  await expect(page.getByTestId("channel-presence-alice-tyler")).toBeVisible();
+
+  await page.getByTestId("channel-alice-tyler").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("alice-tyler");
+  await expect(page.getByTestId("chat-presence-badge")).toContainText("Online");
+
+  await openChannelManagement(page, "general");
+  await expect(
+    page.getByTestId(`member-presence-${TEST_IDENTITIES.alice.pubkey}`),
+  ).toContainText("Online");
+  await expect(
+    page.getByTestId(`member-presence-${TEST_IDENTITIES.bob.pubkey}`),
+  ).toContainText("Away");
+  await closeChannelManagement(page);
+});
+
 test("create stream with name and description", async ({ page }) => {
   const channelName = `my-new-stream-${Date.now()}`;
 

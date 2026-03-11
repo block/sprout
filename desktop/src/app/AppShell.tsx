@@ -1,4 +1,3 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as React from "react";
 import { Settings2 } from "lucide-react";
 
@@ -22,6 +21,11 @@ import {
   collectMessageAuthorPubkeys,
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
+import {
+  usePresenceQuery,
+  usePresenceSession,
+} from "@/features/presence/hooks";
+import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
@@ -67,6 +71,7 @@ export function AppShell() {
     React.useState<RelayEvent | null>(null);
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
+  const presenceSession = usePresenceSession(identityQuery.data?.pubkey);
   const homeFeedQuery = useHomeFeedQuery();
   const channelsQuery = useChannelsQuery();
   const channels = channelsQuery.data ?? [];
@@ -77,6 +82,26 @@ export function AppShell() {
   const createChannelMutation = useCreateChannelMutation();
   const activeChannel = selectedView === "channel" ? selectedChannel : null;
   const { unreadChannelIds } = useUnreadChannels(channels, activeChannel);
+  const activeDmParticipantPubkeys = React.useMemo(() => {
+    if (!activeChannel || activeChannel.channelType !== "dm") {
+      return [];
+    }
+
+    const currentPubkey = identityQuery.data?.pubkey?.toLowerCase();
+
+    return activeChannel.participantPubkeys.filter(
+      (pubkey) => pubkey.toLowerCase() !== currentPubkey,
+    );
+  }, [activeChannel, identityQuery.data?.pubkey]);
+  const activeDmPresenceQuery = usePresenceQuery(activeDmParticipantPubkeys, {
+    enabled: activeDmParticipantPubkeys.length > 0,
+  });
+  const activeDmPresenceStatus =
+    activeDmParticipantPubkeys.length > 0
+      ? activeDmPresenceQuery.data?.[
+          activeDmParticipantPubkeys[0]?.toLowerCase()
+        ]
+      : null;
 
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
@@ -232,14 +257,17 @@ export function AppShell() {
       <SidebarTrigger className="fixed left-[80px] top-[9px] z-50 h-6 w-6" />
       <AppSidebar
         channels={channels}
+        currentPubkey={identityQuery.data?.pubkey}
         errorMessage={
           channelsQuery.error instanceof Error
             ? channelsQuery.error.message
             : undefined
         }
+        fallbackDisplayName={identityQuery.data?.displayName}
         homeUrgentCount={homeUrgentCount}
-        isLoading={channelsQuery.isLoading}
         isCreatingChannel={createChannelMutation.isPending}
+        isLoading={channelsQuery.isLoading}
+        selfPresenceStatus={presenceSession.currentStatus}
         onCreateChannel={async ({ description, name }) => {
           const createdChannel = await createChannelMutation.mutateAsync({
             name,
@@ -265,26 +293,16 @@ export function AppShell() {
         }}
         onSelectChannel={handleOpenChannel}
         onSelectSettings={handleOpenSettings}
+        profile={profileQuery.data}
         selectedChannelId={selectedChannel?.id ?? null}
         selectedView={selectedView}
         unreadChannelIds={unreadChannelIds}
       />
 
       <SidebarInset
-        className="relative min-h-0 min-w-0 overflow-hidden pt-7"
+        className="min-h-0 min-w-0 overflow-hidden"
         key={contentPaneKey}
       >
-        {/* Drag strip covering the traffic-light inset area */}
-        <div
-          className="absolute inset-x-0 top-0 flex h-7 items-center px-2"
-          onPointerDown={(e) => {
-            if (e.button !== 0) return;
-            const target = e.target as HTMLElement;
-            if (target.closest('button, a, input, [role="button"]')) return;
-            e.preventDefault();
-            getCurrentWindow().startDragging();
-          }}
-        />
         {selectedView === "home" ? (
           <ChatHeader
             description="Personalized feed for mentions, reminders, channel activity, and agent work."
@@ -302,21 +320,29 @@ export function AppShell() {
             actions={
               activeChannel ? (
                 <Button
+                  aria-label="Manage channel"
                   data-testid="channel-management-trigger"
                   onClick={() => {
                     setIsChannelManagementOpen(true);
                   }}
-                  size="sm"
+                  size="icon"
                   type="button"
                   variant="outline"
                 >
                   <Settings2 className="h-4 w-4" />
-                  Manage
                 </Button>
               ) : null
             }
             channelType={activeChannel?.channelType}
             description={channelDescription}
+            statusBadge={
+              activeChannel?.channelType === "dm" && activeDmPresenceStatus ? (
+                <PresenceBadge
+                  data-testid="chat-presence-badge"
+                  status={activeDmPresenceStatus}
+                />
+              ) : null
+            }
             title={activeChannel?.name ?? "Channels"}
           />
         )}
@@ -343,6 +369,11 @@ export function AppShell() {
             <SettingsView
               currentPubkey={identityQuery.data?.pubkey}
               fallbackDisplayName={identityQuery.data?.displayName}
+              isPresenceLoading={presenceSession.isLoading}
+              isUpdatingPresence={presenceSession.isPending}
+              onSetPresence={presenceSession.setStatus}
+              presenceError={presenceSession.error}
+              presenceStatus={presenceSession.currentStatus}
             />
           ) : (
             <>

@@ -1,16 +1,12 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  CircleDot,
-  FileText,
-  Hash,
-  Home,
-  Plus,
-  Search,
-  Settings2,
-} from "lucide-react";
+import { CircleDot, FileText, Hash, Home, Plus, Search } from "lucide-react";
 import * as React from "react";
 
-import type { Channel } from "@/shared/api/types";
+import { getPresenceLabel } from "@/features/presence/lib/presence";
+import { usePresenceQuery } from "@/features/presence/hooks";
+import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
+import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import type { Channel, PresenceStatus, Profile } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
@@ -32,8 +28,12 @@ import {
 
 type AppSidebarProps = {
   channels: Channel[];
+  currentPubkey?: string;
+  fallbackDisplayName?: string;
   isLoading: boolean;
   isCreatingChannel: boolean;
+  profile?: Profile;
+  selfPresenceStatus: PresenceStatus;
   errorMessage?: string;
   homeUrgentCount?: number;
   selectedChannelId: string | null;
@@ -65,11 +65,13 @@ function ChannelMenuButton({
   channel,
   isActive,
   hasUnread,
+  presenceStatus,
   onSelectChannel,
 }: {
   channel: Channel;
   isActive: boolean;
   hasUnread: boolean;
+  presenceStatus?: PresenceStatus;
   onSelectChannel: (channelId: string) => void;
 }) {
   return (
@@ -87,13 +89,22 @@ function ChannelMenuButton({
     >
       <SidebarChannelIcon channel={channel} />
       <span className="min-w-0 flex-1 truncate">{channel.name}</span>
-      {hasUnread && !isActive ? (
-        <span
-          aria-hidden="true"
-          className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-primary"
-          data-testid={`channel-unread-${channel.name}`}
-        />
-      ) : null}
+      <div className="ml-auto flex items-center gap-2">
+        {presenceStatus ? (
+          <PresenceDot
+            className="h-2 w-2"
+            data-testid={`channel-presence-${channel.name}`}
+            status={presenceStatus}
+          />
+        ) : null}
+        {hasUnread && !isActive ? (
+          <span
+            aria-hidden="true"
+            className="h-2.5 w-2.5 shrink-0 rounded-full bg-primary"
+            data-testid={`channel-unread-${channel.name}`}
+          />
+        ) : null}
+      </div>
     </SidebarMenuButton>
   );
 }
@@ -101,6 +112,7 @@ function ChannelMenuButton({
 function SidebarSection({
   items,
   isActiveChannel,
+  presenceByChannelId,
   selectedChannelId,
   title,
   testId,
@@ -109,6 +121,7 @@ function SidebarSection({
 }: {
   items: Channel[];
   isActiveChannel: boolean;
+  presenceByChannelId?: Record<string, PresenceStatus>;
   selectedChannelId: string | null;
   title: string;
   testId: string;
@@ -130,6 +143,7 @@ function SidebarSection({
                 channel={channel}
                 hasUnread={unreadChannelIds.has(channel.id)}
                 isActive={isActiveChannel && selectedChannelId === channel.id}
+                presenceStatus={presenceByChannelId?.[channel.id]}
                 onSelectChannel={onSelectChannel}
               />
             </SidebarMenuItem>
@@ -176,8 +190,8 @@ function StreamsSection({
   unreadChannelIds: Set<string>;
 }) {
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel>Streams</SidebarGroupLabel>
+    <SidebarGroup className="pt-1">
+      <SidebarGroupLabel>Channels</SidebarGroupLabel>
       <SidebarGroupAction
         aria-expanded={isCreateOpen}
         aria-label={isCreateOpen ? "Close new stream form" : "Create a stream"}
@@ -264,8 +278,12 @@ function StreamsSection({
 
 export function AppSidebar({
   channels,
+  currentPubkey,
+  fallbackDisplayName,
   isLoading,
   isCreatingChannel,
+  profile,
+  selfPresenceStatus,
   errorMessage,
   homeUrgentCount,
   selectedChannelId,
@@ -294,6 +312,41 @@ export function AppSidebar({
   const directMessages = channels.filter(
     (channel) => channel.channelType === "dm",
   );
+  const dmParticipantPubkeys = React.useMemo(
+    () =>
+      directMessages
+        .flatMap((channel) => channel.participantPubkeys)
+        .filter(
+          (pubkey) => pubkey.toLowerCase() !== currentPubkey?.toLowerCase(),
+        ),
+    [currentPubkey, directMessages],
+  );
+  const dmPresenceQuery = usePresenceQuery(dmParticipantPubkeys, {
+    enabled: directMessages.length > 0,
+  });
+  const dmPresenceByChannelId = React.useMemo(
+    () =>
+      Object.fromEntries(
+        directMessages.map((channel) => {
+          const otherParticipantPubkey = channel.participantPubkeys.find(
+            (pubkey) => pubkey.toLowerCase() !== currentPubkey?.toLowerCase(),
+          );
+
+          return [
+            channel.id,
+            otherParticipantPubkey
+              ? (dmPresenceQuery.data?.[otherParticipantPubkey.toLowerCase()] ??
+                "offline")
+              : "offline",
+          ];
+        }),
+      ) satisfies Record<string, PresenceStatus>,
+    [currentPubkey, directMessages, dmPresenceQuery.data],
+  );
+  const resolvedDisplayName =
+    profile?.displayName?.trim() ||
+    fallbackDisplayName?.trim() ||
+    "Current identity";
 
   React.useEffect(() => {
     if (!isCreateOpen) {
@@ -345,20 +398,9 @@ export function AppSidebar({
       variant="sidebar"
     >
       <SidebarHeader
-        className="gap-3 pt-7"
+        className="gap-3 pt-12"
         onPointerDown={handleDragPointerDown}
       >
-        <div className="flex items-center gap-3 rounded-xl bg-sidebar-accent/80 px-3 py-3">
-          <div className="flex h-6 w-6 items-center justify-center rounded-xl text-lg">
-            <span aria-hidden="true">🌱</span>
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold">Sprout</p>
-            <p className="truncate text-xs text-sidebar-foreground/65">
-              Humans and agents, together
-            </p>
-          </div>
-        </div>
         <Button
           className="w-full justify-between rounded-xl border border-sidebar-border/80 bg-sidebar-accent/60 px-3 text-sidebar-foreground/80 shadow-sm hover:bg-sidebar-accent hover:text-sidebar-foreground"
           data-testid="open-search"
@@ -373,34 +415,29 @@ export function AppSidebar({
           </span>
           <span className="text-xs text-sidebar-foreground/50">&#x2318;K</span>
         </Button>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={selectedView === "home"}
+              onClick={onSelectHome}
+              tooltip="Home"
+              type="button"
+            >
+              <Home className="h-4 w-4" />
+              <span>Home</span>
+              {homeUrgentCount && homeUrgentCount > 0 ? (
+                <span className="ml-auto rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary-foreground">
+                  {homeUrgentCount}
+                </span>
+              ) : null}
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarSeparator />
+      <SidebarSeparator className="mx-0 w-full" />
 
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={selectedView === "home"}
-                  onClick={onSelectHome}
-                  tooltip="Home"
-                  type="button"
-                >
-                  <Home className="h-4 w-4" />
-                  <span>Home</span>
-                  {homeUrgentCount && homeUrgentCount > 0 ? (
-                    <span className="ml-auto rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary-foreground">
-                      {homeUrgentCount}
-                    </span>
-                  ) : null}
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
         {isLoading ? (
           <SidebarGroup>
             <SidebarGroupLabel>Channels</SidebarGroupLabel>
@@ -463,6 +500,7 @@ export function AppSidebar({
               isActiveChannel={selectedView === "channel"}
               items={directMessages}
               onSelectChannel={onSelectChannel}
+              presenceByChannelId={dmPresenceByChannelId}
               selectedChannelId={selectedChannelId}
               testId="dm-list"
               title="Direct Messages"
@@ -484,24 +522,55 @@ export function AppSidebar({
         ) : null}
       </SidebarContent>
 
+      <SidebarSeparator className="mx-0 w-full" />
+
       <SidebarFooter>
-        <div className="w-full border-t border-sidebar-border/70 pt-2">
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                className="rounded-xl"
-                data-testid="open-settings"
-                isActive={selectedView === "settings"}
-                onClick={onSelectSettings}
-                tooltip="Settings"
-                type="button"
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              aria-pressed={selectedView === "settings"}
+              className="h-auto gap-3 rounded-xl px-2 py-2"
+              data-testid="open-settings"
+              isActive={selectedView === "settings"}
+              onClick={onSelectSettings}
+              type="button"
+            >
+              <div
+                className="flex min-w-0 flex-1 items-center gap-3"
+                data-testid="sidebar-profile-card"
               >
-                <Settings2 className="h-4 w-4" />
-                <span>Settings</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </div>
+                <div className="relative shrink-0">
+                  <ProfileAvatar
+                    avatarUrl={profile?.avatarUrl ?? null}
+                    className="h-10 w-10 rounded-2xl text-sm"
+                    iconClassName="h-5 w-5"
+                    label={resolvedDisplayName}
+                    testId="sidebar-profile-avatar"
+                  />
+                  <span
+                    aria-label={getPresenceLabel(selfPresenceStatus)}
+                    className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-sidebar"
+                    data-testid="self-presence-badge"
+                    role="img"
+                  >
+                    <PresenceDot
+                      className="h-2.5 w-2.5"
+                      status={selfPresenceStatus}
+                    />
+                  </span>
+                </div>
+                <div className="min-w-0">
+                  <p
+                    className="truncate text-sm font-semibold text-current"
+                    data-testid="sidebar-profile-name"
+                  >
+                    {resolvedDisplayName}
+                  </p>
+                </div>
+              </div>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
   );

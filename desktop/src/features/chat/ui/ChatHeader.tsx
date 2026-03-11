@@ -10,6 +10,7 @@ type ChatHeaderProps = {
   description: string;
   channelType?: ChannelType;
   mode?: "home" | "channel" | "settings";
+  statusBadge?: React.ReactNode;
 };
 
 function ChannelIcon({
@@ -52,6 +53,7 @@ export function ChatHeader({
   description,
   channelType,
   mode = "channel",
+  statusBadge,
 }: ChatHeaderProps) {
   return (
     <header
@@ -68,6 +70,7 @@ export function ChatHeader({
           >
             {title}
           </h1>
+          {statusBadge ? <div className="shrink-0">{statusBadge}</div> : null}
         </div>
         <p
           className="truncate text-sm text-muted-foreground"
