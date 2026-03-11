@@ -102,6 +102,126 @@ fn reactions_to_json(reactions: &[sprout_db::reaction::ReactionSummary]) -> serd
 
 // ── POST /api/channels/:channel_id/messages ───────────────────────────────────
 
+/// Build Nostr tags for a kind:40008 diff message.
+///
+/// Required fields: `diff_repo_url` (must be http/https) and `diff_commit_sha`.
+/// All other diff fields are optional.
+fn build_diff_tags(
+    body: &SendMessageBody,
+) -> Result<Vec<Tag>, (StatusCode, axum::Json<serde_json::Value>)> {
+    // repo-url is required and must be http/https
+    let repo_url = body
+        .diff_repo_url
+        .as_deref()
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "diff_repo_url is required for kind:40008"))?;
+    if !repo_url.starts_with("http://") && !repo_url.starts_with("https://") {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "diff_repo_url must use http or https scheme",
+        ));
+    }
+
+    // commit-sha is required and must be a valid hex string (min 7 chars for short SHA)
+    let commit_sha = body
+        .diff_commit_sha
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "diff_commit_sha is required for kind=40008"))?;
+    if commit_sha.len() < 7 || !commit_sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "diff_commit_sha must be a hex string (min 7 chars)",
+        ));
+    }
+
+    let mut tags: Vec<Tag> = Vec::new();
+
+    tags.push(
+        Tag::parse(&["repo", repo_url])
+            .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+    );
+    tags.push(
+        Tag::parse(&["commit", commit_sha])
+            .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+    );
+
+    if let Some(ref file_path) = body.diff_file_path {
+        tags.push(
+            Tag::parse(&["file", file_path])
+                .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        );
+    }
+
+    if let Some(parent) = body.diff_parent_commit_sha.as_deref().filter(|s| !s.is_empty()) {
+        if parent.len() < 7 || !parent.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "diff_parent_commit_sha must be a hex string (min 7 chars)",
+            ));
+        }
+        tags.push(
+            Tag::parse(&["parent-commit", parent])
+                .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        );
+    }
+
+    // Both source and target branch are required together
+    match (&body.diff_source_branch, &body.diff_target_branch) {
+        (Some(src), Some(tgt)) => {
+            tags.push(
+                Tag::parse(&["branch", src, tgt])
+                    .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+            );
+        }
+        (None, None) => {}
+        _ => {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "diff_source_branch and diff_target_branch must both be provided or both omitted",
+            ));
+        }
+    }
+
+    if let Some(pr_number) = body.diff_pr_number {
+        let pr_str = pr_number.to_string();
+        tags.push(
+            Tag::parse(&["pr", &pr_str])
+                .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        );
+    }
+
+    if let Some(ref lang) = body.diff_language {
+        tags.push(
+            Tag::parse(&["l", lang])
+                .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        );
+    }
+
+    if let Some(ref description) = body.diff_description {
+        tags.push(
+            Tag::parse(&["description", description])
+                .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        );
+    }
+
+    if let Some(truncated) = body.diff_truncated {
+        let val = if truncated { "true" } else { "false" };
+        tags.push(
+            Tag::parse(&["truncated", val])
+                .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        );
+    }
+
+    if let Some(ref alt) = body.diff_alt {
+        tags.push(
+            Tag::parse(&["alt", alt])
+                .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        );
+    }
+
+    Ok(tags)
+}
+
 /// Request body for sending a channel message or thread reply.
 #[derive(Debug, Deserialize)]
 pub struct SendMessageBody {
@@ -114,6 +234,29 @@ pub struct SendMessageBody {
     pub broadcast_to_channel: bool,
     /// Nostr kind for this message. Defaults to `KIND_STREAM_MESSAGE` (40001).
     pub kind: Option<u32>,
+    // Diff metadata fields (only used when kind == KIND_STREAM_MESSAGE_DIFF)
+    /// Repository URL for the diff (required for kind:40008; must be http/https).
+    pub diff_repo_url: Option<String>,
+    /// File path within the repository that this diff applies to.
+    pub diff_file_path: Option<String>,
+    /// Commit SHA that produced this diff (required for kind:40008).
+    pub diff_commit_sha: Option<String>,
+    /// Parent commit SHA (the base of the diff).
+    pub diff_parent_commit_sha: Option<String>,
+    /// Source branch for the diff (e.g. feature branch). Must be paired with `diff_target_branch`.
+    pub diff_source_branch: Option<String>,
+    /// Target branch for the diff (e.g. main). Must be paired with `diff_source_branch`.
+    pub diff_target_branch: Option<String>,
+    /// Pull request number associated with this diff.
+    pub diff_pr_number: Option<u32>,
+    /// Programming language of the diffed file (e.g. `"rust"`, `"typescript"`).
+    pub diff_language: Option<String>,
+    /// Human-readable description of what the diff changes.
+    pub diff_description: Option<String>,
+    /// When `true`, the diff content was truncated to fit the 60KB limit.
+    pub diff_truncated: Option<bool>,
+    /// Plain-text alternative summary for clients that cannot render diffs.
+    pub diff_alt: Option<String>,
 }
 
 /// Send a new channel message or reply to an existing thread.
@@ -149,6 +292,13 @@ pub async fn send_message(
 
     // Resolve kind — default to KIND_STREAM_MESSAGE (40001).
     let kind_u32 = body.kind.unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE);
+
+    if kind_u32 == sprout_core::kind::KIND_STREAM_MESSAGE_DIFF && body.content.len() > 60 * 1024 {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "diff content exceeds 60KB limit; truncate before sending",
+        ));
+    }
     let kind = Kind::from(kind_u32 as u16);
 
     // ── Resolve thread ancestry ───────────────────────────────────────────────
@@ -272,6 +422,11 @@ pub async fn send_message(
             Tag::parse(&["broadcast", "1"])
                 .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
         );
+    }
+
+    if body.kind == Some(sprout_core::kind::KIND_STREAM_MESSAGE_DIFF) {
+        let diff_tags = build_diff_tags(&body)?;
+        tags.extend(diff_tags);
     }
 
     let event = EventBuilder::new(kind, &body.content, tags)
@@ -486,6 +641,7 @@ pub async fn list_messages(
                 "kind":       m.kind,
                 "created_at": m.created_at.timestamp(),
                 "channel_id": m.channel_id.to_string(),
+                "tags":       m.tags,
             });
 
             if let Some(ref ts) = m.thread_summary {
@@ -618,11 +774,14 @@ pub async fn get_thread(
     let relay_pk = state.relay_keypair.public_key();
     let relay_pk_bytes = relay_pk.serialize().to_vec();
     let root_author = effective_author(&root_event.event, &relay_pk);
+    let root_tags = serde_json::to_value(&root_event.event.tags)
+        .unwrap_or(serde_json::Value::Array(vec![]));
     let mut root_obj = serde_json::json!({
         "event_id":   root_event.event.id.to_hex(),
         "pubkey":     nostr_hex::encode(&root_author),
         "content":    root_event.event.content,
         "kind":       root_event.event.kind.as_u16(),
+        "tags":       root_tags,
         "created_at": root_created_at,
         "channel_id": channel_id.to_string(),
         "thread_summary": summary.as_ref().map(|s| serde_json::json!({
@@ -677,6 +836,7 @@ pub async fn get_thread(
                 "depth":           r.depth,
                 "created_at":      r.created_at.timestamp(),
                 "broadcast":       r.broadcast,
+                "tags":            r.tags,
             });
 
             if let Some(reactions) = thread_reaction_map.get(&r.event_id) {

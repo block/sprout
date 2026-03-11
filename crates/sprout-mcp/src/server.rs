@@ -128,7 +128,7 @@ pub struct CreateWorkflowParams {
     /// UUID of the channel to own this workflow.
     pub channel_id: String,
     /// Full workflow definition in YAML format. Required fields: name (string), trigger (object with
-    /// 'on' field: 'message_posted', 'reaction_added', or 'webhook'), steps (array).
+    /// 'on' field: 'message_posted', 'diff_posted', 'reaction_added', or 'webhook'), steps (array).
     /// Each step needs: id (alphanumeric/underscore), action (e.g. 'send_message'), and action-specific
     /// fields as direct properties (NOT nested under 'params'). Example:
     /// ```yaml
@@ -465,6 +465,130 @@ pub struct GetFeedActionsParams {
     pub limit: Option<u32>,
 }
 
+/// Parameters for the `send_diff_message` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SendDiffMessageParams {
+    /// UUID of the channel to post to.
+    pub channel_id: String,
+    /// Unified diff content (git diff format).
+    pub diff: String,
+    /// URL of the source repository (e.g. "https://github.com/org/repo").
+    pub repo_url: String,
+    /// Full commit SHA this diff applies to.
+    pub commit_sha: String,
+    /// Optional file path within the repo (used for language inference and display).
+    #[serde(default)]
+    pub file_path: Option<String>,
+    /// Optional parent commit SHA (the base of the diff).
+    #[serde(default)]
+    pub parent_commit_sha: Option<String>,
+    /// Optional source branch name (e.g. "feat/my-feature").
+    #[serde(default)]
+    pub source_branch: Option<String>,
+    /// Optional target branch name (e.g. "main").
+    #[serde(default)]
+    pub target_branch: Option<String>,
+    /// Optional pull request number associated with this diff.
+    #[serde(default)]
+    pub pr_number: Option<u32>,
+    /// Optional language hint for syntax highlighting (e.g. "rust", "typescript").
+    /// Inferred from file_path extension if omitted.
+    #[serde(default)]
+    pub language: Option<String>,
+    /// Optional human-readable description of the change.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Optional parent event ID. If provided, sends the diff as a threaded reply.
+    #[serde(default)]
+    pub parent_event_id: Option<String>,
+}
+
+// ── Diff utility functions ────────────────────────────────────────────────────
+
+// Truncation notice appended when a diff is cut. This constant is used to
+// reserve space so the final result never exceeds max_bytes.
+// NOTE: This function is only called with max_bytes = 60 * 1024, so the
+// hardcoded "60KB" in the notice is intentional and always accurate.
+const TRUNCATION_NOTICE: &str =
+    "\n\\ Diff truncated at 60KB. Full diff available at the source repository.";
+
+/// Truncate a diff to at most `max_bytes` bytes, cutting at a hunk boundary
+/// where possible. Returns the (possibly truncated) string and a flag indicating
+/// whether truncation occurred.
+///
+/// The truncation notice is included within the `max_bytes` budget — the
+/// returned string is guaranteed to be `<= max_bytes` in length.
+fn truncate_diff(diff: &str, max_bytes: usize) -> (String, bool) {
+    debug_assert!(
+        max_bytes >= TRUNCATION_NOTICE.len(),
+        "max_bytes ({max_bytes}) must be >= TRUNCATION_NOTICE length ({})",
+        TRUNCATION_NOTICE.len()
+    );
+
+    if diff.len() <= max_bytes {
+        return (diff.to_string(), false);
+    }
+
+    // Reserve space for the truncation notice so the final result stays within max_bytes.
+    let effective_limit = max_bytes.saturating_sub(TRUNCATION_NOTICE.len());
+
+    // Step 1: Find the last UTF-8 char boundary at or before effective_limit
+    let utf8_boundary = diff
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= effective_limit)
+        .last()
+        .unwrap_or(0);
+
+    // Step 2: Within safe prefix, find last complete hunk boundary
+    let safe_prefix = &diff[..utf8_boundary];
+    let last_hunk_start = safe_prefix.rfind("\n@@");
+
+    let cut_point = match last_hunk_start {
+        Some(pos) if pos > 0 => pos,
+        _ => safe_prefix.rfind('\n').unwrap_or(utf8_boundary),
+    };
+
+    let mut result = diff[..cut_point].to_string();
+    result.push_str(TRUNCATION_NOTICE);
+    (result, true)
+}
+
+/// Infer a language name from a file path's extension for syntax highlighting.
+/// Returns `None` if the extension is unknown or absent.
+fn infer_language(file_path: &str) -> Option<String> {
+    // Note: rsplit always yields at least one element (the full string if no '.' found),
+    // so .next() always returns Some. The ? is effectively a no-op here.
+    let ext = file_path.rsplit('.').next()?;
+    let lang = match ext {
+        "rs" => "rust",
+        "ts" | "tsx" => "typescript",
+        "js" | "jsx" => "javascript",
+        "py" => "python",
+        "go" => "go",
+        "java" => "java",
+        "rb" => "ruby",
+        "c" | "h" => "c",
+        "cpp" | "cc" | "cxx" | "hpp" => "cpp",
+        "cs" => "csharp",
+        "swift" => "swift",
+        "kt" | "kts" => "kotlin",
+        "scala" => "scala",
+        "sh" | "bash" | "zsh" => "bash",
+        "sql" => "sql",
+        "html" | "htm" => "html",
+        "css" | "scss" | "sass" => "css",
+        "json" => "json",
+        "yaml" | "yml" => "yaml",
+        "toml" => "toml",
+        "xml" => "xml",
+        "md" | "markdown" => "markdown",
+        "dockerfile" => "dockerfile",
+        _ => return None,
+    };
+    Some(lang.to_string())
+}
+
 /// The MCP server that exposes Sprout relay functionality as tools.
 #[derive(Clone)]
 pub struct SproutMcpServer {
@@ -514,6 +638,103 @@ impl SproutMcpServer {
         match self
             .client
             .post(&format!("/api/channels/{}/messages", p.channel_id), &body)
+            .await
+        {
+            Ok(b) => b,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Send a code diff to a Sprout channel as kind:40008.
+    #[tool(
+        name = "send_diff_message",
+        description = "Send a code diff to a Sprout channel with syntax highlighting and structured metadata. The diff is rendered with GitHub-quality visualization in the desktop client."
+    )]
+    pub async fn send_diff_message(
+        &self,
+        Parameters(p): Parameters<SendDiffMessageParams>,
+    ) -> String {
+        let SendDiffMessageParams {
+            channel_id,
+            diff,
+            repo_url,
+            commit_sha,
+            file_path,
+            parent_commit_sha,
+            source_branch,
+            target_branch,
+            pr_number,
+            language,
+            description,
+            parent_event_id,
+        } = p;
+
+        if let Err(e) = validate_uuid(&channel_id) {
+            return format!("Error: {e}");
+        }
+
+        // 1. Truncate diff at 60KB (UTF-8 safe)
+        let (diff_content, truncated) = truncate_diff(&diff, 60 * 1024);
+
+        // 2. Infer language from file extension if not provided
+        let lang = language.or_else(|| file_path.as_deref().and_then(infer_language));
+
+        // 3. Build NIP-31 alt tag
+        let alt_text = match &description {
+            Some(desc) => format!(
+                "Diff: {} — {}",
+                file_path.as_deref().unwrap_or("diff"),
+                desc
+            ),
+            None => format!("Diff: {}", file_path.as_deref().unwrap_or("diff")),
+        };
+
+        // 4. Build JSON body for REST endpoint
+        let mut body = serde_json::json!({
+            "content": diff_content,
+            "kind": 40008_u32,
+            "broadcast_to_channel": false,
+            "diff_repo_url": repo_url,
+            "diff_commit_sha": commit_sha,
+            "diff_alt": alt_text,
+        });
+        if let Some(ref parent) = parent_event_id {
+            body["parent_event_id"] = serde_json::Value::String(parent.clone());
+        }
+        if let Some(ref file) = file_path {
+            body["diff_file_path"] = serde_json::Value::String(file.clone());
+        }
+        if let Some(ref sha) = parent_commit_sha {
+            body["diff_parent_commit_sha"] = serde_json::Value::String(sha.clone());
+        }
+        // Branch metadata — both source and target must be provided together
+        match (&source_branch, &target_branch) {
+            (Some(ref src), Some(ref tgt)) => {
+                body["diff_source_branch"] = serde_json::Value::String(src.clone());
+                body["diff_target_branch"] = serde_json::Value::String(tgt.clone());
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                // Warn caller that partial branch metadata is discarded
+                tracing::warn!("send_diff_message: only one of source_branch/target_branch provided — both required, branch metadata omitted");
+            }
+            (None, None) => {} // Both absent — no branch tag
+        }
+        if let Some(pr) = pr_number {
+            body["diff_pr_number"] = serde_json::json!(pr);
+        }
+        if let Some(ref l) = lang {
+            body["diff_language"] = serde_json::Value::String(l.clone());
+        }
+        if let Some(ref desc) = description {
+            body["diff_description"] = serde_json::Value::String(desc.clone());
+        }
+        if truncated {
+            body["diff_truncated"] = serde_json::json!(true);
+        }
+
+        match self
+            .client
+            .post(&format!("/api/channels/{}/messages", channel_id), &body)
             .await
         {
             Ok(b) => b,
@@ -1517,5 +1738,96 @@ mod tests {
     #[test]
     fn max_content_bytes_value() {
         assert_eq!(MAX_CONTENT_BYTES, 65_536);
+    }
+}
+
+#[cfg(test)]
+mod diff_tests {
+    use super::*;
+
+    #[test]
+    fn truncate_diff_small_passes_through() {
+        let diff = "--- a/file\n+++ b/file\n@@ -1,3 +1,3 @@\n context\n-old\n+new\n";
+        let (result, truncated) = truncate_diff(diff, 60 * 1024);
+        assert_eq!(result, diff);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn truncate_diff_cuts_at_hunk_boundary() {
+        // Build a diff large enough that truncation is meaningful.
+        // Repeat the first hunk many times so the total is well above any
+        // reasonable max_bytes, then append a second hunk we want excluded.
+        let hunk_unit = "--- a/file\n+++ b/file\n@@ -1,3 +1,3 @@\n context\n-old\n+new\n";
+        let mut diff = hunk_unit.repeat(20); // ~1140 bytes of first-hunk content
+        diff.push_str("@@ -10,3 +10,3 @@\n more context\n-old2\n+new2\n");
+
+        // max_bytes sits inside the repeated first-hunk region (well below total)
+        // but above TRUNCATION_NOTICE.len() so effective_limit > 0.
+        // effective_limit = max_bytes - TRUNCATION_NOTICE.len() ≈ 500 - 72 = 428,
+        // which lands inside the repeated first-hunk block.
+        let max_bytes = 500;
+        let (result, truncated) = truncate_diff(&diff, max_bytes);
+        assert!(truncated);
+        assert!(result.contains("context"), "should contain first-hunk content");
+        assert!(result.contains("Diff truncated"));
+        assert!(!result.contains("@@ -10,3"), "second hunk should be excluded");
+        // Result must not exceed max_bytes.
+        assert!(
+            result.len() <= max_bytes,
+            "truncated result ({}) exceeds max_bytes ({})",
+            result.len(),
+            max_bytes
+        );
+    }
+
+    #[test]
+    fn truncate_diff_utf8_safe() {
+        // Create a diff with multi-byte chars near the boundary
+        let mut diff = String::from("--- a/file\n+++ b/file\n@@ -1,1 +1,1 @@\n-");
+        // Add enough content to exceed a small limit, with multi-byte chars
+        for _ in 0..100 {
+            diff.push('日'); // 3-byte UTF-8 char
+        }
+        diff.push('\n');
+        let (result, truncated) = truncate_diff(&diff, 80);
+        assert!(truncated);
+        // Must not panic and must produce valid UTF-8
+        assert!(result.is_char_boundary(result.len()));
+    }
+
+    #[test]
+    fn truncate_diff_result_within_limit() {
+        let mut diff = String::new();
+        for i in 0..2000 {
+            diff.push_str(&format!("@@ -{i},1 +{i},1 @@\n-old line {i}\n+new line {i}\n"));
+        }
+        let max = 1024;
+        let (result, truncated) = truncate_diff(&diff, max);
+        assert!(truncated);
+        assert!(
+            result.len() <= max,
+            "truncated result ({}) exceeds max_bytes ({})",
+            result.len(),
+            max
+        );
+    }
+
+    #[test]
+    fn infer_language_known_extensions() {
+        assert_eq!(infer_language("src/main.rs"), Some("rust".to_string()));
+        assert_eq!(infer_language("app.tsx"), Some("typescript".to_string()));
+        assert_eq!(infer_language("script.py"), Some("python".to_string()));
+        assert_eq!(infer_language("Makefile"), None);
+    }
+
+    #[test]
+    fn infer_language_no_extension() {
+        assert_eq!(infer_language("Dockerfile"), None);
+        // But "foo.dockerfile" should match
+        assert_eq!(
+            infer_language("foo.dockerfile"),
+            Some("dockerfile".to_string())
+        );
     }
 }

@@ -52,6 +52,12 @@ pub enum TriggerDef {
         #[serde(default)]
         emoji: Option<String>,
     },
+    /// Fires when a diff message (kind:40008) is posted in the workflow's channel.
+    DiffPosted {
+        /// Optional evalexpr filter expression (same variables as MessagePosted).
+        #[serde(default)]
+        filter: Option<String>,
+    },
     /// Fires on a cron schedule.
     Schedule {
         /// Cron expression (UTC). Mutually exclusive with `interval`.
@@ -831,5 +837,23 @@ mod tests {
     fn normalize_cron_every_minute_5_fields() {
         let result = normalize_cron("* * * * *");
         assert_eq!(result, "0 * * * * * *");
+    }
+
+    // ── DiffPosted trigger ────────────────────────────────────────────────────
+
+    #[test]
+    fn diff_posted_trigger_roundtrips_yaml() {
+        let yaml = "on: diff_posted\n";
+        let trigger: TriggerDef = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(trigger, TriggerDef::DiffPosted { filter: None }));
+        let back = serde_yaml::to_string(&trigger).unwrap();
+        assert!(back.contains("diff_posted"));
+    }
+
+    #[test]
+    fn diff_posted_trigger_with_filter_roundtrips_yaml() {
+        let yaml = "on: diff_posted\nfilter: 'str_contains(trigger_text, \"src/\")'\n";
+        let trigger: TriggerDef = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(trigger, TriggerDef::DiffPosted { filter: Some(_) }));
     }
 }

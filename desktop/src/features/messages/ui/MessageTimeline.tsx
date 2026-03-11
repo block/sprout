@@ -2,11 +2,15 @@ import { ArrowDown } from "lucide-react";
 import * as React from "react";
 
 import type { TimelineMessage } from "@/features/messages/types";
+import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
 import { Separator } from "@/shared/ui/separator";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { DiffMessage } from "./DiffMessage";
+
+const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
 
 type MessageTimelineProps = {
   messages: TimelineMessage[];
@@ -28,12 +32,36 @@ function isNearBottom(container: HTMLDivElement) {
 
 function MessageRow({ message }: { message: TimelineMessage }) {
   const [hasAvatarError, setHasAvatarError] = React.useState(false);
+  const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(null);
   const initials = message.author
     .split(" ")
     .map((part) => part[0])
     .join("")
     .slice(0, 2)
     .toUpperCase();
+
+  const getTag = (name: string) => message.tags?.find((t) => t[0] === name)?.[1];
+
+  const renderBody = () => {
+    switch (message.kind) {
+      case KIND_STREAM_MESSAGE_DIFF:
+        return (
+          <DiffMessage
+            commitSha={getTag("commit")}
+            content={message.body}
+            description={getTag("description")}
+            filePath={getTag("file")}
+            onExpand={() => {
+              setExpandedDiffId(message.id);
+            }}
+            repoUrl={getTag("repo")}
+            truncated={getTag("truncated") === "true"}
+          />
+        );
+      default:
+        return <Markdown className="max-w-3xl" content={message.body} tight />;
+    }
+  };
 
   return (
     <article
@@ -88,7 +116,25 @@ function MessageRow({ message }: { message: TimelineMessage }) {
             <p className="whitespace-nowrap">{message.time}</p>
           </div>
         </div>
-        <Markdown className="max-w-3xl" content={message.body} tight />
+        {renderBody()}
+        {expandedDiffId === message.id && (
+          <React.Suspense
+            fallback={
+              <div className="p-4 text-sm text-muted-foreground">
+                Loading diff viewer…
+              </div>
+            }
+          >
+            <DiffMessageExpanded
+              content={message.body}
+              filePath={getTag("file")}
+              language={getTag("l")}
+              onClose={() => {
+                setExpandedDiffId(null);
+              }}
+            />
+          </React.Suspense>
+        )}
       </div>
     </article>
   );
