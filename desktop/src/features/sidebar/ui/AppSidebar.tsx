@@ -435,7 +435,7 @@ export function AppSidebar({
         </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarSeparator />
+      <SidebarSeparator className="mx-0 w-full" />
 
       <SidebarContent>
         {isLoading ? (
@@ -522,7 +522,7 @@ export function AppSidebar({
         ) : null}
       </SidebarContent>
 
-      <SidebarSeparator />
+      <SidebarSeparator className="mx-0 w-full" />
 
       <SidebarFooter>
         <SidebarMenu>
