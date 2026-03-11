@@ -87,10 +87,21 @@ export type Profile = {
   nip05Handle: string | null;
 };
 
+export type UserProfileSummary = {
+  displayName: string | null;
+  nip05Handle: string | null;
+};
+
+export type UsersBatchResponse = {
+  profiles: Record<string, UserProfileSummary>;
+  missing: string[];
+};
+
 export type UpdateProfileInput = {
   displayName?: string;
   avatarUrl?: string;
   about?: string;
+  nip05Handle?: string;
 };
 
 export type RelayEvent = {

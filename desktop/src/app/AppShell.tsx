@@ -14,11 +14,15 @@ import { useHomeFeedQuery } from "@/features/home/hooks";
 import { HomeView } from "@/features/home/ui/HomeView";
 import {
   useChannelMessagesQuery,
-  useChannelSubscription,
   mergeMessages,
   useSendMessageMutation,
+  useChannelSubscription,
 } from "@/features/messages/hooks";
-import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
+import {
+  collectMessageAuthorPubkeys,
+  formatTimelineMessages,
+} from "@/features/messages/lib/formatTimelineMessages";
+import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
 import { SearchDialog } from "@/features/search/ui/SearchDialog";
@@ -62,6 +66,7 @@ export function AppShell() {
   const [searchAnchorEvent, setSearchAnchorEvent] =
     React.useState<RelayEvent | null>(null);
   const identityQuery = useIdentityQuery();
+  const profileQuery = useProfileQuery();
   const homeFeedQuery = useHomeFeedQuery();
   const channelsQuery = useChannelsQuery();
   const channels = channelsQuery.data ?? [];
@@ -105,6 +110,13 @@ export function AppShell() {
     searchAnchorChannelId,
     searchAnchorEvent,
   ]);
+  const messageAuthorPubkeys = React.useMemo(
+    () => collectMessageAuthorPubkeys(resolvedMessages),
+    [resolvedMessages],
+  );
+  const messageProfilesQuery = useUsersBatchQuery(messageAuthorPubkeys, {
+    enabled: resolvedMessages.length > 0,
+  });
 
   const timelineMessages = React.useMemo(
     () =>
@@ -112,8 +124,16 @@ export function AppShell() {
         resolvedMessages,
         activeChannel,
         identityQuery.data?.pubkey,
+        profileQuery.data?.avatarUrl ?? null,
+        messageProfilesQuery.data?.profiles,
       ),
-    [activeChannel, identityQuery.data?.pubkey, resolvedMessages],
+    [
+      activeChannel,
+      identityQuery.data?.pubkey,
+      profileQuery.data?.avatarUrl,
+      messageProfilesQuery.data?.profiles,
+      resolvedMessages,
+    ],
   );
 
   const channelDescription = activeChannel
@@ -382,6 +402,7 @@ export function AppShell() {
 
         <SearchDialog
           channels={channels}
+          currentPubkey={identityQuery.data?.pubkey}
           onOpenResult={handleOpenSearchResult}
           onOpenChange={setIsSearchOpen}
           open={isSearchOpen}

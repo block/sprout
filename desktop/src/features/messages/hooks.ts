@@ -11,17 +11,36 @@ type MessageQueryContext = {
   queryKey: readonly ["channel-messages", string];
 };
 
+function dedupeMessagesById(messages: RelayEvent[]) {
+  const seenIds = new Set<string>();
+  const deduped: RelayEvent[] = [];
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+
+    if (seenIds.has(message.id)) {
+      continue;
+    }
+
+    seenIds.add(message.id);
+    deduped.push(message);
+  }
+
+  return deduped.reverse();
+}
+
 export function mergeMessages(
   current: RelayEvent[],
   incoming: RelayEvent,
 ): RelayEvent[] {
-  const deduped = current.filter(
+  const normalizedCurrent = dedupeMessagesById(current);
+  const deduped = normalizedCurrent.filter(
     (message) =>
       message.id !== incoming.id &&
       !(message.pending && incoming.content === message.content),
   );
 
-  return [...deduped, incoming].sort(
+  return dedupeMessagesById([...deduped, incoming]).sort(
     (left, right) => left.created_at - right.created_at,
   );
 }
@@ -52,7 +71,8 @@ export function useChannelMessagesQuery(channel: Channel | null) {
         throw new Error("No channel selected.");
       }
 
-      return relayClient.fetchChannelHistory(channel.id);
+      const history = await relayClient.fetchChannelHistory(channel.id);
+      return dedupeMessagesById(history);
     },
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 30 * 60 * 1_000,

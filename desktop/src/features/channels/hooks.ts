@@ -44,7 +44,13 @@ const channelTypeOrder = {
 } as const;
 
 function sortChannels(channels: Channel[]) {
-  return [...channels].sort((left, right) => {
+  const uniqueChannels = new Map<string, Channel>();
+
+  for (const channel of channels) {
+    uniqueChannels.set(channel.id, channel);
+  }
+
+  return [...uniqueChannels.values()].sort((left, right) => {
     const typeOrder =
       channelTypeOrder[left.channelType] - channelTypeOrder[right.channelType];
 

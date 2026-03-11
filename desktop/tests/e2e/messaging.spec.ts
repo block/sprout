@@ -17,6 +17,9 @@ test("send a message and see it in timeline", async ({ page }) => {
   await page.getByTestId("send-message").click();
 
   await expect(page.getByTestId("message-timeline")).toContainText(message);
+  await expect(page.getByTestId("message-row").last()).toContainText(
+    "npub1mock...",
+  );
 });
 
 test("send multiple messages in sequence", async ({ page }) => {
@@ -161,4 +164,30 @@ test("send message to DM channel", async ({ page }) => {
   await page.getByTestId("send-message").click();
 
   await expect(page.getByTestId("message-timeline")).toContainText(message);
+});
+
+test("shows your avatar on your own message when profile avatar is set", async ({
+  page,
+}) => {
+  const message = `Avatar message ${Date.now()}`;
+  const avatarUrl =
+    'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"%3E%3Crect width="16" height="16" rx="4" fill="%2300a36c"/%3E%3C/svg%3E';
+
+  await page.goto("/");
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("profile-avatar-url").fill(avatarUrl);
+  await page.getByTestId("profile-save").click();
+
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  await page.getByTestId("message-input").fill(message);
+  await page.getByTestId("send-message").click();
+
+  const lastMessage = page.getByTestId("message-row").last();
+  await expect(lastMessage).toContainText(message);
+  await expect(lastMessage.getByTestId("message-avatar-image")).toHaveAttribute(
+    "src",
+    avatarUrl,
+  );
 });
