@@ -130,6 +130,10 @@ declare global {
   interface Window {
     __SPROUT_E2E__?: E2eConfig;
     __SPROUT_E2E_COMMANDS__?: string[];
+    __SPROUT_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+      channelName: string;
+      content: string;
+    }) => RelayEvent;
   }
 }
 
@@ -672,6 +676,26 @@ function emitMockLiveEvent(channelId: string, event: RelayEvent) {
       }
     }
   }
+}
+
+function recordMockMessage(channelId: string, event: RelayEvent) {
+  const history = getMockMessageStore(channelId);
+  history.push(event);
+
+  const channel = mockChannels.find((candidate) => candidate.id === channelId);
+  if (!channel) {
+    return;
+  }
+
+  channel.last_message_at = new Date(event.created_at * 1_000).toISOString();
+  touchMockChannel(channel);
+}
+
+function emitMockChannelMessage(channelId: string, content: string) {
+  const event = createMockEvent(40001, content, [["h", channelId]]);
+  recordMockMessage(channelId, event);
+  emitMockLiveEvent(channelId, event);
+  return event;
 }
 
 function createMockEvent(
@@ -1589,8 +1613,7 @@ function sendToMockSocket(args: {
       return;
     }
 
-    const history = getMockMessageStore(channelId);
-    history.push(event);
+    recordMockMessage(channelId, event);
     emitMockLiveEvent(channelId, event);
     sendWsText(socket.handler, ["OK", event.id, true, ""]);
   }
@@ -1618,6 +1641,16 @@ export function maybeInstallE2eTauriMocks() {
 
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
+  window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({ channelName, content }) => {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === channelName,
+    );
+    if (!channel) {
+      throw new Error(`Mock channel ${channelName} not found.`);
+    }
+
+    return emitMockChannelMessage(channel.id, content);
+  };
   mockIPC(async (command, payload) => {
     const activeConfig = getConfig();
     const identity = getIdentity(activeConfig);

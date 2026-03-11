@@ -11,6 +11,7 @@ import {
 import * as React from "react";
 
 import type { Channel } from "@/shared/api/types";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import {
@@ -37,6 +38,7 @@ type AppSidebarProps = {
   homeUrgentCount?: number;
   selectedChannelId: string | null;
   selectedView: "home" | "channel" | "settings";
+  unreadChannelIds: Set<string>;
   onCreateChannel: (input: {
     name: string;
     description?: string;
@@ -59,12 +61,50 @@ function SidebarChannelIcon({ channel }: { channel: Channel }) {
   return <Hash className="h-4 w-4" />;
 }
 
+function ChannelMenuButton({
+  channel,
+  isActive,
+  hasUnread,
+  onSelectChannel,
+}: {
+  channel: Channel;
+  isActive: boolean;
+  hasUnread: boolean;
+  onSelectChannel: (channelId: string) => void;
+}) {
+  return (
+    <SidebarMenuButton
+      className={cn(
+        !isActive &&
+          hasUnread &&
+          "font-semibold text-sidebar-foreground hover:text-sidebar-foreground",
+      )}
+      data-testid={`channel-${channel.name}`}
+      isActive={isActive}
+      onClick={() => onSelectChannel(channel.id)}
+      tooltip={channel.name}
+      type="button"
+    >
+      <SidebarChannelIcon channel={channel} />
+      <span className="min-w-0 flex-1 truncate">{channel.name}</span>
+      {hasUnread && !isActive ? (
+        <span
+          aria-hidden="true"
+          className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-primary"
+          data-testid={`channel-unread-${channel.name}`}
+        />
+      ) : null}
+    </SidebarMenuButton>
+  );
+}
+
 function SidebarSection({
   items,
   isActiveChannel,
   selectedChannelId,
   title,
   testId,
+  unreadChannelIds,
   onSelectChannel,
 }: {
   items: Channel[];
@@ -72,6 +112,7 @@ function SidebarSection({
   selectedChannelId: string | null;
   title: string;
   testId: string;
+  unreadChannelIds: Set<string>;
   onSelectChannel: (channelId: string) => void;
 }) {
   if (items.length === 0) {
@@ -85,16 +126,12 @@ function SidebarSection({
         <SidebarMenu data-testid={testId}>
           {items.map((channel) => (
             <SidebarMenuItem key={channel.id}>
-              <SidebarMenuButton
-                data-testid={`channel-${channel.name}`}
+              <ChannelMenuButton
+                channel={channel}
+                hasUnread={unreadChannelIds.has(channel.id)}
                 isActive={isActiveChannel && selectedChannelId === channel.id}
-                onClick={() => onSelectChannel(channel.id)}
-                tooltip={channel.name}
-                type="button"
-              >
-                <SidebarChannelIcon channel={channel} />
-                <span>{channel.name}</span>
-              </SidebarMenuButton>
+                onSelectChannel={onSelectChannel}
+              />
             </SidebarMenuItem>
           ))}
         </SidebarMenu>
@@ -119,6 +156,7 @@ function StreamsSection({
   onSelectChannel,
   isActiveChannel,
   selectedChannelId,
+  unreadChannelIds,
 }: {
   items: Channel[];
   isCreateOpen: boolean;
@@ -135,6 +173,7 @@ function StreamsSection({
   onSelectChannel: (channelId: string) => void;
   isActiveChannel: boolean;
   selectedChannelId: string | null;
+  unreadChannelIds: Set<string>;
 }) {
   return (
     <SidebarGroup>
@@ -208,16 +247,12 @@ function StreamsSection({
           <SidebarMenu data-testid="stream-list">
             {items.map((channel) => (
               <SidebarMenuItem key={channel.id}>
-                <SidebarMenuButton
-                  data-testid={`channel-${channel.name}`}
+                <ChannelMenuButton
+                  channel={channel}
+                  hasUnread={unreadChannelIds.has(channel.id)}
                   isActive={isActiveChannel && selectedChannelId === channel.id}
-                  onClick={() => onSelectChannel(channel.id)}
-                  tooltip={channel.name}
-                  type="button"
-                >
-                  <SidebarChannelIcon channel={channel} />
-                  <span>{channel.name}</span>
-                </SidebarMenuButton>
+                  onSelectChannel={onSelectChannel}
+                />
               </SidebarMenuItem>
             ))}
           </SidebarMenu>
@@ -235,6 +270,7 @@ export function AppSidebar({
   homeUrgentCount,
   selectedChannelId,
   selectedView,
+  unreadChannelIds,
   onCreateChannel,
   onOpenSearch,
   onSelectHome,
@@ -412,6 +448,7 @@ export function AppSidebar({
                 setIsCreateOpen((current) => !current);
               }}
               selectedChannelId={selectedChannelId}
+              unreadChannelIds={unreadChannelIds}
             />
             <SidebarSection
               isActiveChannel={selectedView === "channel"}
@@ -420,6 +457,7 @@ export function AppSidebar({
               selectedChannelId={selectedChannelId}
               testId="forum-list"
               title="Forums"
+              unreadChannelIds={unreadChannelIds}
             />
             <SidebarSection
               isActiveChannel={selectedView === "channel"}
@@ -428,6 +466,7 @@ export function AppSidebar({
               selectedChannelId={selectedChannelId}
               testId="dm-list"
               title="Direct Messages"
+              unreadChannelIds={unreadChannelIds}
             />
           </>
         ) : null}
