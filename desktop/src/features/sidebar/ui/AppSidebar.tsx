@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   CircleDot,
   FileText,
@@ -294,13 +295,24 @@ export function AppSidebar({
     }
   }
 
+  function handleDragPointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, a, input, [role="button"]')) return;
+    e.preventDefault();
+    getCurrentWindow().startDragging();
+  }
+
   return (
     <Sidebar
       collapsible="offcanvas"
       data-testid="app-sidebar"
       variant="sidebar"
     >
-      <SidebarHeader className="gap-3">
+      <SidebarHeader
+        className="gap-3 pt-7"
+        onPointerDown={handleDragPointerDown}
+      >
         <div className="flex items-center gap-3 rounded-xl bg-sidebar-accent/80 px-3 py-3">
           <div className="flex h-6 w-6 items-center justify-center rounded-xl text-lg">
             <span aria-hidden="true">🌱</span>
@@ -324,9 +336,7 @@ export function AppSidebar({
             <Search className="h-4 w-4" />
             Search messages
           </span>
-          <span className="rounded-md border border-sidebar-border/80 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/60">
-            Cmd K
-          </span>
+          <span className="text-xs text-sidebar-foreground/50">&#x2318;K</span>
         </Button>
       </SidebarHeader>
 
