@@ -11,17 +11,27 @@ import type {
   GetHomeFeedInput,
   HomeFeedResponse,
   Identity,
+  Profile,
   RelayEvent,
   SearchMessagesInput,
   SearchMessagesResponse,
   SetChannelPurposeInput,
   SetChannelTopicInput,
+  UpdateProfileInput,
   UpdateChannelInput,
 } from "@/shared/api/types";
 
 type RawIdentity = {
   pubkey: string;
   display_name: string;
+};
+
+type RawProfile = {
+  pubkey: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  about: string | null;
+  nip05_handle: string | null;
 };
 
 type RawChannel = {
@@ -183,6 +193,16 @@ function fromRawSearchHit(hit: RawSearchHit) {
   };
 }
 
+function fromRawProfile(profile: RawProfile): Profile {
+  return {
+    pubkey: profile.pubkey,
+    displayName: profile.display_name,
+    avatarUrl: profile.avatar_url,
+    about: profile.about,
+    nip05Handle: profile.nip05_handle,
+  };
+}
+
 export async function getIdentity(): Promise<Identity> {
   const identity = await invoke<RawIdentity>("get_identity");
 
@@ -190,6 +210,18 @@ export async function getIdentity(): Promise<Identity> {
     pubkey: identity.pubkey,
     displayName: identity.display_name,
   };
+}
+
+export async function getProfile(): Promise<Profile> {
+  const profile = await invoke<RawProfile>("get_profile");
+  return fromRawProfile(profile);
+}
+
+export async function updateProfile(
+  input: UpdateProfileInput,
+): Promise<Profile> {
+  const profile = await invoke<RawProfile>("update_profile", input);
+  return fromRawProfile(profile);
 }
 
 export function getRelayWsUrl(): Promise<string> {

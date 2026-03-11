@@ -19,6 +19,7 @@ import {
 import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
+import { ProfileSheet } from "@/features/profile/ui/ProfileSheet";
 import { SearchDialog } from "@/features/search/ui/SearchDialog";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { getEventById } from "@/shared/api/tauri";
@@ -45,6 +46,7 @@ export function AppShell() {
   const [selectedView, setSelectedView] = React.useState<AppView>("home");
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
+  const [isProfileOpen, setIsProfileOpen] = React.useState(false);
   const [isSearchOpen, setIsSearchOpen] = React.useState(false);
   const [searchAnchor, setSearchAnchor] = React.useState<SearchHit | null>(
     null,
@@ -192,6 +194,9 @@ export function AppShell() {
         onOpenSearch={() => {
           setIsSearchOpen(true);
         }}
+        onOpenProfile={() => {
+          setIsProfileOpen(true);
+        }}
         onSelectHome={() => {
           React.startTransition(() => {
             setSelectedView("home");
@@ -330,6 +335,13 @@ export function AppShell() {
           }}
           onOpenChange={setIsChannelManagementOpen}
           open={isChannelManagementOpen && activeChannel !== null}
+        />
+
+        <ProfileSheet
+          currentPubkey={identityQuery.data?.pubkey}
+          fallbackDisplayName={identityQuery.data?.displayName}
+          onOpenChange={setIsProfileOpen}
+          open={isProfileOpen}
         />
       </SidebarInset>
     </SidebarProvider>

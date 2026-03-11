@@ -17,6 +17,14 @@ type E2eConfig = {
   identity?: TestIdentity;
 };
 
+type RawProfile = {
+  pubkey: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  about: string | null;
+  nip05_handle: string | null;
+};
+
 type RawChannel = {
   id: string;
   name: string;
@@ -265,6 +273,10 @@ function getMockIdentity() {
   };
 }
 
+function cloneProfile(profile: RawProfile): RawProfile {
+  return { ...profile };
+}
+
 function listMockChannels(): RawChannel[] {
   return mockChannels.map(toRawChannel);
 }
@@ -510,6 +522,18 @@ const mockChannels: MockChannel[] = [
 const mockMessages = new Map<string, RelayEvent[]>();
 const mockSockets = new Map<number, MockSocket>();
 const realSockets = new Map<number, WebSocket>();
+const mockProfiles = new Map<string, RawProfile>([
+  [
+    MOCK_IDENTITY_PUBKEY,
+    {
+      pubkey: MOCK_IDENTITY_PUBKEY,
+      display_name: DEFAULT_MOCK_IDENTITY.display_name,
+      avatar_url: null,
+      about: null,
+      nip05_handle: null,
+    },
+  ],
+]);
 
 let installed = false;
 let nextSocketId = 1;
@@ -536,6 +560,41 @@ function getIdentity(config: E2eConfig | undefined): TestIdentity | undefined {
   }
 
   return config?.identity ?? DEFAULT_REAL_IDENTITY;
+}
+
+function ensureMockProfile(config: E2eConfig | undefined): RawProfile {
+  const pubkey = getMockMemberPubkey(config);
+  const existing = mockProfiles.get(pubkey);
+  if (existing) {
+    return existing;
+  }
+
+  const profile = {
+    pubkey,
+    display_name: getMockMemberDisplayName(config),
+    avatar_url: null,
+    about: null,
+    nip05_handle: null,
+  };
+  mockProfiles.set(pubkey, profile);
+  return profile;
+}
+
+function applyMockDisplayName(pubkey: string, displayName: string | null) {
+  if (displayName) {
+    mockDisplayNames.set(pubkey, displayName);
+  } else {
+    mockDisplayNames.delete(pubkey);
+  }
+
+  for (const channel of mockChannels) {
+    for (const member of channel.members) {
+      if (member.pubkey === pubkey) {
+        member.display_name = displayName;
+      }
+    }
+    syncMockChannel(channel);
+  }
 }
 
 function resolveHandler(handler: unknown): WsHandler {
@@ -718,6 +777,56 @@ async function handleGetChannels(config: E2eConfig | undefined) {
   }
 
   return relayJsonRequest<RawChannel[]>(config, "/api/channels");
+}
+
+async function handleGetProfile(config: E2eConfig | undefined) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    return cloneProfile(ensureMockProfile(config));
+  }
+
+  return relayJsonRequest<RawProfile>(config, "/api/users/me/profile");
+}
+
+async function handleUpdateProfile(
+  args: {
+    displayName?: string;
+    avatarUrl?: string;
+    about?: string;
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const profile = ensureMockProfile(config);
+    const nextDisplayName = args.displayName?.trim();
+    const nextAvatarUrl = args.avatarUrl?.trim();
+    const nextAbout = args.about?.trim();
+
+    if (nextDisplayName && nextDisplayName !== profile.display_name) {
+      profile.display_name = nextDisplayName;
+      applyMockDisplayName(profile.pubkey, nextDisplayName);
+    }
+    if (nextAvatarUrl && nextAvatarUrl !== profile.avatar_url) {
+      profile.avatar_url = nextAvatarUrl;
+    }
+    if (nextAbout && nextAbout !== profile.about) {
+      profile.about = nextAbout;
+    }
+
+    return cloneProfile(profile);
+  }
+
+  await relayEmptyRequest(config, "/api/users/me/profile", {
+    method: "PUT",
+    body: JSON.stringify({
+      display_name: args.displayName,
+      avatar_url: args.avatarUrl,
+      about: args.about,
+    }),
+  });
+
+  return relayJsonRequest<RawProfile>(config, "/api/users/me/profile");
 }
 
 async function handleCreateChannel(
@@ -1524,6 +1633,13 @@ export function maybeInstallE2eTauriMocks() {
         }
 
         return DEFAULT_MOCK_IDENTITY;
+      case "get_profile":
+        return handleGetProfile(activeConfig);
+      case "update_profile":
+        return handleUpdateProfile(
+          payload as Parameters<typeof handleUpdateProfile>[0],
+          activeConfig,
+        );
       case "get_relay_ws_url":
         return getRelayWsUrl(activeConfig);
       case "get_channels":

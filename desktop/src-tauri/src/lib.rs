@@ -17,6 +17,15 @@ pub struct IdentityInfo {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct ProfileInfo {
+    pub pubkey: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub about: Option<String>,
+    pub nip05_handle: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct ChannelInfo {
     pub id: String,
     pub name: String,
@@ -106,6 +115,16 @@ struct AddMembersBody<'a> {
     pubkeys: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
     role: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct UpdateProfileBody<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_url: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    about: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -276,6 +295,46 @@ fn get_identity(state: tauri::State<'_, AppState>) -> Result<IdentityInfo, Strin
 #[tauri::command]
 fn get_relay_ws_url() -> String {
     relay_ws_url()
+}
+
+#[tauri::command]
+async fn get_profile(state: tauri::State<'_, AppState>) -> Result<ProfileInfo, String> {
+    let request = build_authed_request(
+        &state.http_client,
+        Method::GET,
+        "/api/users/me/profile",
+        &state,
+    )?;
+    send_json_request(request).await
+}
+
+#[tauri::command]
+async fn update_profile(
+    display_name: Option<String>,
+    avatar_url: Option<String>,
+    about: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<ProfileInfo, String> {
+    let request = build_authed_request(
+        &state.http_client,
+        Method::PUT,
+        "/api/users/me/profile",
+        &state,
+    )?
+    .json(&UpdateProfileBody {
+        display_name: display_name.as_deref(),
+        avatar_url: avatar_url.as_deref(),
+        about: about.as_deref(),
+    });
+    send_empty_request(request).await?;
+
+    let request = build_authed_request(
+        &state.http_client,
+        Method::GET,
+        "/api/users/me/profile",
+        &state,
+    )?;
+    send_json_request(request).await
 }
 
 #[tauri::command]
@@ -558,6 +617,8 @@ pub fn run() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             get_identity,
+            get_profile,
+            update_profile,
             get_relay_ws_url,
             sign_event,
             create_auth_event,

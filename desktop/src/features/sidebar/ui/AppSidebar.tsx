@@ -1,4 +1,12 @@
-import { CircleDot, FileText, Hash, Home, Plus, Search } from "lucide-react";
+import {
+  CircleDot,
+  FileText,
+  Hash,
+  Home,
+  Plus,
+  Search,
+  UserRound,
+} from "lucide-react";
 import * as React from "react";
 
 import type { Channel } from "@/shared/api/types";
@@ -33,6 +41,7 @@ type AppSidebarProps = {
     name: string;
     description?: string;
   }) => Promise<void>;
+  onOpenProfile: () => void;
   onOpenSearch: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
@@ -227,6 +236,7 @@ export function AppSidebar({
   selectedChannelId,
   selectedView,
   onCreateChannel,
+  onOpenProfile,
   onOpenSearch,
   onSelectHome,
   onSelectChannel,
@@ -426,8 +436,26 @@ export function AppSidebar({
         ) : null}
       </SidebarContent>
 
-      <SidebarFooter className="items-end">
-        <ThemeToggle className="text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" />
+      <SidebarFooter>
+        <div className="w-full border-t border-sidebar-border/70 pt-2">
+          <div className="flex items-center justify-between gap-2 px-1">
+            <SidebarMenu className="w-auto">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  className="size-8 rounded-lg p-0 text-sidebar-foreground/55 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
+                  data-testid="open-profile"
+                  onClick={onOpenProfile}
+                  tooltip="Profile"
+                  type="button"
+                >
+                  <UserRound className="h-4 w-4" />
+                  <span className="sr-only">Open profile</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+            <ThemeToggle className="shrink-0 text-sidebar-foreground/55 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground" />
+          </div>
+        </div>
       </SidebarFooter>
     </Sidebar>
   );
