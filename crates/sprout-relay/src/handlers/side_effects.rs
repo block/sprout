@@ -76,19 +76,53 @@ pub async fn validate_admin_event(
 
     match kind {
         9000 => {
-            // PUT_USER: open channels allow any member; private requires owner/admin
+            // PUT_USER: open channels allow any authenticated user; private requires owner/admin.
+            // Policy check applies to both open and private channels.
             if channel.visibility == "private" {
-                // Check actor is owner/admin
                 let members = state.db.get_members(channel_id).await?;
                 let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
                 match actor_member {
-                    Some(m) if m.role == "owner" || m.role == "admin" => Ok(()),
-                    _ => Err(anyhow::anyhow!("actor not authorized")),
+                    Some(m) if m.role == "owner" || m.role == "admin" => {}
+                    _ => return Err(anyhow::anyhow!("actor not authorized")),
                 }
-            } else {
-                // Open channel: any authenticated user can add
-                Ok(())
             }
+
+            // Extract target pubkey from p tag
+            let target_pubkey =
+                extract_p_tag(event).ok_or_else(|| anyhow::anyhow!("missing p tag"))?;
+
+            // Self-add: always allowed regardless of policy.
+            if target_pubkey == actor_bytes {
+                return Ok(());
+            }
+
+            // Third-party add: check channel_add_policy on the target.
+            if let Some((policy, owner)) = state.db.get_agent_channel_policy(&target_pubkey).await?
+            {
+                match policy.as_str() {
+                    "owner_only" => {
+                        let owner_bytes = owner.ok_or_else(|| {
+                            anyhow::anyhow!("policy:owner_only — agent has no owner set")
+                        })?;
+                        if actor_bytes != owner_bytes {
+                            return Err(anyhow::anyhow!(
+                                "policy:owner_only — only the agent owner can add this agent"
+                            ));
+                        }
+                    }
+                    "nobody" => {
+                        return Err(anyhow::anyhow!(
+                            "policy:nobody — this agent has disabled external channel additions"
+                        ));
+                    }
+                    // "anyone" or any unknown value → allow.
+                    // NOTE: DB ENUM constraint prevents unknown values from being stored.
+                    // If a new policy value is added to the ENUM, update this match.
+                    _ => {}
+                }
+            }
+
+            Ok(())
         }
         9001 => {
             // REMOVE_USER: self-remove allowed unless actor is the last owner; removing others requires owner/admin

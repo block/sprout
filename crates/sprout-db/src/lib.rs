@@ -588,6 +588,24 @@ impl Db {
         user::get_user_by_nip05(&self.pool, local_part, domain).await
     }
 
+    /// Set the owner pubkey for an agent user.
+    pub async fn set_agent_owner(&self, agent_pubkey: &[u8], owner_pubkey: &[u8]) -> Result<()> {
+        user::set_agent_owner(&self.pool, agent_pubkey, owner_pubkey).await
+    }
+
+    /// Get the channel_add_policy and agent_owner_pubkey for a user.
+    pub async fn get_agent_channel_policy(
+        &self,
+        pubkey: &[u8],
+    ) -> Result<Option<(String, Option<Vec<u8>>)>> {
+        user::get_agent_channel_policy(&self.pool, pubkey).await
+    }
+
+    /// Set the channel_add_policy for a user.
+    pub async fn set_channel_add_policy(&self, pubkey: &[u8], policy: &str) -> Result<()> {
+        user::set_channel_add_policy(&self.pool, pubkey, policy).await
+    }
+
     // ── API Tokens ───────────────────────────────────────────────────────────
 
     /// Looks up a non-revoked API token by its SHA-256 hash.

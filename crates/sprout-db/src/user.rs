@@ -2,6 +2,7 @@
 
 use crate::error::Result;
 use sqlx::MySqlPool;
+use sqlx::Row;
 
 /// A user's profile fields.
 #[derive(Debug, Clone)]
@@ -164,4 +165,250 @@ pub async fn get_user_by_nip05(
             nip05_handle,
         },
     ))
+}
+
+/// Set the owner pubkey for an agent user.
+/// The owner pubkey must already exist in the users table (FK constraint).
+/// Returns an error if the agent pubkey is not found (rows_affected == 0).
+pub async fn set_agent_owner(
+    pool: &MySqlPool,
+    agent_pubkey: &[u8],
+    owner_pubkey: &[u8],
+) -> Result<()> {
+    let result = sqlx::query(r#"UPDATE users SET agent_owner_pubkey = ? WHERE pubkey = ?"#)
+        .bind(owner_pubkey)
+        .bind(agent_pubkey)
+        .execute(pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(crate::error::DbError::NotFound(
+            "agent pubkey not found in users table".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Get the channel_add_policy and agent_owner_pubkey for a user.
+/// Returns None if the pubkey is not in the users table.
+/// Returns Some((policy_str, owner_bytes_or_none)) if found.
+pub async fn get_agent_channel_policy(
+    pool: &MySqlPool,
+    pubkey: &[u8],
+) -> Result<Option<(String, Option<Vec<u8>>)>> {
+    let row =
+        sqlx::query(r#"SELECT channel_add_policy, agent_owner_pubkey FROM users WHERE pubkey = ?"#)
+            .bind(pubkey)
+            .fetch_optional(pool)
+            .await?;
+
+    row.map(|r| -> Result<(String, Option<Vec<u8>>)> {
+        let policy: String = r.try_get("channel_add_policy")?;
+        let owner: Option<Vec<u8>> = r.try_get("agent_owner_pubkey").unwrap_or(None);
+        Ok((policy, owner))
+    })
+    .transpose()
+}
+
+/// Set the channel_add_policy for a user.
+/// Returns an error if the pubkey is not found (rows_affected == 0).
+/// Returns an error if `policy` is not one of the valid ENUM values.
+pub async fn set_channel_add_policy(pool: &MySqlPool, pubkey: &[u8], policy: &str) -> Result<()> {
+    if !matches!(policy, "anyone" | "owner_only" | "nobody") {
+        return Err(crate::error::DbError::InvalidData(format!(
+            "invalid channel_add_policy: {policy}"
+        )));
+    }
+    let result = sqlx::query(r#"UPDATE users SET channel_add_policy = ? WHERE pubkey = ?"#)
+        .bind(policy)
+        .bind(pubkey)
+        .execute(pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(crate::error::DbError::NotFound(
+            "pubkey not found in users table".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Db;
+    use nostr::Keys;
+
+    const TEST_DB_URL: &str = "mysql://sprout:sprout_dev@localhost:3306/sprout";
+
+    async fn setup_db() -> Db {
+        let pool = MySqlPool::connect(TEST_DB_URL)
+            .await
+            .expect("connect to test DB");
+        sqlx::migrate!("../../migrations")
+            .run(&pool)
+            .await
+            .expect("migrate");
+        Db::from_pool(pool)
+    }
+
+    fn random_pubkey() -> Vec<u8> {
+        Keys::generate().public_key().serialize().to_vec()
+    }
+
+    /// Setting an agent owner then reading back the policy should return
+    /// the default "anyone" policy and the owner pubkey.
+    #[tokio::test]
+    #[ignore = "requires MySQL"]
+    async fn test_set_agent_owner_and_get_policy() {
+        let db = setup_db().await;
+        let agent_pk = random_pubkey();
+        let owner_pk = random_pubkey();
+
+        ensure_user(&db.pool, &agent_pk)
+            .await
+            .expect("ensure agent");
+        ensure_user(&db.pool, &owner_pk)
+            .await
+            .expect("ensure owner");
+
+        set_agent_owner(&db.pool, &agent_pk, &owner_pk)
+            .await
+            .expect("set_agent_owner");
+
+        let result = get_agent_channel_policy(&db.pool, &agent_pk)
+            .await
+            .expect("get_agent_channel_policy");
+
+        let (policy, owner) = result.expect("should return Some for known pubkey");
+        assert_eq!(policy, "anyone", "default policy should be 'anyone'");
+        assert_eq!(
+            owner,
+            Some(owner_pk),
+            "owner pubkey should match what was set"
+        );
+    }
+
+    /// set_channel_add_policy should persist each of the three valid policies.
+    #[tokio::test]
+    #[ignore = "requires MySQL"]
+    async fn test_set_channel_add_policy() {
+        let db = setup_db().await;
+        let pk = random_pubkey();
+        ensure_user(&db.pool, &pk).await.expect("ensure user");
+
+        // owner_only
+        set_channel_add_policy(&db.pool, &pk, "owner_only")
+            .await
+            .expect("set owner_only");
+        let (policy, owner) = get_agent_channel_policy(&db.pool, &pk)
+            .await
+            .expect("get policy")
+            .expect("should be Some");
+        assert_eq!(policy, "owner_only");
+        assert!(owner.is_none(), "no owner was set");
+
+        // nobody
+        set_channel_add_policy(&db.pool, &pk, "nobody")
+            .await
+            .expect("set nobody");
+        let (policy, owner) = get_agent_channel_policy(&db.pool, &pk)
+            .await
+            .expect("get policy")
+            .expect("should be Some");
+        assert_eq!(policy, "nobody");
+        assert!(owner.is_none());
+
+        // anyone (reset to default)
+        set_channel_add_policy(&db.pool, &pk, "anyone")
+            .await
+            .expect("set anyone");
+        let (policy, owner) = get_agent_channel_policy(&db.pool, &pk)
+            .await
+            .expect("get policy")
+            .expect("should be Some");
+        assert_eq!(policy, "anyone");
+        assert!(owner.is_none());
+    }
+
+    /// get_agent_channel_policy should return None for a pubkey that has
+    /// never been inserted into the users table.
+    #[tokio::test]
+    #[ignore = "requires MySQL"]
+    async fn test_get_policy_unknown_pubkey() {
+        let db = setup_db().await;
+        let pk = random_pubkey();
+
+        let result = get_agent_channel_policy(&db.pool, &pk)
+            .await
+            .expect("query should not error");
+
+        assert!(result.is_none(), "unknown pubkey should return None");
+    }
+
+    /// set_agent_owner should return Err when the agent pubkey does not exist
+    /// in the users table (0 rows affected → NotFound).
+    #[tokio::test]
+    #[ignore = "requires MySQL"]
+    async fn test_set_agent_owner_nonexistent_agent() {
+        let db = setup_db().await;
+        let agent_pk = random_pubkey();
+        let owner_pk = random_pubkey();
+
+        // Only ensure the owner exists — agent is intentionally absent.
+        ensure_user(&db.pool, &owner_pk)
+            .await
+            .expect("ensure owner");
+
+        let result = set_agent_owner(&db.pool, &agent_pk, &owner_pk).await;
+        assert!(
+            result.is_err(),
+            "should error when agent pubkey is not in users table"
+        );
+    }
+
+    /// set_channel_add_policy should return Err when the pubkey does not exist
+    /// in the users table (0 rows affected → NotFound).
+    #[tokio::test]
+    #[ignore = "requires MySQL"]
+    async fn test_set_channel_add_policy_nonexistent_user() {
+        let db = setup_db().await;
+        let pk = random_pubkey();
+
+        let result = set_channel_add_policy(&db.pool, &pk, "nobody").await;
+        assert!(
+            result.is_err(),
+            "should error when pubkey is not in users table"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires MySQL"]
+    async fn test_set_channel_add_policy_rejects_invalid() {
+        let db = setup_db().await;
+        let pubkey = nostr::Keys::generate().public_key().serialize().to_vec();
+        ensure_user(&db.pool, &pubkey).await.unwrap();
+        let result = set_channel_add_policy(&db.pool, &pubkey, "invalid_policy").await;
+        assert!(result.is_err(), "should reject invalid policy value");
+    }
+
+    /// A user with "owner_only" policy but no agent_owner_pubkey set should
+    /// return Some(("owner_only", None)).
+    #[tokio::test]
+    #[ignore = "requires MySQL"]
+    async fn test_owner_only_with_no_owner() {
+        let db = setup_db().await;
+        let pk = random_pubkey();
+        ensure_user(&db.pool, &pk).await.expect("ensure user");
+
+        set_channel_add_policy(&db.pool, &pk, "owner_only")
+            .await
+            .expect("set owner_only");
+
+        let result = get_agent_channel_policy(&db.pool, &pk)
+            .await
+            .expect("get policy")
+            .expect("should be Some");
+
+        assert_eq!(result.0, "owner_only");
+        assert!(result.1.is_none(), "owner should be None when never set");
+    }
 }

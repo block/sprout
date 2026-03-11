@@ -1595,3 +1595,447 @@ async fn test_nip05_duplicate_handle_conflict() {
         "duplicate nip05_handle should return 409 Conflict"
     );
 }
+
+// ── Agent Channel Protection tests ───────────────────────────────────────────
+
+/// PUT /api/users/me/channel-add-policy updates the policy and returns the new value.
+/// Cycles through owner_only → nobody → anyone to verify each round-trip.
+#[tokio::test]
+#[ignore]
+async fn test_set_channel_add_policy_returns_updated_policy() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+    let url = format!("{}/api/users/me/channel-add-policy", relay_http_url());
+
+    // Set to owner_only
+    let resp = authed_put(
+        &client,
+        &url,
+        &pubkey_hex,
+        serde_json::json!({ "channel_add_policy": "owner_only" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "expected 200 for owner_only");
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(
+        body["channel_add_policy"].as_str(),
+        Some("owner_only"),
+        "body should reflect owner_only"
+    );
+
+    // Set to nobody
+    let resp = authed_put(
+        &client,
+        &url,
+        &pubkey_hex,
+        serde_json::json!({ "channel_add_policy": "nobody" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "expected 200 for nobody");
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(
+        body["channel_add_policy"].as_str(),
+        Some("nobody"),
+        "body should reflect nobody"
+    );
+
+    // Set to anyone
+    let resp = authed_put(
+        &client,
+        &url,
+        &pubkey_hex,
+        serde_json::json!({ "channel_add_policy": "anyone" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "expected 200 for anyone");
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(
+        body["channel_add_policy"].as_str(),
+        Some("anyone"),
+        "body should reflect anyone"
+    );
+}
+
+/// PUT /api/users/me/channel-add-policy rejects unknown policy values with 400.
+#[tokio::test]
+#[ignore]
+async fn test_set_channel_add_policy_rejects_invalid() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/channel-add-policy", relay_http_url()),
+        &pubkey_hex,
+        serde_json::json!({ "channel_add_policy": "invalid_value" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 400, "invalid policy value should return 400");
+}
+
+/// Default policy (no policy set) allows anyone to add the agent to a channel.
+#[tokio::test]
+#[ignore]
+async fn test_add_member_default_policy_allows_anyone() {
+    let client = http_client();
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    let agent_keys = Keys::generate();
+    let agent_hex = agent_keys.public_key().to_hex();
+
+    // Owner creates a channel (agent has no policy set — default "anyone")
+    let channel_name = format!("e2e-policy-default-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels", relay_http_url()),
+        &owner_hex,
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201, "channel creation should succeed");
+    let channel: serde_json::Value = create_resp.json().await.expect("json");
+    let channel_id = channel["id"].as_str().expect("channel id");
+
+    // Owner adds agent — default policy should allow it
+    let resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels/{channel_id}/members", relay_http_url()),
+        &owner_hex,
+        serde_json::json!({ "pubkeys": [agent_hex], "role": "member" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "add member should return 200");
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let added = body["added"].as_array().expect("added array");
+    assert!(
+        added.iter().any(|v| v.as_str() == Some(&agent_hex)),
+        "agent should be in added list; got body: {body}"
+    );
+}
+
+/// owner_only policy blocks a non-owner stranger from adding the agent.
+#[tokio::test]
+#[ignore]
+async fn test_add_member_owner_only_blocks_non_owner() {
+    let client = http_client();
+    let agent_keys = Keys::generate();
+    let agent_hex = agent_keys.public_key().to_hex();
+    let stranger_keys = Keys::generate();
+    let stranger_hex = stranger_keys.public_key().to_hex();
+
+    // Agent sets policy to owner_only
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/channel-add-policy", relay_http_url()),
+        &agent_hex,
+        serde_json::json!({ "channel_add_policy": "owner_only" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "policy set should succeed");
+
+    // Stranger creates a channel
+    let channel_name = format!("e2e-owner-only-block-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels", relay_http_url()),
+        &stranger_hex,
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201, "channel creation should succeed");
+    let channel: serde_json::Value = create_resp.json().await.expect("json");
+    let channel_id = channel["id"].as_str().expect("channel id");
+
+    // Stranger tries to add agent — should be blocked by owner_only policy
+    let resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels/{channel_id}/members", relay_http_url()),
+        &stranger_hex,
+        serde_json::json!({ "pubkeys": [agent_hex], "role": "member" }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "add member returns 200 even on policy block"
+    );
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let errors = body["errors"].as_array().expect("errors array");
+    let agent_error = errors
+        .iter()
+        .find(|e| e["pubkey"].as_str() == Some(&agent_hex))
+        .unwrap_or_else(|| panic!("agent should be in errors; got body: {body}"));
+    let error_msg = agent_error["error"].as_str().unwrap_or("");
+    assert!(
+        error_msg.contains("policy:owner_only"),
+        "error should mention policy:owner_only; got: {error_msg}"
+    );
+}
+
+/// owner_only policy: when no owner is set, even the channel creator is blocked.
+///
+/// Full AC-2 coverage (owner IS set and can add) requires setting `agent_owner_pubkey`
+/// via `sprout-admin set-agent-owner`, which is not available in e2e REST tests.
+/// The owner bypass path is covered by DB-level unit tests in sprout-db.
+///
+/// What we CAN verify here: with `owner_only` set and no owner configured, the policy
+/// blocks everyone — including the channel creator — because NULL owner matches nobody.
+#[tokio::test]
+#[ignore]
+async fn test_add_member_owner_only_null_owner_blocks_all() {
+    let client = http_client();
+    let agent_keys = Keys::generate();
+    let agent_hex = agent_keys.public_key().to_hex();
+    let channel_creator_keys = Keys::generate();
+    let channel_creator_hex = channel_creator_keys.public_key().to_hex();
+
+    // Agent sets policy to owner_only (no agent_owner_pubkey is set — NULL by default).
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/channel-add-policy", relay_http_url()),
+        &agent_hex,
+        serde_json::json!({ "channel_add_policy": "owner_only" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "policy set should succeed");
+
+    // Channel creator creates a channel.
+    let channel_name = format!("e2e-owner-only-noowner-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels", relay_http_url()),
+        &channel_creator_hex,
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201, "channel creation should succeed");
+    let channel: serde_json::Value = create_resp.json().await.expect("json");
+    let channel_id = channel["id"].as_str().expect("channel id");
+
+    // Channel creator tries to add agent — owner_only with NULL owner blocks everyone.
+    let resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels/{channel_id}/members", relay_http_url()),
+        &channel_creator_hex,
+        serde_json::json!({ "pubkeys": [agent_hex], "role": "member" }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "add member returns 200 even on policy block"
+    );
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let errors = body["errors"].as_array().expect("errors array");
+    let agent_error = errors
+        .iter()
+        .find(|e| e["pubkey"].as_str() == Some(&agent_hex))
+        .unwrap_or_else(|| panic!("agent should be in errors; got body: {body}"));
+    let error_msg = agent_error["error"].as_str().unwrap_or("");
+    assert!(
+        error_msg.contains("policy:owner_only"),
+        "error should mention policy:owner_only when no owner is set; got: {error_msg}"
+    );
+}
+
+/// nobody policy blocks all external callers from adding the agent.
+#[tokio::test]
+#[ignore]
+async fn test_add_member_nobody_blocks_all() {
+    let client = http_client();
+    let agent_keys = Keys::generate();
+    let agent_hex = agent_keys.public_key().to_hex();
+    let stranger_keys = Keys::generate();
+    let stranger_hex = stranger_keys.public_key().to_hex();
+
+    // Agent sets policy to nobody
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/channel-add-policy", relay_http_url()),
+        &agent_hex,
+        serde_json::json!({ "channel_add_policy": "nobody" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "policy set should succeed");
+
+    // Stranger creates a channel
+    let channel_name = format!("e2e-nobody-block-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels", relay_http_url()),
+        &stranger_hex,
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201, "channel creation should succeed");
+    let channel: serde_json::Value = create_resp.json().await.expect("json");
+    let channel_id = channel["id"].as_str().expect("channel id");
+
+    // Stranger tries to add agent — nobody policy blocks all
+    let resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels/{channel_id}/members", relay_http_url()),
+        &stranger_hex,
+        serde_json::json!({ "pubkeys": [agent_hex], "role": "member" }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "add member returns 200 even on policy block"
+    );
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let errors = body["errors"].as_array().expect("errors array");
+    let agent_error = errors
+        .iter()
+        .find(|e| e["pubkey"].as_str() == Some(&agent_hex))
+        .unwrap_or_else(|| panic!("agent should be in errors; got body: {body}"));
+    let error_msg = agent_error["error"].as_str().unwrap_or("");
+    assert!(
+        error_msg.contains("policy:nobody"),
+        "error should mention policy:nobody; got: {error_msg}"
+    );
+}
+
+/// Self-add bypasses the nobody policy — an agent can always add itself.
+#[tokio::test]
+#[ignore]
+async fn test_self_add_bypasses_policy() {
+    let client = http_client();
+    let agent_keys = Keys::generate();
+    let agent_hex = agent_keys.public_key().to_hex();
+
+    // Agent sets policy to nobody
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/channel-add-policy", relay_http_url()),
+        &agent_hex,
+        serde_json::json!({ "channel_add_policy": "nobody" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "policy set should succeed");
+
+    // Agent creates a channel (making agent the owner)
+    let channel_name = format!("e2e-self-add-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels", relay_http_url()),
+        &agent_hex,
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201, "channel creation should succeed");
+    let channel: serde_json::Value = create_resp.json().await.expect("json");
+    let channel_id = channel["id"].as_str().expect("channel id");
+
+    // Agent adds itself — self-add should bypass nobody policy
+    let resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels/{channel_id}/members", relay_http_url()),
+        &agent_hex,
+        serde_json::json!({ "pubkeys": [agent_hex], "role": "member" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "self-add should return 200");
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let added = body["added"].as_array().expect("added array");
+    assert!(
+        added.iter().any(|v| v.as_str() == Some(&agent_hex)),
+        "agent should be in added list (self-add bypasses nobody); got body: {body}"
+    );
+}
+
+/// Batch add with mixed policies: allowed agent goes to added, blocked agent goes to errors.
+#[tokio::test]
+#[ignore]
+async fn test_batch_add_mixed_policies() {
+    let client = http_client();
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    let allowed_agent_keys = Keys::generate();
+    let allowed_agent_hex = allowed_agent_keys.public_key().to_hex();
+    let blocked_agent_keys = Keys::generate();
+    let blocked_agent_hex = blocked_agent_keys.public_key().to_hex();
+
+    // Blocked agent sets policy to nobody
+    let resp = authed_put(
+        &client,
+        &format!("{}/api/users/me/channel-add-policy", relay_http_url()),
+        &blocked_agent_hex,
+        serde_json::json!({ "channel_add_policy": "nobody" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "policy set should succeed");
+
+    // Owner creates a channel (allowed_agent has no policy — default "anyone")
+    let channel_name = format!("e2e-batch-mixed-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels", relay_http_url()),
+        &owner_hex,
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201, "channel creation should succeed");
+    let channel: serde_json::Value = create_resp.json().await.expect("json");
+    let channel_id = channel["id"].as_str().expect("channel id");
+
+    // Owner adds both agents in one batch request
+    let resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels/{channel_id}/members", relay_http_url()),
+        &owner_hex,
+        serde_json::json!({
+            "pubkeys": [allowed_agent_hex, blocked_agent_hex],
+            "role": "member"
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "batch add should return 200");
+    let body: serde_json::Value = resp.json().await.expect("json");
+
+    // Allowed agent should be in added
+    let added = body["added"].as_array().expect("added array");
+    assert!(
+        added.iter().any(|v| v.as_str() == Some(&allowed_agent_hex)),
+        "allowed_agent should be in added; got body: {body}"
+    );
+
+    // Blocked agent should be in errors
+    let errors = body["errors"].as_array().expect("errors array");
+    let blocked_error = errors
+        .iter()
+        .find(|e| e["pubkey"].as_str() == Some(&blocked_agent_hex))
+        .unwrap_or_else(|| panic!("blocked_agent should be in errors; got body: {body}"));
+    let error_msg = blocked_error["error"].as_str().unwrap_or("");
+    assert!(
+        error_msg.contains("policy:nobody"),
+        "error should mention policy:nobody; got: {error_msg}"
+    );
+}

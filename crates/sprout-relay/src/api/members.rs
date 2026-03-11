@@ -113,6 +113,90 @@ pub async fn add_members(
             }
         };
 
+        // --- Agent Channel Protection: self-add bypass + policy check ---
+        // Self-add: always allowed, skip policy check.
+        if pubkey_bytes == actor_bytes {
+            match state
+                .db
+                .add_member(channel_id, &pubkey_bytes, role.clone(), Some(&actor_bytes))
+                .await
+            {
+                Ok(_) => {
+                    let target_hex = nostr_hex::encode(&pubkey_bytes);
+                    if let Err(e) = emit_system_message(
+                        &state,
+                        channel_id,
+                        serde_json::json!({
+                            "type": "member_joined",
+                            "actor": &actor_hex,
+                            "target": target_hex,
+                        }),
+                    )
+                    .await
+                    {
+                        tracing::warn!("Failed to emit system message: {e}");
+                    }
+                    added.push(hex_pk.clone());
+                }
+                Err(e) => {
+                    errors.push(serde_json::json!({
+                        "pubkey": hex_pk,
+                        "error": e.to_string()
+                    }));
+                }
+            }
+            continue;
+        }
+
+        // Third-party add: check channel_add_policy.
+        // FAIL CLOSED: DB errors block the add (never bypass protection).
+        match state.db.get_agent_channel_policy(&pubkey_bytes).await {
+            Err(e) => {
+                errors.push(serde_json::json!({
+                    "pubkey": hex_pk,
+                    "error": format!("policy lookup failed: {e}"),
+                }));
+                continue;
+            }
+            Ok(Some((ref policy, ref owner))) => {
+                let blocked = match policy.as_str() {
+                    "owner_only" => match owner {
+                        Some(owner_bytes) => actor_bytes.as_slice() != owner_bytes.as_slice(),
+                        None => true,
+                    },
+                    "nobody" => true,
+                    // "anyone" or any unknown value → allow.
+                    // NOTE: DB ENUM constraint prevents unknown values from being stored.
+                    // If a new policy value is added to the ENUM, update this match.
+                    _ => false,
+                };
+
+                if blocked {
+                    let reason = match policy.as_str() {
+                        "owner_only" if owner.is_none() => {
+                            "policy:owner_only — agent has no owner set"
+                        }
+                        "owner_only" => {
+                            "policy:owner_only — only the agent owner can add this agent"
+                        }
+                        "nobody" => {
+                            "policy:nobody — this agent has disabled external channel additions"
+                        }
+                        _ => "policy:blocked",
+                    };
+                    errors.push(serde_json::json!({
+                        "pubkey": hex_pk,
+                        "error": reason,
+                    }));
+                    continue;
+                }
+            }
+            Ok(None) => {
+                // Pubkey not in users table — no policy row, treat as "anyone" (default).
+            }
+        }
+        // --- End Agent Channel Protection ---
+
         match state
             .db
             .add_member(channel_id, &pubkey_bytes, role.clone(), Some(&actor_bytes))

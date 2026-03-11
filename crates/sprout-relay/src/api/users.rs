@@ -248,3 +248,46 @@ pub async fn get_users_batch(
         "missing": missing,
     })))
 }
+
+/// Request body for updating channel add policy.
+#[derive(Debug, Deserialize)]
+pub struct UpdateChannelAddPolicyBody {
+    /// Policy value: `"anyone"`, `"owner_only"`, or `"nobody"`.
+    pub channel_add_policy: String,
+}
+
+/// `PUT /api/users/me/channel-add-policy` — set the caller's channel add policy.
+pub async fn put_channel_add_policy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    ExtractJson(body): ExtractJson<UpdateChannelAddPolicyBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let (_pubkey_hex, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+
+    let policy = body.channel_add_policy.as_str();
+    if !matches!(policy, "anyone" | "owner_only" | "nobody") {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "channel_add_policy must be 'anyone', 'owner_only', or 'nobody'",
+        ));
+    }
+
+    state
+        .db
+        .set_channel_add_policy(&pubkey_bytes, policy)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    // Return updated state
+    let (current_policy, owner_pk) = state
+        .db
+        .get_agent_channel_policy(&pubkey_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?
+        .unwrap_or_else(|| ("anyone".to_string(), None));
+
+    Ok(Json(serde_json::json!({
+        "channel_add_policy": current_policy,
+        "agent_owner_pubkey": owner_pk.map(|b| nostr_hex::encode(&b)),
+    })))
+}
