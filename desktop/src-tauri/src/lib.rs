@@ -609,7 +609,7 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(
-                    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
+                    StateFlags::all() & !StateFlags::VISIBLE,
                 )
                 .build(),
         )

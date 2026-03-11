@@ -3,5 +3,13 @@
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:default", "websocket:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-show",
+    "core:window:allow-close",
+    "opener:default",
+    "websocket:default",
+    "window-state:default"
+  ]
 }
