@@ -1,13 +1,40 @@
 export type ChannelType = "stream" | "forum" | "dm";
 export type ChannelVisibility = "open" | "private";
+export type ChannelRole = "owner" | "admin" | "member" | "guest" | "bot";
 
 export type Channel = {
   id: string;
   name: string;
   channelType: ChannelType;
+  visibility: ChannelVisibility;
   description: string;
+  topic: string | null;
+  purpose: string | null;
+  memberCount: number;
+  lastMessageAt: string | null;
+  archivedAt: string | null;
   participants: string[];
   participantPubkeys: string[];
+};
+
+export type ChannelDetail = Channel & {
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  topicSetBy: string | null;
+  topicSetAt: string | null;
+  purposeSetBy: string | null;
+  purposeSetAt: string | null;
+  topicRequired: boolean;
+  maxMembers: number | null;
+  nip29GroupId: string | null;
+};
+
+export type ChannelMember = {
+  pubkey: string;
+  role: ChannelRole;
+  joinedAt: string;
+  displayName: string | null;
 };
 
 export type CreateChannelInput = {
@@ -15,6 +42,36 @@ export type CreateChannelInput = {
   channelType: Exclude<ChannelType, "dm">;
   visibility: ChannelVisibility;
   description?: string;
+};
+
+export type UpdateChannelInput = {
+  channelId: string;
+  name?: string;
+  description?: string;
+};
+
+export type SetChannelTopicInput = {
+  channelId: string;
+  topic: string;
+};
+
+export type SetChannelPurposeInput = {
+  channelId: string;
+  purpose: string;
+};
+
+export type AddChannelMembersInput = {
+  channelId: string;
+  pubkeys: string[];
+  role?: Exclude<ChannelRole, "owner">;
+};
+
+export type AddChannelMembersResult = {
+  added: string[];
+  errors: Array<{
+    pubkey: string;
+    error: string;
+  }>;
 };
 
 export type Identity = {
