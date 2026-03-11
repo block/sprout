@@ -53,6 +53,30 @@ pub async fn nostr_nip05(
     response
 }
 
+/// Validate and canonicalize a NIP-05 handle: must be `local@domain` where domain
+/// matches the relay. Returns the lowercased canonical form, or an error message.
+pub(crate) fn canonicalize_nip05(raw: &str, relay_url: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("empty".into());
+    }
+    let (local, domain) = trimmed
+        .split_once('@')
+        .ok_or_else(|| "nip05_handle must be in user@domain format".to_string())?;
+    if local.is_empty() || domain.is_empty() {
+        return Err("nip05_handle must be in user@domain format".to_string());
+    }
+    let relay_domain = extract_domain(relay_url);
+    let canonical_domain = domain.to_lowercase();
+    if canonical_domain != relay_domain {
+        return Err(format!(
+            "nip05_handle domain must match this relay ({})",
+            relay_domain
+        ));
+    }
+    Ok(format!("{}@{}", local.to_lowercase(), canonical_domain))
+}
+
 /// Extract the domain (host) from a URL string.
 /// e.g. "ws://localhost:3000" → "localhost", "wss://sprout.block.xyz" → "sprout.block.xyz"
 pub(crate) fn extract_domain(url: &str) -> String {

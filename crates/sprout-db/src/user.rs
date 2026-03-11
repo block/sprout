@@ -83,10 +83,18 @@ pub async fn update_user_profile(
     nip05_handle: Option<&str>,
 ) -> Result<()> {
     let mut set_parts: Vec<&str> = Vec::new();
-    if display_name.is_some() { set_parts.push("display_name = ?"); }
-    if avatar_url.is_some() { set_parts.push("avatar_url = ?"); }
-    if about.is_some() { set_parts.push("about = ?"); }
-    if nip05_handle.is_some() { set_parts.push("nip05_handle = ?"); }
+    if display_name.is_some() {
+        set_parts.push("display_name = ?");
+    }
+    if avatar_url.is_some() {
+        set_parts.push("avatar_url = ?");
+    }
+    if about.is_some() {
+        set_parts.push("about = ?");
+    }
+    if nip05_handle.is_some() {
+        set_parts.push("nip05_handle = ?");
+    }
 
     if set_parts.is_empty() {
         return Ok(());
@@ -101,10 +109,18 @@ pub async fn update_user_profile(
 
     let sql = format!("UPDATE users SET {} WHERE pubkey = ?", set_parts.join(", "));
     let mut query = sqlx::query(&sql);
-    if display_name.is_some() { query = query.bind(empty_to_none(display_name)); }
-    if avatar_url.is_some() { query = query.bind(empty_to_none(avatar_url)); }
-    if about.is_some() { query = query.bind(empty_to_none(about)); }
-    if nip05_handle.is_some() { query = query.bind(empty_to_none(nip05_handle)); }
+    if display_name.is_some() {
+        query = query.bind(empty_to_none(display_name));
+    }
+    if avatar_url.is_some() {
+        query = query.bind(empty_to_none(avatar_url));
+    }
+    if about.is_some() {
+        query = query.bind(empty_to_none(about));
+    }
+    if nip05_handle.is_some() {
+        query = query.bind(empty_to_none(nip05_handle));
+    }
     query = query.bind(pubkey);
     query.execute(pool).await?;
     Ok(())

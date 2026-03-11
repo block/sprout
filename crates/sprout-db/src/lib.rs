@@ -568,7 +568,15 @@ impl Db {
         about: Option<&str>,
         nip05_handle: Option<&str>,
     ) -> Result<()> {
-        user::update_user_profile(&self.pool, pubkey, display_name, avatar_url, about, nip05_handle).await
+        user::update_user_profile(
+            &self.pool,
+            pubkey,
+            display_name,
+            avatar_url,
+            about,
+            nip05_handle,
+        )
+        .await
     }
 
     /// Look up a user by their full NIP-05 handle (exact match).

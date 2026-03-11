@@ -163,11 +163,11 @@ sleep 3 && curl -s http://localhost:3000/health
 Then run the integration suites:
 
 ```bash
-# REST API integration tests (32 tests)
+# REST API integration tests (35 tests)
 RELAY_URL=ws://localhost:3000 \
   cargo test -p sprout-test-client --test e2e_rest_api -- --ignored
 
-# WebSocket relay integration tests (13 tests)
+# WebSocket relay integration tests (14 tests)
 RELAY_URL=ws://localhost:3000 \
   cargo test -p sprout-test-client --test e2e_relay -- --ignored
 
@@ -179,12 +179,12 @@ RELAY_URL=ws://localhost:3000 \
 ### Expected Results
 
 ```
-test result: ok. 32 passed; 0 failed; 0 ignored   ← REST API
-test result: ok. 13 passed; 0 failed; 0 ignored   ← relay
+test result: ok. 35 passed; 0 failed; 0 ignored   ← REST API
+test result: ok. 14 passed; 0 failed; 0 ignored   ← relay
 test result: ok. 10 passed; 0 failed; 0 ignored   ← MCP
 ```
 
-All 55 integration tests pass (across the three suites above). An additional 7 workflow integration tests exist in `e2e_workflows.rs` — run them separately if workflow changes are involved. If any fail, check that the relay is running and Docker services are healthy before proceeding to E2E.
+All 59 integration tests pass (across the three suites above). An additional 7 workflow integration tests exist in `e2e_workflows.rs` — run them separately if workflow changes are involved. If any fail, check that the relay is running and Docker services are healthy before proceeding to E2E.
 
 ---
 

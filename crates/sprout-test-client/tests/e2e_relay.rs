@@ -649,3 +649,151 @@ async fn test_eose_sent_for_empty_subscription() {
 
     client.disconnect().await.expect("disconnect");
 }
+
+/// Kind:0 NIP-05 sync regression test.
+///
+/// Verifies:
+/// 1. A valid `nip05` in kind:0 content is synced to the profile and resolvable via NIP-05 endpoint.
+/// 2. An off-domain `nip05` in kind:0 content is NOT synced (handle is cleared).
+#[tokio::test]
+#[ignore]
+async fn test_kind0_nip05_sync() {
+    let url = relay_url();
+    let http = relay_http_url();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Extract the relay domain from the relay URL for building a valid NIP-05 handle.
+    // e.g. "ws://localhost:3000" → "localhost"
+    let relay_domain = url
+        .trim_start_matches("wss://")
+        .trim_start_matches("ws://")
+        .split(':')
+        .next()
+        .unwrap_or("localhost")
+        .split('/')
+        .next()
+        .unwrap_or("localhost")
+        .to_lowercase();
+
+    let unique_name = format!("kind0test{}", &pubkey_hex[..8]);
+    let valid_handle = format!("{}@{}", unique_name, relay_domain);
+
+    // Step 1: Connect and publish kind:0 with a valid nip05 handle.
+    let mut client = SproutTestClient::connect(&url, &keys)
+        .await
+        .expect("connect");
+
+    let kind0_content = serde_json::json!({
+        "display_name": "Kind0 Test User",
+        "nip05": valid_handle,
+    })
+    .to_string();
+
+    let event = nostr::EventBuilder::new(Kind::Custom(0), kind0_content, [])
+        .sign_with_keys(&keys)
+        .expect("sign kind:0");
+
+    let ok = client.send_event(event).await.expect("send kind:0");
+    assert!(
+        ok.accepted,
+        "kind:0 event should be accepted: {:?}",
+        ok.message
+    );
+
+    // Give the relay a moment to process the side effect.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Step 2: Verify the profile has the NIP-05 handle via REST GET.
+    let http_client = reqwest::Client::new();
+    let profile_resp = http_client
+        .get(format!("{}/api/users/{}/profile", http, pubkey_hex))
+        .header("X-Pubkey", &pubkey_hex)
+        .send()
+        .await
+        .expect("GET profile");
+    assert_eq!(
+        profile_resp.status(),
+        200,
+        "profile should exist after kind:0"
+    );
+    let profile: serde_json::Value = profile_resp.json().await.expect("profile json");
+    assert_eq!(
+        profile["nip05_handle"].as_str(),
+        Some(valid_handle.as_str()),
+        "nip05_handle should be synced from kind:0"
+    );
+
+    // Step 3: Verify NIP-05 resolves via /.well-known/nostr.json.
+    let nip05_resp = http_client
+        .get(format!(
+            "{}/.well-known/nostr.json?name={}",
+            http, unique_name
+        ))
+        .send()
+        .await
+        .expect("GET nostr.json");
+    assert_eq!(nip05_resp.status(), 200);
+    let nip05_body: serde_json::Value = nip05_resp.json().await.expect("nip05 json");
+    let resolved_pubkey = nip05_body["names"][&unique_name].as_str();
+    assert_eq!(
+        resolved_pubkey,
+        Some(pubkey_hex.as_str()),
+        "NIP-05 should resolve the pubkey after kind:0 sync"
+    );
+
+    // Step 4: Publish another kind:0 with an off-domain nip05 (should be cleared).
+    let off_domain_content = serde_json::json!({
+        "display_name": "Kind0 Test User",
+        "nip05": format!("{}@evil.com", unique_name),
+    })
+    .to_string();
+
+    let event2 = nostr::EventBuilder::new(Kind::Custom(0), off_domain_content, [])
+        .sign_with_keys(&keys)
+        .expect("sign kind:0 off-domain");
+
+    let ok2 = client
+        .send_event(event2)
+        .await
+        .expect("send kind:0 off-domain");
+    assert!(
+        ok2.accepted,
+        "off-domain kind:0 should still be accepted (stored but handle cleared)"
+    );
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Step 5: Verify the handle was CLEARED (not set to the off-domain value).
+    let profile_resp2 = http_client
+        .get(format!("{}/api/users/{}/profile", http, pubkey_hex))
+        .header("X-Pubkey", &pubkey_hex)
+        .send()
+        .await
+        .expect("GET profile after off-domain kind:0");
+    assert_eq!(profile_resp2.status(), 200);
+    let profile2: serde_json::Value = profile_resp2.json().await.expect("profile json");
+    let handle_after = profile2["nip05_handle"].as_str().unwrap_or("");
+    assert!(
+        handle_after.is_empty() || handle_after == "null",
+        "nip05_handle should be cleared after off-domain kind:0, got: {:?}",
+        profile2["nip05_handle"]
+    );
+
+    // Step 6: Confirm NIP-05 no longer resolves.
+    let nip05_resp2 = http_client
+        .get(format!(
+            "{}/.well-known/nostr.json?name={}",
+            http, unique_name
+        ))
+        .send()
+        .await
+        .expect("GET nostr.json after clear");
+    let nip05_body2: serde_json::Value = nip05_resp2.json().await.expect("nip05 json");
+    assert!(
+        nip05_body2["names"][&unique_name].is_null(),
+        "NIP-05 should not resolve after handle was cleared"
+    );
+
+    client.disconnect().await.expect("disconnect");
+}

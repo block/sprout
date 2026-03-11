@@ -19,7 +19,6 @@ use serde::Deserialize;
 use crate::state::AppState;
 
 use super::{api_error, extract_auth_pubkey, internal_error};
-use super::nip05::extract_domain;
 
 /// Request body for updating a user's profile.
 /// All fields are optional — at least one must be present.
@@ -62,39 +61,25 @@ pub async fn update_profile(
         .map(str::trim)
         .filter(|s| !s.is_empty());
     // nip05_handle: empty string means "clear", None means "leave unchanged"
-    let nip05_handle = body.nip05_handle.as_deref().map(str::trim);
+    let nip05_handle_raw = body.nip05_handle.as_deref().map(str::trim);
     // Don't filter empty — empty string means "clear to NULL" via empty_to_none in DB layer
+
+    // Validate and canonicalize NIP-05 handle (if non-empty)
+    let canonical_nip05: Option<String> = match nip05_handle_raw {
+        Some("") => Some(String::new()), // empty = clear to NULL
+        Some(h) => Some(
+            super::nip05::canonicalize_nip05(h, &state.config.relay_url)
+                .map_err(|msg| api_error(StatusCode::BAD_REQUEST, &msg))?,
+        ),
+        None => None,
+    };
+    let nip05_handle = canonical_nip05.as_deref();
 
     if display_name.is_none() && avatar_url.is_none() && about.is_none() && nip05_handle.is_none() {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
             "at least one of display_name, avatar_url, about, or nip05_handle is required",
         ));
-    }
-
-    // Validate NIP-05 format: must be "local@domain"
-    if let Some(handle) = nip05_handle {
-        if !handle.is_empty() {  // empty = clear, skip validation
-            let parts: Vec<&str> = handle.splitn(2, '@').collect();
-            if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
-                return Err(api_error(
-                    StatusCode::BAD_REQUEST,
-                    "nip05_handle must be in user@domain format",
-                ));
-            }
-            // Domain must match this relay's domain
-            let relay_domain = extract_domain(&state.config.relay_url);
-            let handle_domain = parts[1].to_lowercase();
-            if handle_domain != relay_domain {
-                return Err(api_error(
-                    StatusCode::BAD_REQUEST,
-                    &format!(
-                        "nip05_handle domain must match this relay ({})",
-                        relay_domain
-                    ),
-                ));
-            }
-        }
     }
 
     state
@@ -104,7 +89,10 @@ pub async fn update_profile(
         .map_err(|e| {
             let msg = format!("{e}");
             if msg.contains("Duplicate entry") || msg.contains("1062") {
-                api_error(StatusCode::CONFLICT, "nip05_handle is already claimed by another user")
+                api_error(
+                    StatusCode::CONFLICT,
+                    "nip05_handle is already claimed by another user",
+                )
             } else {
                 internal_error(&format!("db error: {e}"))
             }
@@ -151,7 +139,10 @@ pub async fn get_user_profile(
     let pubkey_bytes = nostr_hex::decode(&pubkey_hex)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid pubkey hex"))?;
     if pubkey_bytes.len() != 32 {
-        return Err(api_error(StatusCode::BAD_REQUEST, "pubkey must be 32 bytes"));
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "pubkey must be 32 bytes",
+        ));
     }
 
     let profile = state
@@ -192,20 +183,32 @@ pub async fn get_users_batch(
         ));
     }
 
-    let valid_inputs: Vec<&str> = body.pubkeys
-        .iter()
-        .filter(|p| p.len() == 64)
-        .map(|p| p.as_str())
-        .collect();
+    // Partition inputs: valid hex (64 chars, valid hex) vs invalid (wrong length or bad hex).
+    // Both wrong-length and 64-char-non-hex inputs go to the missing list.
+    let mut invalid_inputs: Vec<String> = Vec::new();
+    let mut valid_hex_set: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    let normalized: std::collections::HashSet<String> = valid_inputs
-        .iter()
-        .map(|p| p.to_lowercase())
-        .collect();
-    let mut normalized: Vec<String> = normalized.into_iter().collect();
+    for p in &body.pubkeys {
+        if p.len() != 64 {
+            invalid_inputs.push(p.clone());
+        } else {
+            let lower = p.to_lowercase();
+            if nostr_hex::decode(&lower)
+                .map(|b| b.len() == 32)
+                .unwrap_or(false)
+            {
+                valid_hex_set.insert(lower);
+            } else {
+                invalid_inputs.push(p.clone());
+            }
+        }
+    }
+
+    let mut normalized: Vec<String> = valid_hex_set.into_iter().collect();
     normalized.sort();
 
-    let pubkey_bytes: Vec<Vec<u8>> = normalized.iter()
+    let pubkey_bytes: Vec<Vec<u8>> = normalized
+        .iter()
         .filter_map(|h| nostr_hex::decode(h).ok())
         .filter(|b| b.len() == 32)
         .collect();
@@ -224,10 +227,13 @@ pub async fn get_users_batch(
     let mut profiles = serde_json::Map::new();
     for r in records {
         let hex = nostr_hex::encode(&r.pubkey);
-        profiles.insert(hex, serde_json::json!({
-            "display_name": r.display_name,
-            "nip05_handle": r.nip05_handle,
-        }));
+        profiles.insert(
+            hex,
+            serde_json::json!({
+                "display_name": r.display_name,
+                "nip05_handle": r.nip05_handle,
+            }),
+        );
     }
 
     let mut missing: Vec<String> = normalized
@@ -235,12 +241,7 @@ pub async fn get_users_batch(
         .filter(|p| !found_pubkeys.contains(p.as_str()))
         .cloned()
         .collect();
-    missing.extend(
-        body.pubkeys
-            .iter()
-            .filter(|p| p.len() != 64)
-            .cloned(),
-    );
+    missing.extend(invalid_inputs);
 
     Ok(Json(serde_json::json!({
         "profiles": profiles,

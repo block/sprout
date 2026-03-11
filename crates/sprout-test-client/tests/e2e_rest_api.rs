@@ -981,7 +981,10 @@ async fn test_get_user_profile_returns_known_user() {
     let body: serde_json::Value = resp.json().await.expect("json");
     assert_eq!(body["pubkey"].as_str(), Some(pubkey_hex.as_str()));
     assert_eq!(body["display_name"].as_str(), Some("Profile Test User"));
-    assert_eq!(body["about"].as_str(), Some("Testing public profile endpoint"));
+    assert_eq!(
+        body["about"].as_str(),
+        Some("Testing public profile endpoint")
+    );
 }
 
 /// GET /api/users/:pubkey/profile returns 404 for an unknown user.
@@ -1012,7 +1015,11 @@ async fn test_get_user_profile_requires_auth() {
     let some_pubkey = Keys::generate().public_key().to_hex();
 
     let resp = client
-        .get(format!("{}/api/users/{}/profile", relay_http_url(), some_pubkey))
+        .get(format!(
+            "{}/api/users/{}/profile",
+            relay_http_url(),
+            some_pubkey
+        ))
         .send()
         .await
         .expect("GET profile");
@@ -1030,7 +1037,11 @@ async fn test_get_user_profile_rejects_invalid_pubkey() {
 
     let resp = authed_get(
         &client,
-        &format!("{}/api/users/{}/profile", relay_http_url(), "not-a-valid-hex"),
+        &format!(
+            "{}/api/users/{}/profile",
+            relay_http_url(),
+            "not-a-valid-hex"
+        ),
         &pubkey_hex,
     )
     .await;
@@ -1055,13 +1066,17 @@ async fn test_batch_profiles_known_and_unknown() {
         .put(format!("{}/api/users/me/profile", relay_http_url()))
         .header("X-Pubkey", &hex_a)
         .json(&serde_json::json!({"display_name": "Alice Batch"}))
-        .send().await.expect("PUT alice");
+        .send()
+        .await
+        .expect("PUT alice");
 
     client
         .put(format!("{}/api/users/me/profile", relay_http_url()))
         .header("X-Pubkey", &hex_b)
         .json(&serde_json::json!({"display_name": "Bob Batch"}))
-        .send().await.expect("PUT bob");
+        .send()
+        .await
+        .expect("PUT bob");
 
     // Batch lookup
     let resp = authed_post_json(
@@ -1090,7 +1105,9 @@ async fn test_batch_profiles_known_and_unknown() {
 
     let missing = body["missing"].as_array().expect("missing array");
     assert!(
-        missing.iter().any(|v| v.as_str() == Some(&unknown_hex.to_lowercase())),
+        missing
+            .iter()
+            .any(|v| v.as_str() == Some(&unknown_hex.to_lowercase())),
         "unknown pubkey should be in missing"
     );
 }
@@ -1133,6 +1150,7 @@ async fn test_batch_profiles_requires_auth() {
 }
 
 /// POST /api/users/batch places invalid-length inputs in the missing list.
+/// Also verifies that 64-char non-hex strings (e.g. "g" * 64) go to missing.
 #[tokio::test]
 #[ignore]
 async fn test_batch_profiles_invalid_length_in_missing() {
@@ -1140,18 +1158,37 @@ async fn test_batch_profiles_invalid_length_in_missing() {
     let keys = Keys::generate();
     let pubkey_hex = keys.public_key().to_hex();
 
+    let non_hex_64 = "g".repeat(64);
     let resp = authed_post_json(
         &client,
         &format!("{}/api/users/batch", relay_http_url()),
         &pubkey_hex,
-        serde_json::json!({"pubkeys": ["tooshort", "x".repeat(100)]}),
+        serde_json::json!({"pubkeys": ["tooshort", "x".repeat(100), non_hex_64]}),
     )
     .await;
 
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.expect("json");
     let missing = body["missing"].as_array().expect("missing");
-    assert_eq!(missing.len(), 2, "both invalid-length inputs should be in missing");
+    assert_eq!(
+        missing.len(),
+        3,
+        "wrong-length and 64-char non-hex inputs should all be in missing"
+    );
+
+    let missing_strs: Vec<&str> = missing.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        missing_strs.contains(&"tooshort"),
+        "short input should be in missing"
+    );
+    assert!(
+        missing_strs.iter().any(|s| s.len() == 100),
+        "too-long input should be in missing"
+    );
+    assert!(
+        missing_strs.contains(&"g".repeat(64).as_str()),
+        "64-char non-hex should be in missing"
+    );
 }
 
 /// POST /api/users/batch normalizes pubkey case before lookup.
@@ -1167,7 +1204,9 @@ async fn test_batch_profiles_case_normalized() {
         .put(format!("{}/api/users/me/profile", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
         .json(&serde_json::json!({"display_name": "Case Test"}))
-        .send().await.expect("PUT");
+        .send()
+        .await
+        .expect("PUT");
 
     // Query with uppercase version
     let upper_hex = pubkey_hex.to_uppercase();
@@ -1194,7 +1233,10 @@ async fn test_nip05_returns_empty_for_unknown_name() {
     let client = http_client();
 
     let resp = client
-        .get(format!("{}/.well-known/nostr.json?name=nonexistent", relay_http_url()))
+        .get(format!(
+            "{}/.well-known/nostr.json?name=nonexistent",
+            relay_http_url()
+        ))
         .send()
         .await
         .expect("GET nip05");
@@ -1236,7 +1278,10 @@ async fn test_nip05_has_cors_header() {
 
     assert_eq!(resp.status(), 200);
     let cors = resp.headers().get("access-control-allow-origin");
-    assert!(cors.is_some(), "NIP-05 must have Access-Control-Allow-Origin header");
+    assert!(
+        cors.is_some(),
+        "NIP-05 must have Access-Control-Allow-Origin header"
+    );
     assert_eq!(cors.unwrap().to_str().unwrap(), "*");
 }
 

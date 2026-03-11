@@ -1363,10 +1363,7 @@ impl SproutMcpServer {
         name = "get_users_batch",
         description = "Resolve display names and NIP-05 handles for multiple pubkeys at once. Returns a map of pubkey to profile info, plus a list of unknown pubkeys. Useful for identifying message senders in bulk."
     )]
-    pub async fn get_users_batch(
-        &self,
-        Parameters(p): Parameters<GetUsersBatchParams>,
-    ) -> String {
+    pub async fn get_users_batch(&self, Parameters(p): Parameters<GetUsersBatchParams>) -> String {
         let body = serde_json::json!({ "pubkeys": p.pubkeys });
         match self.client.post("/api/users/batch", &body).await {
             Ok(resp) => resp,

@@ -1053,8 +1053,14 @@ async fn test_mcp_get_users_batch() {
     let text = content[0]["text"].as_str().expect("text");
     let batch: serde_json::Value = serde_json::from_str(text).expect("parse batch json");
 
-    assert!(batch["profiles"].as_object().is_some(), "profiles map present");
-    assert!(batch["missing"].as_array().is_some(), "missing array present");
+    assert!(
+        batch["profiles"].as_object().is_some(),
+        "profiles map present"
+    );
+    assert!(
+        batch["missing"].as_array().is_some(),
+        "missing array present"
+    );
 
     session.stop();
 }
