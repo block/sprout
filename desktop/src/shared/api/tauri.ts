@@ -19,6 +19,8 @@ import type {
   SetChannelTopicInput,
   UpdateProfileInput,
   UpdateChannelInput,
+  UserProfileSummary,
+  UsersBatchResponse,
 } from "@/shared/api/types";
 
 type RawIdentity = {
@@ -32,6 +34,16 @@ type RawProfile = {
   avatar_url: string | null;
   about: string | null;
   nip05_handle: string | null;
+};
+
+type RawUserProfileSummary = {
+  display_name: string | null;
+  nip05_handle: string | null;
+};
+
+type RawUsersBatchResponse = {
+  profiles: Record<string, RawUserProfileSummary>;
+  missing: string[];
 };
 
 type RawChannel = {
@@ -203,6 +215,15 @@ function fromRawProfile(profile: RawProfile): Profile {
   };
 }
 
+function fromRawUserProfileSummary(
+  profile: RawUserProfileSummary,
+): UserProfileSummary {
+  return {
+    displayName: profile.display_name,
+    nip05Handle: profile.nip05_handle,
+  };
+}
+
 export async function getIdentity(): Promise<Identity> {
   const identity = await invoke<RawIdentity>("get_identity");
 
@@ -222,6 +243,29 @@ export async function updateProfile(
 ): Promise<Profile> {
   const profile = await invoke<RawProfile>("update_profile", input);
   return fromRawProfile(profile);
+}
+
+export async function getUserProfile(pubkey?: string): Promise<Profile> {
+  const profile = await invoke<RawProfile>("get_user_profile", { pubkey });
+  return fromRawProfile(profile);
+}
+
+export async function getUsersBatch(
+  pubkeys: string[],
+): Promise<UsersBatchResponse> {
+  const response = await invoke<RawUsersBatchResponse>("get_users_batch", {
+    pubkeys,
+  });
+
+  return {
+    profiles: Object.fromEntries(
+      Object.entries(response.profiles).map(([pubkey, profile]) => [
+        pubkey,
+        fromRawUserProfileSummary(profile),
+      ]),
+    ),
+    missing: response.missing,
+  };
 }
 
 export function getRelayWsUrl(): Promise<string> {

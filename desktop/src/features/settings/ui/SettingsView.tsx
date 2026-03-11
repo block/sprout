@@ -190,25 +190,30 @@ function ProfileSettingsCard({
   const currentDisplayName = profile?.displayName ?? "";
   const currentAvatarUrl = profile?.avatarUrl ?? "";
   const currentAbout = profile?.about ?? "";
+  const currentNip05Handle = profile?.nip05Handle ?? "";
 
   const [displayNameDraft, setDisplayNameDraft] = React.useState("");
   const [avatarUrlDraft, setAvatarUrlDraft] = React.useState("");
   const [aboutDraft, setAboutDraft] = React.useState("");
+  const [nip05HandleDraft, setNip05HandleDraft] = React.useState("");
 
   React.useEffect(() => {
     setDisplayNameDraft(currentDisplayName);
     setAvatarUrlDraft(currentAvatarUrl);
     setAboutDraft(currentAbout);
-  }, [currentAbout, currentAvatarUrl, currentDisplayName]);
+    setNip05HandleDraft(currentNip05Handle);
+  }, [currentAbout, currentAvatarUrl, currentDisplayName, currentNip05Handle]);
 
   const nextDisplayName = displayNameDraft.trim();
   const nextAvatarUrl = avatarUrlDraft.trim();
   const nextAbout = aboutDraft.trim();
+  const nextNip05Handle = nip05HandleDraft.trim();
 
   const updatePayload: {
     displayName?: string;
     avatarUrl?: string;
     about?: string;
+    nip05Handle?: string;
   } = {};
 
   if (nextDisplayName.length > 0 && nextDisplayName !== currentDisplayName) {
@@ -219,6 +224,9 @@ function ProfileSettingsCard({
   }
   if (nextAbout.length > 0 && nextAbout !== currentAbout) {
     updatePayload.about = nextAbout;
+  }
+  if (nextNip05Handle !== currentNip05Handle) {
+    updatePayload.nip05Handle = nextNip05Handle;
   }
 
   const hasPendingClearRequest =
@@ -272,6 +280,12 @@ function ProfileSettingsCard({
           </p>
         ) : null}
 
+        {updateProfileMutation.error instanceof Error ? (
+          <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {updateProfileMutation.error.message}
+          </p>
+        ) : null}
+
         {updateProfileMutation.isSuccess ? (
           <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/10 px-3 py-2 text-sm text-primary">
             <Check className="h-4 w-4" />
@@ -280,7 +294,7 @@ function ProfileSettingsCard({
         ) : null}
 
         <Section
-          description="Identity comes from your keypair. These fields are read-only here."
+          description="Your keypair is fixed for this device. Profile fields and NIP-05 are editable below."
           title="Identity"
         >
           <div className="space-y-3">
@@ -336,6 +350,28 @@ function ProfileSettingsCard({
             </div>
 
             <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="profile-nip05">
+                NIP-05 handle
+              </label>
+              <div className="relative min-w-0">
+                <AtSign className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="pl-9"
+                  data-testid="profile-nip05-input"
+                  disabled={updateProfileMutation.isPending}
+                  id="profile-nip05"
+                  onChange={(event) => setNip05HandleDraft(event.target.value)}
+                  placeholder="alice@localhost"
+                  value={nip05HandleDraft}
+                />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Must match this relay&apos;s domain. Leave blank to clear your
+                current handle.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
               <label
                 className="text-sm font-medium"
                 htmlFor="profile-avatar-url"
@@ -386,7 +422,7 @@ function ProfileSettingsCard({
             {hasPendingClearRequest ? (
               <p className="text-sm text-muted-foreground">
                 Clearing existing profile fields is not supported yet. Blank
-                fields are ignored for now.
+                display name, avatar, and about values are ignored for now.
               </p>
             ) : null}
           </form>

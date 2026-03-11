@@ -8,6 +8,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import {
+  resolveUserLabel,
+  type UserProfileLookup,
+} from "@/features/profile/lib/identity";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -17,18 +22,6 @@ import { Skeleton } from "@/shared/ui/skeleton";
 const relativeTimeFormatter = new Intl.RelativeTimeFormat("en-US", {
   numeric: "auto",
 });
-
-function truncatePubkey(pubkey: string) {
-  return `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`;
-}
-
-function formatActor(pubkey: string, currentPubkey: string | undefined) {
-  if (currentPubkey && pubkey === currentPubkey) {
-    return "You";
-  }
-
-  return truncatePubkey(pubkey);
-}
 
 function formatRelativeTime(unixSeconds: number) {
   const diff = unixSeconds - Math.floor(Date.now() / 1_000);
@@ -128,6 +121,7 @@ type FeedSectionProps = {
   icon: LucideIcon;
   items: FeedItem[];
   currentPubkey?: string;
+  profiles?: UserProfileLookup;
   availableChannelIds: ReadonlySet<string>;
   onOpenChannel: (channelId: string) => void;
 };
@@ -140,6 +134,7 @@ function FeedSection({
   icon: Icon,
   items,
   currentPubkey,
+  profiles,
   availableChannelIds,
   onOpenChannel,
 }: FeedSectionProps) {
@@ -195,7 +190,12 @@ function FeedSection({
                       {feedHeadline(item)}
                     </h3>
                     <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                      {formatActor(item.pubkey, currentPubkey)}
+                      {resolveUserLabel({
+                        pubkey: item.pubkey,
+                        currentPubkey,
+                        profiles,
+                        preferResolvedSelfLabel: true,
+                      })}
                     </p>
                     {item.channelName ? (
                       <p className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-primary">
@@ -356,6 +356,22 @@ export function HomeView({
   onOpenChannel,
   onRefresh,
 }: HomeViewProps) {
+  const feedItems = feed
+    ? [
+        ...feed.feed.mentions,
+        ...feed.feed.needsAction,
+        ...feed.feed.activity,
+        ...feed.feed.agentActivity,
+      ]
+    : [];
+  const feedProfilesQuery = useUsersBatchQuery(
+    feedItems.map((item) => item.pubkey),
+    {
+      enabled: feedItems.length > 0,
+    },
+  );
+  const feedProfiles = feedProfilesQuery.data?.profiles;
+
   if (isLoading && !feed) {
     return <HomeLoadingState />;
   }
@@ -459,6 +475,7 @@ export function HomeView({
           <FeedSection
             availableChannelIds={availableChannelIds}
             currentPubkey={currentPubkey}
+            profiles={feedProfiles}
             description="Messages where your pubkey was tagged."
             emptyDescription="When someone mentions you in an accessible channel, it will land here."
             emptyTitle="No mentions right now"
@@ -470,6 +487,7 @@ export function HomeView({
           <FeedSection
             availableChannelIds={availableChannelIds}
             currentPubkey={currentPubkey}
+            profiles={feedProfiles}
             description="Approvals and reminders that need you."
             emptyDescription="Workflow approval requests and reminders will appear here."
             emptyTitle="Nothing needs action"
@@ -481,6 +499,7 @@ export function HomeView({
           <FeedSection
             availableChannelIds={availableChannelIds}
             currentPubkey={currentPubkey}
+            profiles={feedProfiles}
             description="Recent updates from channels you can access."
             emptyDescription="Channel activity will populate here once the relay has recent events."
             emptyTitle="No recent channel activity"
@@ -492,6 +511,7 @@ export function HomeView({
           <FeedSection
             availableChannelIds={availableChannelIds}
             currentPubkey={currentPubkey}
+            profiles={feedProfiles}
             description="Agent jobs, progress, and results."
             emptyDescription="Agent activity appears here once agents start posting into accessible channels."
             emptyTitle="No agent activity yet"

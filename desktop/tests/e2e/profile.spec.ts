@@ -11,6 +11,7 @@ test("updates the relay-backed profile from settings", async ({ page }) => {
   const displayName = `Tyler QA ${stamp}`;
   const avatarUrl = `https://example.com/avatar-${stamp}.png`;
   const about = `Coordinating relay profile setup ${stamp}`;
+  const nip05Handle = `tyler-${stamp}@localhost`;
 
   await page.goto("/");
 
@@ -22,12 +23,17 @@ test("updates the relay-backed profile from settings", async ({ page }) => {
   await expect(page.getByTestId("profile-nip05")).toContainText("Not set");
 
   await page.getByTestId("profile-display-name").fill(displayName);
+  await page.getByTestId("profile-nip05-input").fill(nip05Handle);
   await page.getByTestId("profile-avatar-url").fill(avatarUrl);
   await page.getByTestId("profile-about").fill(about);
   await page.getByTestId("profile-save").click();
 
   await expect(page.getByTestId("profile-display-name")).toHaveValue(
     displayName,
+  );
+  await expect(page.getByTestId("profile-nip05")).toContainText(nip05Handle);
+  await expect(page.getByTestId("profile-nip05-input")).toHaveValue(
+    nip05Handle,
   );
   await expect(page.getByTestId("profile-avatar-url")).toHaveValue(avatarUrl);
   await expect(page.getByTestId("profile-about")).toHaveValue(about);
@@ -39,6 +45,10 @@ test("updates the relay-backed profile from settings", async ({ page }) => {
   await expect(page.getByTestId("settings-view")).toBeVisible();
   await expect(page.getByTestId("profile-display-name")).toHaveValue(
     displayName,
+  );
+  await expect(page.getByTestId("profile-nip05")).toContainText(nip05Handle);
+  await expect(page.getByTestId("profile-nip05-input")).toHaveValue(
+    nip05Handle,
   );
   await expect(page.getByTestId("profile-avatar-url")).toHaveValue(avatarUrl);
   await expect(page.getByTestId("profile-about")).toHaveValue(about);
