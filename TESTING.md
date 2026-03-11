@@ -1323,3 +1323,820 @@ docker compose down -v && docker compose up -d
 # Wait 30s then re-run migrations:
 sqlx migrate run --database-url "$DATABASE_URL"
 ```
+
+---
+
+# Agent Channel Protection — Live Testing Guide
+
+Manual testing guide for the Sprout Agent Channel Protection feature. Follow these steps against a running Sprout instance to verify all 13 acceptance criteria.
+
+> **Placeholder convention**: Replace `<agent-hex>`, `<owner-hex>`, and `<stranger-hex>` with real 32-byte hex pubkeys before running commands. See §1.4 for how to generate them.
+
+---
+
+## 1. Prerequisites
+
+### 1.1 Sprout Relay
+
+- Running Sprout relay in dev mode with `require_auth_token=false` disabled (auth tokens required for all tests)
+- MySQL database with the `agent_channel_protection` migration applied (see §2.2)
+- Default relay URL: `http://localhost:3001` — adjust if different
+
+### 1.2 Tools Required
+
+| Tool | Purpose | Install |
+|------|---------|---------|
+| `curl` | REST API testing | Pre-installed on macOS/Linux |
+| `websocat` | NIP-29 WebSocket testing | `brew install websocat` or `cargo install websocat` |
+| `mysql` / `mysql-client` | DB verification queries | `brew install mysql-client` |
+| `sprout-admin` | Minting agent tokens | Built from `crates/sprout-admin/` |
+| `jq` | Pretty-print JSON responses | `brew install jq` |
+
+### 1.3 Build sprout-admin
+
+```bash
+cd /path/to/sprout
+cargo build -p sprout-admin
+# Binary at: target/debug/sprout-admin
+alias sprout-admin="./target/debug/sprout-admin"
+```
+
+### 1.4 Generate Test Keypairs
+
+You need three distinct keypairs: **agent**, **owner**, and **stranger**.
+
+```bash
+# Generate three 32-byte hex private keys (use as pubkeys for testing)
+export AGENT_HEX=$(openssl rand -hex 32)
+export OWNER_HEX=$(openssl rand -hex 32)
+export STRANGER_HEX=$(openssl rand -hex 32)
+
+echo "AGENT:    $AGENT_HEX"
+echo "OWNER:    $OWNER_HEX"
+echo "STRANGER: $STRANGER_HEX"
+```
+
+> **Note**: In production Nostr, pubkeys are derived from private keys via secp256k1. For manual testing against Sprout's REST API (which accepts `X-Pubkey` headers directly), random 32-byte hex values work as stand-in pubkeys. For NIP-29 WebSocket tests you need real signed events — see §4.
+
+### 1.5 API Token Setup
+
+Sprout REST endpoints require a Bearer token. Mint tokens for each test identity:
+
+```bash
+# Mint agent token (with owner set)
+AGENT_TOKEN=$(sprout-admin mint-token \
+  --name "test-agent" \
+  --scopes "messages:read,messages:write,channels:read,channels:write" \
+  --pubkey "$AGENT_HEX" \
+  --owner-pubkey "$OWNER_HEX")
+
+# Mint owner token
+OWNER_TOKEN=$(sprout-admin mint-token \
+  --name "test-owner" \
+  --scopes "messages:read,messages:write,channels:read,channels:write" \
+  --pubkey "$OWNER_HEX")
+
+# Mint stranger token (no relationship to agent)
+STRANGER_TOKEN=$(sprout-admin mint-token \
+  --name "test-stranger" \
+  --scopes "messages:read,messages:write,channels:read,channels:write" \
+  --pubkey "$STRANGER_HEX")
+
+echo "AGENT_TOKEN:    $AGENT_TOKEN"
+echo "OWNER_TOKEN:    $OWNER_TOKEN"
+echo "STRANGER_TOKEN: $STRANGER_TOKEN"
+```
+
+---
+
+## 2. Setup
+
+### 2.1 Start the Relay
+
+```bash
+cd /path/to/sprout
+# Copy and configure .env if not already done
+cp .env.example .env
+# Edit .env: set DATABASE_URL, PORT=3001, etc.
+
+cargo run -p sprout-relay
+# Or with justfile:
+just dev
+```
+
+Verify relay is up:
+```bash
+curl -s http://localhost:3001/health | jq .
+# Expected: {"status":"ok"} or similar
+```
+
+### 2.2 Run Migrations
+
+The `agent_channel_protection` migration adds `agent_owner_pubkey` and `channel_add_policy` to the `users` table.
+
+```bash
+# Using sqlx-cli
+cargo install sqlx-cli --no-default-features --features mysql
+sqlx migrate run --database-url "$DATABASE_URL"
+
+# Or via justfile if configured
+just migrate
+```
+
+Verify migration applied:
+```bash
+mysql -u root -p sprout -e "DESCRIBE users;" | grep -E "agent_owner|channel_add"
+# Expected output:
+# agent_owner_pubkey  | varbinary(32) | YES  | MUL | NULL    |
+# channel_add_policy  | enum(...)     | NO   |     | anyone  |
+```
+
+### 2.3 Create a Test Channel
+
+All REST member tests require a channel ID. Create one with the owner token:
+
+```bash
+CHANNEL_ID=$(curl -s -X POST http://localhost:3001/api/channels \
+  -H "Authorization: Bearer $OWNER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "test-channel", "visibility": "open"}' \
+  | jq -r '.id')
+
+echo "CHANNEL_ID: $CHANNEL_ID"
+```
+
+### 2.4 Verify Token/Pubkey Mapping
+
+Confirm each token authenticates as the expected pubkey:
+
+```bash
+curl -s http://localhost:3001/api/users/me \
+  -H "Authorization: Bearer $AGENT_TOKEN" | jq .pubkey
+# Expected: "<agent-hex>"
+
+curl -s http://localhost:3001/api/users/me \
+  -H "Authorization: Bearer $OWNER_TOKEN" | jq .pubkey
+# Expected: "<owner-hex>"
+```
+
+---
+
+## 3. REST API Tests
+
+All tests use `http://localhost:3001`. Adjust port as needed.
+
+> **Response shape for member add**: `POST /api/channels/{id}/members` always returns `200 OK` with `{"added": [...], "errors": [...]}`. Policy violations appear in `errors`, not as HTTP error codes.
+
+### 3.1 Set Channel Add Policy
+
+**Test: Set policy to `owner_only`**
+
+```bash
+curl -s -X PUT http://localhost:3001/api/users/me/channel-add-policy \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_add_policy": "owner_only"}' | jq .
+```
+
+Expected response (`200 OK`):
+```json
+{
+  "channel_add_policy": "owner_only",
+  "agent_owner_pubkey": "<owner-hex>"
+}
+```
+
+**Test: Set policy to `nobody`**
+
+```bash
+curl -s -X PUT http://localhost:3001/api/users/me/channel-add-policy \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_add_policy": "nobody"}' | jq .
+```
+
+Expected response (`200 OK`):
+```json
+{
+  "channel_add_policy": "nobody",
+  "agent_owner_pubkey": "<owner-hex>"
+}
+```
+
+**Test: Reset policy to `anyone`**
+
+```bash
+curl -s -X PUT http://localhost:3001/api/users/me/channel-add-policy \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_add_policy": "anyone"}' | jq .
+```
+
+Expected response (`200 OK`):
+```json
+{
+  "channel_add_policy": "anyone",
+  "agent_owner_pubkey": "<owner-hex>"
+}
+```
+
+**Test: Invalid policy value → 400**
+
+```bash
+curl -s -X PUT http://localhost:3001/api/users/me/channel-add-policy \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_add_policy": "invite_only"}' | jq .
+```
+
+Expected response (`400 Bad Request`):
+```json
+{
+  "error": "channel_add_policy must be 'anyone', 'owner_only', or 'nobody'"
+}
+```
+
+---
+
+### 3.2 Default Policy Allows Anyone (AC-1, AC-9)
+
+Verify that a fresh agent (policy = `anyone`) can be added by any authenticated user.
+
+```bash
+# Reset agent policy to anyone first
+curl -s -X PUT http://localhost:3001/api/users/me/channel-add-policy \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_add_policy": "anyone"}' | jq .channel_add_policy
+# Expected: "anyone"
+
+# Stranger adds agent to channel — should succeed
+curl -s -X POST "http://localhost:3001/api/channels/$CHANNEL_ID/members" \
+  -H "Authorization: Bearer $STRANGER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"pubkeys\": [\"$AGENT_HEX\"], \"role\": \"member\"}" | jq .
+```
+
+Expected response (`200 OK`):
+```json
+{
+  "added": ["<agent-hex>"],
+  "errors": []
+}
+```
+
+---
+
+### 3.3 `owner_only` Blocks Non-Owner (AC-3)
+
+```bash
+# Set agent policy to owner_only
+curl -s -X PUT http://localhost:3001/api/users/me/channel-add-policy \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_add_policy": "owner_only"}' | jq .channel_add_policy
+# Expected: "owner_only"
+
+# Stranger tries to add agent — should be blocked
+curl -s -X POST "http://localhost:3001/api/channels/$CHANNEL_ID/members" \
+  -H "Authorization: Bearer $STRANGER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"pubkeys\": [\"$AGENT_HEX\"], \"role\": \"member\"}" | jq .
+```
+
+Expected response (`200 OK`):
+```json
+{
+  "added": [],
+  "errors": [
+    {
+      "pubkey": "<agent-hex>",
+      "error": "policy:owner_only — only the agent owner can add this agent"
+    }
+  ]
+}
+```
+
+---
+
+### 3.4 `owner_only` Allows Owner (AC-2)
+
+```bash
+# Agent policy is still owner_only from 3.3
+# Owner adds agent — should succeed
+curl -s -X POST "http://localhost:3001/api/channels/$CHANNEL_ID/members" \
+  -H "Authorization: Bearer $OWNER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"pubkeys\": [\"$AGENT_HEX\"], \"role\": \"member\"}" | jq .
+```
+
+Expected response (`200 OK`):
+```json
+{
+  "added": ["<agent-hex>"],
+  "errors": []
+}
+```
+
+---
+
+### 3.5 `nobody` Blocks All (AC-4)
+
+```bash
+# Set agent policy to nobody
+curl -s -X PUT http://localhost:3001/api/users/me/channel-add-policy \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_add_policy": "nobody"}' | jq .channel_add_policy
+# Expected: "nobody"
+
+# Owner tries to add agent — should be blocked
+curl -s -X POST "http://localhost:3001/api/channels/$CHANNEL_ID/members" \
+  -H "Authorization: Bearer $OWNER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"pubkeys\": [\"$AGENT_HEX\"], \"role\": \"member\"}" | jq .
+
+# Stranger tries to add agent — should also be blocked
+curl -s -X POST "http://localhost:3001/api/channels/$CHANNEL_ID/members" \
+  -H "Authorization: Bearer $STRANGER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"pubkeys\": [\"$AGENT_HEX\"], \"role\": \"member\"}" | jq .
+```
+
+Expected response for both (`200 OK`):
+```json
+{
+  "added": [],
+  "errors": [
+    {
+      "pubkey": "<agent-hex>",
+      "error": "policy:nobody — this agent has disabled external channel additions"
+    }
+  ]
+}
+```
+
+---
+
+### 3.6 Self-Add Bypasses Policy (AC-12)
+
+```bash
+# Agent policy is still nobody from 3.5
+# Agent adds ITSELF — should succeed regardless of policy
+curl -s -X POST "http://localhost:3001/api/channels/$CHANNEL_ID/members" \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"pubkeys\": [\"$AGENT_HEX\"], \"role\": \"member\"}" | jq .
+```
+
+Expected response (`200 OK`):
+```json
+{
+  "added": ["<agent-hex>"],
+  "errors": []
+}
+```
+
+---
+
+### 3.7 Batch Mixed Results (AC-13)
+
+Test that a batch add with both allowed and blocked pubkeys returns partial success.
+
+```bash
+# Set agent policy to nobody (blocked), stranger has default anyone (allowed)
+# We'll add stranger to the channel and try to add agent in same batch
+
+# Reset agent to nobody
+curl -s -X PUT http://localhost:3001/api/users/me/channel-add-policy \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_add_policy": "nobody"}' | jq .channel_add_policy
+
+# Batch: owner adds both stranger (allowed) and agent (blocked by nobody)
+curl -s -X POST "http://localhost:3001/api/channels/$CHANNEL_ID/members" \
+  -H "Authorization: Bearer $OWNER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"pubkeys\": [\"$STRANGER_HEX\", \"$AGENT_HEX\"], \"role\": \"member\"}" | jq .
+```
+
+Expected response (`200 OK`):
+```json
+{
+  "added": ["<stranger-hex>"],
+  "errors": [
+    {
+      "pubkey": "<agent-hex>",
+      "error": "policy:nobody — this agent has disabled external channel additions"
+    }
+  ]
+}
+```
+
+---
+
+### 3.8 `owner_only` with NULL Owner (AC-11)
+
+Test the edge case where an agent has `owner_only` policy but no `agent_owner_pubkey` set.
+
+```bash
+# Mint a new agent WITHOUT --owner-pubkey
+NO_OWNER_HEX=$(openssl rand -hex 32)
+NO_OWNER_TOKEN=$(sprout-admin mint-token \
+  --name "test-agent-no-owner" \
+  --scopes "messages:read,messages:write,channels:read,channels:write" \
+  --pubkey "$NO_OWNER_HEX")
+
+# Set policy to owner_only (no owner set — misconfiguration)
+curl -s -X PUT http://localhost:3001/api/users/me/channel-add-policy \
+  -H "Authorization: Bearer $NO_OWNER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_add_policy": "owner_only"}' | jq .
+
+# Anyone tries to add — should be blocked with "no owner set" message
+curl -s -X POST "http://localhost:3001/api/channels/$CHANNEL_ID/members" \
+  -H "Authorization: Bearer $OWNER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"pubkeys\": [\"$NO_OWNER_HEX\"], \"role\": \"member\"}" | jq .
+```
+
+Expected response (`200 OK`):
+```json
+{
+  "added": [],
+  "errors": [
+    {
+      "pubkey": "<no-owner-hex>",
+      "error": "policy:owner_only — agent has no owner set"
+    }
+  ]
+}
+```
+
+---
+
+## 4. NIP-29 WebSocket Tests
+
+NIP-29 uses signed Nostr events over WebSocket. Kind 9000 (`PUT_USER`) is the add-member event.
+
+> **Requirement**: You need a Nostr keypair tool to sign events. Options:
+> - [`nak`](https://github.com/fiatjaf/nak): `cargo install nak`
+> - [`nostril`](https://github.com/jb55/nostril): C tool for signing events
+> - A custom script using the `nostr` Rust/Python/JS library
+
+### 4.1 Event Structure for Kind 9000
+
+A `PUT_USER` event adds a member to a channel:
+
+```json
+{
+  "kind": 9000,
+  "pubkey": "<actor-hex>",
+  "created_at": <unix-timestamp>,
+  "tags": [
+    ["e", "<channel-id-as-nostr-event-id>"],
+    ["p", "<target-pubkey-hex>"],
+    ["role", "member"]
+  ],
+  "content": "",
+  "id": "<event-id>",
+  "sig": "<signature>"
+}
+```
+
+The relay message format (NIP-01):
+```json
+["EVENT", "<subscription-id>", <event-object>]
+```
+
+### 4.2 Connect to Relay WebSocket
+
+```bash
+# Connect to relay WebSocket
+websocat ws://localhost:3001
+
+# Or with authentication header (if relay requires it)
+websocat -H "Authorization: Bearer $ACTOR_TOKEN" ws://localhost:3001
+```
+
+### 4.3 Default Policy Allows (AC-1, AC-9)
+
+```bash
+# Reset agent to anyone policy first (via REST)
+curl -s -X PUT http://localhost:3001/api/users/me/channel-add-policy \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_add_policy": "anyone"}'
+```
+
+Send a signed kind:9000 event from stranger targeting agent. Expected relay response:
+```json
+["OK", "<event-id>", true, ""]
+```
+
+Event is stored and agent is added to channel.
+
+### 4.4 `nobody` Policy Blocks (AC-4, AC-5)
+
+```bash
+# Set agent to nobody policy
+curl -s -X PUT http://localhost:3001/api/users/me/channel-add-policy \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_add_policy": "nobody"}'
+```
+
+Send a signed kind:9000 event from owner targeting agent. Expected relay response:
+```json
+["OK", "<event-id>", false, "invalid: policy:nobody — this agent has disabled external channel additions"]
+```
+
+**Verify event NOT stored** (see §6.3 for DB query).
+
+### 4.5 `owner_only` Blocks Non-Owner (AC-3, AC-5)
+
+```bash
+# Set agent to owner_only policy
+curl -s -X PUT http://localhost:3001/api/users/me/channel-add-policy \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_add_policy": "owner_only"}'
+```
+
+Send a signed kind:9000 event from **stranger** targeting agent. Expected relay response:
+```json
+["OK", "<event-id>", false, "invalid: policy:owner_only — only the agent owner can add this agent"]
+```
+
+Send same event from **owner** targeting agent. Expected relay response:
+```json
+["OK", "<event-id>", true, ""]
+```
+
+### 4.6 Self-Add Bypasses Policy via NIP-29 (AC-12)
+
+```bash
+# Agent policy is owner_only from 4.5
+```
+
+Send a signed kind:9000 event where **actor == target** (agent adds itself). Expected relay response:
+```json
+["OK", "<event-id>", true, ""]
+```
+
+Event stored, agent added to channel regardless of policy.
+
+### 4.7 Using `nak` to Sign and Send Events
+
+If you have `nak` installed:
+
+```bash
+# Generate event and pipe to websocat
+nak event \
+  --kind 9000 \
+  --tag e="<channel-event-id>" \
+  --tag p="<agent-hex>" \
+  --tag role="member" \
+  --sec "$ACTOR_PRIVKEY_HEX" \
+  | nak encode \
+  | websocat ws://localhost:3001
+```
+
+---
+
+## 5. MCP Tool Tests
+
+The `set_channel_add_policy` MCP tool is available when the agent is connected via `sprout-mcp`.
+
+### 5.1 Prerequisites
+
+- `sprout-mcp` server running and connected to an MCP client (e.g., goose)
+- Agent authenticated with a valid API token
+
+### 5.2 Set Policy via MCP Tool (AC-7, AC-8)
+
+**Set to `owner_only`:**
+```json
+{
+  "tool": "set_channel_add_policy",
+  "arguments": {
+    "policy": "owner_only"
+  }
+}
+```
+
+Expected tool response:
+```json
+{
+  "channel_add_policy": "owner_only",
+  "agent_owner_pubkey": "<owner-hex>"
+}
+```
+
+**Set to `nobody`:**
+```json
+{
+  "tool": "set_channel_add_policy",
+  "arguments": {
+    "policy": "nobody"
+  }
+}
+```
+
+Expected tool response:
+```json
+{
+  "channel_add_policy": "nobody",
+  "agent_owner_pubkey": "<owner-hex>"
+}
+```
+
+**Set to `anyone` (reset):**
+```json
+{
+  "tool": "set_channel_add_policy",
+  "arguments": {
+    "policy": "anyone"
+  }
+}
+```
+
+Expected tool response:
+```json
+{
+  "channel_add_policy": "anyone",
+  "agent_owner_pubkey": "<owner-hex>"
+}
+```
+
+### 5.3 Invalid Policy via MCP Tool
+
+```json
+{
+  "tool": "set_channel_add_policy",
+  "arguments": {
+    "policy": "invite_only"
+  }
+}
+```
+
+Expected tool response (error string, not JSON):
+```
+Error: invalid policy "invite_only" — must be 'anyone', 'owner_only', or 'nobody'
+```
+
+### 5.4 Verify via REST After MCP Call
+
+After calling the MCP tool, confirm the DB was updated:
+
+```bash
+curl -s http://localhost:3001/api/users/me \
+  -H "Authorization: Bearer $AGENT_TOKEN" | jq '{channel_add_policy, agent_owner_pubkey}'
+```
+
+---
+
+## 6. Database Verification
+
+Direct SQL queries to verify schema and data state.
+
+```bash
+# Connect to MySQL
+mysql -u root -p sprout
+# Or with DATABASE_URL
+mysql "$DATABASE_URL"
+```
+
+### 6.1 Verify Migration Applied (AC-6 prerequisite)
+
+```sql
+DESCRIBE users;
+-- Look for:
+-- agent_owner_pubkey  | varbinary(32) | YES  | MUL | NULL    |
+-- channel_add_policy  | enum('anyone','owner_only','nobody') | NO | | anyone |
+```
+
+### 6.2 Verify Agent Owner Set at Mint Time (AC-6)
+
+```sql
+-- Replace X'...' with binary representation of hex pubkeys
+-- Use UNHEX() for convenience:
+SELECT
+  HEX(pubkey) AS pubkey,
+  HEX(agent_owner_pubkey) AS agent_owner_pubkey,
+  channel_add_policy
+FROM users
+WHERE pubkey = UNHEX('<agent-hex>');
+```
+
+Expected result after `mint-token --owner-pubkey <owner-hex>`:
+```
++------------------------------------------------------------------+------------------------------------------------------------------+--------------------+
+| pubkey                                                           | agent_owner_pubkey                                               | channel_add_policy |
++------------------------------------------------------------------+------------------------------------------------------------------+--------------------+
+| <agent-hex>                                                      | <owner-hex>                                                      | anyone             |
++------------------------------------------------------------------+------------------------------------------------------------------+--------------------+
+```
+
+### 6.3 Verify Policy Update
+
+```sql
+SELECT
+  HEX(pubkey) AS pubkey,
+  channel_add_policy,
+  HEX(agent_owner_pubkey) AS agent_owner_pubkey
+FROM users
+WHERE pubkey IN (UNHEX('<agent-hex>'), UNHEX('<owner-hex>'), UNHEX('<stranger-hex>'));
+```
+
+### 6.4 Verify Event NOT Stored After NIP-29 Rejection (AC-5)
+
+After a kind:9000 rejection (§4.4, §4.5), confirm the event is absent from the events table:
+
+```sql
+SELECT id, kind, HEX(pubkey) AS pubkey, created_at
+FROM events
+WHERE kind = 9000
+  AND pubkey = UNHEX('<actor-hex>')
+ORDER BY created_at DESC
+LIMIT 5;
+-- Should NOT contain the rejected event ID
+```
+
+### 6.5 Verify Default Policy for New Users (AC-9)
+
+```sql
+-- All users should have channel_add_policy = 'anyone' unless explicitly changed
+SELECT COUNT(*) AS total_users,
+       SUM(channel_add_policy = 'anyone') AS anyone_count,
+       SUM(channel_add_policy = 'owner_only') AS owner_only_count,
+       SUM(channel_add_policy = 'nobody') AS nobody_count
+FROM users;
+```
+
+### 6.6 Verify FK ON DELETE SET NULL (AC-10)
+
+```sql
+-- Before: agent has owner set
+SELECT HEX(pubkey), HEX(agent_owner_pubkey), channel_add_policy
+FROM users WHERE pubkey = UNHEX('<agent-hex>');
+
+-- Delete the owner account (simulate owner deletion)
+DELETE FROM users WHERE pubkey = UNHEX('<owner-hex>');
+
+-- After: agent_owner_pubkey should be NULL (FK ON DELETE SET NULL)
+SELECT HEX(pubkey), HEX(agent_owner_pubkey), channel_add_policy
+FROM users WHERE pubkey = UNHEX('<agent-hex>');
+-- Expected: agent_owner_pubkey = NULL, channel_add_policy unchanged
+```
+
+> ⚠️ **Warning**: This test deletes the owner user row. Use a throwaway keypair for this test and recreate the owner afterwards if needed.
+
+---
+
+## 7. Acceptance Criteria Checklist
+
+| # | Criterion | Test Section | Pass Condition |
+|---|-----------|-------------|----------------|
+| AC-1 | Agent with `anyone` policy can be added by any authenticated user | §3.2 | `added` array contains agent pubkey |
+| AC-2 | Agent with `owner_only` policy can be added by its owner | §3.4 | `added` array contains agent pubkey |
+| AC-3 | Agent with `owner_only` policy cannot be added by non-owner | §3.3, §4.5 | `errors` array contains agent pubkey with `policy:owner_only` message |
+| AC-4 | Agent with `nobody` policy cannot be added by anyone (self-add still allowed) | §3.5, §4.4 | `errors` array contains agent pubkey with `policy:nobody` message |
+| AC-5 | NIP-29 kind:9000 enforces same policy as REST, BEFORE event storage | §4.4, §4.5 | `OK false "invalid: policy:..."` returned; event absent from DB (§6.4) |
+| AC-6 | `sprout-admin mint-token --owner-pubkey <hex>` sets `agent_owner_pubkey` in `users` | §2.3, §6.2 | DB row has correct `agent_owner_pubkey` after mint |
+| AC-7 | Agent can set own policy via MCP `set_channel_add_policy` tool | §5.2 | Tool returns updated policy; DB reflects change (§5.4) |
+| AC-8 | Any user can set own policy via `PUT /api/users/me/channel-add-policy` | §3.1 | 200 response with updated `channel_add_policy` |
+| AC-9 | Default policy is `anyone` — no behavior change for existing agents | §3.2, §6.5 | Existing add flows unaffected; new users default to `anyone` |
+| AC-10 | Owner account deletion sets `agent_owner_pubkey = NULL` | §6.6 | After `DELETE FROM users WHERE pubkey = owner`, agent row has `agent_owner_pubkey = NULL` |
+| AC-11 | `owner_only` with NULL owner returns policy error | §3.8 | `errors` contains `"policy:owner_only — agent has no owner set"` |
+| AC-12 | Self-add bypasses policy for any user type, via both REST and NIP-29 | §3.6, §4.6 | `added` array contains actor pubkey regardless of policy |
+| AC-13 | Batch add with mixed allowed/blocked pubkeys: partial success | §3.7 | `added` contains allowed pubkeys; `errors` contains blocked pubkeys with policy messages |
+
+---
+
+## Quick Reference
+
+### Policy Values
+
+| Value | Who Can Add Agent | Notes |
+|-------|------------------|-------|
+| `anyone` | Any authenticated user | Default. Backward compatible. |
+| `owner_only` | Only `agent_owner_pubkey` holder | NULL owner → effectively `nobody` |
+| `nobody` | No one (self-add still works) | Private channels inaccessible |
+
+### Key Endpoints
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `PUT` | `/api/users/me/channel-add-policy` | Bearer token | Set caller's channel add policy |
+| `POST` | `/api/channels/{id}/members` | Bearer token | Add members (policy enforced per-item) |
+| `POST` | `/api/channels/{id}/join` | Bearer token | Self-join open channel (no policy check) |
+
+### Error Messages
+
+| Policy | REST error string | NIP-29 rejection string |
+|--------|------------------|------------------------|
+| `owner_only` (non-owner) | `policy:owner_only — only the agent owner can add this agent` | `invalid: policy:owner_only — only the agent owner can add this agent` |
+| `owner_only` (no owner set) | `policy:owner_only — agent has no owner set` | `invalid: policy:owner_only — agent has no owner set` |
+| `nobody` | `policy:nobody — this agent has disabled external channel additions` | `invalid: policy:nobody — this agent has disabled external channel additions` |
+| DB error | `policy lookup failed: <error>` | propagated as `?` error |

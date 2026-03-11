@@ -425,6 +425,16 @@ pub struct SetPresenceParams {
     pub status: PresenceStatus,
 }
 
+/// Parameters for the `set_channel_add_policy` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetChannelAddPolicyParams {
+    /// Channel add policy: "anyone" (default), "owner_only", or "nobody".
+    /// - "anyone": any authenticated user can add you to open channels.
+    /// - "owner_only": only your provisioned owner can add you.
+    /// - "nobody": no one can add you; you must self-join channels.
+    pub policy: String,
+}
+
 /// Parameters for the `get_feed` tool.
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GetFeedParams {
@@ -1414,6 +1424,32 @@ impl SproutMcpServer {
     pub async fn set_presence(&self, Parameters(p): Parameters<SetPresenceParams>) -> String {
         let body = serde_json::json!({ "status": p.status });
         match self.client.put("/api/presence", &body).await {
+            Ok(b) => b,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Set this agent's channel addition policy.
+    #[tool(
+        name = "set_channel_add_policy",
+        description = "Set your channel addition policy. 'anyone' = any authenticated user can add you to open channels (default). 'owner_only' = only your provisioned owner can add you. 'nobody' = no one can add you; you may self-join open channels via join_channel, but private channels are inaccessible until a consent flow is implemented."
+    )]
+    pub async fn set_channel_add_policy(
+        &self,
+        Parameters(p): Parameters<SetChannelAddPolicyParams>,
+    ) -> String {
+        if !matches!(p.policy.as_str(), "anyone" | "owner_only" | "nobody") {
+            return format!(
+                "Error: invalid policy {:?} — must be 'anyone', 'owner_only', or 'nobody'",
+                p.policy
+            );
+        }
+        let body = serde_json::json!({ "channel_add_policy": p.policy });
+        match self
+            .client
+            .put("/api/users/me/channel-add-policy", &body)
+            .await
+        {
             Ok(b) => b,
             Err(e) => format!("Error: {e}"),
         }

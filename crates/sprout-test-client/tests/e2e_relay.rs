@@ -797,3 +797,196 @@ async fn test_kind0_nip05_sync() {
 
     client.disconnect().await.expect("disconnect");
 }
+
+/// NIP-29 kind 9000 (PUT_USER): default policy ("anyone") allows a third party to add an agent.
+#[tokio::test]
+#[ignore]
+async fn test_nip29_put_user_default_policy_allows() {
+    let url = relay_url();
+
+    let channel_owner_keys = Keys::generate();
+    let agent_keys = Keys::generate();
+    let agent_pubkey_hex = agent_keys.public_key().to_hex();
+
+    // Create a channel owned by channel_owner.
+    let channel_id = create_test_channel(&channel_owner_keys).await;
+
+    // Connect as channel_owner.
+    let mut ws = SproutTestClient::connect(&url, &channel_owner_keys)
+        .await
+        .expect("connect as channel_owner");
+
+    // Build kind 9000 PUT_USER event: h = channel_id, p = agent pubkey.
+    let h_tag = nostr::Tag::parse(&["h", &channel_id]).expect("h tag");
+    let p_tag = nostr::Tag::parse(&["p", &agent_pubkey_hex]).expect("p tag");
+    let event = nostr::EventBuilder::new(Kind::Custom(9000), "", [h_tag, p_tag])
+        .sign_with_keys(&channel_owner_keys)
+        .expect("sign kind 9000");
+
+    let ok = ws.send_event(event).await.expect("send kind 9000");
+
+    assert!(
+        ok.accepted,
+        "default policy should allow PUT_USER, got: {}",
+        ok.message
+    );
+
+    ws.disconnect().await.expect("disconnect");
+}
+
+/// NIP-29 kind 9000 (PUT_USER): "nobody" policy blocks a third party from adding the agent.
+#[tokio::test]
+#[ignore]
+async fn test_nip29_put_user_nobody_blocks() {
+    let url = relay_url();
+
+    let channel_owner_keys = Keys::generate();
+    let agent_keys = Keys::generate();
+    let agent_pubkey_hex = agent_keys.public_key().to_hex();
+
+    // Set agent's channel_add_policy to "nobody" via REST.
+    let http_client = reqwest::Client::new();
+    let resp = http_client
+        .put(format!(
+            "{}/api/users/me/channel-add-policy",
+            relay_http_url()
+        ))
+        .header("X-Pubkey", &agent_pubkey_hex)
+        .json(&serde_json::json!({ "channel_add_policy": "nobody" }))
+        .send()
+        .await
+        .expect("set policy request");
+    assert_eq!(resp.status(), 200, "set policy failed");
+
+    // Create a channel owned by channel_owner (not the agent).
+    let channel_id = create_test_channel(&channel_owner_keys).await;
+
+    // Connect as channel_owner.
+    let mut ws = SproutTestClient::connect(&url, &channel_owner_keys)
+        .await
+        .expect("connect as channel_owner");
+
+    // Build kind 9000 PUT_USER event targeting the agent.
+    let h_tag = nostr::Tag::parse(&["h", &channel_id]).expect("h tag");
+    let p_tag = nostr::Tag::parse(&["p", &agent_pubkey_hex]).expect("p tag");
+    let event = nostr::EventBuilder::new(Kind::Custom(9000), "", [h_tag, p_tag])
+        .sign_with_keys(&channel_owner_keys)
+        .expect("sign kind 9000");
+
+    let ok = ws.send_event(event).await.expect("send kind 9000");
+
+    assert!(
+        !ok.accepted,
+        "nobody policy should block PUT_USER, but relay accepted it"
+    );
+    assert!(
+        ok.message.contains("policy:nobody"),
+        "rejection message should contain 'policy:nobody', got: {}",
+        ok.message
+    );
+
+    ws.disconnect().await.expect("disconnect");
+}
+
+/// NIP-29 kind 9000 (PUT_USER): self-add bypasses "nobody" policy — an agent can always add itself.
+#[tokio::test]
+#[ignore]
+async fn test_nip29_put_user_self_add_bypasses_policy() {
+    let url = relay_url();
+
+    let agent_keys = Keys::generate();
+    let agent_pubkey_hex = agent_keys.public_key().to_hex();
+
+    // Set agent's channel_add_policy to "nobody" via REST.
+    let http_client = reqwest::Client::new();
+    let resp = http_client
+        .put(format!(
+            "{}/api/users/me/channel-add-policy",
+            relay_http_url()
+        ))
+        .header("X-Pubkey", &agent_pubkey_hex)
+        .json(&serde_json::json!({ "channel_add_policy": "nobody" }))
+        .send()
+        .await
+        .expect("set policy request");
+    assert_eq!(resp.status(), 200, "set policy failed");
+
+    // Create a channel where the agent is the owner.
+    let channel_id = create_test_channel(&agent_keys).await;
+
+    // Connect as agent.
+    let mut ws = SproutTestClient::connect(&url, &agent_keys)
+        .await
+        .expect("connect as agent");
+
+    // Build kind 9000 PUT_USER event where agent targets ITSELF.
+    let h_tag = nostr::Tag::parse(&["h", &channel_id]).expect("h tag");
+    let p_tag = nostr::Tag::parse(&["p", &agent_pubkey_hex]).expect("p tag");
+    let event = nostr::EventBuilder::new(Kind::Custom(9000), "", [h_tag, p_tag])
+        .sign_with_keys(&agent_keys)
+        .expect("sign kind 9000");
+
+    let ok = ws.send_event(event).await.expect("send kind 9000");
+
+    assert!(
+        ok.accepted,
+        "self-add should bypass nobody policy, got: {}",
+        ok.message
+    );
+
+    ws.disconnect().await.expect("disconnect");
+}
+
+/// NIP-29 kind 9000: `owner_only` policy blocks third-party PUT_USER.
+#[tokio::test]
+#[ignore]
+async fn test_nip29_put_user_owner_only_blocks() {
+    let url = relay_url();
+
+    let channel_owner_keys = Keys::generate();
+    let agent_keys = Keys::generate();
+    let agent_pubkey_hex = agent_keys.public_key().to_hex();
+
+    // Set agent's channel_add_policy to "owner_only" via REST.
+    let http_client = reqwest::Client::new();
+    let resp = http_client
+        .put(format!(
+            "{}/api/users/me/channel-add-policy",
+            relay_http_url()
+        ))
+        .header("X-Pubkey", &agent_pubkey_hex)
+        .json(&serde_json::json!({ "channel_add_policy": "owner_only" }))
+        .send()
+        .await
+        .expect("set policy request");
+    assert_eq!(resp.status(), 200, "set policy failed");
+
+    // Create a channel owned by channel_owner (not the agent).
+    let channel_id = create_test_channel(&channel_owner_keys).await;
+
+    // Connect as channel_owner.
+    let mut ws = SproutTestClient::connect(&url, &channel_owner_keys)
+        .await
+        .expect("connect as channel_owner");
+
+    // Build kind 9000 PUT_USER event targeting the agent.
+    let h_tag = nostr::Tag::parse(&["h", &channel_id]).expect("h tag");
+    let p_tag = nostr::Tag::parse(&["p", &agent_pubkey_hex]).expect("p tag");
+    let event = nostr::EventBuilder::new(Kind::Custom(9000), "", [h_tag, p_tag])
+        .sign_with_keys(&channel_owner_keys)
+        .expect("sign kind 9000");
+
+    let ok = ws.send_event(event).await.expect("send kind 9000");
+
+    assert!(
+        !ok.accepted,
+        "owner_only policy should block third-party PUT_USER, but relay accepted it"
+    );
+    assert!(
+        ok.message.contains("policy:owner_only"),
+        "rejection message should contain 'policy:owner_only', got: {}",
+        ok.message
+    );
+
+    ws.disconnect().await.expect("disconnect");
+}
