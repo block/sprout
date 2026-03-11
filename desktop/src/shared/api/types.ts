@@ -104,6 +104,15 @@ export type UpdateProfileInput = {
   nip05Handle?: string;
 };
 
+export type PresenceStatus = "online" | "away" | "offline";
+
+export type PresenceLookup = Record<string, PresenceStatus>;
+
+export type SetPresenceResult = {
+  status: PresenceStatus;
+  ttlSeconds: number;
+};
+
 export type RelayEvent = {
   id: string;
   pubkey: string;

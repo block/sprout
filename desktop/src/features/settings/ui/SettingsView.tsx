@@ -15,6 +15,12 @@ import {
   useProfileQuery,
   useUpdateProfileMutation,
 } from "@/features/profile/hooks";
+import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import {
+  PresenceBadge,
+  PresenceDot,
+} from "@/features/presence/ui/PresenceBadge";
+import type { PresenceStatus } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { useTheme } from "@/shared/theme/ThemeProvider";
 import { Button } from "@/shared/ui/button";
@@ -25,6 +31,11 @@ import { Textarea } from "@/shared/ui/textarea";
 type SettingsViewProps = {
   currentPubkey?: string;
   fallbackDisplayName?: string;
+  isPresenceLoading: boolean;
+  isUpdatingPresence: boolean;
+  onSetPresence: (status: PresenceStatus) => Promise<void>;
+  presenceError: Error | null;
+  presenceStatus: PresenceStatus;
 };
 
 type ThemeOption = {
@@ -48,6 +59,28 @@ const themeOptions: ThemeOption[] = [
     value: "system",
     label: "System",
     icon: MonitorCog,
+  },
+];
+
+const presenceOptions: Array<{
+  value: PresenceStatus;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "online",
+    label: "Online",
+    description: "Visible as active and refreshed while the app is open.",
+  },
+  {
+    value: "away",
+    label: "Away",
+    description: "Visible as idle and refreshed while the app is open.",
+  },
+  {
+    value: "offline",
+    label: "Offline",
+    description: "Clears your relay presence entry immediately.",
   },
 ];
 
@@ -90,44 +123,6 @@ function ReadOnlyField({
       >
         {value}
       </div>
-    </div>
-  );
-}
-
-function AvatarPreview({
-  avatarUrl,
-  label,
-}: {
-  avatarUrl: string | null;
-  label: string;
-}) {
-  const [hasError, setHasError] = React.useState(false);
-
-  const initials = label
-    .trim()
-    .split(/\s+/)
-    .map((part) => part[0] ?? "")
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-
-  if (avatarUrl && !hasError) {
-    return (
-      <img
-        alt={`${label} avatar`}
-        className="h-16 w-16 rounded-3xl border border-border/80 object-cover shadow-sm"
-        onError={() => {
-          setHasError(true);
-        }}
-        referrerPolicy="no-referrer"
-        src={avatarUrl}
-      />
-    );
-  }
-
-  return (
-    <div className="flex h-16 w-16 items-center justify-center rounded-3xl border border-border/80 bg-primary/10 text-lg font-semibold text-primary shadow-sm">
-      {initials.length > 0 ? initials : <UserRound className="h-6 w-6" />}
     </div>
   );
 }
@@ -179,10 +174,96 @@ function ThemeSettingsCard() {
   );
 }
 
+function PresenceStatusBadge({ status }: { status: PresenceStatus }) {
+  return (
+    <PresenceBadge data-testid="presence-current-status" status={status} />
+  );
+}
+
+function PresenceSettingsCard({
+  isLoading,
+  isUpdating,
+  onSetPresence,
+  presenceError,
+  presenceStatus,
+}: {
+  isLoading: boolean;
+  isUpdating: boolean;
+  onSetPresence: (status: PresenceStatus) => Promise<void>;
+  presenceError: Error | null;
+  presenceStatus: PresenceStatus;
+}) {
+  return (
+    <section
+      className="rounded-xl border border-border/80 bg-card/80 p-4 shadow-sm"
+      data-testid="settings-presence"
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold tracking-tight">Presence</h2>
+          <p className="text-sm text-muted-foreground">
+            Choose how this desktop session appears on the relay.
+          </p>
+        </div>
+        <PresenceStatusBadge status={presenceStatus} />
+      </div>
+
+      <div className="mt-4 grid gap-2 md:grid-cols-3">
+        {presenceOptions.map((option) => {
+          const isActive = presenceStatus === option.value;
+
+          return (
+            <button
+              aria-pressed={isActive}
+              className={cn(
+                "flex min-h-24 flex-col items-start justify-between rounded-xl border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                isActive
+                  ? "border-primary bg-primary/10 text-foreground"
+                  : "border-border/80 bg-background/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+              )}
+              data-testid={`presence-option-${option.value}`}
+              disabled={isLoading || isUpdating}
+              key={option.value}
+              onClick={() => {
+                void onSetPresence(option.value);
+              }}
+              type="button"
+            >
+              <div className="flex items-center gap-2">
+                <PresenceDot className="h-4 w-4" status={option.value} />
+                <span className="font-medium text-foreground">
+                  {option.label}
+                </span>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {option.description}
+              </p>
+            </button>
+          );
+        })}
+      </div>
+
+      {presenceError ? (
+        <p className="mt-4 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {presenceError.message}
+        </p>
+      ) : null}
+
+      <p
+        className="mt-4 text-sm text-muted-foreground"
+        data-testid="presence-help"
+      >
+        Online and away are refreshed automatically every minute while Sprout is
+        running. The relay expires presence after 90 seconds.
+      </p>
+    </section>
+  );
+}
+
 function ProfileSettingsCard({
   currentPubkey,
   fallbackDisplayName,
-}: SettingsViewProps) {
+}: Pick<SettingsViewProps, "currentPubkey" | "fallbackDisplayName">) {
   const profileQuery = useProfileQuery();
   const updateProfileMutation = useUpdateProfileMutation();
   const profile = profileQuery.data;
@@ -252,8 +333,10 @@ function ProfileSettingsCard({
       data-testid="settings-profile"
     >
       <div className="flex min-w-0 items-start gap-4">
-        <AvatarPreview
+        <ProfileAvatar
           avatarUrl={resolvedAvatarUrl}
+          className="h-16 w-16 rounded-3xl text-lg"
+          iconClassName="h-6 w-6"
           key={resolvedAvatarUrl ?? "profile-fallback-avatar"}
           label={resolvedName}
         />
@@ -435,6 +518,11 @@ function ProfileSettingsCard({
 export function SettingsView({
   currentPubkey,
   fallbackDisplayName,
+  isPresenceLoading,
+  isUpdatingPresence,
+  onSetPresence,
+  presenceError,
+  presenceStatus,
 }: SettingsViewProps) {
   return (
     <div
@@ -443,6 +531,13 @@ export function SettingsView({
     >
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
         <ThemeSettingsCard />
+        <PresenceSettingsCard
+          isLoading={isPresenceLoading}
+          isUpdating={isUpdatingPresence}
+          onSetPresence={onSetPresence}
+          presenceError={presenceError}
+          presenceStatus={presenceStatus}
+        />
         <ProfileSettingsCard
           currentPubkey={currentPubkey}
           fallbackDisplayName={fallbackDisplayName}

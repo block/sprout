@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Mutex};
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, ToBech32};
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sprout_core::PresenceStatus;
 use tauri_plugin_window_state::StateFlags;
 
 pub struct AppState {
@@ -35,6 +36,12 @@ pub struct UserProfileSummaryInfo {
 pub struct UsersBatchResponse {
     pub profiles: HashMap<String, UserProfileSummaryInfo>,
     pub missing: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SetPresenceResponse {
+    pub status: PresenceStatus,
+    pub ttl_seconds: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -139,6 +146,11 @@ struct UpdateProfileBody<'a> {
     about: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     nip05_handle: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct SetPresenceBody {
+    status: PresenceStatus,
 }
 
 #[derive(Serialize)]
@@ -385,6 +397,30 @@ async fn get_users_batch(
     .json(&GetUsersBatchBody {
         pubkeys: pubkeys.as_slice(),
     });
+    send_json_request(request).await
+}
+
+#[tauri::command]
+async fn get_presence(
+    pubkeys: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<HashMap<String, PresenceStatus>, String> {
+    if pubkeys.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let request = build_authed_request(&state.http_client, Method::GET, "/api/presence", &state)?
+        .query(&[("pubkeys", pubkeys.join(","))]);
+    send_json_request(request).await
+}
+
+#[tauri::command]
+async fn set_presence(
+    status: PresenceStatus,
+    state: tauri::State<'_, AppState>,
+) -> Result<SetPresenceResponse, String> {
+    let request = build_authed_request(&state.http_client, Method::PUT, "/api/presence", &state)?
+        .json(&SetPresenceBody { status });
     send_json_request(request).await
 }
 
@@ -672,6 +708,8 @@ pub fn run() {
             update_profile,
             get_user_profile,
             get_users_batch,
+            get_presence,
+            set_presence,
             get_relay_ws_url,
             sign_event,
             create_auth_event,

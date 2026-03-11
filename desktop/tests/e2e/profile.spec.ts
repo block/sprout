@@ -18,6 +18,10 @@ test("updates the relay-backed profile from settings", async ({ page }) => {
   await page.getByTestId("open-settings").click();
   await expect(page.getByTestId("settings-view")).toBeVisible();
   await expect(page.getByTestId("chat-title")).toHaveText("Settings");
+  await expect(page.getByTestId("open-settings")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 
   await expect(page.getByTestId("profile-pubkey")).toContainText("deadbeef");
   await expect(page.getByTestId("profile-nip05")).toContainText("Not set");
@@ -40,6 +44,10 @@ test("updates the relay-backed profile from settings", async ({ page }) => {
 
   await page.getByRole("button", { name: "Home" }).click();
   await expect(page.getByTestId("chat-title")).toHaveText("Home");
+  await expect(page.getByTestId("open-settings")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
 
   await page.getByTestId("open-settings").click();
   await expect(page.getByTestId("settings-view")).toBeVisible();
@@ -52,6 +60,34 @@ test("updates the relay-backed profile from settings", async ({ page }) => {
   );
   await expect(page.getByTestId("profile-avatar-url")).toHaveValue(avatarUrl);
   await expect(page.getByTestId("profile-about")).toHaveValue(about);
+});
+
+test("updates presence from settings", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("settings-view")).toBeVisible();
+  await expect(page.getByTestId("presence-current-status")).toContainText(
+    "Offline",
+  );
+
+  await page.getByTestId("presence-option-away").click();
+  await expect(page.getByTestId("presence-current-status")).toContainText(
+    "Away",
+  );
+
+  await page.getByRole("button", { name: "Home" }).click();
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
+
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("presence-current-status")).toContainText(
+    "Away",
+  );
+
+  await page.getByTestId("presence-option-offline").click();
+  await expect(page.getByTestId("presence-current-status")).toContainText(
+    "Offline",
+  );
 });
 
 test("opens settings with the keyboard shortcut and updates theme", async ({

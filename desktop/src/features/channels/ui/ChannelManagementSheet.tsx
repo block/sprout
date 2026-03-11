@@ -29,6 +29,8 @@ import {
   useUnarchiveChannelMutation,
   useUpdateChannelMutation,
 } from "@/features/channels/hooks";
+import { usePresenceQuery } from "@/features/presence/hooks";
+import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import type { Channel, ChannelMember } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
@@ -165,6 +167,10 @@ export function ChannelManagementSheet({
       return formatMemberName(left).localeCompare(formatMemberName(right));
     });
   }, [currentPubkey, membersQuery.data]);
+  const memberPresenceQuery = usePresenceQuery(
+    members.map((member) => member.pubkey),
+    { enabled: open && members.length > 0 },
+  );
 
   const selfMember =
     members.find((member) => member.pubkey === currentPubkey) ?? null;
@@ -584,6 +590,17 @@ export function ChannelManagementSheet({
                           <p className="truncate text-sm font-medium">
                             {formatMemberName(member, currentPubkey)}
                           </p>
+                          {memberPresenceQuery.data ? (
+                            <PresenceBadge
+                              className="border-border/70 bg-muted/50 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em]"
+                              data-testid={`member-presence-${member.pubkey}`}
+                              status={
+                                memberPresenceQuery.data[
+                                  member.pubkey.toLowerCase()
+                                ] ?? "offline"
+                              }
+                            />
+                          ) : null}
                           <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                             {member.role}
                           </span>

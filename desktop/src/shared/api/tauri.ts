@@ -11,10 +11,13 @@ import type {
   GetHomeFeedInput,
   HomeFeedResponse,
   Identity,
+  PresenceLookup,
+  PresenceStatus,
   Profile,
   RelayEvent,
   SearchMessagesInput,
   SearchMessagesResponse,
+  SetPresenceResult,
   SetChannelPurposeInput,
   SetChannelTopicInput,
   UpdateProfileInput,
@@ -44,6 +47,13 @@ type RawUserProfileSummary = {
 type RawUsersBatchResponse = {
   profiles: Record<string, RawUserProfileSummary>;
   missing: string[];
+};
+
+type RawPresenceLookup = Record<string, PresenceStatus>;
+
+type RawSetPresenceResult = {
+  status: PresenceStatus;
+  ttl_seconds: number;
 };
 
 type RawChannel = {
@@ -265,6 +275,32 @@ export async function getUsersBatch(
       ]),
     ),
     missing: response.missing,
+  };
+}
+
+export async function getPresence(pubkeys: string[]): Promise<PresenceLookup> {
+  const response = await invoke<RawPresenceLookup>("get_presence", {
+    pubkeys,
+  });
+
+  return Object.fromEntries(
+    Object.entries(response).map(([pubkey, status]) => [
+      pubkey.toLowerCase(),
+      status,
+    ]),
+  );
+}
+
+export async function setPresence(
+  status: PresenceStatus,
+): Promise<SetPresenceResult> {
+  const response = await invoke<RawSetPresenceResult>("set_presence", {
+    status,
+  });
+
+  return {
+    status: response.status,
+    ttlSeconds: response.ttl_seconds,
   };
 }
 
