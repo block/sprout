@@ -32,7 +32,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/events/{id}", get(api::get_event))
         .route("/api/search", get(api::search_handler))
         .route("/api/agents", get(api::agents_handler))
-        .route("/api/presence", get(api::presence_handler))
+        .route(
+            "/api/presence",
+            get(api::presence_handler).put(api::set_presence_handler),
+        )
         // Workflow routes
         .route(
             "/api/channels/{channel_id}/workflows",

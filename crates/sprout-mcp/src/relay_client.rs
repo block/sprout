@@ -500,7 +500,9 @@ impl RelayClient {
         let url = format!("{}{}", self.relay_http_url(), path);
         let resp = self.apply_auth(self.http.get(&url)).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow::anyhow!("HTTP {}: {}", resp.status(), url));
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("{} {}: {}", status, url, body));
         }
         Ok(resp.text().await?)
     }
@@ -514,7 +516,9 @@ impl RelayClient {
             .send()
             .await?;
         if !resp.status().is_success() {
-            return Err(anyhow::anyhow!("HTTP {}: {}", resp.status(), url));
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("{} {}: {}", status, url, body));
         }
         Ok(resp.text().await?)
     }
@@ -528,7 +532,9 @@ impl RelayClient {
             .send()
             .await?;
         if !resp.status().is_success() {
-            return Err(anyhow::anyhow!("HTTP {}: {}", resp.status(), url));
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("{} {}: {}", status, url, body));
         }
         Ok(resp.text().await?)
     }
@@ -538,7 +544,9 @@ impl RelayClient {
         let url = format!("{}{}", self.relay_http_url(), path);
         let resp = self.apply_auth(self.http.delete(&url)).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow::anyhow!("HTTP {}: {}", resp.status(), url));
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("{} {}: {}", status, url, body));
         }
         Ok(resp.text().await?)
     }
@@ -560,7 +568,9 @@ impl RelayClient {
     pub async fn get_api(&self, url: &str) -> anyhow::Result<String> {
         let resp = self.apply_auth(self.http.get(url)).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow::anyhow!("HTTP {}: {}", resp.status(), url));
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("{} {}: {}", status, url, body));
         }
         Ok(resp.text().await?)
     }

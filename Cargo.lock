@@ -2689,6 +2689,7 @@ dependencies = [
  "chrono",
  "hex",
  "nostr",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror",

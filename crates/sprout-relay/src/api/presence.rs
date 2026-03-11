@@ -1,4 +1,4 @@
-//! GET /api/presence — bulk presence lookup by pubkey.
+//! Presence API — GET /api/presence (bulk lookup) and PUT /api/presence (set status).
 
 use std::sync::Arc;
 
@@ -8,6 +8,8 @@ use axum::{
     response::Json,
 };
 use serde::Deserialize;
+use sprout_core::PresenceStatus;
+use sprout_pubsub::presence::PRESENCE_TTL_SECS;
 
 use crate::state::AppState;
 
@@ -63,4 +65,53 @@ pub async fn presence_handler(
     }
 
     Ok(Json(serde_json::Value::Object(result)))
+}
+
+/// Request body for `PUT /api/presence`.
+#[derive(Debug, Deserialize)]
+pub struct SetPresenceBody {
+    /// Presence status to set.
+    pub status: PresenceStatus,
+}
+
+/// Set the authenticated user's presence status.
+///
+/// Accepts `{"status": "online" | "away" | "offline"}` (case-sensitive).
+/// Serde rejects unknown variants automatically, returning a 422.
+/// - `"offline"` clears the presence entry (TTL 0).
+/// - `"online"` / `"away"` upsert the entry with a 90-second TTL.
+///
+/// Returns `{"status": "...", "ttl_seconds": N}`.
+///
+/// **Note:** The WebSocket path (kind:20001) accepts arbitrary status strings
+/// for forward-compatibility, but the REST/MCP surface intentionally restricts
+/// to the curated enum above. Aligning the WebSocket path is tracked separately.
+pub async fn set_presence_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    super::ApiJson(body): super::ApiJson<SetPresenceBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let (pubkey, _pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+
+    match body.status {
+        PresenceStatus::Online | PresenceStatus::Away => {
+            state
+                .pubsub
+                .set_presence(&pubkey, body.status.as_str())
+                .await
+                .map_err(|e| super::internal_error(&format!("presence error: {e}")))?;
+        }
+        PresenceStatus::Offline => {
+            state
+                .pubsub
+                .clear_presence(&pubkey)
+                .await
+                .map_err(|e| super::internal_error(&format!("presence error: {e}")))?;
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": body.status,
+        "ttl_seconds": if body.status == PresenceStatus::Offline { 0 } else { PRESENCE_TTL_SECS },
+    })))
 }

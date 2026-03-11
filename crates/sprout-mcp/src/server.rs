@@ -6,6 +6,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 
 use crate::relay_client::RelayClient;
+use sprout_core::PresenceStatus;
 
 /// Percent-encode a string for safe inclusion in a URL query parameter value.
 /// Encodes all characters except unreserved ones (A-Z a-z 0-9 - _ . ~).
@@ -415,6 +416,13 @@ pub struct SearchParams {
 pub struct GetPresenceParams {
     /// Comma-separated hex-encoded public keys to look up presence for (max 200).
     pub pubkeys: String,
+}
+
+/// Parameters for the `set_presence` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetPresenceParams {
+    /// Presence status to set.
+    pub status: PresenceStatus,
 }
 
 /// Parameters for the `get_feed` tool.
@@ -1395,6 +1403,19 @@ impl SproutMcpServer {
         match self.client.get(&path).await {
             Ok(body) => body,
             Err(e) => format!("Error fetching presence: {e}"),
+        }
+    }
+
+    /// Set the agent's presence status.
+    #[tool(
+        name = "set_presence",
+        description = "Set the agent's presence status. Valid values: 'online', 'away', 'offline'. Presence auto-expires after 90 seconds — call periodically to stay online."
+    )]
+    pub async fn set_presence(&self, Parameters(p): Parameters<SetPresenceParams>) -> String {
+        let body = serde_json::json!({ "status": p.status });
+        match self.client.put("/api/presence", &body).await {
+            Ok(b) => b,
+            Err(e) => format!("Error: {e}"),
         }
     }
 }

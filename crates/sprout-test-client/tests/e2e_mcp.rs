@@ -246,7 +246,7 @@ impl McpSession {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// Spawn the MCP server, complete the initialize handshake, and verify that
-/// all 40 expected tools are listed by `tools/list`.
+/// all 41 expected tools are listed by `tools/list`.
 #[tokio::test]
 #[ignore]
 async fn test_mcp_initialize_and_list_tools() {
@@ -295,8 +295,8 @@ async fn test_mcp_initialize_and_list_tools() {
 
     assert_eq!(
         tools.len(),
-        40,
-        "expected exactly 40 tools, got {}. Tools: {:?}",
+        41,
+        "expected exactly 41 tools, got {}. Tools: {:?}",
         tools.len(),
         tools
             .iter()
@@ -348,6 +348,7 @@ async fn test_mcp_initialize_and_list_tools() {
         "get_users_batch",
         "search",
         "get_presence",
+        "set_presence",
     ];
 
     for expected in &expected_tools {
@@ -1060,6 +1061,169 @@ async fn test_mcp_get_users_batch() {
     assert!(
         batch["missing"].as_array().is_some(),
         "missing array present"
+    );
+
+    session.stop();
+}
+
+/// Call `set_presence` via MCP and verify it succeeds.
+#[tokio::test]
+#[ignore]
+async fn test_mcp_set_presence() {
+    let keys = generate_test_keys();
+    let mut session = McpSession::start(&keys).await;
+    session.initialize();
+
+    // Set presence to "online".
+    let resp = session.call_tool("set_presence", json!({"status": "online"}));
+    assert!(
+        resp.get("error").is_none(),
+        "set_presence returned an error: {resp}"
+    );
+    let text = McpSession::tool_text(&resp);
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("response should be JSON");
+    assert_eq!(
+        parsed["status"].as_str(),
+        Some("online"),
+        "set_presence response should have status 'online', got: {text}"
+    );
+    assert_eq!(
+        parsed["ttl_seconds"].as_u64(),
+        Some(90),
+        "online presence should have 90s TTL, got: {text}"
+    );
+
+    // Verify via get_presence.
+    let pubkey_hex = keys.public_key().to_hex();
+    let resp = session.call_tool("get_presence", json!({"pubkeys": pubkey_hex}));
+    assert!(
+        resp.get("error").is_none(),
+        "get_presence returned an error: {resp}"
+    );
+    let text = McpSession::tool_text(&resp);
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("response should be JSON");
+    assert_eq!(
+        parsed[&pubkey_hex].as_str(),
+        Some("online"),
+        "get_presence should show 'online' after set_presence, got: {text}"
+    );
+
+    session.stop();
+}
+
+/// Call `set_presence` with "offline" via MCP and verify presence is cleared.
+#[tokio::test]
+#[ignore]
+async fn test_mcp_set_presence_offline() {
+    let keys = generate_test_keys();
+    let mut session = McpSession::start(&keys).await;
+    session.initialize();
+
+    // First set to "online".
+    let resp = session.call_tool("set_presence", json!({"status": "online"}));
+    assert!(
+        resp.get("error").is_none(),
+        "set_presence(online) returned an error: {resp}"
+    );
+
+    // Now set to "offline" — should clear presence.
+    let resp = session.call_tool("set_presence", json!({"status": "offline"}));
+    assert!(
+        resp.get("error").is_none(),
+        "set_presence(offline) returned an error: {resp}"
+    );
+    let text = McpSession::tool_text(&resp);
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("response should be JSON");
+    assert_eq!(
+        parsed["status"].as_str(),
+        Some("offline"),
+        "set_presence(offline) response should have status 'offline', got: {text}"
+    );
+    assert_eq!(
+        parsed["ttl_seconds"].as_u64(),
+        Some(0),
+        "offline presence should have 0 TTL, got: {text}"
+    );
+
+    // Verify via get_presence — should show "offline".
+    let pubkey_hex = keys.public_key().to_hex();
+    let resp = session.call_tool("get_presence", json!({"pubkeys": pubkey_hex}));
+    assert!(
+        resp.get("error").is_none(),
+        "get_presence returned an error: {resp}"
+    );
+    let text = McpSession::tool_text(&resp);
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("response should be JSON");
+    assert_eq!(
+        parsed[&pubkey_hex].as_str(),
+        Some("offline"),
+        "get_presence should show 'offline' after clearing, got: {text}"
+    );
+
+    session.stop();
+}
+
+/// Call `set_presence` with "away" via MCP and verify round-trip.
+#[tokio::test]
+#[ignore]
+async fn test_mcp_set_presence_away() {
+    let keys = generate_test_keys();
+    let mut session = McpSession::start(&keys).await;
+    session.initialize();
+
+    let resp = session.call_tool("set_presence", json!({"status": "away"}));
+    assert!(
+        resp.get("error").is_none(),
+        "set_presence(away) returned an error: {resp}"
+    );
+    let text = McpSession::tool_text(&resp);
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("response should be JSON");
+    assert_eq!(
+        parsed["status"].as_str(),
+        Some("away"),
+        "set_presence response should have status 'away', got: {text}"
+    );
+    assert_eq!(
+        parsed["ttl_seconds"].as_u64(),
+        Some(90),
+        "away presence should have 90s TTL, got: {text}"
+    );
+
+    // Verify via get_presence.
+    let pubkey_hex = keys.public_key().to_hex();
+    let resp = session.call_tool("get_presence", json!({"pubkeys": pubkey_hex}));
+    assert!(
+        resp.get("error").is_none(),
+        "get_presence returned an error: {resp}"
+    );
+    let text = McpSession::tool_text(&resp);
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("response should be JSON");
+    assert_eq!(
+        parsed[&pubkey_hex].as_str(),
+        Some("away"),
+        "get_presence should show 'away', got: {text}"
+    );
+
+    session.stop();
+}
+
+/// Call `set_presence` with an invalid status via MCP and verify error.
+#[tokio::test]
+#[ignore]
+async fn test_mcp_set_presence_invalid_status() {
+    let keys = generate_test_keys();
+    let mut session = McpSession::start(&keys).await;
+    session.initialize();
+
+    let resp = session.call_tool("set_presence", json!({"status": "invisible"}));
+    // MCP framework rejects invalid enum variants at the JSON-RPC level (not as a tool result),
+    // so the response has an "error" key rather than a "result" key.
+    let has_error = resp.get("error").is_some();
+    let text = McpSession::tool_text(&resp);
+    let has_error_text = text.contains("422") || text.contains("error") || text.contains("Error");
+    assert!(
+        has_error || has_error_text,
+        "invalid status should return a JSON-RPC error or error text, got: {resp}"
     );
 
     session.stop();

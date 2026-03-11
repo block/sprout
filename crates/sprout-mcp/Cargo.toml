@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Sprout core types
-sprout-core = { workspace = true }
+sprout-core = { workspace = true, features = ["mcp-schema"] }
 
 # MCP SDK
 rmcp = { workspace = true }

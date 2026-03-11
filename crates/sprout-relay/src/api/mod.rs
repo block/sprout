@@ -5,7 +5,7 @@
 //!   - `events`    — GET /api/events/:id
 //!   - `search`    — GET /api/search
 //!   - `agents`    — GET /api/agents
-//!   - `presence`  — GET /api/presence
+//!   - `presence`  — GET/PUT /api/presence
 //!   - `workflows` — workflow CRUD + trigger + webhook
 //!   - `approvals` — approval grant/deny
 //!   - `feed`      — GET /api/feed
@@ -59,7 +59,7 @@ pub use events::get_event;
 pub use feed::feed_handler;
 pub use members::{add_members, join_channel, leave_channel, list_members, remove_member};
 pub use messages::{delete_message, get_thread, list_messages, send_message};
-pub use presence::presence_handler;
+pub use presence::{presence_handler, set_presence_handler};
 pub use reactions::{add_reaction_handler, list_reactions_handler, remove_reaction_handler};
 pub use search::search_handler;
 pub use users::{get_profile, get_user_profile, get_users_batch, update_profile};
@@ -291,6 +291,29 @@ pub(crate) async fn check_channel_access(
         Ok(())
     } else {
         Err(forbidden("not a member of this channel"))
+    }
+}
+
+// ── Custom JSON extractor ─────────────────────────────────────────────────────
+
+use axum::extract::{rejection::JsonRejection, FromRequest, Request};
+
+/// A JSON extractor that returns our standard `{"error": "..."}` envelope
+/// on deserialization failure instead of Axum's default plain-text 422.
+pub struct ApiJson<T>(pub T);
+
+impl<S, T> FromRequest<S> for ApiJson<T>
+where
+    axum::Json<T>: FromRequest<S, Rejection = JsonRejection>,
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, Json<serde_json::Value>);
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        match axum::Json::<T>::from_request(req, state).await {
+            Ok(axum::Json(value)) => Ok(ApiJson(value)),
+            Err(rejection) => Err(api_error(rejection.status(), &rejection.body_text())),
+        }
     }
 }
 

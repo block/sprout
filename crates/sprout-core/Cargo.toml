@@ -9,6 +9,7 @@ description = "Core types, event verification, and filter matching for Sprout"
 
 [features]
 test-utils = []
+mcp-schema = ["schemars"]
 
 [dependencies]
 nostr      = { workspace = true }
@@ -18,5 +19,6 @@ thiserror  = { workspace = true }
 uuid       = { workspace = true }
 chrono     = { workspace = true }
 hex        = { workspace = true }
+schemars   = { workspace = true, optional = true }
 
 # NO tokio, NO sqlx, NO redis, NO axum — zero I/O dependencies
