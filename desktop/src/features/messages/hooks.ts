@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { updateChannelLastMessageAt } from "@/features/channels/hooks";
 import { relayClient } from "@/shared/api/relayClient";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
 
@@ -60,20 +61,27 @@ export function useChannelMessagesQuery(channel: Channel | null) {
 
 export function useChannelSubscription(channel: Channel | null) {
   const queryClient = useQueryClient();
+  const channelId = channel?.id ?? null;
+  const channelType = channel?.channelType ?? null;
 
   const appendMessage = useEffectEvent((event: RelayEvent) => {
-    if (!channel) {
+    if (!channelId) {
       return;
     }
 
+    updateChannelLastMessageAt(
+      queryClient,
+      channelId,
+      new Date(event.created_at * 1_000).toISOString(),
+    );
     queryClient.setQueryData<RelayEvent[]>(
-      ["channel-messages", channel.id],
+      ["channel-messages", channelId],
       (current = []) => mergeMessages(current, event),
     );
   });
 
   useEffect(() => {
-    if (!channel || channel.channelType === "forum") {
+    if (!channelId || channelType === "forum") {
       return;
     }
 
@@ -81,7 +89,7 @@ export function useChannelSubscription(channel: Channel | null) {
     let cleanup: (() => Promise<void>) | undefined;
 
     relayClient
-      .subscribeToChannel(channel.id, (event) => {
+      .subscribeToChannel(channelId, (event) => {
         if (!isDisposed) {
           appendMessage(event);
         }
@@ -95,7 +103,7 @@ export function useChannelSubscription(channel: Channel | null) {
         cleanup = dispose;
       })
       .catch((error) => {
-        console.error("Failed to subscribe to channel", channel.id, error);
+        console.error("Failed to subscribe to channel", channelId, error);
       });
 
     return () => {
@@ -104,7 +112,7 @@ export function useChannelSubscription(channel: Channel | null) {
         void cleanup();
       }
     };
-  }, [channel]);
+  }, [channelId, channelType]);
 }
 
 export function useSendMessageMutation(
@@ -161,6 +169,14 @@ export function useSendMessageMutation(
       queryClient.setQueryData(context.queryKey, context.previousMessages);
     },
     onSuccess: (message, _content, context) => {
+      if (channel) {
+        updateChannelLastMessageAt(
+          queryClient,
+          channel.id,
+          new Date(message.created_at * 1_000).toISOString(),
+        );
+      }
+
       if (!context) {
         return;
       }

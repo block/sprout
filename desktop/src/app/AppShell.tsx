@@ -8,6 +8,7 @@ import {
   useChannelsQuery,
   useSelectedChannel,
 } from "@/features/channels/hooks";
+import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
 import { ChannelManagementSheet } from "@/features/channels/ui/ChannelManagementSheet";
 import { useHomeFeedQuery } from "@/features/home/hooks";
 import { HomeView } from "@/features/home/ui/HomeView";
@@ -70,6 +71,7 @@ export function AppShell() {
   );
   const createChannelMutation = useCreateChannelMutation();
   const activeChannel = selectedView === "channel" ? selectedChannel : null;
+  const { unreadChannelIds } = useUnreadChannels(channels, activeChannel);
 
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
@@ -245,6 +247,7 @@ export function AppShell() {
         onSelectSettings={handleOpenSettings}
         selectedChannelId={selectedChannel?.id ?? null}
         selectedView={selectedView}
+        unreadChannelIds={unreadChannelIds}
       />
 
       <SidebarInset
