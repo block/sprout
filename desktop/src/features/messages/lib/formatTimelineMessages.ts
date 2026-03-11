@@ -54,6 +54,8 @@ export function formatTimelineMessages(
     body: event.content,
     accent: currentPubkey === event.pubkey,
     pending: event.pending,
+    kind: event.kind,
+    tags: event.tags,
   }));
 }
 

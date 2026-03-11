@@ -11,9 +11,9 @@ use sprout_core::event::StoredEvent;
 use sprout_core::kind::{
     event_kind_u32, is_ephemeral, is_workflow_execution_kind, KIND_AUTH, KIND_CANVAS,
     KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE,
-    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_EDIT,
-    KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2,
-    KIND_STREAM_REMINDER,
+    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
+    KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
+    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
 };
 use sprout_core::verification::verify_event;
 
@@ -581,6 +581,10 @@ fn extract_channel_id(event: &Event) -> Option<uuid::Uuid> {
     None
 }
 
+// NOTE: This function only validates that channel-scoped kinds include an `h` tag.
+// Kind-specific metadata validation (e.g., diff_repo_url for kind:40008) is NOT
+// enforced on the WebSocket path — it is handled by the REST API layer (api/messages.rs).
+// This follows the Nostr protocol model where the relay is kind-agnostic for content events.
 fn requires_h_channel_scope(kind: u32) -> bool {
     matches!(
         kind,
@@ -591,6 +595,7 @@ fn requires_h_channel_scope(kind: u32) -> bool {
             | KIND_STREAM_MESSAGE_BOOKMARKED
             | KIND_STREAM_MESSAGE_SCHEDULED
             | KIND_STREAM_REMINDER
+            | KIND_STREAM_MESSAGE_DIFF
             | KIND_CANVAS
             | KIND_FORUM_POST
             | KIND_FORUM_VOTE
@@ -603,13 +608,14 @@ mod tests {
     use super::requires_h_channel_scope;
     use sprout_core::kind::{
         KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE,
-        KIND_STREAM_MESSAGE,
+        KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF,
     };
 
     #[test]
     fn channel_scoped_content_kinds_require_h_tags() {
         for kind in [
             KIND_STREAM_MESSAGE,
+            KIND_STREAM_MESSAGE_DIFF,
             KIND_CANVAS,
             KIND_FORUM_POST,
             KIND_FORUM_VOTE,

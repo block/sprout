@@ -8,4 +8,6 @@ export type TimelineMessage = {
   accent?: boolean;
   pending?: boolean;
   highlighted?: boolean;
+  kind?: number;
+  tags?: string[][];
 };

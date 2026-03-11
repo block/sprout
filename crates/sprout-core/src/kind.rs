@@ -84,6 +84,8 @@ pub const KIND_STREAM_MESSAGE_BOOKMARKED: u32 = 40005;
 pub const KIND_STREAM_MESSAGE_SCHEDULED: u32 = 40006;
 /// A reminder attached to a stream message or time.
 pub const KIND_STREAM_REMINDER: u32 = 40007;
+/// A diff/patch message showing file changes (unified diff format).
+pub const KIND_STREAM_MESSAGE_DIFF: u32 = 40008;
 /// Canvas (shared document) for a channel.
 pub const KIND_CANVAS: u32 = 40100;
 /// System message for channel state changes (join, leave, rename, etc.).
@@ -226,6 +228,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_STREAM_MESSAGE_BOOKMARKED,
     KIND_STREAM_MESSAGE_SCHEDULED,
     KIND_STREAM_REMINDER,
+    KIND_STREAM_MESSAGE_DIFF,
     KIND_CANVAS,
     KIND_SYSTEM_MESSAGE,
     KIND_DM_CREATED,

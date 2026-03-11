@@ -351,6 +351,29 @@ async fn should_fire_workflow(
         }
     }
 
+    if let TriggerDef::DiffPosted {
+        filter: Some(ref expr),
+    } = def.trigger
+    {
+        match executor::evaluate_condition(expr, trigger_ctx, &HashMap::new()).await {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::debug!(
+                    workflow_id = %workflow_id,
+                    "Trigger filter evaluated false — skipping workflow"
+                );
+                return false;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    workflow_id = %workflow_id,
+                    "Trigger filter error: {e} — skipping workflow"
+                );
+                return false;
+            }
+        }
+    }
+
     true
 }
 
@@ -426,10 +449,11 @@ pub fn build_trigger_context(event: &sprout_core::StoredEvent) -> executor::Trig
 
 /// Returns `true` if the trigger type matches the given event kind.
 fn trigger_matches_event(trigger: &TriggerDef, kind_u32: u32) -> bool {
-    use sprout_core::kind::{KIND_REACTION, KIND_STREAM_MESSAGE};
+    use sprout_core::kind::{KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF};
     match trigger {
         TriggerDef::MessagePosted { .. } => kind_u32 == KIND_STREAM_MESSAGE,
         TriggerDef::ReactionAdded { .. } => kind_u32 == KIND_REACTION,
+        TriggerDef::DiffPosted { .. } => kind_u32 == KIND_STREAM_MESSAGE_DIFF,
         // Schedule and Webhook triggers are not fired by channel events.
         TriggerDef::Schedule { .. } | TriggerDef::Webhook => false,
     }
@@ -609,6 +633,21 @@ steps:
         assert!(!trigger_matches_event(&react_trigger, 0));
         assert!(!trigger_matches_event(&sched_trigger, 0));
         assert!(!trigger_matches_event(&webhook_trigger, 0));
+    }
+
+    #[test]
+    fn diff_posted_matches_kind_40008_only() {
+        let trigger = TriggerDef::DiffPosted { filter: None };
+        assert!(trigger_matches_event(&trigger, 40008));
+        assert!(!trigger_matches_event(&trigger, 40001));
+        assert!(!trigger_matches_event(&trigger, 7));
+    }
+
+    #[test]
+    fn message_posted_does_not_match_kind_40008() {
+        let trigger = TriggerDef::MessagePosted { filter: None };
+        assert!(!trigger_matches_event(&trigger, 40008));
+        assert!(trigger_matches_event(&trigger, 40001));
     }
 
     #[test]
