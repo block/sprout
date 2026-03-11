@@ -246,7 +246,7 @@ impl McpSession {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// Spawn the MCP server, complete the initialize handshake, and verify that
-/// all 38 expected tools are listed by `tools/list`.
+/// all 40 expected tools are listed by `tools/list`.
 #[tokio::test]
 #[ignore]
 async fn test_mcp_initialize_and_list_tools() {
@@ -295,8 +295,8 @@ async fn test_mcp_initialize_and_list_tools() {
 
     assert_eq!(
         tools.len(),
-        38,
-        "expected exactly 38 tools, got {}. Tools: {:?}",
+        40,
+        "expected exactly 40 tools, got {}. Tools: {:?}",
         tools.len(),
         tools
             .iter()
@@ -346,6 +346,8 @@ async fn test_mcp_initialize_and_list_tools() {
         "set_profile",
         "get_user_profile",
         "get_users_batch",
+        "search",
+        "get_presence",
     ];
 
     for expected in &expected_tools {

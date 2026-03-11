@@ -1,13 +1,13 @@
 # Sprout Testing Guide
 
-This guide enables an AI agent (the **operator**) to run the full Sprout test suite: automated `cargo test` suites and a three-agent multi-agent E2E run that exercises all 38 MCP tools against a live relay.
+This guide enables an AI agent (the **operator**) to run the full Sprout test suite: automated `cargo test` suites and a three-agent multi-agent E2E run that exercises all 40 MCP tools against a live relay.
 
 ## Two Test Modes
 
 | Mode | What It Does | When to Use |
 |------|-------------|-------------|
 | **Automated** (`cargo test`) | Unit tests + REST/WebSocket/MCP integration tests | Fast CI check; verify no unit regressions |
-| **Multi-Agent E2E** | Three agents (Alice, Bob, Charlie) run via `sprout-acp` harness, exercising all 38 MCP tools via real Nostr identities | Before merging relay/MCP/auth changes; full regression run; exploring new features |
+| **Multi-Agent E2E** | Three agents (Alice, Bob, Charlie) run via `sprout-acp` harness, exercising all 40 MCP tools via real Nostr identities | Before merging relay/MCP/auth changes; full regression run; exploring new features |
 
 Run both modes for a complete regression check. Run automated-only for a fast sanity check.
 
@@ -27,7 +27,7 @@ Run both modes for a complete regression check. Run automated-only for a fast sa
    - [3.7 Expected Results](#37-expected-results)
 4. [Advanced: ACP Harness Scenarios](#4-advanced-acp-harness-scenarios)
 5. [Workflow YAML Reference](#5-workflow-yaml-reference)
-6. [The 38 MCP Tools](#6-the-38-mcp-tools)
+6. [The 40 MCP Tools](#6-the-40-mcp-tools)
 7. [Cleanup](#7-cleanup)
 8. [Known Issues / Troubleshooting](#8-known-issues--troubleshooting)
 
@@ -202,7 +202,7 @@ Operator (you)
 Sprout Relay  ──WS (NIP-01)──►  sprout-acp (harness)  ──stdio (ACP)──►  goose
                                                                             │
                                                                        sprout-mcp-server
-                                                                        (38 MCP tools)
+                                                                        (40 MCP tools)
                                                                             │
                                                                        Sprout Relay
                                                                     (send_message, etc.)
@@ -345,6 +345,14 @@ subscribed to channel <uuid>
 
 If you see `discovered 0 channel(s)`, the agent is not yet a member of any channels. Alice will create channels in the first exercise — after that, all three will discover them on subsequent subscriptions (open channels are accessible to any authenticated pubkey).
 
+> **Bootstrap channel timing:** Harnesses discover channels only at startup.
+> If you create the bootstrap channel (in exercise A-1) *after* launching
+> harnesses, Alice's harness won't be subscribed to it. Two options:
+> 1. Create the bootstrap channel *before* launching harnesses (recommended):
+>    run the `curl -X POST` command from A-1 first, then start all three harnesses.
+> 2. Restart Alice's harness after creating the bootstrap channel — it will
+>    discover and subscribe to it on reconnect.
+
 ---
 
 ### 3.5 Test Exercises
@@ -432,7 +440,7 @@ mention "$GENERAL" "$ALICE_PUBKEY" \
 
 ```bash
 mention "$GENERAL" "$ALICE_PUBKEY" \
-  "Set your display name to 'Alice (Test Agent)'. Set your about/bio to 'I am Alice, the infrastructure creator for the Sprout E2E test suite.' Set your NIP-05 handle to 'alice@localhost' using set_profile. Set your presence to online."
+  "Set your display name to 'Alice (Test Agent)'. Set your about/bio to 'I am Alice, the infrastructure creator for the Sprout E2E test suite.' Set your NIP-05 handle to 'alice@localhost' using set_profile. Then use get_presence to check your own presence status (pubkey: $ALICE_PUBKEY)."
 ```
 
 **A-6: Feed, search, and membership**
@@ -487,7 +495,7 @@ mention "$GENERAL" "$BOB_PUBKEY" \
 
 ```bash
 mention "$GENERAL" "$BOB_PUBKEY" \
-  "Try to get the message history from the 'private-ops' channel (ID: $PRIVATE_OPS). Report whether you can access it or get an error. Then try again — Alice should have invited you by now."
+  "Get the message history from the 'private-ops' channel (ID: $PRIVATE_OPS). Alice invited you in exercise A-6 — confirm you have access and report what you find."
 ```
 
 **B-7: Get presence**
@@ -685,7 +693,7 @@ After all exercises complete, the following should be true:
 | Bob in private-ops | Yes (Alice invited him in A-6) |
 | Workflow | alice-notify created with message_posted trigger |
 | Display names | Alice and Bob have display names set |
-| Profile resolution | Bob can read Alice's profile via `get_user_profile`; `get_users_batch` returns Alice and Bob in profiles, Charlie in missing |
+| Profile resolution | Bob can read Alice's profile via `get_user_profile`; `get_users_batch` returns Alice and Bob with display names, Charlie with null display name (all in profiles map) |
 | NIP-05 verification | Charlie queries `/.well-known/nostr.json?name=alice` and gets Alice's pubkey (Alice set `alice@localhost` in A-5) |
 | Profile edge cases | Charlie gets appropriate errors for invalid/unknown pubkeys |
 | Error handling | Charlie's C-1, C-2, C-5 exercises report correct errors |
@@ -995,16 +1003,16 @@ steps:
 
 ---
 
-## 6. The 38 MCP Tools
+## 6. The 40 MCP Tools
 
-The `sprout-mcp-server` exposes 38 tools covering the full Sprout feature surface. All are available to agents running via the `sprout-acp` harness.
+The `sprout-mcp-server` exposes 40 tools covering the full Sprout feature surface. All are available to agents running via the `sprout-acp` harness.
 
 ### Channels (8)
 
 | Tool | Description |
 |------|-------------|
 | `list_channels` | List all channels accessible to the agent |
-| `get_channel_info` | Get metadata for a specific channel |
+| `get_channel` | Get metadata for a specific channel |
 | `create_channel` | Create a new channel (`channel_type`: stream\|forum, `visibility`: open\|private) |
 | `update_channel` | Update channel name or metadata |
 | `archive_channel` | Archive a channel (creator only) |
@@ -1012,14 +1020,19 @@ The `sprout-mcp-server` exposes 38 tools covering the full Sprout feature surfac
 | `join_channel` | Join an open channel |
 | `leave_channel` | Leave a channel |
 
-### Messages (4)
+### Messages (2)
 
 | Tool | Description |
 |------|-------------|
 | `send_message` | Post a message to a channel |
 | `get_channel_history` | Get recent messages from a channel |
-| `send_thread_reply` | Reply within a message thread |
-| `get_thread_replies` | Get replies in a thread |
+
+### Threads (2)
+
+| Tool | Description |
+|------|-------------|
+| `send_reply` | Reply within a message thread |
+| `get_thread` | Get replies in a thread |
 
 ### Reactions (3)
 
@@ -1027,15 +1040,15 @@ The `sprout-mcp-server` exposes 38 tools covering the full Sprout feature surfac
 |------|-------------|
 | `add_reaction` | Add an emoji reaction to a message |
 | `remove_reaction` | Remove a reaction |
-| `get_message_reactions` | List all reactions on a message |
+| `get_reactions` | List all reactions on a message |
 
 ### Direct Messages (3)
 
 | Tool | Description |
 |------|-------------|
-| `send_dm` | Send a direct message to a user |
-| `get_dm_history` | Get DM conversation history |
-| `list_dm_conversations` | List all DM conversations |
+| `open_dm` | Create or retrieve a DM channel with a user (optionally send an initial message) |
+| `add_dm_member` | Add a member to an existing DM conversation |
+| `list_dms` | List all DM conversations |
 
 ### Canvas (2)
 
@@ -1044,20 +1057,25 @@ The `sprout-mcp-server` exposes 38 tools covering the full Sprout feature surfac
 | `get_canvas` | Read the canvas document for a channel |
 | `set_canvas` | Write/overwrite the canvas document (last writer wins) |
 
-### Workflows (3)
+### Workflows (7)
 
 | Tool | Description |
 |------|-------------|
-| `create_workflow` | Create a new workflow with trigger and steps |
 | `list_workflows` | List all workflows |
+| `create_workflow` | Create a new workflow with trigger and steps |
+| `update_workflow` | Update an existing workflow |
+| `delete_workflow` | Delete a workflow |
 | `trigger_workflow` | Manually trigger a webhook workflow |
+| `get_workflow_runs` | Get execution history for a workflow |
+| `approve_workflow_step` | Approve a pending approval step in a workflow run |
 
-### Feed (2)
+### Feed (3)
 
 | Tool | Description |
 |------|-------------|
 | `get_feed` | Get the agent's personal activity feed |
-| `get_channel_feed` | Get the activity feed for a specific channel |
+| `get_feed_mentions` | Get mentions from the agent's feed |
+| `get_feed_actions` | Get action items from the agent's feed |
 
 ### Search (1)
 
@@ -1065,37 +1083,34 @@ The `sprout-mcp-server` exposes 38 tools covering the full Sprout feature surfac
 |------|-------------|
 | `search` | Full-text search across messages and channels |
 
-### Profile (5)
+### Profile (3)
 
 | Tool | Description |
 |------|-------------|
-| `get_profile` | Get the agent's own profile |
+| `set_profile` | Set display name, about/bio, avatar URL, and NIP-05 handle |
 | `get_user_profile` | Get any user's profile by pubkey (omit pubkey for own profile) |
-| `get_users_batch` | Resolve display names and NIP-05 handles for multiple pubkeys |
-| `set_display_name` | Set the agent's display name |
-| `set_about` | Set the agent's bio/about text |
+| `get_users_batch` | Bulk resolve display names and NIP-05 handles for multiple pubkeys |
 
-### Presence (2)
+### Presence (1)
 
 | Tool | Description |
 |------|-------------|
-| `set_presence` | Set the agent's presence status (online/away/etc.) |
-| `get_presence` | Get presence status for a user |
+| `get_presence` | Bulk presence lookup by pubkey |
 
-### Members (2)
+### Members (3)
 
 | Tool | Description |
 |------|-------------|
+| `add_channel_member` | Add a user (by pubkey) to a channel |
+| `remove_channel_member` | Remove a member from a channel |
 | `list_channel_members` | List members of a channel |
-| `get_user_channels` | Get channels a user belongs to |
 
-### Admin (3)
+### Admin (2)
 
 | Tool | Description |
 |------|-------------|
 | `set_channel_topic` | Set the topic for a channel |
 | `set_channel_purpose` | Set the purpose for a channel |
-| `invite_to_channel` | Invite a user (by pubkey) to a channel |
 
 ---
 

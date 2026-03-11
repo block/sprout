@@ -30,6 +30,8 @@ pub struct UpdateProfileBody {
     pub avatar_url: Option<String>,
     /// Short bio or description, or `None` to leave unchanged.
     pub about: Option<String>,
+    /// NIP-05 identifier (e.g. "alice@example.com"), or `None` to leave unchanged.
+    pub nip05_handle: Option<String>,
 }
 
 /// `PUT /api/users/me/profile` — update the authenticated user's profile.
@@ -58,17 +60,22 @@ pub async fn update_profile(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    let nip05_handle = body
+        .nip05_handle
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
-    if display_name.is_none() && avatar_url.is_none() && about.is_none() {
+    if display_name.is_none() && avatar_url.is_none() && about.is_none() && nip05_handle.is_none() {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
-            "at least one of display_name, avatar_url, or about is required",
+            "at least one of display_name, avatar_url, about, or nip05_handle is required",
         ));
     }
 
     state
         .db
-        .update_user_profile(&pubkey_bytes, display_name, avatar_url, about, None)
+        .update_user_profile(&pubkey_bytes, display_name, avatar_url, about, nip05_handle)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
