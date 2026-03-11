@@ -631,6 +631,182 @@ async fn test_presence_empty_pubkeys() {
     );
 }
 
+/// PUT /api/presence sets the user's presence and can be read back.
+#[tokio::test]
+#[ignore]
+async fn test_set_presence_online() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Set presence to "online" via REST.
+    let url = format!("{}/api/presence", relay_http_url());
+    let resp = authed_put(
+        &client,
+        &url,
+        &pubkey_hex,
+        serde_json::json!({"status": "online"}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "PUT /api/presence should return 200");
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    assert_eq!(body["status"].as_str(), Some("online"));
+    assert_eq!(
+        body["ttl_seconds"].as_u64(),
+        Some(90),
+        "online presence should have 90s TTL"
+    );
+
+    // Verify via GET.
+    let get_url = format!("{}/api/presence?pubkeys={pubkey_hex}", relay_http_url());
+    let resp = authed_get(&client, &get_url, &pubkey_hex).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    assert_eq!(
+        body[&pubkey_hex].as_str(),
+        Some("online"),
+        "presence should be 'online' after PUT"
+    );
+}
+
+/// PUT /api/presence with "away" then "offline" updates and clears presence.
+#[tokio::test]
+#[ignore]
+async fn test_set_presence_away_and_offline() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+    let url = format!("{}/api/presence", relay_http_url());
+
+    // Set to "away".
+    let resp = authed_put(
+        &client,
+        &url,
+        &pubkey_hex,
+        serde_json::json!({"status": "away"}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let away_body: serde_json::Value = resp.json().await.expect("JSON");
+    assert_eq!(
+        away_body["status"].as_str(),
+        Some("away"),
+        "PUT response should echo 'away'"
+    );
+    assert_eq!(
+        away_body["ttl_seconds"].as_u64(),
+        Some(90),
+        "away should have 90s TTL"
+    );
+
+    // Verify "away".
+    let get_url = format!("{}/api/presence?pubkeys={pubkey_hex}", relay_http_url());
+    let resp = authed_get(&client, &get_url, &pubkey_hex).await;
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    assert_eq!(body[&pubkey_hex].as_str(), Some("away"));
+
+    // Set to "offline" — should clear presence.
+    let resp = authed_put(
+        &client,
+        &url,
+        &pubkey_hex,
+        serde_json::json!({"status": "offline"}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let offline_body: serde_json::Value = resp.json().await.expect("JSON");
+    assert_eq!(
+        offline_body["status"].as_str(),
+        Some("offline"),
+        "PUT response should echo 'offline'"
+    );
+    assert_eq!(
+        offline_body["ttl_seconds"].as_u64(),
+        Some(0),
+        "offline should have 0 TTL"
+    );
+
+    // Verify "offline" (key deleted from Redis, defaults to "offline").
+    let resp = authed_get(&client, &get_url, &pubkey_hex).await;
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    assert_eq!(body[&pubkey_hex].as_str(), Some("offline"));
+}
+
+/// PUT /api/presence with an invalid status returns 422 with standard error envelope.
+#[tokio::test]
+#[ignore]
+async fn test_set_presence_invalid_status() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let url = format!("{}/api/presence", relay_http_url());
+    let resp = authed_put(
+        &client,
+        &url,
+        &pubkey_hex,
+        serde_json::json!({"status": "invisible"}),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        422,
+        "invalid enum variant should return 422 Unprocessable Entity"
+    );
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    assert!(
+        body["error"].as_str().is_some(),
+        "422 response should contain standard error envelope, got: {body}"
+    );
+}
+
+/// PUT /api/presence without auth returns 401.
+#[tokio::test]
+#[ignore]
+async fn test_set_presence_requires_auth() {
+    let client = http_client();
+    let url = format!("{}/api/presence", relay_http_url());
+    let resp = client
+        .put(&url)
+        .json(&serde_json::json!({"status": "online"}))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(
+        resp.status(),
+        401,
+        "PUT /api/presence without auth should return 401"
+    );
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    assert_eq!(
+        body["error"].as_str(),
+        Some("authentication required"),
+        "401 response should contain standard error envelope"
+    );
+}
+
+/// PUT /api/presence with missing status field returns a structured error.
+#[tokio::test]
+#[ignore]
+async fn test_set_presence_missing_field() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let url = format!("{}/api/presence", relay_http_url());
+    let resp = authed_put(&client, &url, &pubkey_hex, serde_json::json!({})).await;
+    assert_eq!(
+        resp.status(),
+        422,
+        "missing required field should return 422"
+    );
+    let body: serde_json::Value = resp.json().await.expect("JSON");
+    assert!(
+        body["error"].as_str().is_some(),
+        "422 response should contain standard error envelope, got: {body}"
+    );
+}
+
 // ── Agents tests ──────────────────────────────────────────────────────────────
 
 /// GET /api/agents returns a JSON array with the expected fields.

@@ -1,13 +1,13 @@
 # Sprout Testing Guide
 
-This guide enables an AI agent (the **operator**) to run the full Sprout test suite: automated `cargo test` suites and a three-agent multi-agent E2E run that exercises all 40 MCP tools against a live relay.
+This guide enables an AI agent (the **operator**) to run the full Sprout test suite: automated `cargo test` suites and a three-agent multi-agent E2E run that exercises all 41 MCP tools against a live relay.
 
 ## Two Test Modes
 
 | Mode | What It Does | When to Use |
 |------|-------------|-------------|
 | **Automated** (`cargo test`) | Unit tests + REST/WebSocket/MCP integration tests | Fast CI check; verify no unit regressions |
-| **Multi-Agent E2E** | Three agents (Alice, Bob, Charlie) run via `sprout-acp` harness, exercising all 40 MCP tools via real Nostr identities | Before merging relay/MCP/auth changes; full regression run; exploring new features |
+| **Multi-Agent E2E** | Three agents (Alice, Bob, Charlie) run via `sprout-acp` harness, exercising all 41 MCP tools via real Nostr identities | Before merging relay/MCP/auth changes; full regression run; exploring new features |
 
 Run both modes for a complete regression check. Run automated-only for a fast sanity check.
 
@@ -27,7 +27,7 @@ Run both modes for a complete regression check. Run automated-only for a fast sa
    - [3.7 Expected Results](#37-expected-results)
 4. [Advanced: ACP Harness Scenarios](#4-advanced-acp-harness-scenarios)
 5. [Workflow YAML Reference](#5-workflow-yaml-reference)
-6. [The 40 MCP Tools](#6-the-40-mcp-tools)
+6. [The 41 MCP Tools](#6-the-41-mcp-tools)
 7. [Cleanup](#7-cleanup)
 8. [Known Issues / Troubleshooting](#8-known-issues--troubleshooting)
 
@@ -163,7 +163,7 @@ sleep 3 && curl -s http://localhost:3000/health
 Then run the integration suites:
 
 ```bash
-# REST API integration tests (35 tests)
+# REST API integration tests (40 tests)
 RELAY_URL=ws://localhost:3000 \
   cargo test -p sprout-test-client --test e2e_rest_api -- --ignored
 
@@ -171,7 +171,7 @@ RELAY_URL=ws://localhost:3000 \
 RELAY_URL=ws://localhost:3000 \
   cargo test -p sprout-test-client --test e2e_relay -- --ignored
 
-# MCP server integration tests (10 tests)
+# MCP server integration tests (14 tests)
 RELAY_URL=ws://localhost:3000 \
   cargo test -p sprout-test-client --test e2e_mcp -- --ignored
 ```
@@ -179,12 +179,12 @@ RELAY_URL=ws://localhost:3000 \
 ### Expected Results
 
 ```
-test result: ok. 35 passed; 0 failed; 0 ignored   ← REST API
+test result: ok. 40 passed; 0 failed; 0 ignored   ← REST API
 test result: ok. 14 passed; 0 failed; 0 ignored   ← relay
-test result: ok. 10 passed; 0 failed; 0 ignored   ← MCP
+test result: ok. 14 passed; 0 failed; 0 ignored   ← MCP
 ```
 
-All 59 integration tests pass (across the three suites above). An additional 7 workflow integration tests exist in `e2e_workflows.rs` — run them separately if workflow changes are involved. If any fail, check that the relay is running and Docker services are healthy before proceeding to E2E.
+All 68 integration tests pass (across the three suites above). An additional 7 workflow integration tests exist in `e2e_workflows.rs` — run them separately if workflow changes are involved. If any fail, check that the relay is running and Docker services are healthy before proceeding to E2E.
 
 ---
 
@@ -202,7 +202,7 @@ Operator (you)
 Sprout Relay  ──WS (NIP-01)──►  sprout-acp (harness)  ──stdio (ACP)──►  goose
                                                                             │
                                                                        sprout-mcp-server
-                                                                        (40 MCP tools)
+                                                                        (41 MCP tools)
                                                                             │
                                                                        Sprout Relay
                                                                     (send_message, etc.)
@@ -440,7 +440,7 @@ mention "$GENERAL" "$ALICE_PUBKEY" \
 
 ```bash
 mention "$GENERAL" "$ALICE_PUBKEY" \
-  "Set your display name to 'Alice (Test Agent)'. Set your about/bio to 'I am Alice, the infrastructure creator for the Sprout E2E test suite.' Set your NIP-05 handle to 'alice@localhost' using set_profile. Then use get_presence to check your own presence status (pubkey: $ALICE_PUBKEY)."
+  "Set your display name to 'Alice (Test Agent)'. Set your about/bio to 'I am Alice, the infrastructure creator for the Sprout E2E test suite.' Set your NIP-05 handle to 'alice@localhost' using set_profile. Then use set_presence to set your status to 'online'. Finally, use get_presence to check your own presence status (pubkey: $ALICE_PUBKEY) and confirm it shows 'online'."
 ```
 
 **A-6: Feed, search, and membership**
@@ -502,7 +502,14 @@ mention "$GENERAL" "$BOB_PUBKEY" \
 
 ```bash
 mention "$GENERAL" "$BOB_PUBKEY" \
-  "Get the presence status for Alice (pubkey: $ALICE_PUBKEY). Get your own presence status. Report both."
+  "Use set_presence to set your status to 'away'. Then get the presence status for Alice (pubkey: $ALICE_PUBKEY) and yourself. Report both statuses — Alice should be 'online' (from A-5) and you should be 'away'."
+```
+
+**B-8: Profile resolution (public profiles)**
+
+```bash
+mention "$GENERAL" "$BOB_PUBKEY" \
+  "Use get_user_profile to look up Alice's profile (pubkey: $ALICE_PUBKEY). Report her display name and about text. Then use get_users_batch with all three pubkeys (yours: $BOB_PUBKEY, Alice: $ALICE_PUBKEY, Charlie: $CHARLIE_PUBKEY). Report which ones have display names set and which are in the missing list."
 ```
 
 **B-8: Profile resolution (public profiles)**
@@ -696,6 +703,7 @@ After all exercises complete, the following should be true:
 | Profile resolution | Bob can read Alice's profile via `get_user_profile`; `get_users_batch` returns Alice and Bob with display names, Charlie with null display name (all in profiles map) |
 | NIP-05 verification | Charlie queries `/.well-known/nostr.json?name=alice` and gets Alice's pubkey (Alice set `alice@localhost` in A-5) |
 | Profile edge cases | Charlie gets appropriate errors for invalid/unknown pubkeys |
+| Presence | Alice is 'online' (A-5), Bob is 'away' (B-7); Charlie can read both via get_presence (C-7) |
 | Error handling | Charlie's C-1, C-2, C-5 exercises report correct errors |
 | charlie-lifecycle | Unarchived and final message sent successfully |
 
@@ -1003,9 +1011,9 @@ steps:
 
 ---
 
-## 6. The 40 MCP Tools
+## 6. The 41 MCP Tools
 
-The `sprout-mcp-server` exposes 40 tools covering the full Sprout feature surface. All are available to agents running via the `sprout-acp` harness.
+The `sprout-mcp-server` exposes 41 tools covering the full Sprout feature surface. All are available to agents running via the `sprout-acp` harness.
 
 ### Channels (8)
 
@@ -1096,6 +1104,7 @@ The `sprout-mcp-server` exposes 40 tools covering the full Sprout feature surfac
 | Tool | Description |
 |------|-------------|
 | `get_presence` | Bulk presence lookup by pubkey |
+| `set_presence` | Set presence status (online/away/offline) with TTL |
 
 ### Members (3)
 
@@ -1170,9 +1179,9 @@ rm -f /tmp/alice-keys.txt /tmp/agent-b-keys.txt /tmp/agent-c-keys.txt
 
 All automated tests pass as of 2026-03-11:
 
-- ✅ 32/32 REST API integration tests
-- ✅ 13/13 WebSocket relay integration tests
-- ✅ 10/10 MCP server integration tests
+- ✅ 40/40 REST API integration tests
+- ✅ 14/14 WebSocket relay integration tests
+- ✅ 14/14 MCP server integration tests
 - ✅ Multi-agent E2E (Alice/Bob/Charlie) via sprout-acp harness
 
 ---

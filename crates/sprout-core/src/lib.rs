@@ -15,12 +15,15 @@ pub mod filter;
 pub mod kind;
 /// Network utilities — SSRF-safe IP classification.
 pub mod network;
+/// Presence status types shared across crates.
+pub mod presence;
 /// Schnorr signature and event ID verification.
 pub mod verification;
 
 pub use error::VerificationError;
 pub use event::StoredEvent;
 pub use nostr::{Event, EventId, Filter, Keys, Kind, PublicKey};
+pub use presence::PresenceStatus;
 pub use verification::verify_event;
 
 #[cfg(any(test, feature = "test-utils"))]
