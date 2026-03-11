@@ -15,24 +15,17 @@
 //!
 //! # Auth
 //!
-//! The MCP server generates an ephemeral keypair on startup (no `SPROUT_PRIVATE_KEY`
-//! needed). In dev mode (`require_auth_token=false`) the relay accepts any
-//! authenticated NIP-42 client.
-//!
-//! # Channel setup
-//!
-//! Tests use the pre-seeded open channels that are stable across relay restarts.
+//! Each test generates a known keypair, creates a fresh channel via the REST API
+//! (so the keypair is the channel owner and member), then passes the private key
+//! as `SPROUT_PRIVATE_KEY` to the MCP server subprocess.  This ensures the MCP
+//! server uses a stable identity that has access to the channels under test.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
+use nostr::{Keys, ToBech32};
 use serde_json::{json, Value};
-
-// ── Seeded channel IDs (UUID5-derived, stable across relay restarts) ──────────
-
-const CHANNEL_GENERAL: &str = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
-const CHANNEL_ENGINEERING: &str = "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -41,11 +34,63 @@ fn relay_ws_url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3001".to_string())
 }
 
+/// HTTP relay URL derived from the WebSocket URL.
+fn relay_http_url() -> String {
+    relay_ws_url()
+        .replace("wss://", "https://")
+        .replace("ws://", "http://")
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Generate a fresh Nostr keypair for a test run.
+fn generate_test_keys() -> Keys {
+    Keys::generate()
+}
+
+/// Encode the secret key as an `nsec1…` bech32 string.
+fn nsec_from_keys(keys: &Keys) -> String {
+    keys.secret_key().to_bech32().expect("bech32 encode nsec")
+}
+
+/// Create a fresh channel via the REST API using the given keypair as the owner.
+///
+/// Returns the new channel's UUID string.  The creating pubkey is automatically
+/// added as a member, so the MCP server (using the same keypair) will have
+/// access to it.
+async fn create_channel_for_test(keys: &Keys, name: &str) -> String {
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/channels", relay_http_url());
+    let resp = client
+        .post(&url)
+        .header("X-Pubkey", keys.public_key().to_hex())
+        .json(&serde_json::json!({
+            "name": name,
+            "channel_type": "stream",
+            "visibility": "open",
+        }))
+        .send()
+        .await
+        .expect("create channel request failed");
+    assert_eq!(
+        resp.status(),
+        201,
+        "channel creation failed: {}",
+        resp.text().await.unwrap_or_default()
+    );
+    let body: serde_json::Value = resp.json().await.expect("parse channel response");
+    body["id"]
+        .as_str()
+        .expect("channel id in response")
+        .to_string()
+}
+
 /// Spawn the MCP server as a subprocess with stdin/stdout piped.
 ///
-/// The server connects to the relay and performs NIP-42 auth on startup.
-/// We give it a few seconds to complete the handshake before sending requests.
-fn spawn_mcp_server() -> Child {
+/// The server connects to the relay and performs NIP-42 auth on startup using
+/// the provided keypair (passed via `SPROUT_PRIVATE_KEY`).
+fn spawn_mcp_server(keys: &Keys) -> Child {
+    let nsec = nsec_from_keys(keys);
     Command::new("cargo")
         .args([
             "run",
@@ -56,6 +101,7 @@ fn spawn_mcp_server() -> Child {
             "--",
         ])
         .env("SPROUT_RELAY_URL", relay_ws_url())
+        .env("SPROUT_PRIVATE_KEY", &nsec)
         // Suppress verbose startup logs so they don't pollute stderr output.
         .env("RUST_LOG", "error")
         .stdin(Stdio::piped())
@@ -74,9 +120,9 @@ struct McpSession {
 }
 
 impl McpSession {
-    /// Spawn the MCP server and wait for it to connect to the relay.
-    async fn start() -> Self {
-        let mut child = spawn_mcp_server();
+    /// Spawn the MCP server with the given keypair and wait for it to connect.
+    async fn start(keys: &Keys) -> Self {
+        let mut child = spawn_mcp_server(keys);
         let stdin = child.stdin.take().expect("stdin not piped");
         let stdout = child.stdout.take().expect("stdout not piped");
         let reader = BufReader::new(stdout);
@@ -200,11 +246,12 @@ impl McpSession {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// Spawn the MCP server, complete the initialize handshake, and verify that
-/// all 16 expected tools are listed by `tools/list`.
+/// all 36 expected tools are listed by `tools/list`.
 #[tokio::test]
 #[ignore]
 async fn test_mcp_initialize_and_list_tools() {
-    let mut session = McpSession::start().await;
+    let keys = generate_test_keys();
+    let mut session = McpSession::start(&keys).await;
 
     // ── initialize ──────────────────────────────────────────────────────────
     let init_resp = session.initialize();
@@ -248,8 +295,8 @@ async fn test_mcp_initialize_and_list_tools() {
 
     assert_eq!(
         tools.len(),
-        16,
-        "expected exactly 16 tools, got {}. Tools: {:?}",
+        36,
+        "expected exactly 36 tools, got {}. Tools: {:?}",
         tools.len(),
         tools
             .iter()
@@ -277,6 +324,26 @@ async fn test_mcp_initialize_and_list_tools() {
         "get_feed",
         "get_feed_mentions",
         "get_feed_actions",
+        "add_channel_member",
+        "remove_channel_member",
+        "list_channel_members",
+        "join_channel",
+        "leave_channel",
+        "get_channel",
+        "update_channel",
+        "set_channel_topic",
+        "set_channel_purpose",
+        "archive_channel",
+        "unarchive_channel",
+        "send_reply",
+        "get_thread",
+        "open_dm",
+        "add_dm_member",
+        "list_dms",
+        "add_reaction",
+        "remove_reaction",
+        "get_reactions",
+        "set_profile",
     ];
 
     for expected in &expected_tools {
@@ -302,11 +369,19 @@ async fn test_mcp_initialize_and_list_tools() {
     session.stop();
 }
 
-/// Call `list_channels` via MCP and verify the response contains the seeded channels.
+/// Call `list_channels` via MCP and verify the response contains the channel
+/// we created for this test run.
 #[tokio::test]
 #[ignore]
 async fn test_mcp_list_channels() {
-    let mut session = McpSession::start().await;
+    let keys = generate_test_keys();
+    let channel_id = create_channel_for_test(
+        &keys,
+        &format!("mcp-e2e-list-{}", uuid::Uuid::new_v4().simple()),
+    )
+    .await;
+
+    let mut session = McpSession::start(&keys).await;
     session.initialize();
 
     let resp = session.call_tool("list_channels", json!({}));
@@ -335,12 +410,12 @@ async fn test_mcp_list_channels() {
         "list_channels returned an empty channel list"
     );
 
-    // Verify the seeded general channel is present.
+    // Verify the channel we just created is present.
     let ids: Vec<&str> = channels.iter().filter_map(|ch| ch["id"].as_str()).collect();
 
     assert!(
-        ids.contains(&CHANNEL_GENERAL),
-        "expected seeded 'general' channel (id={CHANNEL_GENERAL}) in list, got: {ids:?}"
+        ids.contains(&channel_id.as_str()),
+        "expected created channel (id={channel_id}) in list, got: {ids:?}"
     );
 
     // Each channel must have the required fields.
@@ -361,7 +436,14 @@ async fn test_mcp_list_channels() {
 #[tokio::test]
 #[ignore]
 async fn test_mcp_send_and_read_message() {
-    let mut session = McpSession::start().await;
+    let keys = generate_test_keys();
+    let channel_id = create_channel_for_test(
+        &keys,
+        &format!("mcp-e2e-msg-{}", uuid::Uuid::new_v4().simple()),
+    )
+    .await;
+
+    let mut session = McpSession::start(&keys).await;
     session.initialize();
 
     // Generate a unique message content so we can identify it in history.
@@ -372,7 +454,7 @@ async fn test_mcp_send_and_read_message() {
     let send_resp = session.call_tool(
         "send_message",
         json!({
-            "channel_id": CHANNEL_GENERAL,
+            "channel_id": channel_id,
             "content": content,
         }),
     );
@@ -384,8 +466,8 @@ async fn test_mcp_send_and_read_message() {
 
     let send_text = McpSession::tool_text(&send_resp);
     assert!(
-        send_text.contains("Message sent"),
-        "expected 'Message sent' in send_message response, got: {send_text}"
+        send_text.contains("event_id"),
+        "expected 'event_id' in send_message response, got: {send_text}"
     );
     assert!(
         !send_text.starts_with("Error"),
@@ -399,7 +481,7 @@ async fn test_mcp_send_and_read_message() {
     let history_resp = session.call_tool(
         "get_channel_history",
         json!({
-            "channel_id": CHANNEL_GENERAL,
+            "channel_id": channel_id,
             "limit": 20,
         }),
     );
@@ -415,9 +497,13 @@ async fn test_mcp_send_and_read_message() {
         "get_channel_history returned an error: {history_text}"
     );
 
-    let events: Vec<Value> = serde_json::from_str(&history_text).unwrap_or_else(|e| {
-        panic!("get_channel_history response is not valid JSON array: {e}\n{history_text}")
+    let history_json: Value = serde_json::from_str(&history_text).unwrap_or_else(|e| {
+        panic!("get_channel_history response is not valid JSON: {e}\n{history_text}")
     });
+    let events = history_json
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .unwrap_or_else(|| panic!("expected 'messages' array in response: {history_text}"));
 
     let found = events
         .iter()
@@ -438,7 +524,14 @@ async fn test_mcp_send_and_read_message() {
 #[tokio::test]
 #[ignore]
 async fn test_mcp_search() {
-    let mut session = McpSession::start().await;
+    let keys = generate_test_keys();
+    let channel_id = create_channel_for_test(
+        &keys,
+        &format!("mcp-e2e-search-{}", uuid::Uuid::new_v4().simple()),
+    )
+    .await;
+
+    let mut session = McpSession::start(&keys).await;
     session.initialize();
 
     // Generate a unique token that will appear in the search index.
@@ -449,7 +542,7 @@ async fn test_mcp_search() {
     let send_resp = session.call_tool(
         "send_message",
         json!({
-            "channel_id": CHANNEL_GENERAL,
+            "channel_id": channel_id,
             "content": content,
         }),
     );
@@ -461,8 +554,8 @@ async fn test_mcp_search() {
 
     let send_text = McpSession::tool_text(&send_resp);
     assert!(
-        send_text.contains("Message sent"),
-        "expected 'Message sent', got: {send_text}"
+        send_text.contains("event_id"),
+        "expected 'event_id' in send_message response, got: {send_text}"
     );
 
     // Wait for the search index to catch up.
@@ -485,7 +578,7 @@ async fn test_mcp_search() {
     let history_resp = session.call_tool(
         "get_channel_history",
         json!({
-            "channel_id": CHANNEL_GENERAL,
+            "channel_id": channel_id,
             "limit": 50,
         }),
     );
@@ -501,9 +594,13 @@ async fn test_mcp_search() {
         "get_channel_history returned an error: {history_text}"
     );
 
-    let events: Vec<Value> = serde_json::from_str(&history_text).unwrap_or_else(|e| {
+    let history_json: Value = serde_json::from_str(&history_text).unwrap_or_else(|e| {
         panic!("get_channel_history response is not valid JSON: {e}\n{history_text}")
     });
+    let events = history_json
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .unwrap_or_else(|| panic!("expected 'messages' array in response: {history_text}"));
 
     let found = events
         .iter()
@@ -524,7 +621,14 @@ async fn test_mcp_search() {
 #[tokio::test]
 #[ignore]
 async fn test_mcp_create_and_trigger_workflow() {
-    let mut session = McpSession::start().await;
+    let keys = generate_test_keys();
+    let channel_id = create_channel_for_test(
+        &keys,
+        &format!("mcp-e2e-wf-{}", uuid::Uuid::new_v4().simple()),
+    )
+    .await;
+
+    let mut session = McpSession::start(&keys).await;
     session.initialize();
 
     // A minimal webhook-triggered workflow (no external side effects).
@@ -543,7 +647,7 @@ async fn test_mcp_create_and_trigger_workflow() {
     let create_resp = session.call_tool(
         "create_workflow",
         json!({
-            "channel_id": CHANNEL_ENGINEERING,
+            "channel_id": channel_id,
             "yaml_definition": yaml_definition,
         }),
     );
@@ -555,9 +659,9 @@ async fn test_mcp_create_and_trigger_workflow() {
 
     let create_text = McpSession::tool_text(&create_resp);
     if create_text.starts_with("Error") {
-        // The MCP server uses an ephemeral keypair that may not exist in the
-        // users table (FK constraint on workflows.owner_pubkey).  This is a
-        // test-environment limitation, not a bug.  Skip gracefully.
+        // The MCP server uses a keypair that may not exist in the users table
+        // (FK constraint on workflows.owner_pubkey).  This is a test-environment
+        // limitation, not a bug.  Skip gracefully.
         eprintln!("Skipping workflow test — MCP keypair not in users table: {create_text}");
         session.stop();
         return;
@@ -583,7 +687,7 @@ async fn test_mcp_create_and_trigger_workflow() {
     let list_resp = session.call_tool(
         "list_workflows",
         json!({
-            "channel_id": CHANNEL_ENGINEERING,
+            "channel_id": channel_id,
         }),
     );
 
@@ -701,7 +805,8 @@ async fn test_mcp_create_and_trigger_workflow() {
 #[tokio::test]
 #[ignore]
 async fn test_mcp_feed_tools() {
-    let mut session = McpSession::start().await;
+    let keys = generate_test_keys();
+    let mut session = McpSession::start(&keys).await;
     session.initialize();
 
     // ── get_feed ────────────────────────────────────────────────────────────
@@ -776,7 +881,14 @@ async fn test_mcp_feed_tools() {
 #[tokio::test]
 #[ignore]
 async fn test_mcp_canvas_set_and_get() {
-    let mut session = McpSession::start().await;
+    let keys = generate_test_keys();
+    let channel_id = create_channel_for_test(
+        &keys,
+        &format!("mcp-e2e-canvas-{}", uuid::Uuid::new_v4().simple()),
+    )
+    .await;
+
+    let mut session = McpSession::start(&keys).await;
     session.initialize();
 
     let unique_content = format!("MCP E2E canvas test: {}", uuid::Uuid::new_v4().simple());
@@ -785,7 +897,7 @@ async fn test_mcp_canvas_set_and_get() {
     let set_resp = session.call_tool(
         "set_canvas",
         json!({
-            "channel_id": CHANNEL_GENERAL,
+            "channel_id": channel_id,
             "content": unique_content,
         }),
     );
@@ -796,9 +908,9 @@ async fn test_mcp_canvas_set_and_get() {
     );
 
     let set_text = McpSession::tool_text(&set_resp);
-    assert!(
-        set_text.contains("Canvas updated"),
-        "expected 'Canvas updated' in set_canvas response, got: {set_text}"
+    assert_eq!(
+        set_text, "Canvas updated.",
+        "expected 'Canvas updated.' from set_canvas, got: {set_text}"
     );
 
     // Small delay for the event to propagate.
@@ -808,7 +920,7 @@ async fn test_mcp_canvas_set_and_get() {
     let get_resp = session.call_tool(
         "get_canvas",
         json!({
-            "channel_id": CHANNEL_GENERAL,
+            "channel_id": channel_id,
         }),
     );
 
@@ -818,9 +930,9 @@ async fn test_mcp_canvas_set_and_get() {
     );
 
     let get_text = McpSession::tool_text(&get_resp);
-    assert!(
-        get_text.contains(&unique_content),
-        "expected canvas content '{unique_content}' in get_canvas response, got: {get_text}"
+    assert_eq!(
+        get_text, unique_content,
+        "expected exact canvas content '{unique_content}' from get_canvas, got: {get_text}"
     );
 
     session.stop();

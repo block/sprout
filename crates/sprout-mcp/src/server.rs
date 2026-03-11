@@ -1,5 +1,3 @@
-use sprout_core::kind::KIND_CANVAS;
-
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
@@ -79,7 +77,7 @@ pub struct GetChannelHistoryParams {
 /// Parameters for the `list_channels` tool.
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ListChannelsParams {
-    /// Optional visibility filter: `"public"` or `"private"`.
+    /// Optional visibility filter: `"open"` or `"private"`.
     #[serde(default)]
     pub visibility: Option<String>,
 }
@@ -89,9 +87,9 @@ pub struct ListChannelsParams {
 pub struct CreateChannelParams {
     /// Display name for the new channel.
     pub name: String,
-    /// Channel type identifier (e.g. `"text"`, `"voice"`).
+    /// Channel type: `"stream"` (real-time chat) or `"forum"` (threaded discussions).
     pub channel_type: String,
-    /// Visibility of the channel: `"public"` or `"private"`.
+    /// Channel visibility: `"open"` (anyone can join) or `"private"` (invite-only).
     pub visibility: String,
     /// Optional human-readable description of the channel's purpose.
     #[serde(default)]
@@ -128,7 +126,19 @@ pub struct ListWorkflowsParams {
 pub struct CreateWorkflowParams {
     /// UUID of the channel to own this workflow.
     pub channel_id: String,
-    /// Full workflow definition in YAML format.
+    /// Full workflow definition in YAML format. Required fields: name (string), trigger (object with
+    /// 'on' field: 'message_posted', 'reaction_added', or 'webhook'), steps (array).
+    /// Each step needs: id (alphanumeric/underscore), action (e.g. 'send_message'), and action-specific
+    /// fields as direct properties (NOT nested under 'params'). Example:
+    /// ```yaml
+    /// name: My Workflow
+    /// trigger:
+    ///   on: message_posted
+    /// steps:
+    ///   - id: notify
+    ///     action: send_message
+    ///     text: Hello from workflow!
+    /// ```
     pub yaml_definition: String,
 }
 
@@ -522,7 +532,10 @@ impl SproutMcpServer {
     }
 
     /// Create a new Sprout channel.
-    #[tool(name = "create_channel", description = "Create a new Sprout channel")]
+    #[tool(
+        name = "create_channel",
+        description = "Create a new Sprout channel. channel_type must be 'stream' or 'forum'. visibility must be 'open' or 'private'."
+    )]
     pub async fn create_channel(&self, Parameters(p): Parameters<CreateChannelParams>) -> String {
         let body = serde_json::json!({
             "name": p.name,
@@ -545,28 +558,19 @@ impl SproutMcpServer {
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-
-        let filter = nostr::Filter::new()
-            .kind(nostr::Kind::Custom(KIND_CANVAS as u16))
-            .custom_tag(
-                nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
-                [p.channel_id.as_str()],
-            )
-            .limit(50);
-
-        let sub_id = format!("canvas-{}", uuid::Uuid::new_v4());
-        let events = match self.client.subscribe(&sub_id, vec![filter]).await {
-            Ok(e) => e,
-            Err(e) => return format!("Error: {e}"),
-        };
-        let _ = self.client.close_subscription(&sub_id).await;
-
-        let canvas_event = events.iter().max_by_key(|event| event.created_at.as_u64());
-
-        if let Some(event) = canvas_event {
-            event.content.clone()
-        } else {
-            "No canvas set for this channel.".to_string()
+        match self.client.get_canvas(&p.channel_id).await {
+            Ok(body) => {
+                // Parse REST JSON and return just the content string.
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+                    match v.get("content").and_then(|c| c.as_str()) {
+                        Some(content) => content.to_string(),
+                        None => "No canvas set for this channel.".to_string(),
+                    }
+                } else {
+                    body
+                }
+            }
+            Err(e) => format!("Error: {e}"),
         }
     }
 
@@ -579,29 +583,20 @@ impl SproutMcpServer {
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-
-        let keys = self.client.keys().clone();
-
-        let channel_tag = match nostr::Tag::parse(&["h", &p.channel_id]) {
-            Ok(t) => t,
-            Err(e) => return format!("Error building tag: {e}"),
-        };
-
-        let event = match nostr::EventBuilder::new(
-            nostr::Kind::Custom(KIND_CANVAS as u16),
-            &p.content,
-            [channel_tag],
-        )
-        .sign_with_keys(&keys)
-        {
-            Ok(e) => e,
-            Err(e) => return format!("Error signing event: {e}"),
-        };
-
-        match self.client.send_event(event).await {
-            Ok(ok) if ok.accepted => "Canvas updated.".to_string(),
-            Ok(ok) => format!("Canvas update rejected: {}", ok.message),
-            Err(e) => format!("Relay error: {e}"),
+        match self.client.set_canvas(&p.channel_id, &p.content).await {
+            Ok(body) => {
+                // Parse REST JSON; return a clean confirmation string.
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if v.get("ok").and_then(|o| o.as_bool()) == Some(true) {
+                        return "Canvas updated.".to_string();
+                    }
+                    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+                        return format!("Error: {err}");
+                    }
+                }
+                body
+            }
+            Err(e) => format!("Error: {e}"),
         }
     }
 
@@ -629,7 +624,7 @@ impl SproutMcpServer {
     /// Create a new workflow in a channel from a YAML definition.
     #[tool(
         name = "create_workflow",
-        description = "Create a new workflow in a channel from a YAML definition"
+        description = "Create a new workflow from a YAML definition. Steps need 'id' (not 'name'), and action fields are direct properties (not nested under 'params'). Triggers: message_posted, reaction_added, webhook."
     )]
     pub async fn create_workflow(&self, Parameters(p): Parameters<CreateWorkflowParams>) -> String {
         if uuid::Uuid::parse_str(&p.channel_id).is_err() {

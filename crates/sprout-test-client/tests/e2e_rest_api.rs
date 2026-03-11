@@ -20,10 +20,10 @@
 //!
 //! # Channel setup
 //!
-//! The relay exposes REST endpoints to list and create channels. Tests use the
-//! pre-seeded open channels (`general`, `agents`, `engineering`, etc.) for read
-//! operations and create temporary channels for write coverage when needed.
-//! Some tests also send messages via WebSocket to set up search / feed data.
+//! Each test creates its own channels dynamically via `POST /api/channels`.
+//! No pre-seeded data is required — tests are fully self-contained and work
+//! against a fresh database. Some tests also send messages via WebSocket to
+//! set up search / feed data.
 
 use std::time::Duration;
 
@@ -79,13 +79,6 @@ async fn authed_post_json(
         .unwrap_or_else(|e| panic!("HTTP POST {url} failed: {e}"))
 }
 
-/// Known open channel IDs seeded in the dev database.
-///
-/// These are UUID5-derived from the channel name and are stable across relay
-/// restarts as long as the seed data uses the same namespace + name inputs.
-const CHANNEL_GENERAL: &str = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
-const CHANNEL_ENGINEERING: &str = "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9";
-
 // ── Channel tests ─────────────────────────────────────────────────────────────
 
 /// GET /api/channels returns a non-empty list with the expected fields.
@@ -97,6 +90,26 @@ async fn test_list_channels_returns_expected_fields() {
     let pubkey_hex = keys.public_key().to_hex();
 
     let url = format!("{}/api/channels", relay_http_url());
+
+    // Ensure at least one channel exists (fresh DB may be empty).
+    let seed_resp = authed_post_json(
+        &client,
+        &url,
+        &pubkey_hex,
+        serde_json::json!({
+            "name": format!("list-test-{}", uuid::Uuid::new_v4()),
+            "channel_type": "stream",
+            "visibility": "open",
+            "description": "Seed channel for list test"
+        }),
+    )
+    .await;
+    assert_eq!(
+        seed_resp.status(),
+        201,
+        "bootstrap channel creation must succeed"
+    );
+
     let resp = authed_get(&client, &url, &pubkey_hex).await;
 
     assert_eq!(resp.status(), 200, "expected 200 OK from /api/channels");
@@ -190,6 +203,30 @@ async fn test_channel_visibility_open_channels_visible_to_all() {
 
     let url = format!("{}/api/channels", relay_http_url());
 
+    // Create an open channel as keys_a so there is at least one open channel to verify.
+    let open_channel_name = format!("e2e-open-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &url,
+        &keys_a.public_key().to_hex(),
+        serde_json::json!({
+            "name": open_channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(
+        create_resp.status(),
+        201,
+        "failed to create open channel for visibility test"
+    );
+    let created_channel: serde_json::Value = create_resp.json().await.expect("JSON");
+    let open_channel_id = created_channel["id"]
+        .as_str()
+        .expect("created channel must have id")
+        .to_string();
+
     let resp_a = authed_get(&client, &url, &keys_a.public_key().to_hex()).await;
     let resp_b = authed_get(&client, &url, &keys_b.public_key().to_hex()).await;
 
@@ -199,7 +236,7 @@ async fn test_channel_visibility_open_channels_visible_to_all() {
     let channels_a: Vec<serde_json::Value> = resp_a.json().await.expect("JSON");
     let channels_b: Vec<serde_json::Value> = resp_b.json().await.expect("JSON");
 
-    // Both users should see the same set of open channels.
+    // Both users should see the open channel we just created.
     let ids_a: std::collections::HashSet<String> = channels_a
         .iter()
         .filter_map(|c| c["id"].as_str().map(|s| s.to_string()))
@@ -209,19 +246,13 @@ async fn test_channel_visibility_open_channels_visible_to_all() {
         .filter_map(|c| c["id"].as_str().map(|s| s.to_string()))
         .collect();
 
-    assert_eq!(
-        ids_a, ids_b,
-        "two fresh users should see the same set of open channels"
-    );
-
-    // The well-known seeded channels must be present.
     assert!(
-        ids_a.contains(CHANNEL_GENERAL),
-        "expected seeded 'general' channel (id={CHANNEL_GENERAL})"
+        ids_a.contains(&open_channel_id),
+        "keys_a should see the open channel we created (id={open_channel_id})"
     );
     assert!(
-        ids_a.contains(CHANNEL_ENGINEERING),
-        "expected seeded 'engineering' channel (id={CHANNEL_ENGINEERING})"
+        ids_b.contains(&open_channel_id),
+        "keys_b (unrelated user) should also see the open channel (id={open_channel_id})"
     );
 }
 
@@ -235,14 +266,36 @@ async fn test_rest_send_message_reaches_websocket_channel_subscriptions() {
     let poster_keys = Keys::generate();
     let ws_url = relay_ws_url();
 
+    // Create a fresh open channel for this test.
+    let channels_url = format!("{}/api/channels", relay_http_url());
+    let channel_name = format!("e2e-rest-live-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &channels_url,
+        &poster_keys.public_key().to_hex(),
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201, "failed to create test channel");
+    let created: serde_json::Value = create_resp.json().await.expect("JSON");
+    let channel_id = created["id"]
+        .as_str()
+        .expect("channel must have id")
+        .to_string();
+
     let mut subscriber = SproutTestClient::connect(&ws_url, &subscriber_keys)
         .await
         .expect("WebSocket connect failed");
 
     let sid = format!("rest-live-{}", uuid::Uuid::new_v4().simple());
-    let filter = Filter::new()
-        .kind(Kind::Custom(40001))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [CHANNEL_GENERAL]);
+    let filter = Filter::new().kind(Kind::Custom(40001)).custom_tag(
+        SingleLetterTag::lowercase(Alphabet::H),
+        [channel_id.as_str()],
+    );
 
     subscriber
         .subscribe(&sid, vec![filter])
@@ -254,11 +307,7 @@ async fn test_rest_send_message_reaches_websocket_channel_subscriptions() {
         .expect("EOSE failed");
 
     let content = format!("E2E REST live message: {}", uuid::Uuid::new_v4().simple());
-    let url = format!(
-        "{}/api/channels/{}/messages",
-        relay_http_url(),
-        CHANNEL_GENERAL
-    );
+    let url = format!("{}/api/channels/{}/messages", relay_http_url(), channel_id);
     let resp = authed_post_json(
         &client,
         &url,
@@ -286,7 +335,7 @@ async fn test_rest_send_message_reaches_websocket_channel_subscriptions() {
 
             assert!(
                 tags.iter()
-                    .any(|tag| tag.len() >= 2 && tag[0] == "h" && tag[1] == CHANNEL_GENERAL),
+                    .any(|tag| tag.len() >= 2 && tag[0] == "h" && tag[1] == channel_id),
                 "REST-created message is missing the channel h tag: {tags:?}"
             );
             assert!(
@@ -363,6 +412,27 @@ async fn test_search_returns_indexed_event() {
     let pubkey_hex = keys.public_key().to_hex();
     let ws_url = relay_ws_url();
 
+    // Create a channel for this test so the event is accepted by the relay.
+    let channels_url = format!("{}/api/channels", relay_http_url());
+    let channel_name = format!("e2e-search-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &channels_url,
+        &pubkey_hex,
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201, "failed to create test channel");
+    let created: serde_json::Value = create_resp.json().await.expect("JSON");
+    let channel_id = created["id"]
+        .as_str()
+        .expect("channel must have id")
+        .to_string();
+
     let unique_token = format!("e2e-search-{}", uuid::Uuid::new_v4().simple());
     let content = format!("E2E REST search test marker: {unique_token}");
 
@@ -370,8 +440,8 @@ async fn test_search_returns_indexed_event() {
         .await
         .expect("WebSocket connect failed");
 
-    let e_tag = Tag::parse(&["e", CHANNEL_GENERAL]).expect("tag parse failed");
-    let event = nostr::EventBuilder::new(Kind::Custom(40001), &content, [e_tag])
+    let h_tag = Tag::parse(&["h", &channel_id]).expect("tag parse failed");
+    let event = nostr::EventBuilder::new(Kind::Custom(40001), &content, [h_tag])
         .sign_with_keys(&keys)
         .expect("event sign failed");
 
@@ -673,7 +743,28 @@ async fn test_feed_returns_activity() {
         return;
     }
 
-    // Send a message to an open channel so there is activity to return.
+    // Create a channel for this test so the event is accepted by the relay.
+    let channels_url = format!("{}/api/channels", relay_http_url());
+    let channel_name = format!("e2e-feed-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &channels_url,
+        &pubkey_hex,
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201, "failed to create test channel");
+    let created_channel: serde_json::Value = create_resp.json().await.expect("JSON");
+    let channel_id = created_channel["id"]
+        .as_str()
+        .expect("channel must have id")
+        .to_string();
+
+    // Send a message to the open channel so there is activity to return.
     let unique_token = format!("e2e-feed-{}", uuid::Uuid::new_v4().simple());
     let content = format!("E2E feed test: {unique_token}");
 
@@ -681,8 +772,8 @@ async fn test_feed_returns_activity() {
         .await
         .expect("WebSocket connect failed");
 
-    let e_tag = Tag::parse(&["e", CHANNEL_GENERAL]).expect("tag parse failed");
-    let event = nostr::EventBuilder::new(Kind::Custom(40001), &content, [e_tag])
+    let h_tag = Tag::parse(&["h", &channel_id]).expect("tag parse failed");
+    let event = nostr::EventBuilder::new(Kind::Custom(40001), &content, [h_tag])
         .sign_with_keys(&keys)
         .expect("event sign failed");
 

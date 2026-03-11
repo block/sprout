@@ -8,6 +8,7 @@ members = [
     "crates/sprout-search",
     "crates/sprout-audit",
     "crates/sprout-mcp",
+    "crates/sprout-acp",
     "crates/sprout-proxy",
     "crates/sprout-huddle",
     "crates/sprout-test-client",
@@ -26,7 +27,7 @@ repository = "https://github.com/sprout-rs/sprout"
 
 [workspace.dependencies]
 # Runtime
-tokio       = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal"] }
+tokio       = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal", "process"] }
 tokio-util  = { version = "0.7", features = ["rt"] }
 
 # HTTP + WebSocket
