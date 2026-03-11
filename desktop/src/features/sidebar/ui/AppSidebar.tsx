@@ -398,7 +398,7 @@ export function AppSidebar({
       variant="sidebar"
     >
       <SidebarHeader
-        className="gap-3 pt-14"
+        className="gap-3 pt-12"
         onPointerDown={handleDragPointerDown}
       >
         <Button
