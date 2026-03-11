@@ -79,6 +79,20 @@ export type Identity = {
   displayName: string;
 };
 
+export type Profile = {
+  pubkey: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  about: string | null;
+  nip05Handle: string | null;
+};
+
+export type UpdateProfileInput = {
+  displayName?: string;
+  avatarUrl?: string;
+  about?: string;
+};
+
 export type RelayEvent = {
   id: string;
   pubkey: string;

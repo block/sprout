@@ -29,7 +29,11 @@ export default defineConfig({
     },
     {
       name: "integration",
-      testMatch: ["**/stream.spec.ts", "**/integration.spec.ts"],
+      testMatch: [
+        "**/stream.spec.ts",
+        "**/integration.spec.ts",
+        "**/profile.spec.ts",
+      ],
       use: {
         ...devices["Desktop Chrome"],
       },
