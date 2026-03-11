@@ -1805,9 +1805,15 @@ mod diff_tests {
         let max_bytes = 500;
         let (result, truncated) = truncate_diff(&diff, max_bytes);
         assert!(truncated);
-        assert!(result.contains("context"), "should contain first-hunk content");
+        assert!(
+            result.contains("context"),
+            "should contain first-hunk content"
+        );
         assert!(result.contains("Diff truncated"));
-        assert!(!result.contains("@@ -10,3"), "second hunk should be excluded");
+        assert!(
+            !result.contains("@@ -10,3"),
+            "second hunk should be excluded"
+        );
         // Result must not exceed max_bytes.
         assert!(
             result.len() <= max_bytes,
@@ -1836,7 +1842,9 @@ mod diff_tests {
     fn truncate_diff_result_within_limit() {
         let mut diff = String::new();
         for i in 0..2000 {
-            diff.push_str(&format!("@@ -{i},1 +{i},1 @@\n-old line {i}\n+new line {i}\n"));
+            diff.push_str(&format!(
+                "@@ -{i},1 +{i},1 @@\n-old line {i}\n+new line {i}\n"
+            ));
         }
         let max = 1024;
         let (result, truncated) = truncate_diff(&diff, max);

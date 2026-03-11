@@ -32,7 +32,9 @@ function isNearBottom(container: HTMLDivElement) {
 
 function MessageRow({ message }: { message: TimelineMessage }) {
   const [hasAvatarError, setHasAvatarError] = React.useState(false);
-  const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(null);
+  const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
+    null,
+  );
   const initials = message.author
     .split(" ")
     .map((part) => part[0])
@@ -40,7 +42,8 @@ function MessageRow({ message }: { message: TimelineMessage }) {
     .slice(0, 2)
     .toUpperCase();
 
-  const getTag = (name: string) => message.tags?.find((t) => t[0] === name)?.[1];
+  const getTag = (name: string) =>
+    message.tags?.find((t) => t[0] === name)?.[1];
 
   const renderBody = () => {
     switch (message.kind) {

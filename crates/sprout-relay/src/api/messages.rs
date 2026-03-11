@@ -110,10 +110,12 @@ fn build_diff_tags(
     body: &SendMessageBody,
 ) -> Result<Vec<Tag>, (StatusCode, axum::Json<serde_json::Value>)> {
     // repo-url is required and must be http/https
-    let repo_url = body
-        .diff_repo_url
-        .as_deref()
-        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "diff_repo_url is required for kind:40008"))?;
+    let repo_url = body.diff_repo_url.as_deref().ok_or_else(|| {
+        api_error(
+            StatusCode::BAD_REQUEST,
+            "diff_repo_url is required for kind:40008",
+        )
+    })?;
     if !repo_url.starts_with("http://") && !repo_url.starts_with("https://") {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
@@ -126,7 +128,12 @@ fn build_diff_tags(
         .diff_commit_sha
         .as_deref()
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "diff_commit_sha is required for kind=40008"))?;
+        .ok_or_else(|| {
+            api_error(
+                StatusCode::BAD_REQUEST,
+                "diff_commit_sha is required for kind=40008",
+            )
+        })?;
     if commit_sha.len() < 7 || !commit_sha.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
@@ -152,7 +159,11 @@ fn build_diff_tags(
         );
     }
 
-    if let Some(parent) = body.diff_parent_commit_sha.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(parent) = body
+        .diff_parent_commit_sha
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
         if parent.len() < 7 || !parent.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(api_error(
                 StatusCode::BAD_REQUEST,
@@ -774,8 +785,8 @@ pub async fn get_thread(
     let relay_pk = state.relay_keypair.public_key();
     let relay_pk_bytes = relay_pk.serialize().to_vec();
     let root_author = effective_author(&root_event.event, &relay_pk);
-    let root_tags = serde_json::to_value(&root_event.event.tags)
-        .unwrap_or(serde_json::Value::Array(vec![]));
+    let root_tags =
+        serde_json::to_value(&root_event.event.tags).unwrap_or(serde_json::Value::Array(vec![]));
     let mut root_obj = serde_json::json!({
         "event_id":   root_event.event.id.to_hex(),
         "pubkey":     nostr_hex::encode(&root_author),

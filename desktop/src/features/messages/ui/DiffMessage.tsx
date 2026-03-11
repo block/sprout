@@ -1,10 +1,10 @@
-import { html } from 'diff2html';
-import 'diff2html/bundles/css/diff2html.min.css';
-import DOMPurify from 'dompurify';
-import { FileDiff, Maximize2 } from 'lucide-react';
-import { useMemo } from 'react';
+import { html } from "diff2html";
+import "diff2html/bundles/css/diff2html.min.css";
+import DOMPurify from "dompurify";
+import { FileDiff, Maximize2 } from "lucide-react";
+import { useMemo } from "react";
 
-import { Button } from '@/shared/ui/button';
+import { Button } from "@/shared/ui/button";
 
 type DiffMessageProps = {
   content: string;
@@ -20,7 +20,7 @@ function isSafeUrl(url: string | undefined): url is string {
   if (!url) return false;
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
   } catch {
     return false;
   }
@@ -35,12 +35,32 @@ function getHostname(url: string): string {
 }
 
 const ALLOWED_TAGS = [
-  'div', 'span', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
-  'pre', 'code', 'ins', 'del', 'a', 'i', 'em', 'strong', 'small',
+  "div",
+  "span",
+  "table",
+  "thead",
+  "tbody",
+  "tr",
+  "th",
+  "td",
+  "pre",
+  "code",
+  "ins",
+  "del",
+  "a",
+  "i",
+  "em",
+  "strong",
+  "small",
 ];
 
 const ALLOWED_ATTR = [
-  'class', 'id', 'data-line-number', 'href', 'title', 'aria-label',
+  "class",
+  "id",
+  "data-line-number",
+  "href",
+  "title",
+  "aria-label",
 ];
 
 const ALLOWED_URI_REGEXP = /^https?:\/\//i;
@@ -58,8 +78,8 @@ export function DiffMessage({
     try {
       const rawHtml = html(content, {
         drawFileList: false,
-        matching: 'lines',
-        outputFormat: 'side-by-side',
+        matching: "lines",
+        outputFormat: "side-by-side",
       });
       const sanitized = DOMPurify.sanitize(rawHtml, {
         ALLOWED_TAGS,
@@ -68,16 +88,14 @@ export function DiffMessage({
       });
       return { diffHtml: sanitized, renderError: false };
     } catch {
-      return { diffHtml: '', renderError: true };
+      return { diffHtml: "", renderError: true };
     }
   }, [content]);
 
   const safeRepoUrl = isSafeUrl(repoUrl) ? repoUrl : undefined;
 
   const commitUrl =
-    safeRepoUrl && commitSha
-      ? `${safeRepoUrl}/commit/${commitSha}`
-      : undefined;
+    safeRepoUrl && commitSha ? `${safeRepoUrl}/commit/${commitSha}` : undefined;
 
   const shortSha = commitSha ? commitSha.slice(0, 7) : undefined;
 
@@ -87,7 +105,7 @@ export function DiffMessage({
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50 bg-muted/40">
         <FileDiff className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="flex-1 truncate font-mono text-xs text-foreground/80">
-          {filePath ?? 'diff'}
+          {filePath ?? "diff"}
         </span>
         {shortSha && (
           <span className="text-xs text-muted-foreground font-mono">
@@ -141,19 +159,23 @@ export function DiffMessage({
       {/* Diff content — max 400px height, scrollable */}
       <div className="max-h-[400px] overflow-auto text-xs">
         {renderError ? (
-          <pre className="p-3 whitespace-pre-wrap font-mono text-muted-foreground">{content}</pre>
+          <pre className="p-3 whitespace-pre-wrap font-mono text-muted-foreground">
+            {content}
+          </pre>
         ) : diffHtml ? (
           // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized by DOMPurify
           <div dangerouslySetInnerHTML={{ __html: diffHtml }} />
         ) : (
-          <div className="p-3 text-xs text-muted-foreground italic">No diff content</div>
+          <div className="p-3 text-xs text-muted-foreground italic">
+            No diff content
+          </div>
         )}
       </div>
 
       {/* Truncation warning */}
       {truncated && (
         <div className="px-3 py-2 border-t border-border/50 bg-amber-500/10 text-xs text-amber-700 dark:text-amber-400">
-          Diff truncated.{' '}
+          Diff truncated.{" "}
           {safeRepoUrl && commitUrl ? (
             <a
               className="underline hover:no-underline"
@@ -164,7 +186,7 @@ export function DiffMessage({
               View full diff on {getHostname(safeRepoUrl)}
             </a>
           ) : (
-            'View the full diff at the source repository.'
+            "View the full diff at the source repository."
           )}
         </div>
       )}

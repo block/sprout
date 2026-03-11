@@ -854,6 +854,9 @@ mod tests {
     fn diff_posted_trigger_with_filter_roundtrips_yaml() {
         let yaml = "on: diff_posted\nfilter: 'str_contains(trigger_text, \"src/\")'\n";
         let trigger: TriggerDef = serde_yaml::from_str(yaml).unwrap();
-        assert!(matches!(trigger, TriggerDef::DiffPosted { filter: Some(_) }));
+        assert!(matches!(
+            trigger,
+            TriggerDef::DiffPosted { filter: Some(_) }
+        ));
     }
 }
