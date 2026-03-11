@@ -30,6 +30,11 @@ enum Command {
         /// Nostr public key (hex). If omitted, generates a new keypair.
         #[arg(long)]
         pubkey: Option<String>,
+
+        /// Hex pubkey of the human operator who owns this agent.
+        /// If provided, sets agent_owner_pubkey in the users table.
+        #[arg(long)]
+        owner_pubkey: Option<String>,
     },
     /// List all active API tokens.
     ListTokens,
@@ -53,14 +58,21 @@ async fn main() -> Result<()> {
             name,
             scopes,
             pubkey,
-        } => mint_token(&db, &name, &scopes, pubkey.as_deref()).await?,
+            owner_pubkey,
+        } => mint_token(&db, &name, &scopes, pubkey.as_deref(), owner_pubkey).await?,
         Command::ListTokens => list_tokens(&db).await?,
     }
 
     Ok(())
 }
 
-async fn mint_token(db: &Db, name: &str, scopes_str: &str, pubkey_hex: Option<&str>) -> Result<()> {
+async fn mint_token(
+    db: &Db,
+    name: &str,
+    scopes_str: &str,
+    pubkey_hex: Option<&str>,
+    owner_pubkey: Option<String>,
+) -> Result<()> {
     let scopes: Vec<String> = scopes_str
         .split(',')
         .map(|s| s.trim().to_string())
@@ -77,6 +89,18 @@ async fn mint_token(db: &Db, name: &str, scopes_str: &str, pubkey_hex: Option<&s
     let pubkey_bytes = pubkey.serialize().to_vec();
 
     db.ensure_user(&pubkey_bytes).await?;
+
+    // Set agent owner if --owner-pubkey was provided
+    if let Some(ref owner_hex) = owner_pubkey {
+        let owner_bytes =
+            hex::decode(owner_hex).map_err(|e| anyhow::anyhow!("invalid owner pubkey hex: {e}"))?;
+        if owner_bytes.len() != 32 {
+            anyhow::bail!("owner pubkey must be 32 bytes (64 hex chars)");
+        }
+        // Ensure owner's user row exists (FK constraint requires it)
+        db.ensure_user(&owner_bytes).await?;
+        db.set_agent_owner(&pubkey_bytes, &owner_bytes).await?;
+    }
 
     let raw_token = generate_token();
     let token_hash = hash_token(&raw_token);

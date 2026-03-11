@@ -125,6 +125,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/users/me/profile",
             get(api::get_profile).put(api::update_profile),
         )
+        .route(
+            "/api/users/me/channel-add-policy",
+            put(api::put_channel_add_policy),
+        )
         .route("/api/users/{pubkey}/profile", get(api::get_user_profile))
         .route("/api/users/batch", post(api::get_users_batch))
         // Feed route

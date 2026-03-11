@@ -35,6 +35,15 @@ type RawUsersBatchResponse = {
   missing: string[];
 };
 
+type PresenceStatus = "online" | "away" | "offline";
+
+type RawPresenceLookup = Record<string, PresenceStatus>;
+
+type RawSetPresenceResponse = {
+  status: PresenceStatus;
+  ttl_seconds: number;
+};
+
 type RawChannel = {
   id: string;
   name: string;
@@ -169,6 +178,7 @@ const CHARLIE_PUBKEY =
 const OUTSIDER_PUBKEY =
   "df8e91b86fda13a9a67896df77232f7bdab2ba9c3e165378e1ba3d24c13a328e";
 const MOCK_IDENTITY_PUBKEY = DEFAULT_MOCK_IDENTITY.pubkey;
+const MOCK_PRESENCE_TTL_SECONDS = 90;
 
 const mockDisplayNames = new Map<string, string>([
   [MOCK_IDENTITY_PUBKEY, DEFAULT_MOCK_IDENTITY.display_name],
@@ -568,6 +578,14 @@ const mockProfiles = new Map<string, RawProfile>([
     },
   ],
 ]);
+const mockPresence = new Map<string, PresenceStatus>([
+  [MOCK_IDENTITY_PUBKEY, "offline"],
+  [DEFAULT_REAL_IDENTITY.pubkey, "offline"],
+  [ALICE_PUBKEY, "online"],
+  [BOB_PUBKEY, "away"],
+  [CHARLIE_PUBKEY, "online"],
+  [OUTSIDER_PUBKEY, "offline"],
+]);
 
 let installed = false;
 let nextSocketId = 1;
@@ -629,6 +647,14 @@ function applyMockDisplayName(pubkey: string, displayName: string | null) {
     }
     syncMockChannel(channel);
   }
+}
+
+function getMockPresenceStatus(pubkey: string): PresenceStatus {
+  return mockPresence.get(pubkey.toLowerCase()) ?? "offline";
+}
+
+function setMockPresenceStatus(pubkey: string, status: PresenceStatus) {
+  mockPresence.set(pubkey.toLowerCase(), status);
 }
 
 function resolveHandler(handler: unknown): WsHandler {
@@ -952,6 +978,58 @@ async function handleGetUsersBatch(
     method: "POST",
     body: JSON.stringify({
       pubkeys: args.pubkeys,
+    }),
+  });
+}
+
+async function handleGetPresence(
+  args: {
+    pubkeys: string[];
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    return Object.fromEntries(
+      args.pubkeys.map((pubkey) => [
+        pubkey.toLowerCase(),
+        getMockPresenceStatus(pubkey),
+      ]),
+    ) satisfies RawPresenceLookup;
+  }
+
+  if (args.pubkeys.length === 0) {
+    return {} satisfies RawPresenceLookup;
+  }
+
+  const searchParams = new URLSearchParams();
+  searchParams.set("pubkeys", args.pubkeys.join(","));
+  return relayJsonRequest<RawPresenceLookup>(
+    config,
+    `/api/presence?${searchParams.toString()}`,
+  );
+}
+
+async function handleSetPresence(
+  args: {
+    status: PresenceStatus;
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    setMockPresenceStatus(getMockMemberPubkey(config), args.status);
+
+    return {
+      status: args.status,
+      ttl_seconds: args.status === "offline" ? 0 : MOCK_PRESENCE_TTL_SECONDS,
+    } satisfies RawSetPresenceResponse;
+  }
+
+  return relayJsonRequest<RawSetPresenceResponse>(config, "/api/presence", {
+    method: "PUT",
+    body: JSON.stringify({
+      status: args.status,
     }),
   });
 }
@@ -1795,6 +1873,18 @@ export function maybeInstallE2eTauriMocks() {
       case "get_users_batch":
         return handleGetUsersBatch(
           payload as Parameters<typeof handleGetUsersBatch>[0],
+          activeConfig,
+        );
+      case "get_presence":
+        return handleGetPresence(
+          (payload as Parameters<typeof handleGetPresence>[0]) ?? {
+            pubkeys: [],
+          },
+          activeConfig,
+        );
+      case "set_presence":
+        return handleSetPresence(
+          payload as Parameters<typeof handleSetPresence>[0],
           activeConfig,
         );
       case "get_relay_ws_url":

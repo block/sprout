@@ -5,7 +5,7 @@ import {
   getRelayWsUrl,
   signRelayEvent,
 } from "@/shared/api/tauri";
-import type { RelayEvent } from "@/shared/api/types";
+import type { PresenceStatus, RelayEvent } from "@/shared/api/types";
 import { STREAM_MESSAGE_KINDS } from "@/shared/constants/kinds";
 
 type RelaySubscriptionFilter = {
@@ -126,29 +126,27 @@ class RelayClient {
       tags: [["h", channelId]],
     });
 
-    return new Promise<RelayEvent>((resolve, reject) => {
-      const timeout = window.setTimeout(() => {
-        this.pendingEvents.delete(event.id);
-        reject(new Error("Timed out while sending the message."));
-      }, 8_000);
+    return this.publishEvent(
+      event,
+      "Timed out while sending the message.",
+      "Failed to send the message.",
+    );
+  }
 
-      this.pendingEvents.set(event.id, {
-        event,
-        resolve,
-        reject,
-        timeout,
-      });
+  async sendPresence(status: PresenceStatus) {
+    await this.ensureConnected();
 
-      void this.sendRaw(["EVENT", event]).catch((error) => {
-        window.clearTimeout(timeout);
-        this.pendingEvents.delete(event.id);
-        reject(
-          error instanceof Error
-            ? error
-            : new Error("Failed to send the message."),
-        );
-      });
+    const event = await signRelayEvent({
+      kind: 20001,
+      content: status,
+      tags: [],
     });
+
+    return this.publishEvent(
+      event,
+      "Timed out while updating presence.",
+      "Failed to update presence.",
+    );
   }
 
   async subscribeToChannel(
@@ -259,6 +257,32 @@ class RelayClient {
     }
 
     await this.sendRaw(["CLOSE", subId]);
+  }
+
+  private publishEvent(
+    event: RelayEvent,
+    timeoutMessage: string,
+    sendErrorMessage: string,
+  ) {
+    return new Promise<RelayEvent>((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        this.pendingEvents.delete(event.id);
+        reject(new Error(timeoutMessage));
+      }, 8_000);
+
+      this.pendingEvents.set(event.id, {
+        event,
+        resolve,
+        reject,
+        timeout,
+      });
+
+      void this.sendRaw(["EVENT", event]).catch((error) => {
+        window.clearTimeout(timeout);
+        this.pendingEvents.delete(event.id);
+        reject(error instanceof Error ? error : new Error(sendErrorMessage));
+      });
+    });
   }
 
   private async handleWsMessage(message: unknown) {
