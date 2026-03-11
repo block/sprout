@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   CircleDot,
   FileText,
@@ -5,12 +6,12 @@ import {
   Home,
   Plus,
   Search,
-  UserRound,
+  Settings2,
 } from "lucide-react";
 import * as React from "react";
 
 import type { Channel } from "@/shared/api/types";
-import { ThemeToggle } from "@/shared/theme/ThemeToggle";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import {
@@ -36,15 +37,16 @@ type AppSidebarProps = {
   errorMessage?: string;
   homeUrgentCount?: number;
   selectedChannelId: string | null;
-  selectedView: "home" | "channel";
+  selectedView: "home" | "channel" | "settings";
+  unreadChannelIds: Set<string>;
   onCreateChannel: (input: {
     name: string;
     description?: string;
   }) => Promise<void>;
-  onOpenProfile: () => void;
   onOpenSearch: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
+  onSelectSettings: () => void;
 };
 
 function SidebarChannelIcon({ channel }: { channel: Channel }) {
@@ -59,12 +61,50 @@ function SidebarChannelIcon({ channel }: { channel: Channel }) {
   return <Hash className="h-4 w-4" />;
 }
 
+function ChannelMenuButton({
+  channel,
+  isActive,
+  hasUnread,
+  onSelectChannel,
+}: {
+  channel: Channel;
+  isActive: boolean;
+  hasUnread: boolean;
+  onSelectChannel: (channelId: string) => void;
+}) {
+  return (
+    <SidebarMenuButton
+      className={cn(
+        !isActive &&
+          hasUnread &&
+          "font-semibold text-sidebar-foreground hover:text-sidebar-foreground",
+      )}
+      data-testid={`channel-${channel.name}`}
+      isActive={isActive}
+      onClick={() => onSelectChannel(channel.id)}
+      tooltip={channel.name}
+      type="button"
+    >
+      <SidebarChannelIcon channel={channel} />
+      <span className="min-w-0 flex-1 truncate">{channel.name}</span>
+      {hasUnread && !isActive ? (
+        <span
+          aria-hidden="true"
+          className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-primary"
+          data-testid={`channel-unread-${channel.name}`}
+        />
+      ) : null}
+    </SidebarMenuButton>
+  );
+}
+
 function SidebarSection({
   items,
   isActiveChannel,
   selectedChannelId,
   title,
   testId,
+  unreadChannelIds,
   onSelectChannel,
 }: {
   items: Channel[];
@@ -72,6 +112,7 @@ function SidebarSection({
   selectedChannelId: string | null;
   title: string;
   testId: string;
+  unreadChannelIds: Set<string>;
   onSelectChannel: (channelId: string) => void;
 }) {
   if (items.length === 0) {
@@ -85,16 +126,12 @@ function SidebarSection({
         <SidebarMenu data-testid={testId}>
           {items.map((channel) => (
             <SidebarMenuItem key={channel.id}>
-              <SidebarMenuButton
-                data-testid={`channel-${channel.name}`}
+              <ChannelMenuButton
+                channel={channel}
+                hasUnread={unreadChannelIds.has(channel.id)}
                 isActive={isActiveChannel && selectedChannelId === channel.id}
-                onClick={() => onSelectChannel(channel.id)}
-                tooltip={channel.name}
-                type="button"
-              >
-                <SidebarChannelIcon channel={channel} />
-                <span>{channel.name}</span>
-              </SidebarMenuButton>
+                onSelectChannel={onSelectChannel}
+              />
             </SidebarMenuItem>
           ))}
         </SidebarMenu>
@@ -119,6 +156,7 @@ function StreamsSection({
   onSelectChannel,
   isActiveChannel,
   selectedChannelId,
+  unreadChannelIds,
 }: {
   items: Channel[];
   isCreateOpen: boolean;
@@ -135,6 +173,7 @@ function StreamsSection({
   onSelectChannel: (channelId: string) => void;
   isActiveChannel: boolean;
   selectedChannelId: string | null;
+  unreadChannelIds: Set<string>;
 }) {
   return (
     <SidebarGroup>
@@ -208,16 +247,12 @@ function StreamsSection({
           <SidebarMenu data-testid="stream-list">
             {items.map((channel) => (
               <SidebarMenuItem key={channel.id}>
-                <SidebarMenuButton
-                  data-testid={`channel-${channel.name}`}
+                <ChannelMenuButton
+                  channel={channel}
+                  hasUnread={unreadChannelIds.has(channel.id)}
                   isActive={isActiveChannel && selectedChannelId === channel.id}
-                  onClick={() => onSelectChannel(channel.id)}
-                  tooltip={channel.name}
-                  type="button"
-                >
-                  <SidebarChannelIcon channel={channel} />
-                  <span>{channel.name}</span>
-                </SidebarMenuButton>
+                  onSelectChannel={onSelectChannel}
+                />
               </SidebarMenuItem>
             ))}
           </SidebarMenu>
@@ -235,11 +270,12 @@ export function AppSidebar({
   homeUrgentCount,
   selectedChannelId,
   selectedView,
+  unreadChannelIds,
   onCreateChannel,
-  onOpenProfile,
   onOpenSearch,
   onSelectHome,
   onSelectChannel,
+  onSelectSettings,
 }: AppSidebarProps) {
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
@@ -294,13 +330,24 @@ export function AppSidebar({
     }
   }
 
+  function handleDragPointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, a, input, [role="button"]')) return;
+    e.preventDefault();
+    getCurrentWindow().startDragging();
+  }
+
   return (
     <Sidebar
       collapsible="offcanvas"
       data-testid="app-sidebar"
       variant="sidebar"
     >
-      <SidebarHeader className="gap-3">
+      <SidebarHeader
+        className="gap-3 pt-7"
+        onPointerDown={handleDragPointerDown}
+      >
         <div className="flex items-center gap-3 rounded-xl bg-sidebar-accent/80 px-3 py-3">
           <div className="flex h-6 w-6 items-center justify-center rounded-xl text-lg">
             <span aria-hidden="true">🌱</span>
@@ -324,9 +371,7 @@ export function AppSidebar({
             <Search className="h-4 w-4" />
             Search messages
           </span>
-          <span className="rounded-md border border-sidebar-border/80 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/60">
-            Cmd K
-          </span>
+          <span className="text-xs text-sidebar-foreground/50">&#x2318;K</span>
         </Button>
       </SidebarHeader>
 
@@ -403,6 +448,7 @@ export function AppSidebar({
                 setIsCreateOpen((current) => !current);
               }}
               selectedChannelId={selectedChannelId}
+              unreadChannelIds={unreadChannelIds}
             />
             <SidebarSection
               isActiveChannel={selectedView === "channel"}
@@ -411,6 +457,7 @@ export function AppSidebar({
               selectedChannelId={selectedChannelId}
               testId="forum-list"
               title="Forums"
+              unreadChannelIds={unreadChannelIds}
             />
             <SidebarSection
               isActiveChannel={selectedView === "channel"}
@@ -419,6 +466,7 @@ export function AppSidebar({
               selectedChannelId={selectedChannelId}
               testId="dm-list"
               title="Direct Messages"
+              unreadChannelIds={unreadChannelIds}
             />
           </>
         ) : null}
@@ -438,23 +486,21 @@ export function AppSidebar({
 
       <SidebarFooter>
         <div className="w-full border-t border-sidebar-border/70 pt-2">
-          <div className="flex items-center justify-between gap-2 px-1">
-            <SidebarMenu className="w-auto">
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  className="size-8 rounded-lg p-0 text-sidebar-foreground/55 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
-                  data-testid="open-profile"
-                  onClick={onOpenProfile}
-                  tooltip="Profile"
-                  type="button"
-                >
-                  <UserRound className="h-4 w-4" />
-                  <span className="sr-only">Open profile</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-            <ThemeToggle className="shrink-0 text-sidebar-foreground/55 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground" />
-          </div>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                className="rounded-xl"
+                data-testid="open-settings"
+                isActive={selectedView === "settings"}
+                onClick={onSelectSettings}
+                tooltip="Settings"
+                type="button"
+              >
+                <Settings2 className="h-4 w-4" />
+                <span>Settings</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
         </div>
       </SidebarFooter>
     </Sidebar>

@@ -8,6 +8,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import {
+  resolveUserLabel,
+  type UserProfileLookup,
+} from "@/features/profile/lib/identity";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -17,18 +22,6 @@ import { Skeleton } from "@/shared/ui/skeleton";
 const relativeTimeFormatter = new Intl.RelativeTimeFormat("en-US", {
   numeric: "auto",
 });
-
-function truncatePubkey(pubkey: string) {
-  return `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`;
-}
-
-function formatActor(pubkey: string, currentPubkey: string | undefined) {
-  if (currentPubkey && pubkey === currentPubkey) {
-    return "You";
-  }
-
-  return truncatePubkey(pubkey);
-}
 
 function formatRelativeTime(unixSeconds: number) {
   const diff = unixSeconds - Math.floor(Date.now() / 1_000);
@@ -128,6 +121,7 @@ type FeedSectionProps = {
   icon: LucideIcon;
   items: FeedItem[];
   currentPubkey?: string;
+  profiles?: UserProfileLookup;
   availableChannelIds: ReadonlySet<string>;
   onOpenChannel: (channelId: string) => void;
 };
@@ -140,15 +134,16 @@ function FeedSection({
   icon: Icon,
   items,
   currentPubkey,
+  profiles,
   availableChannelIds,
   onOpenChannel,
 }: FeedSectionProps) {
   return (
-    <section className="rounded-[1.75rem] border border-border/80 bg-card/80 p-5 shadow-sm">
+    <section className="rounded-xl border border-border/80 bg-card/80 p-5 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
               <Icon className="h-4 w-4" />
             </div>
             <div>
@@ -166,7 +161,7 @@ function FeedSection({
 
       <div className="mt-5 space-y-3">
         {items.length === 0 ? (
-          <div className="rounded-3xl border border-dashed border-border/80 bg-background/60 px-5 py-7 text-center">
+          <div className="rounded-lg border border-dashed border-border/80 bg-background/60 px-5 py-7 text-center">
             <p className="text-sm font-semibold tracking-tight">{emptyTitle}</p>
             <p className="mt-2 text-sm text-muted-foreground">
               {emptyDescription}
@@ -181,11 +176,11 @@ function FeedSection({
 
           return (
             <article
-              className="rounded-3xl border border-border/70 bg-background/70 p-4 shadow-sm"
+              className="rounded-lg border border-border/70 bg-background/70 p-4 shadow-sm"
               key={item.id}
             >
               <div className="flex gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-secondary/70 text-secondary-foreground">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-secondary/70 text-secondary-foreground">
                   <Icon className="h-4 w-4" />
                 </div>
 
@@ -195,7 +190,12 @@ function FeedSection({
                       {feedHeadline(item)}
                     </h3>
                     <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                      {formatActor(item.pubkey, currentPubkey)}
+                      {resolveUserLabel({
+                        pubkey: item.pubkey,
+                        currentPubkey,
+                        profiles,
+                        preferResolvedSelfLabel: true,
+                      })}
                     </p>
                     {item.channelName ? (
                       <p className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-primary">
@@ -271,7 +271,7 @@ function SummaryCard({
   return (
     <div
       className={cn(
-        "rounded-3xl border p-4 shadow-sm",
+        "rounded-lg border p-4 shadow-sm",
         tone === "urgent"
           ? "border-primary/20 bg-primary/10"
           : "border-border/80 bg-background/70",
@@ -280,7 +280,7 @@ function SummaryCard({
       <div className="flex items-center gap-3">
         <div
           className={cn(
-            "flex h-10 w-10 items-center justify-center rounded-2xl",
+            "flex h-10 w-10 items-center justify-center rounded-lg",
             tone === "urgent"
               ? "bg-primary text-primary-foreground"
               : "bg-secondary text-secondary-foreground",
@@ -303,13 +303,13 @@ function HomeLoadingState() {
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-4 sm:px-6">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-        <div className="rounded-[1.75rem] border border-border/80 bg-card/80 p-5 shadow-sm">
+        <div className="rounded-xl border border-border/80 bg-card/80 p-5 shadow-sm">
           <Skeleton className="h-6 w-44" />
           <Skeleton className="mt-3 h-4 w-full max-w-xl" />
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {["first", "second", "third", "fourth"].map((item) => (
-              <Skeleton className="h-24 rounded-3xl" key={item} />
+              <Skeleton className="h-24 rounded-lg" key={item} />
             ))}
           </div>
         </div>
@@ -317,14 +317,14 @@ function HomeLoadingState() {
         <div className="grid gap-4 xl:grid-cols-2">
           {["mentions", "actions", "activity", "agents"].map((section) => (
             <div
-              className="rounded-[1.75rem] border border-border/80 bg-card/80 p-5 shadow-sm"
+              className="rounded-xl border border-border/80 bg-card/80 p-5 shadow-sm"
               key={section}
             >
               <Skeleton className="h-6 w-32" />
               <Skeleton className="mt-3 h-4 w-full max-w-xs" />
               <div className="mt-5 space-y-3">
                 {["a", "b", "c"].map((row) => (
-                  <Skeleton className="h-28 rounded-3xl" key={row} />
+                  <Skeleton className="h-28 rounded-lg" key={row} />
                 ))}
               </div>
             </div>
@@ -356,6 +356,22 @@ export function HomeView({
   onOpenChannel,
   onRefresh,
 }: HomeViewProps) {
+  const feedItems = feed
+    ? [
+        ...feed.feed.mentions,
+        ...feed.feed.needsAction,
+        ...feed.feed.activity,
+        ...feed.feed.agentActivity,
+      ]
+    : [];
+  const feedProfilesQuery = useUsersBatchQuery(
+    feedItems.map((item) => item.pubkey),
+    {
+      enabled: feedItems.length > 0,
+    },
+  );
+  const feedProfiles = feedProfilesQuery.data?.profiles;
+
   if (isLoading && !feed) {
     return <HomeLoadingState />;
   }
@@ -364,7 +380,7 @@ export function HomeView({
     return (
       <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-4 sm:px-6">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
-          <div className="rounded-[1.75rem] border border-destructive/30 bg-destructive/5 px-6 py-8 shadow-sm">
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-6 py-8 shadow-sm">
             <p className="text-base font-semibold tracking-tight">
               Home feed unavailable
             </p>
@@ -386,11 +402,11 @@ export function HomeView({
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-4 sm:px-6">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-        <section className="rounded-[1.75rem] border border-border/80 bg-card/80 p-5 shadow-sm">
+        <section className="rounded-xl border border-border/80 bg-card/80 p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-[1.25rem] bg-primary text-primary-foreground shadow-sm">
+                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
                   <Sparkles className="h-5 w-5" />
                 </div>
                 <div>
@@ -459,6 +475,7 @@ export function HomeView({
           <FeedSection
             availableChannelIds={availableChannelIds}
             currentPubkey={currentPubkey}
+            profiles={feedProfiles}
             description="Messages where your pubkey was tagged."
             emptyDescription="When someone mentions you in an accessible channel, it will land here."
             emptyTitle="No mentions right now"
@@ -470,6 +487,7 @@ export function HomeView({
           <FeedSection
             availableChannelIds={availableChannelIds}
             currentPubkey={currentPubkey}
+            profiles={feedProfiles}
             description="Approvals and reminders that need you."
             emptyDescription="Workflow approval requests and reminders will appear here."
             emptyTitle="Nothing needs action"
@@ -481,6 +499,7 @@ export function HomeView({
           <FeedSection
             availableChannelIds={availableChannelIds}
             currentPubkey={currentPubkey}
+            profiles={feedProfiles}
             description="Recent updates from channels you can access."
             emptyDescription="Channel activity will populate here once the relay has recent events."
             emptyTitle="No recent channel activity"
@@ -492,6 +511,7 @@ export function HomeView({
           <FeedSection
             availableChannelIds={availableChannelIds}
             currentPubkey={currentPubkey}
+            profiles={feedProfiles}
             description="Agent jobs, progress, and results."
             emptyDescription="Agent activity appears here once agents start posting into accessible channels."
             emptyTitle="No agent activity yet"

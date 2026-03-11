@@ -1,6 +1,7 @@
 export type TimelineMessage = {
   id: string;
   author: string;
+  avatarUrl?: string | null;
   role?: string;
   time: string;
   body: string;

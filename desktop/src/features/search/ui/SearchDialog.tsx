@@ -10,6 +10,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import {
+  resolveUserLabel,
+  resolveUserSecondaryLabel,
+} from "@/features/profile/lib/identity";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useSearchMessagesQuery } from "@/features/search/hooks";
 import type { Channel, SearchHit } from "@/shared/api/types";
 import {
@@ -118,6 +123,7 @@ function SearchLoadingState() {
 
 type SearchDialogProps = {
   channels: Channel[];
+  currentPubkey?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onOpenResult: (hit: SearchHit) => void;
@@ -125,6 +131,7 @@ type SearchDialogProps = {
 
 export function SearchDialog({
   channels,
+  currentPubkey,
   open,
   onOpenChange,
   onOpenResult,
@@ -144,6 +151,13 @@ export function SearchDialog({
   });
 
   const results = searchQuery.data?.hits ?? [];
+  const resultProfilesQuery = useUsersBatchQuery(
+    results.map((hit) => hit.pubkey),
+    {
+      enabled: open && results.length > 0,
+    },
+  );
+  const resultProfiles = resultProfilesQuery.data?.profiles;
 
   const openResult = React.useCallback(
     (hit: SearchHit) => {
@@ -293,6 +307,16 @@ export function SearchDialog({
               <div className="space-y-2">
                 {results.map((hit, index) => {
                   const channel = channelLookup.get(hit.channelId);
+                  const authorLabel = resolveUserLabel({
+                    pubkey: hit.pubkey,
+                    currentPubkey,
+                    profiles: resultProfiles,
+                    preferResolvedSelfLabel: true,
+                  });
+                  const authorSecondaryLabel = resolveUserSecondaryLabel({
+                    pubkey: hit.pubkey,
+                    profiles: resultProfiles,
+                  });
 
                   return (
                     <button
@@ -324,10 +348,18 @@ export function SearchDialog({
                             <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                               {describeSearchHit(hit)}
                             </p>
+                            <p className="text-xs text-muted-foreground">
+                              {authorLabel}
+                            </p>
                             <p className="ml-auto whitespace-nowrap text-xs text-muted-foreground">
                               {formatRelativeTime(hit.createdAt)}
                             </p>
                           </div>
+                          {authorSecondaryLabel ? (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {authorSecondaryLabel}
+                            </p>
+                          ) : null}
                           <p className="mt-2 text-sm leading-6 text-foreground">
                             {truncateContent(hit.content)}
                           </p>

@@ -1,40 +1,52 @@
 import type { Channel, RelayEvent } from "@/shared/api/types";
 
 import type { TimelineMessage } from "@/features/messages/types";
-
-function truncatePubkey(pubkey: string) {
-  return `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`;
-}
+import {
+  resolveUserLabel,
+  type UserProfileLookup,
+} from "@/features/profile/lib/identity";
 
 function formatMessageAuthor(
   event: RelayEvent,
   channel: Channel | null,
   currentPubkey: string | undefined,
+  profiles: UserProfileLookup | undefined,
 ) {
-  if (currentPubkey && event.pubkey === currentPubkey) {
-    return "You";
-  }
+  const fallbackName =
+    channel?.channelType === "dm"
+      ? (() => {
+          const participantIndex = channel.participantPubkeys.indexOf(
+            event.pubkey,
+          );
+          if (participantIndex < 0) {
+            return null;
+          }
 
-  if (channel?.channelType === "dm") {
-    const participantIndex = channel.participantPubkeys.indexOf(event.pubkey);
-    if (participantIndex >= 0) {
-      return (
-        channel.participants[participantIndex] ?? truncatePubkey(event.pubkey)
-      );
-    }
-  }
+          return channel.participants[participantIndex] ?? null;
+        })()
+      : null;
 
-  return truncatePubkey(event.pubkey);
+  return resolveUserLabel({
+    pubkey: event.pubkey,
+    currentPubkey,
+    fallbackName,
+    profiles,
+    preferResolvedSelfLabel: true,
+  });
 }
 
 export function formatTimelineMessages(
   events: RelayEvent[],
   channel: Channel | null,
   currentPubkey: string | undefined,
+  currentUserAvatarUrl: string | null,
+  profiles?: UserProfileLookup,
 ): TimelineMessage[] {
   return events.map((event) => ({
     id: event.id,
-    author: formatMessageAuthor(event, channel, currentPubkey),
+    author: formatMessageAuthor(event, channel, currentPubkey, profiles),
+    avatarUrl:
+      currentPubkey === event.pubkey ? (currentUserAvatarUrl ?? null) : null,
     time: new Intl.DateTimeFormat("en-US", {
       hour: "numeric",
       minute: "2-digit",
@@ -43,4 +55,8 @@ export function formatTimelineMessages(
     accent: currentPubkey === event.pubkey,
     pending: event.pending,
   }));
+}
+
+export function collectMessageAuthorPubkeys(events: RelayEvent[]) {
+  return [...new Set(events.map((event) => event.pubkey.toLowerCase()))];
 }

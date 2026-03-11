@@ -1,5 +1,10 @@
 import * as React from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 
 import {
   addChannelMembers,
@@ -27,7 +32,7 @@ import type {
   UpdateChannelInput,
 } from "@/shared/api/types";
 
-const channelsQueryKey = ["channels"] as const;
+export const channelsQueryKey = ["channels"] as const;
 const channelDetailQueryKey = (channelId: string) =>
   ["channels", channelId, "detail"] as const;
 const channelMembersQueryKey = (channelId: string) =>
@@ -39,7 +44,13 @@ const channelTypeOrder = {
 } as const;
 
 function sortChannels(channels: Channel[]) {
-  return [...channels].sort((left, right) => {
+  const uniqueChannels = new Map<string, Channel>();
+
+  for (const channel of channels) {
+    uniqueChannels.set(channel.id, channel);
+  }
+
+  return [...uniqueChannels.values()].sort((left, right) => {
     const typeOrder =
       channelTypeOrder[left.channelType] - channelTypeOrder[right.channelType];
 
@@ -48,6 +59,68 @@ function sortChannels(channels: Channel[]) {
     }
 
     return left.name.localeCompare(right.name);
+  });
+}
+
+function parseTimestamp(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+function isNewerTimestamp(
+  candidate: string | null | undefined,
+  current: string | null | undefined,
+) {
+  const candidateTimestamp = parseTimestamp(candidate);
+  if (candidateTimestamp === null) {
+    return false;
+  }
+
+  const currentTimestamp = parseTimestamp(current);
+  return currentTimestamp === null || candidateTimestamp > currentTimestamp;
+}
+
+export function updateChannelLastMessageAt(
+  queryClient: QueryClient,
+  channelId: string,
+  lastMessageAt: string | null | undefined,
+) {
+  const lastMessageTimestamp = parseTimestamp(lastMessageAt);
+  const normalizedLastMessageAt =
+    lastMessageTimestamp === null
+      ? null
+      : new Date(lastMessageTimestamp).toISOString();
+
+  if (!normalizedLastMessageAt) {
+    return;
+  }
+
+  queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) => {
+    if (!current) {
+      return current;
+    }
+
+    let didUpdate = false;
+    const nextChannels = current.map((channel) => {
+      if (
+        channel.id !== channelId ||
+        !isNewerTimestamp(normalizedLastMessageAt, channel.lastMessageAt)
+      ) {
+        return channel;
+      }
+
+      didUpdate = true;
+      return {
+        ...channel,
+        lastMessageAt: normalizedLastMessageAt,
+      };
+    });
+
+    return didUpdate ? nextChannels : current;
   });
 }
 
@@ -76,6 +149,7 @@ export function useChannelsQuery() {
     queryKey: channelsQueryKey,
     queryFn: async () => sortChannels(await getChannels()),
     staleTime: 30_000,
+    refetchInterval: 15_000,
   });
 }
 

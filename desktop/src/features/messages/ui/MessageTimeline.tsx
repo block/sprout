@@ -27,6 +27,7 @@ function isNearBottom(container: HTMLDivElement) {
 }
 
 function MessageRow({ message }: { message: TimelineMessage }) {
+  const [hasAvatarError, setHasAvatarError] = React.useState(false);
   const initials = message.author
     .split(" ")
     .map((part) => part[0])
@@ -43,18 +44,32 @@ function MessageRow({ message }: { message: TimelineMessage }) {
       data-message-id={message.id}
       data-testid="message-row"
     >
-      <div
-        className={cn(
-          "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-semibold shadow-sm",
-          message.accent
-            ? "bg-primary text-primary-foreground"
-            : "bg-secondary text-secondary-foreground",
-        )}
-      >
-        {initials}
-      </div>
+      {message.avatarUrl && !hasAvatarError ? (
+        <img
+          alt={`${message.author} avatar`}
+          className="h-9 w-9 shrink-0 rounded-xl border border-border/80 object-cover shadow-sm"
+          data-testid="message-avatar-image"
+          onError={() => {
+            setHasAvatarError(true);
+          }}
+          referrerPolicy="no-referrer"
+          src={message.avatarUrl}
+        />
+      ) : (
+        <div
+          className={cn(
+            "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-semibold shadow-sm",
+            message.accent
+              ? "bg-primary text-primary-foreground"
+              : "bg-secondary text-secondary-foreground",
+          )}
+          data-testid="message-avatar-fallback"
+        >
+          {initials}
+        </div>
+      )}
 
-      <div className="min-w-0 flex-1 space-y-1">
+      <div className="min-w-0 flex-1 space-y-0">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h3 className="truncate text-sm font-semibold tracking-tight">
             {message.author}
@@ -73,7 +88,7 @@ function MessageRow({ message }: { message: TimelineMessage }) {
             <p className="whitespace-nowrap">{message.time}</p>
           </div>
         </div>
-        <Markdown className="max-w-3xl" compact content={message.body} />
+        <Markdown className="max-w-3xl" content={message.body} tight />
       </div>
     </article>
   );

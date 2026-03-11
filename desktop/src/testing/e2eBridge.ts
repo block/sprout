@@ -25,6 +25,16 @@ type RawProfile = {
   nip05_handle: string | null;
 };
 
+type RawUserProfileSummary = {
+  display_name: string | null;
+  nip05_handle: string | null;
+};
+
+type RawUsersBatchResponse = {
+  profiles: Record<string, RawUserProfileSummary>;
+  missing: string[];
+};
+
 type RawChannel = {
   id: string;
   name: string;
@@ -130,6 +140,10 @@ declare global {
   interface Window {
     __SPROUT_E2E__?: E2eConfig;
     __SPROUT_E2E_COMMANDS__?: string[];
+    __SPROUT_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+      channelName: string;
+      content: string;
+    }) => RelayEvent;
   }
 }
 
@@ -275,6 +289,26 @@ function getMockIdentity() {
 
 function cloneProfile(profile: RawProfile): RawProfile {
   return { ...profile };
+}
+
+function getMockProfileByPubkey(pubkey: string): RawProfile | null {
+  const normalizedPubkey = pubkey.toLowerCase();
+  const existing = mockProfiles.get(normalizedPubkey);
+  if (existing) {
+    return existing;
+  }
+
+  if (!mockDisplayNames.has(normalizedPubkey)) {
+    return null;
+  }
+
+  return {
+    pubkey: normalizedPubkey,
+    display_name: mockDisplayNames.get(normalizedPubkey) ?? null,
+    avatar_url: null,
+    about: null,
+    nip05_handle: null,
+  };
 }
 
 function listMockChannels(): RawChannel[] {
@@ -674,6 +708,26 @@ function emitMockLiveEvent(channelId: string, event: RelayEvent) {
   }
 }
 
+function recordMockMessage(channelId: string, event: RelayEvent) {
+  const history = getMockMessageStore(channelId);
+  history.push(event);
+
+  const channel = mockChannels.find((candidate) => candidate.id === channelId);
+  if (!channel) {
+    return;
+  }
+
+  channel.last_message_at = new Date(event.created_at * 1_000).toISOString();
+  touchMockChannel(channel);
+}
+
+function emitMockChannelMessage(channelId: string, content: string) {
+  const event = createMockEvent(40001, content, [["h", channelId]]);
+  recordMockMessage(channelId, event);
+  emitMockLiveEvent(channelId, event);
+  return event;
+}
+
 function createMockEvent(
   kind: number,
   content: string,
@@ -793,6 +847,7 @@ async function handleUpdateProfile(
     displayName?: string;
     avatarUrl?: string;
     about?: string;
+    nip05Handle?: string;
   },
   config: E2eConfig | undefined,
 ) {
@@ -802,6 +857,7 @@ async function handleUpdateProfile(
     const nextDisplayName = args.displayName?.trim();
     const nextAvatarUrl = args.avatarUrl?.trim();
     const nextAbout = args.about?.trim();
+    const nextNip05Handle = args.nip05Handle?.trim();
 
     if (nextDisplayName && nextDisplayName !== profile.display_name) {
       profile.display_name = nextDisplayName;
@@ -813,6 +869,13 @@ async function handleUpdateProfile(
     if (nextAbout && nextAbout !== profile.about) {
       profile.about = nextAbout;
     }
+    if (
+      typeof nextNip05Handle === "string" &&
+      nextNip05Handle !== profile.nip05_handle
+    ) {
+      profile.nip05_handle =
+        nextNip05Handle.length > 0 ? nextNip05Handle : null;
+    }
 
     return cloneProfile(profile);
   }
@@ -823,10 +886,74 @@ async function handleUpdateProfile(
       display_name: args.displayName,
       avatar_url: args.avatarUrl,
       about: args.about,
+      nip05_handle: args.nip05Handle,
     }),
   });
 
   return relayJsonRequest<RawProfile>(config, "/api/users/me/profile");
+}
+
+async function handleGetUserProfile(
+  args: {
+    pubkey?: string;
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const pubkey = (args.pubkey ?? getMockMemberPubkey(config)).toLowerCase();
+    const profile = getMockProfileByPubkey(pubkey);
+    if (!profile) {
+      throw new Error(`User ${pubkey} not found.`);
+    }
+
+    return cloneProfile(profile);
+  }
+
+  const path = args.pubkey
+    ? `/api/users/${args.pubkey}/profile`
+    : "/api/users/me/profile";
+  return relayJsonRequest<RawProfile>(config, path);
+}
+
+async function handleGetUsersBatch(
+  args: {
+    pubkeys: string[];
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const profiles: RawUsersBatchResponse["profiles"] = {};
+    const missing: string[] = [];
+
+    for (const pubkey of args.pubkeys) {
+      const normalizedPubkey = pubkey.toLowerCase();
+      const profile = getMockProfileByPubkey(normalizedPubkey);
+
+      if (!profile) {
+        missing.push(pubkey);
+        continue;
+      }
+
+      profiles[normalizedPubkey] = {
+        display_name: profile.display_name,
+        nip05_handle: profile.nip05_handle,
+      };
+    }
+
+    return {
+      profiles,
+      missing,
+    };
+  }
+
+  return relayJsonRequest<RawUsersBatchResponse>(config, "/api/users/batch", {
+    method: "POST",
+    body: JSON.stringify({
+      pubkeys: args.pubkeys,
+    }),
+  });
 }
 
 async function handleCreateChannel(
@@ -1250,6 +1377,17 @@ async function handleGetFeed(
     const activity = includeType("activity")
       ? [
           {
+            id: "mock-feed-self-activity",
+            kind: 40001,
+            pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
+            content: "I posted a note about the launch checklist.",
+            created_at: now - 25 * 60,
+            channel_id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+            channel_name: "general",
+            tags: [["e", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"]],
+            category: "activity" as const,
+          },
+          {
             id: "mock-feed-activity",
             kind: 40001,
             pubkey:
@@ -1589,8 +1727,7 @@ function sendToMockSocket(args: {
       return;
     }
 
-    const history = getMockMessageStore(channelId);
-    history.push(event);
+    recordMockMessage(channelId, event);
     emitMockLiveEvent(channelId, event);
     sendWsText(socket.handler, ["OK", event.id, true, ""]);
   }
@@ -1618,6 +1755,16 @@ export function maybeInstallE2eTauriMocks() {
 
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
+  window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({ channelName, content }) => {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === channelName,
+    );
+    if (!channel) {
+      throw new Error(`Mock channel ${channelName} not found.`);
+    }
+
+    return emitMockChannelMessage(channel.id, content);
+  };
   mockIPC(async (command, payload) => {
     const activeConfig = getConfig();
     const identity = getIdentity(activeConfig);
@@ -1638,6 +1785,16 @@ export function maybeInstallE2eTauriMocks() {
       case "update_profile":
         return handleUpdateProfile(
           payload as Parameters<typeof handleUpdateProfile>[0],
+          activeConfig,
+        );
+      case "get_user_profile":
+        return handleGetUserProfile(
+          (payload as Parameters<typeof handleGetUserProfile>[0]) ?? {},
+          activeConfig,
+        );
+      case "get_users_batch":
+        return handleGetUsersBatch(
+          payload as Parameters<typeof handleGetUsersBatch>[0],
           activeConfig,
         );
       case "get_relay_ws_url":

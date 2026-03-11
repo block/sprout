@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::{collections::HashMap, sync::Mutex};
 
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, ToBech32};
 use reqwest::Method;
@@ -23,6 +23,18 @@ pub struct ProfileInfo {
     pub avatar_url: Option<String>,
     pub about: Option<String>,
     pub nip05_handle: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UserProfileSummaryInfo {
+    pub display_name: Option<String>,
+    pub nip05_handle: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UsersBatchResponse {
+    pub profiles: HashMap<String, UserProfileSummaryInfo>,
+    pub missing: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -125,6 +137,8 @@ struct UpdateProfileBody<'a> {
     avatar_url: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     about: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nip05_handle: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -313,6 +327,7 @@ async fn update_profile(
     display_name: Option<String>,
     avatar_url: Option<String>,
     about: Option<String>,
+    nip05_handle: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProfileInfo, String> {
     let request = build_authed_request(
@@ -325,6 +340,7 @@ async fn update_profile(
         display_name: display_name.as_deref(),
         avatar_url: avatar_url.as_deref(),
         about: about.as_deref(),
+        nip05_handle: nip05_handle.as_deref(),
     });
     send_empty_request(request).await?;
 
@@ -334,6 +350,41 @@ async fn update_profile(
         "/api/users/me/profile",
         &state,
     )?;
+    send_json_request(request).await
+}
+
+#[tauri::command]
+async fn get_user_profile(
+    pubkey: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<ProfileInfo, String> {
+    let path = match pubkey {
+        Some(pubkey) => format!("/api/users/{pubkey}/profile"),
+        None => "/api/users/me/profile".to_string(),
+    };
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
+    send_json_request(request).await
+}
+
+#[derive(Serialize)]
+struct GetUsersBatchBody<'a> {
+    pubkeys: &'a [String],
+}
+
+#[tauri::command]
+async fn get_users_batch(
+    pubkeys: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<UsersBatchResponse, String> {
+    let request = build_authed_request(
+        &state.http_client,
+        Method::POST,
+        "/api/users/batch",
+        &state,
+    )?
+    .json(&GetUsersBatchBody {
+        pubkeys: pubkeys.as_slice(),
+    });
     send_json_request(request).await
 }
 
@@ -609,7 +660,7 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(
-                    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
+                    StateFlags::all() & !StateFlags::VISIBLE,
                 )
                 .build(),
         )
@@ -619,6 +670,8 @@ pub fn run() {
             get_identity,
             get_profile,
             update_profile,
+            get_user_profile,
+            get_users_batch,
             get_relay_ws_url,
             sign_event,
             create_auth_event,

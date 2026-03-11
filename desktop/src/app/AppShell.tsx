@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as React from "react";
 import { Settings2 } from "lucide-react";
 
@@ -7,28 +8,37 @@ import {
   useChannelsQuery,
   useSelectedChannel,
 } from "@/features/channels/hooks";
+import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
 import { ChannelManagementSheet } from "@/features/channels/ui/ChannelManagementSheet";
 import { useHomeFeedQuery } from "@/features/home/hooks";
 import { HomeView } from "@/features/home/ui/HomeView";
 import {
   useChannelMessagesQuery,
-  useChannelSubscription,
   mergeMessages,
   useSendMessageMutation,
+  useChannelSubscription,
 } from "@/features/messages/hooks";
-import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
+import {
+  collectMessageAuthorPubkeys,
+  formatTimelineMessages,
+} from "@/features/messages/lib/formatTimelineMessages";
+import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
-import { ProfileSheet } from "@/features/profile/ui/ProfileSheet";
 import { SearchDialog } from "@/features/search/ui/SearchDialog";
+import { SettingsView } from "@/features/settings/ui/SettingsView";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { getEventById } from "@/shared/api/tauri";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { RelayEvent, SearchHit } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
-import { SidebarInset, SidebarProvider } from "@/shared/ui/sidebar";
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/shared/ui/sidebar";
 
-type AppView = "home" | "channel";
+type AppView = "home" | "channel" | "settings";
 
 function createSearchAnchorEvent(hit: SearchHit): RelayEvent {
   return {
@@ -46,7 +56,6 @@ export function AppShell() {
   const [selectedView, setSelectedView] = React.useState<AppView>("home");
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
-  const [isProfileOpen, setIsProfileOpen] = React.useState(false);
   const [isSearchOpen, setIsSearchOpen] = React.useState(false);
   const [searchAnchor, setSearchAnchor] = React.useState<SearchHit | null>(
     null,
@@ -57,6 +66,7 @@ export function AppShell() {
   const [searchAnchorEvent, setSearchAnchorEvent] =
     React.useState<RelayEvent | null>(null);
   const identityQuery = useIdentityQuery();
+  const profileQuery = useProfileQuery();
   const homeFeedQuery = useHomeFeedQuery();
   const channelsQuery = useChannelsQuery();
   const channels = channelsQuery.data ?? [];
@@ -66,6 +76,7 @@ export function AppShell() {
   );
   const createChannelMutation = useCreateChannelMutation();
   const activeChannel = selectedView === "channel" ? selectedChannel : null;
+  const { unreadChannelIds } = useUnreadChannels(channels, activeChannel);
 
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
@@ -99,6 +110,13 @@ export function AppShell() {
     searchAnchorChannelId,
     searchAnchorEvent,
   ]);
+  const messageAuthorPubkeys = React.useMemo(
+    () => collectMessageAuthorPubkeys(resolvedMessages),
+    [resolvedMessages],
+  );
+  const messageProfilesQuery = useUsersBatchQuery(messageAuthorPubkeys, {
+    enabled: resolvedMessages.length > 0,
+  });
 
   const timelineMessages = React.useMemo(
     () =>
@@ -106,8 +124,16 @@ export function AppShell() {
         resolvedMessages,
         activeChannel,
         identityQuery.data?.pubkey,
+        profileQuery.data?.avatarUrl ?? null,
+        messageProfilesQuery.data?.profiles,
       ),
-    [activeChannel, identityQuery.data?.pubkey, resolvedMessages],
+    [
+      activeChannel,
+      identityQuery.data?.pubkey,
+      profileQuery.data?.avatarUrl,
+      messageProfilesQuery.data?.profiles,
+      resolvedMessages,
+    ],
   );
 
   const channelDescription = activeChannel
@@ -124,7 +150,11 @@ export function AppShell() {
         .join(" ") || "Channel details and activity."
     : "Connect to the relay to browse channels and read messages.";
   const contentPaneKey =
-    selectedView === "home" ? "home" : `channel:${activeChannel?.id ?? "none"}`;
+    selectedView === "home"
+      ? "home"
+      : selectedView === "settings"
+        ? "settings"
+        : `channel:${activeChannel?.id ?? "none"}`;
   const isTimelineLoading =
     messagesQuery.isLoading && resolvedMessages.length === 0;
 
@@ -137,6 +167,15 @@ export function AppShell() {
     },
     [setSelectedChannelId],
   );
+
+  const handleOpenSettings = React.useCallback(() => {
+    setIsSearchOpen(false);
+    setIsChannelManagementOpen(false);
+
+    React.startTransition(() => {
+      setSelectedView("settings");
+    });
+  }, []);
 
   const handleOpenSearchResult = React.useCallback(
     (hit: SearchHit) => {
@@ -166,8 +205,31 @@ export function AppShell() {
     [handleOpenChannel],
   );
 
+  React.useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const isSettingsShortcut =
+        (event.key === "," || event.code === "Comma") &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey;
+
+      if (!isSettingsShortcut) {
+        return;
+      }
+
+      event.preventDefault();
+      handleOpenSettings();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [handleOpenSettings]);
+
   return (
     <SidebarProvider className="h-dvh overflow-hidden overscroll-none">
+      <SidebarTrigger className="fixed left-[80px] top-[9px] z-50 h-6 w-6" />
       <AppSidebar
         channels={channels}
         errorMessage={
@@ -194,9 +256,6 @@ export function AppShell() {
         onOpenSearch={() => {
           setIsSearchOpen(true);
         }}
-        onOpenProfile={() => {
-          setIsProfileOpen(true);
-        }}
         onSelectHome={() => {
           React.startTransition(() => {
             setSelectedView("home");
@@ -205,19 +264,38 @@ export function AppShell() {
           void homeFeedQuery.refetch();
         }}
         onSelectChannel={handleOpenChannel}
+        onSelectSettings={handleOpenSettings}
         selectedChannelId={selectedChannel?.id ?? null}
         selectedView={selectedView}
+        unreadChannelIds={unreadChannelIds}
       />
 
       <SidebarInset
-        className="min-h-0 min-w-0 overflow-hidden"
+        className="relative min-h-0 min-w-0 overflow-hidden pt-7"
         key={contentPaneKey}
       >
+        {/* Drag strip covering the traffic-light inset area */}
+        <div
+          className="absolute inset-x-0 top-0 flex h-7 items-center px-2"
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            const target = e.target as HTMLElement;
+            if (target.closest('button, a, input, [role="button"]')) return;
+            e.preventDefault();
+            getCurrentWindow().startDragging();
+          }}
+        />
         {selectedView === "home" ? (
           <ChatHeader
             description="Personalized feed for mentions, reminders, channel activity, and agent work."
             mode="home"
             title="Home"
+          />
+        ) : selectedView === "settings" ? (
+          <ChatHeader
+            description="Theme, appearance, and profile preferences for your current identity."
+            mode="settings"
+            title="Settings"
           />
         ) : (
           <ChatHeader
@@ -260,6 +338,11 @@ export function AppShell() {
               onRefresh={() => {
                 void homeFeedQuery.refetch();
               }}
+            />
+          ) : selectedView === "settings" ? (
+            <SettingsView
+              currentPubkey={identityQuery.data?.pubkey}
+              fallbackDisplayName={identityQuery.data?.displayName}
             />
           ) : (
             <>
@@ -319,6 +402,7 @@ export function AppShell() {
 
         <SearchDialog
           channels={channels}
+          currentPubkey={identityQuery.data?.pubkey}
           onOpenResult={handleOpenSearchResult}
           onOpenChange={setIsSearchOpen}
           open={isSearchOpen}
@@ -335,13 +419,6 @@ export function AppShell() {
           }}
           onOpenChange={setIsChannelManagementOpen}
           open={isChannelManagementOpen && activeChannel !== null}
-        />
-
-        <ProfileSheet
-          currentPubkey={identityQuery.data?.pubkey}
-          fallbackDisplayName={identityQuery.data?.displayName}
-          onOpenChange={setIsProfileOpen}
-          open={isProfileOpen}
         />
       </SidebarInset>
     </SidebarProvider>

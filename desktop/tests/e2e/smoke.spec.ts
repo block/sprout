@@ -91,6 +91,22 @@ test("opens a mocked channel from the home feed", async ({ page }) => {
   );
 });
 
+test("home feed uses your resolved profile label instead of You", async ({
+  page,
+}) => {
+  const activitySection = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Channel Activity" }),
+  });
+
+  await page.goto("/");
+
+  await expect(activitySection).toContainText(
+    "I posted a note about the launch checklist.",
+  );
+  await expect(activitySection).toContainText("npub1mock...");
+  await expect(activitySection).not.toContainText("You");
+});
+
 test("opens relay-backed search from the sidebar and loads the exact result", async ({
   page,
 }) => {
@@ -116,6 +132,24 @@ test("opens relay-backed search from the sidebar and loads the exact result", as
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Engineering shipped the desktop build.",
   );
+});
+
+test("search results use your resolved profile label instead of You", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+K" : "Control+K",
+  );
+  await expect(page.getByTestId("search-dialog")).toBeVisible();
+
+  await page.getByTestId("search-input").fill("welcome");
+  const results = page.getByTestId("search-results");
+
+  await expect(results).toContainText("Welcome to #general");
+  await expect(results).toContainText("npub1mock...");
+  await expect(results).not.toContainText("You");
 });
 
 test("replaces the channel pane when switching channels", async ({ page }) => {

@@ -512,6 +512,13 @@ mention "$GENERAL" "$BOB_PUBKEY" \
   "Use get_user_profile to look up Alice's profile (pubkey: $ALICE_PUBKEY). Report her display name and about text. Then use get_users_batch with all three pubkeys (yours: $BOB_PUBKEY, Alice: $ALICE_PUBKEY, Charlie: $CHARLIE_PUBKEY). Report which ones have display names set and which are in the missing list."
 ```
 
+**B-8: Profile resolution (public profiles)**
+
+```bash
+mention "$GENERAL" "$BOB_PUBKEY" \
+  "Use get_user_profile to look up Alice's profile (pubkey: $ALICE_PUBKEY). Report her display name and about text. Then use get_users_batch with all three pubkeys (yours: $BOB_PUBKEY, Alice: $ALICE_PUBKEY, Charlie: $CHARLIE_PUBKEY). Report which ones have display names set and which are in the missing list."
+```
+
 ---
 
 #### Charlie — Edge Case Specialist
@@ -1092,7 +1099,7 @@ The `sprout-mcp-server` exposes 41 tools covering the full Sprout feature surfac
 | `get_user_profile` | Get any user's profile by pubkey (omit pubkey for own profile) |
 | `get_users_batch` | Bulk resolve display names and NIP-05 handles for multiple pubkeys |
 
-### Presence (2)
+### Presence (1)
 
 | Tool | Description |
 |------|-------------|

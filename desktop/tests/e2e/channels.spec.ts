@@ -123,6 +123,30 @@ test("channel with messages shows content", async ({ page }) => {
   );
 });
 
+test("sidebar shows unread indicator for newly active channels", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await expect(page.getByTestId("channel-unread-random")).toHaveCount(0);
+
+  await page.evaluate(() => {
+    window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "random",
+      content: "Unread update for #random",
+    });
+  });
+
+  await expect(page.getByTestId("channel-unread-random")).toBeVisible();
+
+  await page.getByTestId("channel-random").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("random");
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Unread update for #random",
+  );
+  await expect(page.getByTestId("channel-unread-random")).toHaveCount(0);
+});
+
 test("sidebar persists after channel switch", async ({ page }) => {
   await page.goto("/");
 

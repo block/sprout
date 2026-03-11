@@ -79,7 +79,6 @@ class RelayClient {
   } | null = null;
   private subscriptions = new Map<string, RelaySubscription>();
   private pendingEvents = new Map<string, PendingEvent>();
-  private activeLiveSubscriptionId: string | null = null;
 
   async fetchChannelHistory(channelId: string, limit = 50) {
     await this.ensureConnected();
@@ -158,13 +157,6 @@ class RelayClient {
     await this.ensureConnected();
 
     const subId = `live-${crypto.randomUUID()}`;
-    const previousSubscriptionId = this.activeLiveSubscriptionId;
-    this.activeLiveSubscriptionId = subId;
-
-    if (previousSubscriptionId) {
-      this.subscriptions.delete(previousSubscriptionId);
-      await this.closeSubscription(previousSubscriptionId);
-    }
 
     this.subscriptions.set(subId, {
       mode: "live",
@@ -180,9 +172,6 @@ class RelayClient {
       }
 
       this.subscriptions.delete(subId);
-      if (this.activeLiveSubscriptionId === subId) {
-        this.activeLiveSubscriptionId = null;
-      }
       await this.closeSubscription(subId);
     };
   }
@@ -443,8 +432,6 @@ class RelayClient {
       pendingEvent.reject(error);
       this.pendingEvents.delete(eventId);
     }
-
-    this.activeLiveSubscriptionId = null;
   }
 }
 

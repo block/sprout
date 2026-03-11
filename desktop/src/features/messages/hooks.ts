@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { updateChannelLastMessageAt } from "@/features/channels/hooks";
 import { relayClient } from "@/shared/api/relayClient";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
 
@@ -10,17 +11,36 @@ type MessageQueryContext = {
   queryKey: readonly ["channel-messages", string];
 };
 
+function dedupeMessagesById(messages: RelayEvent[]) {
+  const seenIds = new Set<string>();
+  const deduped: RelayEvent[] = [];
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+
+    if (seenIds.has(message.id)) {
+      continue;
+    }
+
+    seenIds.add(message.id);
+    deduped.push(message);
+  }
+
+  return deduped.reverse();
+}
+
 export function mergeMessages(
   current: RelayEvent[],
   incoming: RelayEvent,
 ): RelayEvent[] {
-  const deduped = current.filter(
+  const normalizedCurrent = dedupeMessagesById(current);
+  const deduped = normalizedCurrent.filter(
     (message) =>
       message.id !== incoming.id &&
       !(message.pending && incoming.content === message.content),
   );
 
-  return [...deduped, incoming].sort(
+  return dedupeMessagesById([...deduped, incoming]).sort(
     (left, right) => left.created_at - right.created_at,
   );
 }
@@ -51,7 +71,8 @@ export function useChannelMessagesQuery(channel: Channel | null) {
         throw new Error("No channel selected.");
       }
 
-      return relayClient.fetchChannelHistory(channel.id);
+      const history = await relayClient.fetchChannelHistory(channel.id);
+      return dedupeMessagesById(history);
     },
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 30 * 60 * 1_000,
@@ -60,20 +81,27 @@ export function useChannelMessagesQuery(channel: Channel | null) {
 
 export function useChannelSubscription(channel: Channel | null) {
   const queryClient = useQueryClient();
+  const channelId = channel?.id ?? null;
+  const channelType = channel?.channelType ?? null;
 
   const appendMessage = useEffectEvent((event: RelayEvent) => {
-    if (!channel) {
+    if (!channelId) {
       return;
     }
 
+    updateChannelLastMessageAt(
+      queryClient,
+      channelId,
+      new Date(event.created_at * 1_000).toISOString(),
+    );
     queryClient.setQueryData<RelayEvent[]>(
-      ["channel-messages", channel.id],
+      ["channel-messages", channelId],
       (current = []) => mergeMessages(current, event),
     );
   });
 
   useEffect(() => {
-    if (!channel || channel.channelType === "forum") {
+    if (!channelId || channelType === "forum") {
       return;
     }
 
@@ -81,7 +109,7 @@ export function useChannelSubscription(channel: Channel | null) {
     let cleanup: (() => Promise<void>) | undefined;
 
     relayClient
-      .subscribeToChannel(channel.id, (event) => {
+      .subscribeToChannel(channelId, (event) => {
         if (!isDisposed) {
           appendMessage(event);
         }
@@ -95,7 +123,7 @@ export function useChannelSubscription(channel: Channel | null) {
         cleanup = dispose;
       })
       .catch((error) => {
-        console.error("Failed to subscribe to channel", channel.id, error);
+        console.error("Failed to subscribe to channel", channelId, error);
       });
 
     return () => {
@@ -104,7 +132,7 @@ export function useChannelSubscription(channel: Channel | null) {
         void cleanup();
       }
     };
-  }, [channel]);
+  }, [channelId, channelType]);
 }
 
 export function useSendMessageMutation(
@@ -161,6 +189,14 @@ export function useSendMessageMutation(
       queryClient.setQueryData(context.queryKey, context.previousMessages);
     },
     onSuccess: (message, _content, context) => {
+      if (channel) {
+        updateChannelLastMessageAt(
+          queryClient,
+          channel.id,
+          new Date(message.created_at * 1_000).toISOString(),
+        );
+      }
+
       if (!context) {
         return;
       }
