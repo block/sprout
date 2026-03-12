@@ -825,7 +825,7 @@ async fn create_invite(
     state.invite_store.insert(token);
 
     info!(
-        token = %token_str,
+        token_prefix = %&token_str[..20],
         channels = channel_ids.len(),
         hours = req.hours,
         "invite token created"

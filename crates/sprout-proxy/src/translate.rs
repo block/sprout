@@ -80,11 +80,9 @@ impl Translator {
         let is_edit = kind_u32 == KIND_STREAM_MESSAGE_EDIT;
 
         if !is_stream_message && !is_edit {
-            if !self.kind_translator.is_translatable(kind_u32) {
-                // Unknown / non-translatable kind — pass through as-is.
-                return Ok(Some(event.clone()));
-            }
-            // Translatable but unhandled kind — drop silently.
+            // Drop all non-stream, non-edit kinds. The proxy only exposes a
+            // strict NIP-28 surface (kind:40/41/42) to external clients.
+            // Passing unknown kinds through would leak raw Sprout internals.
             return Ok(None);
         }
 
@@ -998,6 +996,29 @@ mod tests {
             h_tags[0].as_slice().get(1).map(|v| v.as_str()),
             Some(TEST_UUID),
             "the surviving #h tag must be the authorized channel UUID"
+        );
+    }
+
+    // ── Test 15: Outbound — unknown kinds are dropped (not leaked) ───────
+
+    #[test]
+    fn outbound_drops_unknown_kinds() {
+        let (translator, _) = make_translator();
+        let author_keys = Keys::generate();
+
+        // A kind:9999 event (unknown Sprout kind) should be dropped.
+        let h_tag = Tag::parse(&["h", TEST_UUID]).unwrap();
+        let event = EventBuilder::new(Kind::Custom(9999), "internal stuff", [h_tag])
+            .sign_with_keys(&author_keys)
+            .unwrap();
+
+        let result = translator
+            .translate_outbound(&event, &allowed())
+            .expect("outbound must not error");
+
+        assert!(
+            result.is_none(),
+            "unknown kinds must be dropped, not passed through to clients"
         );
     }
 }
