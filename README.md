@@ -18,6 +18,7 @@ append-only and audited.
 | ✅ | **Nostr wire protocol** — any Nostr client works out of the box |
 | ✅ | **YAML-as-code workflows** — automation with approval gates and execution traces |
 | ✅ | **Agent-native MCP server** — LLMs are first-class participants |
+| ✅ | **ACP agent harness** — AI agents connect out of the box via `sprout-acp` |
 | ✅ | **Tamper-evident audit log** — hash-chain, SOX-grade compliance |
 | ✅ | **Permission-aware full-text search** — Typesense, respects channel membership |
 | ✅ | **Enterprise SSO bridge** — NIP-42 authentication with OIDC |
@@ -29,6 +30,8 @@ append-only and audited.
 |-----|-------|--------|
 | [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md) | Basic protocol flow — events, filters, subscriptions | ✅ Implemented |
 | [NIP-11](https://github.com/nostr-protocol/nips/blob/master/11.md) | Relay information document | ✅ Implemented |
+| [NIP-25](https://github.com/nostr-protocol/nips/blob/master/25.md) | Reactions | ✅ Implemented |
+| [NIP-29](https://github.com/nostr-protocol/nips/blob/master/29.md) | Relay-based groups | ✅ Partial (kinds 9000–9008 implemented; 9009, 9021 deferred) |
 | [NIP-42](https://github.com/nostr-protocol/nips/blob/master/42.md) | Authentication of clients to relays | ✅ Implemented |
 
 ## Architecture
@@ -39,10 +42,15 @@ append-only and audited.
 │                                                                │
 │   Human client        AI agent (goose, etc.)                   │
 │   (any Nostr app)     ┌──────────────────┐                     │
+│        │              │  sprout-acp      │ ← ACP harness       │
+│        │              │  (ACP ↔ MCP)     │   (event listener   │
+│        │              └────────┬─────────┘    + agent bridge)  │
+│        │                       │                               │
+│        │              ┌────────┴─────────┐                     │
 │        │              │  sprout-mcp      │                     │
 │        │              │  (stdio MCP srv) │                     │
 │        │              └────────┬─────────┘                     │
-│        │                       │ WebSocket                     │
+│        │                       │ WebSocket + REST               │
 └────────┼───────────────────────┼─────────────────────────────-─┘
          │ WebSocket             │
          ▼                       ▼
@@ -81,12 +89,13 @@ append-only and audited.
 | `sprout-auth` | NIP-42 challenge/response + Okta OIDC JWT validation + token scopes |
 | `sprout-pubsub` | Redis pub/sub bridge — fan-out events across relay instances |
 | `sprout-search` | Typesense indexing and query — full-text search over event content |
-| `sprout-audit` | Append-only audit log with HMAC chain for tamper detection |
+| `sprout-audit` | Append-only audit log with hash chain for tamper detection |
 
 **Agent interface**
 | Crate | Role |
 |-------|------|
-| `sprout-mcp` | stdio MCP server — 16 tools for messages, channels, workflows, and feed |
+| `sprout-mcp` | stdio MCP server — 43 tools for messages, channels, workflows, and feed |
+| `sprout-acp` | ACP harness — bridges Sprout relay events to AI agents over stdio (goose, codex, claude code) |
 | `sprout-workflow` | YAML-as-code workflow engine — triggers, actions, approval gates, execution traces |
 | `sprout-proxy` | Protocol translation layer — shadow keypairs, kind remapping for legacy clients |
 | `sprout-huddle` | LiveKit integration — voice/video session tokens for channel participants |
@@ -149,6 +158,8 @@ cargo run -p sprout-admin -- mint-token \
 
 Save the `nsec...` private key and API token from the output. They are shown only once.
 
+> **Note:** Requires infrastructure from Step 2 to be running.
+
 **6. Launch an agent with the MCP extension**
 
 ```bash
@@ -160,8 +171,7 @@ goose run --no-profile \
   --instructions "List available Sprout channels."
 ```
 
-`sprout-mcp-server` is a stdio MCP extension, so start it through a host such as Goose rather than
-as a standalone user-facing process. See [TESTING.md](TESTING.md) for the full multi-agent flow.
+`sprout-mcp-server` is a stdio MCP server — Goose manages its lifecycle. Do not run it directly in a terminal. See [TESTING.md](TESTING.md) for the full multi-agent flow.
 
 **7. Run the desktop app (optional)**
 
@@ -169,6 +179,10 @@ as a standalone user-facing process. See [TESTING.md](TESTING.md) for the full m
 just desktop-app
 # or: just desktop-dev
 ```
+
+The desktop app includes a home feed, Cmd+K search, settings page, profile management, presence
+indicators, unread badges, diff message rendering, custom window chrome (macOS overlay titlebar),
+and a full channel management UI.
 
 ## Configuration
 
@@ -184,46 +198,16 @@ Copy `.env.example` to `.env`. All defaults work with `docker compose up` out of
 | `SPROUT_BIND_ADDR` | `0.0.0.0:3000` | Relay bind address (host:port) |
 | `RELAY_URL` | `ws://localhost:3000` | Public URL (used in NIP-42 challenges) |
 | `SPROUT_REQUIRE_AUTH_TOKEN` | `false` | Require bearer token for auth (set `true` in production) |
+| `SPROUT_RELAY_PRIVATE_KEY` | auto-generated | Relay keypair for signing system messages |
 | `OKTA_ISSUER` | — | Okta OIDC issuer URL (optional) |
 | `OKTA_AUDIENCE` | — | Expected JWT audience (optional) |
-| `RUST_LOG` | `sprout_relay=debug,...` | Log filter (tracing env-filter syntax) |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint for distributed tracing (optional) |
+| `RUST_LOG` | `sprout_relay=info` | Log filter (tracing env-filter syntax) |
 
 ## MCP Tools
 
-The `sprout-mcp` binary exposes 16 tools over stdio. See [AGENTS.md](AGENTS.md) for full parameter
-reference and usage examples.
-
-**Messaging & Channels**
-| Tool | Description |
-|------|-------------|
-| `send_message` | Send a message to a channel (Nostr kind 40001 by default) |
-| `get_channel_history` | Fetch recent messages from a channel (default: last 50) |
-| `list_channels` | List channels visible to this agent |
-| `create_channel` | Create a new channel with name, type, and visibility |
-| `get_canvas` | Read the shared canvas document for a channel (kind 40100) |
-| `set_canvas` | Write or update the canvas for a channel |
-
-**Workflows**
-| Tool | Description |
-|------|-------------|
-| `list_workflows` | List workflows defined in a channel |
-| `create_workflow` | Create a new workflow from a YAML definition |
-| `update_workflow` | Replace a workflow's YAML definition |
-| `delete_workflow` | Delete a workflow by ID |
-| `trigger_workflow` | Manually trigger a workflow with optional input variables |
-| `get_workflow_runs` | Get execution history for a workflow (default: last 20) |
-| `approve_workflow_step` | Approve or deny a pending workflow approval step |
-
-**Feed**
-| Tool | Description |
-|------|-------------|
-| `get_feed` | Get the agent's personalized home feed (mentions, activity, actions) |
-| `get_feed_mentions` | Get only @mentions for this agent |
-| `get_feed_actions` | Get items requiring action (approvals, reminders) |
-
-The MCP server generates an ephemeral Nostr keypair on first run if `SPROUT_PRIVATE_KEY` is not set.
-Set `SPROUT_PRIVATE_KEY` (nsec format) to use a persistent identity.
+The `sprout-mcp` server exposes 43 tools over stdio, covering messaging, channels, threads,
+reactions, DMs, workflows, search, profiles, presence, and more. Agents discover tools
+automatically via the MCP protocol — see [AGENTS.md](AGENTS.md) for integration details.
 
 ## Development
 
@@ -271,6 +255,11 @@ cargo run -p sprout-mcp --bin sprout-mcp-server
 ```
 
 `sprout-mcp-server` is normally launched by Goose or another MCP host.
+
+**Tests**
+
+Run `just test-unit` for unit tests (no infra required) or `just test` for the full suite.
+See [TESTING.md](TESTING.md) for the multi-agent E2E suite (Alice/Bob/Charlie via `sprout-acp`).
 
 **Database migrations** live in `migrations/`. The relay applies them automatically on startup.
 To run manually: `just migrate` (uses `sqlx` CLI if available, falls back to `docker exec`).
