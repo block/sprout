@@ -20,6 +20,9 @@ import {
 import { Input } from "@/shared/ui/input";
 import { Button } from "@/shared/ui/button";
 
+const BROWSE_CHANNELS_SHORTCUT_KEY = "o";
+const BROWSE_CHANNELS_SHORTCUT_HINT = "\u21E7\u2318O";
+
 function formatRelativeTime(isoString: string | null) {
   if (!isoString) {
     return "No activity";
@@ -128,7 +131,7 @@ export function ChannelBrowserDialog({
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (
-        event.key.toLowerCase() !== "b" ||
+        event.key.toLowerCase() !== BROWSE_CHANNELS_SHORTCUT_KEY ||
         !(event.metaKey || event.ctrlKey) ||
         event.altKey ||
         !event.shiftKey
@@ -250,9 +253,9 @@ export function ChannelBrowserDialog({
               ref={inputRef}
               value={query}
             />
-            <div className="hidden items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground sm:flex">
-              &#x21E7;&#x2318;B
-            </div>
+            <span className="hidden shrink-0 text-xs text-muted-foreground/50 sm:block">
+              {BROWSE_CHANNELS_SHORTCUT_HINT}
+            </span>
           </div>
         </DialogHeader>
 

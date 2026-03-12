@@ -408,7 +408,7 @@ export function AppSidebar({
       variant="sidebar"
     >
       <SidebarHeader
-        className="gap-3 pt-12"
+        className="gap-3 pt-10"
         onPointerDown={handleDragPointerDown}
       >
         <Button
@@ -497,7 +497,7 @@ export function AppSidebar({
               selectedChannelId={selectedChannelId}
               unreadChannelIds={unreadChannelIds}
             />
-            <SidebarMenu>
+            <SidebarMenu className="px-2">
               <SidebarMenuItem>
                 <SidebarMenuButton
                   className="text-sidebar-foreground/60 hover:text-sidebar-foreground"
