@@ -152,11 +152,7 @@ impl UpstreamClient {
 
     /// Returns `true` if the upstream connection is currently established and authenticated.
     pub fn is_connected(&self) -> bool {
-        self.inner
-            .connected
-            .try_read()
-            .map(|v| *v)
-            .unwrap_or(false)
+        self.inner.connected.try_read().map(|v| *v).unwrap_or(false)
     }
 
     // ── Subscription tracking helpers ─────────────────────────────────────────
@@ -409,7 +405,10 @@ where
             WsMessage::Ping(data) => {
                 // tokio-tungstenite automatically responds to pings at the transport
                 // layer when using connect_async, so we just log and continue.
-                debug!("received PING ({} bytes) — tungstenite auto-pongs", data.len());
+                debug!(
+                    "received PING ({} bytes) — tungstenite auto-pongs",
+                    data.len()
+                );
             }
 
             WsMessage::Close(frame) => {
@@ -455,14 +454,11 @@ async fn respond_to_auth_challenge(
     *inner.auth_event_id.lock().await = Some(auth_event.id);
 
     let msg = ClientMessage::auth(auth_event).as_json();
-    write_tx
-        .send(msg)
-        .await
-        .map_err(|_| {
-            Box::new(crate::ProxyError::Upstream(
-                "write channel closed during auth".into(),
-            )) as Box<dyn std::error::Error + Send + Sync>
-        })?;
+    write_tx.send(msg).await.map_err(|_| {
+        Box::new(crate::ProxyError::Upstream(
+            "write channel closed during auth".into(),
+        )) as Box<dyn std::error::Error + Send + Sync>
+    })?;
 
     Ok(())
 }
@@ -507,14 +503,23 @@ mod tests {
             let req_msg = rx.recv().await.unwrap();
             let close_msg = rx.recv().await.unwrap();
 
-            assert!(event_msg.contains("EVENT"), "expected EVENT in: {event_msg}");
+            assert!(
+                event_msg.contains("EVENT"),
+                "expected EVENT in: {event_msg}"
+            );
             assert!(
                 event_msg.contains(&event_id.to_hex()),
                 "expected event id in: {event_msg}"
             );
             assert!(req_msg.contains("REQ"), "expected REQ in: {req_msg}");
-            assert!(req_msg.contains("test-sub"), "expected sub id in: {req_msg}");
-            assert!(close_msg.contains("CLOSE"), "expected CLOSE in: {close_msg}");
+            assert!(
+                req_msg.contains("test-sub"),
+                "expected sub id in: {req_msg}"
+            );
+            assert!(
+                close_msg.contains("CLOSE"),
+                "expected CLOSE in: {close_msg}"
+            );
         });
     }
 
@@ -574,8 +579,11 @@ mod tests {
                 .unwrap();
 
             // After challenge: auth_event_id should be set.
-            let stored_id = inner.auth_event_id.lock().await.clone();
-            assert!(stored_id.is_some(), "auth_event_id should be set after challenge");
+            let stored_id = *inner.auth_event_id.lock().await;
+            assert!(
+                stored_id.is_some(),
+                "auth_event_id should be set after challenge"
+            );
 
             // The AUTH message should contain the event ID.
             let msg = write_rx.recv().await.unwrap();

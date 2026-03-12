@@ -27,7 +27,9 @@ impl InviteStore {
 
     /// Validate a token string. Returns the list of channel UUIDs if valid.
     pub fn validate(&self, token_str: &str) -> Result<Vec<Uuid>, ProxyError> {
-        let entry = self.tokens.get(token_str)
+        let entry = self
+            .tokens
+            .get(token_str)
             .ok_or(ProxyError::InviteNotFound)?;
         entry.validate(Utc::now())?;
         Ok(entry.channel_ids.clone())
@@ -36,7 +38,9 @@ impl InviteStore {
     /// Atomically validate and consume a token (increment use count).
     /// Returns the list of channel UUIDs if valid.
     pub fn validate_and_consume(&self, token_str: &str) -> Result<Vec<Uuid>, ProxyError> {
-        let mut entry = self.tokens.get_mut(token_str)
+        let mut entry = self
+            .tokens
+            .get_mut(token_str)
             .ok_or(ProxyError::InviteNotFound)?;
         entry.validate(Utc::now())?;
         let channels = entry.channel_ids.clone();
@@ -72,21 +76,11 @@ mod tests {
     use chrono::Duration;
 
     fn future_token(token: &str, channels: Vec<Uuid>, max_uses: u32) -> InviteToken {
-        InviteToken::new(
-            token,
-            channels,
-            Utc::now() + Duration::hours(1),
-            max_uses,
-        )
+        InviteToken::new(token, channels, Utc::now() + Duration::hours(1), max_uses)
     }
 
     fn expired_token(token: &str) -> InviteToken {
-        InviteToken::new(
-            token,
-            vec![],
-            Utc::now() - Duration::seconds(1),
-            5,
-        )
+        InviteToken::new(token, vec![], Utc::now() - Duration::seconds(1), 5)
     }
 
     #[test]

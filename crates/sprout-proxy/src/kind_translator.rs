@@ -80,7 +80,7 @@ impl KindTranslator {
     /// | anything else              | unchanged     | pass-through              |
     pub fn to_standard(&self, sprout_kind: u32) -> u32 {
         match sprout_kind {
-            k if k == KIND_STREAM_MESSAGE => 42,   // NIP-28 channel message (was 1)
+            k if k == KIND_STREAM_MESSAGE => 42, // NIP-28 channel message (was 1)
             k if k == KIND_STREAM_MESSAGE_V2 => 42, // Rich format → plain kind:42
             k if k == KIND_STREAM_MESSAGE_EDIT => 41,
             k if k == KIND_DM_CREATED => 4,

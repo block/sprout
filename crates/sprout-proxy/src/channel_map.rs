@@ -149,7 +149,10 @@ impl ChannelMap {
             map.register(ch)?;
         }
 
-        info!(count = channels.len(), "channel map initialized from REST API");
+        info!(
+            count = channels.len(),
+            "channel map initialized from REST API"
+        );
         Ok(map)
     }
 
@@ -184,8 +187,8 @@ impl ChannelMap {
         dto: &ChannelDto,
     ) -> Result<ChannelInfo, Box<dyn std::error::Error + Send + Sync>> {
         let uuid = dto.id.parse::<Uuid>()?;
-        let created_at_unix = chrono::DateTime::parse_from_rfc3339(&dto.created_at)?
-            .timestamp() as u64;
+        let created_at_unix =
+            chrono::DateTime::parse_from_rfc3339(&dto.created_at)?.timestamp() as u64;
 
         let kind40 = self.synthesize_kind40(&dto.id, created_at_unix);
         let event_id = kind40.id.to_hex();
@@ -272,7 +275,10 @@ mod tests {
         let event_b = map.synthesize_kind40(uuid_b, 1_700_000_000);
         let event_c = map.synthesize_kind40(uuid_a, 1_700_000_001);
         assert_ne!(event_a.id, event_b.id, "different UUIDs → different IDs");
-        assert_ne!(event_a.id, event_c.id, "different timestamps → different IDs");
+        assert_ne!(
+            event_a.id, event_c.id,
+            "different timestamps → different IDs"
+        );
     }
 
     #[test]
@@ -347,17 +353,17 @@ mod tests {
 
         // Verify the e tag references the kind:40 event ID
         let has_e_tag = kind41.tags.iter().any(|tag| {
-            tag.as_slice()
-                .first()
-                .map(|s| s == "e")
-                .unwrap_or(false)
+            tag.as_slice().first().map(|s| s == "e").unwrap_or(false)
                 && tag
                     .as_slice()
                     .get(1)
                     .map(|s| s == &info.kind40_event_id)
                     .unwrap_or(false)
         });
-        assert!(has_e_tag, "kind:41 must have e tag pointing to kind:40 event");
+        assert!(
+            has_e_tag,
+            "kind:41 must have e tag pointing to kind:40 event"
+        );
     }
 
     #[test]
@@ -371,7 +377,8 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".to_string(),
             visibility: "open".to_string(),
             description: "test".to_string(),
-            created_by: "0101010101010101010101010101010101010101010101010101010101010101".to_string(),
+            created_by: "0101010101010101010101010101010101010101010101010101010101010101"
+                .to_string(),
         };
         let info1 = map.register(&dto1).unwrap();
 
@@ -382,15 +389,20 @@ mod tests {
             created_at: "2026-06-01T00:00:00Z".to_string(),
             visibility: "open".to_string(),
             description: "test".to_string(),
-            created_by: "0101010101010101010101010101010101010101010101010101010101010101".to_string(),
+            created_by: "0101010101010101010101010101010101010101010101010101010101010101"
+                .to_string(),
         };
         let info2 = map.register(&dto2).unwrap();
 
         // Old event ID should no longer resolve
-        assert!(map.lookup_by_event_id(&info1.kind40_event_id).is_none(),
-            "stale event ID must be cleaned up");
+        assert!(
+            map.lookup_by_event_id(&info1.kind40_event_id).is_none(),
+            "stale event ID must be cleaned up"
+        );
         // New event ID should resolve
-        assert!(map.lookup_by_event_id(&info2.kind40_event_id).is_some(),
-            "new event ID must resolve");
+        assert!(
+            map.lookup_by_event_id(&info2.kind40_event_id).is_some(),
+            "new event ID must resolve"
+        );
     }
 }

@@ -9,11 +9,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::{
-    Router,
-    extract::{FromRequest, Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
+    extract::{
+        ws::{Message, WebSocket},
+        FromRequest, Query, State, WebSocketUpgrade,
+    },
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
+    Router,
 };
 use nostr::prelude::*;
 use serde::Deserialize;
@@ -25,7 +28,6 @@ use crate::guest_store::GuestStore;
 use crate::invite_store::InviteStore;
 use crate::translate::Translator;
 use crate::upstream::UpstreamClient;
-
 
 // ─── Shared state ────────────────────────────────────────────────────────────
 
@@ -152,7 +154,11 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
     let hash_a: [u8; 32] = Sha256::digest(a.as_bytes()).into();
     let hash_b: [u8; 32] = Sha256::digest(b.as_bytes()).into();
     // Fixed-length comparison — no length oracle
-    hash_a.iter().zip(hash_b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    hash_a
+        .iter()
+        .zip(hash_b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 // ─── WebSocket handler ───────────────────────────────────────────────────────
@@ -181,8 +187,7 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
     // ── 3. Pre-auth loop: reject pre-auth REQs/EVENTs, wait for AUTH ─────
     // Returns `(pubkey, channels)` on successful auth, or drops the connection
     // on timeout / disconnect / invalid auth.
-    let auth_deadline =
-        tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let auth_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
 
     let (client_pubkey, allowed_channels): (PublicKey, Vec<Uuid>) = loop {
         let msg = tokio::select! {
@@ -209,11 +214,7 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                 if auth_event.kind != Kind::Authentication {
                     let _ = send_relay_msg(
                         &mut socket,
-                        RelayMessage::ok(
-                            auth_event.id,
-                            false,
-                            "invalid: wrong kind for AUTH",
-                        ),
+                        RelayMessage::ok(auth_event.id, false, "invalid: wrong kind for AUTH"),
                     )
                     .await;
                     continue;
@@ -227,11 +228,7 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                 if !has_challenge {
                     let _ = send_relay_msg(
                         &mut socket,
-                        RelayMessage::ok(
-                            auth_event.id,
-                            false,
-                            "invalid: wrong challenge",
-                        ),
+                        RelayMessage::ok(auth_event.id, false, "invalid: wrong challenge"),
                     )
                     .await;
                     continue;
@@ -267,11 +264,7 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                 if auth_event.verify().is_err() {
                     let _ = send_relay_msg(
                         &mut socket,
-                        RelayMessage::ok(
-                            auth_event.id,
-                            false,
-                            "invalid: bad signature",
-                        ),
+                        RelayMessage::ok(auth_event.id, false, "invalid: bad signature"),
                     )
                     .await;
                     continue;
@@ -297,7 +290,8 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                             let _ = send_relay_msg(
                                 &mut socket,
                                 RelayMessage::notice(format!("error: token invalid: {e}")),
-                            ).await;
+                            )
+                            .await;
                             return;
                         }
                     }
@@ -305,19 +299,23 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                     // No guest registration, no token → reject.
                     let _ = send_relay_msg(
                         &mut socket,
-                        RelayMessage::ok(event_id, false, "restricted: pubkey not registered and no invite token provided"),
-                    ).await;
+                        RelayMessage::ok(
+                            event_id,
+                            false,
+                            "restricted: pubkey not registered and no invite token provided",
+                        ),
+                    )
+                    .await;
                     return;
                 };
 
-                let _ = send_relay_msg(
-                    &mut socket,
-                    RelayMessage::ok(event_id, true, ""),
-                ).await;
+                let _ = send_relay_msg(&mut socket, RelayMessage::ok(event_id, true, "")).await;
                 break (pubkey, channels);
             }
 
-            Ok(ClientMessage::Req { subscription_id, .. }) => {
+            Ok(ClientMessage::Req {
+                subscription_id, ..
+            }) => {
                 // NIP-42: reject pre-auth REQs with CLOSED so clients like nak
                 // can detect the auth-required rejection, authenticate, and
                 // re-send the REQ. Buffering silently would leave reactive-auth
@@ -505,18 +503,26 @@ async fn handle_client_message(
     let msg = match ClientMessage::from_json(raw_msg) {
         Ok(m) => m,
         Err(_) => {
-            let _ = send_relay_msg(
-                socket,
-                RelayMessage::notice("error: invalid message"),
-            )
-            .await;
+            let _ = send_relay_msg(socket, RelayMessage::notice("error: invalid message")).await;
             return;
         }
     };
 
     match msg {
-        ClientMessage::Req { subscription_id, filters } => {
-            handle_req(socket, state, subscription_id, filters, allowed_channels, conn_prefix, active_subs).await;
+        ClientMessage::Req {
+            subscription_id,
+            filters,
+        } => {
+            handle_req(
+                socket,
+                state,
+                subscription_id,
+                filters,
+                allowed_channels,
+                conn_prefix,
+                active_subs,
+            )
+            .await;
         }
         ClientMessage::Event(event) => {
             let event_id = event.id;
@@ -525,7 +531,11 @@ async fn handle_client_message(
             // Without this, an AUTHed connection could submit arbitrary events
             // that get re-signed under the client's shadow identity.
             if event.pubkey != *client_pubkey {
-                let ok_msg = RelayMessage::ok(event_id, false, "invalid: event pubkey does not match authenticated identity");
+                let ok_msg = RelayMessage::ok(
+                    event_id,
+                    false,
+                    "invalid: event pubkey does not match authenticated identity",
+                );
                 let _ = socket.send(Message::Text(ok_msg.as_json().into())).await;
                 return;
             }
@@ -536,11 +546,16 @@ async fn handle_client_message(
             }
 
             // Translate inbound: kind:42 → kind:40001, #e → #h, re-sign with shadow key.
-            match state.translator.translate_inbound(&event, &client_pubkey.to_hex(), allowed_channels) {
+            match state.translator.translate_inbound(
+                &event,
+                &client_pubkey.to_hex(),
+                allowed_channels,
+            ) {
                 Ok(translated) => {
                     // FIX H: Cap pending_oks to prevent unbounded growth if upstream never ACKs.
                     if pending_oks.len() >= 1000 {
-                        let ok_msg = RelayMessage::ok(event_id, false, "error: too many pending events");
+                        let ok_msg =
+                            RelayMessage::ok(event_id, false, "error: too many pending events");
                         let _ = socket.send(Message::Text(ok_msg.as_json().into())).await;
                         return;
                     }
@@ -554,7 +569,11 @@ async fn handle_client_message(
                         warn!("upstream send_event failed: {e}");
                         // FIX C: Remove by translated (upstream) ID, not client event ID.
                         pending_oks.remove(&upstream_id.to_hex());
-                        let ok_msg = RelayMessage::ok(event_id, false, "error: upstream unavailable".to_string());
+                        let ok_msg = RelayMessage::ok(
+                            event_id,
+                            false,
+                            "error: upstream unavailable".to_string(),
+                        );
                         let _ = socket.send(Message::Text(ok_msg.as_json().into())).await;
                     }
                 }
@@ -608,7 +627,8 @@ fn split_filters(filters: &[Filter]) -> (Vec<Filter>, Vec<Filter>) {
         let has_upstream = kinds.iter().any(|k| *k != 40);
 
         if has_local {
-            let local_kinds: Vec<Kind> = kinds.iter()
+            let local_kinds: Vec<Kind> = kinds
+                .iter()
                 .filter(|k| **k == 40 || **k == 41)
                 .map(|k| Kind::Custom(*k))
                 .collect();
@@ -621,7 +641,8 @@ fn split_filters(filters: &[Filter]) -> (Vec<Filter>, Vec<Filter>) {
         }
         if has_upstream {
             // Upstream gets everything except kind:40 (which is local-only).
-            let upstream_kinds: Vec<Kind> = kinds.iter()
+            let upstream_kinds: Vec<Kind> = kinds
+                .iter()
                 .filter(|k| **k != 40)
                 .map(|k| Kind::Custom(*k))
                 .collect();
@@ -703,14 +724,20 @@ fn collect_local_events(
 
         if wants_40 && events.len() < limit {
             let kind40 = channel_map.synthesize_kind40(&ch.uuid.to_string(), ch.created_at_unix);
-            let id_ok = filter.ids.as_ref().is_none_or(|ids| ids.contains(&kind40.id));
+            let id_ok = filter
+                .ids
+                .as_ref()
+                .is_none_or(|ids| ids.contains(&kind40.id));
             if id_ok {
                 events.push(kind40);
             }
         }
         if wants_41 && events.len() < limit {
             let kind41 = channel_map.synthesize_kind41(ch);
-            let id_ok = filter.ids.as_ref().is_none_or(|ids| ids.contains(&kind41.id));
+            let id_ok = filter
+                .ids
+                .as_ref()
+                .is_none_or(|ids| ids.contains(&kind41.id));
             if id_ok {
                 events.push(kind41);
             }
@@ -751,7 +778,11 @@ async fn handle_req(
     // The upstream EOSE will serve as the combined EOSE for mixed REQs.
     let translated_filters: Vec<Filter> = owned_upstream_filters
         .iter()
-        .map(|f| state.translator.translate_filter_inbound(f, allowed_channels))
+        .map(|f| {
+            state
+                .translator
+                .translate_filter_inbound(f, allowed_channels)
+        })
         .collect();
 
     let prefixed_sub_id_str = format!("{conn_prefix}:{}", sub_id);
@@ -760,7 +791,11 @@ async fn handle_req(
     // FIX 5: Track this subscription for cleanup on disconnect.
     active_subs.insert(prefixed_sub_id_str);
 
-    if let Err(e) = state.upstream.send_req(prefixed_sub_id, translated_filters).await {
+    if let Err(e) = state
+        .upstream
+        .send_req(prefixed_sub_id, translated_filters)
+        .await
+    {
         warn!("upstream send_req failed: {e}");
     }
 }
@@ -820,15 +855,9 @@ async fn create_invite(
     }
 
     let token_str = format!("sprout_invite_{}", Uuid::new_v4().simple());
-    let expires_at = chrono::Utc::now()
-        + chrono::Duration::hours(req.hours as i64);
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(req.hours as i64);
 
-    let token = crate::InviteToken::new(
-        &token_str,
-        channel_ids.clone(),
-        expires_at,
-        req.max_uses,
-    );
+    let token = crate::InviteToken::new(&token_str, channel_ids.clone(), expires_at, req.max_uses);
     state.invite_store.insert(token);
 
     info!(
@@ -963,7 +992,11 @@ async fn revoke_guest(
     let removed = state.guest_store.remove(&pubkey);
     if removed {
         info!(pubkey = %pubkey, "guest revoked");
-        (StatusCode::OK, axum::Json(serde_json::json!({ "revoked": true }))).into_response()
+        (
+            StatusCode::OK,
+            axum::Json(serde_json::json!({ "revoked": true })),
+        )
+            .into_response()
     } else {
         (
             StatusCode::NOT_FOUND,
@@ -973,10 +1006,7 @@ async fn revoke_guest(
     }
 }
 
-async fn list_guests(
-    State(state): State<ProxyState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn list_guests(State(state): State<ProxyState>, headers: HeaderMap) -> impl IntoResponse {
     if let Some(err) = check_admin_secret(&state.admin_secret, &headers) {
         return err;
     }
@@ -993,7 +1023,11 @@ async fn list_guests(
         })
         .collect();
 
-    (StatusCode::OK, axum::Json(serde_json::json!({ "guests": guests }))).into_response()
+    (
+        StatusCode::OK,
+        axum::Json(serde_json::json!({ "guests": guests })),
+    )
+        .into_response()
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -1079,7 +1113,11 @@ mod tests {
         let f = Filter::new().kind(Kind::ChannelMetadata);
         let (local, upstream) = split_filters(&[f]);
         assert_eq!(local.len(), 1, "kind:41 must produce a local filter");
-        assert_eq!(upstream.len(), 1, "kind:41 must also produce an upstream filter");
+        assert_eq!(
+            upstream.len(),
+            1,
+            "kind:41 must also produce an upstream filter"
+        );
     }
 
     #[test]
@@ -1095,11 +1133,27 @@ mod tests {
         let f = Filter::new().kinds([Kind::ChannelCreation, Kind::Custom(42)]);
         let (local, upstream) = split_filters(&[f]);
         assert_eq!(local.len(), 1, "mixed filter must produce a local portion");
-        assert_eq!(upstream.len(), 1, "mixed filter must produce an upstream portion");
-        let local_k: Vec<u16> = local[0].kinds.as_ref().unwrap().iter().map(|k| k.as_u16()).collect();
+        assert_eq!(
+            upstream.len(),
+            1,
+            "mixed filter must produce an upstream portion"
+        );
+        let local_k: Vec<u16> = local[0]
+            .kinds
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|k| k.as_u16())
+            .collect();
         assert!(local_k.contains(&40));
         assert!(!local_k.contains(&42));
-        let up_k: Vec<u16> = upstream[0].kinds.as_ref().unwrap().iter().map(|k| k.as_u16()).collect();
+        let up_k: Vec<u16> = upstream[0]
+            .kinds
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|k| k.as_u16())
+            .collect();
         assert!(up_k.contains(&42));
         assert!(!up_k.contains(&40));
     }
@@ -1110,7 +1164,13 @@ mod tests {
         let (local, upstream) = split_filters(&[f]);
         assert_eq!(local.len(), 1);
         assert_eq!(upstream.len(), 1);
-        let local_k: Vec<u16> = local[0].kinds.as_ref().unwrap().iter().map(|k| k.as_u16()).collect();
+        let local_k: Vec<u16> = local[0]
+            .kinds
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|k| k.as_u16())
+            .collect();
         assert!(local_k.contains(&40));
         assert!(local_k.contains(&41));
         assert!(upstream[0].kinds.is_none());
@@ -1127,7 +1187,8 @@ mod tests {
             created_at: "2026-01-15T12:00:00Z".to_string(),
             visibility: "open".to_string(),
             description: "A test channel".to_string(),
-            created_by: "0101010101010101010101010101010101010101010101010101010101010101".to_string(),
+            created_by: "0101010101010101010101010101010101010101010101010101010101010101"
+                .to_string(),
         };
         map.register(&dto).expect("register must succeed");
         let uuid: Uuid = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();

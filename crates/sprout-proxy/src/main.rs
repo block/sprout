@@ -162,8 +162,8 @@ async fn main() {
 
     // Relay URL for NIP-42 relay tag validation. Prefer explicit env var
     // (e.g. "wss://proxy.example.com") over the derived bind address fallback.
-    let relay_url = std::env::var("SPROUT_PROXY_RELAY_URL")
-        .unwrap_or_else(|_| format!("ws://{}", bind_addr));
+    let relay_url =
+        std::env::var("SPROUT_PROXY_RELAY_URL").unwrap_or_else(|_| format!("ws://{}", bind_addr));
 
     let state = ProxyState {
         channel_map: channel_map.clone(),

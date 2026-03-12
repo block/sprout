@@ -102,8 +102,7 @@ impl Translator {
                 // Verify it's a known channel, not just any UUID-shaped string.
                 self.channel_map.lookup_by_uuid(&parsed)?;
                 Some((val.clone(), parsed))
-            })
-        {
+            }) {
             Some(pair) => pair,
             None => return Ok(None), // No recognized channel tag — drop silently.
         };
@@ -278,11 +277,7 @@ impl Translator {
     ///   only receive events from channels they have access to.
     ///
     /// The returned filter is ready to be forwarded to the upstream Sprout relay.
-    pub fn translate_filter_inbound(
-        &self,
-        filter: &Filter,
-        allowed_channels: &[Uuid],
-    ) -> Filter {
+    pub fn translate_filter_inbound(&self, filter: &Filter, allowed_channels: &[Uuid]) -> Filter {
         // Start with a clone and rebuild the kinds set.
         let mut f = filter.clone();
 
@@ -364,9 +359,7 @@ impl Translator {
                 .map(|k| {
                     let k_u32 = k.as_u16() as u32;
                     let standard_k = self.kind_translator.to_standard(k_u32);
-                    Kind::Custom(
-                        u16::try_from(standard_k).expect("standard kind must fit in u16"),
-                    )
+                    Kind::Custom(u16::try_from(standard_k).expect("standard kind must fit in u16"))
                 })
                 .collect();
             f = f.remove_kinds(kinds.iter().cloned()).kinds(new_kinds);
@@ -414,7 +407,8 @@ mod tests {
             created_by: "0101010101010101010101010101010101010101010101010101010101010101"
                 .to_string(),
         };
-        map.register(&dto).expect("test channel registration must succeed");
+        map.register(&dto)
+            .expect("test channel registration must succeed");
         map
     }
 
@@ -470,19 +464,25 @@ mod tests {
             let s = t.as_slice();
             s.len() >= 2 && s[0] == "e" && s[1] == kind40_event_id
         });
-        assert!(has_e_tag, "translated event must have #e tag with kind:40 event ID");
+        assert!(
+            has_e_tag,
+            "translated event must have #e tag with kind:40 event ID"
+        );
 
         // Must NOT have an #h tag.
-        let has_h_tag = translated.tags.iter().any(|t| {
-            t.as_slice().first().map(|v| v.as_str()) == Some("h")
-        });
+        let has_h_tag = translated
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|v| v.as_str()) == Some("h"));
         assert!(!has_h_tag, "translated event must not retain #h tag");
 
         // Content must be preserved.
         assert_eq!(translated.content, "hello world");
 
         // Signature must be valid.
-        translated.verify().expect("translated event signature must be valid");
+        translated
+            .verify()
+            .expect("translated event signature must be valid");
     }
 
     // ── Test 2: Inbound — kind:42 + #e → kind:40001 + #h ───────────────────
@@ -515,19 +515,25 @@ mod tests {
             let s = t.as_slice();
             s.len() >= 2 && s[0] == "h" && s[1] == TEST_UUID
         });
-        assert!(has_h_tag, "translated event must have #h tag with channel UUID");
+        assert!(
+            has_h_tag,
+            "translated event must have #h tag with channel UUID"
+        );
 
         // Must NOT have an #e tag.
-        let has_e_tag = translated.tags.iter().any(|t| {
-            t.as_slice().first().map(|v| v.as_str()) == Some("e")
-        });
+        let has_e_tag = translated
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|v| v.as_str()) == Some("e"));
         assert!(!has_e_tag, "translated event must not retain #e tag");
 
         // Content must be preserved.
         assert_eq!(translated.content, "hello from client");
 
         // Signature must be valid.
-        translated.verify().expect("translated event signature must be valid");
+        translated
+            .verify()
+            .expect("translated event signature must be valid");
     }
 
     // ── Test 3: Outbound — channel not in allowed_channels → PermissionDenied
@@ -538,13 +544,10 @@ mod tests {
         let author_keys = Keys::generate();
 
         let h_tag = Tag::parse(&["h", TEST_UUID]).unwrap();
-        let sprout_event = EventBuilder::new(
-            Kind::Custom(KIND_STREAM_MESSAGE as u16),
-            "secret",
-            [h_tag],
-        )
-        .sign_with_keys(&author_keys)
-        .unwrap();
+        let sprout_event =
+            EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), "secret", [h_tag])
+                .sign_with_keys(&author_keys)
+                .unwrap();
 
         let result = translator.translate_outbound(&sprout_event, &no_channels());
 
@@ -668,7 +671,7 @@ mod tests {
         let e_tag_key = SingleLetterTag::lowercase(Alphabet::E);
         let filter = Filter::new()
             .kind(Kind::Custom(42))
-            .custom_tag(e_tag_key.clone(), [kind40_event_id.clone()]);
+            .custom_tag(e_tag_key, [kind40_event_id]);
 
         let translated = translator.translate_filter_inbound(&filter, &allowed());
 
@@ -712,7 +715,7 @@ mod tests {
         let e_tag_key = SingleLetterTag::lowercase(Alphabet::E);
         let filter = Filter::new()
             .kind(Kind::Custom(42))
-            .custom_tag(e_tag_key.clone(), [unknown_event_id]);
+            .custom_tag(e_tag_key, [unknown_event_id]);
 
         let translated = translator.translate_filter_inbound(&filter, &allowed());
 
@@ -753,8 +756,7 @@ mod tests {
 
         // A reply event has two #e tags: one for the channel, one for the
         // message being replied to (NIP-10 threading).
-        let reply_event_id =
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let reply_event_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let channel_e_tag = Tag::parse(&["e", &kind40_event_id]).unwrap();
         let reply_e_tag = Tag::parse(&["e", reply_event_id]).unwrap();
 
@@ -775,7 +777,10 @@ mod tests {
             let s = t.as_slice();
             s.len() >= 2 && s[0] == "h" && s[1] == TEST_UUID
         });
-        assert!(has_h_tag, "translated event must have #h tag with channel UUID");
+        assert!(
+            has_h_tag,
+            "translated event must have #h tag with channel UUID"
+        );
 
         // The channel #e tag must be gone.
         let has_channel_e = translated.tags.iter().any(|t| {
@@ -789,9 +794,14 @@ mod tests {
             let s = t.as_slice();
             s.len() >= 2 && s[0] == "e" && s[1] == reply_event_id
         });
-        assert!(has_reply_e, "reply #e tag must be preserved for NIP-10 threading");
+        assert!(
+            has_reply_e,
+            "reply #e tag must be preserved for NIP-10 threading"
+        );
 
-        translated.verify().expect("translated event signature must be valid");
+        translated
+            .verify()
+            .expect("translated event signature must be valid");
     }
 
     // ── Test 8: Outbound — non-channel #h tags are preserved (FIX 2) ────────
@@ -840,7 +850,9 @@ mod tests {
         });
         assert!(has_other_h, "non-channel #h tag must be preserved");
 
-        translated.verify().expect("translated event signature must be valid");
+        translated
+            .verify()
+            .expect("translated event signature must be valid");
     }
 
     // ── Test 9: Filter — empty allowed_channels injects deny-all (FIX 3) ────
@@ -883,7 +895,11 @@ mod tests {
             .unwrap();
 
         let translated = translator
-            .translate_inbound(&nip28_event, &external_keys.public_key().to_hex(), &allowed())
+            .translate_inbound(
+                &nip28_event,
+                &external_keys.public_key().to_hex(),
+                &allowed(),
+            )
             .expect("inbound kind:41 must translate");
 
         // kind:41 → KIND_STREAM_MESSAGE_EDIT (40003)
@@ -957,17 +973,21 @@ mod tests {
         assert_eq!(translated.content, "edited content");
 
         // Must have #e tag (channel reference), not #h.
-        let has_e_tag = translated.tags.iter().any(|t| {
-            t.as_slice().first().map(|v| v.as_str()) == Some("e")
-        });
+        let has_e_tag = translated
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|v| v.as_str()) == Some("e"));
         assert!(has_e_tag, "translated edit must have #e tag");
 
-        let has_h_tag = translated.tags.iter().any(|t| {
-            t.as_slice().first().map(|v| v.as_str()) == Some("h")
-        });
+        let has_h_tag = translated
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|v| v.as_str()) == Some("h"));
         assert!(!has_h_tag, "translated edit must not retain #h tag");
 
-        translated.verify().expect("translated edit signature must be valid");
+        translated
+            .verify()
+            .expect("translated edit signature must be valid");
     }
 
     #[test]
@@ -978,20 +998,23 @@ mod tests {
         // Client tries to inject an #h tag for an unauthorized channel.
         let e_tag = Tag::parse(&["e", &kind40_event_id]).unwrap();
         let injected_h = Tag::parse(&["h", "00000000-0000-0000-0000-000000000001"]).unwrap();
-        let nip28_event = EventBuilder::new(
-            Kind::Custom(42),
-            "sneaky message",
-            [e_tag, injected_h],
-        )
-        .sign_with_keys(&external_keys)
-        .unwrap();
+        let nip28_event =
+            EventBuilder::new(Kind::Custom(42), "sneaky message", [e_tag, injected_h])
+                .sign_with_keys(&external_keys)
+                .unwrap();
 
         let translated = translator
-            .translate_inbound(&nip28_event, &external_keys.public_key().to_hex(), &allowed())
+            .translate_inbound(
+                &nip28_event,
+                &external_keys.public_key().to_hex(),
+                &allowed(),
+            )
             .expect("inbound must succeed");
 
         // Only the authorized #h tag should be present.
-        let h_tags: Vec<_> = translated.tags.iter()
+        let h_tags: Vec<_> = translated
+            .tags
+            .iter()
             .filter(|t| t.as_slice().first().map(|v| v.as_str()) == Some("h"))
             .collect();
         assert_eq!(h_tags.len(), 1, "only the authorized #h tag should survive");

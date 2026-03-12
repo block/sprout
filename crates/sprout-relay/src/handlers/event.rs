@@ -102,7 +102,10 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         let auth = conn.auth_state.read().await;
         match &*auth {
             AuthState::Authenticated(ctx) => {
-                if !ctx.scopes.is_empty() && !ctx.scopes.contains(&Scope::MessagesWrite) && !ctx.scopes.contains(&Scope::ProxySubmit) {
+                if !ctx.scopes.is_empty()
+                    && !ctx.scopes.contains(&Scope::MessagesWrite)
+                    && !ctx.scopes.contains(&Scope::ProxySubmit)
+                {
                     conn.send(RelayMessage::ok(
                         &event_id_hex,
                         false,

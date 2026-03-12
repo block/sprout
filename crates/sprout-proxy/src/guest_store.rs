@@ -84,7 +84,9 @@ mod tests {
 
         store.register(pubkey, vec![ch1, ch2]);
 
-        let channels = store.lookup(&pubkey).expect("should find registered pubkey");
+        let channels = store
+            .lookup(&pubkey)
+            .expect("should find registered pubkey");
         assert_eq!(channels, vec![ch1, ch2]);
     }
 
@@ -101,11 +103,20 @@ mod tests {
         let pubkey = random_pubkey();
 
         store.register(pubkey, vec![Uuid::new_v4()]);
-        assert!(store.remove(&pubkey), "should return true for existing pubkey");
-        assert!(!store.remove(&pubkey), "should return false for already-removed pubkey");
+        assert!(
+            store.remove(&pubkey),
+            "should return true for existing pubkey"
+        );
+        assert!(
+            !store.remove(&pubkey),
+            "should return false for already-removed pubkey"
+        );
 
         let unknown = random_pubkey();
-        assert!(!store.remove(&unknown), "should return false for never-registered pubkey");
+        assert!(
+            !store.remove(&unknown),
+            "should return false for never-registered pubkey"
+        );
     }
 
     #[test]
@@ -119,7 +130,11 @@ mod tests {
         store.register(pubkey, vec![ch2]);
 
         let channels = store.lookup(&pubkey).expect("should find pubkey");
-        assert_eq!(channels, vec![ch2], "second register should overwrite first");
+        assert_eq!(
+            channels,
+            vec![ch2],
+            "second register should overwrite first"
+        );
         assert!(!channels.contains(&ch1), "old channel should be gone");
     }
 
