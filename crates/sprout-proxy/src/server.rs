@@ -45,6 +45,9 @@ pub struct ProxyState {
     /// If `Some`, requests must include `Authorization: Bearer <secret>`.
     /// If `None`, the endpoint is unauthenticated (dev mode).
     pub admin_secret: Option<String>,
+    /// This proxy's own WebSocket URL (e.g. "ws://0.0.0.0:4869").
+    /// Used for NIP-42 relay tag validation.
+    pub relay_url: String,
 }
 
 // ─── Router ──────────────────────────────────────────────────────────────────
@@ -126,15 +129,15 @@ fn nip11_response() -> impl IntoResponse {
 
 /// Compare two strings in constant time to prevent timing side-channel attacks.
 /// Returns `true` only if both strings are identical.
+///
+/// Uses hash-then-compare to eliminate the length oracle: both inputs are hashed
+/// to fixed 32-byte values before comparison, so string length is never leaked.
 fn constant_time_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.as_bytes()
-        .iter()
-        .zip(b.as_bytes())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
+    use sha2::{Digest, Sha256};
+    let hash_a: [u8; 32] = Sha256::digest(a.as_bytes()).into();
+    let hash_b: [u8; 32] = Sha256::digest(b.as_bytes()).into();
+    // Fixed-length comparison — no length oracle
+    hash_a.iter().zip(hash_b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 // ─── WebSocket handler ───────────────────────────────────────────────────────
@@ -234,7 +237,6 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                 }
 
                 // FIX 4: Timestamp recency check — must be within 10 minutes of now.
-                // TODO: Also validate the `relay` tag matches this proxy's URL.
                 let time_diff = Timestamp::now()
                     .as_u64()
                     .abs_diff(auth_event.created_at.as_u64());
@@ -249,6 +251,15 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                     )
                     .await;
                     continue;
+                }
+
+                // FIX F: Validate relay tag (non-fatal — many clients omit it).
+                let has_relay = auth_event.tags.iter().any(|t| {
+                    let s = t.as_slice();
+                    s.len() >= 2 && s[0] == "relay" && s[1] == state.relay_url
+                });
+                if !has_relay {
+                    debug!("NIP-42 AUTH missing or mismatched relay tag (non-fatal)");
                 }
 
                 // Signature must be valid
@@ -514,13 +525,22 @@ async fn handle_client_message(
             // Translate inbound: kind:42 → kind:40001, #e → #h, re-sign with shadow key.
             match state.translator.translate_inbound(&event, &client_pubkey.to_hex(), allowed_channels) {
                 Ok(translated) => {
+                    // FIX H: Cap pending_oks to prevent unbounded growth if upstream never ACKs.
+                    if pending_oks.len() >= 1000 {
+                        let ok_msg = RelayMessage::ok(event_id, false, "error: too many pending events");
+                        let _ = socket.send(Message::Text(ok_msg.as_json().into())).await;
+                        return;
+                    }
                     // FIX 1: Store mapping from upstream event ID → client original event ID
                     // so we can route the OK response back correctly.
-                    pending_oks.insert(translated.id.to_hex(), event_id);
+                    // FIX C: Capture upstream_id before moving `translated` into send_event,
+                    // so we can remove the correct key on failure.
+                    let upstream_id = translated.id;
+                    pending_oks.insert(upstream_id.to_hex(), event_id);
                     if let Err(e) = state.upstream.send_event(translated).await {
                         warn!("upstream send_event failed: {e}");
-                        // Remove the pending mapping since the send failed.
-                        pending_oks.remove(&event_id.to_hex());
+                        // FIX C: Remove by translated (upstream) ID, not client event ID.
+                        pending_oks.remove(&upstream_id.to_hex());
                         let ok_msg = RelayMessage::ok(event_id, false, "error: upstream unavailable".to_string());
                         let _ = socket.send(Message::Text(ok_msg.as_json().into())).await;
                     }
@@ -557,10 +577,11 @@ async fn handle_req(
     conn_prefix: &str,
     active_subs: &mut HashSet<String>,
 ) {
-    // FIX 3: Split filters into local (kind:40/41) and upstream groups.
-    // A REQ like [{kinds:[40]}, {kinds:[42]}] now correctly serves BOTH.
-    let mut local_filters: Vec<&Filter> = Vec::new();
-    let mut upstream_filters: Vec<&Filter> = Vec::new();
+    // FIX D: Split filters into local (kind:40/41) and upstream groups.
+    // A single filter with kinds:[40,42] is split so BOTH portions are served.
+    // A REQ like [{kinds:[40]}, {kinds:[42]}] also correctly serves BOTH.
+    let mut owned_local_filters: Vec<Filter> = Vec::new();
+    let mut owned_upstream_filters: Vec<Filter> = Vec::new();
 
     for filter in &filters {
         let kinds: Vec<u16> = filter
@@ -569,18 +590,43 @@ async fn handle_req(
             .map(|k| k.iter().map(|kind| kind.as_u16()).collect())
             .unwrap_or_default();
 
-        let wants_40 = kinds.contains(&40);
-        let wants_41 = kinds.contains(&41);
+        let has_local = kinds.iter().any(|k| *k == 40 || *k == 41);
+        let has_upstream = kinds.iter().any(|k| *k != 40 && *k != 41);
 
-        if wants_40 || wants_41 {
-            local_filters.push(filter);
-        } else {
-            upstream_filters.push(filter);
+        if has_local {
+            // Build a filter containing only local kinds (40/41).
+            let local_kinds: Vec<Kind> = kinds.iter()
+                .filter(|k| **k == 40 || **k == 41)
+                .map(|k| Kind::Custom(*k))
+                .collect();
+            let mut local_f = filter.clone();
+            if let Some(ref all_kinds) = filter.kinds {
+                local_f = local_f.remove_kinds(all_kinds.iter().cloned());
+            }
+            local_f = local_f.kinds(local_kinds);
+            owned_local_filters.push(local_f);
+        }
+        if has_upstream {
+            // Build a filter containing only non-local kinds.
+            let upstream_kinds: Vec<Kind> = kinds.iter()
+                .filter(|k| **k != 40 && **k != 41)
+                .map(|k| Kind::Custom(*k))
+                .collect();
+            let mut upstream_f = filter.clone();
+            if let Some(ref all_kinds) = filter.kinds {
+                upstream_f = upstream_f.remove_kinds(all_kinds.iter().cloned());
+            }
+            upstream_f = upstream_f.kinds(upstream_kinds);
+            owned_upstream_filters.push(upstream_f);
+        }
+        if !has_local && !has_upstream {
+            // No kinds specified — treat as upstream (subscribe to everything).
+            owned_upstream_filters.push(filter.clone());
         }
     }
 
-    // Serve local filters from ChannelMap.
-    for filter in &local_filters {
+    // Serve local filters from ChannelMap (FIX B: apply filter constraints).
+    for filter in &owned_local_filters {
         let kinds: Vec<u16> = filter
             .kinds
             .as_ref()
@@ -590,32 +636,76 @@ async fn handle_req(
         let wants_40 = kinds.contains(&40);
         let wants_41 = kinds.contains(&41);
 
+        // FIX B: Extract #e tag filter values for channel-specific filtering.
+        let e_tag_key = nostr::SingleLetterTag::lowercase(nostr::Alphabet::E);
+        let e_filter_values = filter.generic_tags.get(&e_tag_key);
+
         let channels = state.channel_map.all_channels();
+        let mut served: usize = 0;
+        let limit: usize = filter.limit.unwrap_or(usize::MAX);
+
         for ch in &channels {
+            if served >= limit {
+                break;
+            }
             if !allowed_channels.contains(&ch.uuid) {
                 continue;
             }
+
+            // FIX B: If client specified #e values, only serve matching channels.
+            if let Some(e_values) = e_filter_values {
+                if !e_values.contains(&ch.kind40_event_id) {
+                    continue;
+                }
+            }
+
+            // FIX B: Apply since/until on created_at.
+            if let Some(since) = filter.since {
+                if Timestamp::from(ch.created_at_unix) < since {
+                    continue;
+                }
+            }
+            if let Some(until) = filter.until {
+                if Timestamp::from(ch.created_at_unix) > until {
+                    continue;
+                }
+            }
+
             if wants_40 {
                 let kind40 =
                     state.channel_map.synthesize_kind40(&ch.uuid.to_string(), ch.created_at_unix);
+                // FIX B: Apply ids filter if present.
+                if let Some(ref ids) = filter.ids {
+                    if !ids.contains(&kind40.id) {
+                        continue;
+                    }
+                }
                 let _ = send_relay_msg(
                     socket,
                     RelayMessage::event(sub_id.clone(), kind40),
                 )
                 .await;
+                served += 1;
             }
-            if wants_41 {
+            if wants_41 && served < limit {
                 let kind41 = state.channel_map.synthesize_kind41(ch);
+                // FIX B: Apply ids filter if present.
+                if let Some(ref ids) = filter.ids {
+                    if !ids.contains(&kind41.id) {
+                        continue;
+                    }
+                }
                 let _ = send_relay_msg(
                     socket,
                     RelayMessage::event(sub_id.clone(), kind41),
                 )
                 .await;
+                served += 1;
             }
         }
     }
 
-    if upstream_filters.is_empty() {
+    if owned_upstream_filters.is_empty() {
         // Only local filters — send EOSE immediately after serving them.
         let _ = send_relay_msg(socket, RelayMessage::eose(sub_id.clone())).await;
         return;
@@ -623,7 +713,7 @@ async fn handle_req(
 
     // Forward upstream filters (translated) to the upstream relay.
     // The upstream EOSE will serve as the combined EOSE for mixed REQs.
-    let translated_filters: Vec<Filter> = upstream_filters
+    let translated_filters: Vec<Filter> = owned_upstream_filters
         .iter()
         .map(|f| state.translator.translate_filter_inbound(f, allowed_channels))
         .collect();
@@ -756,6 +846,7 @@ mod tests {
             upstream,
             upstream_events,
             admin_secret: None,
+            relay_url: "ws://127.0.0.1:4869".to_string(),
         }
     }
 

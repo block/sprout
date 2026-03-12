@@ -149,6 +149,9 @@ async fn main() {
 
     // ── Build proxy state ─────────────────────────────────────────────────────
 
+    // FIX F: Derive relay URL from bind address for NIP-42 relay tag validation.
+    let relay_url = format!("ws://{}", bind_addr);
+
     let state = ProxyState {
         channel_map: channel_map.clone(),
         invite_store: invite_store.clone(),
@@ -156,6 +159,7 @@ async fn main() {
         upstream: upstream.clone(),
         upstream_events: upstream_events_tx.clone(),
         admin_secret,
+        relay_url,
     };
 
     // ── Build router ──────────────────────────────────────────────────────────

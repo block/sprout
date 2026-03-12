@@ -151,10 +151,14 @@ impl Translator {
         // Re-sign with the shadow key for the original author.
         let shadow_keys = self.shadow_keys.get_or_create(&event.pubkey.to_hex())?;
 
-        let translated = EventBuilder::new(Kind::Custom(standard_kind as u16), content, new_tags)
-            .custom_created_at(event.created_at)
-            .sign_with_keys(&shadow_keys)
-            .map_err(|e| ProxyError::Upstream(format!("outbound signing failed: {e}")))?;
+        let translated = EventBuilder::new(
+            Kind::Custom(u16::try_from(standard_kind).expect("standard kind must fit in u16")),
+            content,
+            new_tags,
+        )
+        .custom_created_at(event.created_at)
+        .sign_with_keys(&shadow_keys)
+        .map_err(|e| ProxyError::Upstream(format!("outbound signing failed: {e}")))?;
 
         Ok(Some(translated))
     }
@@ -243,11 +247,14 @@ impl Translator {
         // Re-sign with the shadow key for the external user.
         let shadow_keys = self.shadow_keys.get_or_create(external_pubkey)?;
 
-        let translated =
-            EventBuilder::new(Kind::Custom(sprout_kind as u16), &event.content, new_tags)
-                .custom_created_at(event.created_at)
-                .sign_with_keys(&shadow_keys)
-                .map_err(|e| ProxyError::Upstream(format!("inbound signing failed: {e}")))?;
+        let translated = EventBuilder::new(
+            Kind::Custom(u16::try_from(sprout_kind).expect("sprout kind must fit in u16")),
+            &event.content,
+            new_tags,
+        )
+        .custom_created_at(event.created_at)
+        .sign_with_keys(&shadow_keys)
+        .map_err(|e| ProxyError::Upstream(format!("inbound signing failed: {e}")))?;
 
         Ok(translated)
     }
@@ -277,18 +284,47 @@ impl Translator {
                 .map(|k| {
                     let k_u32 = k.as_u16() as u32;
                     let sprout_k = self.kind_translator.to_sprout(k_u32);
-                    Kind::Custom(sprout_k as u16)
+                    Kind::Custom(u16::try_from(sprout_k).expect("sprout kind must fit in u16"))
                 })
                 .collect();
             // Rebuild via the builder to stay consistent with nostr's internal state.
             f = f.remove_kinds(kinds.iter().cloned()).kinds(new_kinds);
         }
 
+        // Check for client-supplied #e channel filters and translate to #h UUIDs.
+        //
+        // NIP-28 clients filter by channel using `#e <kind40_event_id>`. Sprout
+        // uses `#h <uuid>` instead. If the client specified `#e` values, resolve
+        // them to UUIDs (intersected with allowed_channels) and use those for the
+        // `#h` injection. The `#e` filter must be removed from the translated
+        // filter — if both `#e` and `#h` were present, the relay would AND them,
+        // and since Sprout events carry `#h` but not `#e`, zero events would match.
+        let e_tag_key = SingleLetterTag::lowercase(Alphabet::E);
+        let client_channel_uuids: Vec<String> =
+            if let Some(e_values) = f.generic_tags.get(&e_tag_key) {
+                e_values
+                    .iter()
+                    .filter_map(|event_id| self.channel_map.lookup_by_event_id(event_id))
+                    .filter(|info| allowed_channels.contains(&info.uuid))
+                    .map(|info| info.uuid.to_string())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+        // Remove the #e tag filter — Sprout uses #h, not #e.
+        f.generic_tags.remove(&e_tag_key);
+
         // Inject #h tag constraints from the allowed channel list.
         // This ensures clients can only see events from their invited channels.
         // When the list is empty, inject an impossible value so zero events match
         // (empty scope = no access, not unrestricted access).
-        let uuid_strings: Vec<String> = if allowed_channels.is_empty() {
+        //
+        // If the client specified channels via #e, use those (already intersected
+        // with allowed_channels). Otherwise use all allowed_channels.
+        let uuid_strings: Vec<String> = if !client_channel_uuids.is_empty() {
+            client_channel_uuids
+        } else if allowed_channels.is_empty() {
             vec!["00000000-0000-0000-0000-000000000000".to_string()]
         } else {
             allowed_channels.iter().map(|u| u.to_string()).collect()
@@ -311,7 +347,9 @@ impl Translator {
                 .map(|k| {
                     let k_u32 = k.as_u16() as u32;
                     let standard_k = self.kind_translator.to_standard(k_u32);
-                    Kind::Custom(standard_k as u16)
+                    Kind::Custom(
+                        u16::try_from(standard_k).expect("standard kind must fit in u16"),
+                    )
                 })
                 .collect();
             f = f.remove_kinds(kinds.iter().cloned()).kinds(new_kinds);
@@ -599,6 +637,86 @@ mod tests {
         assert!(
             !kinds.contains(&Kind::Custom(KIND_STREAM_MESSAGE as u16)),
             "filter must not contain KIND_STREAM_MESSAGE after outbound translation"
+        );
+    }
+
+    // ── Test 6b: Filter — #e channel ref translates to #h UUID (FIX A) ─────
+
+    #[test]
+    fn filter_inbound_translates_e_tag_to_h() {
+        let (translator, kind40_event_id) = make_translator();
+
+        // Build a filter that includes a #e tag referencing the test channel's
+        // kind:40 event ID — this is how NIP-28 clients subscribe to a channel.
+        let e_tag_key = SingleLetterTag::lowercase(Alphabet::E);
+        let filter = Filter::new()
+            .kind(Kind::Custom(42))
+            .custom_tag(e_tag_key.clone(), [kind40_event_id.clone()]);
+
+        let translated = translator.translate_filter_inbound(&filter, &allowed());
+
+        // The #e filter must be removed from the translated filter.
+        assert!(
+            !translated.generic_tags.contains_key(&e_tag_key),
+            "#e tag filter must be removed from translated filter (would cause zero matches on Sprout relay)"
+        );
+
+        // The #h filter must be present and contain the channel UUID.
+        let h_tag_key = SingleLetterTag::lowercase(Alphabet::H);
+        let h_values = translated
+            .generic_tags
+            .get(&h_tag_key)
+            .expect("translated filter must have #h tag constraint");
+
+        assert!(
+            h_values.contains(TEST_UUID),
+            "#h filter must contain the channel UUID resolved from #e, got: {:?}",
+            h_values
+        );
+
+        // The translated filter must NOT contain all allowed_channels blindly —
+        // it should contain exactly the channel(s) resolved from the #e values.
+        assert_eq!(
+            h_values.len(),
+            1,
+            "#h filter must contain exactly the one channel resolved from #e, got: {:?}",
+            h_values
+        );
+    }
+
+    // ── Test 6c: Filter — #e with unknown event ID falls back to allowed_channels
+
+    #[test]
+    fn filter_inbound_e_tag_unknown_event_id_falls_back_to_allowed() {
+        let (translator, _) = make_translator();
+
+        // Use an event ID that doesn't exist in the channel map.
+        let unknown_event_id = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        let e_tag_key = SingleLetterTag::lowercase(Alphabet::E);
+        let filter = Filter::new()
+            .kind(Kind::Custom(42))
+            .custom_tag(e_tag_key.clone(), [unknown_event_id]);
+
+        let translated = translator.translate_filter_inbound(&filter, &allowed());
+
+        // The #e filter must be removed.
+        assert!(
+            !translated.generic_tags.contains_key(&e_tag_key),
+            "#e tag filter must be removed even when event ID is unknown"
+        );
+
+        // Since the #e resolved to nothing (empty client_channel_uuids),
+        // the #h injection falls back to all allowed_channels.
+        let h_tag_key = SingleLetterTag::lowercase(Alphabet::H);
+        let h_values = translated
+            .generic_tags
+            .get(&h_tag_key)
+            .expect("translated filter must have #h tag constraint");
+
+        assert!(
+            h_values.contains(TEST_UUID),
+            "fallback #h filter must contain allowed channel UUID, got: {:?}",
+            h_values
         );
     }
 

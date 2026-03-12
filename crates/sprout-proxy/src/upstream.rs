@@ -151,7 +151,8 @@ impl UpstreamClient {
 
     /// Track a subscription by storing its REQ JSON for replay on reconnect.
     /// Called by the server layer when forwarding REQs from downstream clients.
-    pub fn track_subscription(&self, sub_id: &str, req_json: &str) {
+    #[allow(dead_code)] // Used in tests; kept for future server-layer integration
+    pub(crate) fn track_subscription(&self, sub_id: &str, req_json: &str) {
         self.inner
             .active_subs
             .insert(sub_id.to_string(), req_json.to_string());
@@ -159,12 +160,14 @@ impl UpstreamClient {
 
     /// Remove a subscription from the active set.
     /// Called by the server layer when handling CLOSEs from downstream clients.
-    pub fn untrack_subscription(&self, sub_id: &str) {
+    #[allow(dead_code)] // Used in tests; kept for future server-layer integration
+    pub(crate) fn untrack_subscription(&self, sub_id: &str) {
         self.inner.active_subs.remove(sub_id);
     }
 
     /// Returns the number of currently tracked active subscriptions.
-    pub fn active_subscription_count(&self) -> usize {
+    #[allow(dead_code)] // Used in tests; kept for future server-layer integration
+    pub(crate) fn active_subscription_count(&self) -> usize {
         self.inner.active_subs.len()
     }
 
