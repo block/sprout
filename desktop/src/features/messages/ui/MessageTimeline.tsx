@@ -131,7 +131,6 @@ function MessageRow({ message }: { message: TimelineMessage }) {
             <DiffMessageExpanded
               content={message.body}
               filePath={getTag("file")}
-              language={getTag("l")}
               onClose={() => {
                 setExpandedDiffId(null);
               }}

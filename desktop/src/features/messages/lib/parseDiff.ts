@@ -1,52 +1,74 @@
-import { parse } from "diff2html";
+import {
+  isDelete,
+  isInsert,
+  parseDiff,
+  type DiffType,
+  type FileData,
+} from "react-diff-view";
 
-export function parseDiffToOldNew(unifiedDiff: string): {
-  original: string;
-  modified: string;
-} {
+type ParsedDiffResult = {
+  files: FileData[];
+  parseError: boolean;
+};
+
+function isRenderableFile(file: FileData) {
+  return file.hunks.length > 0 || Boolean(file.oldPath || file.newPath);
+}
+
+export function parseUnifiedDiff(content: string): ParsedDiffResult {
+  if (!content.trim()) {
+    return { files: [], parseError: false };
+  }
+
   try {
-    const files = parse(unifiedDiff);
+    const files = parseDiff(content).filter(isRenderableFile);
+
     if (!files.length) {
-      // diff2html couldn't parse any files — show raw diff as fallback
-      return { original: "", modified: unifiedDiff };
+      return { files: [], parseError: true };
     }
 
-    const originalLines: string[] = [];
-    const modifiedLines: string[] = [];
-
-    for (const file of files) {
-      // Add file header separator for multi-file diffs
-      if (files.length > 1) {
-        const header = `// ── ${file.newName || file.oldName || "unknown"} ──`;
-        originalLines.push(header);
-        modifiedLines.push(header);
-      }
-
-      for (const block of file.blocks) {
-        for (const line of block.lines) {
-          if (line.content.startsWith("\\ ")) continue;
-          if (line.type === "context" || line.type === "delete") {
-            originalLines.push(line.content.slice(1));
-          }
-          if (line.type === "context" || line.type === "insert") {
-            modifiedLines.push(line.content.slice(1));
-          }
-        }
-      }
-
-      // Add blank line between files
-      if (files.length > 1) {
-        originalLines.push("");
-        modifiedLines.push("");
-      }
-    }
-
-    return {
-      original: originalLines.join("\n"),
-      modified: modifiedLines.join("\n"),
-    };
+    return { files, parseError: false };
   } catch {
-    // Malformed diff — return raw content as fallback
-    return { original: "", modified: unifiedDiff };
+    return { files: [], parseError: true };
+  }
+}
+
+export function getDiffFileLabel(
+  file: FileData,
+  fallbackFilePath?: string,
+): string {
+  if (file.oldPath && file.newPath && file.oldPath !== file.newPath) {
+    return `${file.oldPath} -> ${file.newPath}`;
+  }
+
+  return file.newPath || file.oldPath || fallbackFilePath || "diff";
+}
+
+export function countDiffFileChanges(file: FileData) {
+  let additions = 0;
+  let deletions = 0;
+
+  for (const hunk of file.hunks) {
+    for (const change of hunk.changes) {
+      if (isInsert(change)) {
+        additions += 1;
+      } else if (isDelete(change)) {
+        deletions += 1;
+      }
+    }
+  }
+
+  return { additions, deletions };
+}
+
+export function normalizeDiffType(type: string | undefined): DiffType {
+  switch (type) {
+    case "add":
+    case "copy":
+    case "delete":
+    case "rename":
+      return type;
+    default:
+      return "modify";
   }
 }

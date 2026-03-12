@@ -19,7 +19,6 @@
     "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
-    "@monaco-editor/react": "^4.7.0",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-separator": "^1.1.8",
@@ -30,10 +29,9 @@
     "@tauri-apps/plugin-opener": "^2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "diff2html": "^3.4.56",
-    "dompurify": "^3.3.3",
     "lucide-react": "^0.577.0",
     "react": "^19.1.0",
+    "react-diff-view": "^3.3.2",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
     "remark-breaks": "^4.0.0",

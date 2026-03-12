@@ -1,49 +1,7 @@
-import { html } from "diff2html";
-import "diff2html/bundles/css/diff2html.min.css";
-import DOMPurify from "dompurify";
 import { FileDiff, Maximize2 } from "lucide-react";
-import { useMemo } from "react";
 
 import { Button } from "@/shared/ui/button";
-
-/**
- * Override diff2html styles that break in constrained containers.
- * The default CSS uses position:absolute for line numbers which causes
- * overflow and misalignment in narrow message bubbles.
- */
-const diffStyleOverrides = `
-.d2h-wrapper { text-align: left; }
-.d2h-file-wrapper { border: none; margin: 0; border-radius: 0; }
-.d2h-file-header { display: none; }
-.d2h-diff-table { font-size: 12px; width: 100%; table-layout: fixed; }
-.d2h-code-linenumber {
-  position: static;
-  display: table-cell;
-  width: 3em;
-  min-width: 3em;
-  max-width: 3em;
-  padding: 0 0.4em;
-  text-align: right;
-  vertical-align: top;
-  user-select: none;
-  border-right: 1px solid var(--d2h-line-border-color, #eee);
-  font-size: 11px;
-}
-.d2h-code-line {
-  display: table-cell;
-  padding: 0 0.5em;
-  white-space: pre-wrap;
-  word-break: break-all;
-  width: auto;
-}
-.d2h-code-line-ctn {
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.d2h-info {
-  padding: 0.2em 0.5em;
-}
-`;
+import { DiffViewer } from "./DiffViewer";
 
 type DiffMessageProps = {
   content: string;
@@ -73,37 +31,6 @@ function getHostname(url: string): string {
   }
 }
 
-const ALLOWED_TAGS = [
-  "div",
-  "span",
-  "table",
-  "thead",
-  "tbody",
-  "tr",
-  "th",
-  "td",
-  "pre",
-  "code",
-  "ins",
-  "del",
-  "a",
-  "i",
-  "em",
-  "strong",
-  "small",
-];
-
-const ALLOWED_ATTR = [
-  "class",
-  "id",
-  "data-line-number",
-  "href",
-  "title",
-  "aria-label",
-];
-
-const ALLOWED_URI_REGEXP = /^https?:\/\//i;
-
 export function DiffMessage({
   content,
   repoUrl,
@@ -113,24 +40,6 @@ export function DiffMessage({
   truncated,
   onExpand,
 }: DiffMessageProps) {
-  const { diffHtml, renderError } = useMemo(() => {
-    try {
-      const rawHtml = html(content, {
-        drawFileList: false,
-        matching: "lines",
-        outputFormat: "line-by-line",
-      });
-      const sanitized = DOMPurify.sanitize(rawHtml, {
-        ALLOWED_TAGS,
-        ALLOWED_ATTR,
-        ALLOWED_URI_REGEXP,
-      });
-      return { diffHtml: sanitized, renderError: false };
-    } catch {
-      return { diffHtml: "", renderError: true };
-    }
-  }, [content]);
-
   const safeRepoUrl = isSafeUrl(repoUrl) ? repoUrl : undefined;
 
   const commitUrl =
@@ -197,20 +106,12 @@ export function DiffMessage({
 
       {/* Diff content — max 400px height, scrollable */}
       <div className="max-h-[400px] overflow-auto text-xs">
-        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: static CSS overrides */}
-        <style dangerouslySetInnerHTML={{ __html: diffStyleOverrides }} />
-        {renderError ? (
-          <pre className="p-3 whitespace-pre-wrap font-mono text-muted-foreground">
-            {content}
-          </pre>
-        ) : diffHtml ? (
-          // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized by DOMPurify
-          <div dangerouslySetInnerHTML={{ __html: diffHtml }} />
-        ) : (
-          <div className="p-3 text-xs text-muted-foreground italic">
-            No diff content
-          </div>
-        )}
+        <DiffViewer
+          className="p-3"
+          content={content}
+          fallbackFilePath={filePath}
+          viewType="unified"
+        />
       </div>
 
       {/* Truncation warning */}
