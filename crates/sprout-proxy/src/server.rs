@@ -4,6 +4,7 @@
 //! validation, pre-auth REQ buffering, and kind:40/41 interception from
 //! the local [`ChannelMap`].
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::{
@@ -121,6 +122,21 @@ fn nip11_response() -> impl IntoResponse {
     )
 }
 
+// ─── Constant-time string comparison ─────────────────────────────────────────
+
+/// Compare two strings in constant time to prevent timing side-channel attacks.
+/// Returns `true` only if both strings are identical.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.as_bytes()
+        .iter()
+        .zip(b.as_bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
 // ─── WebSocket handler ───────────────────────────────────────────────────────
 
 /// Helper: serialize a [`RelayMessage`] and send it over the socket.
@@ -136,18 +152,18 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
     // across clients sharing the single upstream connection.
     let conn_prefix = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
 
-    // ── 1. Validate invite token ──────────────────────────────────────────
-    let allowed_channels = match state.invite_store.validate_and_consume(&token) {
-        Ok(channels) => channels,
-        Err(e) => {
-            let _ = send_relay_msg(
-                &mut socket,
-                RelayMessage::notice(format!("error: {e}")),
-            )
-            .await;
-            return;
-        }
-    };
+    // ── 1. Validate invite token (check-only, no consume yet) ────────────
+    // FIX 2: We only validate here; consumption happens AFTER successful auth
+    // to prevent DoS where auth timeout/failure burns a max_uses=1 token.
+    // We discard the channels here — the loop will re-fetch them via validate_and_consume.
+    if let Err(e) = state.invite_store.validate(&token) {
+        let _ = send_relay_msg(
+            &mut socket,
+            RelayMessage::notice(format!("error: {e}")),
+        )
+        .await;
+        return;
+    }
 
     // ── 2. Send NIP-42 AUTH challenge ─────────────────────────────────────
     let challenge = uuid::Uuid::new_v4().to_string();
@@ -164,7 +180,7 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
     let auth_deadline =
         tokio::time::Instant::now() + std::time::Duration::from_secs(30);
 
-    let client_pubkey: PublicKey = loop {
+    let (client_pubkey, allowed_channels): (PublicKey, Vec<Uuid>) = loop {
         let msg = tokio::select! {
             msg = socket.recv() => msg,
             _ = tokio::time::sleep_until(auth_deadline) => {
@@ -217,6 +233,24 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                     continue;
                 }
 
+                // FIX 4: Timestamp recency check — must be within 10 minutes of now.
+                // TODO: Also validate the `relay` tag matches this proxy's URL.
+                let time_diff = Timestamp::now()
+                    .as_u64()
+                    .abs_diff(auth_event.created_at.as_u64());
+                if time_diff >= 600 {
+                    let _ = send_relay_msg(
+                        &mut socket,
+                        RelayMessage::ok(
+                            auth_event.id,
+                            false,
+                            "invalid: auth event timestamp too far from now",
+                        ),
+                    )
+                    .await;
+                    continue;
+                }
+
                 // Signature must be valid
                 if auth_event.verify().is_err() {
                     let _ = send_relay_msg(
@@ -231,7 +265,21 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                     continue;
                 }
 
-                // Auth success — break with the authenticated pubkey
+                // FIX 2: Auth succeeded — NOW consume the token.
+                // If someone else raced and exhausted it, disconnect cleanly.
+                let consumed_channels = match state.invite_store.validate_and_consume(&token) {
+                    Ok(channels) => channels,
+                    Err(e) => {
+                        let _ = send_relay_msg(
+                            &mut socket,
+                            RelayMessage::notice(format!("error: token no longer valid: {e}")),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+
+                // Auth success — break with the authenticated pubkey and channels
                 let pubkey = auth_event.pubkey;
                 let event_id = auth_event.id;
                 let _ = send_relay_msg(
@@ -241,10 +289,10 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                 .await;
                 info!(
                     pubkey = %pubkey,
-                    channels = allowed_channels.len(),
+                    channels = consumed_channels.len(),
                     "client authenticated"
                 );
-                break pubkey;
+                break (pubkey, consumed_channels);
             }
 
             Ok(ClientMessage::Req { .. }) => {
@@ -280,6 +328,11 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
     };
 
     // ── 4. Replay buffered REQs ───────────────────────────────────────────
+    // FIX 1: pending_oks maps upstream_event_id_hex → client_original_event_id
+    // FIX 5: active_subs tracks prefixed sub IDs sent upstream for cleanup on disconnect
+    let mut pending_oks: HashMap<String, EventId> = HashMap::new();
+    let mut active_subs: HashSet<String> = HashSet::new();
+
     for buffered in pre_auth_buffer {
         handle_client_message(
             &mut socket,
@@ -288,6 +341,8 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
             &allowed_channels,
             &client_pubkey,
             &conn_prefix,
+            &mut pending_oks,
+            &mut active_subs,
         )
         .await;
     }
@@ -309,6 +364,8 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                             &allowed_channels,
                             &client_pubkey,
                             &conn_prefix,
+                            &mut pending_oks,
+                            &mut active_subs,
                         )
                         .await;
                     }
@@ -367,9 +424,26 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                                     }
                                 }
                             }
-                            Ok(other) => {
-                                // OK, NOTICE, AUTH, COUNT — forward as-is (not sub-scoped).
-                                if socket.send(Message::Text(other.as_json().into())).await.is_err() {
+                            // FIX 1: Route OK messages to the correct client using pending_oks map.
+                            Ok(RelayMessage::Ok { event_id, status, message }) => {
+                                let upstream_id_hex = event_id.to_hex();
+                                if let Some(client_event_id) = pending_oks.remove(&upstream_id_hex) {
+                                    // This OK is for an event we sent — rewrite with client's original ID.
+                                    let out = RelayMessage::ok(client_event_id, status, message);
+                                    if socket.send(Message::Text(out.as_json().into())).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                // If not in pending_oks, this OK belongs to another client — skip it.
+                            }
+                            // FIX 1: NOTICE messages from upstream contain operational details.
+                            // Log them but do NOT forward to clients.
+                            Ok(RelayMessage::Notice { message: notice_msg }) => {
+                                debug!(notice = %notice_msg, "upstream notice (not forwarded to client)");
+                            }
+                            Ok(_other) => {
+                                // AUTH, COUNT — forward as-is (not sub-scoped).
+                                if socket.send(Message::Text(text.into())).await.is_err() {
                                     break;
                                 }
                             }
@@ -395,11 +469,20 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
         }
     }
 
+    // FIX 5: On disconnect, send CLOSE for all active upstream subscriptions.
+    for prefixed_sub in active_subs {
+        let sub_id = SubscriptionId::new(prefixed_sub);
+        if let Err(e) = state.upstream.send_close(sub_id).await {
+            warn!("upstream send_close on disconnect failed: {e}");
+        }
+    }
+
     debug!(pubkey = %client_pubkey, "client disconnected");
 }
 
 // ─── Client message dispatcher ───────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_client_message(
     socket: &mut WebSocket,
     state: &ProxyState,
@@ -407,6 +490,8 @@ async fn handle_client_message(
     allowed_channels: &[Uuid],
     client_pubkey: &PublicKey,
     conn_prefix: &str,
+    pending_oks: &mut HashMap<String, EventId>,
+    active_subs: &mut HashSet<String>,
 ) {
     let msg = match ClientMessage::from_json(raw_msg) {
         Ok(m) => m,
@@ -422,15 +507,20 @@ async fn handle_client_message(
 
     match msg {
         ClientMessage::Req { subscription_id, filters } => {
-            handle_req(socket, state, subscription_id, filters, allowed_channels, conn_prefix).await;
+            handle_req(socket, state, subscription_id, filters, allowed_channels, conn_prefix, active_subs).await;
         }
         ClientMessage::Event(event) => {
             let event_id = event.id;
             // Translate inbound: kind:42 → kind:40001, #e → #h, re-sign with shadow key.
             match state.translator.translate_inbound(&event, &client_pubkey.to_hex(), allowed_channels) {
                 Ok(translated) => {
+                    // FIX 1: Store mapping from upstream event ID → client original event ID
+                    // so we can route the OK response back correctly.
+                    pending_oks.insert(translated.id.to_hex(), event_id);
                     if let Err(e) = state.upstream.send_event(translated).await {
                         warn!("upstream send_event failed: {e}");
+                        // Remove the pending mapping since the send failed.
+                        pending_oks.remove(&event_id.to_hex());
                         let ok_msg = RelayMessage::ok(event_id, false, "error: upstream unavailable".to_string());
                         let _ = socket.send(Message::Text(ok_msg.as_json().into())).await;
                     }
@@ -442,8 +532,11 @@ async fn handle_client_message(
             }
         }
         ClientMessage::Close(sub_id) => {
-            let prefixed = SubscriptionId::new(format!("{conn_prefix}:{}", sub_id));
-            if let Err(e) = state.upstream.send_close(prefixed).await {
+            let prefixed = format!("{conn_prefix}:{}", sub_id);
+            // FIX 5: Remove from active_subs tracking.
+            active_subs.remove(&prefixed);
+            let prefixed_sub_id = SubscriptionId::new(prefixed);
+            if let Err(e) = state.upstream.send_close(prefixed_sub_id).await {
                 warn!("upstream send_close failed: {e}");
             }
         }
@@ -462,10 +555,14 @@ async fn handle_req(
     filters: Vec<Filter>,
     allowed_channels: &[Uuid],
     conn_prefix: &str,
+    active_subs: &mut HashSet<String>,
 ) {
+    // FIX 3: Split filters into local (kind:40/41) and upstream groups.
+    // A REQ like [{kinds:[40]}, {kinds:[42]}] now correctly serves BOTH.
+    let mut local_filters: Vec<&Filter> = Vec::new();
+    let mut upstream_filters: Vec<&Filter> = Vec::new();
+
     for filter in &filters {
-        // Collect requested kind numbers (empty = all kinds, treated as "not
-        // specifically kind:40/41").
         let kinds: Vec<u16> = filter
             .kinds
             .as_ref()
@@ -476,45 +573,67 @@ async fn handle_req(
         let wants_41 = kinds.contains(&41);
 
         if wants_40 || wants_41 {
-            // Serve synthesized channel events from the local ChannelMap.
-            // These are NEVER forwarded to the upstream relay.
-            let channels = state.channel_map.all_channels();
-            for ch in &channels {
-                if !allowed_channels.contains(&ch.uuid) {
-                    continue;
-                }
-                if wants_40 {
-                    let kind40 =
-                        state.channel_map.synthesize_kind40(&ch.name, ch.created_at_unix);
-                    let _ = send_relay_msg(
-                        socket,
-                        RelayMessage::event(sub_id.clone(), kind40),
-                    )
-                    .await;
-                }
-                if wants_41 {
-                    let kind41 = state.channel_map.synthesize_kind41(ch);
-                    let _ = send_relay_msg(
-                        socket,
-                        RelayMessage::event(sub_id.clone(), kind41),
-                    )
-                    .await;
-                }
-            }
-            // EOSE for locally-served subscription
-            let _ = send_relay_msg(socket, RelayMessage::eose(sub_id.clone())).await;
-            return; // Do NOT forward kind:40/41 REQs upstream
+            local_filters.push(filter);
+        } else {
+            upstream_filters.push(filter);
         }
     }
 
-    // All other kinds (42 messages, metadata, etc.) → translate and forward upstream.
-    // Translate kind:42 filters to kind:40001 + #h tags.
-    let translated_filters: Vec<Filter> = filters
+    // Serve local filters from ChannelMap.
+    for filter in &local_filters {
+        let kinds: Vec<u16> = filter
+            .kinds
+            .as_ref()
+            .map(|k| k.iter().map(|kind| kind.as_u16()).collect())
+            .unwrap_or_default();
+
+        let wants_40 = kinds.contains(&40);
+        let wants_41 = kinds.contains(&41);
+
+        let channels = state.channel_map.all_channels();
+        for ch in &channels {
+            if !allowed_channels.contains(&ch.uuid) {
+                continue;
+            }
+            if wants_40 {
+                let kind40 =
+                    state.channel_map.synthesize_kind40(&ch.uuid.to_string(), ch.created_at_unix);
+                let _ = send_relay_msg(
+                    socket,
+                    RelayMessage::event(sub_id.clone(), kind40),
+                )
+                .await;
+            }
+            if wants_41 {
+                let kind41 = state.channel_map.synthesize_kind41(ch);
+                let _ = send_relay_msg(
+                    socket,
+                    RelayMessage::event(sub_id.clone(), kind41),
+                )
+                .await;
+            }
+        }
+    }
+
+    if upstream_filters.is_empty() {
+        // Only local filters — send EOSE immediately after serving them.
+        let _ = send_relay_msg(socket, RelayMessage::eose(sub_id.clone())).await;
+        return;
+    }
+
+    // Forward upstream filters (translated) to the upstream relay.
+    // The upstream EOSE will serve as the combined EOSE for mixed REQs.
+    let translated_filters: Vec<Filter> = upstream_filters
         .iter()
         .map(|f| state.translator.translate_filter_inbound(f, allowed_channels))
         .collect();
 
-    let prefixed_sub_id = SubscriptionId::new(format!("{conn_prefix}:{}", sub_id));
+    let prefixed_sub_id_str = format!("{conn_prefix}:{}", sub_id);
+    let prefixed_sub_id = SubscriptionId::new(prefixed_sub_id_str.clone());
+
+    // FIX 5: Track this subscription for cleanup on disconnect.
+    active_subs.insert(prefixed_sub_id_str);
+
     if let Err(e) = state.upstream.send_req(prefixed_sub_id, translated_filters).await {
         warn!("upstream send_req failed: {e}");
     }
@@ -529,7 +648,7 @@ struct CreateInviteRequest {
     /// Hours until the token expires (default: 24).
     #[serde(default = "default_hours")]
     hours: u32,
-    /// Maximum number of times the token may be used (default: 1).
+    /// Maximum number of times the token may be used (default: 10).
     #[serde(default = "default_max_uses")]
     max_uses: u32,
 }
@@ -537,8 +656,10 @@ struct CreateInviteRequest {
 fn default_hours() -> u32 {
     24
 }
+
+/// FIX 7: Default max_uses changed from 1 to 10.
 fn default_max_uses() -> u32 {
-    1
+    10
 }
 
 async fn create_invite(
@@ -546,7 +667,7 @@ async fn create_invite(
     headers: HeaderMap,
     axum::Json(req): axum::Json<CreateInviteRequest>,
 ) -> impl IntoResponse {
-    // ── Admin secret check ────────────────────────────────────────────────
+    // ── Admin secret check (FIX 6: constant-time comparison) ─────────────
     if let Some(ref secret) = state.admin_secret {
         let provided = headers
             .get(axum::http::header::AUTHORIZATION)
@@ -554,7 +675,7 @@ async fn create_invite(
             .and_then(|v| v.strip_prefix("Bearer "));
 
         match provided {
-            Some(token) if token == secret => {
+            Some(token) if constant_time_eq(token, secret) => {
                 // Authorized — proceed.
             }
             _ => {
@@ -654,6 +775,18 @@ mod tests {
     #[test]
     fn default_hours_and_max_uses() {
         assert_eq!(default_hours(), 24);
-        assert_eq!(default_max_uses(), 1);
+        // FIX 7: default max_uses is now 10
+        assert_eq!(default_max_uses(), 10);
+    }
+
+    #[test]
+    fn constant_time_eq_works() {
+        assert!(constant_time_eq("hello", "hello"));
+        assert!(!constant_time_eq("hello", "world"));
+        assert!(!constant_time_eq("hello", "hell"));
+        assert!(!constant_time_eq("", "a"));
+        assert!(constant_time_eq("", ""));
+        // Ensure different-length strings with same prefix don't match
+        assert!(!constant_time_eq("abc", "abcd"));
     }
 }

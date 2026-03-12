@@ -17,7 +17,9 @@
 use std::sync::Arc;
 
 use nostr::prelude::*;
-use sprout_core::kind::{event_kind_u32, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2};
+use sprout_core::kind::{
+    event_kind_u32, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_V2,
+};
 use uuid::Uuid;
 
 use crate::channel_map::ChannelMap;
@@ -72,13 +74,17 @@ impl Translator {
     ) -> Result<Option<Event>, ProxyError> {
         let kind_u32 = event_kind_u32(event);
 
-        // Only translate stream messages; pass through or drop everything else.
-        if kind_u32 != KIND_STREAM_MESSAGE && kind_u32 != KIND_STREAM_MESSAGE_V2 {
+        // Only translate stream messages and edits; pass through or drop everything else.
+        let is_stream_message =
+            kind_u32 == KIND_STREAM_MESSAGE || kind_u32 == KIND_STREAM_MESSAGE_V2;
+        let is_edit = kind_u32 == KIND_STREAM_MESSAGE_EDIT;
+
+        if !is_stream_message && !is_edit {
             if !self.kind_translator.is_translatable(kind_u32) {
                 // Unknown / non-translatable kind — pass through as-is.
                 return Ok(Some(event.clone()));
             }
-            // Translatable but not a stream message (e.g. edits) — drop for now.
+            // Translatable but unhandled kind — drop silently.
             return Ok(None);
         }
 
@@ -115,15 +121,19 @@ impl Translator {
             .lookup_by_uuid(&uuid)
             .ok_or_else(|| ProxyError::ChannelNotFound(uuid.to_string()))?;
 
-        // Build translated tag list: replace `#h` with `#e`, keep everything else.
+        // Build translated tag list: replace the channel `#h` with `#e`, keep everything else.
         let mut new_tags: Vec<Tag> = Vec::new();
         new_tags.push(
             Tag::parse(&["e", &channel_info.kind40_event_id]).expect("e tag is always valid"),
         );
         for tag in event.tags.iter() {
             let s = tag.as_slice();
-            if s.first().map(|v| v.as_str()) == Some("h") {
-                continue; // Drop the original `#h` tag.
+            // Only strip the specific `#h` tag whose value matches the channel UUID.
+            // Preserve any other `#h` tags.
+            if s.first().map(|v| v.as_str()) == Some("h")
+                && s.get(1).map(|v| v.as_str()) == Some(uuid_str.as_str())
+            {
+                continue; // Drop only the channel `#h` tag.
             }
             new_tags.push(tag.clone());
         }
@@ -131,7 +141,7 @@ impl Translator {
         // Translate kind number.
         let standard_kind = self.kind_translator.to_standard(kind_u32);
 
-        // Unwrap V2 rich content to plain text; V1 content passes through.
+        // Unwrap V2 rich content to plain text; V1 and edit content passes through.
         let content = if kind_u32 == KIND_STREAM_MESSAGE_V2 {
             extract_plain_text(&event.content)
         } else {
@@ -210,15 +220,19 @@ impl Translator {
             )));
         }
 
-        // Build translated tag list: replace `#e` with `#h`, keep everything else.
+        // Build translated tag list: replace the channel `#e` with `#h`, keep everything else.
         let mut new_tags: Vec<Tag> = Vec::new();
         new_tags.push(
             Tag::parse(&["h", &channel_info.uuid.to_string()]).expect("h tag is always valid"),
         );
         for tag in event.tags.iter() {
             let s = tag.as_slice();
-            if s.first().map(|v| v.as_str()) == Some("e") {
-                continue; // Drop the original `#e` tag.
+            // Only strip the specific `#e` tag whose value matches the channel event ID.
+            // Preserve other `#e` tags (e.g. NIP-10 reply threading).
+            if s.first().map(|v| v.as_str()) == Some("e")
+                && s.get(1).map(|v| v.as_str()) == Some(event_id_str.as_str())
+            {
+                continue; // Drop only the channel `#e` tag.
             }
             new_tags.push(tag.clone());
         }
@@ -272,14 +286,14 @@ impl Translator {
 
         // Inject #h tag constraints from the allowed channel list.
         // This ensures clients can only see events from their invited channels.
-        if !allowed_channels.is_empty() {
-            let uuid_strings: Vec<String> =
-                allowed_channels.iter().map(|u| u.to_string()).collect();
-            f = f.custom_tag(
-                SingleLetterTag::lowercase(Alphabet::H),
-                uuid_strings,
-            );
-        }
+        // When the list is empty, inject an impossible value so zero events match
+        // (empty scope = no access, not unrestricted access).
+        let uuid_strings: Vec<String> = if allowed_channels.is_empty() {
+            vec!["00000000-0000-0000-0000-000000000000".to_string()]
+        } else {
+            allowed_channels.iter().map(|u| u.to_string()).collect()
+        };
+        f = f.custom_tag(SingleLetterTag::lowercase(Alphabet::H), uuid_strings);
 
         f
     }
@@ -586,5 +600,177 @@ mod tests {
             !kinds.contains(&Kind::Custom(KIND_STREAM_MESSAGE as u16)),
             "filter must not contain KIND_STREAM_MESSAGE after outbound translation"
         );
+    }
+
+    // ── Test 7: Inbound — reply #e tags are preserved (FIX 1) ───────────────
+
+    #[test]
+    fn inbound_preserves_reply_e_tags() {
+        let (translator, kind40_event_id) = make_translator();
+        let client_keys = Keys::generate();
+        let external_pubkey = client_keys.public_key().to_hex();
+
+        // A reply event has two #e tags: one for the channel, one for the
+        // message being replied to (NIP-10 threading).
+        let reply_event_id =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let channel_e_tag = Tag::parse(&["e", &kind40_event_id]).unwrap();
+        let reply_e_tag = Tag::parse(&["e", reply_event_id]).unwrap();
+
+        let nip28_event = EventBuilder::new(
+            Kind::Custom(42),
+            "replying to a message",
+            [channel_e_tag, reply_e_tag],
+        )
+        .sign_with_keys(&client_keys)
+        .unwrap();
+
+        let translated = translator
+            .translate_inbound(&nip28_event, &external_pubkey, &allowed())
+            .expect("inbound translation must not error");
+
+        // Must have the #h tag for the channel.
+        let has_h_tag = translated.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.len() >= 2 && s[0] == "h" && s[1] == TEST_UUID
+        });
+        assert!(has_h_tag, "translated event must have #h tag with channel UUID");
+
+        // The channel #e tag must be gone.
+        let has_channel_e = translated.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.len() >= 2 && s[0] == "e" && s[1] == kind40_event_id
+        });
+        assert!(!has_channel_e, "channel #e tag must be stripped");
+
+        // The reply #e tag must be preserved.
+        let has_reply_e = translated.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.len() >= 2 && s[0] == "e" && s[1] == reply_event_id
+        });
+        assert!(has_reply_e, "reply #e tag must be preserved for NIP-10 threading");
+
+        translated.verify().expect("translated event signature must be valid");
+    }
+
+    // ── Test 8: Outbound — non-channel #h tags are preserved (FIX 2) ────────
+
+    #[test]
+    fn outbound_preserves_non_channel_h_tags() {
+        let (translator, kind40_event_id) = make_translator();
+        let author_keys = Keys::generate();
+
+        // An event with the channel #h tag AND an unrelated #h tag.
+        let channel_h_tag = Tag::parse(&["h", TEST_UUID]).unwrap();
+        let other_h_tag = Tag::parse(&["h", "some-other-value"]).unwrap();
+
+        let sprout_event = EventBuilder::new(
+            Kind::Custom(KIND_STREAM_MESSAGE as u16),
+            "message with extra h tag",
+            [channel_h_tag, other_h_tag],
+        )
+        .sign_with_keys(&author_keys)
+        .unwrap();
+
+        let result = translator
+            .translate_outbound(&sprout_event, &allowed())
+            .expect("outbound translation must not error");
+
+        let translated = result.expect("should produce a translated event");
+
+        // The channel #h tag must be replaced by #e.
+        let has_channel_e = translated.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.len() >= 2 && s[0] == "e" && s[1] == kind40_event_id
+        });
+        assert!(has_channel_e, "channel #e tag must be present");
+
+        // The channel #h tag must be gone.
+        let has_channel_h = translated.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.len() >= 2 && s[0] == "h" && s[1] == TEST_UUID
+        });
+        assert!(!has_channel_h, "channel #h tag must be stripped");
+
+        // The unrelated #h tag must be preserved.
+        let has_other_h = translated.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.len() >= 2 && s[0] == "h" && s[1] == "some-other-value"
+        });
+        assert!(has_other_h, "non-channel #h tag must be preserved");
+
+        translated.verify().expect("translated event signature must be valid");
+    }
+
+    // ── Test 9: Filter — empty allowed_channels injects deny-all (FIX 3) ────
+
+    #[test]
+    fn empty_allowed_channels_denies_all() {
+        let (translator, _) = make_translator();
+
+        let filter = Filter::new().kind(Kind::Custom(42));
+        let translated = translator.translate_filter_inbound(&filter, &no_channels());
+
+        // Must have an #h tag constraint.
+        let h_tag = SingleLetterTag::lowercase(Alphabet::H);
+        let h_values = translated
+            .generic_tags
+            .get(&h_tag)
+            .expect("filter must have #h tag constraint even with empty allowed_channels");
+
+        // The injected value must be the impossible sentinel UUID.
+        assert!(
+            h_values.contains("00000000-0000-0000-0000-000000000000"),
+            "empty allowed_channels must inject impossible sentinel UUID, got: {:?}",
+            h_values
+        );
+    }
+
+    // ── Test 10: Outbound — kind:40003 (edit) → kind:41 (FIX 4) ─────────────
+
+    #[test]
+    fn outbound_translates_edit_message() {
+        use sprout_core::kind::KIND_STREAM_MESSAGE_EDIT;
+
+        let (translator, _) = make_translator();
+        let author_keys = Keys::generate();
+
+        let h_tag = Tag::parse(&["h", TEST_UUID]).unwrap();
+        let sprout_event = EventBuilder::new(
+            Kind::Custom(KIND_STREAM_MESSAGE_EDIT as u16),
+            "edited content",
+            [h_tag],
+        )
+        .sign_with_keys(&author_keys)
+        .unwrap();
+
+        let result = translator
+            .translate_outbound(&sprout_event, &allowed())
+            .expect("outbound translation of edit must not error");
+
+        let translated = result.expect("edit must produce a translated event, not None");
+
+        // kind:40003 must translate to kind:41 (NIP-28 channel edit).
+        assert_eq!(
+            translated.kind.as_u16(),
+            41,
+            "kind:40003 must translate to kind:41"
+        );
+
+        // Content must be preserved.
+        assert_eq!(translated.content, "edited content");
+
+        // Must have #e tag (channel reference), not #h.
+        let has_e_tag = translated.tags.iter().any(|t| {
+            t.as_slice().first().map(|v| v.as_str()) == Some("e")
+        });
+        assert!(has_e_tag, "translated edit must have #e tag");
+
+        let has_h_tag = translated.tags.iter().any(|t| {
+            t.as_slice().first().map(|v| v.as_str()) == Some("h")
+        });
+        assert!(!has_h_tag, "translated edit must not retain #h tag");
+
+        translated.verify().expect("translated edit signature must be valid");
     }
 }

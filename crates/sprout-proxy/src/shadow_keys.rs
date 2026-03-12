@@ -1,8 +1,13 @@
 //! Shadow keypair management — deterministic internal keys derived from external pubkeys.
 //!
-//! SHA-256(server_salt || external_pubkey_bytes) → secp256k1 secret key. Cached in DashMap.
+//! HMAC-SHA256(key=server_salt, msg=external_pubkey_bytes) → secp256k1 secret key. Cached in DashMap.
 //! A server-side salt is required to prevent offline derivation by anyone who knows only
 //! the external public key.
+//!
+//! **Key derivation note**: This uses HMAC-SHA256 (not raw SHA-256) for proper domain
+//! separation and resistance to length-extension attacks. If the derivation scheme is
+//! ever changed, all existing shadow keys will differ — acceptable for MVP (no persistent
+//! state), but must be coordinated with a migration for production deployments.
 //!
 //! # Cache size limit
 //!
@@ -16,11 +21,14 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dashmap::DashMap;
+use hmac::{Hmac, Mac};
 use nostr::util::hex;
 use nostr::{Keys, SecretKey};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 
 use crate::error::ProxyError;
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// Maximum number of shadow keys held in the in-memory cache at one time.
 /// Exceeding this limit triggers a full cache flush before the new entry is
@@ -96,10 +104,12 @@ impl ShadowKeyManager {
             )));
         }
 
-        let mut hasher = Sha256::new();
-        hasher.update(&self.salt);
-        hasher.update(&pubkey_bytes);
-        let secret_bytes: [u8; 32] = hasher.finalize().into();
+        // HMAC-SHA256(key=salt, msg=pubkey_bytes) — provides proper domain separation
+        // and resistance to length-extension attacks vs. raw SHA-256(salt || pubkey).
+        let mut mac = HmacSha256::new_from_slice(&self.salt)
+            .map_err(|e| ProxyError::KeyDerivation(format!("HMAC init: {e}")))?;
+        mac.update(&pubkey_bytes);
+        let secret_bytes: [u8; 32] = mac.finalize().into_bytes().into();
         let secret_key = SecretKey::from_slice(&secret_bytes)
             .map_err(|e| ProxyError::KeyDerivation(e.to_string()))?;
 

@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use nostr::prelude::*;
 use tokio::sync::{mpsc, RwLock};
@@ -37,6 +38,12 @@ struct Inner {
     auth_keys: Keys,
     /// Whether we're currently connected and authenticated.
     connected: RwLock<bool>,
+    /// The EventId of the most recently sent auth event.  Used to correlate
+    /// OK responses: only an OK for this specific event ID marks us as authenticated.
+    auth_event_id: tokio::sync::Mutex<Option<EventId>>,
+    /// Active subscriptions: maps subscription_id → original REQ JSON.
+    /// Replayed after reconnect so clients don't silently lose their subscriptions.
+    active_subs: DashMap<String, String>,
 }
 
 /// Manages a single persistent, authenticated WebSocket connection to the upstream
@@ -84,6 +91,8 @@ impl UpstreamClient {
                 api_token: api_token.into(),
                 auth_keys: Keys::generate(),
                 connected: RwLock::new(false),
+                auth_event_id: tokio::sync::Mutex::new(None),
+                active_subs: DashMap::new(),
             }),
             outbound_tx,
             outbound_rx: Arc::new(tokio::sync::Mutex::new(outbound_rx)),
@@ -102,12 +111,16 @@ impl UpstreamClient {
     }
 
     /// Send a REQ subscription to the upstream relay.
+    /// Also stores the subscription so it can be replayed on reconnect.
     pub async fn send_req(
         &self,
         sub_id: SubscriptionId,
         filters: Vec<Filter>,
     ) -> Result<(), crate::ProxyError> {
-        let msg = ClientMessage::req(sub_id, filters).as_json();
+        let msg = ClientMessage::req(sub_id.clone(), filters).as_json();
+        self.inner
+            .active_subs
+            .insert(sub_id.to_string(), msg.clone());
         self.outbound_tx
             .send(msg)
             .await
@@ -115,7 +128,9 @@ impl UpstreamClient {
     }
 
     /// Send a CLOSE to the upstream relay.
+    /// Also removes the subscription from the active set.
     pub async fn send_close(&self, sub_id: SubscriptionId) -> Result<(), crate::ProxyError> {
+        self.inner.active_subs.remove(&sub_id.to_string());
         let msg = ClientMessage::close(sub_id).as_json();
         self.outbound_tx
             .send(msg)
@@ -130,6 +145,27 @@ impl UpstreamClient {
             .try_read()
             .map(|v| *v)
             .unwrap_or(false)
+    }
+
+    // ── Subscription tracking helpers ─────────────────────────────────────────
+
+    /// Track a subscription by storing its REQ JSON for replay on reconnect.
+    /// Called by the server layer when forwarding REQs from downstream clients.
+    pub fn track_subscription(&self, sub_id: &str, req_json: &str) {
+        self.inner
+            .active_subs
+            .insert(sub_id.to_string(), req_json.to_string());
+    }
+
+    /// Remove a subscription from the active set.
+    /// Called by the server layer when handling CLOSEs from downstream clients.
+    pub fn untrack_subscription(&self, sub_id: &str) {
+        self.inner.active_subs.remove(sub_id);
+    }
+
+    /// Returns the number of currently tracked active subscriptions.
+    pub fn active_subscription_count(&self) -> usize {
+        self.inner.active_subs.len()
     }
 
     // ── Run loop ──────────────────────────────────────────────────────────────
@@ -192,11 +228,20 @@ impl UpstreamClient {
             let _ = sink.close().await;
         });
 
+        // Notify used to gate the bridge task until authentication succeeds.
+        // This prevents outbound messages from being forwarded before the connection
+        // is authenticated.
+        let connected_notify = Arc::new(tokio::sync::Notify::new());
+
         // Bridge task: forward from the shared outbound_rx to the per-connection write_tx.
-        // This allows send_event/send_req/send_close to work while connected.
+        // Waits for the connected_notify signal before starting to forward, ensuring
+        // no messages are sent before authentication completes.
         let outbound_rx_arc = Arc::clone(&self.outbound_rx);
         let bridge_write_tx = write_tx.clone();
+        let bridge_notify = Arc::clone(&connected_notify);
         let bridge_task = tokio::spawn(async move {
+            // Wait until authentication succeeds before forwarding any messages.
+            bridge_notify.notified().await;
             let mut rx = outbound_rx_arc.lock().await;
             while let Some(msg) = rx.recv().await {
                 if bridge_write_tx.send(msg).await.is_err() {
@@ -211,6 +256,7 @@ impl UpstreamClient {
             &write_tx,
             inbound_tx,
             Arc::clone(&self.inner),
+            connected_notify,
         )
         .await;
 
@@ -232,6 +278,7 @@ async fn read_loop<S>(
     write_tx: &mpsc::Sender<String>,
     inbound_tx: &mpsc::Sender<UpstreamEvent>,
     inner: Arc<Inner>,
+    connected_notify: Arc<tokio::sync::Notify>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     S: StreamExt<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
@@ -265,22 +312,68 @@ where
                         }
                     }
 
-                    // ── OK for our auth event (first OK before authenticated) ─
+                    // ── OK response — check if it's for our auth event ───────
                     RelayMessage::Ok {
+                        event_id,
                         ref status,
                         ref message,
-                        ..
                     } if !authenticated => {
-                        if *status {
-                            info!("upstream relay authenticated successfully");
-                            authenticated = true;
-                            *inner.connected.write().await = true;
-                            let _ = inbound_tx.send(UpstreamEvent::Connected).await;
+                        // Only treat this OK as the auth response if the event_id
+                        // matches the auth event we sent. If it's for something else
+                        // (e.g. a queued event that got through), forward it downstream.
+                        let stored_auth_id = *inner.auth_event_id.lock().await;
+                        if stored_auth_id.as_ref() == Some(&event_id) {
+                            if *status {
+                                info!("upstream relay authenticated successfully");
+                                authenticated = true;
+                                *inner.connected.write().await = true;
+
+                                // Replay any active subscriptions from before the reconnect.
+                                let subs: Vec<String> = inner
+                                    .active_subs
+                                    .iter()
+                                    .map(|entry| entry.value().clone())
+                                    .collect();
+                                if !subs.is_empty() {
+                                    info!(
+                                        count = subs.len(),
+                                        "replaying active subscriptions after reconnect"
+                                    );
+                                    for req_json in subs {
+                                        if let Err(e) = write_tx.send(req_json).await {
+                                            error!("failed to replay subscription: {e}");
+                                        }
+                                    }
+                                }
+
+                                // Signal the bridge task to start forwarding.
+                                connected_notify.notify_one();
+
+                                let _ = inbound_tx.send(UpstreamEvent::Connected).await;
+                            } else {
+                                error!("upstream auth rejected: {message}");
+                                return Err(Box::new(crate::ProxyError::Auth(format!(
+                                    "upstream auth rejected: {message}"
+                                ))));
+                            }
                         } else {
-                            error!("upstream auth rejected: {message}");
-                            return Err(Box::new(crate::ProxyError::Auth(format!(
-                                "upstream auth rejected: {message}"
-                            ))));
+                            // OK for a different event — forward downstream as normal.
+                            debug!(
+                                "received OK for non-auth event {} while not yet authenticated — forwarding",
+                                event_id.to_hex()
+                            );
+                            if inbound_tx
+                                .send(UpstreamEvent::RelayMessage(RelayMessage::Ok {
+                                    event_id,
+                                    status: *status,
+                                    message: message.clone(),
+                                }))
+                                .await
+                                .is_err()
+                            {
+                                debug!("inbound_tx closed — stopping upstream read loop");
+                                return Ok(());
+                            }
                         }
                     }
 
@@ -321,6 +414,8 @@ where
 // ── Free function: NIP-42 auth response ──────────────────────────────────────
 
 /// Build and send a NIP-42 kind:22242 auth event in response to a challenge.
+/// Stores the auth event's ID in `inner.auth_event_id` so the read loop can
+/// correlate the OK response to this specific event.
 async fn respond_to_auth_challenge(
     challenge: &str,
     inner: &Inner,
@@ -340,6 +435,9 @@ async fn respond_to_auth_challenge(
     )
     .sign_with_keys(&inner.auth_keys)
     .map_err(|e| crate::ProxyError::Auth(format!("sign auth event: {e}")))?;
+
+    // Store the auth event ID so the read loop can correlate the OK response.
+    *inner.auth_event_id.lock().await = Some(auth_event.id);
 
     let msg = ClientMessage::auth(auth_event).as_json();
     write_tx
@@ -414,6 +512,8 @@ mod tests {
                 api_token: "sprout_mytoken".into(),
                 auth_keys: Keys::generate(),
                 connected: RwLock::new(false),
+                auth_event_id: tokio::sync::Mutex::new(None),
+                active_subs: DashMap::new(),
             };
             let (write_tx, mut write_rx) = mpsc::channel::<String>(8);
 
@@ -434,6 +534,82 @@ mod tests {
                 msg.contains("ws://localhost:3000"),
                 "expected relay url in: {msg}"
             );
+        });
+    }
+
+    #[test]
+    fn auth_event_id_stored_after_challenge_response() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let inner = Inner {
+                relay_url: "ws://localhost:3000".into(),
+                api_token: "sprout_mytoken".into(),
+                auth_keys: Keys::generate(),
+                connected: RwLock::new(false),
+                auth_event_id: tokio::sync::Mutex::new(None),
+                active_subs: DashMap::new(),
+            };
+            let (write_tx, mut write_rx) = mpsc::channel::<String>(8);
+
+            // Before challenge: no auth_event_id stored.
+            assert!(inner.auth_event_id.lock().await.is_none());
+
+            respond_to_auth_challenge("my-challenge", &inner, &write_tx)
+                .await
+                .unwrap();
+
+            // After challenge: auth_event_id should be set.
+            let stored_id = inner.auth_event_id.lock().await.clone();
+            assert!(stored_id.is_some(), "auth_event_id should be set after challenge");
+
+            // The AUTH message should contain the event ID.
+            let msg = write_rx.recv().await.unwrap();
+            let stored_hex = stored_id.unwrap().to_hex();
+            assert!(
+                msg.contains(&stored_hex),
+                "AUTH message should contain the event ID {stored_hex}: {msg}"
+            );
+        });
+    }
+
+    #[test]
+    fn track_and_untrack_subscriptions() {
+        let client = UpstreamClient::new("ws://localhost:3000", "sprout_test");
+
+        assert_eq!(client.active_subscription_count(), 0);
+
+        client.track_subscription("sub-1", r#"["REQ","sub-1",{}]"#);
+        client.track_subscription("sub-2", r#"["REQ","sub-2",{}]"#);
+        assert_eq!(client.active_subscription_count(), 2);
+
+        client.untrack_subscription("sub-1");
+        assert_eq!(client.active_subscription_count(), 1);
+
+        client.untrack_subscription("sub-2");
+        assert_eq!(client.active_subscription_count(), 0);
+    }
+
+    #[test]
+    fn send_req_tracks_subscription() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let client = UpstreamClient::new("ws://localhost:3000", "sprout_test");
+
+            assert_eq!(client.active_subscription_count(), 0);
+
+            let sub_id = SubscriptionId::new("tracked-sub");
+            let filters = vec![Filter::new().kind(Kind::TextNote)];
+            client.send_req(sub_id.clone(), filters).await.unwrap();
+
+            assert_eq!(client.active_subscription_count(), 1);
+            assert!(
+                client.inner.active_subs.contains_key("tracked-sub"),
+                "subscription should be tracked"
+            );
+
+            // CLOSE should remove it.
+            client.send_close(sub_id).await.unwrap();
+            assert_eq!(client.active_subscription_count(), 0);
         });
     }
 }

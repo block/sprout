@@ -2764,6 +2764,7 @@ dependencies = [
  "chrono",
  "dashmap",
  "futures-util",
+ "hmac",
  "nostr",
  "rand 0.8.5",
  "reqwest",

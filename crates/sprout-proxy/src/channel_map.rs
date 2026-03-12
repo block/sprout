@@ -68,12 +68,17 @@ pub struct ChannelMap {
 impl ChannelMap {
     /// Synthesize a deterministic NIP-28 kind:40 channel creation event.
     ///
-    /// The event ID is a pure function of `(name, created_at_unix, server_keys)`.
+    /// The event ID is a pure function of `(uuid, created_at_unix, server_keys)`.
     /// Calling this twice with the same inputs yields the same [`Event`] and
     /// therefore the same event ID.
-    pub fn synthesize_kind40(&self, name: &str, created_at_unix: u64) -> Event {
+    ///
+    /// **Important**: The `uuid` (not the human-readable name) is used as the
+    /// identity anchor in the content JSON. This ensures the kind:40 event ID
+    /// remains stable even if the channel is renamed. The real name belongs in
+    /// kind:41 (mutable metadata), not here.
+    pub fn synthesize_kind40(&self, uuid: &str, created_at_unix: u64) -> Event {
         let content = serde_json::json!({
-            "name": name,
+            "name": uuid,  // Use UUID for deterministic ID stability — name goes in kind:41
             "about": "",
             "picture": ""
         })
@@ -182,7 +187,7 @@ impl ChannelMap {
         let created_at_unix = chrono::DateTime::parse_from_rfc3339(&dto.created_at)?
             .timestamp() as u64;
 
-        let kind40 = self.synthesize_kind40(&dto.name, created_at_unix);
+        let kind40 = self.synthesize_kind40(&dto.id, created_at_unix);
         let event_id = kind40.id.to_hex();
 
         let info = ChannelInfo {
@@ -242,8 +247,9 @@ mod tests {
     #[test]
     fn test_synthesize_kind40_deterministic() {
         let map = make_map();
-        let event_a = map.synthesize_kind40("general", 1_700_000_000);
-        let event_b = map.synthesize_kind40("general", 1_700_000_000);
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let event_a = map.synthesize_kind40(uuid, 1_700_000_000);
+        let event_b = map.synthesize_kind40(uuid, 1_700_000_000);
         assert_eq!(
             event_a.id, event_b.id,
             "same inputs must produce same event ID"
@@ -253,10 +259,12 @@ mod tests {
     #[test]
     fn test_synthesize_kind40_different_inputs() {
         let map = make_map();
-        let event_a = map.synthesize_kind40("general", 1_700_000_000);
-        let event_b = map.synthesize_kind40("random", 1_700_000_000);
-        let event_c = map.synthesize_kind40("general", 1_700_000_001);
-        assert_ne!(event_a.id, event_b.id, "different names → different IDs");
+        let uuid_a = "550e8400-e29b-41d4-a716-446655440000";
+        let uuid_b = "660f9511-f3ac-52e5-b827-557766551111";
+        let event_a = map.synthesize_kind40(uuid_a, 1_700_000_000);
+        let event_b = map.synthesize_kind40(uuid_b, 1_700_000_000);
+        let event_c = map.synthesize_kind40(uuid_a, 1_700_000_001);
+        assert_ne!(event_a.id, event_b.id, "different UUIDs → different IDs");
         assert_ne!(event_a.id, event_c.id, "different timestamps → different IDs");
     }
 
