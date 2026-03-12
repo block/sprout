@@ -75,6 +75,10 @@ type RawChannel = {
   participant_pubkeys: string[];
 };
 
+type RawChannelWithMembership = RawChannel & {
+  is_member: boolean;
+};
+
 type RawChannelDetail = RawChannel & {
   created_by: string;
   created_at: string;
@@ -240,7 +244,7 @@ function cloneMembers(members: RawChannelMember[]): RawChannelMember[] {
   return members.map((member) => ({ ...member }));
 }
 
-function toRawChannel(channel: MockChannel): RawChannel {
+function toRawChannel(channel: MockChannel): RawChannelWithMembership {
   return {
     id: channel.id,
     name: channel.name,
@@ -254,6 +258,11 @@ function toRawChannel(channel: MockChannel): RawChannel {
     archived_at: channel.archived_at,
     participants: [...channel.participants],
     participant_pubkeys: [...channel.participant_pubkeys],
+    is_member: channel.members.some(
+      (member) =>
+        member.pubkey === MOCK_IDENTITY_PUBKEY ||
+        member.pubkey === DEFAULT_REAL_IDENTITY.pubkey,
+    ),
   };
 }
 
@@ -393,7 +402,7 @@ function getMockProfileByPubkey(pubkey: string): RawProfile | null {
   };
 }
 
-function listMockChannels(): RawChannel[] {
+function listMockChannels(): RawChannelWithMembership[] {
   return mockChannels.map(toRawChannel);
 }
 
@@ -475,7 +484,58 @@ const mockChannels: MockChannel[] = [
     updated_minutes_ago: 1400,
     members: [
       createMockMember(ALICE_PUBKEY, "owner", 1400),
+      createMockMember(MOCK_IDENTITY_PUBKEY, "member", 1300),
       createMockMember(BOB_PUBKEY, "member", 1000),
+    ],
+  }),
+  createMockChannel({
+    id: "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e",
+    name: "design",
+    channel_type: "stream",
+    visibility: "open",
+    description: "Design system and UX discussions",
+    topic: null,
+    purpose: null,
+    last_message_at: isoMinutesAgo(120),
+    archived_at: null,
+    created_by: ALICE_PUBKEY,
+    topic_set_by: null,
+    topic_set_at: null,
+    purpose_set_by: null,
+    purpose_set_at: null,
+    topic_required: false,
+    max_members: null,
+    nip29_group_id: null,
+    created_minutes_ago: 1350,
+    updated_minutes_ago: 120,
+    members: [
+      createMockMember(ALICE_PUBKEY, "owner", 1350),
+      createMockMember(BOB_PUBKEY, "member", 1100),
+    ],
+  }),
+  createMockChannel({
+    id: "c6f3a9b2-4d55-5a23-bf78-5b9e2g3c5d6f",
+    name: "sales",
+    channel_type: "stream",
+    visibility: "open",
+    description: "Sales team coordination and pipeline updates",
+    topic: "Q1 targets",
+    purpose: null,
+    last_message_at: isoMinutesAgo(30),
+    archived_at: null,
+    created_by: BOB_PUBKEY,
+    topic_set_by: BOB_PUBKEY,
+    topic_set_at: isoMinutesAgo(200),
+    purpose_set_by: null,
+    purpose_set_at: null,
+    topic_required: false,
+    max_members: null,
+    nip29_group_id: null,
+    created_minutes_ago: 1300,
+    updated_minutes_ago: 30,
+    members: [
+      createMockMember(BOB_PUBKEY, "owner", 1300),
+      createMockMember(CHARLIE_PUBKEY, "member", 900),
     ],
   }),
   createMockChannel({
@@ -1754,6 +1814,17 @@ async function handleSearchMessages(
         score: 7.2,
       },
       {
+        event_id: "mock-design-critique",
+        content: "Design critique notes for the browse flow.",
+        kind: 40001,
+        pubkey:
+          "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+        channel_id: "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e",
+        channel_name: "design",
+        created_at: now - 75 * 60,
+        score: 6.6,
+      },
+      {
         event_id: "mock-forum-release-thread",
         content: "Release checklist: async feedback thread.",
         kind: 45001,
@@ -1818,6 +1889,16 @@ async function handleGetEvent(
         kind: 40001,
         tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
         content: "Engineering shipped the desktop build.",
+        sig: "mocksig".repeat(20).slice(0, 128),
+      },
+      {
+        id: "mock-design-critique",
+        pubkey:
+          "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+        created_at: Math.floor(Date.now() / 1000) - 75 * 60,
+        kind: 40001,
+        tags: [["h", "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e"]],
+        content: "Design critique notes for the browse flow.",
         sig: "mocksig".repeat(20).slice(0, 128),
       },
       {

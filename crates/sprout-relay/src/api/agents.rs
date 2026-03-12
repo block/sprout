@@ -36,8 +36,10 @@ pub async fn agents_handler(
             tracing::error!("agents: failed to load accessible channels: {e}");
             internal_error("presence lookup failed")
         })?;
-    let accessible_names: std::collections::HashSet<String> =
-        accessible_channels.iter().map(|c| c.name.clone()).collect();
+    let accessible_names: std::collections::HashSet<String> = accessible_channels
+        .iter()
+        .map(|ac| ac.channel.name.clone())
+        .collect();
 
     let bots = state
         .db

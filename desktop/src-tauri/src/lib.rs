@@ -63,6 +63,8 @@ pub struct ChannelInfo {
     pub archived_at: Option<String>,
     pub participants: Vec<String>,
     pub participant_pubkeys: Vec<String>,
+    #[serde(default = "default_true")]
+    pub is_member: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -276,6 +278,10 @@ where
     D: Deserializer<'de>,
 {
     Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn relay_ws_url() -> String {
@@ -964,4 +970,32 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::ChannelInfo;
+
+    #[test]
+    fn channel_info_defaults_is_member_for_legacy_payloads() {
+        let channel: ChannelInfo = serde_json::from_value(json!({
+            "id": "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+            "name": "general",
+            "channel_type": "stream",
+            "visibility": "open",
+            "description": "General discussion",
+            "topic": null,
+            "purpose": null,
+            "member_count": 3,
+            "last_message_at": null,
+            "archived_at": null,
+            "participants": [],
+            "participant_pubkeys": []
+        }))
+        .expect("legacy payload should deserialize");
+
+        assert!(channel.is_member);
+    }
 }

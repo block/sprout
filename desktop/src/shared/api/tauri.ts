@@ -73,6 +73,7 @@ type RawChannel = {
   archived_at: string | null;
   participants: string[];
   participant_pubkeys: string[];
+  is_member?: boolean;
 };
 
 type RawChannelDetail = RawChannel & {
@@ -225,6 +226,7 @@ function fromRawChannel(channel: RawChannel): Channel {
     archivedAt: channel.archived_at,
     participants: channel.participants,
     participantPubkeys: channel.participant_pubkeys,
+    isMember: channel.is_member ?? true,
   };
 }
 
