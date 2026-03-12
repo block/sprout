@@ -7,6 +7,7 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info};
 
 use sprout_proxy::channel_map::ChannelMap;
+use sprout_proxy::guest_store::GuestStore;
 use sprout_proxy::invite_store::InviteStore;
 use sprout_proxy::server::{self, ProxyState};
 use sprout_proxy::shadow_keys::ShadowKeyManager;
@@ -92,6 +93,10 @@ async fn main() {
 
     let translator = Arc::new(Translator::new(shadow_keys, channel_map.clone()));
 
+    // ── Init guest store (empty — guests registered via POST /admin/guests) ────
+
+    let guest_store = Arc::new(GuestStore::new());
+
     // ── Init invite store (empty — tokens created via POST /admin/invite) ─────
 
     let invite_store = Arc::new(InviteStore::new());
@@ -156,6 +161,7 @@ async fn main() {
 
     let state = ProxyState {
         channel_map: channel_map.clone(),
+        guest_store: guest_store.clone(),
         invite_store: invite_store.clone(),
         translator,
         upstream: upstream.clone(),

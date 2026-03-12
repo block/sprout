@@ -20,6 +20,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::channel_map::ChannelMap;
+use crate::guest_store::GuestStore;
 use crate::invite_store::InviteStore;
 use crate::translate::Translator;
 use crate::upstream::UpstreamClient;
@@ -32,7 +33,9 @@ use crate::upstream::UpstreamClient;
 pub struct ProxyState {
     /// Bidirectional UUID ↔ kind:40 event ID map (loaded at startup).
     pub channel_map: Arc<ChannelMap>,
-    /// In-memory invite token registry.
+    /// Pubkey-based guest registry (persistent access, no token needed).
+    pub guest_store: Arc<GuestStore>,
+    /// In-memory invite token registry (temporary access via bearer token).
     pub invite_store: Arc<InviteStore>,
     /// Event translator: NIP-28 ↔ Sprout internal format.
     pub translator: Arc<Translator>,
@@ -62,12 +65,23 @@ pub struct WsParams {
 /// Build the axum [`Router`] for the proxy server.
 ///
 /// Routes:
-/// - `GET /`              — NIP-11 JSON *or* WebSocket upgrade (content-negotiated)
-/// - `POST /admin/invite` — Create an invite token (protected by `SPROUT_PROXY_ADMIN_SECRET`)
+/// - `GET /`               — NIP-11 JSON *or* WebSocket upgrade (content-negotiated)
+/// - `POST /admin/invite`  — Create an invite token (temporary access)
+/// - `POST /admin/guests`  — Register a guest pubkey (persistent access)
+/// - `DELETE /admin/guests` — Revoke a guest pubkey
+/// - `GET /admin/guests`   — List all registered guests
+///
+/// All `/admin/*` routes are protected by `SPROUT_PROXY_ADMIN_SECRET` if set.
 pub fn router(state: ProxyState) -> Router {
     Router::new()
         .route("/", get(root_handler))
         .route("/admin/invite", axum::routing::post(create_invite))
+        .route(
+            "/admin/guests",
+            axum::routing::post(register_guest)
+                .delete(revoke_guest)
+                .get(list_guests),
+        )
         .with_state(state)
 }
 
@@ -155,20 +169,9 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
     // across clients sharing the single upstream connection.
     let conn_prefix = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
 
-    // ── 1. Validate invite token (check-only, no consume yet) ────────────
-    // FIX 2: We only validate here; consumption happens AFTER successful auth
-    // to prevent DoS where auth timeout/failure burns a max_uses=1 token.
-    // We discard the channels here — the loop will re-fetch them via validate_and_consume.
-    if let Err(e) = state.invite_store.validate(&token) {
-        let _ = send_relay_msg(
-            &mut socket,
-            RelayMessage::notice(format!("error: {e}")),
-        )
-        .await;
-        return;
-    }
-
-    // ── 2. Send NIP-42 AUTH challenge ─────────────────────────────────────
+    // ── 1. Send NIP-42 AUTH challenge ─────────────────────────────────────
+    // Token validation is deferred until after NIP-42 auth completes.
+    // Registered guests (in GuestStore) don't need a token at all.
     let challenge = uuid::Uuid::new_v4().to_string();
     if !send_relay_msg(&mut socket, RelayMessage::auth(challenge.clone())).await {
         return;
@@ -276,34 +279,44 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                     continue;
                 }
 
-                // FIX 2: Auth succeeded — NOW consume the token.
-                // If someone else raced and exhausted it, disconnect cleanly.
-                let consumed_channels = match state.invite_store.validate_and_consume(&token) {
-                    Ok(channels) => channels,
-                    Err(e) => {
-                        let _ = send_relay_msg(
-                            &mut socket,
-                            RelayMessage::notice(format!("error: token no longer valid: {e}")),
-                        )
-                        .await;
-                        return;
-                    }
-                };
-
-                // Auth success — break with the authenticated pubkey and channels
+                // ── Resolve channel access ────────────────────────────
+                // Priority: GuestStore (pubkey-based) > invite token.
                 let pubkey = auth_event.pubkey;
                 let event_id = auth_event.id;
+
+                let channels = if let Some(guest_channels) = state.guest_store.lookup(&pubkey) {
+                    // Registered guest — no token needed.
+                    info!(pubkey = %pubkey, channels = guest_channels.len(), "guest authenticated (pubkey-based)");
+                    guest_channels
+                } else if !token.is_empty() {
+                    // Fall back to invite token.
+                    match state.invite_store.validate_and_consume(&token) {
+                        Ok(ch) => {
+                            info!(pubkey = %pubkey, channels = ch.len(), "guest authenticated (invite token)");
+                            ch
+                        }
+                        Err(e) => {
+                            let _ = send_relay_msg(
+                                &mut socket,
+                                RelayMessage::notice(format!("error: token invalid: {e}")),
+                            ).await;
+                            return;
+                        }
+                    }
+                } else {
+                    // No guest registration, no token → reject.
+                    let _ = send_relay_msg(
+                        &mut socket,
+                        RelayMessage::ok(event_id, false, "restricted: pubkey not registered and no invite token provided"),
+                    ).await;
+                    return;
+                };
+
                 let _ = send_relay_msg(
                     &mut socket,
                     RelayMessage::ok(event_id, true, ""),
-                )
-                .await;
-                info!(
-                    pubkey = %pubkey,
-                    channels = consumed_channels.len(),
-                    "client authenticated"
-                );
-                break (pubkey, consumed_channels);
+                ).await;
+                break (pubkey, channels);
             }
 
             Ok(ClientMessage::Req { .. }) => {
@@ -789,27 +802,8 @@ async fn create_invite(
     headers: HeaderMap,
     axum::Json(req): axum::Json<CreateInviteRequest>,
 ) -> impl IntoResponse {
-    // ── Admin secret check (FIX 6: constant-time comparison) ─────────────
-    if let Some(ref secret) = state.admin_secret {
-        let provided = headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "));
-
-        match provided {
-            Some(token) if constant_time_eq(token, secret) => {
-                // Authorized — proceed.
-            }
-            _ => {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    axum::Json(serde_json::json!({
-                        "error": "unauthorized: missing or invalid Authorization header"
-                    })),
-                )
-                    .into_response();
-            }
-        }
+    if let Some(err) = check_admin_secret(&state.admin_secret, &headers) {
+        return err;
     }
 
     let channel_ids: Vec<Uuid> = req
@@ -849,6 +843,152 @@ async fn create_invite(
         .into_response()
 }
 
+// ─── Admin: check secret helper ───────────────────────────────────────────────
+
+/// Verify the admin secret from the Authorization header. Returns an error
+/// response if the secret is required but missing/wrong, or `None` if OK.
+fn check_admin_secret(admin_secret: &Option<String>, headers: &HeaderMap) -> Option<Response> {
+    if let Some(ref secret) = admin_secret {
+        let provided = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "));
+        match provided {
+            Some(token) if constant_time_eq(token, secret) => None,
+            _ => Some(
+                (
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(serde_json::json!({
+                        "error": "unauthorized: missing or invalid Authorization header"
+                    })),
+                )
+                    .into_response(),
+            ),
+        }
+    } else {
+        None // No secret configured — dev mode, allow all.
+    }
+}
+
+// ─── Admin: guest registration ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct RegisterGuestRequest {
+    /// Hex-encoded Nostr public key (64 chars).
+    pubkey: String,
+    /// Comma-separated channel UUIDs this guest can access.
+    channels: String,
+}
+
+async fn register_guest(
+    State(state): State<ProxyState>,
+    headers: HeaderMap,
+    axum::Json(req): axum::Json<RegisterGuestRequest>,
+) -> impl IntoResponse {
+    if let Some(err) = check_admin_secret(&state.admin_secret, &headers) {
+        return err;
+    }
+
+    let pubkey = match PublicKey::from_hex(&req.pubkey) {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({ "error": format!("invalid pubkey: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let channel_ids: Vec<Uuid> = req
+        .channels
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    if channel_ids.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({ "error": "at least one valid channel UUID required" })),
+        )
+            .into_response();
+    }
+
+    state.guest_store.register(pubkey, channel_ids.clone());
+    info!(pubkey = %pubkey, channels = channel_ids.len(), "guest registered");
+
+    (
+        StatusCode::OK,
+        axum::Json(serde_json::json!({
+            "pubkey": req.pubkey,
+            "channels": channel_ids,
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct RevokeGuestRequest {
+    /// Hex-encoded Nostr public key to revoke.
+    pubkey: String,
+}
+
+async fn revoke_guest(
+    State(state): State<ProxyState>,
+    headers: HeaderMap,
+    axum::Json(req): axum::Json<RevokeGuestRequest>,
+) -> impl IntoResponse {
+    if let Some(err) = check_admin_secret(&state.admin_secret, &headers) {
+        return err;
+    }
+
+    let pubkey = match PublicKey::from_hex(&req.pubkey) {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({ "error": format!("invalid pubkey: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let removed = state.guest_store.remove(&pubkey);
+    if removed {
+        info!(pubkey = %pubkey, "guest revoked");
+        (StatusCode::OK, axum::Json(serde_json::json!({ "revoked": true }))).into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({ "error": "pubkey not registered" })),
+        )
+            .into_response()
+    }
+}
+
+async fn list_guests(
+    State(state): State<ProxyState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(err) = check_admin_secret(&state.admin_secret, &headers) {
+        return err;
+    }
+
+    let guests: Vec<serde_json::Value> = state
+        .guest_store
+        .all()
+        .into_iter()
+        .map(|(pk, channels)| {
+            serde_json::json!({
+                "pubkey": pk.to_hex(),
+                "channels": channels,
+            })
+        })
+        .collect();
+
+    (StatusCode::OK, axum::Json(serde_json::json!({ "guests": guests }))).into_response()
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -860,6 +1000,7 @@ mod tests {
     fn make_state() -> ProxyState {
         let keys = Keys::generate();
         let channel_map = Arc::new(crate::channel_map::ChannelMap::new(keys.clone()));
+        let guest_store = Arc::new(GuestStore::new());
         let invite_store = Arc::new(InviteStore::new());
         let (upstream_events, _) = broadcast::channel(16);
         let shadow_keys = Arc::new(
@@ -873,6 +1014,7 @@ mod tests {
         let upstream = Arc::new(UpstreamClient::new("ws://localhost:3000", "sprout_test"));
         ProxyState {
             channel_map,
+            guest_store,
             invite_store,
             translator,
             upstream,
