@@ -195,26 +195,27 @@ impl Translator {
             )));
         }
 
-        // Extract the kind:40 event ID from the `#e` tag.
-        let event_id_str = event
+        // Find the channel-reference `#e` tag by looking up each `#e` value
+        // against the channel map. This is more robust than assuming the first
+        // `#e` tag is always the channel reference — reply/thread `#e` tags may
+        // appear in any order depending on the client.
+        let (event_id_str, channel_info) = event
             .tags
             .iter()
-            .find(|t| {
+            .filter(|t| {
                 let s = t.as_slice();
                 s.len() >= 2 && s[0] == "e"
             })
-            .and_then(|t| t.as_slice().get(1).cloned())
+            .find_map(|t| {
+                let eid = t.as_slice().get(1)?;
+                let info = self.channel_map.lookup_by_event_id(eid)?;
+                Some((eid.clone(), info))
+            })
             .ok_or_else(|| {
                 ProxyError::PermissionDenied(
-                    "kind:42 event must have an #e tag referencing a channel".into(),
+                    "kind:42 event must have an #e tag referencing a known channel".into(),
                 )
             })?;
-
-        // Resolve the channel from the event ID.
-        let channel_info = self
-            .channel_map
-            .lookup_by_event_id(&event_id_str)
-            .ok_or_else(|| ProxyError::ChannelNotFound(event_id_str.clone()))?;
 
         // Enforce channel-level access control.
         if !allowed_channels.contains(&channel_info.uuid) {
@@ -300,6 +301,7 @@ impl Translator {
         // filter — if both `#e` and `#h` were present, the relay would AND them,
         // and since Sprout events carry `#h` but not `#e`, zero events would match.
         let e_tag_key = SingleLetterTag::lowercase(Alphabet::E);
+        let had_e_filter = f.generic_tags.contains_key(&e_tag_key);
         let client_channel_uuids: Vec<String> =
             if let Some(e_values) = f.generic_tags.get(&e_tag_key) {
                 e_values
@@ -316,17 +318,25 @@ impl Translator {
         f.generic_tags.remove(&e_tag_key);
 
         // Inject #h tag constraints from the allowed channel list.
-        // This ensures clients can only see events from their invited channels.
-        // When the list is empty, inject an impossible value so zero events match
-        // (empty scope = no access, not unrestricted access).
+        // Three cases:
+        //   1. Client specified #e and some resolved → use those (already intersected)
+        //   2. Client specified #e but NONE resolved → deny-all (sentinel UUID)
+        //   3. Client didn't specify #e → use all allowed_channels (or sentinel if empty)
         //
-        // If the client specified channels via #e, use those (already intersected
-        // with allowed_channels). Otherwise use all allowed_channels.
+        // Case 2 is critical: an explicit filter that resolves to nothing must
+        // return zero results, not widen to all channels.
+        let sentinel = vec!["00000000-0000-0000-0000-000000000000".to_string()];
         let uuid_strings: Vec<String> = if !client_channel_uuids.is_empty() {
+            // Case 1: client asked for specific channels, some resolved
             client_channel_uuids
+        } else if had_e_filter {
+            // Case 2: client asked for specific channels, none resolved → deny all
+            sentinel
         } else if allowed_channels.is_empty() {
-            vec!["00000000-0000-0000-0000-000000000000".to_string()]
+            // Case 3 with empty scope → deny all
+            sentinel
         } else {
+            // Case 3: no #e filter, use full allowed scope
             allowed_channels.iter().map(|u| u.to_string()).collect()
         };
         f = f.custom_tag(SingleLetterTag::lowercase(Alphabet::H), uuid_strings);
@@ -687,7 +697,7 @@ mod tests {
     // ── Test 6c: Filter — #e with unknown event ID falls back to allowed_channels
 
     #[test]
-    fn filter_inbound_e_tag_unknown_event_id_falls_back_to_allowed() {
+    fn filter_inbound_e_tag_unknown_event_id_denies_all() {
         let (translator, _) = make_translator();
 
         // Use an event ID that doesn't exist in the channel map.
@@ -705,18 +715,24 @@ mod tests {
             "#e tag filter must be removed even when event ID is unknown"
         );
 
-        // Since the #e resolved to nothing (empty client_channel_uuids),
-        // the #h injection falls back to all allowed_channels.
+        // Since the client explicitly specified #e values but none resolved,
+        // the filter must deny all — inject the sentinel UUID, NOT fall back
+        // to all allowed_channels. Explicit filter → fail closed.
         let h_tag_key = SingleLetterTag::lowercase(Alphabet::H);
         let h_values = translated
             .generic_tags
             .get(&h_tag_key)
             .expect("translated filter must have #h tag constraint");
 
+        let sentinel = "00000000-0000-0000-0000-000000000000";
         assert!(
-            h_values.contains(TEST_UUID),
-            "fallback #h filter must contain allowed channel UUID, got: {:?}",
+            h_values.contains(sentinel),
+            "unknown #e must inject sentinel UUID (deny-all), got: {:?}",
             h_values
+        );
+        assert!(
+            !h_values.contains(TEST_UUID),
+            "unknown #e must NOT fall back to allowed channels"
         );
     }
 

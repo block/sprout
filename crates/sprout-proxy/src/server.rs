@@ -522,6 +522,21 @@ async fn handle_client_message(
         }
         ClientMessage::Event(event) => {
             let event_id = event.id;
+
+            // Verify the event is signed by the authenticated client.
+            // Without this, an AUTHed connection could submit arbitrary events
+            // that get re-signed under the client's shadow identity.
+            if event.pubkey != *client_pubkey {
+                let ok_msg = RelayMessage::ok(event_id, false, "invalid: event pubkey does not match authenticated identity");
+                let _ = socket.send(Message::Text(ok_msg.as_json().into())).await;
+                return;
+            }
+            if event.verify().is_err() {
+                let ok_msg = RelayMessage::ok(event_id, false, "invalid: bad event signature");
+                let _ = socket.send(Message::Text(ok_msg.as_json().into())).await;
+                return;
+            }
+
             // Translate inbound: kind:42 → kind:40001, #e → #h, re-sign with shadow key.
             match state.translator.translate_inbound(&event, &client_pubkey.to_hex(), allowed_channels) {
                 Ok(translated) => {
@@ -620,8 +635,13 @@ async fn handle_req(
             owned_upstream_filters.push(upstream_f);
         }
         if !has_local && !has_upstream {
-            // No kinds specified — treat as upstream (subscribe to everything).
+            // No kinds specified — "subscribe to everything".
+            // Forward upstream AND serve local kind:40/41 metadata so the
+            // client sees channel creation/metadata events too.
             owned_upstream_filters.push(filter.clone());
+            let mut local_f = filter.clone();
+            local_f = local_f.kinds([Kind::ChannelCreation, Kind::ChannelMetadata]);
+            owned_local_filters.push(local_f);
         }
     }
 
@@ -671,36 +691,33 @@ async fn handle_req(
                 }
             }
 
-            if wants_40 {
+            if wants_40 && served < limit {
                 let kind40 =
                     state.channel_map.synthesize_kind40(&ch.uuid.to_string(), ch.created_at_unix);
-                // FIX B: Apply ids filter if present.
-                if let Some(ref ids) = filter.ids {
-                    if !ids.contains(&kind40.id) {
-                        continue;
-                    }
+                // Apply ids filter — use a local check, NOT `continue`,
+                // so kind:41 for the same channel is still considered.
+                let id_ok = filter.ids.as_ref().is_none_or(|ids| ids.contains(&kind40.id));
+                if id_ok {
+                    let _ = send_relay_msg(
+                        socket,
+                        RelayMessage::event(sub_id.clone(), kind40),
+                    )
+                    .await;
+                    served += 1;
                 }
-                let _ = send_relay_msg(
-                    socket,
-                    RelayMessage::event(sub_id.clone(), kind40),
-                )
-                .await;
-                served += 1;
             }
             if wants_41 && served < limit {
                 let kind41 = state.channel_map.synthesize_kind41(ch);
-                // FIX B: Apply ids filter if present.
-                if let Some(ref ids) = filter.ids {
-                    if !ids.contains(&kind41.id) {
-                        continue;
-                    }
+                // Local check — no `continue`, so we don't skip the outer channel loop.
+                let id_ok = filter.ids.as_ref().is_none_or(|ids| ids.contains(&kind41.id));
+                if id_ok {
+                    let _ = send_relay_msg(
+                        socket,
+                        RelayMessage::event(sub_id.clone(), kind41),
+                    )
+                    .await;
+                    served += 1;
                 }
-                let _ = send_relay_msg(
-                    socket,
-                    RelayMessage::event(sub_id.clone(), kind41),
-                )
-                .await;
-                served += 1;
             }
         }
     }
