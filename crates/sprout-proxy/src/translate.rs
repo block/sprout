@@ -187,10 +187,11 @@ impl Translator {
     ) -> Result<Event, ProxyError> {
         let kind_u32 = event.kind.as_u16() as u32;
 
-        // Only accept kind:42 (NIP-28 channel message) and kind:1 (text note).
-        if kind_u32 != 42 && kind_u32 != 1 {
+        // Accept kind:42 (channel message), kind:41 (channel metadata edit),
+        // and kind:1 (text note). Everything else is rejected.
+        if kind_u32 != 42 && kind_u32 != 41 && kind_u32 != 1 {
             return Err(ProxyError::PermissionDenied(format!(
-                "kind {} not accepted by proxy (expected 42 or 1)",
+                "kind {} not accepted by proxy (expected 1, 41, or 42)",
                 kind_u32
             )));
         }
@@ -860,7 +861,62 @@ mod tests {
         );
     }
 
-    // ── Test 10: Outbound — kind:40003 (edit) → kind:41 (FIX 4) ─────────────
+    // ── Test 10: Inbound — kind:41 (edit) → kind:40003 ─────────────────────
+
+    #[test]
+    fn inbound_translates_edit_message() {
+        use sprout_core::kind::KIND_STREAM_MESSAGE_EDIT;
+
+        let (translator, kind40_event_id) = make_translator();
+        let external_keys = Keys::generate();
+
+        // Build a kind:41 event with #e referencing the channel.
+        let e_tag = Tag::parse(&["e", &kind40_event_id]).unwrap();
+        let nip28_event = EventBuilder::new(Kind::ChannelMetadata, "updated metadata", [e_tag])
+            .sign_with_keys(&external_keys)
+            .unwrap();
+
+        let translated = translator
+            .translate_inbound(&nip28_event, &external_keys.public_key().to_hex(), &allowed())
+            .expect("inbound kind:41 must translate");
+
+        // kind:41 → KIND_STREAM_MESSAGE_EDIT (40003)
+        assert_eq!(
+            translated.kind.as_u16() as u32,
+            KIND_STREAM_MESSAGE_EDIT,
+            "kind:41 must translate to KIND_STREAM_MESSAGE_EDIT"
+        );
+
+        // Must have #h tag (channel UUID), not #e.
+        let has_h = translated
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|v| v.as_str()) == Some("h"));
+        assert!(has_h, "translated edit must have #h tag");
+
+        translated
+            .verify()
+            .expect("translated edit signature must be valid");
+    }
+
+    // ── Test 11: Inbound — rejects unknown kinds ─────────────────────────────
+
+    #[test]
+    fn inbound_rejects_unknown_kind() {
+        let (translator, kind40_event_id) = make_translator();
+        let external_keys = Keys::generate();
+
+        let e_tag = Tag::parse(&["e", &kind40_event_id]).unwrap();
+        let event = EventBuilder::new(Kind::Custom(9999), "nope", [e_tag])
+            .sign_with_keys(&external_keys)
+            .unwrap();
+
+        let result =
+            translator.translate_inbound(&event, &external_keys.public_key().to_hex(), &allowed());
+        assert!(result.is_err(), "kind:9999 must be rejected inbound");
+    }
+
+    // ── Test 12: Outbound — kind:40003 (edit) → kind:41 (FIX 4) ─────────────
 
     #[test]
     fn outbound_translates_edit_message() {

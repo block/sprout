@@ -581,6 +581,141 @@ async fn handle_client_message(
     }
 }
 
+// ─── Filter splitting (pure, testable) ───────────────────────────────────────
+
+/// Split a list of NIP-28 filters into local (kind:40/41) and upstream groups.
+///
+/// A single filter with `kinds:[40,42]` becomes two filters: one with `[40]`
+/// served locally, one with `[42]` forwarded upstream. A filter with no kinds
+/// is duplicated into both groups (local gets `[40,41]` injected).
+///
+/// Returns `(local_filters, upstream_filters)`.
+fn split_filters(filters: &[Filter]) -> (Vec<Filter>, Vec<Filter>) {
+    let mut local_filters: Vec<Filter> = Vec::new();
+    let mut upstream_filters: Vec<Filter> = Vec::new();
+
+    for filter in filters {
+        let kinds: Vec<u16> = filter
+            .kinds
+            .as_ref()
+            .map(|k| k.iter().map(|kind| kind.as_u16()).collect())
+            .unwrap_or_default();
+
+        let has_local = kinds.iter().any(|k| *k == 40 || *k == 41);
+        let has_upstream = kinds.iter().any(|k| *k != 40 && *k != 41);
+
+        if has_local {
+            let local_kinds: Vec<Kind> = kinds.iter()
+                .filter(|k| **k == 40 || **k == 41)
+                .map(|k| Kind::Custom(*k))
+                .collect();
+            let mut local_f = filter.clone();
+            if let Some(ref all_kinds) = filter.kinds {
+                local_f = local_f.remove_kinds(all_kinds.iter().cloned());
+            }
+            local_f = local_f.kinds(local_kinds);
+            local_filters.push(local_f);
+        }
+        if has_upstream {
+            let upstream_kinds: Vec<Kind> = kinds.iter()
+                .filter(|k| **k != 40 && **k != 41)
+                .map(|k| Kind::Custom(*k))
+                .collect();
+            let mut upstream_f = filter.clone();
+            if let Some(ref all_kinds) = filter.kinds {
+                upstream_f = upstream_f.remove_kinds(all_kinds.iter().cloned());
+            }
+            upstream_f = upstream_f.kinds(upstream_kinds);
+            upstream_filters.push(upstream_f);
+        }
+        if !has_local && !has_upstream {
+            // No kinds specified — "subscribe to everything".
+            // Forward upstream AND serve local kind:40/41 metadata.
+            upstream_filters.push(filter.clone());
+            let mut local_f = filter.clone();
+            local_f = local_f.kinds([Kind::ChannelCreation, Kind::ChannelMetadata]);
+            local_filters.push(local_f);
+        }
+    }
+
+    (local_filters, upstream_filters)
+}
+
+/// Collect locally-served events for kind:40/41 filters from the channel map.
+///
+/// Returns the events that match the filter constraints (kinds, #e, authors,
+/// since, until, ids, limit). The caller is responsible for sending them.
+fn collect_local_events(
+    filter: &Filter,
+    channel_map: &ChannelMap,
+    allowed_channels: &[Uuid],
+) -> Vec<Event> {
+    let kinds: Vec<u16> = filter
+        .kinds
+        .as_ref()
+        .map(|k| k.iter().map(|kind| kind.as_u16()).collect())
+        .unwrap_or_default();
+
+    let wants_40 = kinds.contains(&40);
+    let wants_41 = kinds.contains(&41);
+
+    // Apply `authors` filter — all synthesized events share the server pubkey.
+    let server_pubkey = channel_map.server_keys().public_key();
+    if let Some(ref authors) = filter.authors {
+        if !authors.contains(&server_pubkey) {
+            return Vec::new();
+        }
+    }
+
+    let e_tag_key = nostr::SingleLetterTag::lowercase(nostr::Alphabet::E);
+    let e_filter_values = filter.generic_tags.get(&e_tag_key);
+
+    let channels = channel_map.all_channels();
+    let limit: usize = filter.limit.unwrap_or(usize::MAX);
+    let mut events: Vec<Event> = Vec::new();
+
+    for ch in &channels {
+        if events.len() >= limit {
+            break;
+        }
+        if !allowed_channels.contains(&ch.uuid) {
+            continue;
+        }
+        if let Some(e_values) = e_filter_values {
+            if !e_values.contains(&ch.kind40_event_id) {
+                continue;
+            }
+        }
+        if let Some(since) = filter.since {
+            if Timestamp::from(ch.created_at_unix) < since {
+                continue;
+            }
+        }
+        if let Some(until) = filter.until {
+            if Timestamp::from(ch.created_at_unix) > until {
+                continue;
+            }
+        }
+
+        if wants_40 && events.len() < limit {
+            let kind40 = channel_map.synthesize_kind40(&ch.uuid.to_string(), ch.created_at_unix);
+            let id_ok = filter.ids.as_ref().is_none_or(|ids| ids.contains(&kind40.id));
+            if id_ok {
+                events.push(kind40);
+            }
+        }
+        if wants_41 && events.len() < limit {
+            let kind41 = channel_map.synthesize_kind41(ch);
+            let id_ok = filter.ids.as_ref().is_none_or(|ids| ids.contains(&kind41.id));
+            if id_ok {
+                events.push(kind41);
+            }
+        }
+    }
+
+    events
+}
+
 // ─── REQ handler ─────────────────────────────────────────────────────────────
 
 async fn handle_req(
@@ -592,133 +727,13 @@ async fn handle_req(
     conn_prefix: &str,
     active_subs: &mut HashSet<String>,
 ) {
-    // FIX D: Split filters into local (kind:40/41) and upstream groups.
-    // A single filter with kinds:[40,42] is split so BOTH portions are served.
-    // A REQ like [{kinds:[40]}, {kinds:[42]}] also correctly serves BOTH.
-    let mut owned_local_filters: Vec<Filter> = Vec::new();
-    let mut owned_upstream_filters: Vec<Filter> = Vec::new();
+    let (owned_local_filters, owned_upstream_filters) = split_filters(&filters);
 
-    for filter in &filters {
-        let kinds: Vec<u16> = filter
-            .kinds
-            .as_ref()
-            .map(|k| k.iter().map(|kind| kind.as_u16()).collect())
-            .unwrap_or_default();
-
-        let has_local = kinds.iter().any(|k| *k == 40 || *k == 41);
-        let has_upstream = kinds.iter().any(|k| *k != 40 && *k != 41);
-
-        if has_local {
-            // Build a filter containing only local kinds (40/41).
-            let local_kinds: Vec<Kind> = kinds.iter()
-                .filter(|k| **k == 40 || **k == 41)
-                .map(|k| Kind::Custom(*k))
-                .collect();
-            let mut local_f = filter.clone();
-            if let Some(ref all_kinds) = filter.kinds {
-                local_f = local_f.remove_kinds(all_kinds.iter().cloned());
-            }
-            local_f = local_f.kinds(local_kinds);
-            owned_local_filters.push(local_f);
-        }
-        if has_upstream {
-            // Build a filter containing only non-local kinds.
-            let upstream_kinds: Vec<Kind> = kinds.iter()
-                .filter(|k| **k != 40 && **k != 41)
-                .map(|k| Kind::Custom(*k))
-                .collect();
-            let mut upstream_f = filter.clone();
-            if let Some(ref all_kinds) = filter.kinds {
-                upstream_f = upstream_f.remove_kinds(all_kinds.iter().cloned());
-            }
-            upstream_f = upstream_f.kinds(upstream_kinds);
-            owned_upstream_filters.push(upstream_f);
-        }
-        if !has_local && !has_upstream {
-            // No kinds specified — "subscribe to everything".
-            // Forward upstream AND serve local kind:40/41 metadata so the
-            // client sees channel creation/metadata events too.
-            owned_upstream_filters.push(filter.clone());
-            let mut local_f = filter.clone();
-            local_f = local_f.kinds([Kind::ChannelCreation, Kind::ChannelMetadata]);
-            owned_local_filters.push(local_f);
-        }
-    }
-
-    // Serve local filters from ChannelMap (FIX B: apply filter constraints).
+    // Serve local filters from ChannelMap via the extracted pure function.
     for filter in &owned_local_filters {
-        let kinds: Vec<u16> = filter
-            .kinds
-            .as_ref()
-            .map(|k| k.iter().map(|kind| kind.as_u16()).collect())
-            .unwrap_or_default();
-
-        let wants_40 = kinds.contains(&40);
-        let wants_41 = kinds.contains(&41);
-
-        // FIX B: Extract #e tag filter values for channel-specific filtering.
-        let e_tag_key = nostr::SingleLetterTag::lowercase(nostr::Alphabet::E);
-        let e_filter_values = filter.generic_tags.get(&e_tag_key);
-
-        let channels = state.channel_map.all_channels();
-        let mut served: usize = 0;
-        let limit: usize = filter.limit.unwrap_or(usize::MAX);
-
-        for ch in &channels {
-            if served >= limit {
-                break;
-            }
-            if !allowed_channels.contains(&ch.uuid) {
-                continue;
-            }
-
-            // FIX B: If client specified #e values, only serve matching channels.
-            if let Some(e_values) = e_filter_values {
-                if !e_values.contains(&ch.kind40_event_id) {
-                    continue;
-                }
-            }
-
-            // FIX B: Apply since/until on created_at.
-            if let Some(since) = filter.since {
-                if Timestamp::from(ch.created_at_unix) < since {
-                    continue;
-                }
-            }
-            if let Some(until) = filter.until {
-                if Timestamp::from(ch.created_at_unix) > until {
-                    continue;
-                }
-            }
-
-            if wants_40 && served < limit {
-                let kind40 =
-                    state.channel_map.synthesize_kind40(&ch.uuid.to_string(), ch.created_at_unix);
-                // Apply ids filter — use a local check, NOT `continue`,
-                // so kind:41 for the same channel is still considered.
-                let id_ok = filter.ids.as_ref().is_none_or(|ids| ids.contains(&kind40.id));
-                if id_ok {
-                    let _ = send_relay_msg(
-                        socket,
-                        RelayMessage::event(sub_id.clone(), kind40),
-                    )
-                    .await;
-                    served += 1;
-                }
-            }
-            if wants_41 && served < limit {
-                let kind41 = state.channel_map.synthesize_kind41(ch);
-                // Local check — no `continue`, so we don't skip the outer channel loop.
-                let id_ok = filter.ids.as_ref().is_none_or(|ids| ids.contains(&kind41.id));
-                if id_ok {
-                    let _ = send_relay_msg(
-                        socket,
-                        RelayMessage::event(sub_id.clone(), kind41),
-                    )
-                    .await;
-                    served += 1;
-                }
-            }
+        let events = collect_local_events(filter, &state.channel_map, allowed_channels);
+        for event in events {
+            let _ = send_relay_msg(socket, RelayMessage::event(sub_id.clone(), event)).await;
         }
     }
 
