@@ -199,6 +199,13 @@ impl ChannelMap {
             created_at_unix,
         };
 
+        // Clean up stale by_event_id entry if this UUID was previously registered
+        // with a different event ID (e.g. after channel rename or data change).
+        if let Some(old_info) = self.by_uuid.get(&uuid) {
+            if old_info.kind40_event_id != event_id {
+                self.by_event_id.remove(&old_info.kind40_event_id);
+            }
+        }
         self.by_uuid.insert(uuid, info.clone());
         self.by_event_id.insert(event_id, uuid);
         Ok(info)
@@ -351,5 +358,39 @@ mod tests {
                     .unwrap_or(false)
         });
         assert!(has_e_tag, "kind:41 must have e tag pointing to kind:40 event");
+    }
+
+    #[test]
+    fn register_cleans_up_stale_event_id() {
+        let keys = Keys::generate();
+        let map = ChannelMap::new(keys);
+
+        let dto1 = ChannelDto {
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            name: "original-name".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            visibility: "open".to_string(),
+            description: "test".to_string(),
+            created_by: "0101010101010101010101010101010101010101010101010101010101010101".to_string(),
+        };
+        let info1 = map.register(&dto1).unwrap();
+
+        // Re-register with different created_at (changes the synthesized event ID)
+        let dto2 = ChannelDto {
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            name: "original-name".to_string(),
+            created_at: "2026-06-01T00:00:00Z".to_string(),
+            visibility: "open".to_string(),
+            description: "test".to_string(),
+            created_by: "0101010101010101010101010101010101010101010101010101010101010101".to_string(),
+        };
+        let info2 = map.register(&dto2).unwrap();
+
+        // Old event ID should no longer resolve
+        assert!(map.lookup_by_event_id(&info1.kind40_event_id).is_none(),
+            "stale event ID must be cleaned up");
+        // New event ID should resolve
+        assert!(map.lookup_by_event_id(&info2.kind40_event_id).is_some(),
+            "new event ID must resolve");
     }
 }

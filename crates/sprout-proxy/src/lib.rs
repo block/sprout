@@ -17,6 +17,8 @@ pub mod kind_translator;
 pub mod shadow_keys;
 /// Thread-safe invite token registry.
 pub mod invite_store;
+/// Pubkey-based guest registry for persistent access control.
+pub mod guest_store;
 /// Upstream relay WebSocket client with NIP-42 auth and reconnect.
 pub mod upstream;
 /// External-facing NIP-01 WebSocket server for standard Nostr clients.
@@ -29,5 +31,6 @@ pub use invite::InviteToken;
 pub use kind_translator::KindTranslator;
 pub use shadow_keys::ShadowKeyManager;
 pub use invite_store::InviteStore;
+pub use guest_store::GuestStore;
 
 

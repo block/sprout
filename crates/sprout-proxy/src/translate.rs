@@ -238,7 +238,12 @@ impl Translator {
             if s.first().map(|v| v.as_str()) == Some("e")
                 && s.get(1).map(|v| v.as_str()) == Some(event_id_str.as_str())
             {
-                continue; // Drop only the channel `#e` tag.
+                continue;
+            }
+            // Strip ALL `#h` tags — the authorized #h is already added above.
+            // Prevents clients from injecting unauthorized channel associations.
+            if s.first().map(|v| v.as_str()) == Some("h") {
+                continue;
             }
             new_tags.push(tag.clone());
         }
@@ -962,5 +967,37 @@ mod tests {
         assert!(!has_h_tag, "translated edit must not retain #h tag");
 
         translated.verify().expect("translated edit signature must be valid");
+    }
+
+    #[test]
+    fn inbound_strips_injected_h_tags() {
+        let (translator, kind40_event_id) = make_translator();
+        let external_keys = Keys::generate();
+
+        // Client tries to inject an #h tag for an unauthorized channel.
+        let e_tag = Tag::parse(&["e", &kind40_event_id]).unwrap();
+        let injected_h = Tag::parse(&["h", "00000000-0000-0000-0000-000000000001"]).unwrap();
+        let nip28_event = EventBuilder::new(
+            Kind::Custom(42),
+            "sneaky message",
+            [e_tag, injected_h],
+        )
+        .sign_with_keys(&external_keys)
+        .unwrap();
+
+        let translated = translator
+            .translate_inbound(&nip28_event, &external_keys.public_key().to_hex(), &allowed())
+            .expect("inbound must succeed");
+
+        // Only the authorized #h tag should be present.
+        let h_tags: Vec<_> = translated.tags.iter()
+            .filter(|t| t.as_slice().first().map(|v| v.as_str()) == Some("h"))
+            .collect();
+        assert_eq!(h_tags.len(), 1, "only the authorized #h tag should survive");
+        assert_eq!(
+            h_tags[0].as_slice().get(1).map(|v| v.as_str()),
+            Some(TEST_UUID),
+            "the surviving #h tag must be the authorized channel UUID"
+        );
     }
 }
