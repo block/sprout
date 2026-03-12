@@ -186,3 +186,40 @@ export type SearchMessagesResponse = {
   hits: SearchHit[];
   found: number;
 };
+
+export type TokenScope =
+  | "messages:read"
+  | "messages:write"
+  | "channels:read"
+  | "channels:write"
+  | "users:read"
+  | "files:read"
+  | "files:write";
+
+export type Token = {
+  id: string;
+  name: string;
+  scopes: TokenScope[];
+  channelIds: string[];
+  createdAt: string;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+};
+
+export type MintTokenInput = {
+  name: string;
+  scopes: TokenScope[];
+  channelIds?: string[];
+  expiresInDays?: number;
+};
+
+export type MintTokenResponse = {
+  id: string;
+  token: string;
+  name: string;
+  scopes: TokenScope[];
+  channelIds: string[];
+  createdAt: string;
+  expiresAt: string | null;
+};

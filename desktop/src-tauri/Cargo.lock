@@ -4017,10 +4017,12 @@ dependencies = [
 name = "sprout"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "nostr 0.37.0",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "sprout-core",
  "tauri",
  "tauri-build",

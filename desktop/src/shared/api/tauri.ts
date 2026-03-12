@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 import type {
   AddChannelMembersInput,
@@ -11,6 +11,8 @@ import type {
   GetHomeFeedInput,
   HomeFeedResponse,
   Identity,
+  MintTokenInput,
+  MintTokenResponse,
   PresenceLookup,
   PresenceStatus,
   Profile,
@@ -20,6 +22,8 @@ import type {
   SetPresenceResult,
   SetChannelPurposeInput,
   SetChannelTopicInput,
+  Token,
+  TokenScope,
   UpdateProfileInput,
   UpdateChannelInput,
   UserProfileSummary,
@@ -146,6 +150,67 @@ type RawSearchResponse = {
   found: number;
 };
 
+type RawToken = {
+  id: string;
+  name: string;
+  scopes: TokenScope[];
+  channel_ids: string[];
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+};
+
+type RawListTokensResponse = {
+  tokens: RawToken[];
+};
+
+type RawMintTokenResponse = {
+  id: string;
+  token: string;
+  name: string;
+  scopes: TokenScope[];
+  channel_ids: string[];
+  created_at: string;
+  expires_at: string | null;
+};
+
+function toTauriError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+
+  if (typeof error === "string") {
+    return new Error(error);
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return new Error(error.message);
+  }
+
+  try {
+    return new Error(JSON.stringify(error));
+  } catch {
+    return new Error("Unknown Tauri error");
+  }
+}
+
+async function invokeTauri<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
+  try {
+    return await tauriInvoke<T>(command, args);
+  } catch (error) {
+    throw toTauriError(error);
+  }
+}
+
 function fromRawChannel(channel: RawChannel): Channel {
   return {
     id: channel.id,
@@ -235,7 +300,7 @@ function fromRawUserProfileSummary(
 }
 
 export async function getIdentity(): Promise<Identity> {
-  const identity = await invoke<RawIdentity>("get_identity");
+  const identity = await invokeTauri<RawIdentity>("get_identity");
 
   return {
     pubkey: identity.pubkey,
@@ -244,26 +309,26 @@ export async function getIdentity(): Promise<Identity> {
 }
 
 export async function getProfile(): Promise<Profile> {
-  const profile = await invoke<RawProfile>("get_profile");
+  const profile = await invokeTauri<RawProfile>("get_profile");
   return fromRawProfile(profile);
 }
 
 export async function updateProfile(
   input: UpdateProfileInput,
 ): Promise<Profile> {
-  const profile = await invoke<RawProfile>("update_profile", input);
+  const profile = await invokeTauri<RawProfile>("update_profile", input);
   return fromRawProfile(profile);
 }
 
 export async function getUserProfile(pubkey?: string): Promise<Profile> {
-  const profile = await invoke<RawProfile>("get_user_profile", { pubkey });
+  const profile = await invokeTauri<RawProfile>("get_user_profile", { pubkey });
   return fromRawProfile(profile);
 }
 
 export async function getUsersBatch(
   pubkeys: string[],
 ): Promise<UsersBatchResponse> {
-  const response = await invoke<RawUsersBatchResponse>("get_users_batch", {
+  const response = await invokeTauri<RawUsersBatchResponse>("get_users_batch", {
     pubkeys,
   });
 
@@ -279,7 +344,7 @@ export async function getUsersBatch(
 }
 
 export async function getPresence(pubkeys: string[]): Promise<PresenceLookup> {
-  const response = await invoke<RawPresenceLookup>("get_presence", {
+  const response = await invokeTauri<RawPresenceLookup>("get_presence", {
     pubkeys,
   });
 
@@ -294,7 +359,7 @@ export async function getPresence(pubkeys: string[]): Promise<PresenceLookup> {
 export async function setPresence(
   status: PresenceStatus,
 ): Promise<SetPresenceResult> {
-  const response = await invoke<RawSetPresenceResult>("set_presence", {
+  const response = await invokeTauri<RawSetPresenceResult>("set_presence", {
     status,
   });
 
@@ -305,25 +370,25 @@ export async function setPresence(
 }
 
 export function getRelayWsUrl(): Promise<string> {
-  return invoke<string>("get_relay_ws_url");
+  return invokeTauri<string>("get_relay_ws_url");
 }
 
 export async function getChannels(): Promise<Channel[]> {
-  const channels = await invoke<RawChannel[]>("get_channels");
+  const channels = await invokeTauri<RawChannel[]>("get_channels");
   return channels.map(fromRawChannel);
 }
 
 export async function createChannel(
   input: CreateChannelInput,
 ): Promise<Channel> {
-  const channel = await invoke<RawChannel>("create_channel", input);
+  const channel = await invokeTauri<RawChannel>("create_channel", input);
   return fromRawChannel(channel);
 }
 
 export async function getChannelDetails(
   channelId: string,
 ): Promise<ChannelDetail> {
-  const channel = await invoke<RawChannelDetail>("get_channel_details", {
+  const channel = await invokeTauri<RawChannelDetail>("get_channel_details", {
     channelId,
   });
   return fromRawChannelDetail(channel);
@@ -332,7 +397,7 @@ export async function getChannelDetails(
 export async function getChannelMembers(
   channelId: string,
 ): Promise<ChannelMember[]> {
-  const response = await invoke<RawChannelMembersResponse>(
+  const response = await invokeTauri<RawChannelMembersResponse>(
     "get_channel_members",
     {
       channelId,
@@ -344,59 +409,59 @@ export async function getChannelMembers(
 export async function updateChannel(
   input: UpdateChannelInput,
 ): Promise<ChannelDetail> {
-  const channel = await invoke<RawChannelDetail>("update_channel", input);
+  const channel = await invokeTauri<RawChannelDetail>("update_channel", input);
   return fromRawChannelDetail(channel);
 }
 
 export async function setChannelTopic(
   input: SetChannelTopicInput,
 ): Promise<void> {
-  await invoke("set_channel_topic", input);
+  await invokeTauri("set_channel_topic", input);
 }
 
 export async function setChannelPurpose(
   input: SetChannelPurposeInput,
 ): Promise<void> {
-  await invoke("set_channel_purpose", input);
+  await invokeTauri("set_channel_purpose", input);
 }
 
 export async function archiveChannel(channelId: string): Promise<void> {
-  await invoke("archive_channel", { channelId });
+  await invokeTauri("archive_channel", { channelId });
 }
 
 export async function unarchiveChannel(channelId: string): Promise<void> {
-  await invoke("unarchive_channel", { channelId });
+  await invokeTauri("unarchive_channel", { channelId });
 }
 
 export async function deleteChannel(channelId: string): Promise<void> {
-  await invoke("delete_channel", { channelId });
+  await invokeTauri("delete_channel", { channelId });
 }
 
 export async function addChannelMembers(
   input: AddChannelMembersInput,
 ): Promise<AddChannelMembersResult> {
-  return invoke<RawAddChannelMembersResult>("add_channel_members", input);
+  return invokeTauri<RawAddChannelMembersResult>("add_channel_members", input);
 }
 
 export async function removeChannelMember(
   channelId: string,
   pubkey: string,
 ): Promise<void> {
-  await invoke("remove_channel_member", { channelId, pubkey });
+  await invokeTauri("remove_channel_member", { channelId, pubkey });
 }
 
 export async function joinChannel(channelId: string): Promise<void> {
-  await invoke("join_channel", { channelId });
+  await invokeTauri("join_channel", { channelId });
 }
 
 export async function leaveChannel(channelId: string): Promise<void> {
-  await invoke("leave_channel", { channelId });
+  await invokeTauri("leave_channel", { channelId });
 }
 
 export async function getHomeFeed(
   input: GetHomeFeedInput = {},
 ): Promise<HomeFeedResponse> {
-  const response = await invoke<RawHomeFeedResponse>("get_feed", input);
+  const response = await invokeTauri<RawHomeFeedResponse>("get_feed", input);
 
   return {
     feed: {
@@ -416,7 +481,10 @@ export async function getHomeFeed(
 export async function searchMessages(
   input: SearchMessagesInput,
 ): Promise<SearchMessagesResponse> {
-  const response = await invoke<RawSearchResponse>("search_messages", input);
+  const response = await invokeTauri<RawSearchResponse>(
+    "search_messages",
+    input,
+  );
 
   return {
     hits: response.hits.map(fromRawSearchHit),
@@ -425,7 +493,7 @@ export async function searchMessages(
 }
 
 export async function getEventById(eventId: string): Promise<RelayEvent> {
-  const eventJson = await invoke<string>("get_event", { eventId });
+  const eventJson = await invokeTauri<string>("get_event", { eventId });
   return JSON.parse(eventJson) as RelayEvent;
 }
 
@@ -434,7 +502,7 @@ export async function signRelayEvent(input: {
   content: string;
   tags: string[][];
 }): Promise<RelayEvent> {
-  const eventJson = await invoke<string>("sign_event", input);
+  const eventJson = await invokeTauri<string>("sign_event", input);
   return JSON.parse(eventJson) as RelayEvent;
 }
 
@@ -442,6 +510,55 @@ export async function createAuthEvent(input: {
   challenge: string;
   relayUrl: string;
 }): Promise<RelayEvent> {
-  const eventJson = await invoke<string>("create_auth_event", input);
+  const eventJson = await invokeTauri<string>("create_auth_event", input);
   return JSON.parse(eventJson) as RelayEvent;
+}
+
+function fromRawToken(token: RawToken): Token {
+  return {
+    id: token.id,
+    name: token.name,
+    scopes: token.scopes,
+    channelIds: token.channel_ids,
+    createdAt: token.created_at,
+    expiresAt: token.expires_at,
+    lastUsedAt: token.last_used_at,
+    revokedAt: token.revoked_at,
+  };
+}
+
+export async function listTokens(): Promise<Token[]> {
+  const response = await invokeTauri<RawListTokensResponse>("list_tokens");
+  return response.tokens.map(fromRawToken);
+}
+
+export async function mintToken(
+  input: MintTokenInput,
+): Promise<MintTokenResponse> {
+  const response = await invokeTauri<RawMintTokenResponse>("mint_token", {
+    name: input.name,
+    scopes: input.scopes,
+    channelIds: input.channelIds,
+    expiresInDays: input.expiresInDays,
+  });
+  return {
+    id: response.id,
+    token: response.token,
+    name: response.name,
+    scopes: response.scopes,
+    channelIds: response.channel_ids,
+    createdAt: response.created_at,
+    expiresAt: response.expires_at,
+  };
+}
+
+export async function revokeToken(tokenId: string): Promise<void> {
+  await invokeTauri("revoke_token", { tokenId });
+}
+
+export async function revokeAllTokens(): Promise<{ revokedCount: number }> {
+  const response = await invokeTauri<{ revoked_count: number }>(
+    "revoke_all_tokens",
+  );
+  return { revokedCount: response.revoked_count };
 }
