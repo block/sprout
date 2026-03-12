@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use crate::state::AppState;
 
-use super::{api_error, extract_auth_pubkey, forbidden, internal_error, not_found};
+use super::{api_error, extract_auth_context, forbidden, internal_error, not_found, scope_error};
 
 // ── Request body ──────────────────────────────────────────────────────────────
 
@@ -178,7 +178,10 @@ pub async fn grant_approval(
     Path(token): Path<String>,
     body: Option<Json<ApprovalBody>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let (pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let approval = state
         .db
@@ -197,7 +200,7 @@ pub async fn grant_approval(
         return Err(api_error(StatusCode::GONE, "approval token has expired"));
     }
 
-    check_approver_spec(&approval.approver_spec, &pubkey.to_hex())?;
+    check_approver_spec(&approval.approver_spec, &ctx.pubkey.to_hex())?;
 
     let note = body.as_ref().and_then(|b| b.note.as_deref());
 
@@ -250,7 +253,10 @@ pub async fn deny_approval(
     Path(token): Path<String>,
     body: Option<Json<ApprovalBody>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let (pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let approval = state
         .db
@@ -269,7 +275,7 @@ pub async fn deny_approval(
         return Err(api_error(StatusCode::GONE, "approval token has expired"));
     }
 
-    check_approver_spec(&approval.approver_spec, &pubkey.to_hex())?;
+    check_approver_spec(&approval.approver_spec, &ctx.pubkey.to_hex())?;
 
     let note = body.as_ref().and_then(|b| b.note.as_deref());
 
@@ -292,7 +298,7 @@ pub async fn deny_approval(
     // A run that has already transitioned to Failed/Completed/Cancelled through
     // another path (e.g., timeout, manual cancel) must not be overwritten.
     let run_id = approval.run_id;
-    let pubkey_for_msg = pubkey.to_hex();
+    let pubkey_for_msg = ctx.pubkey.to_hex();
     let db = state.db.clone();
     tokio::spawn(async move {
         let run = match db.get_workflow_run(run_id).await {

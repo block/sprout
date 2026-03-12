@@ -18,7 +18,7 @@ use serde::Deserialize;
 
 use crate::state::AppState;
 
-use super::{api_error, extract_auth_pubkey, internal_error};
+use super::{api_error, extract_auth_context, internal_error, scope_error};
 
 /// Request body for updating a user's profile.
 /// All fields are optional — at least one must be present.
@@ -43,7 +43,9 @@ pub async fn update_profile(
     headers: HeaderMap,
     ExtractJson(body): ExtractJson<UpdateProfileBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersWrite).map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let display_name = body
         .display_name
@@ -108,7 +110,9 @@ pub async fn get_profile(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersRead).map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let profile = state
         .db
@@ -134,7 +138,8 @@ pub async fn get_user_profile(
     headers: HeaderMap,
     Path(pubkey_hex): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let _ = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersRead).map_err(scope_error)?;
 
     let pubkey_bytes = nostr_hex::decode(&pubkey_hex)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid pubkey hex"))?;
@@ -174,7 +179,8 @@ pub async fn get_users_batch(
     headers: HeaderMap,
     ExtractJson(body): ExtractJson<BatchProfilesRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let _ = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersRead).map_err(scope_error)?;
 
     if body.pubkeys.len() > 200 {
         return Err(api_error(
@@ -262,7 +268,9 @@ pub async fn put_channel_add_policy(
     headers: HeaderMap,
     ExtractJson(body): ExtractJson<UpdateChannelAddPolicyBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey_hex, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersWrite).map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let policy = body.channel_add_policy.as_str();
     if !matches!(policy, "anyone" | "owner_only" | "nobody") {

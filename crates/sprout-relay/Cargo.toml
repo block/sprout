@@ -43,6 +43,7 @@ serde_yaml      = { workspace = true }
 sha2            = { workspace = true }
 hex             = { workspace = true }
 url             = { workspace = true }
+moka            = { workspace = true }
 
 [dev-dependencies]
 sprout-core = { workspace = true, features = ["test-utils"] }

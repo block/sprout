@@ -24,7 +24,10 @@ use sprout_db::event::EventQuery;
 use crate::handlers::event::dispatch_persistent_event;
 use crate::state::AppState;
 
-use super::{api_error, check_channel_access, extract_auth_pubkey, internal_error};
+use super::{
+    api_error, check_channel_access, check_token_channel_access, extract_auth_context,
+    internal_error,
+};
 
 // ── GET /api/channels/:channel_id/canvas ─────────────────────────────────────
 
@@ -37,11 +40,15 @@ pub async fn get_canvas(
     headers: HeaderMap,
     Path(channel_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = uuid::Uuid::parse_str(&channel_id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel UUID"))?;
 
+    check_token_channel_access(&ctx, &channel_id)?;
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
 
     // Query the events table for the most recent KIND_CANVAS event scoped to
@@ -105,11 +112,15 @@ pub async fn set_canvas(
     Path(channel_id_str): Path<String>,
     Json(body): Json<SetCanvasBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = uuid::Uuid::parse_str(&channel_id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel UUID"))?;
 
+    check_token_channel_access(&ctx, &channel_id)?;
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
 
     // Reject writes to archived channels (consistent with messages, metadata, etc.).

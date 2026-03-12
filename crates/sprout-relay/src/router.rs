@@ -14,6 +14,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::api;
+use crate::api::tokens;
 use crate::connection::handle_connection;
 use crate::nip11::{relay_info_handler, RelayInfo};
 use crate::state::AppState;
@@ -25,6 +26,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/info", get(relay_info_handler))
         .route("/.well-known/nostr.json", get(api::nip05::nostr_nip05))
         .route("/health", get(health_handler))
+        // Token self-service routes
+        .route(
+            "/api/tokens",
+            post(tokens::post_tokens)
+                .get(tokens::get_tokens)
+                .delete(tokens::delete_all_tokens),
+        )
+        .route("/api/tokens/{id}", delete(tokens::delete_token))
         .route(
             "/api/channels",
             get(api::channels_handler).post(api::create_channel),
