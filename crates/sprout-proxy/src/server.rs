@@ -912,4 +912,152 @@ mod tests {
         // Ensure different-length strings with same prefix don't match
         assert!(!constant_time_eq("abc", "abcd"));
     }
+
+    // ── split_filters tests ──────────────────────────────────────────────
+
+    #[test]
+    fn split_filters_pure_local() {
+        let f = Filter::new().kind(Kind::ChannelCreation);
+        let (local, upstream) = split_filters(&[f]);
+        assert_eq!(local.len(), 1);
+        assert!(upstream.is_empty());
+        let k: Vec<u16> = local[0].kinds.as_ref().unwrap().iter().map(|k| k.as_u16()).collect();
+        assert!(k.contains(&40));
+    }
+
+    #[test]
+    fn split_filters_pure_upstream() {
+        let f = Filter::new().kind(Kind::Custom(42));
+        let (local, upstream) = split_filters(&[f]);
+        assert!(local.is_empty());
+        assert_eq!(upstream.len(), 1);
+    }
+
+    #[test]
+    fn split_filters_mixed_kind() {
+        let f = Filter::new().kinds([Kind::ChannelCreation, Kind::Custom(42)]);
+        let (local, upstream) = split_filters(&[f]);
+        assert_eq!(local.len(), 1, "mixed filter must produce a local portion");
+        assert_eq!(upstream.len(), 1, "mixed filter must produce an upstream portion");
+        let local_k: Vec<u16> = local[0].kinds.as_ref().unwrap().iter().map(|k| k.as_u16()).collect();
+        assert!(local_k.contains(&40));
+        assert!(!local_k.contains(&42));
+        let up_k: Vec<u16> = upstream[0].kinds.as_ref().unwrap().iter().map(|k| k.as_u16()).collect();
+        assert!(up_k.contains(&42));
+        assert!(!up_k.contains(&40));
+    }
+
+    #[test]
+    fn split_filters_no_kind_duplicates() {
+        let f = Filter::new();
+        let (local, upstream) = split_filters(&[f]);
+        assert_eq!(local.len(), 1);
+        assert_eq!(upstream.len(), 1);
+        let local_k: Vec<u16> = local[0].kinds.as_ref().unwrap().iter().map(|k| k.as_u16()).collect();
+        assert!(local_k.contains(&40));
+        assert!(local_k.contains(&41));
+        assert!(upstream[0].kinds.is_none());
+    }
+
+    // ── collect_local_events tests ───────────────────────────────────────
+
+    fn make_channel_map_with_channel() -> (Arc<ChannelMap>, Uuid) {
+        let keys = Keys::generate();
+        let map = ChannelMap::new(keys);
+        let dto = crate::channel_map::ChannelDto {
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            name: "test-channel".to_string(),
+            created_at: "2026-01-15T12:00:00Z".to_string(),
+            visibility: "open".to_string(),
+            description: "A test channel".to_string(),
+            created_by: "0101010101010101010101010101010101010101010101010101010101010101".to_string(),
+        };
+        map.register(&dto).expect("register must succeed");
+        let uuid: Uuid = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+        (Arc::new(map), uuid)
+    }
+
+    #[test]
+    fn collect_local_kind40_basic() {
+        let (map, uuid) = make_channel_map_with_channel();
+        let filter = Filter::new().kind(Kind::ChannelCreation);
+        let events = collect_local_events(&filter, &map, &[uuid]);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind.as_u16(), 40);
+    }
+
+    #[test]
+    fn collect_local_kind41_basic() {
+        let (map, uuid) = make_channel_map_with_channel();
+        let filter = Filter::new().kind(Kind::ChannelMetadata);
+        let events = collect_local_events(&filter, &map, &[uuid]);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind.as_u16(), 41);
+    }
+
+    #[test]
+    fn collect_local_both_kinds() {
+        let (map, uuid) = make_channel_map_with_channel();
+        let filter = Filter::new().kinds([Kind::ChannelCreation, Kind::ChannelMetadata]);
+        let events = collect_local_events(&filter, &map, &[uuid]);
+        assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn collect_local_authors_filter_matches() {
+        let (map, uuid) = make_channel_map_with_channel();
+        let server_pk = map.server_keys().public_key();
+        let filter = Filter::new().kind(Kind::ChannelCreation).author(server_pk);
+        let events = collect_local_events(&filter, &map, &[uuid]);
+        assert_eq!(events.len(), 1, "server pubkey must match");
+    }
+
+    #[test]
+    fn collect_local_authors_filter_rejects() {
+        let (map, uuid) = make_channel_map_with_channel();
+        let random_pk = Keys::generate().public_key();
+        let filter = Filter::new().kind(Kind::ChannelCreation).author(random_pk);
+        let events = collect_local_events(&filter, &map, &[uuid]);
+        assert!(events.is_empty(), "random pubkey must not match");
+    }
+
+    #[test]
+    fn collect_local_channel_not_in_scope() {
+        let (map, _uuid) = make_channel_map_with_channel();
+        let other: Uuid = "00000000-0000-0000-0000-000000000001".parse().unwrap();
+        let filter = Filter::new().kind(Kind::ChannelCreation);
+        let events = collect_local_events(&filter, &map, &[other]);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn collect_local_limit_respected() {
+        let (map, uuid) = make_channel_map_with_channel();
+        let filter = Filter::new()
+            .kinds([Kind::ChannelCreation, Kind::ChannelMetadata])
+            .limit(1);
+        let events = collect_local_events(&filter, &map, &[uuid]);
+        assert_eq!(events.len(), 1, "limit:1 must cap at 1 event");
+    }
+
+    #[test]
+    fn collect_local_since_excludes() {
+        let (map, uuid) = make_channel_map_with_channel();
+        // Channel created 2026-01-15T12:00:00Z. Since after that → empty.
+        let filter = Filter::new()
+            .kind(Kind::ChannelCreation)
+            .since(Timestamp::from(1768478401u64));
+        let events = collect_local_events(&filter, &map, &[uuid]);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn collect_local_until_excludes() {
+        let (map, uuid) = make_channel_map_with_channel();
+        let filter = Filter::new()
+            .kind(Kind::ChannelCreation)
+            .until(Timestamp::from(1000000000u64));
+        let events = collect_local_events(&filter, &map, &[uuid]);
+        assert!(events.is_empty());
+    }
 }
