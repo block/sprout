@@ -5,6 +5,8 @@
 //! Translates standard Nostr kinds ↔ Sprout custom kinds, derives deterministic
 //! shadow keypairs for external users, and authenticates guests via invite tokens.
 
+/// Bidirectional UUID ↔ NIP-28 kind:40 event ID mapping.
+pub mod channel_map;
 /// Error types for the proxy layer.
 pub mod error;
 /// Invite token management for guest authentication.
@@ -13,11 +15,14 @@ pub mod invite;
 pub mod kind_translator;
 /// Deterministic shadow keypair derivation and caching.
 pub mod shadow_keys;
+/// Thread-safe invite token registry.
+pub mod invite_store;
 
 pub use error::ProxyError;
 pub use invite::InviteToken;
 pub use kind_translator::KindTranslator;
 pub use shadow_keys::ShadowKeyManager;
+pub use invite_store::InviteStore;
 
 /// Configuration for the guest relay proxy.
 #[derive(Debug, Clone)]

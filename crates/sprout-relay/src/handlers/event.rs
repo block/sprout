@@ -98,11 +98,11 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     let kind_u32 = event_kind_u32(&event);
     debug!(event_id = %event_id_hex, kind = kind_u32, "EVENT");
 
-    let (conn_id, pubkey_hex, pubkey_bytes, auth_pubkey) = {
+    let (conn_id, pubkey_hex, pubkey_bytes, auth_pubkey, has_proxy_scope) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
             AuthState::Authenticated(ctx) => {
-                if !ctx.scopes.is_empty() && !ctx.scopes.contains(&Scope::MessagesWrite) {
+                if !ctx.scopes.is_empty() && !ctx.scopes.contains(&Scope::MessagesWrite) && !ctx.scopes.contains(&Scope::ProxySubmit) {
                     conn.send(RelayMessage::ok(
                         &event_id_hex,
                         false,
@@ -115,6 +115,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                     ctx.pubkey.to_hex(),
                     ctx.pubkey.serialize().to_vec(),
                     ctx.pubkey,
+                    ctx.scopes.contains(&Scope::ProxySubmit),
                 )
             }
             _ => {
@@ -130,13 +131,22 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
 
     // Enforce that the event's pubkey matches the authenticated identity.
     // Without this, a user authenticated as key A could submit events signed by key B.
-    if event.pubkey != auth_pubkey {
+    // Exception: proxy:submit scope allows submitting events on behalf of shadow pubkeys.
+    if event.pubkey != auth_pubkey && !has_proxy_scope {
         conn.send(RelayMessage::ok(
             &event_id_hex,
             false,
             "invalid: event pubkey does not match authenticated identity",
         ));
         return;
+    }
+    if has_proxy_scope && event.pubkey != auth_pubkey {
+        tracing::info!(
+            proxy_pubkey = %auth_pubkey,
+            event_pubkey = %event.pubkey,
+            event_id = %event_id_hex,
+            "proxy:submit scope used — event submitted on behalf of shadow pubkey"
+        );
     }
 
     if kind_u32 == KIND_AUTH {
@@ -252,11 +262,13 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     }
 
     if let Some(ch_id) = channel_id {
-        if let Err(msg) =
-            check_channel_membership(&state, ch_id, &pubkey_bytes, conn_id, &event_id_hex).await
-        {
-            conn.send(msg);
-            return;
+        if !has_proxy_scope {
+            if let Err(msg) =
+                check_channel_membership(&state, ch_id, &pubkey_bytes, conn_id, &event_id_hex).await
+            {
+                conn.send(msg);
+                return;
+            }
         }
     }
 

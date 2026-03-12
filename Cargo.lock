@@ -2763,6 +2763,7 @@ dependencies = [
  "chrono",
  "dashmap",
  "nostr",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
