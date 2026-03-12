@@ -431,12 +431,12 @@ async fn handle_client_message(
                 Ok(translated) => {
                     if let Err(e) = state.upstream.send_event(translated).await {
                         warn!("upstream send_event failed: {e}");
-                        let ok_msg = RelayMessage::ok(event_id, false, &format!("error: upstream unavailable"));
+                        let ok_msg = RelayMessage::ok(event_id, false, "error: upstream unavailable".to_string());
                         let _ = socket.send(Message::Text(ok_msg.as_json().into())).await;
                     }
                 }
                 Err(e) => {
-                    let ok_msg = RelayMessage::ok(event_id, false, &format!("error: {e}"));
+                    let ok_msg = RelayMessage::ok(event_id, false, format!("error: {e}"));
                     let _ = socket.send(Message::Text(ok_msg.as_json().into())).await;
                 }
             }
