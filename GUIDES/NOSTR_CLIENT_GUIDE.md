@@ -498,7 +498,7 @@ All env vars are read at startup. Required vars cause the proxy to exit with an 
 | `SPROUT_UPSTREAM_URL` | ✅ | — | WebSocket URL of the Sprout relay (e.g., `ws://localhost:3000` or `wss://relay.example.com`) |
 | `SPROUT_PROXY_SERVER_KEY` | ✅ | — | Hex-encoded nsec (secp256k1 secret key) for the proxy server. Used to sign REST API requests to the relay and synthesize channel events. |
 | `SPROUT_PROXY_SALT` | ✅ | — | Hex-encoded 32-byte random salt for deterministic shadow key derivation. **Keep secret and stable** — changing it invalidates all shadow keypairs. |
-| `SPROUT_PROXY_API_TOKEN` | ✅ | — | Sprout API token with `proxy:submit` and `channels:read` scopes. Used to authenticate REST API calls to the relay (channel map init) and to submit shadow-signed events. |
+| `SPROUT_PROXY_API_TOKEN` | ✅ | — | Sprout API token with `proxy:submit`, `channels:read`, and `messages:read` scopes. Used to authenticate with the upstream relay for REST API calls (channel map init), event submission, and subscriptions. |
 | `SPROUT_PROXY_BIND_ADDR` | ❌ | `0.0.0.0:4869` | TCP address and port for the proxy to listen on. |
 | `SPROUT_PROXY_RELAY_URL` | ❌ | derived from `SPROUT_PROXY_BIND_ADDR` | WebSocket URL the proxy advertises to NIP-42 clients (e.g., `ws://relay.example.com:4869`). Used to validate the `relay` tag in AUTH responses. Defaults to `ws://<bind_addr>`. Set this if the proxy is behind a reverse proxy or has a public hostname different from the bind address. |
 | `SPROUT_PROXY_ADMIN_SECRET` | ❌ | — | Bearer token secret for all `/admin/*` endpoints. If unset, endpoints are unauthenticated (dev mode). **Always set this in production.** |

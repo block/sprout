@@ -32,7 +32,7 @@ nak key public <SPROUT_PROXY_SERVER_KEY>
 # Mint the token with that pubkey
 cargo run -p sprout-admin -- mint-token \
   --name "sprout-proxy" \
-  --scopes "proxy:submit,channels:read" \
+  --scopes "proxy:submit,channels:read,messages:read" \
   --pubkey <derived-pubkey>
 ```
 
@@ -100,7 +100,7 @@ ws://localhost:4869?token=<invite_token>
 | `SPROUT_UPSTREAM_URL` | ✅ | — | WebSocket URL of the Sprout relay |
 | `SPROUT_PROXY_SERVER_KEY` | ✅ | — | Hex nsec for the proxy server keypair |
 | `SPROUT_PROXY_SALT` | ✅ | — | Hex 32-byte salt for shadow key derivation (keep stable) |
-| `SPROUT_PROXY_API_TOKEN` | ✅ | — | Sprout API token with `proxy:submit` scope |
+| `SPROUT_PROXY_API_TOKEN` | ✅ | — | Sprout API token with `proxy:submit`, `channels:read`, and `messages:read` scopes |
 | `SPROUT_PROXY_BIND_ADDR` | ❌ | `0.0.0.0:4869` | Listen address |
 | `SPROUT_PROXY_ADMIN_SECRET` | ❌ | — | Bearer secret for `POST /admin/invite` (unset = dev mode, no auth) |
 | `RUST_LOG` | ❌ | `sprout_proxy=info` | Log level |
