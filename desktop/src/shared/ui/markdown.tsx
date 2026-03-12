@@ -4,6 +4,7 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
 import { cn } from "@/shared/lib/cn";
+import remarkMentions from "@/shared/lib/remarkMentions";
 
 type MarkdownProps = {
   className?: string;
@@ -121,7 +122,12 @@ const markdownComponents: Components = {
       {children}
     </ul>
   ),
-};
+  mention: ({ children }: { children?: React.ReactNode }) => (
+    <span className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary">
+      {children}
+    </span>
+  ),
+} as Components;
 
 export function Markdown({
   className,
@@ -152,7 +158,7 @@ export function Markdown({
     >
       <ReactMarkdown
         components={markdownComponents}
-        remarkPlugins={[remarkGfm, remarkBreaks]}
+        remarkPlugins={[remarkGfm, remarkBreaks, remarkMentions]}
       >
         {processedContent}
       </ReactMarkdown>

@@ -44,6 +44,7 @@ export function formatTimelineMessages(
 ): TimelineMessage[] {
   return events.map((event) => ({
     id: event.id,
+    pubkey: event.pubkey,
     author: formatMessageAuthor(event, channel, currentPubkey, profiles),
     avatarUrl:
       currentPubkey === event.pubkey ? (currentUserAvatarUrl ?? null) : null,

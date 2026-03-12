@@ -49,13 +49,19 @@ function createOptimisticMessage(
   channelId: string,
   content: string,
   identity: Identity,
+  mentionPubkeys: string[] = [],
 ): RelayEvent {
+  const tags: string[][] = [["h", channelId]];
+  for (const pubkey of mentionPubkeys) {
+    tags.push(["p", pubkey]);
+  }
+
   return {
     id: `optimistic-${crypto.randomUUID()}`,
     pubkey: identity.pubkey,
     created_at: Math.floor(Date.now() / 1_000),
     kind: 4_0001,
-    tags: [["h", channelId]],
+    tags,
     content,
     sig: "",
     pending: true,
@@ -144,17 +150,17 @@ export function useSendMessageMutation(
   return useMutation<
     RelayEvent,
     Error,
-    string,
+    { content: string; mentionPubkeys?: string[] },
     MessageQueryContext | undefined
   >({
-    mutationFn: async (content) => {
+    mutationFn: async ({ content, mentionPubkeys }) => {
       if (!channel || channel.channelType === "forum") {
         throw new Error("This channel does not support message sending yet.");
       }
 
-      return relayClient.sendMessage(channel.id, content);
+      return relayClient.sendMessage(channel.id, content, mentionPubkeys ?? []);
     },
-    onMutate: async (content) => {
+    onMutate: async ({ content, mentionPubkeys }) => {
       if (!channel || !identity || channel.channelType === "forum") {
         return undefined;
       }
@@ -168,6 +174,7 @@ export function useSendMessageMutation(
         channel.id,
         content.trim(),
         identity,
+        mentionPubkeys ?? [],
       );
 
       queryClient.setQueryData<RelayEvent[]>(
@@ -181,14 +188,14 @@ export function useSendMessageMutation(
         queryKey,
       };
     },
-    onError: (_error, _content, context) => {
+    onError: (_error, _variables, context) => {
       if (!context) {
         return;
       }
 
       queryClient.setQueryData(context.queryKey, context.previousMessages);
     },
-    onSuccess: (message, _content, context) => {
+    onSuccess: (message, _variables, context) => {
       if (channel) {
         updateChannelLastMessageAt(
           queryClient,
