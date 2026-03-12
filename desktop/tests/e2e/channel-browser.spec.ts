@@ -20,7 +20,9 @@ test("keyboard shortcut opens the channel browser dialog", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
 
-  await page.keyboard.press("Meta+Shift+B");
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+Shift+O" : "Control+Shift+O",
+  );
   await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
 });
 
