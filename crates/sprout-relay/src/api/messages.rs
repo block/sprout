@@ -31,7 +31,8 @@ use crate::handlers::event::dispatch_persistent_event;
 use crate::state::AppState;
 
 use super::{
-    api_error, check_channel_access, extract_auth_pubkey, forbidden, internal_error, not_found,
+    api_error, check_channel_access, check_token_channel_access, extract_auth_context, forbidden,
+    internal_error, not_found,
 };
 
 /// Extract the effective message author from a stored event.
@@ -281,11 +282,15 @@ pub async fn send_message(
     Path(channel_id_str): Path<String>,
     Json(body): Json<SendMessageBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = uuid::Uuid::parse_str(&channel_id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel UUID"))?;
 
+    check_token_channel_access(&ctx, &channel_id)?;
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
 
     let channel = state
@@ -499,7 +504,10 @@ pub async fn delete_message(
     headers: HeaderMap,
     Path(event_id_hex): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let event_id_bytes = nostr_hex::decode(&event_id_hex)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid event_id hex"))?;
@@ -515,6 +523,9 @@ pub async fn delete_message(
     let channel_id = stored
         .channel_id
         .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "event has no channel"))?;
+
+    // Token-level channel restriction check (channel_id from event lookup).
+    check_token_channel_access(&ctx, &channel_id)?;
 
     // Auth: must be the message author OR an owner/admin of the channel.
     // For relay-signed REST messages, the real author is in the p tag.
@@ -589,11 +600,15 @@ pub async fn list_messages(
     Path(channel_id_str): Path<String>,
     Query(params): Query<ListMessagesParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = uuid::Uuid::parse_str(&channel_id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel UUID"))?;
 
+    check_token_channel_access(&ctx, &channel_id)?;
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
 
     let limit = params.limit.unwrap_or(50).min(200);
@@ -704,11 +719,15 @@ pub async fn get_thread(
     Path((channel_id_str, event_id_hex)): Path<(String, String)>,
     Query(params): Query<GetThreadParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = uuid::Uuid::parse_str(&channel_id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel UUID"))?;
 
+    check_token_channel_access(&ctx, &channel_id)?;
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
 
     let root_id_bytes = nostr_hex::decode(&event_id_hex)

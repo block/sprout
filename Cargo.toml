@@ -78,6 +78,7 @@ rand = "0.8"
 
 # Concurrent data structures
 dashmap = "6"
+moka    = { version = "0.12", features = ["sync"] }
 
 # JWT validation (Okta JWKS)
 jsonwebtoken = "9"

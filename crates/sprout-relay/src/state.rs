@@ -1,6 +1,7 @@
 //! Shared application state — Arc-wrapped, shared across all connections.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::extract::ws::Message as WsMessage;
 use dashmap::DashMap;
@@ -14,6 +15,7 @@ use sprout_pubsub::PubSubManager;
 use sprout_search::SearchService;
 use sprout_workflow::WorkflowEngine;
 
+use crate::api::tokens::MintRateLimiter;
 use crate::config::Config;
 use crate::subscription::SubscriptionRegistry;
 
@@ -84,6 +86,12 @@ pub struct AppState {
     pub workflow_engine: Arc<WorkflowEngine>,
     /// Relay signing keypair — used to sign system messages (kind 40099).
     pub relay_keypair: nostr::Keys,
+    /// Rate limiter for `POST /api/tokens` — 5 mints per pubkey per hour.
+    pub mint_rate_limiter: Arc<MintRateLimiter>,
+    /// Debounce cache for `last_used_at` token updates — avoids a DB write on every request.
+    /// Entries map token UUID → last time we wrote `last_used_at` to the DB.
+    /// Resets on restart (acceptable — `last_used_at` is informational, not security-critical).
+    pub last_used_cache: Arc<DashMap<Uuid, Instant>>,
 }
 
 impl AppState {
@@ -114,6 +122,8 @@ impl AppState {
             handler_semaphore: Arc::new(Semaphore::new(max_concurrent_handlers)),
             workflow_engine,
             relay_keypair,
+            mint_rate_limiter: Arc::new(MintRateLimiter::new()),
+            last_used_cache: Arc::new(DashMap::new()),
         }
     }
 }

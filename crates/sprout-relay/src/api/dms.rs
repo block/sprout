@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::handlers::side_effects::emit_system_message;
 use crate::state::AppState;
 
-use super::{api_error, extract_auth_pubkey, internal_error};
+use super::{api_error, extract_auth_context, internal_error};
 
 // ── Request / query types ─────────────────────────────────────────────────────
 
@@ -58,7 +58,10 @@ pub async fn open_dm_handler(
     headers: HeaderMap,
     ExtractJson(body): ExtractJson<OpenDmBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, self_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
+        .map_err(super::scope_error)?;
+    let self_bytes = ctx.pubkey_bytes.clone();
 
     if body.pubkeys.is_empty() {
         return Err(api_error(
@@ -154,7 +157,10 @@ pub async fn add_dm_member_handler(
     Path(channel_id_str): Path<String>,
     ExtractJson(body): ExtractJson<AddDmMemberBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, self_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
+        .map_err(super::scope_error)?;
+    let self_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = Uuid::parse_str(&channel_id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel_id format"))?;
@@ -258,7 +264,10 @@ pub async fn list_dms_handler(
     headers: HeaderMap,
     Query(params): Query<ListDmsQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, self_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
+        .map_err(super::scope_error)?;
+    let self_bytes = ctx.pubkey_bytes.clone();
 
     let limit = params.limit.unwrap_or(50).min(200);
 

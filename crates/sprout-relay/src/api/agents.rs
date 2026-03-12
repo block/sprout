@@ -13,7 +13,7 @@ use nostr::util::hex as nostr_hex;
 
 use crate::state::AppState;
 
-use super::{extract_auth_pubkey, internal_error};
+use super::{extract_auth_context, internal_error};
 
 /// Returns all bot/agent members visible to the authenticated user, with presence status.
 ///
@@ -22,7 +22,10 @@ pub async fn agents_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     // Get requester's accessible channels to filter bot channel visibility.
     let accessible_channels = state

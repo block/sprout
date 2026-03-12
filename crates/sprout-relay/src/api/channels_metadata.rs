@@ -34,7 +34,8 @@ use crate::handlers::side_effects::emit_system_message;
 use crate::state::AppState;
 
 use super::{
-    api_error, check_channel_access, extract_auth_pubkey, forbidden, internal_error, not_found,
+    api_error, check_channel_access, check_token_channel_access, extract_auth_context, forbidden,
+    internal_error, not_found, scope_error,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -99,8 +100,12 @@ pub async fn get_channel_handler(
     headers: HeaderMap,
     Path(channel_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
     let channel_id = parse_channel_id(&channel_id_str)?;
+    check_token_channel_access(&ctx, &channel_id)?;
 
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
 
@@ -143,8 +148,12 @@ pub async fn update_channel_handler(
     Path(channel_id_str): Path<String>,
     ExtractJson(body): ExtractJson<UpdateChannelBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
     let channel_id = parse_channel_id(&channel_id_str)?;
+    check_token_channel_access(&ctx, &channel_id)?;
 
     require_owner_or_admin(&state, channel_id, &pubkey_bytes).await?;
 
@@ -237,8 +246,12 @@ pub async fn set_topic_handler(
     Path(channel_id_str): Path<String>,
     ExtractJson(body): ExtractJson<SetTopicBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
     let channel_id = parse_channel_id(&channel_id_str)?;
+    check_token_channel_access(&ctx, &channel_id)?;
 
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
 
@@ -300,8 +313,12 @@ pub async fn set_purpose_handler(
     Path(channel_id_str): Path<String>,
     ExtractJson(body): ExtractJson<SetPurposeBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
     let channel_id = parse_channel_id(&channel_id_str)?;
+    check_token_channel_access(&ctx, &channel_id)?;
 
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
 
@@ -359,8 +376,12 @@ pub async fn archive_channel_handler(
     headers: HeaderMap,
     Path(channel_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::AdminChannels)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
     let channel_id = parse_channel_id(&channel_id_str)?;
+    check_token_channel_access(&ctx, &channel_id)?;
 
     require_owner_or_admin(&state, channel_id, &pubkey_bytes).await?;
 
@@ -400,8 +421,12 @@ pub async fn unarchive_channel_handler(
     headers: HeaderMap,
     Path(channel_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::AdminChannels)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
     let channel_id = parse_channel_id(&channel_id_str)?;
+    check_token_channel_access(&ctx, &channel_id)?;
 
     require_owner_or_admin(&state, channel_id, &pubkey_bytes).await?;
 
@@ -441,8 +466,12 @@ pub async fn delete_channel_handler(
     headers: HeaderMap,
     Path(channel_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::AdminChannels)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
     let channel_id = parse_channel_id(&channel_id_str)?;
+    check_token_channel_access(&ctx, &channel_id)?;
 
     // Only channel owners may delete.
     let role = state

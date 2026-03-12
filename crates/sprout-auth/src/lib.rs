@@ -21,6 +21,8 @@ pub mod access;
 pub mod error;
 /// NIP-42 challenge–response authentication.
 pub mod nip42;
+/// NIP-98 HTTP Auth verification (kind:27235).
+pub mod nip98;
 /// Okta OIDC integration and JWKS validation.
 pub mod okta;
 /// Per-connection rate limiting.
@@ -33,11 +35,12 @@ pub mod token;
 pub use access::{check_read_access, check_write_access, require_scope, ChannelAccessChecker};
 pub use error::AuthError;
 pub use nip42::{generate_challenge, verify_nip42_event};
+pub use nip98::verify_nip98_event;
 pub use okta::{CachedJwks, Jwks, JwksCache, OktaConfig};
 pub use rate_limit::{
     ip_rate_limit_key, rate_limit_key, LimitType, RateLimitConfig, RateLimitResult, RateLimiter,
 };
-pub use scope::{parse_scopes, Scope};
+pub use scope::{is_self_mintable, parse_scopes, Scope, SELF_MINTABLE_SCOPES};
 pub use token::{generate_token, hash_token, verify_token_hash};
 
 #[cfg(any(test, feature = "test-utils"))]
