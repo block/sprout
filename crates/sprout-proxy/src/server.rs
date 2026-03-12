@@ -598,9 +598,11 @@ async fn handle_client_message(
 
 /// Split a list of NIP-28 filters into local (kind:40/41) and upstream groups.
 ///
-/// A single filter with `kinds:[40,42]` becomes two filters: one with `[40]`
-/// served locally, one with `[42]` forwarded upstream. A filter with no kinds
-/// is duplicated into both groups (local gets `[40,41]` injected).
+/// **Routing rules:**
+/// - kind:40 → local only (channel creation is synthesized from ChannelMap)
+/// - kind:41 → BOTH local (synthesized metadata) AND upstream (edit events, kind:40003)
+/// - kind:42 and others → upstream only
+/// - no kinds → both local (with 40/41 injected) and upstream
 ///
 /// Returns `(local_filters, upstream_filters)`.
 fn split_filters(filters: &[Filter]) -> (Vec<Filter>, Vec<Filter>) {
@@ -614,8 +616,11 @@ fn split_filters(filters: &[Filter]) -> (Vec<Filter>, Vec<Filter>) {
             .map(|k| k.iter().map(|kind| kind.as_u16()).collect())
             .unwrap_or_default();
 
+        // kind:40 and kind:41 are served locally (synthesized metadata).
         let has_local = kinds.iter().any(|k| *k == 40 || *k == 41);
-        let has_upstream = kinds.iter().any(|k| *k != 40 && *k != 41);
+        // kind:41 ALSO goes upstream (translates to kind:40003 for edit events).
+        // kind:42 and everything else goes upstream.
+        let has_upstream = kinds.iter().any(|k| *k != 40);
 
         if has_local {
             let local_kinds: Vec<Kind> = kinds.iter()
@@ -630,8 +635,9 @@ fn split_filters(filters: &[Filter]) -> (Vec<Filter>, Vec<Filter>) {
             local_filters.push(local_f);
         }
         if has_upstream {
+            // Upstream gets everything except kind:40 (which is local-only).
             let upstream_kinds: Vec<Kind> = kinds.iter()
-                .filter(|k| **k != 40 && **k != 41)
+                .filter(|k| **k != 40)
                 .map(|k| Kind::Custom(*k))
                 .collect();
             let mut upstream_f = filter.clone();
@@ -811,6 +817,22 @@ async fn create_invite(
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
+
+    if channel_ids.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({ "error": "at least one valid channel UUID required" })),
+        )
+            .into_response();
+    }
+
+    if req.hours == 0 || req.max_uses == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({ "error": "hours and max_uses must be > 0" })),
+        )
+            .into_response();
+    }
 
     let token_str = format!("sprout_invite_{}", Uuid::new_v4().simple());
     let expires_at = chrono::Utc::now()
@@ -1059,12 +1081,20 @@ mod tests {
 
     #[test]
     fn split_filters_pure_local() {
+        // kind:40 is the only pure-local kind (channel creation is synthesized).
         let f = Filter::new().kind(Kind::ChannelCreation);
         let (local, upstream) = split_filters(&[f]);
         assert_eq!(local.len(), 1);
-        assert!(upstream.is_empty());
-        let k: Vec<u16> = local[0].kinds.as_ref().unwrap().iter().map(|k| k.as_u16()).collect();
-        assert!(k.contains(&40));
+        assert!(upstream.is_empty(), "kind:40 is local-only");
+    }
+
+    #[test]
+    fn split_filters_kind41_goes_both() {
+        // kind:41 goes to BOTH local (synthesized metadata) and upstream (edits).
+        let f = Filter::new().kind(Kind::ChannelMetadata);
+        let (local, upstream) = split_filters(&[f]);
+        assert_eq!(local.len(), 1, "kind:41 must produce a local filter");
+        assert_eq!(upstream.len(), 1, "kind:41 must also produce an upstream filter");
     }
 
     #[test]
