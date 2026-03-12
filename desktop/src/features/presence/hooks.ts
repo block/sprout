@@ -6,7 +6,12 @@ import { getPresence, setPresence } from "@/shared/api/tauri";
 import type { PresenceLookup, PresenceStatus } from "@/shared/api/types";
 
 const PRESENCE_HEARTBEAT_INTERVAL_MS = 60_000;
+const PRESENCE_IDLE_TIMEOUT_MS = 5 * 60_000;
+const PRESENCE_STATUS_TICK_INTERVAL_MS = 30_000;
 const PRESENCE_TTL_SECONDS = 90;
+const PRESENCE_PREFERENCE_STORAGE_KEY = "sprout-presence-preference";
+
+type PresencePreference = "auto" | "away" | "offline" | null;
 
 function normalizePubkeys(pubkeys: string[]) {
   return [...new Set(pubkeys.map((pubkey) => pubkey.trim().toLowerCase()))]
@@ -16,6 +21,51 @@ function normalizePubkeys(pubkeys: string[]) {
 
 function presenceQueryKey(pubkeys: string[]) {
   return ["presence", ...normalizePubkeys(pubkeys)] as const;
+}
+
+function presencePreferenceStorageKey(pubkey: string) {
+  return `${PRESENCE_PREFERENCE_STORAGE_KEY}:${pubkey}`;
+}
+
+function readStoredPresencePreference(pubkey: string): PresencePreference {
+  if (typeof window === "undefined" || pubkey.length === 0) {
+    return null;
+  }
+
+  const value = window.localStorage.getItem(
+    presencePreferenceStorageKey(pubkey),
+  );
+  return value === "auto" || value === "away" || value === "offline"
+    ? value
+    : null;
+}
+
+function writeStoredPresencePreference(
+  pubkey: string,
+  preference: PresencePreference,
+) {
+  if (typeof window === "undefined" || pubkey.length === 0) {
+    return;
+  }
+
+  if (preference === null) {
+    window.localStorage.removeItem(presencePreferenceStorageKey(pubkey));
+    return;
+  }
+
+  window.localStorage.setItem(presencePreferenceStorageKey(pubkey), preference);
+}
+
+function resolveAutomaticPresenceStatus(
+  isDocumentHidden: boolean,
+  lastActivityAt: number,
+  now: number,
+): PresenceStatus {
+  if (isDocumentHidden) {
+    return "away";
+  }
+
+  return now - lastActivityAt >= PRESENCE_IDLE_TIMEOUT_MS ? "away" : "online";
 }
 
 export function usePresenceQuery(
@@ -87,65 +137,180 @@ export function usePresenceSession(pubkey?: string) {
     { enabled: normalizedPubkey.length > 0 },
   );
   const setPresenceMutation = useSetPresenceMutation(normalizedPubkey);
-  const [desiredStatus, setDesiredStatus] =
-    React.useState<PresenceStatus | null>(null);
-  const previousPubkeyRef = React.useRef(normalizedPubkey);
+  const [presencePreference, setPresencePreference] =
+    React.useState<PresencePreference>(() =>
+      readStoredPresencePreference(normalizedPubkey),
+    );
+  const [lastActivityAt, setLastActivityAt] = React.useState(() => Date.now());
+  const [statusClock, setStatusClock] = React.useState(() => Date.now());
+  const [isDocumentHidden, setIsDocumentHidden] = React.useState(() =>
+    typeof document === "undefined" ? false : document.hidden,
+  );
+  const skipNextSyncRef = React.useRef<PresenceStatus | null>(null);
 
   React.useEffect(() => {
-    if (previousPubkeyRef.current === normalizedPubkey) {
+    const now = Date.now();
+    setPresencePreference(readStoredPresencePreference(normalizedPubkey));
+    setLastActivityAt(now);
+    setStatusClock(now);
+    setIsDocumentHidden(
+      typeof document === "undefined" ? false : document.hidden,
+    );
+  }, [normalizedPubkey]);
+
+  React.useEffect(() => {
+    writeStoredPresencePreference(normalizedPubkey, presencePreference);
+  }, [normalizedPubkey, presencePreference]);
+
+  const recordActivity = React.useEffectEvent(() => {
+    const now = Date.now();
+    setLastActivityAt(now);
+    setStatusClock(now);
+  });
+
+  React.useEffect(() => {
+    if (normalizedPubkey.length === 0) {
       return;
     }
 
-    previousPubkeyRef.current = normalizedPubkey;
-    setDesiredStatus(null);
-  });
+    function handleUserActivity() {
+      if (typeof document !== "undefined" && document.hidden) {
+        return;
+      }
 
+      recordActivity();
+    }
+
+    function handleFocus() {
+      setIsDocumentHidden(false);
+      recordActivity();
+    }
+
+    function handleVisibilityChange() {
+      const hidden = document.hidden;
+      setIsDocumentHidden(hidden);
+
+      if (!hidden) {
+        recordActivity();
+      }
+    }
+
+    window.addEventListener("pointerdown", handleUserActivity, true);
+    window.addEventListener("keydown", handleUserActivity, true);
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("pointerdown", handleUserActivity, true);
+      window.removeEventListener("keydown", handleUserActivity, true);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [normalizedPubkey]);
+
+  React.useEffect(() => {
+    if (normalizedPubkey.length === 0) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setStatusClock(Date.now());
+    }, PRESENCE_STATUS_TICK_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [normalizedPubkey]);
+
+  const automaticStatus = React.useMemo(
+    () =>
+      resolveAutomaticPresenceStatus(
+        isDocumentHidden,
+        lastActivityAt,
+        statusClock,
+      ),
+    [isDocumentHidden, lastActivityAt, statusClock],
+  );
   const relayStatus =
     normalizedPubkey.length > 0
       ? (presenceQuery.data?.[normalizedPubkey] ?? "offline")
       : "offline";
-  const currentStatus = desiredStatus ?? relayStatus;
+  const currentStatus =
+    normalizedPubkey.length === 0
+      ? "offline"
+      : presencePreference === "offline"
+        ? "offline"
+        : presencePreference === "away"
+          ? "away"
+          : presencePreference === "auto"
+            ? automaticStatus
+            : relayStatus;
 
   const updatePresence = React.useCallback(
     async (status: PresenceStatus) => {
-      const previousStatus = currentStatus;
-      setDesiredStatus(status);
+      const previousPreference = presencePreference;
+      const nextPreference: PresencePreference =
+        status === "online" ? "auto" : status;
+
+      if (nextPreference === "auto") {
+        const now = Date.now();
+        setLastActivityAt(now);
+        setStatusClock(now);
+        setIsDocumentHidden(
+          typeof document === "undefined" ? false : document.hidden,
+        );
+      }
+
+      setPresencePreference(nextPreference);
+      skipNextSyncRef.current = status;
 
       try {
         await setPresenceMutation.mutateAsync(status);
       } catch (error) {
-        setDesiredStatus(
-          previousStatus === relayStatus ? null : previousStatus,
-        );
+        skipNextSyncRef.current = null;
+        setPresencePreference(previousPreference);
         throw error;
       }
     },
-    [currentStatus, relayStatus, setPresenceMutation],
+    [presencePreference, setPresenceMutation],
   );
 
-  const sendHeartbeat = React.useEffectEvent((status: PresenceStatus) => {
+  const syncPresence = React.useEffectEvent((status: PresenceStatus) => {
     void setPresenceMutation.mutateAsync(status).catch(() => {
       return;
     });
   });
 
   React.useEffect(() => {
+    if (normalizedPubkey.length === 0 || presencePreference === null) {
+      return;
+    }
+
+    if (skipNextSyncRef.current === currentStatus) {
+      skipNextSyncRef.current = null;
+      return;
+    }
+
+    syncPresence(currentStatus);
+  }, [currentStatus, normalizedPubkey, presencePreference]);
+
+  React.useEffect(() => {
     if (
       normalizedPubkey.length === 0 ||
-      desiredStatus === null ||
-      desiredStatus === "offline"
+      presencePreference === null ||
+      currentStatus === "offline"
     ) {
       return;
     }
 
     const intervalId = window.setInterval(() => {
-      sendHeartbeat(desiredStatus);
+      syncPresence(currentStatus);
     }, PRESENCE_HEARTBEAT_INTERVAL_MS);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [desiredStatus, normalizedPubkey]);
+  }, [currentStatus, normalizedPubkey, presencePreference]);
 
   return {
     currentStatus,

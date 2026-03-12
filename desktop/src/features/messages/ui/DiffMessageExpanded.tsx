@@ -1,7 +1,8 @@
-import { DiffEditor } from "@monaco-editor/react";
-import { useMemo } from "react";
+import { Rows3, SplitSquareVertical } from "lucide-react";
+import { useState } from "react";
 
-import { parseDiffToOldNew } from "@/features/messages/lib/parseDiff";
+import { DiffViewer } from "@/features/messages/ui/DiffViewer";
+import { Button } from "@/shared/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -11,21 +12,16 @@ import {
 
 type DiffMessageExpandedProps = {
   content: string;
-  language?: string;
   filePath?: string;
   onClose: () => void;
 };
 
 export default function DiffMessageExpanded({
   content,
-  language,
   filePath,
   onClose,
 }: DiffMessageExpandedProps) {
-  const { original, modified } = useMemo(
-    () => parseDiffToOldNew(content),
-    [content],
-  );
+  const [viewType, setViewType] = useState<"split" | "unified">("unified");
 
   return (
     <Dialog
@@ -35,28 +31,44 @@ export default function DiffMessageExpanded({
       open
     >
       <DialogContent className="max-w-5xl w-full h-[80vh] flex flex-col p-0 gap-0">
-        <DialogHeader className="px-4 py-3 border-b border-border/50 shrink-0">
-          <DialogTitle className="text-sm font-mono font-medium truncate">
-            {filePath ?? "Diff Viewer"}{" "}
-            <span className="text-muted-foreground text-xs font-normal">
-              (hunks-only preview — shows changed regions, not full file)
-            </span>
-          </DialogTitle>
+        <DialogHeader className="shrink-0 border-b border-border/50 px-4 py-3 pr-14">
+          <div className="flex flex-wrap items-center gap-2">
+            <DialogTitle className="min-w-0 flex-1 truncate font-mono text-sm font-medium">
+              {filePath ?? "Diff Viewer"}
+            </DialogTitle>
+            <div className="flex items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-1">
+              <Button
+                className="h-7 px-2"
+                onClick={() => {
+                  setViewType("unified");
+                }}
+                size="sm"
+                type="button"
+                variant={viewType === "unified" ? "secondary" : "ghost"}
+              >
+                <Rows3 className="h-3.5 w-3.5" />
+                Unified
+              </Button>
+              <Button
+                className="h-7 px-2"
+                onClick={() => {
+                  setViewType("split");
+                }}
+                size="sm"
+                type="button"
+                variant={viewType === "split" ? "secondary" : "ghost"}
+              >
+                <SplitSquareVertical className="h-3.5 w-3.5" />
+                Split
+              </Button>
+            </div>
+          </div>
         </DialogHeader>
-        <div className="flex-1 min-h-0">
-          <DiffEditor
-            height="100%"
-            language={language ?? "plaintext"}
-            modified={modified}
-            options={{
-              readOnly: true,
-              renderSideBySide: true,
-              minimap: { enabled: false },
-              scrollBeyondLastLine: false,
-              fontSize: 13,
-            }}
-            original={original}
-            theme="vs-dark"
+        <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+          <DiffViewer
+            content={content}
+            fallbackFilePath={filePath}
+            viewType={viewType}
           />
         </div>
       </DialogContent>
