@@ -686,8 +686,30 @@ async fn get_event(event_id: String, state: tauri::State<'_, AppState>) -> Resul
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // GUI app: warn on bad key but don't crash — fall back to ephemeral.
+    // CLI crates (sprout-mcp, sprout-test-client) use fatal errors instead.
+    let (keys, source) = match std::env::var("SPROUT_PRIVATE_KEY") {
+        Ok(nsec) => match Keys::parse(nsec.trim()) {
+            Ok(k) => (k, "configured"),
+            Err(e) => {
+                eprintln!("sprout-desktop: invalid SPROUT_PRIVATE_KEY: {e}");
+                (Keys::generate(), "ephemeral")
+            }
+        },
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!("sprout-desktop: SPROUT_PRIVATE_KEY contains invalid UTF-8");
+            (Keys::generate(), "ephemeral")
+        }
+        Err(std::env::VarError::NotPresent) => (Keys::generate(), "ephemeral"),
+    };
+
+    eprintln!(
+        "sprout-desktop: {source} identity pubkey {}",
+        keys.public_key().to_hex()
+    );
+
     let app_state = AppState {
-        keys: Mutex::new(Keys::generate()),
+        keys: Mutex::new(keys),
         http_client: reqwest::Client::new(),
     };
 
