@@ -200,10 +200,11 @@ See sections 4–6 for client-specific instructions.
 | **Amethyst** | Android | ✅ | ✅ | P1 | NIP-28 public chat view works; supports pubkey-based auth |
 | **Nostrudel** | Web | ✅ | ✅ | P2 | Good NIP-28 support; NIP-29 group navigation not in MVP scope |
 | **nak** | CLI | ✅ | ✅ | — | Best for scripting and automated testing |
+| **nostr-tools** | JS/Node | ✅ | ✅ | — | Most popular Nostr library (powers Coracle, Snort, Damus Web); NIP-28 helpers built in |
 | **websocat** | CLI | ✅ | — | — | Raw WebSocket testing; no built-in NIP-42 signing |
 | **Primal** | All | ❌ | ❌ | N/A | Uses caching relay infrastructure — not direct relay; incompatible |
 
-**Recommended for dev testing:** `nak` (CLI) for scripted tests, Coracle for UI verification.
+**Recommended for dev testing:** `nak` (CLI) for scripted tests, `nostr-tools` (Node.js) for programmatic tests, Coracle for UI verification.
 
 > **Pubkey-based auth requires NIP-42.** All P1 clients (Coracle, Damus, Amethyst) support NIP-42 and work with pubkey-based guest registration. Clients without NIP-42 support can only use invite tokens.
 
@@ -316,7 +317,65 @@ nak req -k 41 -l 10 --auth "ws://localhost:4869"
 
 ---
 
-## 6. Testing with websocat (Raw Protocol)
+## 6. Testing with nostr-tools (JavaScript / Node.js)
+
+[nostr-tools](https://github.com/nbd-wtf/nostr-tools) is the most widely-used Nostr library in the ecosystem — it powers Coracle, Snort, Damus Web, and hundreds of other clients. Testing with nostr-tools validates that the proxy works with the same code path real web clients use.
+
+The repo includes a ready-to-run test script at `scripts/test-proxy-nostr-tools.mjs`.
+
+### Setup
+
+```bash
+cd scripts
+npm install nostr-tools ws   # or use the included package.json
+```
+
+### Run
+
+```bash
+GUEST_PRIVKEY=<hex-secret-key> \
+CHANNEL_EVENT_ID=<hex-event-id> \
+node test-proxy-nostr-tools.mjs
+```
+
+### What it tests
+
+1. **NIP-42 auth** — automatic via `relay.onauth` callback (same pattern all nostr-tools web clients use)
+2. **Channel discovery** — `subscribe([{ kinds: [40] }])` returns synthesized kind:40 events
+3. **Channel metadata** — `subscribe([{ kinds: [41], '#e': [id] }])` returns kind:41 with name/description
+4. **Send message** — `channelMessageEvent()` from `nostr-tools/nip28` + `relay.publish()`
+5. **Read messages** — `subscribe([{ kinds: [42], '#e': [id] }])` returns translated messages
+6. **Live streaming** — real-time event delivery via open subscription
+
+### Key integration pattern
+
+```javascript
+import { Relay } from 'nostr-tools/relay'
+import { finalizeEvent } from 'nostr-tools/pure'
+import { channelMessageEvent } from 'nostr-tools/nip28'
+import WebSocket from 'ws'
+
+const relay = new Relay('ws://localhost:4869', { websocketImplementation: WebSocket })
+
+// NIP-42 auth happens automatically via onauth
+relay.onauth = async (authTemplate) => finalizeEvent(authTemplate, secretKey)
+
+await relay.connect()
+
+// Send a NIP-28 channel message
+const event = channelMessageEvent({
+  channel_create_event_id: '<kind:40 event ID>',
+  relay_url: 'ws://localhost:4869',
+  content: 'Hello from nostr-tools!',
+  created_at: Math.floor(Date.now() / 1000),
+}, secretKey)
+
+await relay.publish(event)
+```
+
+---
+
+## 7. Testing with websocat (Raw Protocol)
 
 [`websocat`](https://github.com/vi/websocat) lets you interact with the raw NIP-01 protocol. Useful for debugging the proxy's message handling.
 
@@ -383,7 +442,7 @@ Response:
 
 ---
 
-## 7. Admin Endpoints
+## 8. Admin Endpoints
 
 All admin endpoints require `Authorization: Bearer <SPROUT_PROXY_ADMIN_SECRET>` unless `SPROUT_PROXY_ADMIN_SECRET` is unset (dev mode).
 
@@ -454,7 +513,7 @@ Response:
 
 ---
 
-## 8. Running the E2E Test Script
+## 9. Running the E2E Test Script
 
 The repo includes a shell-based end-to-end test that validates NIP-11, invite creation, and WebSocket connectivity.
 
@@ -489,7 +548,7 @@ RELAY_HTTP=http://localhost:3000 \
 
 ---
 
-## 9. Environment Variables Reference
+## 10. Environment Variables Reference
 
 All env vars are read at startup. Required vars cause the proxy to exit with an error if missing.
 
@@ -519,7 +578,7 @@ RUST_LOG=sprout_proxy=debug
 
 ---
 
-## 10. How It Works (Architecture)
+## 11. How It Works (Architecture)
 
 ### Kind Translation
 
@@ -589,7 +648,7 @@ All subscriptions are prefixed with a per-connection UUID prefix (8 chars) befor
 
 ---
 
-## 11. Security Model
+## 12. Security Model
 
 ### Event Verification
 
@@ -631,7 +690,7 @@ The proxy checks the `relay` tag in clients' AUTH responses against its own URL.
 
 ---
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 ### "auth-required: not authenticated" (pubkey-based)
 
