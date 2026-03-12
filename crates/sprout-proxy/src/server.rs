@@ -131,6 +131,11 @@ async fn send_relay_msg(socket: &mut WebSocket, msg: RelayMessage) -> bool {
 }
 
 async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
+    // Per-connection prefix for subscription ID namespacing.
+    // All sub IDs sent upstream are prefixed with this to prevent collisions
+    // across clients sharing the single upstream connection.
+    let conn_prefix = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
+
     // ── 1. Validate invite token ──────────────────────────────────────────
     let allowed_channels = match state.invite_store.validate_and_consume(&token) {
         Ok(channels) => channels,
@@ -282,6 +287,7 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
             &buffered,
             &allowed_channels,
             &client_pubkey,
+            &conn_prefix,
         )
         .await;
     }
@@ -302,6 +308,7 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                             &text.to_string(),
                             &allowed_channels,
                             &client_pubkey,
+                            &conn_prefix,
                         )
                         .await;
                     }
@@ -316,10 +323,17 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                     Ok(text) => {
                         match RelayMessage::from_json(&text) {
                             Ok(RelayMessage::Event { subscription_id, event }) => {
+                                // Only process events for subscriptions owned by this connection.
+                                let sub_str = subscription_id.to_string();
+                                if !sub_str.starts_with(&conn_prefix) {
+                                    continue; // Not ours — another client's subscription.
+                                }
+                                // Strip the connection prefix before sending to client.
+                                let client_sub_id = SubscriptionId::new(&sub_str[conn_prefix.len() + 1..]);
                                 // Translate outbound: kind:40001 → kind:42, #h → #e
                                 match state.translator.translate_outbound(&event, &allowed_channels) {
                                     Ok(Some(translated)) => {
-                                        let out = RelayMessage::event(subscription_id, translated);
+                                        let out = RelayMessage::event(client_sub_id, translated);
                                         if socket.send(Message::Text(out.as_json().into())).await.is_err() {
                                             break;
                                         }
@@ -333,8 +347,28 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                                     }
                                 }
                             }
+                            Ok(RelayMessage::EndOfStoredEvents(ref sub_id)) => {
+                                let sub_str = sub_id.to_string();
+                                if sub_str.starts_with(&conn_prefix) {
+                                    let client_sub_id = SubscriptionId::new(&sub_str[conn_prefix.len() + 1..]);
+                                    let out = RelayMessage::eose(client_sub_id);
+                                    if socket.send(Message::Text(out.as_json().into())).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Ok(RelayMessage::Closed { ref subscription_id, ref message }) => {
+                                let sub_str = subscription_id.to_string();
+                                if sub_str.starts_with(&conn_prefix) {
+                                    let client_sub_id = SubscriptionId::new(&sub_str[conn_prefix.len() + 1..]);
+                                    let out = RelayMessage::closed(client_sub_id, message.clone());
+                                    if socket.send(Message::Text(out.as_json().into())).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
                             Ok(other) => {
-                                // Non-EVENT messages (OK, EOSE, NOTICE, CLOSED) — forward as-is.
+                                // OK, NOTICE, AUTH, COUNT — forward as-is (not sub-scoped).
                                 if socket.send(Message::Text(other.as_json().into())).await.is_err() {
                                     break;
                                 }
@@ -372,6 +406,7 @@ async fn handle_client_message(
     raw_msg: &str,
     allowed_channels: &[Uuid],
     client_pubkey: &PublicKey,
+    conn_prefix: &str,
 ) {
     let msg = match ClientMessage::from_json(raw_msg) {
         Ok(m) => m,
@@ -387,7 +422,7 @@ async fn handle_client_message(
 
     match msg {
         ClientMessage::Req { subscription_id, filters } => {
-            handle_req(socket, state, subscription_id, filters, allowed_channels).await;
+            handle_req(socket, state, subscription_id, filters, allowed_channels, conn_prefix).await;
         }
         ClientMessage::Event(event) => {
             let event_id = event.id;
@@ -407,7 +442,8 @@ async fn handle_client_message(
             }
         }
         ClientMessage::Close(sub_id) => {
-            if let Err(e) = state.upstream.send_close(sub_id).await {
+            let prefixed = SubscriptionId::new(format!("{conn_prefix}:{}", sub_id));
+            if let Err(e) = state.upstream.send_close(prefixed).await {
                 warn!("upstream send_close failed: {e}");
             }
         }
@@ -425,6 +461,7 @@ async fn handle_req(
     sub_id: SubscriptionId,
     filters: Vec<Filter>,
     allowed_channels: &[Uuid],
+    conn_prefix: &str,
 ) {
     for filter in &filters {
         // Collect requested kind numbers (empty = all kinds, treated as "not
@@ -477,7 +514,8 @@ async fn handle_req(
         .map(|f| state.translator.translate_filter_inbound(f, allowed_channels))
         .collect();
 
-    if let Err(e) = state.upstream.send_req(sub_id, translated_filters).await {
+    let prefixed_sub_id = SubscriptionId::new(format!("{conn_prefix}:{}", sub_id));
+    if let Err(e) = state.upstream.send_req(prefixed_sub_id, translated_filters).await {
         warn!("upstream send_req failed: {e}");
     }
 }
