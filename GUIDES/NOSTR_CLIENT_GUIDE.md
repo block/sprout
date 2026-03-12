@@ -26,12 +26,18 @@ sources:
 - Implements NIP-42 AUTH challenge/response so clients authenticate before receiving events
 - Serves NIP-11 relay info document at `GET /` with `Accept: application/nostr+json`
 - Assigns each external user a deterministic shadow keypair so Sprout's relay sees consistent pubkeys
+- **Verifies event signatures and pubkey match before translation** (prevents identity spoofing — events whose pubkey doesn't match the authenticated client are rejected)
+- **Translates NIP-28 `#e` channel filters to Sprout `#h` UUID filters** in REQ subscriptions (so kind:42 queries correctly reach the upstream relay)
+- **Handles mixed-kind REQs** (e.g., `kinds:[40,42]` in one filter) by splitting into local (kind:40/41 served from channel map) and upstream (kind:42 forwarded) portions
+- **Uses HMAC-SHA256 for shadow key derivation** (proper domain separation vs. raw SHA-256)
+- **Replays client subscriptions automatically on upstream reconnect** (no silent subscription loss)
 
 **What is NOT supported (MVP):**
 - NIP-29 group navigation (group list, group join/leave)
 - NIP-50 full-text search
 - Direct Messages (DMs)
-- kind:40001 forum posts or workflow events
+- kind:40001 workflow/forum events (non-message kinds)
+- Inbound edits (kind:41 from client → kind:40003) — outbound only for MVP (kind:40003 edits from the relay are translated to kind:41 for clients)
 
 ### Architecture
 
@@ -99,6 +105,8 @@ export SPROUT_PROXY_ADMIN_SECRET=<any secret string for admin API>
 ```
 
 > **Tip:** Put these in a `.env` file at the repo root — `just` loads it automatically (`set dotenv-load := true` in Justfile).
+
+> **NIP-42 relay tag validation:** The proxy validates the `relay` tag in clients' AUTH responses. By default the relay URL is derived from `SPROUT_PROXY_BIND_ADDR` (e.g., `0.0.0.0:4869` → `ws://0.0.0.0:4869`). If your proxy is behind a reverse proxy or has a public hostname, set `SPROUT_PROXY_RELAY_URL` to the public WebSocket URL (e.g., `wss://relay.example.com`). Mismatched relay tags are logged as a warning but are non-fatal — many clients omit the tag entirely.
 
 ### Step 5 — Start the proxy
 
@@ -353,6 +361,7 @@ All env vars are read at startup. Required vars cause the proxy to exit with an 
 | `SPROUT_PROXY_SALT` | ✅ | — | Hex-encoded 32-byte random salt for deterministic shadow key derivation. **Keep secret and stable** — changing it invalidates all shadow keypairs. |
 | `SPROUT_PROXY_API_TOKEN` | ✅ | — | Sprout API token with `proxy:submit` scope. Used to authenticate REST API calls to the relay (channel map init) and to submit shadow-signed events. |
 | `SPROUT_PROXY_BIND_ADDR` | ❌ | `0.0.0.0:4869` | TCP address and port for the proxy to listen on. |
+| `SPROUT_PROXY_RELAY_URL` | ❌ | derived from `SPROUT_PROXY_BIND_ADDR` | WebSocket URL the proxy advertises to NIP-42 clients (e.g., `ws://relay.example.com:4869`). Used to validate the `relay` tag in AUTH responses. Defaults to `ws://<bind_addr>`. Set this if the proxy is behind a reverse proxy or has a public hostname different from the bind address. |
 | `SPROUT_PROXY_ADMIN_SECRET` | ❌ | — | Bearer token secret for the `POST /admin/invite` endpoint. If unset, the endpoint is unauthenticated (dev mode). Set this in production. |
 | `RUST_LOG` | ❌ | `sprout_proxy=info,tower_http=info` | Log level filter. Use `sprout_proxy=debug` for verbose output. |
 
@@ -361,6 +370,7 @@ All env vars are read at startup. Required vars cause the proxy to exit with an 
 ```bash
 SPROUT_UPSTREAM_URL=ws://localhost:3000
 SPROUT_PROXY_BIND_ADDR=0.0.0.0:4869
+# SPROUT_PROXY_RELAY_URL=ws://relay.example.com:4869  # set if behind a reverse proxy
 SPROUT_PROXY_SERVER_KEY=<64-char hex nsec>
 SPROUT_PROXY_SALT=<64-char hex random>
 SPROUT_PROXY_API_TOKEN=sprout_tok_<...>
@@ -428,7 +438,43 @@ All subscriptions are prefixed with a per-connection UUID prefix (8 chars) befor
 
 ---
 
-## 10. Troubleshooting
+## 10. Security Model
+
+### Event Verification
+
+All inbound events (client → relay) are verified before translation:
+
+1. **Pubkey check** — the event's `pubkey` field must match the authenticated client pubkey from NIP-42. An event claiming a different pubkey is rejected with `invalid: event pubkey does not match authenticated identity`.
+2. **Signature check** — `event.verify()` is called to validate the Schnorr signature. Invalid signatures are rejected with `invalid: bad event signature`.
+
+This prevents identity spoofing: a client cannot submit events on behalf of another user, even if they construct a valid-looking event with someone else's pubkey.
+
+### Invite Token Security
+
+- **Empty channel scope = zero access.** If an invite token is created with no channel UUIDs, a deny-all sentinel UUID is used as the `#h` filter. The client authenticates successfully but receives no events and cannot post to any channel.
+- **Token consumed only after successful NIP-42 auth.** The token's `max_uses` counter is decremented only when authentication completes. An auth timeout or invalid signature does not burn a use, preventing DoS where an attacker could exhaust a token's uses without ever authenticating.
+- **Default `max_uses` is 10.** Tokens created without an explicit `max_uses` default to 10 uses.
+
+### Admin Endpoint Security
+
+- **Hash-then-compare for admin secret.** The `Authorization: Bearer <secret>` value is compared using a hash-then-compare approach (both sides hashed with SHA-256 before comparison). This eliminates timing oracles — an attacker cannot infer the secret length or prefix from response timing.
+- **Unauthenticated dev mode.** If `SPROUT_PROXY_ADMIN_SECRET` is unset, the `/admin/invite` endpoint requires no auth. The proxy logs a warning at startup. **Always set this in production.**
+
+### Memory Safety
+
+- **`pending_oks` capped at 1000 entries.** The map tracking in-flight event submissions (upstream event ID → client event ID) is capped at 1000 entries. If the upstream relay stops ACKing events, the map is pruned rather than growing unboundedly.
+
+### Shadow Key Derivation
+
+Shadow keys use `HMAC-SHA256(key=salt, msg=external_pubkey_bytes)` rather than raw SHA-256. HMAC provides proper domain separation: the salt acts as a key, so an attacker who knows the output cannot reverse-engineer the salt without the HMAC key property. The salt must be kept secret and stable (see `SPROUT_PROXY_SALT` in Section 8).
+
+### NIP-42 Relay Tag Validation
+
+The proxy checks the `relay` tag in clients' AUTH responses against its own URL. Mismatches are logged as a warning but are non-fatal, because many NIP-42 implementations omit the relay tag. This is a defense-in-depth measure — the primary security boundary is the invite token + pubkey binding.
+
+---
+
+## 11. Troubleshooting
 
 ### "auth-required: not authenticated"
 
