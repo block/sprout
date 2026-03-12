@@ -13,7 +13,7 @@ use sprout_pubsub::presence::PRESENCE_TTL_SECS;
 
 use crate::state::AppState;
 
-use super::extract_auth_pubkey;
+use super::extract_auth_context;
 
 /// Query parameters for the presence endpoint.
 #[derive(Debug, Deserialize)]
@@ -31,7 +31,9 @@ pub async fn presence_handler(
     headers: HeaderMap,
     Query(params): Query<PresenceParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, _pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(super::scope_error)?;
 
     let pubkeys_param = params.pubkeys.unwrap_or_default();
 
@@ -91,7 +93,10 @@ pub async fn set_presence_handler(
     headers: HeaderMap,
     super::ApiJson(body): super::ApiJson<SetPresenceBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (pubkey, _pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(super::scope_error)?;
+    let pubkey = ctx.pubkey;
 
     match body.status {
         PresenceStatus::Online | PresenceStatus::Away => {

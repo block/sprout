@@ -24,7 +24,10 @@ use uuid::Uuid;
 use crate::handlers::side_effects::emit_system_message;
 use crate::state::AppState;
 
-use super::{api_error, check_channel_access, extract_auth_pubkey, forbidden, internal_error};
+use super::{
+    api_error, check_channel_access, check_token_channel_access, extract_auth_context, forbidden,
+    internal_error, scope_error,
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -72,10 +75,14 @@ pub async fn add_members(
     Path(channel_id): Path<String>,
     ExtractJson(body): ExtractJson<AddMembersBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, actor_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::AdminChannels)
+        .map_err(scope_error)?;
+    let actor_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = Uuid::parse_str(&channel_id)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel_id"))?;
+    check_token_channel_access(&ctx, &channel_id)?;
 
     // Private channels require owner/admin to add members.
     let channel = state
@@ -245,10 +252,14 @@ pub async fn remove_member(
     headers: HeaderMap,
     Path((channel_id, pubkey)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_actor_pk, actor_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::AdminChannels)
+        .map_err(scope_error)?;
+    let actor_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = Uuid::parse_str(&channel_id)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel_id"))?;
+    check_token_channel_access(&ctx, &channel_id)?;
 
     let target_bytes = hex::decode(&pubkey)
         .ok()
@@ -330,10 +341,14 @@ pub async fn list_members(
     headers: HeaderMap,
     Path(channel_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = Uuid::parse_str(&channel_id)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel_id"))?;
+    check_token_channel_access(&ctx, &channel_id)?;
 
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
 
@@ -390,7 +405,10 @@ pub async fn join_channel(
     headers: HeaderMap,
     Path(channel_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = Uuid::parse_str(&channel_id)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel_id"))?;
@@ -449,7 +467,10 @@ pub async fn leave_channel(
     headers: HeaderMap,
     Path(channel_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = Uuid::parse_str(&channel_id)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel_id"))?;

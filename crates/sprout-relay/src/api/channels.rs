@@ -19,7 +19,7 @@ use sprout_db::channel::{ChannelRecord, ChannelType, ChannelVisibility};
 
 use crate::state::AppState;
 
-use super::{api_error, extract_auth_pubkey, internal_error};
+use super::{api_error, extract_auth_context, internal_error};
 
 /// Query parameters for `GET /api/channels`.
 #[derive(Debug, Deserialize)]
@@ -36,7 +36,10 @@ pub async fn channels_handler(
     headers: HeaderMap,
     Query(params): Query<ListChannelsParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channels = state
         .db
@@ -101,7 +104,10 @@ pub async fn create_channel(
     headers: HeaderMap,
     ExtractJson(body): ExtractJson<CreateChannelBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let name = body.name.trim();
     if name.is_empty() {

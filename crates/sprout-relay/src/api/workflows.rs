@@ -26,7 +26,8 @@ use super::workflow_helpers::{
     validate_webhook_urls, workflow_record_to_json,
 };
 use super::{
-    api_error, check_channel_access, extract_auth_pubkey, forbidden, internal_error, not_found,
+    api_error, check_channel_access, check_token_channel_access, extract_auth_context, forbidden,
+    internal_error, not_found, scope_error,
 };
 
 // ── GET /api/channels/:channel_id/workflows ───────────────────────────────────
@@ -37,11 +38,15 @@ pub async fn list_channel_workflows(
     headers: HeaderMap,
     Path(channel_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = uuid::Uuid::parse_str(&channel_id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel UUID"))?;
 
+    check_token_channel_access(&ctx, &channel_id)?;
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
 
     let workflows = state
@@ -73,11 +78,15 @@ pub async fn create_workflow(
     Path(channel_id_str): Path<String>,
     Json(body): Json<CreateWorkflowBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = uuid::Uuid::parse_str(&channel_id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel UUID"))?;
 
+    check_token_channel_access(&ctx, &channel_id)?;
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
 
     let (def, definition_json_str) =
@@ -150,7 +159,10 @@ pub async fn get_workflow(
     headers: HeaderMap,
     Path(id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let id = uuid::Uuid::parse_str(&id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workflow UUID"))?;
@@ -162,6 +174,7 @@ pub async fn get_workflow(
         .map_err(|_| not_found("workflow not found"))?;
 
     if let Some(channel_id) = workflow.channel_id {
+        check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
     } else if workflow.owner_pubkey != pubkey_bytes {
         return Err(forbidden("not authorized to access this workflow"));
@@ -189,7 +202,10 @@ pub async fn update_workflow(
     Path(id_str): Path<String>,
     Json(body): Json<UpdateWorkflowBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let id = uuid::Uuid::parse_str(&id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workflow UUID"))?;
@@ -201,6 +217,7 @@ pub async fn update_workflow(
         .map_err(|_| not_found("workflow not found"))?;
 
     if let Some(channel_id) = existing.channel_id {
+        check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
     } else if existing.owner_pubkey != pubkey_bytes {
         return Err(forbidden("not authorized to access this workflow"));
@@ -278,7 +295,10 @@ pub async fn delete_workflow(
     headers: HeaderMap,
     Path(id_str): Path<String>,
 ) -> Result<axum::response::Response, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let id = uuid::Uuid::parse_str(&id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workflow UUID"))?;
@@ -291,6 +311,7 @@ pub async fn delete_workflow(
 
     if workflow.owner_pubkey != pubkey_bytes {
         if let Some(channel_id) = workflow.channel_id {
+            check_token_channel_access(&ctx, &channel_id)?;
             check_channel_access(&state, channel_id, &pubkey_bytes)
                 .await
                 .map_err(|_| forbidden("not authorized to delete this workflow"))?;
@@ -325,7 +346,10 @@ pub async fn list_workflow_runs(
     Path(id_str): Path<String>,
     Query(params): Query<RunsParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let id = uuid::Uuid::parse_str(&id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workflow UUID"))?;
@@ -337,6 +361,7 @@ pub async fn list_workflow_runs(
         .map_err(|_| not_found("workflow not found"))?;
 
     if let Some(channel_id) = workflow.channel_id {
+        check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
     }
 
@@ -359,7 +384,10 @@ pub async fn trigger_workflow(
     headers: HeaderMap,
     Path(id_str): Path<String>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let id = uuid::Uuid::parse_str(&id_str)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workflow UUID"))?;
@@ -371,6 +399,7 @@ pub async fn trigger_workflow(
         .map_err(|_| not_found("workflow not found"))?;
 
     if let Some(channel_id) = workflow.channel_id {
+        check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
     }
 

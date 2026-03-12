@@ -34,6 +34,27 @@ pub enum AuthError {
     #[error("api token invalid or expired")]
     TokenInvalid,
 
+    /// The API token was found in the database but has been revoked.
+    ///
+    /// Distinct from [`TokenInvalid`] so the relay can return `401 token_revoked`
+    /// rather than the generic `invalid_token` error code.
+    #[error("api token has been revoked")]
+    TokenRevoked,
+
+    /// The API token was found in the database but has passed its expiry timestamp.
+    ///
+    /// Distinct from [`TokenInvalid`] so the relay can return `401 token_expired`
+    /// rather than the generic `invalid_token` error code.
+    #[error("api token has expired")]
+    TokenExpired,
+
+    /// NIP-98 HTTP Auth event (kind:27235) failed verification.
+    ///
+    /// The inner string describes the specific failure (signature, timestamp, URL, etc.)
+    /// and is safe to include in server logs. Do **not** forward raw event content to clients.
+    #[error("NIP-98 HTTP Auth verification failed: {0}")]
+    Nip98Invalid(String),
+
     /// The pubkey in the NIP-42 event does not match the identity in the JWT or API token.
     #[error("pubkey mismatch: event pubkey does not match authenticated identity")]
     PubkeyMismatch,

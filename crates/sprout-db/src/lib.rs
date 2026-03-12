@@ -694,6 +694,68 @@ impl Db {
         .await
     }
 
+    /// Atomic conditional INSERT: create a self-minted token only if the owner has
+    /// fewer than 10 active (non-revoked, non-expired) tokens.
+    ///
+    /// Returns `Ok(Some(uuid))` on success, `Ok(None)` if the limit is exceeded.
+    pub async fn create_api_token_if_under_limit(
+        &self,
+        token_hash: &[u8],
+        owner_pubkey: &[u8],
+        name: &str,
+        scopes: &[String],
+        channel_ids: Option<&[Uuid]>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> Result<Option<Uuid>> {
+        api_token::create_api_token_if_under_limit(
+            &self.pool,
+            token_hash,
+            owner_pubkey,
+            name,
+            scopes,
+            channel_ids,
+            expires_at,
+        )
+        .await
+    }
+
+    /// Look up an API token by its SHA-256 hash, **including revoked tokens**.
+    ///
+    /// Unlike [`Db::get_api_token_by_hash`], this does not filter on `revoked_at IS NULL`.
+    /// Used by the relay to return distinct `token_revoked` vs `invalid_token` errors.
+    pub async fn get_api_token_by_hash_including_revoked(
+        &self,
+        hash: &[u8],
+    ) -> Result<Option<ApiTokenRecord>> {
+        api_token::get_api_token_by_hash_including_revoked(&self.pool, hash).await
+    }
+
+    /// List all tokens (including revoked) for a pubkey, ordered by `created_at DESC`.
+    ///
+    /// Does not return `token_hash`. Used by `GET /api/tokens`.
+    pub async fn list_tokens_by_owner(&self, pubkey: &[u8]) -> Result<Vec<ApiTokenRecord>> {
+        api_token::list_tokens_by_owner(&self.pool, pubkey).await
+    }
+
+    /// Revoke a single token by ID, scoped to the owner.
+    ///
+    /// Returns `true` if revoked, `false` if not found, not owned by caller, or already revoked.
+    pub async fn revoke_token(
+        &self,
+        id: Uuid,
+        owner_pubkey: &[u8],
+        revoked_by: &[u8],
+    ) -> Result<bool> {
+        api_token::revoke_token(&self.pool, id, owner_pubkey, revoked_by).await
+    }
+
+    /// Revoke all active tokens for a pubkey. Skips already-revoked tokens (idempotent).
+    ///
+    /// Returns the count of newly revoked tokens (0 if all already revoked).
+    pub async fn revoke_all_tokens(&self, owner_pubkey: &[u8], revoked_by: &[u8]) -> Result<u64> {
+        api_token::revoke_all_tokens(&self.pool, owner_pubkey, revoked_by).await
+    }
+
     /// List all non-revoked, non-expired API tokens.
     ///
     /// Returns a summary view — does not expose raw token hashes.

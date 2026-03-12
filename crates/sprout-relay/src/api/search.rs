@@ -14,7 +14,7 @@ use sprout_search::SearchQuery;
 
 use crate::state::AppState;
 
-use super::extract_auth_pubkey;
+use super::extract_auth_context;
 
 /// Query parameters for the search endpoint.
 #[derive(Debug, Deserialize)]
@@ -34,7 +34,10 @@ pub async fn search_handler(
     headers: HeaderMap,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let query_str = params.q.unwrap_or_default();
     let per_page = params.limit.unwrap_or(20).min(100);

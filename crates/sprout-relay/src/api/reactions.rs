@@ -26,7 +26,10 @@ use serde::Deserialize;
 
 use crate::state::AppState;
 
-use super::{api_error, check_channel_access, extract_auth_pubkey, internal_error, not_found};
+use super::{
+    api_error, check_channel_access, check_token_channel_access, extract_auth_context,
+    internal_error, not_found,
+};
 
 // ── Request / query types ─────────────────────────────────────────────────────
 
@@ -78,7 +81,10 @@ pub async fn add_reaction_handler(
     Path(event_id_hex): Path<String>,
     axum::extract::Json(body): axum::extract::Json<AddReactionBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let emoji = body.emoji.trim().to_string();
     if emoji.is_empty() {
@@ -97,6 +103,8 @@ pub async fn add_reaction_handler(
 
     // Verify channel access if the event belongs to a channel.
     if let Some(channel_id) = stored.channel_id {
+        // Token-level channel restriction check (channel_id from event lookup).
+        check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
         let channel = state
             .db
@@ -142,7 +150,10 @@ pub async fn remove_reaction_handler(
     headers: HeaderMap,
     Path((event_id_hex, emoji)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let event_id_bytes = decode_event_id(&event_id_hex)?;
 
@@ -156,6 +167,8 @@ pub async fn remove_reaction_handler(
 
     // Verify channel access if the event belongs to a channel.
     if let Some(channel_id) = stored.channel_id {
+        // Token-level channel restriction check (channel_id from event lookup).
+        check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
         let channel = state
             .db
@@ -197,7 +210,10 @@ pub async fn list_reactions_handler(
     Path(event_id_hex): Path<String>,
     Query(params): Query<ListReactionsParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let limit = params.limit.unwrap_or(50).min(200);
     let cursor = params.cursor.as_deref();
@@ -214,6 +230,8 @@ pub async fn list_reactions_handler(
 
     // Verify channel access if the event belongs to a channel.
     if let Some(channel_id) = stored.channel_id {
+        // Token-level channel restriction check (channel_id from event lookup).
+        check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
     }
 

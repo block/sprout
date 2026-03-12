@@ -21,7 +21,7 @@ use sprout_core::kind::{self, event_kind_u32};
 
 use crate::state::AppState;
 
-use super::{extract_auth_pubkey, internal_error};
+use super::{extract_auth_context, internal_error};
 
 /// Agent activity kind set — used to partition activity into agent vs channel activity.
 const AGENT_KINDS: &[u32] = &[
@@ -54,7 +54,10 @@ pub async fn feed_handler(
     headers: HeaderMap,
     Query(params): Query<FeedParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let (_pubkey, pubkey_bytes) = extract_auth_pubkey(&headers, &state).await?;
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let limit = params.limit.unwrap_or(20).min(50) as i64;
     let since: DateTime<Utc> = params

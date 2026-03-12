@@ -28,6 +28,10 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true }
+base64 = "0.22"
+sha2 = "0.10"
+chrono = { workspace = true }
+hex = "0.4"
 
 [[bin]]
 name = "sprout-test-cli"

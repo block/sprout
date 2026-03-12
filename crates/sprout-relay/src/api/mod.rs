@@ -38,6 +38,8 @@ pub mod presence;
 pub mod reactions;
 /// Full-text search endpoint.
 pub mod search;
+/// Self-service API token minting, listing, and revocation endpoints.
+pub mod tokens;
 /// User profile endpoints.
 pub mod users;
 /// Shared helpers for workflow API handlers.
@@ -73,14 +75,365 @@ pub use workflows::{
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
+
+use sprout_auth::Scope;
 
 use crate::state::AppState;
+
+// ── Auth context types ────────────────────────────────────────────────────────
+
+/// How the REST request was authenticated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestAuthMethod {
+    /// `Authorization: Bearer sprout_*` — API token verified against DB hash.
+    ApiToken,
+    /// `Authorization: Bearer eyJ*` — Okta JWT validated via JWKS.
+    OktaJwt,
+    /// `Authorization: Nostr <base64>` — NIP-98 HTTP Auth (bootstrap path only).
+    Nip98,
+    /// `X-Pubkey: <hex>` — dev mode only (`require_auth_token=false`).
+    DevPubkey,
+}
+
+/// Full authentication context returned to REST handlers.
+///
+/// Replaces the old `(pubkey, pubkey_bytes)` tuple from `extract_auth_pubkey`.
+/// The `pubkey` and `pubkey_bytes` fields are identical to the old return value,
+/// so existing handler logic is unchanged; scope and channel checks can now be
+/// layered on top.
+#[derive(Debug, Clone)]
+pub struct RestAuthContext {
+    /// The authenticated Nostr public key.
+    pub pubkey: nostr::PublicKey,
+    /// Compressed (32-byte) serialisation of `pubkey`.
+    pub pubkey_bytes: Vec<u8>,
+    /// Permission scopes granted to this request.
+    ///
+    /// Empty for the NIP-98 bootstrap path — the caller must be `POST /api/tokens`.
+    pub scopes: Vec<Scope>,
+    /// How the request was authenticated.
+    pub auth_method: RestAuthMethod,
+    /// The UUID of the API token used, if auth_method is `ApiToken`.
+    pub token_id: Option<Uuid>,
+    /// Token-level channel restriction, if any.
+    ///
+    /// `None` means unrestricted (all channels the pubkey is a member of).
+    /// `Some([])` means no channels are permitted.
+    pub channel_ids: Option<Vec<Uuid>>,
+}
+
+/// Extract the full auth context from request headers.
+///
+/// Auth resolution order:
+/// 1. `Authorization: Bearer sprout_*` — API token; revocation + expiry checked here
+/// 2. `Authorization: Bearer eyJ*` — Okta JWT
+/// 3. `X-Pubkey: <hex>` — dev mode only
+///
+/// NIP-98 (`Authorization: Nostr <base64>`) is **not** handled here — it is only
+/// valid for `POST /api/tokens` and is verified directly in that handler. Any
+/// request that sends a `Nostr` auth header to a non-token endpoint will receive
+/// a 401 with `"nip98_not_supported"`.
+///
+/// Returns a populated [`RestAuthContext`] on success, or a 401 response on failure.
+pub(crate) async fn extract_auth_context(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<RestAuthContext, (StatusCode, Json<serde_json::Value>)> {
+    let require_auth = state.config.require_auth_token;
+
+    if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
+        // ── 1. Reject NIP-98 on non-token endpoints ───────────────────────────
+        // NIP-98 auth is only valid for POST /api/tokens (handled directly in
+        // post_tokens). Sending it here is a client error — reject explicitly
+        // rather than falling through to a confusing "authentication failed".
+        if auth_header.starts_with("Nostr ") {
+            tracing::warn!("auth: NIP-98 auth header sent to non-token endpoint");
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "nip98_not_supported",
+                    "message": "NIP-98 auth is only supported for POST /api/tokens"
+                })),
+            ));
+        }
+
+        // ── 2. Bearer token path ──────────────────────────────────────────────
+        if let Some(token) = auth_header.strip_prefix("Bearer ") {
+            // ── 2a. API token (sprout_*) ──────────────────────────────────────
+            if token.starts_with("sprout_") {
+                let hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+
+                // Use the new including-revoked query so we can return distinct
+                // token_revoked vs invalid_token errors.
+                let record = match state
+                    .db
+                    .get_api_token_by_hash_including_revoked(&hash)
+                    .await
+                {
+                    Ok(Some(r)) => r,
+                    Ok(None) => {
+                        tracing::warn!("auth: API token not found");
+                        return Err((
+                            StatusCode::UNAUTHORIZED,
+                            Json(serde_json::json!({ "error": "invalid_token" })),
+                        ));
+                    }
+                    Err(e) => {
+                        tracing::warn!("auth: API token lookup failed: {e}");
+                        return Err((
+                            StatusCode::UNAUTHORIZED,
+                            Json(serde_json::json!({ "error": "invalid_token" })),
+                        ));
+                    }
+                };
+
+                // Relay-layer revocation check (before hash verification).
+                if record.revoked_at.is_some() {
+                    tracing::warn!("auth: API token is revoked");
+                    return Err((
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({ "error": "token_revoked" })),
+                    ));
+                }
+
+                // Relay-layer expiry check (before hash verification).
+                if let Some(exp) = record.expires_at {
+                    if exp < chrono::Utc::now() {
+                        tracing::warn!("auth: API token is expired");
+                        return Err((
+                            StatusCode::UNAUTHORIZED,
+                            Json(serde_json::json!({ "error": "token_expired" })),
+                        ));
+                    }
+                }
+
+                let owner_pubkey = match nostr::PublicKey::from_slice(&record.owner_pubkey) {
+                    Ok(pk) => pk,
+                    Err(e) => {
+                        tracing::warn!("auth: API token owner pubkey invalid: {e}");
+                        return Err((
+                            StatusCode::UNAUTHORIZED,
+                            Json(serde_json::json!({ "error": "invalid_token" })),
+                        ));
+                    }
+                };
+
+                match state.auth.verify_api_token_against_hash(
+                    token,
+                    &record.token_hash,
+                    &owner_pubkey,
+                    &owner_pubkey,
+                    record.expires_at,
+                    &record.scopes,
+                ) {
+                    Ok((pubkey, scopes)) => {
+                        let pubkey_bytes = pubkey.serialize().to_vec();
+                        if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
+                            tracing::warn!("ensure_user failed: {e}");
+                        }
+
+                        // Debounced last_used_at update — at most once per 5 min per token.
+                        let should_update = state
+                            .last_used_cache
+                            .get(&record.id)
+                            .map(|t| t.elapsed() > Duration::from_secs(300))
+                            .unwrap_or(true);
+                        if should_update {
+                            state.last_used_cache.insert(record.id, Instant::now());
+                            let db = state.db.clone();
+                            let hash_copy = hash;
+                            tokio::spawn(async move {
+                                let _ = db.update_token_last_used(&hash_copy).await;
+                            });
+                        }
+
+                        return Ok(RestAuthContext {
+                            pubkey,
+                            pubkey_bytes,
+                            scopes,
+                            auth_method: RestAuthMethod::ApiToken,
+                            token_id: Some(record.id),
+                            channel_ids: record.channel_ids,
+                        });
+                    }
+                    Err(_) => {
+                        tracing::warn!("auth: API token hash verification failed");
+                        return Err((
+                            StatusCode::UNAUTHORIZED,
+                            Json(serde_json::json!({ "error": "invalid_token" })),
+                        ));
+                    }
+                }
+            }
+
+            // ── 2b. Okta JWT (eyJ*) ───────────────────────────────────────────
+            if require_auth {
+                match state.auth.validate_bearer_jwt(token).await {
+                    Ok((pubkey, scopes)) => {
+                        let pubkey_bytes = pubkey.serialize().to_vec();
+                        if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
+                            tracing::warn!("ensure_user failed: {e}");
+                        }
+                        return Ok(RestAuthContext {
+                            pubkey,
+                            pubkey_bytes,
+                            scopes,
+                            auth_method: RestAuthMethod::OktaJwt,
+                            token_id: None,
+                            channel_ids: None,
+                        });
+                    }
+                    Err(_) => {
+                        tracing::warn!("auth: JWT validation failed");
+                        return Err((
+                            StatusCode::UNAUTHORIZED,
+                            Json(serde_json::json!({ "error": "authentication failed" })),
+                        ));
+                    }
+                }
+            } else {
+                // Dev mode: decode JWT payload without JWKS validation.
+                match decode_jwt_payload_unverified(token) {
+                    Ok(claims) => {
+                        if let Some(username) =
+                            claims.get("preferred_username").and_then(|v| v.as_str())
+                        {
+                            match sprout_auth::derive_pubkey_from_username(username) {
+                                Ok(pubkey) => {
+                                    let pubkey_bytes = pubkey.serialize().to_vec();
+                                    if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
+                                        tracing::warn!("ensure_user failed: {e}");
+                                    }
+                                    return Ok(RestAuthContext {
+                                        pubkey,
+                                        pubkey_bytes,
+                                        scopes: vec![Scope::MessagesRead, Scope::MessagesWrite],
+                                        auth_method: RestAuthMethod::OktaJwt,
+                                        token_id: None,
+                                        channel_ids: None,
+                                    });
+                                }
+                                Err(_) => {
+                                    tracing::warn!("auth: key derivation failed for username");
+                                    return Err((
+                                        StatusCode::UNAUTHORIZED,
+                                        Json(
+                                            serde_json::json!({ "error": "authentication failed" }),
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+                        tracing::warn!("auth: JWT missing preferred_username claim");
+                        return Err((
+                            StatusCode::UNAUTHORIZED,
+                            Json(serde_json::json!({ "error": "authentication failed" })),
+                        ));
+                    }
+                    Err(_) => {
+                        tracing::warn!("auth: malformed JWT");
+                        return Err((
+                            StatusCode::UNAUTHORIZED,
+                            Json(serde_json::json!({ "error": "authentication failed" })),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 4. Dev fallback: X-Pubkey ─────────────────────────────────────────────
+    if !require_auth {
+        if let Some(hex_val) = headers.get("x-pubkey").and_then(|v| v.to_str().ok()) {
+            match nostr::PublicKey::from_hex(hex_val) {
+                Ok(pubkey) => {
+                    let pubkey_bytes = pubkey.serialize().to_vec();
+                    if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
+                        tracing::warn!("ensure_user failed: {e}");
+                    }
+                    // Dev mode grants all scopes (including admin) — it's a development convenience.
+                    // Production deployments MUST set SPROUT_REQUIRE_AUTH_TOKEN=true.
+                    return Ok(RestAuthContext {
+                        pubkey,
+                        pubkey_bytes,
+                        scopes: Scope::all_known(),
+                        auth_method: RestAuthMethod::DevPubkey,
+                        token_id: None,
+                        channel_ids: None,
+                    });
+                }
+                Err(_) => {
+                    tracing::warn!("auth: invalid X-Pubkey header value");
+                    return Err((
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({ "error": "authentication failed" })),
+                    ));
+                }
+            }
+        }
+    }
+
+    Err((
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "authentication required" })),
+    ))
+}
+
+// ── Step 8: Token-level channel access enforcement ────────────────────────────
+
+/// Check whether a token is permitted to access the given channel.
+///
+/// This is a **token-level** check — it verifies that `channel_id` is in the
+/// token's `channel_ids` restriction list. It is **in addition to** the
+/// membership check (`check_channel_access`) and scope check (`require_scope`);
+/// all three must pass.
+///
+/// Tokens with `channel_ids = None` (no restriction) always pass this check.
+/// Tokens with `channel_ids = Some([])` (empty list) deny all channels.
+pub fn check_token_channel_access(
+    ctx: &RestAuthContext,
+    channel_id: &Uuid,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if let Some(ref allowed) = ctx.channel_ids {
+        if !allowed.contains(channel_id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "channel_not_permitted",
+                    "message": "Token does not have access to this channel"
+                })),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Convert a scope-check failure into a 403 Forbidden response.
+///
+/// Used by handlers to propagate `require_scope` errors via `?`.
+pub(crate) fn scope_error(e: sprout_auth::AuthError) -> (StatusCode, Json<serde_json::Value>) {
+    match e {
+        sprout_auth::AuthError::InsufficientScope { required, .. } => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "insufficient_scope",
+                "message": format!("token missing required scope: {required}"),
+            })),
+        ),
+        other => {
+            tracing::warn!("scope_error: unexpected auth error: {other}");
+            api_error(StatusCode::FORBIDDEN, "insufficient_scope")
+        }
+    }
+}
 
 /// Standard error envelope.
 pub(crate) fn api_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Value>) {
@@ -116,161 +469,16 @@ fn decode_jwt_payload_unverified(
     serde_json::from_slice(&decoded).map_err(|_| "authentication failed".to_string())
 }
 
-/// Extract an authenticated pubkey from the request headers.
+/// Check channel membership access: member OR open-visibility channel.
 ///
-/// Auth resolution order:
-/// 1. `Authorization: Bearer sprout_*` — API token; hashed, looked up in DB.
-/// 2. `Authorization: Bearer eyJ*` — Okta JWT; validated via JWKS when
-///    `require_auth_token=true`, or decoded unverified (username → derived key) when
-///    `require_auth_token=false`.
-/// 3. `X-Pubkey: <hex>` — accepted only when `require_auth_token=false` (dev mode).
-///
-/// Returns `(nostr::PublicKey, pubkey_bytes)` on success, or a 401 response on failure.
-pub(crate) async fn extract_auth_pubkey(
-    headers: &HeaderMap,
-    state: &AppState,
-) -> Result<(nostr::PublicKey, Vec<u8>), (StatusCode, Json<serde_json::Value>)> {
-    let require_auth = state.config.require_auth_token;
-
-    // Try Authorization: Bearer <token>
-    if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        if let Some(token) = auth_header.strip_prefix("Bearer ") {
-            // ── API token path (sprout_*) ─────────────────────────────────
-            // Must be checked before the Okta JWT path: verify_auth_event()
-            // (and validate_bearer_jwt) would reject sprout_ tokens immediately.
-            if token.starts_with("sprout_") {
-                let hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-                let record = match state.db.get_api_token_by_hash(&hash).await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::warn!("auth: API token lookup failed: {e}");
-                        return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
-                    }
-                };
-                let owner_pubkey = match nostr::PublicKey::from_slice(&record.owner_pubkey) {
-                    Ok(pk) => pk,
-                    Err(e) => {
-                        tracing::warn!("auth: API token owner pubkey invalid: {e}");
-                        return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
-                    }
-                };
-                // verify_api_token_against_hash checks hash match, expiry, and
-                // pubkey equality. For the REST path there is no "claimed" pubkey
-                // from a Nostr event, so we pass the owner pubkey for both
-                // arguments — we are asserting identity from the DB record itself.
-                match state.auth.verify_api_token_against_hash(
-                    token,
-                    &record.token_hash,
-                    &owner_pubkey,
-                    &owner_pubkey,
-                    record.expires_at,
-                    &record.scopes,
-                ) {
-                    Ok((pubkey, _scopes)) => {
-                        let bytes = pubkey.serialize().to_vec();
-                        if let Err(e) = state.db.ensure_user(&bytes).await {
-                            tracing::warn!("ensure_user failed: {e}");
-                        }
-                        // Update last_used_at — non-fatal.
-                        let _ = state.db.update_token_last_used(&hash).await;
-                        return Ok((pubkey, bytes));
-                    }
-                    Err(_) => {
-                        tracing::warn!("auth: API token verification failed");
-                        return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
-                    }
-                }
-            }
-
-            if require_auth {
-                // Production: validate JWT against JWKS
-                match state.auth.validate_bearer_jwt(token).await {
-                    // NOTE: Scope enforcement is deferred to a future milestone.
-                    // Currently all authenticated users get full API access.
-                    Ok((pubkey, _scopes)) => {
-                        let bytes = pubkey.serialize().to_vec();
-                        // Auto-register user on first authentication (INSERT IGNORE — no-op if exists).
-                        if let Err(e) = state.db.ensure_user(&bytes).await {
-                            tracing::warn!("ensure_user failed: {e}");
-                            // Non-fatal — don't block auth if user creation fails
-                        }
-                        return Ok((pubkey, bytes));
-                    }
-                    Err(_) => {
-                        tracing::warn!("auth: JWT validation failed");
-                        return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
-                    }
-                }
-            } else {
-                // Dev mode: decode JWT payload without JWKS validation.
-                match decode_jwt_payload_unverified(token) {
-                    Ok(claims) => {
-                        if let Some(username) =
-                            claims.get("preferred_username").and_then(|v| v.as_str())
-                        {
-                            match sprout_auth::derive_pubkey_from_username(username) {
-                                Ok(pubkey) => {
-                                    let bytes = pubkey.serialize().to_vec();
-                                    // Auto-register user on first authentication (INSERT IGNORE — no-op if exists).
-                                    if let Err(e) = state.db.ensure_user(&bytes).await {
-                                        tracing::warn!("ensure_user failed: {e}");
-                                        // Non-fatal — don't block auth if user creation fails
-                                    }
-                                    return Ok((pubkey, bytes));
-                                }
-                                Err(_) => {
-                                    tracing::warn!("auth: key derivation failed for username");
-                                    return Err(api_error(
-                                        StatusCode::UNAUTHORIZED,
-                                        "authentication failed",
-                                    ));
-                                }
-                            }
-                        }
-                        // JWT present but no preferred_username — fail, don't silently downgrade
-                        tracing::warn!("auth: JWT missing preferred_username claim");
-                        return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
-                    }
-                    Err(_) => {
-                        // Malformed JWT — fail, don't silently downgrade to X-Pubkey
-                        tracing::warn!("auth: malformed JWT");
-                        return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
-                    }
-                }
-            }
-        }
-    }
-
-    // Dev fallback: X-Pubkey header (only when require_auth_token=false)
-    if !require_auth {
-        if let Some(hex_val) = headers.get("x-pubkey").and_then(|v| v.to_str().ok()) {
-            match nostr::PublicKey::from_hex(hex_val) {
-                Ok(pubkey) => {
-                    let bytes = pubkey.serialize().to_vec();
-                    // Auto-register user on first authentication (INSERT IGNORE — no-op if exists).
-                    if let Err(e) = state.db.ensure_user(&bytes).await {
-                        tracing::warn!("ensure_user failed: {e}");
-                        // Non-fatal — don't block auth if user creation fails
-                    }
-                    return Ok((pubkey, bytes));
-                }
-                Err(_) => {
-                    tracing::warn!("auth: invalid X-Pubkey header value");
-                    return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
-                }
-            }
-        }
-    }
-
-    Err(api_error(
-        StatusCode::UNAUTHORIZED,
-        "authentication required",
-    ))
-}
-
-/// Check channel access: member OR open-visibility channel.
 /// Open channels (visibility = "open") allow any authenticated user to read/write.
-pub(crate) async fn check_channel_access(
+/// This is the **membership** check — separate from the token-level channel restriction
+/// check ([`check_token_channel_access`]).
+///
+/// # Note
+/// This function is also exported as [`check_channel_access`] for backward compatibility
+/// while Step 7 migrates all handlers to use [`extract_auth_context`].
+pub(crate) async fn check_channel_membership(
     state: &AppState,
     channel_id: uuid::Uuid,
     pubkey_bytes: &[u8],
@@ -294,6 +502,18 @@ pub(crate) async fn check_channel_access(
     } else {
         Err(forbidden("not a member of this channel"))
     }
+}
+
+/// Backward-compatible alias for [`check_channel_membership`].
+///
+/// Step 7 will replace all call sites with `check_channel_membership` and remove this alias.
+#[allow(dead_code)]
+pub(crate) async fn check_channel_access(
+    state: &AppState,
+    channel_id: uuid::Uuid,
+    pubkey_bytes: &[u8],
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    check_channel_membership(state, channel_id, pubkey_bytes).await
 }
 
 // ── Custom JSON extractor ─────────────────────────────────────────────────────
