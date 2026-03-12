@@ -1814,6 +1814,17 @@ async function handleSearchMessages(
         score: 7.2,
       },
       {
+        event_id: "mock-design-critique",
+        content: "Design critique notes for the browse flow.",
+        kind: 40001,
+        pubkey:
+          "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+        channel_id: "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e",
+        channel_name: "design",
+        created_at: now - 75 * 60,
+        score: 6.6,
+      },
+      {
         event_id: "mock-forum-release-thread",
         content: "Release checklist: async feedback thread.",
         kind: 45001,
@@ -1878,6 +1889,16 @@ async function handleGetEvent(
         kind: 40001,
         tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
         content: "Engineering shipped the desktop build.",
+        sig: "mocksig".repeat(20).slice(0, 128),
+      },
+      {
+        id: "mock-design-critique",
+        pubkey:
+          "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+        created_at: Math.floor(Date.now() / 1000) - 75 * 60,
+        kind: 40001,
+        tags: [["h", "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e"]],
+        content: "Design critique notes for the browse flow.",
         sig: "mocksig".repeat(20).slice(0, 128),
       },
       {

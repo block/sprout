@@ -37,7 +37,7 @@ import { SettingsView } from "@/features/settings/ui/SettingsView";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { getEventById, joinChannel } from "@/shared/api/tauri";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import type { RelayEvent, SearchHit } from "@/shared/api/types";
+import type { Channel, RelayEvent, SearchHit } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import {
   SidebarInset,
@@ -79,13 +79,14 @@ export function AppShell() {
   const presenceSession = usePresenceSession(identityQuery.data?.pubkey);
   const homeFeedQuery = useHomeFeedQuery();
   const channelsQuery = useChannelsQuery();
+  const { refetch: refetchChannels } = channelsQuery;
   const channels = channelsQuery.data ?? [];
   const memberChannels = React.useMemo(
     () => channels.filter((channel) => channel.isMember),
     [channels],
   );
   const { selectedChannel, setSelectedChannelId } = useSelectedChannel(
-    memberChannels,
+    channels,
     null,
   );
   const createChannelMutation = useCreateChannelMutation();
@@ -123,8 +124,8 @@ export function AppShell() {
     (homeFeedQuery.data?.feed.mentions.length ?? 0) +
     (homeFeedQuery.data?.feed.needsAction.length ?? 0);
   const availableChannelIds = React.useMemo(
-    () => new Set(memberChannels.map((channel) => channel.id)),
-    [memberChannels],
+    () => new Set(channels.map((channel) => channel.id)),
+    [channels],
   );
   const resolvedMessages = React.useMemo(() => {
     const currentMessages = messagesQuery.data ?? [];
@@ -173,6 +174,9 @@ export function AppShell() {
   const channelDescription = activeChannel
     ? [
         activeChannel.archivedAt ? "Archived." : null,
+        !activeChannel.isMember
+          ? "Read-only until you join this open channel."
+          : null,
         activeChannel.topic,
         activeChannel.description,
         activeChannel.purpose,
@@ -192,14 +196,45 @@ export function AppShell() {
   const isTimelineLoading =
     messagesQuery.isLoading && resolvedMessages.length === 0;
 
-  const handleOpenChannel = React.useCallback(
-    (channelId: string) => {
-      React.startTransition(() => {
-        setSelectedChannelId(channelId);
-        setSelectedView("channel");
-      });
+  const resolveChannel = React.useCallback(
+    async (channelId: string): Promise<Channel | null> => {
+      const cachedChannels =
+        queryClient.getQueryData<Channel[]>(channelsQueryKey);
+      const knownChannel =
+        channels.find((channel) => channel.id === channelId) ??
+        cachedChannels?.find((channel) => channel.id === channelId) ??
+        null;
+
+      if (knownChannel) {
+        return knownChannel;
+      }
+
+      const refreshed = await refetchChannels();
+      return (
+        refreshed.data?.find((channel) => channel.id === channelId) ?? null
+      );
     },
-    [setSelectedChannelId],
+    [channels, queryClient, refetchChannels],
+  );
+
+  const handleOpenChannel = React.useCallback(
+    async (channelId: string) => {
+      try {
+        const channel = await resolveChannel(channelId);
+        if (!channel) {
+          console.error("Failed to resolve channel before opening", channelId);
+          return;
+        }
+
+        React.startTransition(() => {
+          setSelectedChannelId(channel.id);
+          setSelectedView("channel");
+        });
+      } catch (error) {
+        console.error("Failed to open channel", channelId, error);
+      }
+    },
+    [resolveChannel, setSelectedChannelId],
   );
 
   const handleBrowseChannelJoin = React.useCallback(
@@ -224,7 +259,7 @@ export function AppShell() {
       setSearchAnchor(hit);
       setSearchAnchorChannelId(hit.channelId);
       setSearchAnchorEvent(createSearchAnchorEvent(hit));
-      handleOpenChannel(hit.channelId);
+      void handleOpenChannel(hit.channelId);
 
       void getEventById(hit.eventId)
         .then((event) => {
@@ -300,9 +335,11 @@ export function AppShell() {
         }}
         onOpenBrowseChannels={() => {
           setIsBrowseChannelsOpen(true);
+          void refetchChannels();
         }}
         onOpenSearch={() => {
           setIsSearchOpen(true);
+          void refetchChannels();
         }}
         onSelectHome={() => {
           React.startTransition(() => {
@@ -428,6 +465,7 @@ export function AppShell() {
                 channelName={activeChannel?.name ?? "channel"}
                 disabled={
                   !activeChannel ||
+                  !activeChannel.isMember ||
                   activeChannel.archivedAt !== null ||
                   activeChannel.channelType === "forum" ||
                   sendMessageMutation.isPending
@@ -440,11 +478,13 @@ export function AppShell() {
                 placeholder={
                   activeChannel?.archivedAt
                     ? "Archived channels are read-only."
-                    : activeChannel?.channelType === "forum"
-                      ? "Forum posting is not wired in this pass."
-                      : activeChannel
-                        ? `Message #${activeChannel.name}`
-                        : "Select a channel"
+                    : activeChannel && !activeChannel.isMember
+                      ? "Join this channel to message."
+                      : activeChannel?.channelType === "forum"
+                        ? "Forum posting is not wired in this pass."
+                        : activeChannel
+                          ? `Message #${activeChannel.name}`
+                          : "Select a channel"
                 }
               />
             </>
