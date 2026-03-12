@@ -20,3 +20,9 @@ thiserror    = { workspace = true }
 sha2         = { workspace = true }
 dashmap      = { workspace = true }
 reqwest      = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+url          = { workspace = true }
+rand         = { workspace = true }
+axum         = { workspace = true }
+tower-http   = { workspace = true }

@@ -17,6 +17,10 @@ pub mod kind_translator;
 pub mod shadow_keys;
 /// Thread-safe invite token registry.
 pub mod invite_store;
+/// Upstream relay WebSocket client with NIP-42 auth and reconnect.
+pub mod upstream;
+/// External-facing NIP-01 WebSocket server for standard Nostr clients.
+pub mod server;
 
 pub use error::ProxyError;
 pub use invite::InviteToken;
