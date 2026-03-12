@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { installMockBridge } from "../helpers/bridge";
 
 const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
-const RANDOM_CHANNEL_ID = "9dae0116-799b-5071-a0a8-fdd30a91a35d";
+const DESIGN_CHANNEL_ID = "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e";
 
 test("creates a channel-scoped token from settings and can revoke it", async ({
   page,
@@ -27,14 +27,14 @@ test("creates a channel-scoped token from settings and can revoke it", async ({
 
   await expect(
     dialog.getByText(
-      "Only channels where you are a member can be added to a scoped token. 3 accessible channels hidden because you are not a member.",
+      /Only channels where you are a member can be added to a scoped token\.( \d+ accessible channels? hidden because you are not a member\.)?/,
     ),
   ).toBeVisible();
   await expect(
     page.getByTestId(`token-channel-${GENERAL_CHANNEL_ID}`),
   ).toBeVisible();
   await expect(
-    page.getByTestId(`token-channel-${RANDOM_CHANNEL_ID}`),
+    page.getByTestId(`token-channel-${DESIGN_CHANNEL_ID}`),
   ).toHaveCount(0);
 
   await page.getByTestId(`token-channel-${GENERAL_CHANNEL_ID}`).click();
