@@ -33,6 +33,7 @@ export default defineConfig({
         "**/stream.spec.ts",
         "**/integration.spec.ts",
         "**/profile.spec.ts",
+        "**/tokens.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

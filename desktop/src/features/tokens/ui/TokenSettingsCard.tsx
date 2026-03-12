@@ -125,7 +125,10 @@ function TokenRow({
   const hiddenChannelCount = token.channelIds.length - visibleChannelIds.length;
 
   return (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-border/60 bg-background/60 px-3 py-2.5">
+    <div
+      className="flex items-start justify-between gap-3 rounded-lg border border-border/60 bg-background/60 px-3 py-2.5"
+      data-testid={`token-row-${token.id}`}
+    >
       <div className="min-w-0 space-y-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">{token.name}</span>
@@ -164,6 +167,7 @@ function TokenRow({
       </div>
       {status === "active" ? (
         <Button
+          data-testid={`revoke-token-${token.id}`}
           disabled={isRevoking}
           onClick={() => onRevoke(token.id)}
           size="sm"
@@ -282,7 +286,10 @@ function CreateTokenDialog({
   if (mintedToken) {
     return (
       <Dialog onOpenChange={handleOpenChange} open={open}>
-        <DialogContent className="max-w-lg overflow-hidden p-0">
+        <DialogContent
+          className="max-w-lg overflow-hidden p-0"
+          data-testid="token-created-dialog"
+        >
           <div className="flex max-h-[85vh] flex-col">
             <DialogHeader className="border-b border-border/60 px-6 py-5 pr-14">
               <DialogTitle>Token created</DialogTitle>
@@ -317,6 +324,7 @@ function CreateTokenDialog({
 
             <div className="flex justify-end border-t border-border/60 bg-background/95 px-6 py-4">
               <Button
+                data-testid="token-created-done"
                 onClick={() => handleOpenChange(false)}
                 size="sm"
                 variant="outline"
@@ -332,7 +340,10 @@ function CreateTokenDialog({
 
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
-      <DialogContent className="max-w-lg overflow-hidden p-0">
+      <DialogContent
+        className="max-w-lg overflow-hidden p-0"
+        data-testid="create-token-dialog"
+      >
         <div className="flex max-h-[85vh] flex-col">
           <DialogHeader className="border-b border-border/60 px-6 py-5 pr-14">
             <DialogTitle>Create API token</DialogTitle>
@@ -351,6 +362,7 @@ function CreateTokenDialog({
                 <Input
                   autoCapitalize="none"
                   autoCorrect="off"
+                  data-testid="token-name-input"
                   id="token-name"
                   maxLength={100}
                   onChange={(e) => setName(e.target.value)}
@@ -373,6 +385,7 @@ function CreateTokenDialog({
                             ? "border-primary bg-primary/10 text-foreground"
                             : "border-border/60 text-muted-foreground hover:bg-accent",
                         )}
+                        data-testid={`token-scope-${value.replace(/:/g, "-")}`}
                         key={value}
                         onClick={() => toggleScope(value)}
                         type="button"
@@ -416,6 +429,7 @@ function CreateTokenDialog({
                             ? "border-primary bg-primary/10 text-foreground"
                             : "border-border/60 text-muted-foreground hover:bg-accent",
                         )}
+                        data-testid={`token-channel-access-${option.value}`}
                         key={option.value}
                         onClick={() => setChannelAccessMode(option.value)}
                         type="button"
@@ -450,6 +464,7 @@ function CreateTokenDialog({
                                 ? "border-primary bg-primary/10"
                                 : "border-border/60 bg-background/70 hover:bg-accent",
                             )}
+                            data-testid={`token-channel-${channel.id}`}
                             key={channel.id}
                             onClick={() => toggleChannel(channel.id)}
                             type="button"
@@ -514,6 +529,7 @@ function CreateTokenDialog({
                           ? "border-primary bg-primary/10 text-foreground"
                           : "border-border/60 text-muted-foreground hover:bg-accent",
                       )}
+                      data-testid={`token-expiry-${value}`}
                       key={value}
                       onClick={() => setExpiryDays(value)}
                       type="button"
@@ -541,6 +557,7 @@ function CreateTokenDialog({
 
           <div className="flex justify-end gap-2 border-t border-border/60 bg-background/95 px-6 py-4">
             <Button
+              data-testid="cancel-create-token"
               onClick={() => handleOpenChange(false)}
               size="sm"
               variant="outline"
@@ -548,6 +565,7 @@ function CreateTokenDialog({
               Cancel
             </Button>
             <Button
+              data-testid="confirm-create-token"
               disabled={!canCreate}
               onClick={() => void handleCreate()}
               size="sm"
