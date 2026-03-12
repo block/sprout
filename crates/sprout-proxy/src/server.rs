@@ -9,18 +9,19 @@ use std::sync::Arc;
 use axum::{
     Router,
     extract::{FromRequest, Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
 };
 use nostr::prelude::*;
 use serde::Deserialize;
-use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::channel_map::ChannelMap;
 use crate::invite_store::InviteStore;
+use crate::translate::Translator;
+use crate::upstream::UpstreamClient;
 
 
 // ─── Shared state ────────────────────────────────────────────────────────────
@@ -32,11 +33,17 @@ pub struct ProxyState {
     pub channel_map: Arc<ChannelMap>,
     /// In-memory invite token registry.
     pub invite_store: Arc<InviteStore>,
-    /// Send raw NIP-01 JSON strings TO the upstream relay.
-    pub upstream_tx: mpsc::Sender<String>,
+    /// Event translator: NIP-28 ↔ Sprout internal format.
+    pub translator: Arc<Translator>,
+    /// Upstream relay client — used to send events, REQs, and CLOSEs.
+    pub upstream: Arc<UpstreamClient>,
     /// Broadcast channel: raw NIP-01 JSON strings FROM the upstream relay.
     /// Each WebSocket connection subscribes its own receiver.
     pub upstream_events: tokio::sync::broadcast::Sender<String>,
+    /// Optional shared secret for the admin endpoint.
+    /// If `Some`, requests must include `Authorization: Bearer <secret>`.
+    /// If `None`, the endpoint is unauthenticated (dev mode).
+    pub admin_secret: Option<String>,
 }
 
 // ─── Router ──────────────────────────────────────────────────────────────────
@@ -52,7 +59,7 @@ pub struct WsParams {
 ///
 /// Routes:
 /// - `GET /`              — NIP-11 JSON *or* WebSocket upgrade (content-negotiated)
-/// - `POST /admin/invite` — Create an invite token (admin-only, no auth enforced here)
+/// - `POST /admin/invite` — Create an invite token (protected by `SPROUT_PROXY_ADMIN_SECRET`)
 pub fn router(state: ProxyState) -> Router {
     Router::new()
         .route("/", get(root_handler))
@@ -138,7 +145,7 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
     };
 
     // ── 2. Send NIP-42 AUTH challenge ─────────────────────────────────────
-    let challenge = Uuid::new_v4().to_string();
+    let challenge = uuid::Uuid::new_v4().to_string();
     if !send_relay_msg(&mut socket, RelayMessage::auth(challenge.clone())).await {
         return;
     }
@@ -303,12 +310,41 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                 }
             }
 
-            // Outbound from upstream relay
+            // Outbound from upstream relay — translate and filter per-client
             upstream = upstream_rx.recv() => {
                 match upstream {
                     Ok(text) => {
-                        if socket.send(Message::Text(text.into())).await.is_err() {
-                            break;
+                        match RelayMessage::from_json(&text) {
+                            Ok(RelayMessage::Event { subscription_id, event }) => {
+                                // Translate outbound: kind:40001 → kind:42, #h → #e
+                                match state.translator.translate_outbound(&event, &allowed_channels) {
+                                    Ok(Some(translated)) => {
+                                        let out = RelayMessage::event(subscription_id, translated);
+                                        if socket.send(Message::Text(out.as_json().into())).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        // Not translatable or not a stream message — drop silently.
+                                    }
+                                    Err(e) => {
+                                        // Permission denied or channel not found — skip silently.
+                                        debug!(error = %e, "dropping upstream event (not in scope)");
+                                    }
+                                }
+                            }
+                            Ok(other) => {
+                                // Non-EVENT messages (OK, EOSE, NOTICE, CLOSED) — forward as-is.
+                                if socket.send(Message::Text(other.as_json().into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(_) => {
+                                // Unparseable upstream message — forward raw so client can decide.
+                                if socket.send(Message::Text(text.into())).await.is_err() {
+                                    break;
+                                }
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -335,7 +371,7 @@ async fn handle_client_message(
     state: &ProxyState,
     raw_msg: &str,
     allowed_channels: &[Uuid],
-    _client_pubkey: &PublicKey,
+    client_pubkey: &PublicKey,
 ) {
     let msg = match ClientMessage::from_json(raw_msg) {
         Ok(m) => m,
@@ -354,17 +390,25 @@ async fn handle_client_message(
             handle_req(socket, state, subscription_id, filters, allowed_channels).await;
         }
         ClientMessage::Event(event) => {
-            // Forward to upstream relay for storage and fanout.
-            // Kind translation (42 → 40001) will be added in translate.rs.
-            let json = ClientMessage::event(*event).as_json();
-            if let Err(e) = state.upstream_tx.send(json).await {
-                warn!("upstream_tx send failed: {e}");
+            let event_id = event.id;
+            // Translate inbound: kind:42 → kind:40001, #e → #h, re-sign with shadow key.
+            match state.translator.translate_inbound(&event, &client_pubkey.to_hex(), allowed_channels) {
+                Ok(translated) => {
+                    if let Err(e) = state.upstream.send_event(translated).await {
+                        warn!("upstream send_event failed: {e}");
+                        let ok_msg = RelayMessage::ok(event_id, false, &format!("error: upstream unavailable"));
+                        let _ = socket.send(Message::Text(ok_msg.as_json().into())).await;
+                    }
+                }
+                Err(e) => {
+                    let ok_msg = RelayMessage::ok(event_id, false, &format!("error: {e}"));
+                    let _ = socket.send(Message::Text(ok_msg.as_json().into())).await;
+                }
             }
         }
         ClientMessage::Close(sub_id) => {
-            let json = ClientMessage::close(sub_id).as_json();
-            if let Err(e) = state.upstream_tx.send(json).await {
-                warn!("upstream_tx send failed (CLOSE): {e}");
+            if let Err(e) = state.upstream.send_close(sub_id).await {
+                warn!("upstream send_close failed: {e}");
             }
         }
         // AUTH after initial handshake is silently ignored.
@@ -426,11 +470,15 @@ async fn handle_req(
         }
     }
 
-    // All other kinds (42 messages, metadata, etc.) → forward upstream.
-    // TODO: translate kind:42 filters to kind:40001 + #h tags (translate.rs).
-    let json = ClientMessage::req(sub_id, filters).as_json();
-    if let Err(e) = state.upstream_tx.send(json).await {
-        warn!("upstream_tx send failed (REQ): {e}");
+    // All other kinds (42 messages, metadata, etc.) → translate and forward upstream.
+    // Translate kind:42 filters to kind:40001 + #h tags.
+    let translated_filters: Vec<Filter> = filters
+        .iter()
+        .map(|f| state.translator.translate_filter_inbound(f, allowed_channels))
+        .collect();
+
+    if let Err(e) = state.upstream.send_req(sub_id, translated_filters).await {
+        warn!("upstream send_req failed: {e}");
     }
 }
 
@@ -457,8 +505,32 @@ fn default_max_uses() -> u32 {
 
 async fn create_invite(
     State(state): State<ProxyState>,
+    headers: HeaderMap,
     axum::Json(req): axum::Json<CreateInviteRequest>,
 ) -> impl IntoResponse {
+    // ── Admin secret check ────────────────────────────────────────────────
+    if let Some(ref secret) = state.admin_secret {
+        let provided = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "));
+
+        match provided {
+            Some(token) if token == secret => {
+                // Authorized — proceed.
+            }
+            _ => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(serde_json::json!({
+                        "error": "unauthorized: missing or invalid Authorization header"
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let channel_ids: Vec<Uuid> = req
         .channels
         .split(',')
@@ -484,12 +556,16 @@ async fn create_invite(
         "invite token created"
     );
 
-    axum::Json(serde_json::json!({
-        "token": token_str,
-        "channels": channel_ids,
-        "expires_at": expires_at.to_rfc3339(),
-        "max_uses": req.max_uses,
-    }))
+    (
+        StatusCode::OK,
+        axum::Json(serde_json::json!({
+            "token": token_str,
+            "channels": channel_ids,
+            "expires_at": expires_at.to_rfc3339(),
+            "max_uses": req.max_uses,
+        })),
+    )
+        .into_response()
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -498,19 +574,29 @@ async fn create_invite(
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use tokio::sync::{broadcast, mpsc};
+    use tokio::sync::broadcast;
 
     fn make_state() -> ProxyState {
         let keys = Keys::generate();
-        let channel_map = Arc::new(crate::channel_map::ChannelMap::new(keys));
+        let channel_map = Arc::new(crate::channel_map::ChannelMap::new(keys.clone()));
         let invite_store = Arc::new(InviteStore::new());
-        let (upstream_tx, _upstream_rx) = mpsc::channel(16);
         let (upstream_events, _) = broadcast::channel(16);
+        let shadow_keys = Arc::new(
+            crate::shadow_keys::ShadowKeyManager::new(b"test-salt-server-tests")
+                .expect("shadow key manager"),
+        );
+        let translator = Arc::new(crate::translate::Translator::new(
+            shadow_keys,
+            channel_map.clone(),
+        ));
+        let upstream = Arc::new(UpstreamClient::new("ws://localhost:3000", "sprout_test"));
         ProxyState {
             channel_map,
             invite_store,
-            upstream_tx,
+            translator,
+            upstream,
             upstream_events,
+            admin_secret: None,
         }
     }
 
