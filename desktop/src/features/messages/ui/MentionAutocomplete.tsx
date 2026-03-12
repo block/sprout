@@ -1,0 +1,70 @@
+import * as React from "react";
+
+import { cn } from "@/shared/lib/cn";
+
+export type MentionSuggestion = {
+  pubkey: string;
+  displayName: string;
+  role?: string | null;
+};
+
+type MentionAutocompleteProps = {
+  suggestions: MentionSuggestion[];
+  selectedIndex: number;
+  onSelect: (suggestion: MentionSuggestion) => void;
+};
+
+export function MentionAutocomplete({
+  suggestions,
+  selectedIndex,
+  onSelect,
+}: MentionAutocompleteProps) {
+  const listRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    const activeItem = listRef.current?.children[selectedIndex] as
+      | HTMLElement
+      | undefined;
+    activeItem?.scrollIntoView({ block: "nearest" });
+  }, [selectedIndex]);
+
+  if (suggestions.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="absolute bottom-full left-0 right-0 z-50 mb-1 px-3 sm:px-4">
+      <div
+        className="max-h-48 overflow-y-auto rounded-xl border bg-popover p-1 shadow-lg"
+        ref={listRef}
+      >
+        {suggestions.map((suggestion, index) => (
+          <button
+            className={cn(
+              "flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-1.5 text-left text-sm",
+              index === selectedIndex
+                ? "bg-accent text-accent-foreground"
+                : "text-popover-foreground hover:bg-accent/50",
+            )}
+            key={suggestion.pubkey}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              onSelect(suggestion);
+            }}
+            tabIndex={-1}
+            type="button"
+          >
+            <span className="truncate font-medium">
+              {suggestion.displayName}
+            </span>
+            {suggestion.role ? (
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                {suggestion.role}
+              </span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}

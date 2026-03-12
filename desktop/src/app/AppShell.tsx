@@ -462,6 +462,7 @@ export function AppShell() {
                 }
               />
               <MessageComposer
+                channelId={activeChannel?.id ?? null}
                 channelName={activeChannel?.name ?? "channel"}
                 disabled={
                   !activeChannel ||
@@ -472,8 +473,11 @@ export function AppShell() {
                 }
                 isSending={sendMessageMutation.isPending}
                 key={activeChannel?.id ?? "no-channel"}
-                onSend={async (content) => {
-                  await sendMessageMutation.mutateAsync(content);
+                onSend={async (content, mentionPubkeys) => {
+                  await sendMessageMutation.mutateAsync({
+                    content,
+                    mentionPubkeys,
+                  });
                 }}
                 placeholder={
                   activeChannel?.archivedAt
