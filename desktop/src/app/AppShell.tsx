@@ -1,8 +1,10 @@
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Settings2 } from "lucide-react";
 
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
+  channelsQueryKey,
   useCreateChannelMutation,
   useChannelsQuery,
   useSelectedChannel,
@@ -29,10 +31,11 @@ import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
+import { ChannelBrowserDialog } from "@/features/channels/ui/ChannelBrowserDialog";
 import { SearchDialog } from "@/features/search/ui/SearchDialog";
 import { SettingsView } from "@/features/settings/ui/SettingsView";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
-import { getEventById } from "@/shared/api/tauri";
+import { getEventById, joinChannel } from "@/shared/api/tauri";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { RelayEvent, SearchHit } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
@@ -61,6 +64,7 @@ export function AppShell() {
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
   const [isSearchOpen, setIsSearchOpen] = React.useState(false);
+  const [isBrowseChannelsOpen, setIsBrowseChannelsOpen] = React.useState(false);
   const [searchAnchor, setSearchAnchor] = React.useState<SearchHit | null>(
     null,
   );
@@ -69,14 +73,19 @@ export function AppShell() {
   >(null);
   const [searchAnchorEvent, setSearchAnchorEvent] =
     React.useState<RelayEvent | null>(null);
+  const queryClient = useQueryClient();
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
   const presenceSession = usePresenceSession(identityQuery.data?.pubkey);
   const homeFeedQuery = useHomeFeedQuery();
   const channelsQuery = useChannelsQuery();
   const channels = channelsQuery.data ?? [];
+  const memberChannels = React.useMemo(
+    () => channels.filter((channel) => channel.isMember),
+    [channels],
+  );
   const { selectedChannel, setSelectedChannelId } = useSelectedChannel(
-    channels,
+    memberChannels,
     null,
   );
   const createChannelMutation = useCreateChannelMutation();
@@ -114,8 +123,8 @@ export function AppShell() {
     (homeFeedQuery.data?.feed.mentions.length ?? 0) +
     (homeFeedQuery.data?.feed.needsAction.length ?? 0);
   const availableChannelIds = React.useMemo(
-    () => new Set(channels.map((channel) => channel.id)),
-    [channels],
+    () => new Set(memberChannels.map((channel) => channel.id)),
+    [memberChannels],
   );
   const resolvedMessages = React.useMemo(() => {
     const currentMessages = messagesQuery.data ?? [];
@@ -193,6 +202,14 @@ export function AppShell() {
     [setSelectedChannelId],
   );
 
+  const handleBrowseChannelJoin = React.useCallback(
+    async (channelId: string) => {
+      await joinChannel(channelId);
+      await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+    },
+    [queryClient],
+  );
+
   const handleOpenSettings = React.useCallback(() => {
     setIsSearchOpen(false);
     setIsChannelManagementOpen(false);
@@ -256,7 +273,7 @@ export function AppShell() {
     <SidebarProvider className="h-dvh overflow-hidden overscroll-none">
       <SidebarTrigger className="fixed left-[80px] top-[9px] z-50 h-6 w-6" />
       <AppSidebar
-        channels={channels}
+        channels={memberChannels}
         currentPubkey={identityQuery.data?.pubkey}
         errorMessage={
           channelsQuery.error instanceof Error
@@ -280,6 +297,9 @@ export function AppShell() {
             setSelectedChannelId(createdChannel.id);
             setSelectedView("channel");
           });
+        }}
+        onOpenBrowseChannels={() => {
+          setIsBrowseChannelsOpen(true);
         }}
         onOpenSearch={() => {
           setIsSearchOpen(true);
@@ -430,6 +450,14 @@ export function AppShell() {
             </>
           )}
         </div>
+
+        <ChannelBrowserDialog
+          channels={channels}
+          onJoinChannel={handleBrowseChannelJoin}
+          onOpenChange={setIsBrowseChannelsOpen}
+          onSelectChannel={handleOpenChannel}
+          open={isBrowseChannelsOpen}
+        />
 
         <SearchDialog
           channels={channels}

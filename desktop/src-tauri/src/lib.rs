@@ -63,6 +63,8 @@ pub struct ChannelInfo {
     pub archived_at: Option<String>,
     pub participants: Vec<String>,
     pub participant_pubkeys: Vec<String>,
+    #[serde(default)]
+    pub is_member: bool,
 }
 
 #[derive(Serialize, Deserialize)]

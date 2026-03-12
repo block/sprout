@@ -15,6 +15,7 @@ export type Channel = {
   archivedAt: string | null;
   participants: string[];
   participantPubkeys: string[];
+  isMember: boolean;
 };
 
 export type ChannelDetail = Channel & {

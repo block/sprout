@@ -327,7 +327,7 @@ impl Db {
         &self,
         pubkey: &[u8],
         visibility_filter: Option<&str>,
-    ) -> Result<Vec<channel::ChannelRecord>> {
+    ) -> Result<Vec<channel::AccessibleChannel>> {
         channel::get_accessible_channels(&self.pool, pubkey, visibility_filter).await
     }
 

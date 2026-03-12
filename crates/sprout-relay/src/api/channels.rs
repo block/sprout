@@ -49,7 +49,7 @@ pub async fn channels_handler(
 
     // Bulk-fetch member counts and last-message timestamps in two queries
     // instead of 2N queries (one per channel per metric).
-    let channel_ids: Vec<uuid::Uuid> = channels.iter().map(|ch| ch.id).collect();
+    let channel_ids: Vec<uuid::Uuid> = channels.iter().map(|ac| ac.channel.id).collect();
     let member_counts = state
         .db
         .get_member_counts_bulk(&channel_ids)
@@ -63,7 +63,8 @@ pub async fn channels_handler(
 
     let mut result = Vec::with_capacity(channels.len());
 
-    for ch in &channels {
+    for ac in &channels {
+        let ch = &ac.channel;
         let (participants, participant_pubkeys) = if ch.channel_type == "dm" {
             resolve_dm_participants(&state, ch.id).await
         } else {
@@ -79,6 +80,7 @@ pub async fn channels_handler(
             participant_pubkeys,
             member_count,
             last_message_at,
+            ac.is_member,
         ));
     }
 
@@ -153,7 +155,14 @@ pub async fn create_channel(
 
     Ok((
         StatusCode::CREATED,
-        Json(channel_record_to_json(&channel, vec![], vec![], 1, None)),
+        Json(channel_record_to_json(
+            &channel,
+            vec![],
+            vec![],
+            1,
+            None,
+            true,
+        )),
     ))
 }
 
@@ -163,6 +172,7 @@ fn channel_record_to_json(
     participant_pubkeys: Vec<String>,
     member_count: i64,
     last_message_at: Option<chrono::DateTime<chrono::Utc>>,
+    is_member: bool,
 ) -> serde_json::Value {
     serde_json::json!({
         "id": channel.id.to_string(),
@@ -180,6 +190,7 @@ fn channel_record_to_json(
         "last_message_at": last_message_at.map(|t| t.to_rfc3339()),
         "participants": participants,
         "participant_pubkeys": participant_pubkeys,
+        "is_member": is_member,
     })
 }
 
