@@ -1,8 +1,9 @@
 //! External-facing NIP-01 WebSocket server for standard Nostr clients.
 //!
-//! Handles NIP-11 relay info, NIP-42 AUTH challenge/response, invite token
-//! validation, pre-auth REQ buffering, and kind:40/41 interception from
-//! the local [`ChannelMap`].
+//! Handles NIP-11 relay info, NIP-42 AUTH challenge/response (with
+//! reactive-auth–compatible CLOSED/OK rejections for pre-auth messages),
+//! guest and invite token authentication, and kind:40/41 interception
+//! from the local [`ChannelMap`].
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
