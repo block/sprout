@@ -82,14 +82,26 @@ impl UpstreamClient {
     /// `relay_url` — WebSocket URL of the upstream Sprout relay (e.g. `ws://localhost:3000`).
     /// `api_token` — A `sprout_*` API token with the `proxy:submit` scope.
     pub fn new(relay_url: impl Into<String>, api_token: impl Into<String>) -> Self {
-        // 128-slot channel: the write loop drains it as fast as the socket allows.
+        Self::with_keys(relay_url, api_token, Keys::generate())
+    }
+
+    /// Create a new upstream client with explicit auth keys.
+    ///
+    /// Use this when the API token's `owner_pubkey` must match a specific keypair
+    /// (e.g. the proxy's server key). The relay verifies that the NIP-42 auth
+    /// event is signed by the token owner.
+    pub fn with_keys(
+        relay_url: impl Into<String>,
+        api_token: impl Into<String>,
+        auth_keys: Keys,
+    ) -> Self {
         let (outbound_tx, outbound_rx) = mpsc::channel::<String>(128);
 
         Self {
             inner: Arc::new(Inner {
                 relay_url: relay_url.into(),
                 api_token: api_token.into(),
-                auth_keys: Keys::generate(),
+                auth_keys,
                 connected: RwLock::new(false),
                 auth_event_id: tokio::sync::Mutex::new(None),
                 active_subs: DashMap::new(),

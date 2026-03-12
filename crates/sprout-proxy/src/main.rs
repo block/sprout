@@ -108,7 +108,13 @@ async fn main() {
     // Note: UpstreamClient generates a stable ephemeral keypair per process
     // lifetime for NIP-42 auth — consistent across reconnects.
 
-    let upstream = Arc::new(UpstreamClient::new(upstream_url.clone(), api_token.clone()));
+    // Use server_keys for upstream NIP-42 auth so the auth event pubkey matches
+    // the API token's owner_pubkey (the relay enforces this).
+    let upstream = Arc::new(UpstreamClient::with_keys(
+        upstream_url.clone(),
+        api_token.clone(),
+        server_keys.clone(),
+    ));
 
     // ── upstream_events broadcast: UpstreamClient → all WebSocket sessions ────
 
