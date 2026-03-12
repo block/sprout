@@ -177,12 +177,9 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
         return;
     }
 
-    // ── 3. Pre-auth loop: buffer REQs, wait for AUTH ──────────────────────
-    // Returns `Some(pubkey)` on successful auth, `None` if the connection
-    // should be dropped (timeout, disconnect, buffer overflow).
-    let mut pre_auth_buffer: Vec<String> = Vec::new();
-    let mut pre_auth_bytes: usize = 0;
-
+    // ── 3. Pre-auth loop: reject pre-auth REQs/EVENTs, wait for AUTH ─────
+    // Returns `(pubkey, channels)` on successful auth, or drops the connection
+    // on timeout / disconnect / invalid auth.
     let auth_deadline =
         tokio::time::Instant::now() + std::time::Duration::from_secs(30);
 
@@ -319,26 +316,29 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                 break (pubkey, channels);
             }
 
-            Ok(ClientMessage::Req { .. }) => {
-                // Buffer pre-auth REQs (cap at 20 messages / 64 KiB)
-                if pre_auth_buffer.len() >= 20 || pre_auth_bytes + text.len() > 65_536 {
-                    let _ = send_relay_msg(
-                        &mut socket,
-                        RelayMessage::notice(
-                            "error: pre-auth buffer full, authenticate first",
-                        ),
-                    )
-                    .await;
-                    return;
-                }
-                pre_auth_bytes += text.len();
-                pre_auth_buffer.push(text);
-            }
-
-            Ok(ClientMessage::Event(_)) => {
+            Ok(ClientMessage::Req { subscription_id, .. }) => {
+                // NIP-42: reject pre-auth REQs with CLOSED so clients like nak
+                // can detect the auth-required rejection, authenticate, and
+                // re-send the REQ. Buffering silently would leave reactive-auth
+                // clients stuck waiting forever.
                 let _ = send_relay_msg(
                     &mut socket,
-                    RelayMessage::notice(
+                    RelayMessage::closed(
+                        subscription_id,
+                        "auth-required: authenticate before subscribing",
+                    ),
+                )
+                .await;
+            }
+
+            Ok(ClientMessage::Event(event)) => {
+                // NIP-42: respond with OK false so clients like nak can detect
+                // the auth-required rejection and retry after authenticating.
+                let _ = send_relay_msg(
+                    &mut socket,
+                    RelayMessage::ok(
+                        event.id,
+                        false,
                         "auth-required: authenticate before sending events",
                     ),
                 )
@@ -351,30 +351,15 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
         }
     };
 
-    // ── 4. Replay buffered REQs ───────────────────────────────────────────
     // FIX 1: pending_oks maps upstream_event_id_hex → client_original_event_id
     // FIX 5: active_subs tracks prefixed sub IDs sent upstream for cleanup on disconnect
     let mut pending_oks: HashMap<String, EventId> = HashMap::new();
     let mut active_subs: HashSet<String> = HashSet::new();
 
-    for buffered in pre_auth_buffer {
-        handle_client_message(
-            &mut socket,
-            &state,
-            &buffered,
-            &allowed_channels,
-            &client_pubkey,
-            &conn_prefix,
-            &mut pending_oks,
-            &mut active_subs,
-        )
-        .await;
-    }
-
-    // ── 5. Subscribe to upstream broadcast ───────────────────────────────
+    // ── 4. Subscribe to upstream broadcast ────────────────────────────────
     let mut upstream_rx = state.upstream_events.subscribe();
 
-    // ── 6. Main authenticated message loop ───────────────────────────────
+    // ── 5. Main authenticated message loop ────────────────────────────────
     loop {
         tokio::select! {
             // Inbound from client
