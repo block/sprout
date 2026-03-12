@@ -23,10 +23,17 @@ just relay    # Relay on :3000
 
 ### 2. Mint a proxy API token
 
+The token's `--pubkey` must match the public key derived from `SPROUT_PROXY_SERVER_KEY`.
+
 ```bash
+# Derive the public key from your server key
+nak key public <SPROUT_PROXY_SERVER_KEY>
+
+# Mint the token with that pubkey
 cargo run -p sprout-admin -- mint-token \
-  --name "proxy" \
-  --scopes "messages:read,messages:write,channels:read,admin:channels,proxy:submit"
+  --name "sprout-proxy" \
+  --scopes "proxy:submit,channels:read" \
+  --pubkey <derived-pubkey>
 ```
 
 ### 3. Configure environment
@@ -48,7 +55,28 @@ export SPROUT_PROXY_ADMIN_SECRET=<secret for admin API>
 just proxy    # Proxy on :4869
 ```
 
-### 5. Create an invite token
+### 5. Register a guest (recommended)
+
+Register a guest by their Nostr public key. They can then connect with any NIP-42-capable client — no token needed.
+
+```bash
+curl -X POST http://localhost:4869/admin/guests \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <SPROUT_PROXY_ADMIN_SECRET>" \
+  -d '{"pubkey":"<guest-hex-pubkey>","channels":"<channel-uuid1>,<channel-uuid2>"}'
+```
+
+### 6. Connect (pubkey-based)
+
+Just add the proxy as a relay in your Nostr client:
+
+```
+ws://localhost:4869
+```
+
+The client handles NIP-42 authentication automatically. No token in the URL.
+
+### Alternative: Invite tokens (for ad-hoc sharing)
 
 ```bash
 curl -X POST http://localhost:4869/admin/invite \
@@ -57,7 +85,7 @@ curl -X POST http://localhost:4869/admin/invite \
   -d '{"channels":"<channel-uuid>","hours":24,"max_uses":10}'
 ```
 
-### 6. Connect a client
+Connect with the token in the URL:
 
 ```
 ws://localhost:4869?token=<invite_token>
