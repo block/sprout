@@ -71,17 +71,19 @@ const presenceOptions: Array<{
   {
     value: "online",
     label: "Online",
-    description: "Visible as active and refreshed while the app is open.",
+    description:
+      "Automatically active while you use the app and away when idle.",
   },
   {
     value: "away",
     label: "Away",
-    description: "Visible as idle and refreshed while the app is open.",
+    description:
+      "Forces this desktop session to appear idle until you change it.",
   },
   {
     value: "offline",
     label: "Offline",
-    description: "Clears your relay presence entry immediately.",
+    description: "Hides this desktop session and stops presence heartbeats.",
   },
 ];
 
@@ -254,8 +256,9 @@ function PresenceSettingsCard({
         className="mt-4 text-sm text-muted-foreground"
         data-testid="presence-help"
       >
-        Online and away are refreshed automatically every minute while Sprout is
-        running. The relay expires presence after 90 seconds.
+        Sprout refreshes presence every minute while it is running. Online will
+        switch to away after a few minutes of inactivity or when the app is
+        hidden. The relay expires presence after 90 seconds.
       </p>
     </section>
   );

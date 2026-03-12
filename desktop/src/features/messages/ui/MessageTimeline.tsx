@@ -78,7 +78,7 @@ function MessageRow({ message }: { message: TimelineMessage }) {
       {message.avatarUrl && !hasAvatarError ? (
         <img
           alt={`${message.author} avatar`}
-          className="h-9 w-9 shrink-0 rounded-xl border border-border/80 object-cover shadow-sm"
+          className="h-9 w-9 shrink-0 rounded-xl object-cover shadow-sm"
           data-testid="message-avatar-image"
           onError={() => {
             setHasAvatarError(true);
