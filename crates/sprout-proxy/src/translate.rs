@@ -86,24 +86,27 @@ impl Translator {
             return Ok(None);
         }
 
-        // Extract channel UUID from the `#h` tag.
-        let uuid_str = event
+        // Find the channel `#h` tag by looking up each `#h` value against the
+        // channel map. This is robust to ordering — non-channel `#h` tags (e.g.
+        // hashtags) may appear before the real channel tag.
+        let (uuid_str, uuid) = match event
             .tags
             .iter()
-            .find(|t| {
+            .filter(|t| {
                 let s = t.as_slice();
                 s.len() >= 2 && s[0] == "h"
             })
-            .and_then(|t| t.as_slice().get(1).cloned());
-
-        let uuid_str = match uuid_str {
-            Some(s) => s,
-            None => return Ok(None), // No channel tag — drop silently.
+            .find_map(|t| {
+                let val = t.as_slice().get(1)?;
+                let parsed: Uuid = val.parse().ok()?;
+                // Verify it's a known channel, not just any UUID-shaped string.
+                self.channel_map.lookup_by_uuid(&parsed)?;
+                Some((val.clone(), parsed))
+            })
+        {
+            Some(pair) => pair,
+            None => return Ok(None), // No recognized channel tag — drop silently.
         };
-
-        let uuid: Uuid = uuid_str
-            .parse()
-            .map_err(|_| ProxyError::ChannelNotFound(uuid_str.clone()))?;
 
         // Enforce channel-level access control.
         if !allowed_channels.contains(&uuid) {

@@ -466,16 +466,15 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                                 debug!(notice = %notice_msg, "upstream notice (not forwarded to client)");
                             }
                             Ok(_other) => {
-                                // AUTH, COUNT — forward as-is (not sub-scoped).
-                                if socket.send(Message::Text(text.into())).await.is_err() {
-                                    break;
-                                }
+                                // AUTH, COUNT, and other control-plane messages from
+                                // upstream are internal to the proxy↔relay connection.
+                                // Do NOT forward to clients — they leak relay internals.
+                                debug!("dropping upstream control-plane message (not forwarded)");
                             }
                             Err(_) => {
-                                // Unparseable upstream message — forward raw so client can decide.
-                                if socket.send(Message::Text(text.into())).await.is_err() {
-                                    break;
-                                }
+                                // Unparseable upstream message — drop silently.
+                                // Forwarding raw frames could leak relay internals.
+                                debug!("dropping unparseable upstream message");
                             }
                         }
                     }
