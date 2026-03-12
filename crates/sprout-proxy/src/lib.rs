@@ -21,6 +21,8 @@ pub mod invite_store;
 pub mod upstream;
 /// External-facing NIP-01 WebSocket server for standard Nostr clients.
 pub mod server;
+/// Event translation between Sprout internal format and NIP-28 standard format.
+pub mod translate;
 
 pub use error::ProxyError;
 pub use invite::InviteToken;
