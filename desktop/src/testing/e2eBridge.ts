@@ -12,9 +12,25 @@ type TestIdentity = {
 
 type E2eConfig = {
   mode?: "mock" | "relay";
+  mock?: {
+    mintTokenError?: string;
+    seededTokens?: RawMockTokenSeed[];
+  };
   relayHttpUrl?: string;
   relayWsUrl?: string;
   identity?: TestIdentity;
+};
+
+type RawMockTokenSeed = {
+  id: string;
+  name: string;
+  scopes: string[];
+  channel_ids: string[];
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  token?: string;
 };
 
 type RawProfile = {
@@ -136,6 +152,33 @@ type RawSearchHit = {
 type RawSearchResponse = {
   hits: RawSearchHit[];
   found: number;
+};
+
+type RawToken = {
+  id: string;
+  name: string;
+  scopes: string[];
+  channel_ids: string[];
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+};
+
+type RawListTokensResponse = {
+  tokens: RawToken[];
+};
+
+type RawMintTokenResponse = RawToken & {
+  token: string;
+};
+
+type RawRevokeAllTokensResponse = {
+  revoked_count: number;
+};
+
+type MockToken = RawToken & {
+  token: string;
 };
 
 type WsHandler = (message: unknown) => void;
@@ -299,6 +342,35 @@ function getMockIdentity() {
 
 function cloneProfile(profile: RawProfile): RawProfile {
   return { ...profile };
+}
+
+function cloneToken(token: RawToken): RawToken {
+  return {
+    ...token,
+    channel_ids: [...token.channel_ids],
+    scopes: [...token.scopes],
+  };
+}
+
+function cloneMintedToken(token: MockToken): RawMintTokenResponse {
+  return {
+    ...cloneToken(token),
+    token: token.token,
+  };
+}
+
+function toMockToken(seed: RawMockTokenSeed): MockToken {
+  return {
+    ...cloneToken(seed),
+    token:
+      seed.token ??
+      `spr_tok_mock_${seed.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 24)}`,
+  };
+}
+
+function resetMockTokens(config: E2eConfig | undefined) {
+  mockTokens = (config?.mock?.seededTokens ?? []).map(toMockToken);
+  mockMintTokenError = config?.mock?.mintTokenError ?? null;
 }
 
 function getMockProfileByPubkey(pubkey: string): RawProfile | null {
@@ -566,6 +638,8 @@ const mockChannels: MockChannel[] = [
 const mockMessages = new Map<string, RelayEvent[]>();
 const mockSockets = new Map<number, MockSocket>();
 const realSockets = new Map<number, WebSocket>();
+let mockTokens: MockToken[] = [];
+let mockMintTokenError: string | null = null;
 const mockProfiles = new Map<string, RawProfile>([
   [
     MOCK_IDENTITY_PUBKEY,
@@ -1536,6 +1610,114 @@ async function handleGetFeed(
   return response.json();
 }
 
+async function handleListTokens(
+  config: E2eConfig | undefined,
+): Promise<RawListTokensResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    return {
+      tokens: mockTokens.map(cloneToken),
+    };
+  }
+
+  return relayJsonRequest<RawListTokensResponse>(config, "/api/tokens");
+}
+
+async function handleMintToken(
+  args: {
+    name: string;
+    scopes: string[];
+    channelIds?: string[];
+    expiresInDays?: number;
+  },
+  config: E2eConfig | undefined,
+): Promise<RawMintTokenResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    if (mockMintTokenError) {
+      throw mockMintTokenError;
+    }
+
+    const now = new Date();
+    const token: MockToken = {
+      id: crypto.randomUUID(),
+      name: args.name,
+      scopes: [...args.scopes],
+      channel_ids: [...(args.channelIds ?? [])],
+      created_at: now.toISOString(),
+      expires_at:
+        typeof args.expiresInDays === "number"
+          ? new Date(
+              now.getTime() + args.expiresInDays * 24 * 60 * 60 * 1_000,
+            ).toISOString()
+          : null,
+      last_used_at: null,
+      revoked_at: null,
+      token: `spr_tok_mock_${crypto.randomUUID().replace(/-/g, "")}`,
+    };
+
+    mockTokens.unshift(token);
+    return cloneMintedToken(token);
+  }
+
+  return relayJsonRequest<RawMintTokenResponse>(config, "/api/tokens", {
+    method: "POST",
+    body: JSON.stringify({
+      name: args.name,
+      scopes: args.scopes,
+      channel_ids: args.channelIds,
+      expires_in_days: args.expiresInDays,
+    }),
+  });
+}
+
+async function handleRevokeToken(
+  args: { tokenId: string },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const token = mockTokens.find((candidate) => candidate.id === args.tokenId);
+    if (!token) {
+      throw new Error(`Token ${args.tokenId} not found.`);
+    }
+
+    token.revoked_at = new Date().toISOString();
+    return;
+  }
+
+  await relayEmptyRequest(config, `/api/tokens/${args.tokenId}`, {
+    method: "DELETE",
+  });
+}
+
+async function handleRevokeAllTokens(
+  config: E2eConfig | undefined,
+): Promise<RawRevokeAllTokensResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const now = new Date().toISOString();
+    let revokedCount = 0;
+
+    for (const token of mockTokens) {
+      if (token.revoked_at) {
+        continue;
+      }
+
+      token.revoked_at = now;
+      revokedCount += 1;
+    }
+
+    return {
+      revoked_count: revokedCount,
+    };
+  }
+
+  return relayJsonRequest<RawRevokeAllTokensResponse>(config, "/api/tokens", {
+    method: "DELETE",
+  });
+}
+
 async function handleSearchMessages(
   args: {
     q: string;
@@ -1831,6 +2013,7 @@ export function maybeInstallE2eTauriMocks() {
     return;
   }
 
+  resetMockTokens(config);
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({ channelName, content }) => {
@@ -1896,6 +2079,20 @@ export function maybeInstallE2eTauriMocks() {
           (payload as Parameters<typeof handleGetFeed>[0]) ?? {},
           activeConfig,
         );
+      case "list_tokens":
+        return handleListTokens(activeConfig);
+      case "mint_token":
+        return handleMintToken(
+          payload as Parameters<typeof handleMintToken>[0],
+          activeConfig,
+        );
+      case "revoke_token":
+        return handleRevokeToken(
+          payload as Parameters<typeof handleRevokeToken>[0],
+          activeConfig,
+        );
+      case "revoke_all_tokens":
+        return handleRevokeAllTokens(activeConfig);
       case "create_channel":
         return handleCreateChannel(
           payload as Parameters<typeof handleCreateChannel>[0],

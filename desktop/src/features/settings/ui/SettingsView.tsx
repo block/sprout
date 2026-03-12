@@ -15,6 +15,7 @@ import {
   useProfileQuery,
   useUpdateProfileMutation,
 } from "@/features/profile/hooks";
+import { TokenSettingsCard } from "@/features/tokens/ui/TokenSettingsCard";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import {
   PresenceBadge,
@@ -542,6 +543,7 @@ export function SettingsView({
           currentPubkey={currentPubkey}
           fallbackDisplayName={fallbackDisplayName}
         />
+        <TokenSettingsCard currentPubkey={currentPubkey} />
       </div>
     </div>
   );
