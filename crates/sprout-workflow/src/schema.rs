@@ -220,11 +220,18 @@ impl WorkflowDef {
             }
 
             if let Some(dur) = interval {
-                crate::executor::parse_duration_secs(dur).map_err(|_| {
+                let secs = crate::executor::parse_duration_secs(dur).map_err(|_| {
                     WorkflowError::InvalidDefinition(format!(
                         "invalid interval '{dur}': expected a duration like '30m', '1h', or '60s'"
                     ))
                 })?;
+                // Fix 4: the cron loop ticks every 60s, so sub-minute intervals
+                // can never fire correctly. Reject them at definition time.
+                if secs < 60 {
+                    return Err(WorkflowError::InvalidDefinition(
+                        "interval must be at least 60s (cron loop ticks every 60 seconds)".into(),
+                    ));
+                }
             }
         }
 
@@ -840,6 +847,43 @@ mod tests {
     }
 
     // ── DiffPosted trigger ────────────────────────────────────────────────────
+
+    // ── Sub-minute interval validation (Fix 4) ────────────────────────────────
+
+    #[test]
+    fn validate_rejects_sub_minute_interval() {
+        let yaml = "name: Too Fast\ntrigger:\n  on: schedule\n  interval: 30s\nsteps:\n  - id: s1\n    action: send_message\n    text: tick\n";
+        let err = parse_yaml(yaml).unwrap_err();
+        match &err {
+            WorkflowError::InvalidDefinition(msg) => {
+                assert!(
+                    msg.contains("60s") || msg.contains("60 seconds"),
+                    "error should mention 60s minimum, got: {msg}"
+                );
+            }
+            other => panic!("expected InvalidDefinition, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_sub_minute_interval_59s() {
+        let yaml = "name: Too Fast\ntrigger:\n  on: schedule\n  interval: 59s\nsteps:\n  - id: s1\n    action: send_message\n    text: tick\n";
+        let err = parse_yaml(yaml).unwrap_err();
+        assert!(matches!(err, WorkflowError::InvalidDefinition(_)));
+    }
+
+    #[test]
+    fn validate_accepts_exactly_60s_interval() {
+        let yaml = "name: Exactly 60s\ntrigger:\n  on: schedule\n  interval: 60s\nsteps:\n  - id: s1\n    action: send_message\n    text: tick\n";
+        assert!(parse_yaml(yaml).is_ok(), "60s interval should be valid");
+    }
+
+    #[test]
+    fn validate_accepts_interval_above_60s() {
+        // 30m = 1800s, well above the 60s minimum.
+        let yaml = "name: Interval Schedule\ntrigger:\n  on: schedule\n  interval: 30m\nsteps:\n  - id: s1\n    action: send_message\n    text: tick\n";
+        assert!(parse_yaml(yaml).is_ok(), "30m interval should be valid");
+    }
 
     #[test]
     fn diff_posted_trigger_roundtrips_yaml() {

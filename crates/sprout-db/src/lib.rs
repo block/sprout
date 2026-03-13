@@ -844,6 +844,13 @@ impl Db {
         workflow::list_enabled_channel_workflows(&self.pool, channel_id).await
     }
 
+    /// Lists all active, enabled workflows across all channels.
+    ///
+    /// Used by the cron scheduler.
+    pub async fn list_all_enabled_workflows(&self) -> Result<Vec<workflow::WorkflowRecord>> {
+        workflow::list_all_enabled_workflows(&self.pool).await
+    }
+
     /// Updates a workflow's name and definition.
     pub async fn update_workflow(
         &self,

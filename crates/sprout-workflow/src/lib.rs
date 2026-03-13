@@ -38,10 +38,13 @@ pub use schema::{ActionDef, Step, TriggerDef, WorkflowDef};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
+use dashmap::DashMap;
 use sprout_core::kind::{event_kind_u32, is_workflow_execution_kind, KIND_REACTION};
 use sprout_db::workflow::RunStatus;
 use sprout_db::Db;
 use tokio::sync::Semaphore;
+use uuid::Uuid;
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -71,6 +74,10 @@ pub struct WorkflowEngine {
     pub(crate) config: WorkflowConfig,
     /// Semaphore enforcing `config.max_concurrent` simultaneous workflow runs.
     pub(crate) run_semaphore: Arc<Semaphore>,
+    /// Last-fired timestamps for interval-triggered workflows.
+    /// In-memory only — lost on restart. Missed fires during downtime are
+    /// not replayed (acceptable for MVP).
+    pub(crate) last_fired: DashMap<Uuid, DateTime<Utc>>,
 }
 
 impl WorkflowEngine {
@@ -82,6 +89,7 @@ impl WorkflowEngine {
             db,
             config,
             run_semaphore,
+            last_fired: DashMap::new(),
         }
     }
 
@@ -285,18 +293,216 @@ impl WorkflowEngine {
         Ok(())
     }
 
-    /// Background task for scheduled (cron) triggers.
+    /// Background loop for scheduled (cron/interval) triggers.
     ///
-    /// Runs indefinitely. Cron trigger matching requires a cross-channel
-    /// workflow query (`list_all_enabled_workflows`) that doesn't exist yet.
-    /// Interval triggers need last-run tracking. Both are deferred to WF-09.
-    pub async fn run(&self) {
+    /// Ticks every 60 seconds. For each active workflow with a `Schedule`
+    /// trigger, checks whether the cron expression or interval has elapsed
+    /// and spawns execution if so.
+    ///
+    /// Uses window-based matching for cron expressions to handle tick drift:
+    /// `schedule.after(&(now - 60s)).next() <= now` instead of `includes(now)`.
+    ///
+    /// Interval tracking is in-memory (`last_fired` DashMap). Lost on restart —
+    /// missed fires during downtime are not replayed.
+    pub async fn run(self: &Arc<Self>) {
+        tracing::info!("WorkflowEngine cron loop started (60s tick)");
+
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            // Cron trigger matching requires a cross-channel workflow query
-            // (list_all_enabled_workflows) that doesn't exist yet. Interval
-            // triggers need last-run tracking. Both are deferred to WF-09.
-            tracing::trace!("WorkflowEngine::run tick — cron/interval triggers not yet wired");
+
+            let now = Utc::now();
+
+            let workflows = match self.db.list_all_enabled_workflows().await {
+                Ok(wf) => wf,
+                Err(e) => {
+                    tracing::error!("Cron tick: failed to load workflows: {e}");
+                    continue;
+                }
+            };
+
+            for workflow in &workflows {
+                let def: schema::WorkflowDef =
+                    match serde_json::from_value(workflow.definition.clone()) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            tracing::warn!(
+                                workflow_id = %workflow.id,
+                                "Cron tick: failed to parse workflow definition: {e}"
+                            );
+                            continue;
+                        }
+                    };
+
+                if !def.enabled {
+                    continue;
+                }
+
+                // Fix 2: skip workflows with no channel_id — an empty channel_id
+                // causes silent downstream failures when the run tries to act on a channel.
+                let Some(channel_id) = workflow.channel_id else {
+                    tracing::warn!(
+                        workflow_id = %workflow.id,
+                        "Cron tick: skipping schedule workflow with no channel_id"
+                    );
+                    continue;
+                };
+
+                let (should_fire, trigger_type) = match &def.trigger {
+                    schema::TriggerDef::Schedule {
+                        cron: Some(expr),
+                        interval: None,
+                    } => {
+                        // Fix 7: delegate to pure helper for testability.
+                        (cron_should_fire(expr, now, 60, workflow.id), "cron")
+                    }
+                    schema::TriggerDef::Schedule {
+                        cron: None,
+                        interval: Some(dur),
+                    } => {
+                        // Fix 7: delegate to pure helper for testability.
+                        let last = self.last_fired.get(&workflow.id).map(|t| *t);
+                        (
+                            interval_should_fire(dur, last, now, workflow.id),
+                            "interval",
+                        )
+                    }
+                    _ => (false, ""), // Non-schedule triggers handled by on_event()
+                };
+
+                if !should_fire {
+                    continue;
+                }
+
+                // Fix 5: handle serialization errors explicitly rather than silently
+                // dropping the trigger context with .ok().
+                let trigger_ctx = executor::TriggerContext {
+                    channel_id: channel_id.to_string(),
+                    timestamp: now.timestamp().to_string(),
+                    ..Default::default()
+                };
+                let trigger_ctx_json = match serde_json::to_value(&trigger_ctx) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::error!(
+                            workflow_id = %workflow.id,
+                            "Cron tick: failed to serialize trigger context: {e}"
+                        );
+                        continue;
+                    }
+                };
+
+                let run_id = match self
+                    .db
+                    .create_workflow_run(
+                        workflow.id,
+                        None, // no trigger event for cron
+                        trigger_ctx_json.as_ref(),
+                    )
+                    .await
+                {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!(
+                            workflow_id = %workflow.id,
+                            "Cron tick: failed to create workflow run: {e}"
+                        );
+                        continue;
+                    }
+                };
+
+                // Update last_fired AFTER successful DB insert so that a
+                // failed insert doesn't suppress the next tick for the full interval.
+                // Only needed for interval triggers — cron uses window-based matching
+                // which already prevents double-fire within the same minute.
+                if trigger_type == "interval" {
+                    self.last_fired.insert(workflow.id, now);
+                }
+
+                // Fix 6: log the specific trigger type (cron vs interval).
+                tracing::info!(
+                    workflow_id = %workflow.id,
+                    run_id = %run_id,
+                    trigger = trigger_type,
+                    "Cron trigger fired"
+                );
+
+                let engine = Arc::clone(self);
+                let def_clone = def.clone();
+                let ctx_clone = trigger_ctx.clone();
+                tokio::spawn(async move {
+                    let result =
+                        executor::execute_run(&engine, run_id, &def_clone, &ctx_clone).await;
+                    engine.finalize_run(run_id, result, None).await;
+                });
+            }
+
+            // Fix 1: prune stale last_fired entries for workflows that are no longer
+            // active/enabled. Without this the DashMap grows monotonically as
+            // workflows are deleted or disabled.
+            let active_ids: std::collections::HashSet<Uuid> =
+                workflows.iter().map(|w| w.id).collect();
+            self.last_fired.retain(|id, _| active_ids.contains(id));
+        }
+    }
+}
+
+// ── Cron/interval helpers ─────────────────────────────────────────────────────
+
+/// Check whether a cron expression should fire within the `window_secs`-wide
+/// window ending at `now`.
+///
+/// Uses window-based matching: finds the next scheduled time after
+/// `(now - window_secs)` and checks whether it falls at or before `now`.
+/// This tolerates tick drift gracefully — a 61s tick won't miss a
+/// minute-granularity cron expression.
+///
+/// Returns `false` (and logs a warning) if the expression is invalid.
+fn cron_should_fire(expr: &str, now: DateTime<Utc>, window_secs: i64, workflow_id: Uuid) -> bool {
+    let normalized = schema::normalize_cron(expr);
+    match normalized.parse::<cron::Schedule>() {
+        Ok(sched) => {
+            let window_start = now - chrono::Duration::seconds(window_secs);
+            sched
+                .after(&window_start)
+                .next()
+                .map(|t| t <= now)
+                .unwrap_or(false)
+        }
+        Err(e) => {
+            tracing::warn!(
+                workflow_id = %workflow_id,
+                "Cron tick: invalid cron expression '{expr}': {e}"
+            );
+            false
+        }
+    }
+}
+
+/// Check whether an interval trigger should fire based on the last-fired time.
+///
+/// `last_fired` is `None` on the first tick after startup — in that case we
+/// default to `now`, which prevents an immediate fire and waits a full interval.
+///
+/// Returns `false` (and logs a warning) if the duration string is invalid.
+fn interval_should_fire(
+    dur: &str,
+    last_fired: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+    workflow_id: Uuid,
+) -> bool {
+    match executor::parse_duration_secs(dur) {
+        Ok(interval_secs) => {
+            // Default to now on first tick — prevents immediate fire after startup.
+            let last = last_fired.unwrap_or(now);
+            let elapsed = (now - last).num_seconds().unsigned_abs();
+            elapsed >= interval_secs
+        }
+        Err(e) => {
+            tracing::warn!(
+                workflow_id = %workflow_id,
+                "Cron tick: invalid interval '{dur}': {e}"
+            );
+            false
         }
     }
 }
@@ -464,6 +670,146 @@ fn trigger_matches_event(trigger: &TriggerDef, kind_u32: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── cron_should_fire helper ───────────────────────────────────────────────
+
+    #[test]
+    fn cron_should_fire_matches_within_window() {
+        // "every minute" cron — should always fire within a 60s window.
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T12:00:30Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let wf_id = Uuid::new_v4();
+        assert!(
+            cron_should_fire("* * * * *", now, 60, wf_id),
+            "every-minute cron should fire within 60s window"
+        );
+    }
+
+    #[test]
+    fn cron_should_fire_returns_false_for_invalid_expr() {
+        let now = Utc::now();
+        let wf_id = Uuid::new_v4();
+        assert!(
+            !cron_should_fire("not-a-cron", now, 60, wf_id),
+            "invalid cron should return false"
+        );
+    }
+
+    #[test]
+    fn cron_should_fire_returns_false_outside_window() {
+        // Fixed time: 2026-06-15 14:30:00 UTC (a Sunday in June)
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T14:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let wf_id = Uuid::new_v4();
+        // "0 0 1 1 *" = midnight on Jan 1 only — June 15 is definitely outside.
+        assert!(
+            !cron_should_fire("0 0 1 1 *", now, 60, wf_id),
+            "Jan-1-only cron should not fire on June 15"
+        );
+    }
+
+    #[test]
+    fn cron_should_fire_at_exact_minute_boundary() {
+        // Fixed time: exactly 09:00:00 UTC. Cron "0 9 * * *" fires at 09:00.
+        // Window [08:59:00, 09:00:00] should contain the fire time.
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T09:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let wf_id = Uuid::new_v4();
+        assert!(
+            cron_should_fire("0 9 * * *", now, 60, wf_id),
+            "cron should fire at exact minute boundary"
+        );
+    }
+
+    #[test]
+    fn cron_should_fire_within_drift_window() {
+        // Fixed time: 09:00:45 UTC (45s drift). Cron "0 9 * * *" fires at 09:00.
+        // Window [08:59:45, 09:00:45] should still contain 09:00:00.
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T09:00:45Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let wf_id = Uuid::new_v4();
+        assert!(
+            cron_should_fire("0 9 * * *", now, 60, wf_id),
+            "cron should fire even with 45s drift"
+        );
+    }
+
+    #[test]
+    fn cron_should_fire_returns_false_just_outside_window() {
+        // Fixed time: 09:01:01 UTC. Cron "0 9 * * *" fires at 09:00:00.
+        // Window [09:00:01, 09:01:01] does NOT contain 09:00:00.
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T09:01:01Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let wf_id = Uuid::new_v4();
+        assert!(
+            !cron_should_fire("0 9 * * *", now, 60, wf_id),
+            "cron should not fire 61s after the scheduled time"
+        );
+    }
+
+    // ── interval_should_fire helper ───────────────────────────────────────────
+
+    #[test]
+    fn interval_should_fire_returns_false_on_first_tick() {
+        // When last_fired is None (first tick), defaults to now → elapsed = 0 → false.
+        let now = Utc::now();
+        let wf_id = Uuid::new_v4();
+        assert!(
+            !interval_should_fire("1h", None, now, wf_id),
+            "first tick should not fire immediately"
+        );
+    }
+
+    #[test]
+    fn interval_should_fire_returns_true_after_interval_elapsed() {
+        let wf_id = Uuid::new_v4();
+        let now = Utc::now();
+        // last_fired was 2 hours ago; interval is 1h → should fire.
+        let last = now - chrono::Duration::hours(2);
+        assert!(
+            interval_should_fire("1h", Some(last), now, wf_id),
+            "should fire after interval elapsed"
+        );
+    }
+
+    #[test]
+    fn interval_should_fire_returns_false_before_interval_elapsed() {
+        let wf_id = Uuid::new_v4();
+        let now = Utc::now();
+        // last_fired was 30 minutes ago; interval is 1h → should not fire.
+        let last = now - chrono::Duration::minutes(30);
+        assert!(
+            !interval_should_fire("1h", Some(last), now, wf_id),
+            "should not fire before interval elapsed"
+        );
+    }
+
+    #[test]
+    fn interval_should_fire_returns_false_for_invalid_duration() {
+        let now = Utc::now();
+        let wf_id = Uuid::new_v4();
+        assert!(
+            !interval_should_fire("not-a-duration", None, now, wf_id),
+            "invalid duration should return false"
+        );
+    }
+
+    #[test]
+    fn interval_should_fire_at_exact_boundary() {
+        let wf_id = Uuid::new_v4();
+        let now = Utc::now();
+        // last_fired was exactly 1 hour ago; interval is 1h → should fire (elapsed >= interval).
+        let last = now - chrono::Duration::hours(1);
+        assert!(
+            interval_should_fire("1h", Some(last), now, wf_id),
+            "should fire at exact interval boundary"
+        );
+    }
 
     #[test]
     fn workflow_config_defaults() {
