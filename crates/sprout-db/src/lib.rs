@@ -588,8 +588,17 @@ impl Db {
         event_created_at: DateTime<Utc>,
         pubkey: &[u8],
         emoji: &str,
+        reaction_event_id: Option<&[u8]>,
     ) -> Result<bool> {
-        reaction::add_reaction(&self.pool, event_id, event_created_at, pubkey, emoji).await
+        reaction::add_reaction(
+            &self.pool,
+            event_id,
+            event_created_at,
+            pubkey,
+            emoji,
+            reaction_event_id,
+        )
+        .await
     }
 
     /// Soft-delete a reaction.
@@ -601,6 +610,26 @@ impl Db {
         emoji: &str,
     ) -> Result<bool> {
         reaction::remove_reaction(&self.pool, event_id, event_created_at, pubkey, emoji).await
+    }
+
+    /// Soft-delete a reaction by the reaction event's own event ID.
+    pub async fn remove_reaction_by_source_event_id(
+        &self,
+        reaction_event_id: &[u8],
+    ) -> Result<bool> {
+        reaction::remove_reaction_by_source_event_id(&self.pool, reaction_event_id).await
+    }
+
+    /// Look up the active reaction row for one actor + emoji + target tuple.
+    pub async fn get_active_reaction_record(
+        &self,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        pubkey: &[u8],
+        emoji: &str,
+    ) -> Result<Option<reaction::ActiveReactionRecord>> {
+        reaction::get_active_reaction_record(&self.pool, event_id, event_created_at, pubkey, emoji)
+            .await
     }
 
     /// Get all active reactions for an event, grouped by emoji.

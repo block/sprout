@@ -598,6 +598,19 @@ pub fn build_trigger_context(event: &sprout_core::StoredEvent) -> executor::Trig
     let kind_u32 = event_kind_u32(&event.event);
     let content = event.event.content.clone();
 
+    let author = event
+        .event
+        .tags
+        .iter()
+        .find_map(|tag| {
+            if tag.kind().to_string() == "actor" {
+                tag.content().map(|value| value.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| event.event.pubkey.to_hex());
+
     // For reaction events (NIP-25), the content field holds the emoji character
     // or shortcode (e.g. "👍", "+", "-"). Expose it as `emoji`.
     let emoji = if kind_u32 == KIND_REACTION {
@@ -639,7 +652,7 @@ pub fn build_trigger_context(event: &sprout_core::StoredEvent) -> executor::Trig
 
     executor::TriggerContext {
         text: content,
-        author: event.event.pubkey.to_hex(),
+        author,
         channel_id: event
             .channel_id
             .map(|id| id.to_string())

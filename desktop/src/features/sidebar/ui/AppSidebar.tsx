@@ -43,7 +43,6 @@ type AppSidebarProps = {
   profile?: Profile;
   selfPresenceStatus: PresenceStatus;
   errorMessage?: string;
-  homeUrgentCount?: number;
   selectedChannelId: string | null;
   selectedView: "home" | "channel" | "settings";
   unreadChannelIds: Set<string>;
@@ -294,7 +293,6 @@ export function AppSidebar({
   profile,
   selfPresenceStatus,
   errorMessage,
-  homeUrgentCount,
   selectedChannelId,
   selectedView,
   unreadChannelIds,
@@ -435,11 +433,6 @@ export function AppSidebar({
             >
               <Home className="h-4 w-4" />
               <span>Home</span>
-              {homeUrgentCount && homeUrgentCount > 0 ? (
-                <span className="ml-auto rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary-foreground">
-                  {homeUrgentCount}
-                </span>
-              ) : null}
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

@@ -188,6 +188,11 @@ struct SendChannelMessageBody<'a> {
 }
 
 #[derive(Serialize)]
+struct AddReactionBody<'a> {
+    emoji: &'a str,
+}
+
+#[derive(Serialize)]
 struct MintTokenBody<'a> {
     name: &'a str,
     scopes: &'a [String],
@@ -300,6 +305,31 @@ where
 
 fn default_true() -> bool {
     true
+}
+
+fn percent_encode(input: &str) -> String {
+    let mut encoded = String::with_capacity(input.len());
+
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                let high = char::from_digit((byte >> 4) as u32, 16)
+                    .expect("nibble 0-15 is always a valid hex digit")
+                    .to_ascii_uppercase();
+                let low = char::from_digit((byte & 0x0f) as u32, 16)
+                    .expect("nibble 0-15 is always a valid hex digit")
+                    .to_ascii_uppercase();
+                encoded.push('%');
+                encoded.push(high);
+                encoded.push(low);
+            }
+        }
+    }
+
+    encoded
 }
 
 fn relay_ws_url() -> String {
@@ -830,6 +860,37 @@ async fn send_channel_message(
 }
 
 #[tauri::command]
+async fn add_reaction(
+    event_id: String,
+    emoji: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let path = format!("/api/messages/{event_id}/reactions");
+    let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?.json(
+        &AddReactionBody {
+            emoji: emoji.trim(),
+        },
+    );
+
+    send_empty_request(request).await
+}
+
+#[tauri::command]
+async fn remove_reaction(
+    event_id: String,
+    emoji: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let path = format!(
+        "/api/messages/{event_id}/reactions/{}",
+        percent_encode(emoji.trim())
+    );
+    let request = build_authed_request(&state.http_client, Method::DELETE, &path, &state)?;
+
+    send_empty_request(request).await
+}
+
+#[tauri::command]
 async fn get_event(event_id: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
     let request = build_authed_request(
         &state.http_client,
@@ -1000,6 +1061,8 @@ pub fn run() {
             get_feed,
             search_messages,
             send_channel_message,
+            add_reaction,
+            remove_reaction,
             get_event,
             list_tokens,
             mint_token,
@@ -1014,7 +1077,7 @@ pub fn run() {
 mod tests {
     use serde_json::json;
 
-    use super::ChannelInfo;
+    use super::{percent_encode, ChannelInfo};
 
     #[test]
     fn channel_info_defaults_is_member_for_legacy_payloads() {
@@ -1035,5 +1098,19 @@ mod tests {
         .expect("legacy payload should deserialize");
 
         assert!(channel.is_member);
+    }
+
+    #[test]
+    fn percent_encode_leaves_unreserved_chars() {
+        assert_eq!(
+            percent_encode("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"),
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+        );
+    }
+
+    #[test]
+    fn percent_encode_escapes_unicode_and_reserved_chars() {
+        assert_eq!(percent_encode("👍"), "%F0%9F%91%8D");
+        assert_eq!(percent_encode("a/b?c"), "a%2Fb%3Fc");
     }
 }
