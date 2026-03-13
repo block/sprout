@@ -491,8 +491,10 @@ impl Translator {
 
         // Build translated tag list: replace the channel `#e` with `#h`, keep everything else.
         let mut new_tags: Vec<Tag> = Vec::new();
+        // SAFETY: ["h", <uuid_string>] is always a valid 2-element tag structure
         new_tags.push(
-            Tag::parse(&["h", &channel_info.uuid.to_string()]).expect("h tag is always valid"),
+            Tag::parse(&["h", &channel_info.uuid.to_string()])
+                .expect("SAFETY: [\"h\", uuid_string] is always a valid tag structure"),
         );
         for tag in event.tags.iter() {
             let s = tag.as_slice();
@@ -517,8 +519,12 @@ impl Translator {
         // Re-sign with the shadow key for the external user.
         let shadow_keys = self.shadow_keys.get_or_create(external_pubkey)?;
 
+        // SAFETY: sprout_kind is derived from KindTranslator which maps to known Sprout kinds (40001, 40002, 40003) that fit in u16
         let translated = EventBuilder::new(
-            Kind::Custom(u16::try_from(sprout_kind).expect("sprout kind must fit in u16")),
+            Kind::Custom(
+                u16::try_from(sprout_kind)
+                    .expect("SAFETY: sprout kind values (40001, 40002, 40003) always fit in u16"),
+            ),
             &event.content,
             new_tags,
         )
@@ -552,7 +558,11 @@ impl Translator {
                 .map(|k| {
                     let k_u32 = k.as_u16() as u32;
                     let sprout_k = self.kind_translator.to_sprout(k_u32);
-                    Kind::Custom(u16::try_from(sprout_k).expect("sprout kind must fit in u16"))
+                    // SAFETY: sprout kind values (40001, 40002, 40003) always fit in u16
+                    Kind::Custom(
+                        u16::try_from(sprout_k)
+                            .expect("SAFETY: sprout kind values always fit in u16"),
+                    )
                 })
                 .collect();
             // Rebuild via the builder to stay consistent with nostr's internal state.
@@ -624,7 +634,11 @@ impl Translator {
                 .map(|k| {
                     let k_u32 = k.as_u16() as u32;
                     let standard_k = self.kind_translator.to_standard(k_u32);
-                    Kind::Custom(u16::try_from(standard_k).expect("standard kind must fit in u16"))
+                    // SAFETY: standard kind values (42, 41) always fit in u16
+                    Kind::Custom(
+                        u16::try_from(standard_k)
+                            .expect("SAFETY: standard kind values always fit in u16"),
+                    )
                 })
                 .collect();
             f = f.remove_kinds(kinds.iter().cloned()).kinds(new_kinds);

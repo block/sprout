@@ -554,18 +554,16 @@ pub async fn dispatch_action(
             }
         }
 
-        SendDm { to, text } => {
-            info!(run_id = %run_id, step = step_id, "SendDm → {to}: {text}");
+        SendDm { to, text: _ } => {
+            warn!(run_id = %run_id, step = step_id, "SendDm not yet implemented (to={to})");
             // TODO (WF-07): emit DM event.
-            Ok(StepResult::Completed(serde_json::json!({ "sent": true })))
+            Err(WorkflowError::NotImplemented("SendDm".into()))
         }
 
-        SetChannelTopic { topic } => {
-            info!(run_id = %run_id, step = step_id, "SetChannelTopic → {topic}");
+        SetChannelTopic { topic: _ } => {
+            warn!(run_id = %run_id, step = step_id, "SetChannelTopic not yet implemented");
             // TODO (WF-07): update channel topic via DB.
-            Ok(StepResult::Completed(
-                serde_json::json!({ "updated": true }),
-            ))
+            Err(WorkflowError::NotImplemented("SetChannelTopic".into()))
         }
 
         AddReaction { emoji } => {

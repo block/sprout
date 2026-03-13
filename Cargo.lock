@@ -2834,6 +2834,7 @@ dependencies = [
  "redis",
  "serde",
  "serde_json",
+ "sprout-auth",
  "sprout-core",
  "thiserror",
  "tokio",

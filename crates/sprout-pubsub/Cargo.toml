@@ -9,6 +9,7 @@ description = "Redis pub/sub fan-out, presence, and typing indicators for Sprout
 
 [dependencies]
 sprout-core = { workspace = true }
+sprout-auth = { workspace = true }
 redis = { workspace = true }
 deadpool-redis = { workspace = true }
 tokio = { workspace = true }

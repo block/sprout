@@ -74,6 +74,7 @@ pub use workflows::{
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
+#[cfg(any(test, feature = "dev"))]
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -301,50 +302,62 @@ pub(crate) async fn extract_auth_context(
                 }
             } else {
                 // Dev mode: decode JWT payload without JWKS validation.
-                match decode_jwt_payload_unverified(token) {
-                    Ok(claims) => {
-                        if let Some(username) =
-                            claims.get("preferred_username").and_then(|v| v.as_str())
-                        {
-                            match sprout_auth::derive_pubkey_from_username(username) {
-                                Ok(pubkey) => {
-                                    let pubkey_bytes = pubkey.serialize().to_vec();
-                                    if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
-                                        tracing::warn!("ensure_user failed: {e}");
+                // Only compiled when the `dev` feature is enabled — disabled in release builds.
+                #[cfg(any(test, feature = "dev"))]
+                {
+                    match decode_jwt_payload_unverified(token) {
+                        Ok(claims) => {
+                            if let Some(username) =
+                                claims.get("preferred_username").and_then(|v| v.as_str())
+                            {
+                                match sprout_auth::derive_pubkey_from_username(username) {
+                                    Ok(pubkey) => {
+                                        let pubkey_bytes = pubkey.serialize().to_vec();
+                                        if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
+                                            tracing::warn!("ensure_user failed: {e}");
+                                        }
+                                        return Ok(RestAuthContext {
+                                            pubkey,
+                                            pubkey_bytes,
+                                            scopes: vec![Scope::MessagesRead, Scope::MessagesWrite],
+                                            auth_method: RestAuthMethod::OktaJwt,
+                                            token_id: None,
+                                            channel_ids: None,
+                                        });
                                     }
-                                    return Ok(RestAuthContext {
-                                        pubkey,
-                                        pubkey_bytes,
-                                        scopes: vec![Scope::MessagesRead, Scope::MessagesWrite],
-                                        auth_method: RestAuthMethod::OktaJwt,
-                                        token_id: None,
-                                        channel_ids: None,
-                                    });
-                                }
-                                Err(_) => {
-                                    tracing::warn!("auth: key derivation failed for username");
-                                    return Err((
-                                        StatusCode::UNAUTHORIZED,
-                                        Json(
-                                            serde_json::json!({ "error": "authentication failed" }),
-                                        ),
-                                    ));
+                                    Err(_) => {
+                                        tracing::warn!("auth: key derivation failed for username");
+                                        return Err((
+                                            StatusCode::UNAUTHORIZED,
+                                            Json(
+                                                serde_json::json!({ "error": "authentication failed" }),
+                                            ),
+                                        ));
+                                    }
                                 }
                             }
+                            tracing::warn!("auth: JWT missing preferred_username claim");
+                            return Err((
+                                StatusCode::UNAUTHORIZED,
+                                Json(serde_json::json!({ "error": "authentication failed" })),
+                            ));
                         }
-                        tracing::warn!("auth: JWT missing preferred_username claim");
-                        return Err((
-                            StatusCode::UNAUTHORIZED,
-                            Json(serde_json::json!({ "error": "authentication failed" })),
-                        ));
+                        Err(_) => {
+                            tracing::warn!("auth: malformed JWT");
+                            return Err((
+                                StatusCode::UNAUTHORIZED,
+                                Json(serde_json::json!({ "error": "authentication failed" })),
+                            ));
+                        }
                     }
-                    Err(_) => {
-                        tracing::warn!("auth: malformed JWT");
-                        return Err((
-                            StatusCode::UNAUTHORIZED,
-                            Json(serde_json::json!({ "error": "authentication failed" })),
-                        ));
-                    }
+                }
+                #[cfg(not(any(test, feature = "dev")))]
+                {
+                    tracing::warn!("auth: dev-mode JWT auth disabled in release builds");
+                    return Err((
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({ "error": "authentication failed" })),
+                    ));
                 }
             }
         }
@@ -455,6 +468,7 @@ pub(crate) fn forbidden(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
 
 /// Decode a JWT payload segment without signature verification.
 /// Used in dev mode (`require_auth_token=false`) to extract `preferred_username`.
+#[cfg(any(test, feature = "dev"))]
 fn decode_jwt_payload_unverified(
     token: &str,
 ) -> Result<HashMap<String, serde_json::Value>, String> {
