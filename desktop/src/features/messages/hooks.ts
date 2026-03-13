@@ -93,16 +93,27 @@ function createOptimisticMessage(
 }
 
 export function useChannelMessagesQuery(channel: Channel | null) {
+  const queryClient = useQueryClient();
+  const queryKey = ["channel-messages", channel?.id ?? "none"] as const;
+
   return useQuery({
     enabled: channel !== null && channel.channelType !== "forum",
-    queryKey: ["channel-messages", channel?.id ?? "none"],
+    placeholderData: () => queryClient.getQueryData<RelayEvent[]>(queryKey),
+    queryKey,
     queryFn: async () => {
       if (!channel) {
         throw new Error("No channel selected.");
       }
 
       const history = await relayClient.fetchChannelHistory(channel.id, 200);
-      return dedupeMessagesById(history);
+      const currentMessages =
+        queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];
+      const mergedHistory = dedupeMessagesById([
+        ...currentMessages,
+        ...history,
+      ]).sort((left, right) => left.created_at - right.created_at);
+
+      return mergedHistory;
     },
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 30 * 60 * 1_000,
@@ -113,6 +124,24 @@ export function useChannelSubscription(channel: Channel | null) {
   const queryClient = useQueryClient();
   const channelId = channel?.id ?? null;
   const channelType = channel?.channelType ?? null;
+  const syncLatestHistory = useEffectEvent(async () => {
+    if (!channelId) {
+      return;
+    }
+
+    const history = await relayClient.fetchChannelHistory(channelId, 200);
+
+    queryClient.setQueryData<RelayEvent[]>(
+      ["channel-messages", channelId],
+      (current = []) => {
+        const mergedHistory = dedupeMessagesById([...current, ...history]).sort(
+          (left, right) => left.created_at - right.created_at,
+        );
+
+        return mergedHistory;
+      },
+    );
+  });
 
   const appendMessage = useEffectEvent((event: RelayEvent) => {
     if (!channelId) {
@@ -151,6 +180,16 @@ export function useChannelSubscription(channel: Channel | null) {
         }
 
         cleanup = dispose;
+
+        void syncLatestHistory().catch((error) => {
+          if (!isDisposed) {
+            console.error(
+              "Failed to refresh channel history after subscribing",
+              channelId,
+              error,
+            );
+          }
+        });
       })
       .catch((error) => {
         console.error("Failed to subscribe to channel", channelId, error);

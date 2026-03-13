@@ -1,0 +1,235 @@
+use std::collections::HashMap;
+
+use tauri::AppHandle;
+
+use crate::{
+    managed_agents::{
+        append_log_marker, managed_agent_log_path, missing_command_message, open_log_file,
+        resolve_command, ManagedAgentProcess, ManagedAgentRecord, ManagedAgentSummary,
+        DEFAULT_AGENT_ARG,
+    },
+    util::now_iso,
+};
+
+pub fn sync_managed_agent_processes(
+    records: &mut [ManagedAgentRecord],
+    runtimes: &mut HashMap<String, ManagedAgentProcess>,
+) -> bool {
+    let mut changed = false;
+    let mut exited = Vec::new();
+
+    for (pubkey, runtime) in runtimes.iter_mut() {
+        let status = match runtime.child.try_wait() {
+            Ok(status) => status,
+            Err(error) => {
+                if let Some(record) = records.iter_mut().find(|record| record.pubkey == *pubkey) {
+                    record.updated_at = now_iso();
+                    record.last_error = Some(format!("failed to inspect process state: {error}"));
+                }
+                changed = true;
+                exited.push(pubkey.clone());
+                continue;
+            }
+        };
+
+        let Some(status) = status else {
+            continue;
+        };
+
+        if let Some(record) = records.iter_mut().find(|record| record.pubkey == *pubkey) {
+            record.updated_at = now_iso();
+            record.last_stopped_at = Some(now_iso());
+            record.last_exit_code = status.code();
+            record.last_error = if status.success() {
+                None
+            } else {
+                Some(format!("harness exited with status {status}"))
+            };
+        }
+
+        changed = true;
+        exited.push(pubkey.clone());
+    }
+
+    for pubkey in exited {
+        runtimes.remove(&pubkey);
+    }
+
+    changed
+}
+
+pub fn build_managed_agent_summary(
+    app: &AppHandle,
+    record: &ManagedAgentRecord,
+    runtimes: &HashMap<String, ManagedAgentProcess>,
+) -> Result<ManagedAgentSummary, String> {
+    let (status, pid, log_path) = if let Some(runtime) = runtimes.get(&record.pubkey) {
+        (
+            "running".to_string(),
+            Some(runtime.child.id()),
+            runtime.log_path.display().to_string(),
+        )
+    } else {
+        (
+            "stopped".to_string(),
+            None,
+            managed_agent_log_path(app, &record.pubkey)?
+                .display()
+                .to_string(),
+        )
+    };
+
+    Ok(ManagedAgentSummary {
+        pubkey: record.pubkey.clone(),
+        name: record.name.clone(),
+        relay_url: record.relay_url.clone(),
+        acp_command: record.acp_command.clone(),
+        agent_command: record.agent_command.clone(),
+        agent_args: record.agent_args.clone(),
+        mcp_command: record.mcp_command.clone(),
+        turn_timeout_seconds: record.turn_timeout_seconds,
+        has_api_token: record.api_token.is_some(),
+        status,
+        pid,
+        created_at: record.created_at.clone(),
+        updated_at: record.updated_at.clone(),
+        last_started_at: record.last_started_at.clone(),
+        last_stopped_at: record.last_stopped_at.clone(),
+        last_exit_code: record.last_exit_code,
+        last_error: record.last_error.clone(),
+        log_path,
+    })
+}
+
+pub fn find_managed_agent_mut<'a>(
+    records: &'a mut [ManagedAgentRecord],
+    pubkey: &str,
+) -> Result<&'a mut ManagedAgentRecord, String> {
+    records
+        .iter_mut()
+        .find(|record| record.pubkey == pubkey)
+        .ok_or_else(|| format!("agent {pubkey} not found"))
+}
+
+pub fn start_managed_agent_process(
+    app: &AppHandle,
+    record: &mut ManagedAgentRecord,
+    runtimes: &mut HashMap<String, ManagedAgentProcess>,
+) -> Result<(), String> {
+    if let Some(runtime) = runtimes.get_mut(&record.pubkey) {
+        if runtime
+            .child
+            .try_wait()
+            .map_err(|error| format!("failed to inspect running process: {error}"))?
+            .is_none()
+        {
+            return Ok(());
+        }
+
+        runtimes.remove(&record.pubkey);
+    }
+
+    let log_path = managed_agent_log_path(app, &record.pubkey)?;
+    append_log_marker(
+        &log_path,
+        &format!(
+            "\n=== starting {} ({}) at {} ===",
+            record.name,
+            record.pubkey,
+            now_iso()
+        ),
+    )?;
+
+    let stdout = open_log_file(&log_path)?;
+    let stderr = stdout
+        .try_clone()
+        .map_err(|error| format!("failed to clone log handle: {error}"))?;
+    let agent_args = if record.agent_args.is_empty() {
+        vec![DEFAULT_AGENT_ARG.to_string()]
+    } else {
+        record.agent_args.clone()
+    };
+    let resolved_acp_command = resolve_command(&record.acp_command, Some(app))
+        .ok_or_else(|| missing_command_message(&record.acp_command, "ACP harness command"))?;
+    let resolved_mcp_command = resolve_command(&record.mcp_command, Some(app))
+        .ok_or_else(|| missing_command_message(&record.mcp_command, "MCP server command"))?;
+
+    let mut command = std::process::Command::new(&resolved_acp_command);
+    command.stdin(std::process::Stdio::null());
+    command.stdout(std::process::Stdio::from(stdout));
+    command.stderr(std::process::Stdio::from(stderr));
+    command.env("SPROUT_PRIVATE_KEY", &record.private_key_nsec);
+    command.env("SPROUT_RELAY_URL", &record.relay_url);
+    command.env("SPROUT_ACP_AGENT_COMMAND", &record.agent_command);
+    command.env("SPROUT_ACP_AGENT_ARGS", agent_args.join(","));
+    command.env("SPROUT_ACP_MCP_COMMAND", &resolved_mcp_command);
+    command.env(
+        "SPROUT_ACP_TURN_TIMEOUT",
+        record.turn_timeout_seconds.to_string(),
+    );
+    command.env(
+        "GOOSE_MODE",
+        std::env::var("GOOSE_MODE").unwrap_or_else(|_| "auto".to_string()),
+    );
+    command.env_remove("SPROUT_ACP_PRIVATE_KEY");
+    command.env_remove("SPROUT_ACP_API_TOKEN");
+
+    if let Some(token) = &record.api_token {
+        command.env("SPROUT_API_TOKEN", token);
+    } else {
+        command.env_remove("SPROUT_API_TOKEN");
+    }
+
+    let child = command.spawn().map_err(|error| {
+        format!(
+            "failed to spawn `{}` for agent {}: {error}",
+            resolved_acp_command.display(),
+            record.name
+        )
+    })?;
+
+    let now = now_iso();
+    record.updated_at = now.clone();
+    record.last_started_at = Some(now);
+    record.last_stopped_at = None;
+    record.last_exit_code = None;
+    record.last_error = None;
+
+    runtimes.insert(
+        record.pubkey.clone(),
+        ManagedAgentProcess { child, log_path },
+    );
+    Ok(())
+}
+
+pub fn stop_managed_agent_process(
+    record: &mut ManagedAgentRecord,
+    runtimes: &mut HashMap<String, ManagedAgentProcess>,
+) -> Result<(), String> {
+    let Some(mut runtime) = runtimes.remove(&record.pubkey) else {
+        return Ok(());
+    };
+
+    let _ = runtime.child.kill();
+    let status = runtime
+        .child
+        .wait()
+        .map_err(|error| format!("failed to wait for agent shutdown: {error}"))?;
+    let now = now_iso();
+    record.updated_at = now.clone();
+    record.last_stopped_at = Some(now);
+    record.last_exit_code = status.code();
+    record.last_error = None;
+
+    append_log_marker(
+        &runtime.log_path,
+        &format!(
+            "=== stopped {} ({}) at {} ===",
+            record.name,
+            record.pubkey,
+            now_iso()
+        ),
+    )?;
+
+    Ok(())
+}

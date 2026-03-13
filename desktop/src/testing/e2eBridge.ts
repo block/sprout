@@ -268,6 +268,7 @@ type MockManagedAgent = RawManagedAgent & {
 };
 
 type WsHandler = (message: unknown) => void;
+const GLOBAL_MOCK_SUBSCRIPTION = "*";
 
 type MockSocket = {
   handler: WsHandler;
@@ -1046,7 +1047,10 @@ function emitMockHistory(socket: MockSocket, subId: string, channelId: string) {
 function emitMockLiveEvent(channelId: string, event: RelayEvent) {
   for (const socket of mockSockets.values()) {
     for (const [subId, subscribedChannelId] of socket.subscriptions) {
-      if (subscribedChannelId === channelId) {
+      if (
+        subscribedChannelId === channelId ||
+        subscribedChannelId === GLOBAL_MOCK_SUBSCRIPTION
+      ) {
         sendWsText(socket.handler, ["EVENT", subId, event]);
       }
     }
@@ -2534,13 +2538,15 @@ function sendToMockSocket(args: {
     const subId = rest[0] as string;
     const filter = rest[1] as { "#h"?: string[] };
     const channelId = filter["#h"]?.[0];
-    if (!channelId) {
+
+    if (subId.startsWith("live-")) {
+      socket.subscriptions.set(subId, channelId ?? GLOBAL_MOCK_SUBSCRIPTION);
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
 
-    if (subId.startsWith("live-")) {
-      socket.subscriptions.set(subId, channelId);
+    if (!channelId) {
+      sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
 

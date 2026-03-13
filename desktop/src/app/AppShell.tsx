@@ -41,6 +41,7 @@ import { ChannelBrowserDialog } from "@/features/channels/ui/ChannelBrowserDialo
 import { SearchDialog } from "@/features/search/ui/SearchDialog";
 import { SettingsView } from "@/features/settings/ui/SettingsView";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
+import { relayClient } from "@/shared/api/relayClient";
 import { getEventById, joinChannel } from "@/shared/api/tauri";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { Channel, RelayEvent, SearchHit } from "@/shared/api/types";
@@ -206,8 +207,12 @@ export function AppShell() {
         : selectedView === "settings"
           ? "settings"
           : `channel:${activeChannel?.id ?? "none"}`;
+  const shouldLoadTimeline =
+    activeChannel !== null && activeChannel.channelType !== "forum";
   const isTimelineLoading =
-    messagesQuery.isLoading && resolvedMessages.length === 0;
+    shouldLoadTimeline &&
+    (messagesQuery.isPending ||
+      (messagesQuery.isFetching && resolvedMessages.length === 0));
 
   const requestedAncestorIdsRef = React.useRef<Set<string>>(new Set());
   const previousActiveChannelIdRef = React.useRef<string | null>(
@@ -299,6 +304,20 @@ export function AppShell() {
     },
     [handleOpenChannel],
   );
+
+  React.useEffect(() => {
+    let isCancelled = false;
+
+    void relayClient.preconnect().catch((error) => {
+      if (!isCancelled) {
+        console.error("Failed to preconnect to relay", error);
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   React.useEffect(() => {
     if (previousActiveChannelIdRef.current === activeChannelId) {
@@ -541,7 +560,7 @@ export function AppShell() {
               presenceStatus={presenceSession.currentStatus}
             />
           ) : (
-            <>
+            <React.Fragment key={activeChannel?.id ?? "no-channel"}>
               <MessageTimeline
                 activeReplyTargetId={replyTargetId}
                 emptyDescription={
@@ -557,7 +576,6 @@ export function AppShell() {
                     : "No channel selected"
                 }
                 isLoading={isTimelineLoading}
-                key={activeChannel?.id ?? "no-channel"}
                 messages={timelineMessages}
                 onReply={(message) => {
                   setReplyTargetId((current) =>
@@ -599,7 +617,6 @@ export function AppShell() {
                   sendMessageMutation.isPending
                 }
                 isSending={sendMessageMutation.isPending}
-                key={activeChannel?.id ?? "no-channel"}
                 onCancelReply={() => {
                   setReplyTargetId(null);
                 }}
@@ -632,7 +649,7 @@ export function AppShell() {
                     : null
                 }
               />
-            </>
+            </React.Fragment>
           )}
         </div>
 
