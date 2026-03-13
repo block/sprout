@@ -533,6 +533,20 @@ export async function sendChannelMessage(
   };
 }
 
+export async function addReaction(
+  eventId: string,
+  emoji: string,
+): Promise<void> {
+  await invokeTauri("add_reaction", { eventId, emoji });
+}
+
+export async function removeReaction(
+  eventId: string,
+  emoji: string,
+): Promise<void> {
+  await invokeTauri("remove_reaction", { eventId, emoji });
+}
+
 export async function signRelayEvent(input: {
   kind: number;
   content: string;

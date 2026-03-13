@@ -10,7 +10,7 @@ use sprout_audit::{AuditAction, NewAuditEntry};
 use sprout_core::event::StoredEvent;
 use sprout_core::kind::{
     event_kind_u32, is_ephemeral, is_workflow_execution_kind, KIND_AUTH, KIND_CANVAS,
-    KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE,
+    KIND_DELETION, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE,
     KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
     KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
     KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
@@ -279,6 +279,19 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     if crate::handlers::side_effects::is_admin_kind(kind_u32) {
         if let Err(e) =
             crate::handlers::side_effects::validate_admin_event(kind_u32, &event, &state).await
+        {
+            conn.send(RelayMessage::ok(
+                &event_id_hex,
+                false,
+                &format!("invalid: {e}"),
+            ));
+            return;
+        }
+    }
+
+    if kind_u32 == KIND_DELETION {
+        if let Err(e) =
+            crate::handlers::side_effects::validate_standard_deletion_event(&event, &state).await
         {
             conn.send(RelayMessage::ok(
                 &event_id_hex,

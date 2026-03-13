@@ -7,7 +7,11 @@ import {
   resolveReplyRootId,
 } from "@/features/messages/lib/threading";
 import { relayClient } from "@/shared/api/relayClient";
-import { sendChannelMessage } from "@/shared/api/tauri";
+import {
+  addReaction,
+  removeReaction,
+  sendChannelMessage,
+} from "@/shared/api/tauri";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
 
 type MessageQueryContext = {
@@ -275,6 +279,27 @@ export function useSendMessageMutation(
           return mergeMessages(withoutOptimistic, message);
         },
       );
+    },
+  });
+}
+
+export function useToggleReactionMutation() {
+  return useMutation<
+    void,
+    Error,
+    {
+      eventId: string;
+      emoji: string;
+      remove: boolean;
+    }
+  >({
+    mutationFn: async ({ eventId, emoji, remove }) => {
+      if (remove) {
+        await removeReaction(eventId, emoji);
+        return;
+      }
+
+      await addReaction(eventId, emoji);
     },
   });
 }

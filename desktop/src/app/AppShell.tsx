@@ -18,6 +18,7 @@ import {
   mergeMessages,
   useSendMessageMutation,
   useChannelSubscription,
+  useToggleReactionMutation,
 } from "@/features/messages/hooks";
 import {
   collectMessageAuthorPubkeys,
@@ -126,6 +127,7 @@ export function AppShell() {
     activeChannel,
     identityQuery.data,
   );
+  const toggleReactionMutation = useToggleReactionMutation();
   const availableChannelIds = React.useMemo(
     () => new Set(channels.map((channel) => channel.id)),
     [channels],
@@ -546,6 +548,19 @@ export function AppShell() {
                     current === message.id ? null : message.id,
                   );
                 }}
+                onToggleReaction={
+                  activeChannel &&
+                  activeChannel.archivedAt === null &&
+                  activeChannel.channelType !== "forum"
+                    ? async (message, emoji, remove) => {
+                        await toggleReactionMutation.mutateAsync({
+                          emoji,
+                          eventId: message.id,
+                          remove,
+                        });
+                      }
+                    : undefined
+                }
                 onTargetReached={(messageId) => {
                   setSearchAnchor((current) =>
                     current?.eventId === messageId ? null : current,

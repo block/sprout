@@ -1,3 +1,9 @@
+export type TimelineReaction = {
+  emoji: string;
+  count: number;
+  reactedByCurrentUser?: boolean;
+};
+
 export type TimelineMessage = {
   id: string;
   createdAt: number;
@@ -17,4 +23,5 @@ export type TimelineMessage = {
   highlighted?: boolean;
   kind?: number;
   tags?: string[][];
+  reactions?: TimelineReaction[];
 };
