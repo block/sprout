@@ -419,23 +419,17 @@ impl Translator {
         let kind_u32 = event.kind.as_u16() as u32;
 
         // Accept kind:42 (channel message), kind:41 (channel metadata edit),
-        // kind:1 (text note), kind:7 (reaction), and kind:5 (deletion).
+        // kind:1 (text note), and kind:7 (reaction).
+        // kind:5 (deletion) is intentionally NOT accepted inbound.
+        // Inbound kind:5 blocked: relay deletion handler lacks author-match authorization.
+        // External clients could delete any user's messages. Re-enable after adding
+        // author validation to handle_standard_deletion_event.
         // Everything else is rejected.
-        if kind_u32 != 42 && kind_u32 != 41 && kind_u32 != 1 && kind_u32 != 7 && kind_u32 != 5 {
+        if kind_u32 != 42 && kind_u32 != 41 && kind_u32 != 1 && kind_u32 != 7 {
             return Err(ProxyError::PermissionDenied(format!(
-                "kind {} not accepted by proxy (expected 1, 5, 7, 41, or 42)",
+                "kind {} not accepted by proxy (expected 1, 7, 41, or 42)",
                 kind_u32
             )));
-        }
-
-        if kind_u32 == 5 {
-            return self.translate_inbound_tag_targeted(
-                event,
-                external_pubkey,
-                allowed_channels,
-                Kind::EventDeletion,
-                "deletion",
-            );
         }
 
         if kind_u32 == 7 {

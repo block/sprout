@@ -205,12 +205,17 @@ export function ChannelManagementSheet({
   // not on every background refetch, which would clobber in-flight edits.
   const syncedForRef = React.useRef<string | null>(null);
   React.useEffect(() => {
+    if (!open) {
+      // Reset on close so the next open re-syncs from server.
+      syncedForRef.current = null;
+      return;
+    }
     if (!detail) {
       return;
     }
 
-    const key = `${detail.id}:${open}`;
-    if (!open || syncedForRef.current === key) {
+    const key = detail.id;
+    if (syncedForRef.current === key) {
       return;
     }
     syncedForRef.current = key;

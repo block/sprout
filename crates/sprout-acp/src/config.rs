@@ -159,6 +159,19 @@ pub struct Config {
 
 impl Config {
     pub fn from_cli() -> Result<Self, ConfigError> {
+        // Propagate legacy env vars so clap sees them under the canonical names.
+        // Only set if the canonical var is absent — clap's `env` reads these.
+        for (legacy, canonical) in [
+            ("SPROUT_ACP_PRIVATE_KEY", "SPROUT_PRIVATE_KEY"),
+            ("SPROUT_ACP_API_TOKEN", "SPROUT_API_TOKEN"),
+        ] {
+            if std::env::var(canonical).is_err() {
+                if let Ok(val) = std::env::var(legacy) {
+                    std::env::set_var(canonical, &val);
+                }
+            }
+        }
+
         let args = CliArgs::parse();
         let keys = Keys::parse(&args.private_key)?;
 
@@ -258,6 +271,23 @@ pub fn load_rules(path: &std::path::Path) -> Result<Vec<SubscriptionRule>, Confi
                     "rule '{}': filter too long ({} bytes, max 4096)",
                     rule.name,
                     expr.len()
+                )));
+            }
+            // Fail fast: parse the expression at load time so typos don't
+            // silently produce dead rules at runtime.
+            if let Err(e) = evalexpr::build_operator_tree(expr) {
+                return Err(ConfigError::ConfigFile(format!(
+                    "rule '{}': invalid filter expression: {e}",
+                    rule.name,
+                )));
+            }
+        }
+        // Validate channel scope — catch typos like "ALL" or "All" early.
+        if let crate::filter::ChannelScope::All(ref s) = rule.channels {
+            if s != "all" {
+                return Err(ConfigError::ConfigFile(format!(
+                    "rule '{}': channels must be \"all\" or a list, got {:?}",
+                    rule.name, s,
                 )));
             }
         }

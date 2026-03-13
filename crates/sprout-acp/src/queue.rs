@@ -226,19 +226,7 @@ fn format_event_block(channel_id: Uuid, be: &BatchEvent) -> String {
 
     // Include raw tags for non-stream-message kinds.
     if !STREAM_MESSAGE_KINDS.contains(&kind) {
-        let tags_json: Vec<Vec<String>> = be
-            .event
-            .tags
-            .iter()
-            .map(|t| {
-                // Reconstruct tag as a Vec<String> from its string representation.
-                let mut parts = vec![t.kind().to_string()];
-                if let Some(content) = t.content() {
-                    parts.push(content.to_string());
-                }
-                parts
-            })
-            .collect();
+        let tags_json: Vec<&[String]> = be.event.tags.iter().map(|t| t.as_slice()).collect();
         if let Ok(tags_str) = serde_json::to_string(&tags_json) {
             block.push_str(&format!("\nTags: {tags_str}"));
         }

@@ -1,4 +1,4 @@
 ALTER TABLE reactions
-    ADD COLUMN reaction_event_id VARBINARY(32) NULL;
+    ADD COLUMN reaction_event_id VARBINARY(32) NULL AFTER emoji;
 
-CREATE UNIQUE INDEX idx_reactions_source_event ON reactions (reaction_event_id);
+CREATE INDEX idx_reactions_source_event ON reactions (reaction_event_id);

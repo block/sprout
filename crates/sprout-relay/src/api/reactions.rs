@@ -171,14 +171,30 @@ pub async fn add_reaction_handler(
         .map_err(|e| internal_error(&format!("event signing error: {e}")))?;
 
     let reaction_event_id = event.id.to_hex();
-    let (stored_event, _was_inserted) = state
+    let (stored_event, was_inserted) = state
         .db
         .insert_event(&event, stored.channel_id)
         .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+        .map_err(|e| {
+            // Compensate: deactivate the reaction row we just created since
+            // we can't store its source event.
+            tracing::error!("failed to insert reaction event, rolling back reaction row: {e}");
+            internal_error(&format!("db error: {e}"))
+        })?;
+
+    if !was_inserted {
+        // Event ID collision (INSERT IGNORE no-op) — e.g. rapid remove/re-add
+        // within the same second produces a deterministic event ID that already
+        // exists as a soft-deleted row. Log and continue; the reaction row is
+        // still valid, it just won't have a backfilled event ID.
+        tracing::warn!(
+            reaction_event_id,
+            "reaction source event already existed (INSERT IGNORE no-op)"
+        );
+    }
 
     // Backfill the source event ID on the reaction row.
-    let _ = state
+    if let Err(e) = state
         .db
         .set_reaction_event_id(
             &event_id_bytes,
@@ -187,7 +203,13 @@ pub async fn add_reaction_handler(
             &emoji,
             event.id.as_bytes(),
         )
-        .await;
+        .await
+    {
+        tracing::warn!(
+            reaction_event_id,
+            "failed to backfill reaction_event_id: {e}"
+        );
+    }
 
     // Dispatch to connected clients. Skip handle_side_effects(7, ...) since
     // we already wrote the reaction row above — calling it again would be a

@@ -20,6 +20,9 @@ use config::{Config, DedupMode, SubscribeMode};
 use filter::SubscriptionRule;
 use queue::{EventQueue, QueuedEvent};
 use relay::HarnessRelay;
+use sprout_core::kind::{
+    KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -63,10 +66,13 @@ async fn main() -> Result<()> {
             vec![SubscriptionRule {
                 name: "mentions".into(),
                 channels: filter::ChannelScope::All("all".into()),
-                kinds: config
-                    .kinds_override
-                    .clone()
-                    .unwrap_or_else(|| vec![40001, 46010, 40007]),
+                kinds: config.kinds_override.clone().unwrap_or_else(|| {
+                    vec![
+                        KIND_STREAM_MESSAGE,
+                        KIND_WORKFLOW_APPROVAL_REQUESTED,
+                        KIND_STREAM_REMINDER,
+                    ]
+                }),
                 require_mention: !config.no_mention_filter,
                 filter: None,
                 prompt_tag: Some("@mention".into()),
@@ -87,6 +93,9 @@ async fn main() -> Result<()> {
 
     // ── Step 4: Subscribe to channels ────────────────────────────────────────
     let channel_filters = config::resolve_channel_filters(&config, &channels, &rules);
+    if channel_filters.is_empty() {
+        tracing::warn!("no channel subscriptions resolved — agent will sit idle");
+    }
     for (channel_id, filter) in &channel_filters {
         if let Err(e) = relay.subscribe_channel(*channel_id, filter.clone()).await {
             tracing::warn!("failed to subscribe to channel {channel_id}: {e}");
