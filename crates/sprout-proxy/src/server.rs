@@ -1057,6 +1057,7 @@ mod tests {
             channel_map.clone(),
             "http://localhost:3000",
             "sprout_test",
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         ));
         let upstream = Arc::new(UpstreamClient::new("ws://localhost:3000", "sprout_test"));
         ProxyState {

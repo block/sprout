@@ -46,6 +46,14 @@ async fn main() {
     let server_key_hex = env_required("SPROUT_PROXY_SERVER_KEY");
     let salt_hex = env_required("SPROUT_PROXY_SALT");
     let api_token = env_required("SPROUT_PROXY_API_TOKEN");
+    let relay_pubkey = env_required("SPROUT_RELAY_PUBKEY").to_lowercase();
+    // Validate relay pubkey is well-formed 64-char hex at startup.
+    // Input is lowercased above, so mixed-case is accepted.
+    if relay_pubkey.len() != 64 || !relay_pubkey.chars().all(|c| c.is_ascii_hexdigit()) {
+        eprintln!("error: SPROUT_RELAY_PUBKEY must be a 64-character hex string (32 bytes)");
+        std::process::exit(1);
+    }
+    info!(relay_pubkey = %relay_pubkey, "relay pubkey configured for attribution trust");
 
     // ── Parse server keypair ──────────────────────────────────────────────────
 
@@ -96,6 +104,7 @@ async fn main() {
         channel_map.clone(),
         api_base.clone(),
         api_token.clone(),
+        relay_pubkey,
     ));
 
     // ── Init guest store (empty — guests registered via POST /admin/guests) ────

@@ -867,20 +867,30 @@ async fn call_webhook_impl(
 ///
 /// This is an internal call — the workflow engine runs inside the relay process,
 /// so `localhost:3000` is always reachable without SSRF concerns.
+///
+/// Returns a shared `reqwest::Client` reused across all workflow HTTP calls.
+/// Sharing a single client reuses the underlying connection pool.
+#[cfg(feature = "reqwest")]
+fn shared_http_client() -> &'static reqwest::Client {
+    use std::sync::LazyLock;
+    use std::time::Duration;
+    static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("HTTP client build must succeed")
+    });
+    &CLIENT
+}
+
 #[cfg(feature = "reqwest")]
 async fn send_message_impl(channel_id: &str, text: &str) -> Result<JsonValue, WorkflowError> {
-    use reqwest::Client;
-    use std::time::Duration;
-
     let base_url = std::env::var("SPROUT_RELAY_BASE_URL")
         .unwrap_or_else(|_| "http://localhost:3000".to_owned());
 
     let url = format!("{base_url}/api/channels/{channel_id}/messages");
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| WorkflowError::WebhookError(format!("failed to build HTTP client: {e}")))?;
+    let client = shared_http_client();
 
     let mut req = client
         .post(&url)
@@ -927,18 +937,12 @@ async fn send_message_impl(channel_id: &str, text: &str) -> Result<JsonValue, Wo
 /// POST `{"emoji": emoji}` to `POST /api/messages/{message_id}/reactions`.
 #[cfg(feature = "reqwest")]
 async fn add_reaction_impl(message_id: &str, emoji: &str) -> Result<JsonValue, WorkflowError> {
-    use reqwest::Client;
-    use std::time::Duration;
-
     let base_url = std::env::var("SPROUT_RELAY_BASE_URL")
         .unwrap_or_else(|_| "http://localhost:3000".to_owned());
 
     let url = format!("{base_url}/api/messages/{message_id}/reactions");
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| WorkflowError::WebhookError(format!("failed to build HTTP client: {e}")))?;
+    let client = shared_http_client();
 
     let mut req = client
         .post(&url)

@@ -6,7 +6,7 @@ import {
   signRelayEvent,
 } from "@/shared/api/tauri";
 import type { PresenceStatus, RelayEvent } from "@/shared/api/types";
-import { STREAM_MESSAGE_KINDS } from "@/shared/constants/kinds";
+import { CHANNEL_EVENT_KINDS } from "@/shared/constants/kinds";
 
 type RelaySubscriptionFilter = {
   kinds: number[];
@@ -239,7 +239,7 @@ class RelayClient {
     limit: number,
   ): RelaySubscriptionFilter {
     return {
-      kinds: [...STREAM_MESSAGE_KINDS],
+      kinds: [...CHANNEL_EVENT_KINDS],
       "#h": [channelId],
       limit,
     };

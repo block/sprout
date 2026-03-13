@@ -20,6 +20,7 @@ thiserror    = { workspace = true }
 sha2         = { workspace = true }
 hmac         = { workspace = true }
 dashmap      = { workspace = true }
+moka         = { workspace = true }
 reqwest      = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }

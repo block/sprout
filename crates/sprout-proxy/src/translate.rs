@@ -15,11 +15,12 @@
 //! each external user maps to a consistent shadow pubkey across sessions.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use dashmap::DashMap;
+use moka::sync::Cache;
 use nostr::prelude::*;
 use sprout_core::kind::{
-    event_kind_u32, KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT,
+    event_kind_u32, KIND_DELETION, KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT,
     KIND_STREAM_MESSAGE_V2,
 };
 use uuid::Uuid;
@@ -43,9 +44,12 @@ pub struct Translator {
     http_client: reqwest::Client,
     api_base: String,
     api_token: String,
-    internal_to_external_event_ids: DashMap<String, String>,
-    external_to_internal_event_ids: DashMap<String, String>,
-    internal_event_channels: DashMap<String, Uuid>,
+    /// Hex-encoded public key of the relay. Only events signed by this key
+    /// may carry trusted `actor`/`p` attribution tags.
+    relay_pubkey: String,
+    internal_to_external_event_ids: Cache<String, String>,
+    external_to_internal_event_ids: Cache<String, String>,
+    internal_event_channels: Cache<String, Uuid>,
 }
 
 impl Translator {
@@ -55,17 +59,32 @@ impl Translator {
         channel_map: Arc<ChannelMap>,
         api_base: impl Into<String>,
         api_token: impl Into<String>,
+        relay_pubkey: impl Into<String>,
     ) -> Self {
+        let cache_ttl = Duration::from_secs(3600);
         Self {
             kind_translator: KindTranslator::new(),
             shadow_keys,
             channel_map,
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .expect("HTTP client build must succeed"),
             api_base: api_base.into(),
             api_token: api_token.into(),
-            internal_to_external_event_ids: DashMap::new(),
-            external_to_internal_event_ids: DashMap::new(),
-            internal_event_channels: DashMap::new(),
+            relay_pubkey: relay_pubkey.into(),
+            internal_to_external_event_ids: Cache::builder()
+                .max_capacity(100_000)
+                .time_to_idle(cache_ttl)
+                .build(),
+            external_to_internal_event_ids: Cache::builder()
+                .max_capacity(100_000)
+                .time_to_idle(cache_ttl)
+                .build(),
+            internal_event_channels: Cache::builder()
+                .max_capacity(100_000)
+                .time_to_idle(cache_ttl)
+                .build(),
         }
     }
 }
@@ -81,15 +100,11 @@ impl Translator {
     }
 
     fn lookup_external_event_id(&self, internal_event_id: &str) -> Option<String> {
-        self.internal_to_external_event_ids
-            .get(internal_event_id)
-            .map(|value| value.value().clone())
+        self.internal_to_external_event_ids.get(internal_event_id)
     }
 
     fn lookup_internal_event_id(&self, external_event_id: &str) -> Option<String> {
-        self.external_to_internal_event_ids
-            .get(external_event_id)
-            .map(|value| value.value().clone())
+        self.external_to_internal_event_ids.get(external_event_id)
     }
 
     fn cache_internal_channel(&self, internal_event_id: &str, channel_uuid: Uuid) {
@@ -98,12 +113,28 @@ impl Translator {
     }
 
     fn lookup_internal_channel(&self, internal_event_id: &str) -> Option<Uuid> {
-        self.internal_event_channels
-            .get(internal_event_id)
-            .map(|value| *value.value())
+        self.internal_event_channels.get(internal_event_id)
     }
 
     fn resolve_shadow_author_hex(&self, event: &Event) -> String {
+        // Only trust actor/p tags on relay-signed events (API-originated).
+        // User-signed events could carry spoofed actor/p tags — if the event
+        // pubkey doesn't match the relay's keypair, fall back to the event
+        // pubkey directly.
+        if event.pubkey.to_hex() == self.relay_pubkey {
+            for tag_name in &["actor", "p"] {
+                for tag in event.tags.iter() {
+                    let slice = tag.as_slice();
+                    if slice.len() >= 2 && slice[0] == *tag_name {
+                        let hex = &slice[1];
+                        if hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                            // Normalize to lowercase for consistent shadow-key derivation.
+                            return hex.to_lowercase();
+                        }
+                    }
+                }
+            }
+        }
         event.pubkey.to_hex()
     }
 
@@ -248,6 +279,30 @@ impl Translator {
         event: &Event,
         allowed_channels: &[Uuid],
     ) -> Result<Option<Event>, ProxyError> {
+        self.translate_outbound_tag_targeted(event, allowed_channels, Kind::Reaction)
+            .await
+    }
+
+    async fn translate_outbound_deletion(
+        &self,
+        event: &Event,
+        allowed_channels: &[Uuid],
+    ) -> Result<Option<Event>, ProxyError> {
+        self.translate_outbound_tag_targeted(event, allowed_channels, Kind::EventDeletion)
+            .await
+    }
+
+    /// Shared outbound translation for tag-targeted events (reactions, deletions).
+    ///
+    /// Resolves the channel via `#h`, translates all internal `#e` event IDs to
+    /// their external counterparts, strips `#h` and `actor` tags, and re-signs
+    /// with the shadow key for the original author.
+    async fn translate_outbound_tag_targeted(
+        &self,
+        event: &Event,
+        allowed_channels: &[Uuid],
+        kind: Kind,
+    ) -> Result<Option<Event>, ProxyError> {
         let Some((_uuid_str, channel_info)) = self.resolve_channel_info(event, allowed_channels)?
         else {
             return Ok(None);
@@ -280,7 +335,7 @@ impl Translator {
                 parts.extend(slice.iter().skip(2).cloned());
                 let part_refs: Vec<&str> = parts.iter().map(String::as_str).collect();
                 new_tags.push(Tag::parse(&part_refs).map_err(|e| {
-                    ProxyError::Upstream(format!("reaction tag build failed: {e}"))
+                    ProxyError::Upstream(format!("outbound tag build failed: {e}"))
                 })?);
                 saw_target = true;
                 continue;
@@ -296,7 +351,7 @@ impl Translator {
             .shadow_keys
             .get_or_create(&self.resolve_shadow_author_hex(event))?;
 
-        let translated = EventBuilder::new(Kind::Reaction, event.content.clone(), new_tags)
+        let translated = EventBuilder::new(kind, event.content.clone(), new_tags)
             .custom_created_at(event.created_at)
             .sign_with_keys(&shadow_keys)
             .map_err(|e| ProxyError::Upstream(format!("outbound signing failed: {e}")))?;
@@ -330,6 +385,11 @@ impl Translator {
                 .translate_outbound_reaction(event, allowed_channels)
                 .await;
         }
+        if kind_u32 == KIND_DELETION {
+            return self
+                .translate_outbound_deletion(event, allowed_channels)
+                .await;
+        }
 
         self.translate_outbound_message_like(event, allowed_channels)
     }
@@ -359,104 +419,33 @@ impl Translator {
         let kind_u32 = event.kind.as_u16() as u32;
 
         // Accept kind:42 (channel message), kind:41 (channel metadata edit),
-        // kind:1 (text note), and kind:7 (reaction). Everything else is rejected.
-        if kind_u32 != 42 && kind_u32 != 41 && kind_u32 != 1 && kind_u32 != 7 {
+        // kind:1 (text note), kind:7 (reaction), and kind:5 (deletion).
+        // Everything else is rejected.
+        if kind_u32 != 42 && kind_u32 != 41 && kind_u32 != 1 && kind_u32 != 7 && kind_u32 != 5 {
             return Err(ProxyError::PermissionDenied(format!(
-                "kind {} not accepted by proxy (expected 1, 7, 41, or 42)",
+                "kind {} not accepted by proxy (expected 1, 5, 7, 41, or 42)",
                 kind_u32
             )));
         }
 
+        if kind_u32 == 5 {
+            return self.translate_inbound_tag_targeted(
+                event,
+                external_pubkey,
+                allowed_channels,
+                Kind::EventDeletion,
+                "deletion",
+            );
+        }
+
         if kind_u32 == 7 {
-            let target_external_id = event
-                .tags
-                .iter()
-                .rev()
-                .find_map(|tag| {
-                    let slice = tag.as_slice();
-                    if slice.len() >= 2
-                        && slice[0] == "e"
-                        && slice[1].len() == 64
-                        && slice[1].chars().all(|ch| ch.is_ascii_hexdigit())
-                    {
-                        Some(slice[1].clone())
-                    } else {
-                        None
-                    }
-                })
-                .ok_or_else(|| {
-                    ProxyError::PermissionDenied(
-                        "kind:7 event must reference a target message via #e".into(),
-                    )
-                })?;
-
-            let target_internal_id = self
-                .lookup_internal_event_id(&target_external_id)
-                .ok_or_else(|| {
-                    ProxyError::PermissionDenied(
-                        "reaction target is unknown to the proxy; fetch the message first".into(),
-                    )
-                })?;
-
-            let Some(channel_uuid) = self.lookup_internal_channel(&target_internal_id) else {
-                return Err(ProxyError::PermissionDenied(
-                    "reaction target is unknown to the proxy; fetch the message first".into(),
-                ));
-            };
-
-            if !allowed_channels.contains(&channel_uuid) {
-                return Err(ProxyError::PermissionDenied(
-                    "reaction target channel not in invite scope".into(),
-                ));
-            }
-
-            let mut new_tags: Vec<Tag> =
-                vec![Tag::parse(&["h", &channel_uuid.to_string()]).expect("h tag is always valid")];
-            let mut saw_target = false;
-
-            for tag in event.tags.iter() {
-                let slice = tag.as_slice();
-                if slice.first().map(|value| value.as_str()) == Some("h") {
-                    continue;
-                }
-                if slice.len() >= 2
-                    && slice[0] == "e"
-                    && slice[1].len() == 64
-                    && slice[1].chars().all(|ch| ch.is_ascii_hexdigit())
-                {
-                    let Some(internal_id) = self.lookup_internal_event_id(&slice[1]) else {
-                        return Err(ProxyError::PermissionDenied(
-                            "reaction target is unknown to the proxy; fetch the message first"
-                                .into(),
-                        ));
-                    };
-                    let mut parts = vec!["e".to_string(), internal_id];
-                    parts.extend(slice.iter().skip(2).cloned());
-                    let part_refs: Vec<&str> = parts.iter().map(String::as_str).collect();
-                    new_tags.push(Tag::parse(&part_refs).map_err(|e| {
-                        ProxyError::Upstream(format!("reaction tag build failed: {e}"))
-                    })?);
-                    saw_target = true;
-                    continue;
-                }
-                new_tags.push(tag.clone());
-            }
-
-            if !saw_target {
-                return Err(ProxyError::PermissionDenied(
-                    "kind:7 event must reference a target message via #e".into(),
-                ));
-            }
-
-            let shadow_keys = self.shadow_keys.get_or_create(external_pubkey)?;
-            let translated = EventBuilder::new(Kind::Reaction, &event.content, new_tags)
-                .custom_created_at(event.created_at)
-                .sign_with_keys(&shadow_keys)
-                .map_err(|e| ProxyError::Upstream(format!("inbound signing failed: {e}")))?;
-
-            self.cache_event_mapping(&translated.id.to_hex(), &event.id.to_hex());
-            self.cache_internal_channel(&translated.id.to_hex(), channel_uuid);
-            return Ok(translated);
+            return self.translate_inbound_tag_targeted(
+                event,
+                external_pubkey,
+                allowed_channels,
+                Kind::Reaction,
+                "reaction",
+            );
         }
 
         // Find the channel-reference `#e` tag by looking up each `#e` value
@@ -534,6 +523,148 @@ impl Translator {
 
         self.cache_event_mapping(&translated.id.to_hex(), &event.id.to_hex());
         self.cache_internal_channel(&translated.id.to_hex(), channel_info.uuid);
+        Ok(translated)
+    }
+
+    /// Shared inbound translation for tag-targeted events (kind:5 deletion, kind:7 reaction).
+    ///
+    /// # Security
+    ///
+    /// Collects ALL hex `#e` tags and verifies every one resolves to the **same**
+    /// channel UUID that is in `allowed_channels`. A mixed-target event (targets
+    /// spanning multiple channels) is rejected outright — this prevents a client
+    /// from smuggling out-of-scope event IDs inside a single deletion or reaction.
+    fn translate_inbound_tag_targeted(
+        &self,
+        event: &Event,
+        external_pubkey: &str,
+        allowed_channels: &[Uuid],
+        kind: Kind,
+        label: &str,
+    ) -> Result<Event, ProxyError> {
+        // Collect all hex #e tag values.
+        let e_tag_values: Vec<String> = event
+            .tags
+            .iter()
+            .filter_map(|tag| {
+                let slice = tag.as_slice();
+                if slice.len() >= 2
+                    && slice[0] == "e"
+                    && slice[1].len() == 64
+                    && slice[1].chars().all(|ch| ch.is_ascii_hexdigit())
+                {
+                    Some(slice[1].clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if e_tag_values.is_empty() {
+            return Err(ProxyError::PermissionDenied(format!(
+                "kind:{} event must reference a target message via #e",
+                event.kind.as_u16()
+            )));
+        }
+
+        // Resolve every #e tag to an internal event ID and channel UUID.
+        // All targets must resolve to the same channel — cross-channel targeting
+        // is rejected to prevent authorization bypass.
+        let mut resolved_channel: Option<Uuid> = None;
+        // Resolve all external → internal ID mappings upfront. We store
+        // the resolved pairs so the tag-building loop below never re-reads
+        // the moka cache (which could evict entries between passes).
+        let mut resolved_ids: Vec<(String, String)> = Vec::with_capacity(e_tag_values.len());
+        for external_id in &e_tag_values {
+            let internal_id = self.lookup_internal_event_id(external_id).ok_or_else(|| {
+                ProxyError::PermissionDenied(format!(
+                    "{label} target is unknown to the proxy; fetch the message first"
+                ))
+            })?;
+            let channel_uuid = self.lookup_internal_channel(&internal_id).ok_or_else(|| {
+                ProxyError::PermissionDenied(format!(
+                    "{label} target is unknown to the proxy; fetch the message first"
+                ))
+            })?;
+            match resolved_channel {
+                None => resolved_channel = Some(channel_uuid),
+                Some(existing) if existing != channel_uuid => {
+                    return Err(ProxyError::PermissionDenied(format!(
+                        "{label} targets span multiple channels — cross-channel targeting rejected"
+                    )));
+                }
+                Some(_) => {}
+            }
+            resolved_ids.push((external_id.clone(), internal_id));
+        }
+        let id_map: std::collections::HashMap<&str, &str> = resolved_ids
+            .iter()
+            .map(|(ext, int)| (ext.as_str(), int.as_str()))
+            .collect();
+
+        let channel_uuid = resolved_channel.expect("e_tag_values non-empty guarantees Some");
+
+        if !allowed_channels.contains(&channel_uuid) {
+            return Err(ProxyError::PermissionDenied(format!(
+                "{label} target channel not in invite scope"
+            )));
+        }
+
+        // Build translated tag list: prepend #h, translate all #e values, drop
+        // any client-supplied #h tags (prevent unauthorized channel injection).
+        let mut new_tags: Vec<Tag> =
+            vec![Tag::parse(&["h", &channel_uuid.to_string()]).expect("h tag is always valid")];
+        let mut saw_target = false;
+
+        for tag in event.tags.iter() {
+            let slice = tag.as_slice();
+            // Strip client-supplied #h tags (authorized #h already added above).
+            if slice.first().map(|v| v.as_str()) == Some("h") {
+                continue;
+            }
+            // Strip actor tags — untrusted client data should not persist.
+            if slice.first().map(|v| v.as_str()) == Some("actor") {
+                continue;
+            }
+            if slice.len() >= 2
+                && slice[0] == "e"
+                && slice[1].len() == 64
+                && slice[1].chars().all(|ch| ch.is_ascii_hexdigit())
+            {
+                let internal_id = *id_map.get(slice[1].as_str()).ok_or_else(|| {
+                    ProxyError::PermissionDenied(format!(
+                        "{label} target is unknown to the proxy; fetch the message first"
+                    ))
+                })?;
+                let mut parts = vec!["e".to_string(), internal_id.to_string()];
+                parts.extend(slice.iter().skip(2).cloned());
+                let part_refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+                new_tags.push(
+                    Tag::parse(&part_refs).map_err(|e| {
+                        ProxyError::Upstream(format!("{label} tag build failed: {e}"))
+                    })?,
+                );
+                saw_target = true;
+                continue;
+            }
+            new_tags.push(tag.clone());
+        }
+
+        if !saw_target {
+            return Err(ProxyError::PermissionDenied(format!(
+                "kind:{} event must reference a target message via #e",
+                event.kind.as_u16()
+            )));
+        }
+
+        let shadow_keys = self.shadow_keys.get_or_create(external_pubkey)?;
+        let translated = EventBuilder::new(kind, &event.content, new_tags)
+            .custom_created_at(event.created_at)
+            .sign_with_keys(&shadow_keys)
+            .map_err(|e| ProxyError::Upstream(format!("inbound signing failed: {e}")))?;
+
+        self.cache_event_mapping(&translated.id.to_hex(), &event.id.to_hex());
+        self.cache_internal_channel(&translated.id.to_hex(), channel_uuid);
         Ok(translated)
     }
 }
@@ -701,6 +832,7 @@ mod tests {
             channel_map.clone(),
             "http://localhost:3000",
             "sprout_test",
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         );
 
         // Retrieve the kind:40 event ID for the test channel.

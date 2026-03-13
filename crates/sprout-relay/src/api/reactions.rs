@@ -96,6 +96,12 @@ pub async fn add_reaction_handler(
     if emoji.is_empty() {
         return Err(api_error(StatusCode::BAD_REQUEST, "emoji is required"));
     }
+    if emoji.chars().count() > 64 {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "emoji too long (max 64 characters)",
+        ));
+    }
 
     let event_id_bytes = decode_event_id(&event_id_hex)?;
 
@@ -128,6 +134,10 @@ pub async fn add_reaction_handler(
         .single()
         .unwrap_or_default();
 
+    // Check if this reaction already exists. This prevents creating duplicate
+    // kind:7 events for the same logical reaction. A narrow TOCTOU window
+    // remains for concurrent first-adds, but that's acceptable — both will
+    // succeed at the DB level (ON DUPLICATE KEY UPDATE is idempotent).
     if state
         .db
         .get_active_reaction_record(&event_id_bytes, event_created_at, &pubkey_bytes, &emoji)
@@ -305,7 +315,6 @@ pub async fn remove_reaction_handler(
 
     Ok(Json(serde_json::json!({
         "removed": true,
-        "legacy": true,
     })))
 }
 

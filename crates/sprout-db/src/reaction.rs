@@ -84,10 +84,14 @@ pub async fn add_reaction(
         ON DUPLICATE KEY UPDATE
             created_at = IF(removed_at IS NOT NULL, NOW(6), created_at),
             removed_at = NULL,
-            reaction_event_id = CASE
-                WHEN removed_at IS NOT NULL THEN VALUES(reaction_event_id)
-                ELSE COALESCE(reaction_event_id, VALUES(reaction_event_id))
-            END
+            -- Always take the newest source event ID. For already-active rows
+            -- with the same event ID, MySQL detects no actual value change and
+            -- reports rows_affected=0 (no-op). The REST API pre-check prevents
+            -- duplicate kind:7 events for the same logical reaction; the
+            -- WebSocket path deduplicates via event ID uniqueness at the events
+            -- table level. A narrow concurrent-first-add race can overwrite the
+            -- source ID, but both events remain valid and the DB stays consistent.
+            reaction_event_id = VALUES(reaction_event_id)
         "#,
     )
     .bind(event_created_at)
