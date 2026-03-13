@@ -1,12 +1,16 @@
-import { ArrowDown, CornerUpLeft } from "lucide-react";
+import { ArrowDown, CornerUpLeft, LoaderCircle, SmilePlus } from "lucide-react";
 import * as React from "react";
 
-import type { TimelineMessage } from "@/features/messages/types";
+import type {
+  TimelineMessage,
+  TimelineReaction,
+} from "@/features/messages/types";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
+import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Separator } from "@/shared/ui/separator";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { DiffMessage } from "./DiffMessage";
@@ -20,11 +24,26 @@ type MessageTimelineProps = {
   emptyDescription?: string;
   activeReplyTargetId?: string | null;
   onReply?: (message: TimelineMessage) => void;
+  onToggleReaction?: (
+    message: TimelineMessage,
+    emoji: string,
+    remove: boolean,
+  ) => Promise<void>;
   targetMessageId?: string | null;
   onTargetReached?: (messageId: string) => void;
 };
 
 const BOTTOM_THRESHOLD_PX = 72;
+const DEFAULT_REACTION_OPTIONS = [
+  "👍",
+  "❤️",
+  "🎉",
+  "🚀",
+  "👀",
+  "✅",
+  "🔥",
+  "👎",
+];
 
 function isNearBottom(container: HTMLDivElement) {
   return (
@@ -33,48 +52,189 @@ function isNearBottom(container: HTMLDivElement) {
   );
 }
 
+function getReactionOptions(reactions: TimelineReaction[]) {
+  const seen = new Set<string>();
+  const options: string[] = [];
+
+  for (const reaction of reactions) {
+    if (seen.has(reaction.emoji)) {
+      continue;
+    }
+
+    seen.add(reaction.emoji);
+    options.push(reaction.emoji);
+  }
+
+  for (const emoji of DEFAULT_REACTION_OPTIONS) {
+    if (seen.has(emoji)) {
+      continue;
+    }
+
+    seen.add(emoji);
+    options.push(emoji);
+  }
+
+  return options;
+}
+
 function MessageActionBar({
   activeReplyTargetId = null,
   message,
+  onReactionSelect,
   onReply,
+  reactionErrorMessage = null,
+  reactions,
+  reactionPending = false,
 }: {
   activeReplyTargetId?: string | null;
   message: TimelineMessage;
+  onReactionSelect?: (emoji: string) => Promise<void>;
   onReply?: (message: TimelineMessage) => void;
+  reactionErrorMessage?: string | null;
+  reactions: TimelineReaction[];
+  reactionPending?: boolean;
 }) {
-  if (!onReply) {
+  const [isReactionPickerOpen, setIsReactionPickerOpen] = React.useState(false);
+  const hasReplyAction = Boolean(onReply);
+  const hasReactionAction = Boolean(onReactionSelect);
+
+  if (!hasReplyAction && !hasReactionAction) {
     return null;
   }
 
   const isReplyingToMessage = activeReplyTargetId === message.id;
+  const selectedReactionCount = reactions.filter(
+    (reaction) => reaction.reactedByCurrentUser,
+  ).length;
+  const reactionOptions = getReactionOptions(reactions);
 
   return (
     <div
       className={cn(
-        "max-w-40 overflow-hidden rounded-full border border-border/70 bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85 transition-all duration-150 ease-out",
+        "max-w-20 overflow-hidden rounded-full border border-border/70 bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85 transition-all duration-150 ease-out",
         "opacity-100 translate-y-0 sm:max-w-0 sm:opacity-0 sm:translate-y-1",
-        "sm:group-hover/message:max-w-40 sm:group-hover/message:opacity-100 sm:group-hover/message:translate-y-0",
-        "sm:group-focus-within/message:max-w-40 sm:group-focus-within/message:opacity-100 sm:group-focus-within/message:translate-y-0",
-        isReplyingToMessage
-          ? "sm:max-w-40 sm:opacity-100 sm:translate-y-0"
+        "sm:group-hover/message:max-w-20 sm:group-hover/message:opacity-100 sm:group-hover/message:translate-y-0",
+        "sm:group-focus-within/message:max-w-20 sm:group-focus-within/message:opacity-100 sm:group-focus-within/message:translate-y-0",
+        isReplyingToMessage || isReactionPickerOpen
+          ? "sm:max-w-20 sm:opacity-100 sm:translate-y-0"
           : "",
       )}
       data-testid={`message-action-bar-${message.id}`}
     >
       <div className="flex items-center gap-1 p-1">
-        <Button
-          className="h-6 rounded-full px-2.5 text-[11px]"
-          data-testid={`reply-message-${message.id}`}
-          onClick={() => {
-            onReply(message);
-          }}
-          size="sm"
-          type="button"
-          variant={isReplyingToMessage ? "secondary" : "ghost"}
-        >
-          <CornerUpLeft className="h-3 w-3" />
-          {isReplyingToMessage ? "Replying" : "Reply"}
-        </Button>
+        {hasReactionAction ? (
+          <Popover
+            onOpenChange={setIsReactionPickerOpen}
+            open={isReactionPickerOpen}
+          >
+            <PopoverTrigger asChild>
+              <Button
+                aria-label="Open reactions"
+                className="h-6 w-6 rounded-full p-0"
+                data-testid={`react-message-${message.id}`}
+                disabled={reactionPending}
+                size="sm"
+                title="React"
+                type="button"
+                variant={
+                  isReactionPickerOpen || selectedReactionCount > 0
+                    ? "secondary"
+                    : "ghost"
+                }
+              >
+                {reactionPending ? (
+                  <LoaderCircle className="h-3 w-3 animate-spin" />
+                ) : (
+                  <SmilePlus className="h-3 w-3" />
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              className="w-56 rounded-2xl p-3"
+              side="top"
+              sideOffset={10}
+            >
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                    React
+                  </p>
+                  <p
+                    className={cn(
+                      "text-xs",
+                      reactionErrorMessage
+                        ? "text-destructive"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {reactionErrorMessage ??
+                      "Click any emoji. Click it again to remove your own reaction."}
+                  </p>
+                </div>
+                <div className="grid grid-cols-4 gap-1">
+                  {reactionOptions.map((emoji) => {
+                    const isActive = reactions.some(
+                      (reaction) =>
+                        reaction.emoji === emoji &&
+                        reaction.reactedByCurrentUser,
+                    );
+
+                    return (
+                      <button
+                        aria-label={`React with ${emoji}`}
+                        aria-pressed={isActive}
+                        className={cn(
+                          "flex h-10 items-center justify-center rounded-xl border text-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          isActive
+                            ? "border-primary/40 bg-primary/10"
+                            : "border-border/70 bg-muted/40 hover:bg-accent",
+                        )}
+                        data-emoji={emoji}
+                        data-testid={`react-option-${message.id}`}
+                        disabled={reactionPending}
+                        key={`${message.id}-${emoji}`}
+                        onClick={() => {
+                          if (!onReactionSelect) {
+                            return;
+                          }
+
+                          void onReactionSelect(emoji)
+                            .then(() => {
+                              setIsReactionPickerOpen(false);
+                            })
+                            .catch(() => {
+                              return;
+                            });
+                        }}
+                        type="button"
+                      >
+                        {emoji}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+        ) : null}
+
+        {hasReplyAction ? (
+          <Button
+            aria-label={isReplyingToMessage ? "Cancel reply" : "Reply"}
+            className="h-6 w-6 rounded-full p-0"
+            data-testid={`reply-message-${message.id}`}
+            onClick={() => {
+              onReply?.(message);
+            }}
+            size="sm"
+            title={isReplyingToMessage ? "Cancel reply" : "Reply"}
+            type="button"
+            variant={isReplyingToMessage ? "secondary" : "ghost"}
+          >
+            <CornerUpLeft className="h-3 w-3" />
+          </Button>
+        ) : null}
       </div>
     </div>
   );
@@ -83,16 +243,26 @@ function MessageActionBar({
 function MessageRow({
   activeReplyTargetId = null,
   message,
+  onToggleReaction,
   onReply,
 }: {
   activeReplyTargetId?: string | null;
   message: TimelineMessage;
+  onToggleReaction?: (
+    message: TimelineMessage,
+    emoji: string,
+    remove: boolean,
+  ) => Promise<void>;
   onReply?: (message: TimelineMessage) => void;
 }) {
   const [hasAvatarError, setHasAvatarError] = React.useState(false);
   const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
     null,
   );
+  const [reactionErrorMessage, setReactionErrorMessage] = React.useState<
+    string | null
+  >(null);
+  const [reactionPending, setReactionPending] = React.useState(false);
   const visibleDepth = Math.min(message.depth, 6);
   const compressedDepth = Math.max(message.depth - visibleDepth, 0);
   const indentPx = visibleDepth * 28;
@@ -126,6 +296,44 @@ function MessageRow({
         return <Markdown className="max-w-3xl" content={message.body} tight />;
     }
   };
+
+  const reactions = [...(message.reactions ?? [])].sort((left, right) => {
+    if (left.count !== right.count) {
+      return right.count - left.count;
+    }
+
+    return left.emoji.localeCompare(right.emoji);
+  });
+  const canToggleReactions = Boolean(onToggleReaction && !message.pending);
+
+  const handleReactionSelect = React.useCallback(
+    async (emoji: string) => {
+      if (!onToggleReaction || reactionPending) {
+        return;
+      }
+
+      const remove = reactions.some(
+        (reaction) => reaction.emoji === emoji && reaction.reactedByCurrentUser,
+      );
+
+      setReactionErrorMessage(null);
+      setReactionPending(true);
+
+      try {
+        await onToggleReaction(message, emoji, remove);
+      } catch (error) {
+        const nextMessage =
+          error instanceof Error
+            ? error.message
+            : "Failed to update the reaction.";
+        setReactionErrorMessage(nextMessage);
+        throw error;
+      } finally {
+        setReactionPending(false);
+      }
+    },
+    [message, onToggleReaction, reactionPending, reactions],
+  );
 
   return (
     <div
@@ -252,7 +460,13 @@ function MessageRow({
               <MessageActionBar
                 activeReplyTargetId={activeReplyTargetId}
                 message={message}
+                onReactionSelect={
+                  canToggleReactions ? handleReactionSelect : undefined
+                }
                 onReply={onReply}
+                reactionErrorMessage={reactionErrorMessage}
+                reactionPending={reactionPending}
+                reactions={reactions}
               />
               {message.pending ? (
                 <p className="font-medium uppercase tracking-[0.14em] text-primary/80">
@@ -263,6 +477,47 @@ function MessageRow({
             </div>
           </div>
           {renderBody()}
+          {reactions.length > 0 ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {reactions.map((reaction) => (
+                <button
+                  aria-label={`Toggle ${reaction.emoji} reaction`}
+                  aria-pressed={reaction.reactedByCurrentUser}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                    reaction.reactedByCurrentUser
+                      ? "border-primary/40 bg-primary/10 text-primary"
+                      : "border-border/70 bg-muted/70 text-foreground/90",
+                    canToggleReactions
+                      ? "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      : "cursor-default",
+                  )}
+                  disabled={!canToggleReactions || reactionPending}
+                  key={`${message.id}-${reaction.emoji}`}
+                  onClick={() => {
+                    if (!canToggleReactions) {
+                      return;
+                    }
+
+                    void handleReactionSelect(reaction.emoji).catch(() => {
+                      return;
+                    });
+                  }}
+                  type="button"
+                >
+                  <span>{reaction.emoji}</span>
+                  <span className="text-muted-foreground">
+                    {reaction.count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {reactionErrorMessage ? (
+            <p className="mt-2 text-xs text-destructive">
+              {reactionErrorMessage}
+            </p>
+          ) : null}
           <div className="mt-2 flex items-center gap-2">
             {message.replyToSnippet ? (
               <p className="truncate text-xs text-muted-foreground">
@@ -319,6 +574,7 @@ export function MessageTimeline({
   emptyDescription = "Send the first message to start the thread.",
   activeReplyTargetId = null,
   onReply,
+  onToggleReaction,
   targetMessageId = null,
   onTargetReached,
 }: MessageTimelineProps) {
@@ -679,6 +935,7 @@ export function MessageTimeline({
                     ...message,
                     highlighted: message.id === highlightedMessageId,
                   }}
+                  onToggleReaction={onToggleReaction}
                   onReply={onReply}
                 />
               ))

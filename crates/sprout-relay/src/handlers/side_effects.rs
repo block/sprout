@@ -6,6 +6,7 @@ use nostr::{Event, EventBuilder, Kind, Tag};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use sprout_core::kind::KIND_REACTION;
 use sprout_db::channel::MemberRole;
 
 use crate::state::AppState;
@@ -17,7 +18,7 @@ pub fn is_admin_kind(kind: u32) -> bool {
 
 /// Check if a kind triggers side effects after storage.
 pub fn is_side_effect_kind(kind: u32) -> bool {
-    matches!(kind, 0 | 7 | 9000..=9022 | 41001..=41003 | 40099)
+    matches!(kind, 0 | 5 | 7 | 9000..=9022 | 41001..=41003 | 40099)
 }
 
 /// Dispatch side effects for a stored event.
@@ -28,6 +29,7 @@ pub async fn handle_side_effects(
 ) -> anyhow::Result<()> {
     match kind {
         0 => handle_kind0_profile(event, state).await,
+        5 => handle_standard_deletion_event(event, state).await,
         9000 => handle_put_user(event, state).await,
         9001 => handle_remove_user(event, state).await,
         9002 => handle_edit_metadata(event, state).await,
@@ -45,6 +47,38 @@ pub async fn handle_side_effects(
         7 => handle_reaction(event, state).await,
         _ => Ok(()),
     }
+}
+
+/// Validate a standard NIP-09 deletion event before it is stored.
+///
+/// Sprout accepts standard deletions for self-authored events only. Channel
+/// admin deletions continue to use kind 9005.
+pub async fn validate_standard_deletion_event(
+    event: &Event,
+    state: &Arc<AppState>,
+) -> anyhow::Result<()> {
+    let actor_bytes = effective_message_author(event, &state.relay_keypair.public_key());
+    let target_ids = extract_target_event_ids(event);
+
+    if target_ids.is_empty() {
+        return Err(anyhow::anyhow!("missing e tag for target event"));
+    }
+
+    for target_id in target_ids {
+        let target_event = state
+            .db
+            .get_event_by_id_including_deleted(&target_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("target event not found"))?;
+
+        let target_author =
+            effective_message_author(&target_event.event, &state.relay_keypair.public_key());
+        if target_author != actor_bytes {
+            return Err(anyhow::anyhow!("must be event author"));
+        }
+    }
+
+    Ok(())
 }
 
 /// Validate an admin kind event BEFORE storage.
@@ -740,7 +774,7 @@ async fn handle_reaction(event: &Event, state: &Arc<AppState>) -> anyhow::Result
         chrono::DateTime::from_timestamp(target_event.event.created_at.as_u64() as i64, 0)
             .unwrap_or_else(chrono::Utc::now);
 
-    let pubkey_bytes = event.pubkey.serialize().to_vec();
+    let pubkey_bytes = effective_message_author(event, &state.relay_keypair.public_key());
     let emoji = if event.content.is_empty() {
         "+"
     } else {
@@ -749,10 +783,63 @@ async fn handle_reaction(event: &Event, state: &Arc<AppState>) -> anyhow::Result
 
     state
         .db
-        .add_reaction(&target_id, event_created_at, &pubkey_bytes, emoji)
+        .add_reaction(
+            &target_id,
+            event_created_at,
+            &pubkey_bytes,
+            emoji,
+            Some(event.id.as_bytes()),
+        )
         .await?;
 
     info!(target = %target_hex, emoji = %emoji, "NIP-25 reaction processed");
+    Ok(())
+}
+
+async fn handle_standard_deletion_event(
+    event: &Event,
+    state: &Arc<AppState>,
+) -> anyhow::Result<()> {
+    let target_ids = extract_target_event_ids(event);
+    if target_ids.is_empty() {
+        return Err(anyhow::anyhow!("missing e tag for target event"));
+    }
+
+    for target_id in target_ids {
+        let target_event = match state
+            .db
+            .get_event_by_id_including_deleted(&target_id)
+            .await?
+        {
+            Some(target) => target,
+            None => continue,
+        };
+
+        let meta = state.db.get_thread_metadata_by_event(&target_id).await?;
+        let parent_id = meta.as_ref().and_then(|m| m.parent_event_id.clone());
+        let root_id = meta.as_ref().and_then(|m| m.root_event_id.clone());
+
+        let deleted = state
+            .db
+            .soft_delete_event_and_update_thread(
+                &target_id,
+                parent_id.as_deref(),
+                root_id.as_deref(),
+            )
+            .await?;
+
+        if !deleted {
+            continue;
+        }
+
+        if u32::from(target_event.event.kind.as_u16()) == KIND_REACTION {
+            let _ = state
+                .db
+                .remove_reaction_by_source_event_id(&target_id)
+                .await?;
+        }
+    }
+
     Ok(())
 }
 
@@ -795,6 +882,13 @@ fn extract_p_tag(event: &Event) -> Option<Vec<u8>> {
 /// the author. Returns the correct author bytes in both cases.
 fn effective_message_author(event: &Event, relay_pubkey: &nostr::PublicKey) -> Vec<u8> {
     if event.pubkey == *relay_pubkey {
+        if let Some(actor_hex) = extract_tag_value(event, "actor") {
+            if let Ok(bytes) = hex::decode(actor_hex) {
+                if bytes.len() == 32 {
+                    return bytes;
+                }
+            }
+        }
         for tag in event.tags.iter() {
             if tag.kind().to_string() == "p" {
                 if let Some(hex) = tag.content() {
@@ -808,6 +902,26 @@ fn effective_message_author(event: &Event, relay_pubkey: &nostr::PublicKey) -> V
         }
     }
     event.pubkey.serialize().to_vec()
+}
+
+fn extract_target_event_ids(event: &Event) -> Vec<Vec<u8>> {
+    event
+        .tags
+        .iter()
+        .filter_map(|tag| {
+            if tag.kind().to_string() != "e" {
+                return None;
+            }
+
+            tag.content().and_then(|value| {
+                if value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()) {
+                    hex::decode(value).ok().filter(|bytes| bytes.len() == 32)
+                } else {
+                    None
+                }
+            })
+        })
+        .collect()
 }
 
 /// Extract value of a named tag.

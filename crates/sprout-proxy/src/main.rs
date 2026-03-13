@@ -91,7 +91,12 @@ async fn main() {
 
     // ── Init translator ───────────────────────────────────────────────────────
 
-    let translator = Arc::new(Translator::new(shadow_keys, channel_map.clone()));
+    let translator = Arc::new(Translator::new(
+        shadow_keys,
+        channel_map.clone(),
+        api_base.clone(),
+        api_token.clone(),
+    ));
 
     // ── Init guest store (empty — guests registered via POST /admin/guests) ────
 
