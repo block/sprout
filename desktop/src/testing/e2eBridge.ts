@@ -43,6 +43,7 @@ type RawProfile = {
 
 type RawUserProfileSummary = {
   display_name: string | null;
+  avatar_url: string | null;
   nip05_handle: string | null;
 };
 
@@ -1098,6 +1099,7 @@ async function handleGetUsersBatch(
 
       profiles[normalizedPubkey] = {
         display_name: profile.display_name,
+        avatar_url: profile.avatar_url,
         nip05_handle: profile.nip05_handle,
       };
     }

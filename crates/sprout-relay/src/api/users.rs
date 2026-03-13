@@ -173,7 +173,7 @@ pub struct BatchProfilesRequest {
     pub pubkeys: Vec<String>,
 }
 
-/// `POST /api/users/batch` — resolve display names for multiple pubkeys.
+/// `POST /api/users/batch` — resolve profile summaries for multiple pubkeys.
 pub async fn get_users_batch(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -237,6 +237,7 @@ pub async fn get_users_batch(
             hex,
             serde_json::json!({
                 "display_name": r.display_name,
+                "avatar_url": r.avatar_url,
                 "nip05_handle": r.nip05_handle,
             }),
         );
