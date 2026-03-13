@@ -19,6 +19,7 @@ import type {
   RelayEvent,
   SearchMessagesInput,
   SearchMessagesResponse,
+  SendChannelMessageResult,
   SetPresenceResult,
   SetChannelPurposeInput,
   SetChannelTopicInput,
@@ -150,6 +151,14 @@ type RawSearchHit = {
 type RawSearchResponse = {
   hits: RawSearchHit[];
   found: number;
+};
+
+type RawSendChannelMessageResult = {
+  event_id: string;
+  parent_event_id: string | null;
+  root_event_id: string | null;
+  depth: number;
+  created_at: number;
 };
 
 type RawToken = {
@@ -499,6 +508,29 @@ export async function searchMessages(
 export async function getEventById(eventId: string): Promise<RelayEvent> {
   const eventJson = await invokeTauri<string>("get_event", { eventId });
   return JSON.parse(eventJson) as RelayEvent;
+}
+
+export async function sendChannelMessage(
+  channelId: string,
+  content: string,
+  parentEventId?: string | null,
+): Promise<SendChannelMessageResult> {
+  const response = await invokeTauri<RawSendChannelMessageResult>(
+    "send_channel_message",
+    {
+      channelId,
+      content,
+      parentEventId,
+    },
+  );
+
+  return {
+    eventId: response.event_id,
+    parentEventId: response.parent_event_id,
+    rootEventId: response.root_event_id,
+    depth: response.depth,
+    createdAt: response.created_at,
+  };
 }
 
 export async function signRelayEvent(input: {

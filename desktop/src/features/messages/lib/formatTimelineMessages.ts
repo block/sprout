@@ -1,6 +1,7 @@
 import type { Channel, RelayEvent } from "@/shared/api/types";
 
 import type { TimelineMessage } from "@/features/messages/types";
+import { getThreadReference } from "@/features/messages/lib/threading";
 import {
   resolveUserLabel,
   type UserProfileLookup,
@@ -70,13 +71,71 @@ export function formatTimelineMessages(
   currentUserAvatarUrl: string | null,
   profiles?: UserProfileLookup,
 ): TimelineMessage[] {
-  return events.map((event) => {
+  const eventsById = new Map(events.map((event) => [event.id, event]));
+  const authorPubkeyByEventId = new Map<string, string>();
+  const authorLabelByEventId = new Map<string, string>();
+  const depthByEventId = new Map<string, number>();
+  const resolvingEventIds = new Set<string>();
+
+  function getAuthorLabel(event: RelayEvent) {
+    const cached = authorLabelByEventId.get(event.id);
+    if (cached) {
+      return cached;
+    }
+
     const authorPubkey = getEffectiveAuthorPubkey(event);
+    const author = formatMessageAuthor(event, channel, currentPubkey, profiles);
+
+    authorPubkeyByEventId.set(event.id, authorPubkey);
+    authorLabelByEventId.set(event.id, author);
+    return author;
+  }
+
+  function getDepth(event: RelayEvent): number {
+    const cached = depthByEventId.get(event.id);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    if (resolvingEventIds.has(event.id)) {
+      return 0;
+    }
+
+    const thread = getThreadReference(event.tags);
+    if (!thread.parentId) {
+      depthByEventId.set(event.id, 0);
+      return 0;
+    }
+
+    const parent = eventsById.get(thread.parentId);
+    if (!parent) {
+      const fallbackDepth =
+        thread.rootId && thread.rootId !== thread.parentId ? 2 : 1;
+      depthByEventId.set(event.id, fallbackDepth);
+      return fallbackDepth;
+    }
+
+    resolvingEventIds.add(event.id);
+    const depth = getDepth(parent) + 1;
+    resolvingEventIds.delete(event.id);
+    depthByEventId.set(event.id, depth);
+    return depth;
+  }
+
+  return events.map((event) => {
+    const author = getAuthorLabel(event);
+    const authorPubkey =
+      authorPubkeyByEventId.get(event.id) ?? getEffectiveAuthorPubkey(event);
+    const thread = getThreadReference(event.tags);
+    const parentEvent = thread.parentId
+      ? eventsById.get(thread.parentId)
+      : undefined;
 
     return {
       id: event.id,
+      createdAt: event.created_at,
       pubkey: authorPubkey,
-      author: formatMessageAuthor(event, channel, currentPubkey, profiles),
+      author,
       avatarUrl: getAuthorAvatarUrl({
         authorPubkey,
         currentPubkey,
@@ -88,6 +147,11 @@ export function formatTimelineMessages(
         minute: "2-digit",
       }).format(new Date(event.created_at * 1_000)),
       body: event.content,
+      parentId: thread.parentId,
+      rootId: thread.rootId,
+      depth: getDepth(event),
+      replyToAuthor: parentEvent ? getAuthorLabel(parentEvent) : null,
+      replyToSnippet: parentEvent?.content ?? null,
       accent: currentPubkey === authorPubkey,
       pending: event.pending,
       kind: event.kind,

@@ -2,7 +2,12 @@ import { useEffect, useEffectEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { updateChannelLastMessageAt } from "@/features/channels/hooks";
+import {
+  buildReplyTags,
+  resolveReplyRootId,
+} from "@/features/messages/lib/threading";
 import { relayClient } from "@/shared/api/relayClient";
+import { sendChannelMessage } from "@/shared/api/tauri";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
 
 type MessageQueryContext = {
@@ -49,11 +54,26 @@ function createOptimisticMessage(
   channelId: string,
   content: string,
   identity: Identity,
+  currentMessages: RelayEvent[],
   mentionPubkeys: string[] = [],
+  parentEventId: string | null = null,
 ): RelayEvent {
-  const tags: string[][] = [["h", channelId]];
-  for (const pubkey of mentionPubkeys) {
-    tags.push(["p", pubkey]);
+  const tags: string[][] = [];
+
+  if (parentEventId) {
+    tags.push(
+      ...buildReplyTags(
+        channelId,
+        identity.pubkey,
+        parentEventId,
+        resolveReplyRootId(parentEventId, currentMessages),
+      ),
+    );
+  } else {
+    tags.push(["h", channelId]);
+    for (const pubkey of mentionPubkeys) {
+      tags.push(["p", pubkey]);
+    }
   }
 
   return {
@@ -77,7 +97,7 @@ export function useChannelMessagesQuery(channel: Channel | null) {
         throw new Error("No channel selected.");
       }
 
-      const history = await relayClient.fetchChannelHistory(channel.id);
+      const history = await relayClient.fetchChannelHistory(channel.id, 200);
       return dedupeMessagesById(history);
     },
     staleTime: Number.POSITIVE_INFINITY,
@@ -150,17 +170,53 @@ export function useSendMessageMutation(
   return useMutation<
     RelayEvent,
     Error,
-    { content: string; mentionPubkeys?: string[] },
+    {
+      content: string;
+      mentionPubkeys?: string[];
+      parentEventId?: string | null;
+    },
     MessageQueryContext | undefined
   >({
-    mutationFn: async ({ content, mentionPubkeys }) => {
+    mutationFn: async ({ content, mentionPubkeys, parentEventId }) => {
       if (!channel || channel.channelType === "forum") {
         throw new Error("This channel does not support message sending yet.");
       }
 
+      if (!identity) {
+        throw new Error("No identity available for sending messages.");
+      }
+
+      if (parentEventId) {
+        const cachedMessages =
+          queryClient.getQueryData<RelayEvent[]>([
+            "channel-messages",
+            channel.id,
+          ]) ?? [];
+        const result = await sendChannelMessage(
+          channel.id,
+          content,
+          parentEventId,
+        );
+
+        return {
+          id: result.eventId,
+          pubkey: identity.pubkey,
+          created_at: result.createdAt,
+          kind: 4_0001,
+          tags: buildReplyTags(
+            channel.id,
+            identity.pubkey,
+            parentEventId,
+            resolveReplyRootId(parentEventId, cachedMessages),
+          ),
+          content: content.trim(),
+          sig: "",
+        };
+      }
+
       return relayClient.sendMessage(channel.id, content, mentionPubkeys ?? []);
     },
-    onMutate: async ({ content, mentionPubkeys }) => {
+    onMutate: async ({ content, mentionPubkeys, parentEventId }) => {
       if (!channel || !identity || channel.channelType === "forum") {
         return undefined;
       }
@@ -174,7 +230,9 @@ export function useSendMessageMutation(
         channel.id,
         content.trim(),
         identity,
+        previousMessages,
         mentionPubkeys ?? [],
+        parentEventId ?? null,
       );
 
       queryClient.setQueryData<RelayEvent[]>(

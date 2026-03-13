@@ -1,4 +1,4 @@
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, CornerUpLeft } from "lucide-react";
 import * as React from "react";
 
 import type { TimelineMessage } from "@/features/messages/types";
@@ -18,6 +18,8 @@ type MessageTimelineProps = {
   isLoading?: boolean;
   emptyTitle?: string;
   emptyDescription?: string;
+  activeReplyTargetId?: string | null;
+  onReply?: (message: TimelineMessage) => void;
   targetMessageId?: string | null;
   onTargetReached?: (messageId: string) => void;
 };
@@ -31,11 +33,69 @@ function isNearBottom(container: HTMLDivElement) {
   );
 }
 
-function MessageRow({ message }: { message: TimelineMessage }) {
+function MessageActionBar({
+  activeReplyTargetId = null,
+  message,
+  onReply,
+}: {
+  activeReplyTargetId?: string | null;
+  message: TimelineMessage;
+  onReply?: (message: TimelineMessage) => void;
+}) {
+  if (!onReply) {
+    return null;
+  }
+
+  const isReplyingToMessage = activeReplyTargetId === message.id;
+
+  return (
+    <div
+      className={cn(
+        "max-w-40 overflow-hidden rounded-full border border-border/70 bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85 transition-all duration-150 ease-out",
+        "opacity-100 translate-y-0 sm:max-w-0 sm:opacity-0 sm:translate-y-1",
+        "sm:group-hover/message:max-w-40 sm:group-hover/message:opacity-100 sm:group-hover/message:translate-y-0",
+        "sm:group-focus-within/message:max-w-40 sm:group-focus-within/message:opacity-100 sm:group-focus-within/message:translate-y-0",
+        isReplyingToMessage
+          ? "sm:max-w-40 sm:opacity-100 sm:translate-y-0"
+          : "",
+      )}
+      data-testid={`message-action-bar-${message.id}`}
+    >
+      <div className="flex items-center gap-1 p-1">
+        <Button
+          className="h-6 rounded-full px-2.5 text-[11px]"
+          data-testid={`reply-message-${message.id}`}
+          onClick={() => {
+            onReply(message);
+          }}
+          size="sm"
+          type="button"
+          variant={isReplyingToMessage ? "secondary" : "ghost"}
+        >
+          <CornerUpLeft className="h-3 w-3" />
+          {isReplyingToMessage ? "Replying" : "Reply"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function MessageRow({
+  activeReplyTargetId = null,
+  message,
+  onReply,
+}: {
+  activeReplyTargetId?: string | null;
+  message: TimelineMessage;
+  onReply?: (message: TimelineMessage) => void;
+}) {
   const [hasAvatarError, setHasAvatarError] = React.useState(false);
   const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
     null,
   );
+  const visibleDepth = Math.min(message.depth, 6);
+  const compressedDepth = Math.max(message.depth - visibleDepth, 0);
+  const indentPx = visibleDepth * 28;
   const initials = message.author
     .split(" ")
     .map((part) => part[0])
@@ -68,121 +128,168 @@ function MessageRow({ message }: { message: TimelineMessage }) {
   };
 
   return (
-    <article
-      className={cn(
-        "flex gap-3 rounded-2xl px-2 py-2 transition-colors",
-        message.highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
-      )}
-      data-message-id={message.id}
-      data-testid="message-row"
+    <div
+      className="relative"
+      style={indentPx > 0 ? { paddingLeft: `${indentPx}px` } : undefined}
     >
-      {message.pubkey ? (
-        <UserProfilePopover pubkey={message.pubkey}>
-          <button
-            className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            type="button"
-          >
-            {message.avatarUrl && !hasAvatarError ? (
-              <img
-                alt={`${message.author} avatar`}
-                className="h-9 w-9 rounded-xl object-cover shadow-sm"
-                data-testid="message-avatar-image"
-                onError={() => {
-                  setHasAvatarError(true);
-                }}
-                referrerPolicy="no-referrer"
-                src={message.avatarUrl}
-              />
-            ) : (
-              <div
-                className={cn(
-                  "flex h-9 w-9 items-center justify-center rounded-xl text-xs font-semibold shadow-sm",
-                  message.accent
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-secondary text-secondary-foreground",
-                )}
-                data-testid="message-avatar-fallback"
-              >
-                {initials}
-              </div>
-            )}
-          </button>
-        </UserProfilePopover>
-      ) : message.avatarUrl && !hasAvatarError ? (
-        <img
-          alt={`${message.author} avatar`}
-          className="h-9 w-9 shrink-0 rounded-xl object-cover shadow-sm"
-          data-testid="message-avatar-image"
-          onError={() => {
-            setHasAvatarError(true);
-          }}
-          referrerPolicy="no-referrer"
-          src={message.avatarUrl}
-        />
-      ) : (
+      {message.depth > 0 ? (
         <div
-          className={cn(
-            "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-semibold shadow-sm",
-            message.accent
-              ? "bg-primary text-primary-foreground"
-              : "bg-secondary text-secondary-foreground",
-          )}
-          data-testid="message-avatar-fallback"
-        >
-          {initials}
-        </div>
-      )}
+          aria-hidden
+          className="absolute bottom-2 left-3 top-2 rounded-full border-l border-border/70"
+          style={{ left: `${Math.max(indentPx - 14, 12)}px` }}
+        />
+      ) : null}
 
-      <div className="min-w-0 flex-1 space-y-0">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {message.pubkey ? (
-            <UserProfilePopover pubkey={message.pubkey}>
-              <button
-                className="truncate text-sm font-semibold tracking-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
-                type="button"
-              >
-                {message.author}
-              </button>
-            </UserProfilePopover>
-          ) : (
-            <h3 className="truncate text-sm font-semibold tracking-tight">
-              {message.author}
-            </h3>
-          )}
-          {message.role ? (
-            <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-              {message.role}
-            </p>
+      <article
+        className={cn(
+          "group/message flex gap-3 rounded-2xl px-2 py-2 transition-colors",
+          message.highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
+          activeReplyTargetId === message.id
+            ? "bg-muted/60 ring-1 ring-border"
+            : "",
+        )}
+        data-message-id={message.id}
+        data-testid="message-row"
+      >
+        {message.pubkey ? (
+          <UserProfilePopover pubkey={message.pubkey}>
+            <button
+              className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              type="button"
+            >
+              {message.avatarUrl && !hasAvatarError ? (
+                <img
+                  alt={`${message.author} avatar`}
+                  className="h-9 w-9 rounded-xl object-cover shadow-sm"
+                  data-testid="message-avatar-image"
+                  onError={() => {
+                    setHasAvatarError(true);
+                  }}
+                  referrerPolicy="no-referrer"
+                  src={message.avatarUrl}
+                />
+              ) : (
+                <div
+                  className={cn(
+                    "flex h-9 w-9 items-center justify-center rounded-xl text-xs font-semibold shadow-sm",
+                    message.accent
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-secondary text-secondary-foreground",
+                  )}
+                  data-testid="message-avatar-fallback"
+                >
+                  {initials}
+                </div>
+              )}
+            </button>
+          </UserProfilePopover>
+        ) : message.avatarUrl && !hasAvatarError ? (
+          <img
+            alt={`${message.author} avatar`}
+            className="h-9 w-9 shrink-0 rounded-xl object-cover shadow-sm"
+            data-testid="message-avatar-image"
+            onError={() => {
+              setHasAvatarError(true);
+            }}
+            referrerPolicy="no-referrer"
+            src={message.avatarUrl}
+          />
+        ) : (
+          <div
+            className={cn(
+              "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-semibold shadow-sm",
+              message.accent
+                ? "bg-primary text-primary-foreground"
+                : "bg-secondary text-secondary-foreground",
+            )}
+            data-testid="message-avatar-fallback"
+          >
+            {initials}
+          </div>
+        )}
+
+        <div className="min-w-0 flex-1 space-y-0">
+          {message.parentId ? (
+            <div className="mb-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px]">
+                Reply
+              </span>
+              <span className="truncate normal-case tracking-normal">
+                {message.replyToAuthor
+                  ? `to ${message.replyToAuthor}`
+                  : "to an earlier message"}
+              </span>
+              {compressedDepth > 0 ? (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px]">
+                  +{compressedDepth} more level
+                  {compressedDepth === 1 ? "" : "s"}
+                </span>
+              ) : null}
+            </div>
           ) : null}
-          <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-            {message.pending ? (
-              <p className="font-medium uppercase tracking-[0.14em] text-primary/80">
-                Sending
+
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {message.pubkey ? (
+              <UserProfilePopover pubkey={message.pubkey}>
+                <button
+                  className="truncate text-sm font-semibold tracking-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                  type="button"
+                >
+                  {message.author}
+                </button>
+              </UserProfilePopover>
+            ) : (
+              <h3 className="truncate text-sm font-semibold tracking-tight">
+                {message.author}
+              </h3>
+            )}
+            {message.role ? (
+              <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                {message.role}
               </p>
             ) : null}
-            <p className="whitespace-nowrap">{message.time}</p>
+            <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+              <MessageActionBar
+                activeReplyTargetId={activeReplyTargetId}
+                message={message}
+                onReply={onReply}
+              />
+              {message.pending ? (
+                <p className="font-medium uppercase tracking-[0.14em] text-primary/80">
+                  Sending
+                </p>
+              ) : null}
+              <p className="whitespace-nowrap">{message.time}</p>
+            </div>
           </div>
+          {renderBody()}
+          <div className="mt-2 flex items-center gap-2">
+            {message.replyToSnippet ? (
+              <p className="truncate text-xs text-muted-foreground">
+                {message.replyToSnippet}
+              </p>
+            ) : null}
+          </div>
+          {expandedDiffId === message.id && (
+            <React.Suspense
+              fallback={
+                <div className="p-4 text-sm text-muted-foreground">
+                  Loading diff viewer…
+                </div>
+              }
+            >
+              <DiffMessageExpanded
+                content={message.body}
+                filePath={getTag("file")}
+                onClose={() => {
+                  setExpandedDiffId(null);
+                }}
+              />
+            </React.Suspense>
+          )}
         </div>
-        {renderBody()}
-        {expandedDiffId === message.id && (
-          <React.Suspense
-            fallback={
-              <div className="p-4 text-sm text-muted-foreground">
-                Loading diff viewer…
-              </div>
-            }
-          >
-            <DiffMessageExpanded
-              content={message.body}
-              filePath={getTag("file")}
-              onClose={() => {
-                setExpandedDiffId(null);
-              }}
-            />
-          </React.Suspense>
-        )}
-      </div>
-    </article>
+      </article>
+    </div>
   );
 }
 
@@ -210,6 +317,8 @@ export function MessageTimeline({
   isLoading = false,
   emptyTitle = "No messages yet",
   emptyDescription = "Send the first message to start the thread.",
+  activeReplyTargetId = null,
+  onReply,
   targetMessageId = null,
   onTargetReached,
 }: MessageTimelineProps) {
@@ -564,11 +673,13 @@ export function MessageTimeline({
           {!isLoading
             ? messages.map((message) => (
                 <MessageRow
+                  activeReplyTargetId={activeReplyTargetId}
                   key={message.id}
                   message={{
                     ...message,
                     highlighted: message.id === highlightedMessageId,
                   }}
+                  onReply={onReply}
                 />
               ))
             : null}

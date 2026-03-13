@@ -1,11 +1,17 @@
 export type TimelineMessage = {
   id: string;
+  createdAt: number;
   pubkey?: string;
   author: string;
   avatarUrl?: string | null;
   role?: string;
   time: string;
   body: string;
+  parentId?: string | null;
+  rootId?: string | null;
+  depth: number;
+  replyToAuthor?: string | null;
+  replyToSnippet?: string | null;
   accent?: boolean;
   pending?: boolean;
   highlighted?: boolean;
