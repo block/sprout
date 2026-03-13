@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use nostr::nips::nip19::ToBech32;
 use nostr::{Keys, PublicKey};
+use serde::Serialize;
 use sprout_auth::token::{generate_token, hash_token};
 use sprout_db::{Db, DbConfig};
 
@@ -35,6 +36,10 @@ enum Command {
         /// If provided, sets agent_owner_pubkey in the users table.
         #[arg(long)]
         owner_pubkey: Option<String>,
+
+        /// Emit a machine-readable JSON payload instead of the boxed summary.
+        #[arg(long)]
+        json: bool,
     },
     /// List all active API tokens.
     ListTokens,
@@ -59,7 +64,8 @@ async fn main() -> Result<()> {
             scopes,
             pubkey,
             owner_pubkey,
-        } => mint_token(&db, &name, &scopes, pubkey.as_deref(), owner_pubkey).await?,
+            json,
+        } => mint_token(&db, &name, &scopes, pubkey.as_deref(), owner_pubkey, json).await?,
         Command::ListTokens => list_tokens(&db).await?,
     }
 
@@ -72,6 +78,7 @@ async fn mint_token(
     scopes_str: &str,
     pubkey_hex: Option<&str>,
     owner_pubkey: Option<String>,
+    json: bool,
 ) -> Result<()> {
     let scopes: Vec<String> = scopes_str
         .split(',')
@@ -86,7 +93,7 @@ async fn mint_token(
         }
     };
 
-    let pubkey_bytes = pubkey.serialize().to_vec();
+    let pubkey_bytes = pubkey.to_bytes().to_vec();
 
     db.ensure_user(&pubkey_bytes).await?;
 
@@ -108,6 +115,28 @@ async fn mint_token(
     let token_id = db
         .create_api_token(&token_hash, &pubkey_bytes, name, &scopes, None, None)
         .await?;
+
+    let private_key_nsec = generated_keys.as_ref().map(|keys| {
+        keys.secret_key()
+            .to_bech32()
+            .unwrap_or_else(|_| "error encoding".into())
+    });
+
+    if json {
+        let payload = MintTokenJsonOutput {
+            token_id: token_id.to_string(),
+            name: name.to_string(),
+            scopes,
+            pubkey: pubkey.to_hex(),
+            private_key_nsec,
+            api_token: raw_token,
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&payload).expect("mint token JSON should serialize")
+        );
+        return Ok(());
+    }
 
     println!("╔══════════════════════════════════════════════════════════════╗");
     println!("║  Token minted successfully!                                 ║");
@@ -136,6 +165,16 @@ async fn mint_token(
     println!("╚══════════════════════════════════════════════════════════════╝");
 
     Ok(())
+}
+
+#[derive(Serialize)]
+struct MintTokenJsonOutput {
+    token_id: String,
+    name: String,
+    scopes: Vec<String>,
+    pubkey: String,
+    private_key_nsec: Option<String>,
+    api_token: String,
 }
 
 async fn list_tokens(db: &Db) -> Result<()> {

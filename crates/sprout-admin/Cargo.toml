@@ -16,6 +16,7 @@ sprout-db = { workspace = true }
 sprout-auth = { workspace = true }
 nostr = { workspace = true }
 tokio = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 hex = { workspace = true }

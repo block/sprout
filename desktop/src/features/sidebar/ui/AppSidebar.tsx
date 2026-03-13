@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  Bot,
   CircleDot,
   Compass,
   FileText,
@@ -44,7 +45,7 @@ type AppSidebarProps = {
   selfPresenceStatus: PresenceStatus;
   errorMessage?: string;
   selectedChannelId: string | null;
-  selectedView: "home" | "channel" | "settings";
+  selectedView: "home" | "channel" | "settings" | "agents";
   unreadChannelIds: Set<string>;
   onCreateChannel: (input: {
     name: string;
@@ -52,6 +53,7 @@ type AppSidebarProps = {
   }) => Promise<void>;
   onOpenBrowseChannels: () => void;
   onOpenSearch: () => void;
+  onSelectAgents: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
   onSelectSettings: () => void;
@@ -299,6 +301,7 @@ export function AppSidebar({
   onCreateChannel,
   onOpenBrowseChannels,
   onOpenSearch,
+  onSelectAgents,
   onSelectHome,
   onSelectChannel,
   onSelectSettings,
@@ -433,6 +436,17 @@ export function AppSidebar({
             >
               <Home className="h-4 w-4" />
               <span>Home</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={selectedView === "agents"}
+              onClick={onSelectAgents}
+              tooltip="Agents"
+              type="button"
+            >
+              <Bot className="h-4 w-4" />
+              <span>Agents</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

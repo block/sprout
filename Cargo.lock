@@ -2678,6 +2678,7 @@ dependencies = [
  "clap",
  "hex",
  "nostr",
+ "serde",
  "serde_json",
  "sprout-auth",
  "sprout-db",
