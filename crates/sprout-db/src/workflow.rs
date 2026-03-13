@@ -353,6 +353,31 @@ pub async fn list_enabled_channel_workflows(
     rows.into_iter().map(row_to_workflow_record).collect()
 }
 
+/// List all active, enabled workflows with a `schedule` trigger across all channels.
+///
+/// Used by the cron scheduler. Filters by trigger type in SQL to avoid loading
+/// event-triggered workflows that the cron loop would immediately discard.
+/// Results are bounded to [`LIST_MAX_LIMIT`] rows.
+pub async fn list_all_enabled_workflows(pool: &MySqlPool) -> Result<Vec<WorkflowRecord>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, name, owner_pubkey, channel_id, definition, definition_hash,
+               status, enabled, created_at, updated_at
+        FROM workflows
+        WHERE status = 'active'
+          AND enabled = TRUE
+          AND JSON_EXTRACT(definition, '$.trigger.on') = 'schedule'
+        ORDER BY created_at ASC
+        LIMIT ?
+        "#,
+    )
+    .bind(LIST_MAX_LIMIT)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter().map(row_to_workflow_record).collect()
+}
+
 /// Update a workflow's name, definition, and definition_hash.
 pub async fn update_workflow(
     pool: &MySqlPool,

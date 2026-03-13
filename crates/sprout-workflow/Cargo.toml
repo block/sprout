@@ -13,6 +13,7 @@ sprout-db   = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 serde_yaml  = { workspace = true }
+dashmap     = { workspace = true }
 evalexpr    = "11"
 cron        = "0.12"
 uuid        = { workspace = true }
