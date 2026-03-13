@@ -40,6 +40,8 @@ pub enum Scope {
     FilesRead,
     /// Upload files and attachments.
     FilesWrite,
+    /// Submit events on behalf of other pubkeys (proxy service accounts only).
+    ProxySubmit,
     /// A scope string not recognised by this version of the relay.
     ///
     /// Preserved as-is to allow forward-compatibility with future scope additions.
@@ -109,6 +111,7 @@ impl Scope {
             Self::SubscriptionsWrite => "subscriptions:write",
             Self::FilesRead => "files:read",
             Self::FilesWrite => "files:write",
+            Self::ProxySubmit => "proxy:submit",
             Self::Unknown(s) => s.as_str(),
         }
     }
@@ -139,6 +142,7 @@ impl FromStr for Scope {
             "subscriptions:write" => Self::SubscriptionsWrite,
             "files:read" => Self::FilesRead,
             "files:write" => Self::FilesWrite,
+            "proxy:submit" => Self::ProxySubmit,
             other => Self::Unknown(other.to_string()),
         })
     }

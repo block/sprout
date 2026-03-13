@@ -123,6 +123,14 @@ relay:
 relay-release:
     cargo run -p sprout-relay --release
 
+# Start sprout-proxy (dev mode)
+proxy:
+    cargo run -p sprout-proxy
+
+# Start sprout-proxy (release mode)
+proxy-release:
+    cargo run -p sprout-proxy --release
+
 # Run the desktop Tauri app in dev mode
 dev *ARGS:
     cd {{desktop_dir}} && pnpm tauri dev {{ARGS}}

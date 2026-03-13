@@ -41,7 +41,7 @@ The relay enforces all access control. Channel membership is the only gate.
 | **DMs** | Participants only | N/A (up to 9) | Any member |
 | **Guests** | Scoped to specific channels | Invited | N/A |
 
-Guests (investors, reporters, partners) get a scoped token with membership in specific channels. Same access model as everyone else. Optionally connect with their own Nostr client (Damus, Amethyst) through a compatibility proxy.
+Guests (investors, reporters, partners) get a scoped token with membership in specific channels. Same access model as everyone else. Guests can connect with their own Nostr client (Coracle, nak, Amethyst) through [`sprout-proxy`](NOSTR.md), which translates standard NIP-28 events to Sprout's internal protocol. Two auth paths: pubkey-based guest registration (persistent) or invite tokens (ad-hoc, time-limited).
 
 ---
 
@@ -163,6 +163,7 @@ Greenfield. Agent swarms build in parallel, integrating at the event store bound
 | ✅ | Channel features — messaging, threads, DMs, reactions, NIP-29, soft-delete |
 | ✅ | Workflow engine — YAML-as-code, approval gates, execution traces |
 | ✅ | Identity — NIP-05, public profiles, self-service token minting, agent protection |
+| ✅ | NIP-28 proxy — third-party Nostr clients (Coracle, nak, Amethyst) via `sprout-proxy` |
 | 🚧 | Desktop client — Forum view, DM UI |
 | 📋 | Mobile clients, developer portal, notifications, culture features |
 

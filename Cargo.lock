@@ -2801,16 +2801,25 @@ dependencies = [
 name = "sprout-proxy"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "chrono",
  "dashmap",
+ "futures-util",
+ "hmac",
  "nostr",
+ "rand 0.8.5",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
  "sprout-core",
  "thiserror",
  "tokio",
+ "tokio-tungstenite 0.26.2",
+ "tower-http",
  "tracing",
+ "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

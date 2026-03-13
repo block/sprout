@@ -31,34 +31,36 @@ append-only and audited.
 | [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md) | Basic protocol flow — events, filters, subscriptions | ✅ Implemented |
 | [NIP-11](https://github.com/nostr-protocol/nips/blob/master/11.md) | Relay information document | ✅ Implemented |
 | [NIP-25](https://github.com/nostr-protocol/nips/blob/master/25.md) | Reactions | ✅ Implemented |
+| [NIP-28](https://github.com/nostr-protocol/nips/blob/master/28.md) | Public chat channels | ✅ Via `sprout-proxy` (kind translation) |
 | [NIP-29](https://github.com/nostr-protocol/nips/blob/master/29.md) | Relay-based groups | ✅ Partial (kinds 9000–9008 implemented; 9009, 9021 deferred) |
 | [NIP-42](https://github.com/nostr-protocol/nips/blob/master/42.md) | Authentication of clients to relays | ✅ Implemented |
 
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                         Clients                                │
-│                                                                │
-│   Human client        AI agent (goose, etc.)                   │
-│   (any Nostr app)     ┌──────────────────┐                     │
-│        │              │  sprout-acp      │ ← ACP harness       │
-│        │              │  (ACP ↔ MCP)     │   (event listener   │
-│        │              └────────┬─────────┘    + agent bridge)  │
-│        │                       │                               │
-│        │              ┌────────┴─────────┐                     │
-│        │              │  sprout-mcp      │                     │
-│        │              │  (stdio MCP srv) │                     │
-│        │              └────────┬─────────┘                     │
-│        │                       │ WebSocket + REST               │
-└────────┼───────────────────────┼─────────────────────────────-─┘
-         │ WebSocket             │
-         ▼                       ▼
-┌────────────────────────────────────────────────────────────────┐
-│                      sprout-relay                              │
-│                                                                │
-│  NIP-01 handler  ·  NIP-42 auth  ·  channel REST  ·  admin API │
-└──────────┬──────────────────────┬──────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                             Clients                                     │
+│                                                                         │
+│  Human client         AI agent              Third-party Nostr client    │
+│  (any Nostr app)      (goose, etc.)         (Coracle, nak, Amethyst)    │
+│       │               ┌──────────────┐               │                  │
+│       │               │  sprout-acp  │               │                  │
+│       │               │  (ACP ↔ MCP) │               │                  │
+│       │               └──────┬───────┘               │                  │
+│       │               ┌──────┴───────┐      ┌────────┴─────────┐        │
+│       │               │  sprout-mcp  │      │  sprout-proxy    │        │
+│       │               │  (stdio MCP) │      │  :4869           │        │
+│       │               └──────┬───────┘      │  NIP-28 ↔ Sprout │        │
+│       │                      │              └────────┬─────────┘        │
+│       │                      │ WS + REST             │ WS + REST        │
+└───────┼──────────────────────┼───────────────────────┼──────────────────┘
+        │ WebSocket            │                       │
+        ▼                      ▼                       ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          sprout-relay                                   │
+│                                                                         │
+│  NIP-01 handler  ·  NIP-42 auth  ·  channel REST  ·  admin API          │
+└──────────┬──────────────────────┬───────────────────────────────────────┘
            │                      │
     ┌──────▼──────┐        ┌──────▼──────┐
     │    MySQL    │        │    Redis    │
@@ -97,8 +99,12 @@ append-only and audited.
 | `sprout-mcp` | stdio MCP server — 43 tools for messages, channels, workflows, and feed |
 | `sprout-acp` | ACP harness — bridges Sprout relay events to AI agents over stdio (goose, codex, claude code) |
 | `sprout-workflow` | YAML-as-code workflow engine — triggers, actions, approval gates, execution traces |
-| `sprout-proxy` | Protocol translation layer — shadow keypairs, kind remapping for legacy clients |
 | `sprout-huddle` | LiveKit integration — voice/video session tokens for channel participants |
+
+**Client compatibility**
+| Crate | Role |
+|-------|------|
+| `sprout-proxy` | NIP-28 compatibility proxy — standard Nostr clients (Coracle, nak, Amethyst) read/write Sprout channels via kind translation, shadow keypairs, and guest auth. See [NOSTR.md](NOSTR.md) |
 
 **Tooling**
 | Crate | Role |
@@ -173,6 +179,17 @@ goose run --no-profile \
 
 `sprout-mcp-server` is a stdio MCP server — Goose manages its lifecycle. Do not run it directly in a terminal. See [TESTING.md](TESTING.md) for the full multi-agent flow.
 
+**6b. Start the NIP-28 proxy (optional)**
+
+```bash
+just proxy
+# or: cargo run -p sprout-proxy
+```
+
+The proxy lets third-party Nostr clients (Coracle, nak, Amethyst) connect to Sprout using
+standard NIP-28 channel events. See [NOSTR.md](NOSTR.md) for setup, guest registration, and
+client configuration.
+
 **7. Run the desktop app (optional)**
 
 ```bash
@@ -202,6 +219,12 @@ Copy `.env.example` to `.env`. All defaults work with `docker compose up` out of
 | `OKTA_ISSUER` | — | Okta OIDC issuer URL (optional) |
 | `OKTA_AUDIENCE` | — | Expected JWT audience (optional) |
 | `RUST_LOG` | `sprout_relay=info` | Log filter (tracing env-filter syntax) |
+| `SPROUT_PROXY_BIND_ADDR` | `0.0.0.0:4869` | Proxy bind address (see [NOSTR.md](NOSTR.md) for full proxy config) |
+| `SPROUT_UPSTREAM_URL` | — | Upstream relay URL for the proxy (e.g., `ws://localhost:3000`) |
+| `SPROUT_PROXY_SERVER_KEY` | — | Hex private key for the proxy server keypair |
+| `SPROUT_PROXY_SALT` | — | Hex 32-byte salt for shadow key derivation |
+| `SPROUT_PROXY_API_TOKEN` | — | Sprout API token with `proxy:submit` scope |
+| `SPROUT_PROXY_ADMIN_SECRET` | — | Bearer secret for proxy admin endpoints (optional — omit for dev mode) |
 
 ## MCP Tools
 
@@ -232,6 +255,7 @@ lefthook install
 ```bash
 just setup          # Start Docker services + run migrations
 just relay          # Run the relay (dev mode)
+just proxy          # Run the NIP-28 proxy (dev mode)
 just build          # Build the Rust workspace
 just desktop-install # Install desktop dependencies
 just desktop-dev    # Run the desktop web UI only
@@ -252,6 +276,7 @@ just reset          # ⚠️  Wipe all data and recreate environment
 cargo run -p sprout-relay
 cargo run -p sprout-admin -- --help
 cargo run -p sprout-mcp --bin sprout-mcp-server
+cargo run -p sprout-proxy
 ```
 
 `sprout-mcp-server` is normally launched by Goose or another MCP host.

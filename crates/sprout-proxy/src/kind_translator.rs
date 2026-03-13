@@ -13,6 +13,7 @@
 
 use sprout_core::kind::{
     KIND_DM_CREATED, KIND_NIP29_DELETE_EVENT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT,
+    KIND_STREAM_MESSAGE_V2,
 };
 
 /// Translates Nostr event kinds between standard and Sprout-internal values.
@@ -65,11 +66,22 @@ impl KindTranslator {
     /// this function always returns the primary/canonical standard kind — it
     /// cannot recover the original kind if it was one of the secondary mappings.
     ///
-    /// For example: `to_standard(KIND_STREAM_MESSAGE)` returns `1`, not `40`
-    /// or `42`, even if the event was originally kind 40 or 42.
+    /// For example: `to_standard(KIND_STREAM_MESSAGE)` returns `42` (NIP-28
+    /// channel message), not `1` or `40`, even if the event was originally
+    /// kind 1 or 40.
+    ///
+    /// | Sprout kind                | Standard kind | Notes                     |
+    /// |----------------------------|---------------|---------------------------|
+    /// | `KIND_STREAM_MESSAGE`      | 42            | NIP-28 channel message    |
+    /// | `KIND_STREAM_MESSAGE_V2`   | 42            | Rich format → plain 42    |
+    /// | `KIND_STREAM_MESSAGE_EDIT` | 41            | NIP-28 channel message edit |
+    /// | `KIND_DM_CREATED`          | 4             | Encrypted DM              |
+    /// | `KIND_NIP29_DELETE_EVENT`  | 43            | NIP-29 delete             |
+    /// | anything else              | unchanged     | pass-through              |
     pub fn to_standard(&self, sprout_kind: u32) -> u32 {
         match sprout_kind {
-            k if k == KIND_STREAM_MESSAGE => 1,
+            k if k == KIND_STREAM_MESSAGE => 42, // NIP-28 channel message (was 1)
+            k if k == KIND_STREAM_MESSAGE_V2 => 42, // Rich format → plain kind:42
             k if k == KIND_STREAM_MESSAGE_EDIT => 41,
             k if k == KIND_DM_CREATED => 4,
             k if k == KIND_NIP29_DELETE_EVENT => 43,
@@ -92,7 +104,9 @@ impl Default for KindTranslator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sprout_core::kind::{KIND_DM_CREATED, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT};
+    use sprout_core::kind::{
+        KIND_DM_CREATED, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_V2,
+    };
 
     #[test]
     fn standard_to_sprout() {
@@ -106,9 +120,17 @@ mod tests {
     #[test]
     fn sprout_to_standard() {
         let t = KindTranslator::new();
-        assert_eq!(t.to_standard(KIND_STREAM_MESSAGE), 1);
+        assert_eq!(t.to_standard(KIND_STREAM_MESSAGE), 42);
+        assert_eq!(t.to_standard(KIND_STREAM_MESSAGE_V2), 42);
         assert_eq!(t.to_standard(KIND_STREAM_MESSAGE_EDIT), 41);
         assert_eq!(t.to_standard(KIND_DM_CREATED), 4);
+    }
+
+    #[test]
+    fn stream_message_v2_round_trip() {
+        let t = KindTranslator::new();
+        // kind:42 → KIND_STREAM_MESSAGE (lossy collapse), then back → 42
+        assert_eq!(t.to_standard(t.to_sprout(42)), 42);
     }
 
     #[test]
@@ -126,6 +148,7 @@ mod tests {
         assert!(t.is_translatable(1));
         assert!(t.is_translatable(4));
         assert!(t.is_translatable(KIND_STREAM_MESSAGE));
+        assert!(t.is_translatable(KIND_STREAM_MESSAGE_V2));
         assert!(!t.is_translatable(9999));
         assert!(!t.is_translatable(0));
     }
