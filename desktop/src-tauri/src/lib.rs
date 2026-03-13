@@ -180,6 +180,14 @@ struct SearchQueryParams<'a> {
 }
 
 #[derive(Serialize)]
+struct SendChannelMessageBody<'a> {
+    content: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_event_id: Option<&'a str>,
+    broadcast_to_channel: bool,
+}
+
+#[derive(Serialize)]
 struct MintTokenBody<'a> {
     name: &'a str,
     scopes: &'a [String],
@@ -272,6 +280,15 @@ pub struct SearchHitInfo {
 pub struct SearchResponse {
     pub hits: Vec<SearchHitInfo>,
     pub found: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SendChannelMessageResponse {
+    pub event_id: String,
+    pub parent_event_id: Option<String>,
+    pub root_event_id: Option<String>,
+    pub depth: u32,
+    pub created_at: i64,
 }
 
 fn deserialize_null_string_as_empty<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -794,6 +811,25 @@ async fn search_messages(
 }
 
 #[tauri::command]
+async fn send_channel_message(
+    channel_id: String,
+    content: String,
+    parent_event_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<SendChannelMessageResponse, String> {
+    let path = format!("/api/channels/{channel_id}/messages");
+    let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?.json(
+        &SendChannelMessageBody {
+            content: content.trim(),
+            parent_event_id: parent_event_id.as_deref(),
+            broadcast_to_channel: false,
+        },
+    );
+
+    send_json_request(request).await
+}
+
+#[tauri::command]
 async fn get_event(event_id: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
     let request = build_authed_request(
         &state.http_client,
@@ -963,6 +999,7 @@ pub fn run() {
             leave_channel,
             get_feed,
             search_messages,
+            send_channel_message,
             get_event,
             list_tokens,
             mint_token,

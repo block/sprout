@@ -24,6 +24,10 @@ import {
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
 import {
+  getChannelIdFromTags,
+  getThreadReference,
+} from "@/features/messages/lib/threading";
+import {
   usePresenceQuery,
   usePresenceSession,
 } from "@/features/presence/hooks";
@@ -73,6 +77,7 @@ export function AppShell() {
   >(null);
   const [searchAnchorEvent, setSearchAnchorEvent] =
     React.useState<RelayEvent | null>(null);
+  const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
   const queryClient = useQueryClient();
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
@@ -91,6 +96,7 @@ export function AppShell() {
   );
   const createChannelMutation = useCreateChannelMutation();
   const activeChannel = selectedView === "channel" ? selectedChannel : null;
+  const activeChannelId = activeChannel?.id ?? null;
   const { unreadChannelIds } = useUnreadChannels(channels, activeChannel);
   const activeDmParticipantPubkeys = React.useMemo(() => {
     if (!activeChannel || activeChannel.channelType !== "dm") {
@@ -170,6 +176,11 @@ export function AppShell() {
       resolvedMessages,
     ],
   );
+  const replyTargetMessage = React.useMemo(
+    () =>
+      timelineMessages.find((message) => message.id === replyTargetId) ?? null,
+    [replyTargetId, timelineMessages],
+  );
 
   const channelDescription = activeChannel
     ? [
@@ -195,6 +206,11 @@ export function AppShell() {
         : `channel:${activeChannel?.id ?? "none"}`;
   const isTimelineLoading =
     messagesQuery.isLoading && resolvedMessages.length === 0;
+
+  const requestedAncestorIdsRef = React.useRef<Set<string>>(new Set());
+  const previousActiveChannelIdRef = React.useRef<string | null>(
+    activeChannelId,
+  );
 
   const resolveChannel = React.useCallback(
     async (channelId: string): Promise<Channel | null> => {
@@ -281,6 +297,85 @@ export function AppShell() {
     },
     [handleOpenChannel],
   );
+
+  React.useEffect(() => {
+    if (previousActiveChannelIdRef.current === activeChannelId) {
+      return;
+    }
+
+    previousActiveChannelIdRef.current = activeChannelId;
+    setReplyTargetId(null);
+    requestedAncestorIdsRef.current.clear();
+  }, [activeChannelId]);
+
+  React.useEffect(() => {
+    if (replyTargetId && !replyTargetMessage) {
+      setReplyTargetId(null);
+    }
+  }, [replyTargetId, replyTargetMessage]);
+
+  React.useEffect(() => {
+    if (!activeChannel || activeChannel.channelType === "forum") {
+      return;
+    }
+
+    const knownEvents = new Map(
+      resolvedMessages.map((message) => [message.id, message]),
+    );
+    const missingAncestorIds = new Set<string>();
+
+    for (const message of resolvedMessages) {
+      const thread = getThreadReference(message.tags);
+
+      for (const eventId of [thread.parentId, thread.rootId]) {
+        if (
+          !eventId ||
+          knownEvents.has(eventId) ||
+          requestedAncestorIdsRef.current.has(eventId)
+        ) {
+          continue;
+        }
+
+        missingAncestorIds.add(eventId);
+      }
+    }
+
+    if (missingAncestorIds.size === 0) {
+      return;
+    }
+
+    for (const eventId of missingAncestorIds) {
+      requestedAncestorIdsRef.current.add(eventId);
+    }
+
+    let isCancelled = false;
+
+    void Promise.all(
+      [...missingAncestorIds].map(async (eventId) => {
+        try {
+          const event = await getEventById(eventId);
+
+          if (
+            isCancelled ||
+            getChannelIdFromTags(event.tags) !== activeChannel.id
+          ) {
+            return;
+          }
+
+          queryClient.setQueryData<RelayEvent[]>(
+            ["channel-messages", activeChannel.id],
+            (current = []) => mergeMessages(current, event),
+          );
+        } catch (error) {
+          console.error("Failed to load ancestor event", eventId, error);
+        }
+      }),
+    );
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeChannel, queryClient, resolvedMessages]);
 
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -435,10 +530,11 @@ export function AppShell() {
           ) : (
             <>
               <MessageTimeline
+                activeReplyTargetId={replyTargetId}
                 emptyDescription={
                   activeChannel?.channelType === "forum"
                     ? "Select a stream or DM to load real message history in this first integration pass."
-                    : "Messages will appear here once the relay has history for this channel."
+                    : "Messages and sub-replies will appear here once the relay has history for this channel."
                 }
                 emptyTitle={
                   activeChannel
@@ -450,6 +546,11 @@ export function AppShell() {
                 isLoading={isTimelineLoading}
                 key={activeChannel?.id ?? "no-channel"}
                 messages={timelineMessages}
+                onReply={(message) => {
+                  setReplyTargetId((current) =>
+                    current === message.id ? null : message.id,
+                  );
+                }}
                 onTargetReached={(messageId) => {
                   setSearchAnchor((current) =>
                     current?.eventId === messageId ? null : current,
@@ -473,11 +574,16 @@ export function AppShell() {
                 }
                 isSending={sendMessageMutation.isPending}
                 key={activeChannel?.id ?? "no-channel"}
+                onCancelReply={() => {
+                  setReplyTargetId(null);
+                }}
                 onSend={async (content, mentionPubkeys) => {
                   await sendMessageMutation.mutateAsync({
                     content,
                     mentionPubkeys,
+                    parentEventId: replyTargetId,
                   });
+                  setReplyTargetId(null);
                 }}
                 placeholder={
                   activeChannel?.archivedAt
@@ -489,6 +595,15 @@ export function AppShell() {
                         : activeChannel
                           ? `Message #${activeChannel.name}`
                           : "Select a channel"
+                }
+                replyTarget={
+                  replyTargetMessage
+                    ? {
+                        author: replyTargetMessage.author,
+                        body: replyTargetMessage.body,
+                        id: replyTargetMessage.id,
+                      }
+                    : null
                 }
               />
             </>

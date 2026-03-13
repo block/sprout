@@ -14,8 +14,14 @@ type MessageComposerProps = {
   channelName: string;
   disabled?: boolean;
   isSending?: boolean;
+  onCancelReply?: () => void;
   onSend: (content: string, mentionPubkeys: string[]) => Promise<void>;
   placeholder?: string;
+  replyTarget?: {
+    author: string;
+    body: string;
+    id: string;
+  } | null;
 };
 
 const MAX_TEXTAREA_ROWS = 4;
@@ -45,8 +51,10 @@ export function MessageComposer({
   channelName,
   disabled = false,
   isSending = false,
+  onCancelReply,
   onSend,
   placeholder,
+  replyTarget = null,
 }: MessageComposerProps) {
   const [content, setContent] = React.useState("");
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -258,6 +266,14 @@ export function MessageComposer({
     }
   });
 
+  React.useEffect(() => {
+    if (!replyTarget || disabled) {
+      return;
+    }
+
+    textareaRef.current?.focus();
+  }, [disabled, replyTarget]);
+
   return (
     <footer className="border-t border-border/80 bg-background p-4">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
@@ -274,6 +290,31 @@ export function MessageComposer({
             suggestions={isMentionOpen ? suggestions : []}
           />
 
+          {replyTarget ? (
+            <div
+              className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-border/70 bg-muted/40 px-3 py-2"
+              data-testid="reply-target"
+            >
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  Replying to {replyTarget.author}
+                </p>
+                <p className="truncate text-sm text-foreground/80">
+                  {replyTarget.body}
+                </p>
+              </div>
+              <Button
+                className="shrink-0"
+                onClick={onCancelReply}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                Cancel
+              </Button>
+            </div>
+          ) : null}
+
           <Textarea
             aria-label="Message channel"
             className="min-h-0 resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 text-sm leading-6 shadow-none focus-visible:ring-0"
@@ -281,7 +322,12 @@ export function MessageComposer({
             disabled={disabled}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            placeholder={placeholder ?? `Message #${channelName}`}
+            placeholder={
+              placeholder ??
+              (replyTarget
+                ? `Reply to ${replyTarget.author} in #${channelName}`
+                : `Message #${channelName}`)
+            }
             ref={textareaRef}
             rows={1}
             value={content}

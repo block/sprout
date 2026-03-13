@@ -126,6 +126,14 @@ export type RelayEvent = {
   pending?: boolean;
 };
 
+export type SendChannelMessageResult = {
+  eventId: string;
+  parentEventId: string | null;
+  rootEventId: string | null;
+  depth: number;
+  createdAt: number;
+};
+
 export type FeedItemCategory =
   | "mention"
   | "needs_action"

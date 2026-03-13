@@ -159,6 +159,14 @@ type RawSearchResponse = {
   found: number;
 };
 
+type RawSendChannelMessageResponse = {
+  event_id: string;
+  parent_event_id: string | null;
+  root_event_id: string | null;
+  depth: number;
+  created_at: number;
+};
+
 type RawToken = {
   id: string;
   name: string;
@@ -824,6 +832,35 @@ function sendWsClose(handler: WsHandler) {
 
 function getChannelIdFromTags(tags: string[][]): string | undefined {
   return tags.find((tag) => tag[0] === "h")?.[1];
+}
+
+function getThreadReferenceFromTags(tags: string[][]) {
+  const eventTags = tags.filter(
+    (tag) => tag[0] === "e" && typeof tag[1] === "string",
+  );
+
+  if (eventTags.length === 0) {
+    return {
+      parentEventId: null,
+      rootEventId: null,
+    };
+  }
+
+  const rootTag = eventTags.find((tag) => tag[3] === "root");
+  const replyTag =
+    [...eventTags].reverse().find((tag) => tag[3] === "reply") ?? null;
+
+  if (!replyTag) {
+    return {
+      parentEventId: null,
+      rootEventId: null,
+    };
+  }
+
+  return {
+    parentEventId: replyTag[1] ?? null,
+    rootEventId: rootTag?.[1] ?? replyTag[1] ?? null,
+  };
 }
 
 function getMockMessageStore(channelId: string): RelayEvent[] {
@@ -1873,6 +1910,114 @@ async function handleSearchMessages(
   return response.json();
 }
 
+async function handleSendChannelMessage(
+  args: {
+    channelId: string;
+    content: string;
+    parentEventId?: string | null;
+  },
+  config: E2eConfig | undefined,
+): Promise<RawSendChannelMessageResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const createdAt = Math.floor(Date.now() / 1000);
+
+    if (!args.parentEventId) {
+      const event = createMockEvent(40001, args.content, [
+        ["h", args.channelId],
+      ]);
+      recordMockMessage(args.channelId, event);
+      emitMockLiveEvent(args.channelId, event);
+
+      return {
+        event_id: event.id,
+        parent_event_id: null,
+        root_event_id: null,
+        depth: 0,
+        created_at: createdAt,
+      };
+    }
+
+    const history = getMockMessageStore(args.channelId);
+    const parentEvent = history.find(
+      (event) => event.id === args.parentEventId,
+    );
+    const parentThread = parentEvent
+      ? getThreadReferenceFromTags(parentEvent.tags)
+      : {
+          parentEventId: null,
+          rootEventId: null,
+        };
+    const rootEventId = parentThread.rootEventId ?? args.parentEventId;
+    const depth = parentEvent
+      ? (() => {
+          let currentEvent: RelayEvent | undefined = parentEvent;
+          let nextDepth = 1;
+
+          while (currentEvent) {
+            const reference = getThreadReferenceFromTags(currentEvent.tags);
+            if (!reference.parentEventId) {
+              return nextDepth;
+            }
+
+            nextDepth += 1;
+            currentEvent = history.find(
+              (event) => event.id === reference.parentEventId,
+            );
+          }
+
+          return nextDepth;
+        })()
+      : 1;
+
+    const event: RelayEvent = {
+      id: crypto.randomUUID().replace(/-/g, ""),
+      pubkey: getMockMemberPubkey(config),
+      created_at: createdAt,
+      kind: 40001,
+      tags:
+        rootEventId === args.parentEventId
+          ? [
+              ["p", getMockMemberPubkey(config)],
+              ["h", args.channelId],
+              ["e", rootEventId, "", "reply"],
+            ]
+          : [
+              ["p", getMockMemberPubkey(config)],
+              ["h", args.channelId],
+              ["e", rootEventId, "", "root"],
+              ["e", args.parentEventId, "", "reply"],
+            ],
+      content: args.content.trim(),
+      sig: "mocksig".repeat(20).slice(0, 128),
+    };
+
+    recordMockMessage(args.channelId, event);
+    emitMockLiveEvent(args.channelId, event);
+
+    return {
+      event_id: event.id,
+      parent_event_id: args.parentEventId,
+      root_event_id: rootEventId,
+      depth,
+      created_at: createdAt,
+    };
+  }
+
+  return relayJsonRequest<RawSendChannelMessageResponse>(
+    config,
+    `/api/channels/${args.channelId}/messages`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        content: args.content,
+        parent_event_id: args.parentEventId,
+        broadcast_to_channel: false,
+      }),
+    },
+  );
+}
+
 async function handleGetEvent(
   args: {
     eventId: string;
@@ -2244,6 +2389,11 @@ export function maybeInstallE2eTauriMocks() {
       case "search_messages":
         return handleSearchMessages(
           payload as Parameters<typeof handleSearchMessages>[0],
+          activeConfig,
+        );
+      case "send_channel_message":
+        return handleSendChannelMessage(
+          payload as Parameters<typeof handleSendChannelMessage>[0],
           activeConfig,
         );
       case "get_event":
