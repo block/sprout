@@ -68,6 +68,12 @@ test("two users see the same channel", async ({
     await expect(pageOne.getByTestId("stream-list")).toContainText(channelName);
 
     await pageTwo.goto("/");
+    await pageTwo.getByTestId("browse-channels").click();
+    await expect(pageTwo.getByTestId("channel-browser-dialog")).toBeVisible();
+    await pageTwo
+      .getByTestId(`browse-channel-${channelName}`)
+      .getByRole("button", { name: "Join" })
+      .click();
     await expect(pageTwo.getByTestId("stream-list")).toContainText(channelName);
   } finally {
     await contextOne.close();

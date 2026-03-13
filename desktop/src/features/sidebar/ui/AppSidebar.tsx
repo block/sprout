@@ -1,5 +1,13 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { CircleDot, FileText, Hash, Home, Plus, Search } from "lucide-react";
+import {
+  CircleDot,
+  Compass,
+  FileText,
+  Hash,
+  Home,
+  Plus,
+  Search,
+} from "lucide-react";
 import * as React from "react";
 
 import { getPresenceLabel } from "@/features/presence/lib/presence";
@@ -43,6 +51,7 @@ type AppSidebarProps = {
     name: string;
     description?: string;
   }) => Promise<void>;
+  onOpenBrowseChannels: () => void;
   onOpenSearch: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
@@ -290,6 +299,7 @@ export function AppSidebar({
   selectedView,
   unreadChannelIds,
   onCreateChannel,
+  onOpenBrowseChannels,
   onOpenSearch,
   onSelectHome,
   onSelectChannel,
@@ -398,7 +408,7 @@ export function AppSidebar({
       variant="sidebar"
     >
       <SidebarHeader
-        className="gap-3 pt-12"
+        className="gap-3 pt-10"
         onPointerDown={handleDragPointerDown}
       >
         <Button
@@ -487,6 +497,20 @@ export function AppSidebar({
               selectedChannelId={selectedChannelId}
               unreadChannelIds={unreadChannelIds}
             />
+            <SidebarMenu className="px-2">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  className="text-sidebar-foreground/60 hover:text-sidebar-foreground"
+                  data-testid="browse-channels"
+                  onClick={onOpenBrowseChannels}
+                  tooltip="Browse channels"
+                  type="button"
+                >
+                  <Compass className="h-4 w-4" />
+                  <span>Browse channels</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
             <SidebarSection
               isActiveChannel={selectedView === "channel"}
               items={forumChannels}

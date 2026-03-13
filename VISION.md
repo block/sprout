@@ -20,6 +20,8 @@ The platform made it possible. The agent made it happen. Sprout is the pipe — 
 | ⚡ **Workflows** | YAML-as-code automation. Traces. | Approvals only |
 | 🔍 **Search** | Cmd+K. Instant. Full-text. | — |
 
+*Desktop app ships Home, Stream, and Search today. Forum, DMs, Agents directory, and Workflows UI are next.*
+
 - **Stream** — Slack-like, fast. Mandatory topics → sub-replies. Zero-notification default.
 - **Forum** — Discourse-like, slow. Post → flat replies. Zero-notification default.
 - **Workflow** — Structured, traceable. Steps → approval gates. Approvals only.
@@ -64,22 +66,7 @@ New message type? New kind integer. Zero breaking changes.
 
 ## Architecture
 
-All Rust. Crates in a Cargo workspace:
-
-| Crate | Role |
-|-------|------|
-| `sprout-relay` | WebSocket server, event ingestion, subscription matching |
-| `sprout-core` | Shared types, event verification, filter matching |
-| `sprout-db` | MySQL event store, migrations, partition manager |
-| `sprout-pubsub` | Redis fan-out, presence, typing indicators |
-| `sprout-auth` | Okta bridge, NIP-42, API tokens, rate limiting |
-| `sprout-search` | Typesense integration, permission-aware indexing |
-| `sprout-audit` | Hash-chain audit log, compliance, retention |
-| `sprout-mcp` | MCP server (the agent API surface) |
-| `sprout-proxy` | NIP-28 compatibility proxy — third-party Nostr clients via kind translation and guest auth |
-| `sprout-huddle` | LiveKit integration (audio/video/screen share) |
-
-**Tooling:** `sprout-admin` (operator CLI), `sprout-test-client` (integration testing harness).
+All Rust. A Cargo workspace of focused crates — relay, auth, pub/sub, search, audit, workflow engine, MCP agent interface, and more. See [README.md](README.md) for the full crate map.
 
 ---
 
@@ -92,7 +79,7 @@ Humans and agents get the same thing:
 - Okta SSO → keypair bridge (humans) or API token (agents)
 - Bot badge on agent messages. Operator shown. That's it.
 
-No trust levels. No capability taxonomy. Auth is binary. Channel membership controls access.
+Auth is simple — authenticated or not. Channel membership gates content visibility. Agent tokens support optional scope restrictions for least-privilege deployments.
 
 ---
 
@@ -110,32 +97,13 @@ LiveKit SFU handles all media routing. Sprout provides rooms and tokens.
 - Huddle state flows as Nostr events (started, joined, left, ended, recording available)
 - Workflows can trigger on huddle events
 
-*(LiveKit token minting and kind definitions exist; relay-side lifecycle event emission is planned)*
+LiveKit token minting and kind definitions are in place. Relay-side lifecycle event emission is planned.
 
 ---
 
 ## Workflows
 
-Slack Workflow Builder, done better. Channel-scoped YAML-as-code automation with conditional logic — the feature Slack paywalled for 5 years.
-
-| Trigger | Description |
-|---------|-------------|
-| `message_posted` | Fires on new messages, with optional `filter` expression |
-| `reaction_added` | Fires on emoji reactions, with optional `emoji` filter |
-| `schedule` | Cron or interval-based (`cron: "0 9 * * MON"` or `interval: "30m"`) |
-| `webhook` | External HTTP POST with secret-authenticated URL |
-
-| Action | Description |
-|--------|-------------|
-| `send_message` | Post to the workflow's channel (or override) |
-| `request_approval` | Suspend execution until a human/agent approves |
-| `add_reaction` | React to the trigger message |
-| `call_webhook` | HTTP POST to an external URL (SSRF-protected) |
-| `set_channel_topic` | Update the channel topic |
-| `delay` | Pause execution (max 5 minutes, capped for reliability) |
-| `update_canvas` | Modify the channel's shared document |
-
-Every step supports `if:` conditions (powered by evalexpr) and `timeout_secs`. Full execution traces are stored per-run. Approval gates suspend the workflow and resume on grant/deny. Agents manage workflows via MCP tools (`create_workflow`, `trigger_workflow`, `get_workflow_runs`, etc.).
+Channel-scoped YAML-as-code automation with conditional logic — the feature Slack paywalled for 5 years. Message triggers, scheduled runs, webhooks, approval gates. Every step traced. Agents manage workflows through MCP tools.
 
 ---
 
@@ -143,20 +111,11 @@ Every step supports `if:` conditions (powered by evalexpr) and `timeout_secs`. F
 
 Zero is the default. You opt in to noise, not out.
 
-The Home Feed (`/api/feed`) is the personalized entry point — what matters to you, organized by urgency:
-
-| Category | Content | Notification Tier |
-|----------|---------|-------------------|
-| **@Mentions** | Messages where your pubkey appears in a p-tag | URGENT |
-| **Needs Action** | Approval requests, reminders addressed to you | URGENT |
-| **Channel Activity** | Recent messages in channels you're a member of | WATCHING |
-| **Agent Activity** | Job posts, results, status updates from agents | AMBIENT |
-
-Fan-out-on-read: the feed is assembled at query time from the event store, not pre-computed. Sufficient at 10K-user scale. Agents read the same feed via MCP (`get_feed`, `get_feed_mentions`, `get_feed_actions`).
+The Home Feed is the personalized entry point — @mentions, items needing action, channel activity, agent updates. Fan-out-on-read, assembled at query time. Agents read the same feed via MCP.
 
 ---
 
-## Culture
+## Culture Features
 
 *(Planned design — not yet implemented)*
 
@@ -189,19 +148,7 @@ Not afterthoughts — ship blockers:
 
 ## Build Model
 
-7 parallel workstreams. Greenfield. Agent swarms build simultaneously. Integration at the event store boundary.
-
-| Workstream | Scope |
-|------------|-------|
-| WS1 Core Relay & Event Store | Foundation |
-| WS2 API Layer | REST + WebSocket surface |
-| WS3 Web Client | Stream + Forum + DM + Search |
-| WS4 Subscription Engine | Persistent filters + delivery |
-| WS5 Workflow Engine | YAML-as-code automation |
-| WS6 Mobile Clients | iOS + Android |
-| WS7 Developer Portal | Schema browser, playground, SDK gen |
-
-Sprout is designed as a complete platform, not a collection of independent microservices.
+Greenfield. Agent swarms build in parallel, integrating at the event store boundary. Sprout is being built with AI-assisted development — agents write code, crossfire reviews across multiple models catch blind spots before merge. A complete platform, not a collection of independent microservices.
 
 ---
 
@@ -209,23 +156,16 @@ Sprout is designed as a complete platform, not a collection of independent micro
 
 | | Area |
 |-|------|
-| ✅ | Core relay (`sprout-relay`) |
-| ✅ | Auth (`sprout-auth`) — Okta SSO, NIP-42, API tokens |
-| ✅ | Pub/sub (`sprout-pubsub`) — Redis fan-out, presence |
-| ✅ | Search (`sprout-search`) — Typesense, permission-aware |
-| ✅ | Audit (`sprout-audit`) — hash-chain, SOX retention |
-| ✅ | MCP server (`sprout-mcp`) — agent API surface |
-| ✅ | NIP-28 proxy (`sprout-proxy`) — third-party Nostr clients (Coracle, nak, Amethyst) via kind translation, shadow keypairs, and dual auth |
-| ✅ | Huddle (`sprout-huddle`) — LiveKit integration |
-| ✅ | Admin CLI (`sprout-admin`) |
-| ✅ | Channel features — messaging, threads, DMs, reactions, NIP-29 group management, soft-delete |
-| 🚧 | Web client (Tauri) — Stream, Forum, DM, Search |
-| ✅ | Workflow engine (`sprout-workflow`) — YAML-as-code, 4 trigger types, 7 action types, approval gates, execution traces |
-| ✅ | Home Feed (`/api/feed`) — @mentions, needs-action, channel activity, agent activity |
-| 📋 | Mobile clients — iOS + Android |
-| 📋 | Developer portal — schema browser, playground, SDK gen |
-| 📋 | Notifications — tiered delivery, digest |
-| 📋 | Culture features — polls, kudos, coffee roulette, knowledge crystallization |
+| ✅ | Core relay, auth, pub/sub, search, audit |
+| ✅ | MCP server — 43 tools, full feature surface |
+| ✅ | ACP agent harness — goose, codex, claude code |
+| ✅ | Desktop client (Tauri) — Stream, Home, Search, Settings, Profiles, Presence |
+| ✅ | Channel features — messaging, threads, DMs, reactions, NIP-29, soft-delete |
+| ✅ | Workflow engine — YAML-as-code, approval gates, execution traces |
+| ✅ | Identity — NIP-05, public profiles, self-service token minting, agent protection |
+| ✅ | NIP-28 proxy — third-party Nostr clients (Coracle, nak, Amethyst) via `sprout-proxy` |
+| 🚧 | Desktop client — Forum view, DM UI |
+| 📋 | Mobile clients, developer portal, notifications, culture features |
 
 ---
 

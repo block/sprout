@@ -2,6 +2,7 @@ import { ArrowDown } from "lucide-react";
 import * as React from "react";
 
 import type { TimelineMessage } from "@/features/messages/types";
+import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -75,10 +76,42 @@ function MessageRow({ message }: { message: TimelineMessage }) {
       data-message-id={message.id}
       data-testid="message-row"
     >
-      {message.avatarUrl && !hasAvatarError ? (
+      {message.pubkey ? (
+        <UserProfilePopover pubkey={message.pubkey}>
+          <button
+            className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            type="button"
+          >
+            {message.avatarUrl && !hasAvatarError ? (
+              <img
+                alt={`${message.author} avatar`}
+                className="h-9 w-9 rounded-xl object-cover shadow-sm"
+                data-testid="message-avatar-image"
+                onError={() => {
+                  setHasAvatarError(true);
+                }}
+                referrerPolicy="no-referrer"
+                src={message.avatarUrl}
+              />
+            ) : (
+              <div
+                className={cn(
+                  "flex h-9 w-9 items-center justify-center rounded-xl text-xs font-semibold shadow-sm",
+                  message.accent
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-secondary text-secondary-foreground",
+                )}
+                data-testid="message-avatar-fallback"
+              >
+                {initials}
+              </div>
+            )}
+          </button>
+        </UserProfilePopover>
+      ) : message.avatarUrl && !hasAvatarError ? (
         <img
           alt={`${message.author} avatar`}
-          className="h-9 w-9 shrink-0 rounded-xl border border-border/80 object-cover shadow-sm"
+          className="h-9 w-9 shrink-0 rounded-xl object-cover shadow-sm"
           data-testid="message-avatar-image"
           onError={() => {
             setHasAvatarError(true);
@@ -102,9 +135,20 @@ function MessageRow({ message }: { message: TimelineMessage }) {
 
       <div className="min-w-0 flex-1 space-y-0">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <h3 className="truncate text-sm font-semibold tracking-tight">
-            {message.author}
-          </h3>
+          {message.pubkey ? (
+            <UserProfilePopover pubkey={message.pubkey}>
+              <button
+                className="truncate text-sm font-semibold tracking-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                type="button"
+              >
+                {message.author}
+              </button>
+            </UserProfilePopover>
+          ) : (
+            <h3 className="truncate text-sm font-semibold tracking-tight">
+              {message.author}
+            </h3>
+          )}
           {message.role ? (
             <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
               {message.role}
@@ -131,7 +175,6 @@ function MessageRow({ message }: { message: TimelineMessage }) {
             <DiffMessageExpanded
               content={message.body}
               filePath={getTag("file")}
-              language={getTag("l")}
               onClose={() => {
                 setExpandedDiffId(null);
               }}

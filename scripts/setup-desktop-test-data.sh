@@ -79,6 +79,14 @@ run_sql "
 INSERT IGNORE INTO channel_members
   (channel_id, pubkey, role, invited_by)
 VALUES
+  (UNHEX('${UUID_GENERAL}'), UNHEX('${TYLER_PUBKEY}'), 'member', ${SYSTEM_HEX}),
+  (UNHEX('${UUID_GENERAL}'), UNHEX('${ALICE_PUBKEY}'), 'member', ${SYSTEM_HEX}),
+  (UNHEX('${UUID_GENERAL}'), UNHEX('${BOB_PUBKEY}'), 'member', ${SYSTEM_HEX}),
+  (UNHEX('${UUID_RANDOM}'), UNHEX('${TYLER_PUBKEY}'), 'member', ${SYSTEM_HEX}),
+  (UNHEX('${UUID_ENGINEERING}'), UNHEX('${TYLER_PUBKEY}'), 'member', ${SYSTEM_HEX}),
+  (UNHEX('${UUID_AGENTS}'), UNHEX('${TYLER_PUBKEY}'), 'member', ${SYSTEM_HEX}),
+  (UNHEX('${UUID_WATERCOOLER}'), UNHEX('${TYLER_PUBKEY}'), 'member', ${SYSTEM_HEX}),
+  (UNHEX('${UUID_ANNOUNCEMENTS}'), UNHEX('${TYLER_PUBKEY}'), 'guest', ${SYSTEM_HEX}),
   (UNHEX('${UUID_DM_ALICE_TYLER}'), UNHEX('${ALICE_PUBKEY}'), 'member', ${SYSTEM_HEX}),
   (UNHEX('${UUID_DM_ALICE_TYLER}'), UNHEX('${TYLER_PUBKEY}'), 'member', ${SYSTEM_HEX}),
   (UNHEX('${UUID_DM_BOB_TYLER}'), UNHEX('${BOB_PUBKEY}'), 'member', ${SYSTEM_HEX}),

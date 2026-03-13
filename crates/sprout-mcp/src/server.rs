@@ -1,3 +1,4 @@
+use nostr::{EventBuilder, Kind, Tag};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
@@ -634,8 +635,34 @@ impl SproutMcpServer {
             );
         }
 
-        // Route all messages through REST — avoids WebSocket timeout (~5 min).
-        // The relay determines kind from channel_type; parent_event_id is optional.
+        // Use a user-signed WebSocket event for top-level messages so downstream
+        // clients see the agent pubkey directly rather than the relay pubkey.
+        // Threaded replies still go through REST because that path handles the
+        // reply ancestry tags and DB bookkeeping for us.
+        if p.parent_event_id.is_none() {
+            let kind = Kind::from(p.kind.unwrap_or(40001));
+            let tags = vec![match Tag::parse(&["h", &p.channel_id]) {
+                Ok(tag) => tag,
+                Err(e) => return format!("Error: failed to build channel tag: {e}"),
+            }];
+
+            let event =
+                match EventBuilder::new(kind, p.content, tags).sign_with_keys(self.client.keys()) {
+                    Ok(event) => event,
+                    Err(e) => return format!("Error: failed to sign message event: {e}"),
+                };
+
+            return match self.client.send_event(event).await {
+                Ok(ok) => serde_json::json!({
+                    "event_id": ok.event_id,
+                    "accepted": ok.accepted,
+                    "message": ok.message,
+                })
+                .to_string(),
+                Err(e) => format!("Error: {e}"),
+            };
+        }
+
         let mut body = serde_json::json!({
             "content": p.content,
         });

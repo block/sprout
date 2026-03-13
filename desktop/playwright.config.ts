@@ -21,7 +21,9 @@ export default defineConfig({
       testMatch: [
         "**/smoke.spec.ts",
         "**/channels.spec.ts",
+        "**/channel-browser.spec.ts",
         "**/messaging.spec.ts",
+        "**/mentions.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
@@ -33,6 +35,7 @@ export default defineConfig({
         "**/stream.spec.ts",
         "**/integration.spec.ts",
         "**/profile.spec.ts",
+        "**/tokens.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

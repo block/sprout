@@ -35,8 +35,24 @@ export const TEST_IDENTITIES = {
 
 type BridgeMode = "mock" | "relay";
 
+type MockBridgeOptions = {
+  mintTokenError?: string;
+  seededTokens?: Array<{
+    id: string;
+    name: string;
+    scopes: string[];
+    channel_ids: string[];
+    created_at: string;
+    expires_at: string | null;
+    last_used_at: string | null;
+    revoked_at: string | null;
+    token?: string;
+  }>;
+};
+
 type BridgeOptions = {
   mode: BridgeMode;
+  mock?: MockBridgeOptions;
   relayHttpUrl?: string;
   relayWsUrl?: string;
   user?: keyof typeof TEST_IDENTITIES;
@@ -49,13 +65,14 @@ export async function installBridge(page: Page, options: BridgeOptions) {
       : undefined;
 
   await page.addInitScript(
-    ({ identity: bridgeIdentity, mode, relayHttpUrl, relayWsUrl }) => {
+    ({ identity: bridgeIdentity, mock, mode, relayHttpUrl, relayWsUrl }) => {
       (
         window as Window & {
           __SPROUT_E2E__?: Record<string, unknown>;
         }
       ).__SPROUT_E2E__ = {
         identity: bridgeIdentity,
+        mock,
         mode,
         relayHttpUrl,
         relayWsUrl,
@@ -63,6 +80,7 @@ export async function installBridge(page: Page, options: BridgeOptions) {
     },
     {
       identity,
+      mock: options.mock,
       mode: options.mode,
       relayHttpUrl: options.relayHttpUrl,
       relayWsUrl: options.relayWsUrl,
@@ -70,8 +88,8 @@ export async function installBridge(page: Page, options: BridgeOptions) {
   );
 }
 
-export async function installMockBridge(page: Page) {
-  await installBridge(page, { mode: "mock" });
+export async function installMockBridge(page: Page, mock?: MockBridgeOptions) {
+  await installBridge(page, { mode: "mock", mock });
 }
 
 export async function installRelayBridge(

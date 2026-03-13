@@ -152,6 +152,35 @@ test("search results use your resolved profile label instead of You", async ({
   await expect(results).not.toContainText("You");
 });
 
+test("opens accessible unjoined channels from search in read-only mode", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+K" : "Control+K",
+  );
+  await expect(page.getByTestId("search-dialog")).toBeVisible();
+
+  await page.getByTestId("search-input").fill("critique");
+  const results = page.getByTestId("search-results");
+
+  await expect(results).toContainText(
+    "Design critique notes for the browse flow.",
+  );
+  await results.getByText("Design critique notes for the browse flow.").click();
+
+  await expect(page.getByTestId("chat-title")).toHaveText("design");
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Design critique notes for the browse flow.",
+  );
+  await expect(page.getByTestId("message-input")).toBeDisabled();
+
+  await page.getByTestId("channel-management-trigger").click();
+  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await expect(page.getByTestId("channel-management-join")).toBeVisible();
+});
+
 test("replaces the channel pane when switching channels", async ({ page }) => {
   await page.goto("/");
 

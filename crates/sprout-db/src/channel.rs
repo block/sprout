@@ -680,8 +680,19 @@ pub struct UserRecord {
     pub pubkey: Vec<u8>,
     /// Optional display name.
     pub display_name: Option<String>,
+    /// Optional avatar image URL.
+    pub avatar_url: Option<String>,
     /// Optional NIP-05 identifier (e.g. `user@example.com`).
     pub nip05_handle: Option<String>,
+}
+
+/// A channel record paired with whether the querying user is an active member.
+#[derive(Debug, Clone)]
+pub struct AccessibleChannel {
+    /// The channel record.
+    pub channel: ChannelRecord,
+    /// Whether the querying user is an active member of this channel.
+    pub is_member: bool,
 }
 
 /// Returns full channel records for all channels a user can access:
@@ -696,13 +707,14 @@ pub async fn get_accessible_channels(
     pool: &MySqlPool,
     pubkey: &[u8],
     visibility_filter: Option<&str>,
-) -> Result<Vec<ChannelRecord>> {
+) -> Result<Vec<AccessibleChannel>> {
     let base = r#"
         SELECT DISTINCT c.id, c.name, c.channel_type, c.visibility, c.description, c.canvas,
                c.created_by, c.created_at, c.updated_at, c.archived_at, c.deleted_at,
                c.nip29_group_id, c.topic_required, c.max_members,
                c.topic, c.topic_set_by, c.topic_set_at,
-               c.purpose, c.purpose_set_by, c.purpose_set_at
+               c.purpose, c.purpose_set_by, c.purpose_set_at,
+               (cm.channel_id IS NOT NULL) AS is_member
         FROM channels c
         LEFT JOIN channel_members cm
             ON c.id = cm.channel_id AND cm.pubkey = ? AND cm.removed_at IS NULL
@@ -724,7 +736,13 @@ pub async fn get_accessible_channels(
     };
 
     let rows = query.fetch_all(pool).await?;
-    rows.into_iter().map(row_to_channel_record).collect()
+    rows.into_iter()
+        .map(|row| {
+            let is_member: bool = row.try_get::<i8, _>("is_member").unwrap_or(0) != 0;
+            let channel = row_to_channel_record(row)?;
+            Ok(AccessibleChannel { channel, is_member })
+        })
+        .collect()
 }
 
 /// Returns all bot-role members with their aggregated channel names.
@@ -778,7 +796,7 @@ pub async fn get_users_bulk(pool: &MySqlPool, pubkeys: &[Vec<u8>]) -> Result<Vec
     // `.bind()` below. No user input is interpolated into the SQL string.
     let placeholders = pubkeys.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     let sql = format!(
-        "SELECT pubkey, display_name, nip05_handle FROM users WHERE pubkey IN ({placeholders})"
+        "SELECT pubkey, display_name, avatar_url, nip05_handle FROM users WHERE pubkey IN ({placeholders})"
     );
 
     let mut q = sqlx::query(&sql);
@@ -793,6 +811,7 @@ pub async fn get_users_bulk(pool: &MySqlPool, pubkeys: &[Vec<u8>]) -> Result<Vec
         out.push(UserRecord {
             pubkey: row.try_get("pubkey")?,
             display_name: row.try_get("display_name")?,
+            avatar_url: row.try_get("avatar_url")?,
             nip05_handle: row.try_get("nip05_handle")?,
         });
     }

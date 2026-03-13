@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 mod acp;
 mod config;
 mod queue;

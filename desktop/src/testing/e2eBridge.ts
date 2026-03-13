@@ -12,9 +12,25 @@ type TestIdentity = {
 
 type E2eConfig = {
   mode?: "mock" | "relay";
+  mock?: {
+    mintTokenError?: string;
+    seededTokens?: RawMockTokenSeed[];
+  };
   relayHttpUrl?: string;
   relayWsUrl?: string;
   identity?: TestIdentity;
+};
+
+type RawMockTokenSeed = {
+  id: string;
+  name: string;
+  scopes: string[];
+  channel_ids: string[];
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  token?: string;
 };
 
 type RawProfile = {
@@ -27,6 +43,7 @@ type RawProfile = {
 
 type RawUserProfileSummary = {
   display_name: string | null;
+  avatar_url: string | null;
   nip05_handle: string | null;
 };
 
@@ -57,6 +74,10 @@ type RawChannel = {
   archived_at: string | null;
   participants: string[];
   participant_pubkeys: string[];
+};
+
+type RawChannelWithMembership = RawChannel & {
+  is_member: boolean;
 };
 
 type RawChannelDetail = RawChannel & {
@@ -138,6 +159,33 @@ type RawSearchResponse = {
   found: number;
 };
 
+type RawToken = {
+  id: string;
+  name: string;
+  scopes: string[];
+  channel_ids: string[];
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+};
+
+type RawListTokensResponse = {
+  tokens: RawToken[];
+};
+
+type RawMintTokenResponse = RawToken & {
+  token: string;
+};
+
+type RawRevokeAllTokensResponse = {
+  revoked_count: number;
+};
+
+type MockToken = RawToken & {
+  token: string;
+};
+
 type WsHandler = (message: unknown) => void;
 
 type MockSocket = {
@@ -197,7 +245,7 @@ function cloneMembers(members: RawChannelMember[]): RawChannelMember[] {
   return members.map((member) => ({ ...member }));
 }
 
-function toRawChannel(channel: MockChannel): RawChannel {
+function toRawChannel(channel: MockChannel): RawChannelWithMembership {
   return {
     id: channel.id,
     name: channel.name,
@@ -211,6 +259,11 @@ function toRawChannel(channel: MockChannel): RawChannel {
     archived_at: channel.archived_at,
     participants: [...channel.participants],
     participant_pubkeys: [...channel.participant_pubkeys],
+    is_member: channel.members.some(
+      (member) =>
+        member.pubkey === MOCK_IDENTITY_PUBKEY ||
+        member.pubkey === DEFAULT_REAL_IDENTITY.pubkey,
+    ),
   };
 }
 
@@ -301,6 +354,35 @@ function cloneProfile(profile: RawProfile): RawProfile {
   return { ...profile };
 }
 
+function cloneToken(token: RawToken): RawToken {
+  return {
+    ...token,
+    channel_ids: [...token.channel_ids],
+    scopes: [...token.scopes],
+  };
+}
+
+function cloneMintedToken(token: MockToken): RawMintTokenResponse {
+  return {
+    ...cloneToken(token),
+    token: token.token,
+  };
+}
+
+function toMockToken(seed: RawMockTokenSeed): MockToken {
+  return {
+    ...cloneToken(seed),
+    token:
+      seed.token ??
+      `spr_tok_mock_${seed.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 24)}`,
+  };
+}
+
+function resetMockTokens(config: E2eConfig | undefined) {
+  mockTokens = (config?.mock?.seededTokens ?? []).map(toMockToken);
+  mockMintTokenError = config?.mock?.mintTokenError ?? null;
+}
+
 function getMockProfileByPubkey(pubkey: string): RawProfile | null {
   const normalizedPubkey = pubkey.toLowerCase();
   const existing = mockProfiles.get(normalizedPubkey);
@@ -321,7 +403,7 @@ function getMockProfileByPubkey(pubkey: string): RawProfile | null {
   };
 }
 
-function listMockChannels(): RawChannel[] {
+function listMockChannels(): RawChannelWithMembership[] {
   return mockChannels.map(toRawChannel);
 }
 
@@ -403,7 +485,58 @@ const mockChannels: MockChannel[] = [
     updated_minutes_ago: 1400,
     members: [
       createMockMember(ALICE_PUBKEY, "owner", 1400),
+      createMockMember(MOCK_IDENTITY_PUBKEY, "member", 1300),
       createMockMember(BOB_PUBKEY, "member", 1000),
+    ],
+  }),
+  createMockChannel({
+    id: "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e",
+    name: "design",
+    channel_type: "stream",
+    visibility: "open",
+    description: "Design system and UX discussions",
+    topic: null,
+    purpose: null,
+    last_message_at: isoMinutesAgo(120),
+    archived_at: null,
+    created_by: ALICE_PUBKEY,
+    topic_set_by: null,
+    topic_set_at: null,
+    purpose_set_by: null,
+    purpose_set_at: null,
+    topic_required: false,
+    max_members: null,
+    nip29_group_id: null,
+    created_minutes_ago: 1350,
+    updated_minutes_ago: 120,
+    members: [
+      createMockMember(ALICE_PUBKEY, "owner", 1350),
+      createMockMember(BOB_PUBKEY, "member", 1100),
+    ],
+  }),
+  createMockChannel({
+    id: "c6f3a9b2-4d55-5a23-bf78-5b9e2g3c5d6f",
+    name: "sales",
+    channel_type: "stream",
+    visibility: "open",
+    description: "Sales team coordination and pipeline updates",
+    topic: "Q1 targets",
+    purpose: null,
+    last_message_at: isoMinutesAgo(30),
+    archived_at: null,
+    created_by: BOB_PUBKEY,
+    topic_set_by: BOB_PUBKEY,
+    topic_set_at: isoMinutesAgo(200),
+    purpose_set_by: null,
+    purpose_set_at: null,
+    topic_required: false,
+    max_members: null,
+    nip29_group_id: null,
+    created_minutes_ago: 1300,
+    updated_minutes_ago: 30,
+    members: [
+      createMockMember(BOB_PUBKEY, "owner", 1300),
+      createMockMember(CHARLIE_PUBKEY, "member", 900),
     ],
   }),
   createMockChannel({
@@ -566,6 +699,8 @@ const mockChannels: MockChannel[] = [
 const mockMessages = new Map<string, RelayEvent[]>();
 const mockSockets = new Map<number, MockSocket>();
 const realSockets = new Map<number, WebSocket>();
+let mockTokens: MockToken[] = [];
+let mockMintTokenError: string | null = null;
 const mockProfiles = new Map<string, RawProfile>([
   [
     MOCK_IDENTITY_PUBKEY,
@@ -964,6 +1099,7 @@ async function handleGetUsersBatch(
 
       profiles[normalizedPubkey] = {
         display_name: profile.display_name,
+        avatar_url: profile.avatar_url,
         nip05_handle: profile.nip05_handle,
       };
     }
@@ -1536,6 +1672,114 @@ async function handleGetFeed(
   return response.json();
 }
 
+async function handleListTokens(
+  config: E2eConfig | undefined,
+): Promise<RawListTokensResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    return {
+      tokens: mockTokens.map(cloneToken),
+    };
+  }
+
+  return relayJsonRequest<RawListTokensResponse>(config, "/api/tokens");
+}
+
+async function handleMintToken(
+  args: {
+    name: string;
+    scopes: string[];
+    channelIds?: string[];
+    expiresInDays?: number;
+  },
+  config: E2eConfig | undefined,
+): Promise<RawMintTokenResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    if (mockMintTokenError) {
+      throw mockMintTokenError;
+    }
+
+    const now = new Date();
+    const token: MockToken = {
+      id: crypto.randomUUID(),
+      name: args.name,
+      scopes: [...args.scopes],
+      channel_ids: [...(args.channelIds ?? [])],
+      created_at: now.toISOString(),
+      expires_at:
+        typeof args.expiresInDays === "number"
+          ? new Date(
+              now.getTime() + args.expiresInDays * 24 * 60 * 60 * 1_000,
+            ).toISOString()
+          : null,
+      last_used_at: null,
+      revoked_at: null,
+      token: `spr_tok_mock_${crypto.randomUUID().replace(/-/g, "")}`,
+    };
+
+    mockTokens.unshift(token);
+    return cloneMintedToken(token);
+  }
+
+  return relayJsonRequest<RawMintTokenResponse>(config, "/api/tokens", {
+    method: "POST",
+    body: JSON.stringify({
+      name: args.name,
+      scopes: args.scopes,
+      channel_ids: args.channelIds,
+      expires_in_days: args.expiresInDays,
+    }),
+  });
+}
+
+async function handleRevokeToken(
+  args: { tokenId: string },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const token = mockTokens.find((candidate) => candidate.id === args.tokenId);
+    if (!token) {
+      throw new Error(`Token ${args.tokenId} not found.`);
+    }
+
+    token.revoked_at = new Date().toISOString();
+    return;
+  }
+
+  await relayEmptyRequest(config, `/api/tokens/${args.tokenId}`, {
+    method: "DELETE",
+  });
+}
+
+async function handleRevokeAllTokens(
+  config: E2eConfig | undefined,
+): Promise<RawRevokeAllTokensResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const now = new Date().toISOString();
+    let revokedCount = 0;
+
+    for (const token of mockTokens) {
+      if (token.revoked_at) {
+        continue;
+      }
+
+      token.revoked_at = now;
+      revokedCount += 1;
+    }
+
+    return {
+      revoked_count: revokedCount,
+    };
+  }
+
+  return relayJsonRequest<RawRevokeAllTokensResponse>(config, "/api/tokens", {
+    method: "DELETE",
+  });
+}
+
 async function handleSearchMessages(
   args: {
     q: string;
@@ -1570,6 +1814,17 @@ async function handleSearchMessages(
         channel_name: "engineering",
         created_at: now - 42 * 60,
         score: 7.2,
+      },
+      {
+        event_id: "mock-design-critique",
+        content: "Design critique notes for the browse flow.",
+        kind: 40001,
+        pubkey:
+          "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+        channel_id: "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e",
+        channel_name: "design",
+        created_at: now - 75 * 60,
+        score: 6.6,
       },
       {
         event_id: "mock-forum-release-thread",
@@ -1636,6 +1891,16 @@ async function handleGetEvent(
         kind: 40001,
         tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
         content: "Engineering shipped the desktop build.",
+        sig: "mocksig".repeat(20).slice(0, 128),
+      },
+      {
+        id: "mock-design-critique",
+        pubkey:
+          "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+        created_at: Math.floor(Date.now() / 1000) - 75 * 60,
+        kind: 40001,
+        tags: [["h", "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e"]],
+        content: "Design critique notes for the browse flow.",
         sig: "mocksig".repeat(20).slice(0, 128),
       },
       {
@@ -1831,6 +2096,7 @@ export function maybeInstallE2eTauriMocks() {
     return;
   }
 
+  resetMockTokens(config);
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({ channelName, content }) => {
@@ -1896,6 +2162,20 @@ export function maybeInstallE2eTauriMocks() {
           (payload as Parameters<typeof handleGetFeed>[0]) ?? {},
           activeConfig,
         );
+      case "list_tokens":
+        return handleListTokens(activeConfig);
+      case "mint_token":
+        return handleMintToken(
+          payload as Parameters<typeof handleMintToken>[0],
+          activeConfig,
+        );
+      case "revoke_token":
+        return handleRevokeToken(
+          payload as Parameters<typeof handleRevokeToken>[0],
+          activeConfig,
+        );
+      case "revoke_all_tokens":
+        return handleRevokeAllTokens(activeConfig);
       case "create_channel":
         return handleCreateChannel(
           payload as Parameters<typeof handleCreateChannel>[0],

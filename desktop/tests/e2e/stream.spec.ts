@@ -45,6 +45,44 @@ async function ensureTimelineScrollable(
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight + 160);
 }
 
+async function createAndJoinSharedStream(
+  ownerPage: Page,
+  memberPage: Page,
+  channelName: string,
+) {
+  await ownerPage.getByRole("button", { name: "Create a stream" }).click();
+  await ownerPage.getByTestId("create-stream-name").fill(channelName);
+  await ownerPage.getByRole("button", { name: "Create" }).click();
+  await expect(ownerPage.getByTestId("stream-list")).toContainText(channelName);
+  await expect(ownerPage.getByTestId("chat-title")).toHaveText(channelName);
+
+  await memberPage.getByTestId("browse-channels").click();
+  await expect(memberPage.getByTestId("channel-browser-dialog")).toBeVisible();
+  await memberPage
+    .getByTestId(`browse-channel-${channelName}`)
+    .getByRole("button", { name: "Join" })
+    .click();
+  await expect(memberPage.getByTestId("chat-title")).toHaveText(channelName);
+  await expect(memberPage.getByTestId("stream-list")).toContainText(
+    channelName,
+  );
+}
+
+async function scrollTimelineAwayFromBottom(page: Page, minDistance = 160) {
+  const timeline = page.getByTestId("message-timeline");
+  await timeline.hover();
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await page.mouse.wheel(0, -800);
+    const metrics = await getTimelineMetrics(page);
+    if (metrics.distanceFromBottom > minDistance) {
+      return;
+    }
+  }
+
+  throw new Error("Failed to scroll the timeline away from the bottom.");
+}
+
 test.beforeAll(async () => {
   await assertRelaySeeded();
 });
@@ -107,6 +145,7 @@ test("delivers a message to a second browser context in real time", async ({
 }: {
   browser: Browser;
 }) => {
+  const channelName = `realtime-shared-${Date.now()}`;
   const contextOne = await browser.newContext();
   const contextTwo = await browser.newContext();
   const pageOne = await contextOne.newPage();
@@ -119,11 +158,7 @@ test("delivers a message to a second browser context in real time", async ({
 
     await pageOne.goto("/");
     await pageTwo.goto("/");
-
-    await pageOne.getByTestId("channel-general").click();
-    await pageTwo.getByTestId("channel-general").click();
-    await expect(pageOne.getByTestId("chat-title")).toHaveText("general");
-    await expect(pageTwo.getByTestId("chat-title")).toHaveText("general");
+    await createAndJoinSharedStream(pageOne, pageTwo, channelName);
 
     await pageOne.getByTestId("message-input").fill(message);
     await pageOne.getByTestId("send-message").click();
@@ -142,6 +177,7 @@ test("stays pinned to the latest message when new messages arrive at the bottom"
 }: {
   browser: Browser;
 }) => {
+  const channelName = `pinned-bottom-${Date.now()}`;
   const contextOne = await browser.newContext();
   const contextTwo = await browser.newContext();
   const pageOne = await contextOne.newPage();
@@ -155,11 +191,7 @@ test("stays pinned to the latest message when new messages arrive at the bottom"
 
     await pageOne.goto("/");
     await pageTwo.goto("/");
-
-    await pageOne.getByTestId("channel-general").click();
-    await pageTwo.getByTestId("channel-general").click();
-    await expect(pageOne.getByTestId("chat-title")).toHaveText("general");
-    await expect(pageTwo.getByTestId("chat-title")).toHaveText("general");
+    await createAndJoinSharedStream(pageOne, pageTwo, channelName);
 
     await ensureTimelineScrollable(pageOne, pageTwo, prefix);
     await expect
@@ -189,6 +221,7 @@ test("stays pinned after you send a message and a remote reply arrives right aft
 }: {
   browser: Browser;
 }) => {
+  const channelName = `reply-shared-${Date.now()}`;
   const contextOne = await browser.newContext();
   const contextTwo = await browser.newContext();
   const pageOne = await contextOne.newPage();
@@ -203,11 +236,7 @@ test("stays pinned after you send a message and a remote reply arrives right aft
 
     await pageOne.goto("/");
     await pageTwo.goto("/");
-
-    await pageOne.getByTestId("channel-general").click();
-    await pageTwo.getByTestId("channel-general").click();
-    await expect(pageOne.getByTestId("chat-title")).toHaveText("general");
-    await expect(pageTwo.getByTestId("chat-title")).toHaveText("general");
+    await createAndJoinSharedStream(pageOne, pageTwo, channelName);
 
     await ensureTimelineScrollable(pageOne, pageTwo, prefix);
     await expect
@@ -243,6 +272,7 @@ test("keeps bottom-pinned scrolling after the composer grows", async ({
 }: {
   browser: Browser;
 }) => {
+  const channelName = `composer-shared-${Date.now()}`;
   const contextOne = await browser.newContext();
   const contextTwo = await browser.newContext();
   const pageOne = await contextOne.newPage();
@@ -257,11 +287,7 @@ test("keeps bottom-pinned scrolling after the composer grows", async ({
 
     await pageOne.goto("/");
     await pageTwo.goto("/");
-
-    await pageOne.getByTestId("channel-general").click();
-    await pageTwo.getByTestId("channel-general").click();
-    await expect(pageOne.getByTestId("chat-title")).toHaveText("general");
-    await expect(pageTwo.getByTestId("chat-title")).toHaveText("general");
+    await createAndJoinSharedStream(pageOne, pageTwo, channelName);
 
     await ensureTimelineScrollable(pageOne, pageTwo, prefix);
     await expect
@@ -303,6 +329,7 @@ test("keeps scroll position when new messages arrive above the fold", async ({
 }: {
   browser: Browser;
 }) => {
+  const channelName = `scroll-shared-${Date.now()}`;
   const contextOne = await browser.newContext();
   const contextTwo = await browser.newContext();
   const pageOne = await contextOne.newPage();
@@ -316,25 +343,14 @@ test("keeps scroll position when new messages arrive above the fold", async ({
 
     await pageOne.goto("/");
     await pageTwo.goto("/");
-
-    await pageOne.getByTestId("channel-general").click();
-    await pageTwo.getByTestId("channel-general").click();
-    await expect(pageOne.getByTestId("chat-title")).toHaveText("general");
-    await expect(pageTwo.getByTestId("chat-title")).toHaveText("general");
+    await createAndJoinSharedStream(pageOne, pageTwo, channelName);
 
     await ensureTimelineScrollable(pageOne, pageTwo, prefix);
     await expect
       .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
       .toBeLessThan(8);
 
-    await pageTwo.getByTestId("message-timeline").evaluate((element) => {
-      const timeline = element as HTMLDivElement;
-      timeline.scrollTop = 0;
-    });
-
-    await expect
-      .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
-      .toBeGreaterThan(160);
+    await scrollTimelineAwayFromBottom(pageTwo);
 
     await pageOne.getByTestId("message-input").fill(incomingMessage);
     await pageOne.getByTestId("send-message").click();

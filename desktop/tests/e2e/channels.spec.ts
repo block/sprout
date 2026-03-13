@@ -280,28 +280,39 @@ test("manage channel can invite and remove members", async ({ page }) => {
 
 test("open channel management supports join and leave", async ({ page }) => {
   await page.goto("/");
-  await openChannelManagement(page, "random");
 
-  await expect(page.getByTestId("channel-management-join")).toBeVisible();
-  await expect(page.getByTestId("channel-management-leave")).toHaveCount(0);
+  // Navigate to "design" (an unjoined channel) via the channel browser
+  await page.getByTestId("browse-channels").click();
+  await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
+  await page
+    .getByTestId("browse-channel-design")
+    .getByRole("button", { name: "Join" })
+    .click();
+  await expect(page.getByTestId("chat-title")).toHaveText("design");
 
-  await page.getByTestId("channel-management-join").click();
-
+  // Open channel management — should show Leave since we just joined
+  await page.getByTestId("channel-management-trigger").click();
+  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
   await expect(page.getByTestId("channel-management-join")).toHaveCount(0);
   await expect(page.getByTestId("channel-management-leave")).toBeVisible();
   await expect(
     page.getByTestId(`channel-member-${MOCK_IDENTITY_PUBKEY}`),
   ).toContainText("You");
 
+  // Leave the channel
   await page.getByTestId("channel-management-leave").click();
   await expect(page.getByTestId("channel-management-sheet")).not.toBeVisible();
 
-  await page.getByTestId("channel-management-trigger").click();
-  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
-  await expect(page.getByTestId("channel-management-join")).toBeVisible();
+  // After leaving, the app navigates away — re-open browser and find design
+  await page.getByTestId("browse-channels").click();
+  await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
+
+  // "design" should be back in the unjoined section with a Join button
   await expect(
-    page.getByTestId(`channel-member-${MOCK_IDENTITY_PUBKEY}`),
-  ).toHaveCount(0);
+    page
+      .getByTestId("browse-channel-design")
+      .getByRole("button", { name: "Join" }),
+  ).toBeVisible();
 });
 
 test("manage channel can archive and unarchive a stream", async ({ page }) => {

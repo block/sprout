@@ -116,14 +116,22 @@ class RelayClient {
     });
   }
 
-  async sendMessage(channelId: string, content: string) {
+  async sendMessage(
+    channelId: string,
+    content: string,
+    mentionPubkeys: string[] = [],
+  ) {
     await this.ensureConnected();
+
+    const tags: string[][] = [["h", channelId]];
+    for (const pubkey of mentionPubkeys) {
+      tags.push(["p", pubkey]);
+    }
 
     const event = await signRelayEvent({
       kind: 40001,
       content: content.trim(),
-      // Channel-scoped events use the NIP-29 `h` tag.
-      tags: [["h", channelId]],
+      tags,
     });
 
     return this.publishEvent(

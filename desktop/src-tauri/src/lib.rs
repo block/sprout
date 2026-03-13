@@ -1,14 +1,18 @@
 use std::{collections::HashMap, sync::Mutex};
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, ToBech32};
 use reqwest::Method;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
 use sprout_core::PresenceStatus;
 use tauri_plugin_window_state::StateFlags;
 
 pub struct AppState {
     pub keys: Mutex<Keys>,
     pub http_client: reqwest::Client,
+    pub configured_api_token: Option<String>,
+    pub session_token: Mutex<Option<String>>,
 }
 
 #[derive(Serialize)]
@@ -29,6 +33,7 @@ pub struct ProfileInfo {
 #[derive(Serialize, Deserialize)]
 pub struct UserProfileSummaryInfo {
     pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
     pub nip05_handle: Option<String>,
 }
 
@@ -50,6 +55,7 @@ pub struct ChannelInfo {
     pub name: String,
     pub channel_type: String,
     pub visibility: String,
+    #[serde(deserialize_with = "deserialize_null_string_as_empty")]
     pub description: String,
     pub topic: Option<String>,
     pub purpose: Option<String>,
@@ -58,6 +64,8 @@ pub struct ChannelInfo {
     pub archived_at: Option<String>,
     pub participants: Vec<String>,
     pub participant_pubkeys: Vec<String>,
+    #[serde(default = "default_true")]
+    pub is_member: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -66,6 +74,7 @@ pub struct ChannelDetailInfo {
     pub name: String,
     pub channel_type: String,
     pub visibility: String,
+    #[serde(deserialize_with = "deserialize_null_string_as_empty")]
     pub description: String,
     pub topic: Option<String>,
     pub topic_set_by: Option<String>,
@@ -170,6 +179,49 @@ struct SearchQueryParams<'a> {
     limit: Option<u32>,
 }
 
+#[derive(Serialize)]
+struct MintTokenBody<'a> {
+    name: &'a str,
+    scopes: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel_ids: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_in_days: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct MintTokenResponse {
+    pub id: String,
+    pub token: String,
+    pub name: String,
+    pub scopes: Vec<String>,
+    pub channel_ids: Vec<String>,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub id: String,
+    pub name: String,
+    pub scopes: Vec<String>,
+    pub channel_ids: Vec<String>,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+    pub last_used_at: Option<String>,
+    pub revoked_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ListTokensResponse {
+    pub tokens: Vec<TokenInfo>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RevokeAllTokensResponse {
+    pub revoked_count: u64,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct FeedItemInfo {
     pub id: String,
@@ -222,6 +274,17 @@ pub struct SearchResponse {
     pub found: u64,
 }
 
+fn deserialize_null_string_as_empty<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+fn default_true() -> bool {
+    true
+}
+
 fn relay_ws_url() -> String {
     std::env::var("SPROUT_RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
 }
@@ -242,10 +305,15 @@ fn build_authed_request(
     path: &str,
     state: &AppState,
 ) -> Result<reqwest::RequestBuilder, String> {
-    let pubkey_hex = auth_pubkey_header(state)?;
     let url = format!("{}{}", relay_api_base_url(), path);
+    let request = client.request(method, url);
 
-    Ok(client.request(method, url).header("X-Pubkey", pubkey_hex))
+    if let Some(token) = state.configured_api_token.as_deref() {
+        return Ok(request.header("Authorization", format!("Bearer {token}")));
+    }
+
+    let pubkey_hex = auth_pubkey_header(state)?;
+    Ok(request.header("X-Pubkey", pubkey_hex))
 }
 
 fn auth_pubkey_header(state: &AppState) -> Result<String, String> {
@@ -253,13 +321,67 @@ fn auth_pubkey_header(state: &AppState) -> Result<String, String> {
     Ok(keys.public_key().to_hex())
 }
 
+fn session_api_token(state: &AppState) -> Result<Option<String>, String> {
+    let token = state.session_token.lock().map_err(|e| e.to_string())?;
+    Ok(token.clone())
+}
+
+fn build_token_management_request(
+    client: &reqwest::Client,
+    method: Method,
+    path: &str,
+    state: &AppState,
+) -> Result<reqwest::RequestBuilder, String> {
+    let url = format!("{}{}", relay_api_base_url(), path);
+    let request = client.request(method, url);
+
+    if let Some(token) = state.configured_api_token.as_deref() {
+        return Ok(request.header("Authorization", format!("Bearer {token}")));
+    }
+
+    if let Some(token) = session_api_token(state)? {
+        return Ok(request.header("Authorization", format!("Bearer {token}")));
+    }
+
+    let pubkey_hex = auth_pubkey_header(state)?;
+    Ok(request.header("X-Pubkey", pubkey_hex))
+}
+
+fn build_nip98_auth_header(
+    method: &Method,
+    url: &str,
+    body: &[u8],
+    state: &AppState,
+) -> Result<String, String> {
+    let keys = state.keys.lock().map_err(|e| e.to_string())?;
+    let payload_hash = format!("{:x}", Sha256::digest(body));
+    let tags = vec![
+        Tag::parse(vec!["u", url]).map_err(|e| format!("url tag failed: {e}"))?,
+        Tag::parse(vec!["method", method.as_str()])
+            .map_err(|e| format!("method tag failed: {e}"))?,
+        Tag::parse(vec!["payload", &payload_hash])
+            .map_err(|e| format!("payload tag failed: {e}"))?,
+    ];
+
+    let event = EventBuilder::new(Kind::HttpAuth, "")
+        .tags(tags)
+        .sign_with_keys(&keys)
+        .map_err(|e| format!("sign failed: {e}"))?;
+
+    Ok(format!("Nostr {}", BASE64.encode(event.as_json().as_bytes())))
+}
+
 async fn relay_error_message(response: reqwest::Response) -> String {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
 
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
-        if let Some(message) = value.get("error").and_then(serde_json::Value::as_str) {
+        if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
             return format!("relay returned {status}: {message}");
+        }
+
+        if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
+            return format!("relay returned {status}: {error}");
         }
     }
 
@@ -454,11 +576,18 @@ fn create_auth_event(
 ) -> Result<String, String> {
     let keys = state.keys.lock().map_err(|e| e.to_string())?;
 
-    let tags = vec![
+    let mut tags = vec![
         Tag::parse(vec!["relay", &relay_url]).map_err(|e| format!("relay tag failed: {e}"))?,
         Tag::parse(vec!["challenge", &challenge])
             .map_err(|e| format!("challenge tag failed: {e}"))?,
     ];
+
+    if let Some(token) = state.configured_api_token.as_deref() {
+        tags.push(
+            Tag::parse(vec!["auth_token", token])
+                .map_err(|e| format!("auth token tag failed: {e}"))?,
+        );
+    }
 
     let event = EventBuilder::new(Kind::Custom(22242), "")
         .tags(tags)
@@ -684,11 +813,116 @@ async fn get_event(event_id: String, state: tauri::State<'_, AppState>) -> Resul
     response.text().await.map_err(|e| format!("parse failed: {e}"))
 }
 
+#[tauri::command]
+async fn list_tokens(state: tauri::State<'_, AppState>) -> Result<ListTokensResponse, String> {
+    let request =
+        build_token_management_request(&state.http_client, Method::GET, "/api/tokens", &state)?;
+    send_json_request(request).await
+}
+
+#[tauri::command]
+async fn mint_token(
+    name: String,
+    scopes: Vec<String>,
+    channel_ids: Option<Vec<String>>,
+    expires_in_days: Option<u32>,
+    state: tauri::State<'_, AppState>,
+) -> Result<MintTokenResponse, String> {
+    let body = MintTokenBody {
+        name: &name,
+        scopes: &scopes,
+        channel_ids: channel_ids.as_deref(),
+        expires_in_days,
+    };
+    let request = if state.configured_api_token.is_some() {
+        build_authed_request(&state.http_client, Method::POST, "/api/tokens", &state)?.json(&body)
+    } else {
+        let url = format!("{}{}", relay_api_base_url(), "/api/tokens");
+        let body_bytes =
+            serde_json::to_vec(&body).map_err(|e| format!("serialize failed: {e}"))?;
+        let auth_header = build_nip98_auth_header(&Method::POST, &url, &body_bytes, &state)?;
+        let forwarded_proto = if url.starts_with("http://") {
+            "http"
+        } else {
+            "https"
+        };
+
+        state
+            .http_client
+            .request(Method::POST, url)
+            .header("Authorization", auth_header)
+            .header("Content-Type", "application/json")
+            .header("X-Forwarded-Proto", forwarded_proto)
+            .body(body_bytes)
+    };
+    let response: MintTokenResponse = send_json_request(request).await?;
+
+    if state.configured_api_token.is_none() {
+        let mut token = state.session_token.lock().map_err(|e| e.to_string())?;
+        *token = Some(response.token.clone());
+    }
+
+    Ok(response)
+}
+
+#[tauri::command]
+async fn revoke_token(
+    token_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let path = format!("/api/tokens/{token_id}");
+    let request =
+        build_token_management_request(&state.http_client, Method::DELETE, &path, &state)?;
+    send_empty_request(request).await
+}
+
+#[tauri::command]
+async fn revoke_all_tokens(
+    state: tauri::State<'_, AppState>,
+) -> Result<RevokeAllTokensResponse, String> {
+    let request =
+        build_token_management_request(&state.http_client, Method::DELETE, "/api/tokens", &state)?;
+    send_json_request(request).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // GUI app: warn on bad key but don't crash — fall back to ephemeral.
+    // CLI crates (sprout-mcp, sprout-test-client) use fatal errors instead.
+    let (keys, source) = match std::env::var("SPROUT_PRIVATE_KEY") {
+        Ok(nsec) => match Keys::parse(nsec.trim()) {
+            Ok(k) => (k, "configured"),
+            Err(e) => {
+                eprintln!("sprout-desktop: invalid SPROUT_PRIVATE_KEY: {e}");
+                (Keys::generate(), "ephemeral")
+            }
+        },
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!("sprout-desktop: SPROUT_PRIVATE_KEY contains invalid UTF-8");
+            (Keys::generate(), "ephemeral")
+        }
+        Err(std::env::VarError::NotPresent) => (Keys::generate(), "ephemeral"),
+    };
+
+    eprintln!(
+        "sprout-desktop: {source} identity pubkey {}",
+        keys.public_key().to_hex()
+    );
+
+    let api_token = match std::env::var("SPROUT_API_TOKEN") {
+        Ok(token) if !token.trim().is_empty() => Some(token),
+        Ok(_) | Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!("sprout-desktop: SPROUT_API_TOKEN contains invalid UTF-8");
+            None
+        }
+    };
+
     let app_state = AppState {
-        keys: Mutex::new(Keys::generate()),
+        keys: Mutex::new(keys),
         http_client: reqwest::Client::new(),
+        configured_api_token: api_token,
+        session_token: Mutex::new(None),
     };
 
     tauri::Builder::default()
@@ -730,7 +964,39 @@ pub fn run() {
             get_feed,
             search_messages,
             get_event,
+            list_tokens,
+            mint_token,
+            revoke_token,
+            revoke_all_tokens,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::ChannelInfo;
+
+    #[test]
+    fn channel_info_defaults_is_member_for_legacy_payloads() {
+        let channel: ChannelInfo = serde_json::from_value(json!({
+            "id": "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+            "name": "general",
+            "channel_type": "stream",
+            "visibility": "open",
+            "description": "General discussion",
+            "topic": null,
+            "purpose": null,
+            "member_count": 3,
+            "last_message_at": null,
+            "archived_at": null,
+            "participants": [],
+            "participant_pubkeys": []
+        }))
+        .expect("legacy payload should deserialize");
+
+        assert!(channel.is_member);
+    }
 }

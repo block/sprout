@@ -77,8 +77,8 @@ lefthook install
 ```
 
 `just setup` starts Docker services (MySQL on `:3306`, Redis on `:6379`,
-Typesense on `:8108`, Adminer on `:8082`) and runs all pending database
-migrations.
+Typesense on `:8108`, Adminer on `:8082`, Keycloak on `:8180` for local
+OAuth/OIDC testing) and runs all pending database migrations.
 
 ### Running the Relay
 
@@ -105,7 +105,6 @@ just reset   # ⚠️  Wipe all data and recreate the environment
 
 ```bash
 just test-unit
-# or: cargo test --lib
 ```
 
 Unit tests are self-contained and run without Docker. They cover event
@@ -115,7 +114,6 @@ parsing, filter matching, auth logic, workflow YAML parsing, and more.
 
 ```bash
 just test
-# or: cargo test
 ```
 
 Integration tests spin up the relay and exercise the full stack — WebSocket
@@ -125,14 +123,21 @@ already running.
 
 ### End-to-End Tests
 
-The `sprout-test-client` crate contains a WebSocket harness for scenario-level
-tests:
+End-to-end tests live in `crates/sprout-test-client/tests/`:
+
+- `e2e_rest_api.rs` — REST API tests
+- `e2e_relay.rs` — WebSocket relay tests
+- `e2e_mcp.rs` — MCP tool tests
+- `e2e_tokens.rs` — token management tests
+- `e2e_workflows.rs` — workflow tests
+
+Run them with (requires running infrastructure):
 
 ```bash
-cargo run -p sprout-test-client -- --scenario basic-pubsub
+cargo test -p sprout-test-client
 ```
 
-Run `cargo run -p sprout-test-client -- --help` for available scenarios.
+See `TESTING.md` for the full multi-agent E2E testing guide.
 
 ### CI Gate
 
@@ -152,8 +157,7 @@ merged.
 
 ### Formatting
 
-We use `rustfmt` with the project's `rustfmt.toml`. Format your code before
-committing:
+We use `rustfmt` with default settings. Format your code before committing:
 
 ```bash
 cargo fmt --all
@@ -255,7 +259,6 @@ required. The scope (in parentheses) is optional but encouraged.
 - [ ] `just ci` passes (fmt + clippy + unit tests)
 - [ ] Integration tests pass (`just test`)
 - [ ] New public APIs / tools / endpoints are documented
-- [ ] CHANGELOG entry added (if user-facing change)
 - [ ] No new `unwrap()` in production code paths
 - [ ] No new `unsafe` blocks
 ```
@@ -284,10 +287,12 @@ sprout-search     ← Typesense full-text search
 sprout-audit      ← Tamper-evident hash-chain audit log
 sprout-workflow   ← YAML-as-code workflow engine
 sprout-mcp        ← stdio MCP server (agent API surface)
+sprout-acp        ← ACP harness (bridges Sprout relay events to AI agents via stdio)
 sprout-proxy      ← Nostr client compatibility layer
 sprout-huddle     ← LiveKit integration
 sprout-admin      ← Operator CLI
 sprout-test-client← Integration test harness
+desktop/          ← Desktop app (Tauri 2 + React 19 + Vite + Tailwind)
 ```
 
 **Key design principle:** The relay is the single source of truth. All state
@@ -304,18 +309,19 @@ to existing clients.
 
 ## How to Add a New Event Kind
 
-1. **Define the kind constant** in `sprout-core/src/kinds.rs`:
+1. **Define the kind constant** in `sprout-core/src/kind.rs`:
 
    ```rust
    /// My new event kind — description of what it represents.
-   pub const KIND_MY_FEATURE: u16 = 4XXXX;
+   pub const KIND_MY_FEATURE: u32 = 4XXXX;
    ```
 
-   Pick a kind number in the `40000–49999` range (Sprout's reserved range
-   for enterprise extensions). Check `kinds.rs` to avoid collisions.
+   Pick a kind number in the appropriate sub-range defined in `kind.rs`.
+   Check the `ALL_KINDS` array for collisions. Each sub-range is documented
+   with comments in the file.
 
-2. **Define the payload type** in `sprout-core/src/types/` (if the content
-   field is structured JSON):
+2. **Define the payload type** in the appropriate module in `sprout-core/src/`
+   (e.g., alongside `event.rs`) if the content field is structured JSON:
 
    ```rust
    #[derive(Debug, Serialize, Deserialize)]
@@ -325,19 +331,26 @@ to existing clients.
    }
    ```
 
-3. **Handle the kind in the relay** in `sprout-relay/src/api.rs` (or the
-   appropriate handler module). Add a match arm for your kind:
+3. **Handle the kind in the relay** by adding a match arm in
+   `crates/sprout-relay/src/handlers/side_effects.rs` inside the
+   `handle_side_effects()` function:
 
    ```rust
    KIND_MY_FEATURE => handle_my_feature(&state, &event).await?,
    ```
+
+   This is the central dispatch point for event side-effects. If the new
+   kind also needs a REST surface (e.g., a query endpoint for clients), add
+   a handler in `crates/sprout-relay/src/api/` and register it in
+   `crates/sprout-relay/src/router.rs` — that's separate from event
+   dispatch.
 
 4. **Persist to the database** — if the event needs to be queryable, add a
    handler in `sprout-db/src/` (e.g., `sprout-db/src/my_feature.rs`) with
    the appropriate `INSERT` and `SELECT` queries.
 
 5. **Index for search** (if applicable) — add the kind to the Typesense
-   indexing logic in `sprout-search/src/indexer.rs`.
+   indexing logic in `sprout-search/src/index.rs`.
 
 6. **Audit** — the audit log captures all events automatically; no changes
    needed unless you need custom audit metadata.
@@ -346,8 +359,8 @@ to existing clients.
    `sprout-core` and an integration test in `sprout-test-client` that sends
    the new event kind and verifies the expected behavior.
 
-8. **Document** — add the kind to the kind reference table in `VISION.md`
-   and update `README.md` if it's a user-facing feature.
+8. **Document** — `kind.rs` is the authoritative registry of all kind numbers.
+   Update `README.md` if it's a user-facing feature.
 
 ---
 
@@ -394,20 +407,19 @@ provides the `#[tool]` and `#[tool_router]` macros.
 
 3. **The `#[tool_router]` macro** on the `impl SproutMcpServer` block
    automatically discovers all `#[tool]`-annotated methods and registers
-   them. No manual registration needed.
+   them. The MCP server auto-discovers `#[tool]`-annotated methods — no
+   manual registration or doc updates needed.
 
-4. **Update the tool count** in `README.md` and add a full parameter table
-   and example to `AGENTS.md`.
-
-5. **Write a test** — add an integration test in
-   `crates/sprout-mcp/tests/` that exercises the new tool end-to-end.
+4. **Write a test** — add an integration test in
+   `crates/sprout-test-client/tests/e2e_mcp.rs` that exercises the new tool end-to-end.
 
 ---
 
 ## How to Add a New API Endpoint
 
-REST endpoints live in `crates/sprout-relay/src/api.rs` (or the module
-it delegates to after the planned split into `src/api/`).
+REST endpoints live in `crates/sprout-relay/src/api/` — each resource has
+its own submodule (e.g., `channels.rs`, `messages.rs`, `tokens.rs`). Routes
+are registered in `crates/sprout-relay/src/router.rs`.
 
 1. **Define the handler function:**
 
@@ -425,11 +437,10 @@ it delegates to after the planned split into `src/api/`).
    }
    ```
 
-2. **Register the route** in the router (look for `Router::new().route(...)`
-   in `api.rs` or `router.rs`):
+2. **Register the route** in `crates/sprout-relay/src/router.rs`:
 
    ```rust
-   .route("/api/channels/:channel_id/my-resource", get(get_my_resource))
+   .route("/api/channels/{channel_id}/my-resource", get(get_my_resource))
    ```
 
 3. **Add the database query** in `sprout-db/src/` — follow the existing
@@ -439,7 +450,7 @@ it delegates to after the planned split into `src/api/`).
    Map database errors and not-found cases to appropriate HTTP status codes.
 
 5. **Write tests** — add an integration test using the `sprout-test-client`
-   harness or `axum::test` utilities.
+   harness in `crates/sprout-test-client/tests/e2e_rest_api.rs`.
 
 6. **Document** — if the endpoint is part of the public API surface, add it
    to the API reference section of `README.md` or a dedicated `API.md`.

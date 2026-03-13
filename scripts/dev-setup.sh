@@ -101,8 +101,19 @@ else
   # Check if sqlx CLI is available (preferred)
   if command -v sqlx &>/dev/null; then
     log "Using sqlx CLI for migrations..."
-    DATABASE_URL="mysql://sprout:sprout_dev@localhost:3306/sprout" \
-      sqlx migrate run --source "${MIGRATION_DIR}"
+    # MySQL may need a moment after healthcheck before accepting connections
+    attempts=0
+    max_attempts=10
+    until DATABASE_URL="mysql://sprout:sprout_dev@localhost:3306/sprout" \
+      sqlx migrate run --source "${MIGRATION_DIR}" 2>/dev/null; do
+      attempts=$((attempts + 1))
+      if [[ ${attempts} -ge ${max_attempts} ]]; then
+        error "Failed to run migrations after ${max_attempts} attempts"
+        exit 1
+      fi
+      log "MySQL not ready for connections yet, retrying in 2s... (${attempts}/${max_attempts})"
+      sleep 2
+    done
     success "Migrations applied via sqlx"
   else
     error "sqlx CLI not found. Install it with: cargo install sqlx-cli --no-default-features --features mysql"

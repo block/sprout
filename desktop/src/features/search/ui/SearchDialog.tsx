@@ -1,7 +1,6 @@
 import * as React from "react";
 import {
   ArrowRight,
-  Command,
   FileText,
   Hash,
   LoaderCircle,
@@ -270,9 +269,9 @@ export function SearchDialog({
               ref={inputRef}
               value={query}
             />
-            <div className="hidden items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground sm:flex">
-              <Command className="h-3 w-3" />K
-            </div>
+            <span className="hidden shrink-0 text-xs text-muted-foreground/50 sm:block">
+              &#x2318;K
+            </span>
           </div>
         </DialogHeader>
 

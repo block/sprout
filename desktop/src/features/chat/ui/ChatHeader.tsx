@@ -57,7 +57,7 @@ export function ChatHeader({
 }: ChatHeaderProps) {
   return (
     <header
-      className="flex min-w-0 items-center gap-3 border-b border-border/80 bg-background px-4 py-3 sm:px-6"
+      className="flex min-w-0 items-center gap-3 border-b border-border/80 bg-background px-4 pb-3 pt-8 sm:px-6"
       data-testid="chat-header"
       onPointerDown={handlePointerDown}
     >
