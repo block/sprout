@@ -2,6 +2,7 @@
 
 mod acp;
 mod config;
+mod filter;
 mod queue;
 mod relay;
 
@@ -15,7 +16,8 @@ use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 use acp::{AcpClient, AcpError, EnvVar, McpServer, StopReason};
-use config::Config;
+use config::{Config, DedupMode, SubscribeMode};
+use filter::SubscriptionRule;
 use queue::{EventQueue, QueuedEvent};
 use relay::HarnessRelay;
 
@@ -28,7 +30,7 @@ async fn main() -> Result<()> {
         .compact()
         .init();
 
-    let config = Config::from_env().map_err(|e| anyhow::anyhow!("configuration error: {e}"))?;
+    let config = Config::from_cli().map_err(|e| anyhow::anyhow!("configuration error: {e}"))?;
     tracing::info!("sprout-acp starting: {}", config.summary());
 
     // ── Step 1: Spawn ACP agent subprocess and initialize ─────────────────────
@@ -47,7 +49,7 @@ async fn main() -> Result<()> {
 
     tracing::info!("connected to relay at {}", config.relay_url);
 
-    // ── Step 3: Discover channels and subscribe ───────────────────────────────
+    // ── Step 3: Discover channels and build subscription rules ────────────────
     let channels = relay
         .discover_channels()
         .await
@@ -55,17 +57,48 @@ async fn main() -> Result<()> {
 
     tracing::info!("discovered {} channel(s)", channels.len());
 
-    for channel_id in &channels {
-        if let Err(e) = relay.subscribe_channel(*channel_id).await {
+    // Build subscription rules from the configured mode.
+    let rules: Vec<SubscriptionRule> = match config.subscribe_mode {
+        SubscribeMode::Mentions => {
+            vec![SubscriptionRule {
+                name: "mentions".into(),
+                channels: filter::ChannelScope::All("all".into()),
+                kinds: config
+                    .kinds_override
+                    .clone()
+                    .unwrap_or_else(|| vec![40001, 46010, 40007]),
+                require_mention: !config.no_mention_filter,
+                filter: None,
+                prompt_tag: Some("@mention".into()),
+            }]
+        }
+        SubscribeMode::All => {
+            vec![SubscriptionRule {
+                name: "all".into(),
+                channels: filter::ChannelScope::All("all".into()),
+                kinds: config.kinds_override.clone().unwrap_or_default(),
+                require_mention: false,
+                filter: None,
+                prompt_tag: Some("all".into()),
+            }]
+        }
+        SubscribeMode::Config => config::load_rules(&config.config_path)?,
+    };
+
+    // ── Step 4: Subscribe to channels ────────────────────────────────────────
+    let channel_filters = config::resolve_channel_filters(&config, &channels, &rules);
+    for (channel_id, filter) in &channel_filters {
+        if let Err(e) = relay.subscribe_channel(*channel_id, filter.clone()).await {
             tracing::warn!("failed to subscribe to channel {channel_id}: {e}");
         } else {
             tracing::info!("subscribed to channel {channel_id}");
         }
     }
 
-    // ── Step 4: Main orchestration loop ──────────────────────────────────────
+    // ── Step 5: Main orchestration loop ──────────────────────────────────────
     let mut sessions: HashMap<Uuid, String> = HashMap::new();
-    let mut queue = EventQueue::new();
+    let dedup_mode = config.dedup_mode;
+    let mut queue = EventQueue::new(dedup_mode);
     let mcp_servers = build_mcp_servers(&config);
     let turn_timeout = Duration::from_secs(config.turn_timeout_secs);
 
@@ -81,11 +114,44 @@ async fn main() -> Result<()> {
 
         match sprout_event {
             Some(sprout_event) => {
+                // Self-event filter: drop events authored by this agent.
+                if config.ignore_self
+                    && sprout_event.event.pubkey.to_hex() == pubkey_hex
+                {
+                    tracing::debug!(
+                        channel_id = %sprout_event.channel_id,
+                        "dropping self-authored event"
+                    );
+                    continue;
+                }
+
+                // Rule match: find first matching rule.
+                let matched = filter::match_event(
+                    &sprout_event.event,
+                    sprout_event.channel_id,
+                    &rules,
+                    &pubkey_hex,
+                )
+                .await;
+
+                let prompt_tag = match matched {
+                    Some(m) => m.prompt_tag,
+                    None => {
+                        tracing::debug!(
+                            channel_id = %sprout_event.channel_id,
+                            kind = sprout_event.event.kind.as_u16(),
+                            "event matched no rule — dropping"
+                        );
+                        continue;
+                    }
+                };
+
                 // Push event into the queue.
                 queue.push(QueuedEvent {
                     channel_id: sprout_event.channel_id,
                     event: sprout_event.event,
                     received_at: std::time::Instant::now(),
+                    prompt_tag,
                 });
 
                 // Try to flush and process batches.
@@ -97,7 +163,8 @@ async fn main() -> Result<()> {
 
                     let channel_id = batch.channel_id;
                     // Format prompt before potentially requeuing (borrows batch by ref).
-                    let prompt_text = queue::format_prompt(&batch);
+                    let prompt_text =
+                        queue::format_prompt(&batch, config.system_prompt.as_deref());
 
                     // Get or create session for this channel.
                     let session_id = match get_or_create_session(
@@ -105,6 +172,7 @@ async fn main() -> Result<()> {
                         channel_id,
                         &mut acp,
                         &mcp_servers,
+                        &config,
                     )
                     .await
                     {
@@ -113,7 +181,10 @@ async fn main() -> Result<()> {
                             tracing::error!(
                                 "failed to create session for channel {channel_id}: {e}"
                             );
-                            queue.requeue(batch);
+                            match dedup_mode {
+                                DedupMode::Queue => queue.requeue(batch),
+                                DedupMode::Drop => { /* discard */ }
+                            }
                             queue.mark_complete();
                             break;
                         }
@@ -136,14 +207,20 @@ async fn main() -> Result<()> {
                         Ok(Err(AcpError::AgentExited)) => {
                             tracing::error!("agent process exited — respawning");
                             sessions.clear();
-                            queue.requeue(batch);
+                            match dedup_mode {
+                                DedupMode::Queue => queue.requeue(batch),
+                                DedupMode::Drop => { /* discard */ }
+                            }
                             queue.mark_complete();
                             acp = respawn_agent(&config).await?;
                             break;
                         }
                         Ok(Err(e)) => {
                             tracing::error!("session_prompt error for channel {channel_id}: {e}");
-                            queue.requeue(batch);
+                            match dedup_mode {
+                                DedupMode::Queue => queue.requeue(batch),
+                                DedupMode::Drop => { /* discard */ }
+                            }
                             queue.mark_complete();
                             sessions.remove(&channel_id);
                             break;
@@ -228,11 +305,19 @@ async fn spawn_and_init(config: &Config) -> Result<AcpClient> {
 
 // ── Helper: get or create session for a channel ───────────────────────────────
 
+/// Get or create an ACP session for the given channel.
+///
+/// If a session already exists, returns it immediately. Otherwise creates a new
+/// session and — if `config.initial_message` is set — sends it as the first
+/// prompt before returning. The initial-message turn counts against
+/// `in_flight_channel`, so in `drop` mode events for this channel are dropped
+/// while it runs.
 async fn get_or_create_session(
     sessions: &mut HashMap<Uuid, String>,
     channel_id: Uuid,
     acp: &mut AcpClient,
     mcp_servers: &[McpServer],
+    config: &Config,
 ) -> Result<String, AcpError> {
     if let Some(session_id) = sessions.get(&channel_id) {
         return Ok(session_id.clone());
@@ -246,6 +331,37 @@ async fn get_or_create_session(
     let session_id = acp.session_new(&cwd, mcp_servers.to_vec()).await?;
     tracing::info!("created session {session_id} for channel {channel_id}");
     sessions.insert(channel_id, session_id.clone());
+
+    // Send initial message if configured.
+    if let Some(ref initial_message) = config.initial_message {
+        tracing::info!(
+            "sending initial message to session {session_id} for channel {channel_id}"
+        );
+        let turn_timeout = Duration::from_secs(config.turn_timeout_secs);
+        let result = timeout(turn_timeout, acp.session_prompt(&session_id, initial_message)).await;
+        match result {
+            Ok(Ok(stop_reason)) => {
+                tracing::info!(
+                    "initial message complete for channel {channel_id}: {stop_reason:?}"
+                );
+            }
+            Ok(Err(e)) => {
+                tracing::error!(
+                    "initial message failed for channel {channel_id}: {e} — invalidating session"
+                );
+                sessions.remove(&channel_id);
+                return Err(e);
+            }
+            Err(_elapsed) => {
+                tracing::warn!(
+                    "initial message timed out for channel {channel_id} — invalidating session"
+                );
+                sessions.remove(&channel_id);
+                return Err(AcpError::AgentExited);
+            }
+        }
+    }
+
     Ok(session_id)
 }
 

@@ -47,5 +47,14 @@ tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Config file
+toml = "0.8"
+
+# Filter expressions
+evalexpr = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
