@@ -134,20 +134,25 @@ pub async fn add_reaction_handler(
         .single()
         .unwrap_or_default();
 
-    // Check if this reaction already exists. This prevents creating duplicate
-    // kind:7 events for the same logical reaction. A narrow TOCTOU window
-    // remains for concurrent first-adds, but that's acceptable — both will
-    // succeed at the DB level (ON DUPLICATE KEY UPDATE is idempotent).
-    if state
+    // Atomically add the reaction. ON DUPLICATE KEY UPDATE returns
+    // rows_affected=0 if the row is already active — no TOCTOU race.
+    let added = state
         .db
-        .get_active_reaction_record(&event_id_bytes, event_created_at, &pubkey_bytes, &emoji)
+        .add_reaction(
+            &event_id_bytes,
+            event_created_at,
+            &pubkey_bytes,
+            &emoji,
+            None,
+        )
         .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?
-        .is_some()
-    {
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    if !added {
         return Err(api_error(StatusCode::CONFLICT, "reaction already exists"));
     }
 
+    // Reaction is now active in DB. Build and store the kind:7 source event.
     let user_pubkey_hex = nostr_hex::encode(&pubkey_bytes);
     let mut tags = build_actor_tags(&user_pubkey_hex)?;
     tags.push(
@@ -165,31 +170,35 @@ pub async fn add_reaction_handler(
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| internal_error(&format!("event signing error: {e}")))?;
 
-    let event_id = event.id.to_hex();
-    let (stored_event, was_inserted) = state
+    let reaction_event_id = event.id.to_hex();
+    let (stored_event, _was_inserted) = state
         .db
         .insert_event(&event, stored.channel_id)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
-    if !was_inserted {
-        return Err(api_error(
-            StatusCode::CONFLICT,
-            "reaction event already exists",
-        ));
-    }
+    // Backfill the source event ID on the reaction row.
+    let _ = state
+        .db
+        .set_reaction_event_id(
+            &event_id_bytes,
+            event_created_at,
+            &pubkey_bytes,
+            &emoji,
+            event.id.as_bytes(),
+        )
+        .await;
 
-    crate::handlers::side_effects::handle_side_effects(7, &event, &state)
-        .await
-        .map_err(|e| internal_error(&format!("reaction side effect failed: {e}")))?;
-
+    // Dispatch to connected clients. Skip handle_side_effects(7, ...) since
+    // we already wrote the reaction row above — calling it again would be a
+    // redundant no-op (ON DUPLICATE KEY UPDATE with same values).
     let _ = dispatch_persistent_event(&state, &stored_event, 7, &user_pubkey_hex).await;
 
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
             "added": true,
-            "event_id": event_id,
+            "event_id": reaction_event_id,
         })),
     ))
 }

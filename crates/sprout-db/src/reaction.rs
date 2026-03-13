@@ -84,13 +84,9 @@ pub async fn add_reaction(
         ON DUPLICATE KEY UPDATE
             created_at = IF(removed_at IS NOT NULL, NOW(6), created_at),
             removed_at = NULL,
-            -- Always take the newest source event ID. For already-active rows
-            -- with the same event ID, MySQL detects no actual value change and
-            -- reports rows_affected=0 (no-op). The REST API pre-check prevents
-            -- duplicate kind:7 events for the same logical reaction; the
-            -- WebSocket path deduplicates via event ID uniqueness at the events
-            -- table level. A narrow concurrent-first-add race can overwrite the
-            -- source ID, but both events remain valid and the DB stays consistent.
+            -- The REST API calls add_reaction(reaction_event_id=None) first,
+            -- then backfills the source event ID after creating the kind:7 event.
+            -- The WebSocket path passes the real event ID directly.
             reaction_event_id = VALUES(reaction_event_id)
         "#,
     )
@@ -193,6 +189,40 @@ pub async fn get_active_reaction_record(
         })
     })
     .transpose()
+}
+
+/// Backfill the source event ID on an active reaction row.
+///
+/// Called after the kind:7 event is created and stored, to link the
+/// reaction row to its source event. Returns `true` if the row was updated.
+pub async fn set_reaction_event_id(
+    pool: &MySqlPool,
+    event_id: &[u8],
+    event_created_at: DateTime<Utc>,
+    pubkey: &[u8],
+    emoji: &str,
+    reaction_event_id: &[u8],
+) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        UPDATE reactions
+        SET reaction_event_id = ?
+        WHERE event_created_at = ?
+          AND event_id = ?
+          AND pubkey = ?
+          AND emoji = ?
+          AND removed_at IS NULL
+        "#,
+    )
+    .bind(reaction_event_id)
+    .bind(event_created_at)
+    .bind(event_id)
+    .bind(pubkey)
+    .bind(emoji)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
 }
 
 // ── Read operations ───────────────────────────────────────────────────────────
