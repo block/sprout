@@ -45,6 +45,7 @@ type RawProfile = {
 
 type RawUserProfileSummary = {
   display_name: string | null;
+  avatar_url: string | null;
   nip05_handle: string | null;
 };
 
@@ -297,6 +298,7 @@ function fromRawUserProfileSummary(
 ): UserProfileSummary {
   return {
     displayName: profile.display_name,
+    avatarUrl: profile.avatar_url,
     nip05Handle: profile.nip05_handle,
   };
 }

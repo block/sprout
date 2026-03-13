@@ -90,6 +90,7 @@ export type Profile = {
 
 export type UserProfileSummary = {
   displayName: string | null;
+  avatarUrl: string | null;
   nip05Handle: string | null;
 };
 

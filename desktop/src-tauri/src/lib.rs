@@ -33,6 +33,7 @@ pub struct ProfileInfo {
 #[derive(Serialize, Deserialize)]
 pub struct UserProfileSummaryInfo {
     pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
     pub nip05_handle: Option<String>,
 }
 
