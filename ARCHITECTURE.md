@@ -77,13 +77,13 @@ sprout-core  (zero I/O — types, verification, filter matching, kind registry)
          └── sprout-relay       (ties everything together — the server)
 
 sprout-mcp          (agent API surface — stdio MCP server; no sprout-* Cargo deps)
-sprout-proxy        (guest Nostr client compatibility — standalone, not wired into relay)
+sprout-proxy        (NIP-28 compatibility proxy — translates standard Nostr clients ↔ Sprout relay)
 sprout-huddle       (LiveKit audio/video integration — standalone, not wired into relay)
 sprout-admin        (operator CLI: mint/list API tokens)
 sprout-test-client  (integration test harness + manual CLI)
 ```
 
-**Key architectural principle:** The relay is the single source of truth. `sprout-relay` orchestrates all subsystems by calling them directly — it imports `sprout-db`, `sprout-auth`, `sprout-pubsub`, `sprout-search`, `sprout-audit`, and `sprout-workflow`. However, those subsystems are isolated from each other: `sprout-workflow` never calls `sprout-pubsub`, `sprout-search` never calls `sprout-db`, etc. Cross-subsystem coordination happens only through the relay. `sprout-proxy` and `sprout-huddle` are standalone crates not yet wired into the relay.
+**Key architectural principle:** The relay is the single source of truth. `sprout-relay` orchestrates all subsystems by calling them directly — it imports `sprout-db`, `sprout-auth`, `sprout-pubsub`, `sprout-search`, `sprout-audit`, and `sprout-workflow`. However, those subsystems are isolated from each other: `sprout-workflow` never calls `sprout-pubsub`, `sprout-search` never calls `sprout-db`, etc. Cross-subsystem coordination happens only through the relay. `sprout-proxy` connects to the relay as a WebSocket client and translates NIP-28 events between standard Nostr clients and the Sprout relay. `sprout-huddle` is a standalone crate not yet wired into the relay.
 
 ---
 
@@ -526,24 +526,44 @@ Note: Both `TriggerDef` and `ActionDef` use serde internally-tagged enums. Trigg
 
 ---
 
-### sprout-proxy — Guest Nostr Client Compatibility
+### sprout-proxy — NIP-28 Compatibility Proxy
 
-**513 LOC.** Enables standard Nostr clients (Damus, Amethyst, etc.) to connect to Sprout as guests.
+**~4,500 LOC.** Lets standard Nostr clients (Coracle, nak, Amethyst, nostr-tools, nostr-sdk) read and write Sprout channels using the NIP-28 Public Chat Channels protocol. Connects to the relay as a WebSocket client; presents a standard NIP-01/NIP-11/NIP-28/NIP-42 interface to external clients.
 
-**Shadow keypairs:** `SHA-256(server_salt || external_pubkey_bytes)` → secp256k1 secret key. Deterministic: same external pubkey always produces the same shadow key. Empty salt rejected. Cache: `DashMap` with `MAX_CACHE_SIZE = 10,000`. Eviction strategy: **full cache flush** (not LRU) — keys are re-derivable, so eviction is always safe. Count tracked with `AtomicUsize` (soft bound — may briefly exceed limit under concurrent inserts).
+**Key modules:** `server.rs` (Axum WebSocket server, NIP-11, NIP-42 auth, filter splitting), `translate.rs` (bidirectional kind/tag translation), `upstream.rs` (persistent relay connection with auto-reconnect and subscription replay), `channel_map.rs` (bidirectional UUID ↔ kind:40 event ID mapping), `shadow_keys.rs` (deterministic keypair derivation), `guest_store.rs` (pubkey-based guest registry), `invite_store.rs` (token-based invite system).
+
+**Shadow keypairs:** `HMAC-SHA256(key=server_salt, msg=external_pubkey_bytes)` → secp256k1 secret key. Deterministic: same external pubkey always produces the same shadow key. Empty salt rejected. Cache: `DashMap` with `MAX_CACHE_SIZE = 10,000`. Eviction strategy: **full cache flush** (not LRU) — keys are re-derivable, so eviction is always safe. Count tracked with `AtomicUsize` (soft bound — may briefly exceed limit under concurrent inserts).
 
 **Kind translation (lossy):**
+
+*Inbound (client → relay):*
 
 | Standard Kind | Sprout Kind | Note |
 |--------------|-------------|------|
 | 1, 40, 42 | KIND_STREAM_MESSAGE | Multiple → one (lossy) |
 | 41, 44 | KIND_STREAM_MESSAGE_EDIT | Multiple → one (lossy) |
+| 4 | KIND_DM_CREATED | Encrypted DM |
+| 43 | KIND_NIP29_DELETE_EVENT | NIP-29 delete |
 
-`to_sprout(to_standard(k))` is NOT lossless for secondary mappings. Translation invalidates Schnorr signatures (event ID includes kind) — proxy re-signs events.
+*Outbound (relay → client):*
 
-**Invite tokens:** `InviteToken` with `expires_at`, `max_uses`, `uses` counter. `consume()` uses `saturating_add`.
+| Sprout Kind | Standard Kind | Note |
+|-------------|--------------|------|
+| KIND_STREAM_MESSAGE | 42 | NIP-28 channel message |
+| KIND_STREAM_MESSAGE_V2 | 42 | Rich format collapses to plain kind:42 |
+| KIND_STREAM_MESSAGE_EDIT | 41 | NIP-28 channel message edit |
+| KIND_DM_CREATED | 4 | Encrypted DM |
+| KIND_NIP29_DELETE_EVENT | 43 | NIP-29 delete |
 
-**Does NOT:** implement relay-side lifecycle event emission (scaffolding only — types and tokens exist, integration with relay is planned).
+`to_sprout(to_standard(k))` is NOT lossless for secondary mappings (e.g., kind:1 → KIND_STREAM_MESSAGE → kind:42). Translation invalidates Schnorr signatures (event ID includes kind) — proxy re-signs events with shadow keys.
+
+**Dual auth:** Pubkey-based guest registration (persistent, primary) + invite tokens (ad-hoc, time-limited, secondary). Both use NIP-42 for the authentication handshake. The `proxy:submit` scope on the proxy's API token bypasses the relay's pubkey enforcement for shadow-signed events.
+
+**Channel map:** Loaded at startup from the relay's REST API. kind:40 events are synthesized locally only. kind:41 is split: synthesized metadata is served locally, but kind:41 filters are also forwarded upstream (translated to kind:40003) to capture edit events. Channels created after proxy start require a restart to appear.
+
+**State is in-memory.** Guest registrations, invite tokens, and channel map are lost on proxy restart.
+
+**Does NOT:** implement relay-side lifecycle event emission — the relay does not emit events when proxy clients connect or disconnect (planned).
 
 ---
 
@@ -634,7 +654,7 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 
 **1,748 LOC.** stdio MCP server using the `rmcp` SDK. The interface through which AI agents interact with Sprout. Logs to stderr (stdout is the MCP JSON-RPC channel).
 
-**16 tools:**
+**43 tools:**
 
 | Category | Tools |
 |----------|-------|
@@ -809,7 +829,7 @@ These are verified gaps in the current implementation — not design aspirations
 | 4 | **Single-process fan-out** | `SubscriptionRegistry` is in-process DashMap. Redis `PUBLISH` occurs for channel-scoped events, and a `PSUBSCRIBE` subscriber loop runs, but the relay does not consume the broadcast stream for WebSocket delivery. Fan-out is entirely in-process. Running multiple relay instances would result in split fan-out. |
 | 5 | **Cron scheduler is a stub** | `WorkflowEngine::run()` loops every 60 seconds but the loop body logs "not yet implemented" (TODO WF-07). Schedule-triggered workflows do not fire. |
 | 6 | **Typing indicators not delivered** | Typing events (kind 20002) are published to Redis via the ephemeral pipeline but never reach WebSocket subscribers — the relay does not consume the Redis broadcast stream, and non-presence ephemeral events have no local fan-out path. Typing state is queryable via the REST `/api/presence` endpoint but not pushed in real-time. |
-| 7 | **sprout-proxy and sprout-huddle are scaffolding** | Both crates define types, token generation, and webhook parsing, but relay-side lifecycle event emission is not implemented. Guest proxy connections and huddle state events are not wired into the relay's event pipeline. |
+| 7 | **sprout-huddle is scaffolding** | `sprout-huddle` defines types, token generation, and webhook parsing, but relay-side lifecycle event emission is not implemented. Huddle state events are not wired into the relay's event pipeline. `sprout-proxy` is now functional — see its section above. |
 
 ---
 
@@ -824,7 +844,7 @@ These are verified gaps in the current implementation — not design aspirations
 | sprout-search | 1,043 | Foundation |
 | sprout-audit | 732 | Foundation |
 | sprout-workflow | 2,717 | Foundation |
-| sprout-proxy | 513 | Standalone |
+| sprout-proxy | ~4,500 | Client compatibility |
 | sprout-huddle | 659 | Standalone |
 | sprout-relay | 4,852 | Server |
 | sprout-mcp | 1,748 | Agent API |

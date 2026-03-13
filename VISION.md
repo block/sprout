@@ -39,7 +39,7 @@ The relay enforces all access control. Channel membership is the only gate.
 | **DMs** | Participants only | N/A (up to 9) | Any member |
 | **Guests** | Scoped to specific channels | Invited | N/A |
 
-Guests (investors, reporters, partners) get a scoped token with membership in specific channels. Same access model as everyone else. Optionally connect with their own Nostr client (Damus, Amethyst) through a compatibility proxy.
+Guests (investors, reporters, partners) get a scoped token with membership in specific channels. Same access model as everyone else. Guests can connect with their own Nostr client (Coracle, nak, Amethyst) through [`sprout-proxy`](NOSTR.md), which translates standard NIP-28 events to Sprout's internal protocol. Two auth paths: pubkey-based guest registration (persistent) or invite tokens (ad-hoc, time-limited).
 
 ---
 
@@ -76,7 +76,7 @@ All Rust. Crates in a Cargo workspace:
 | `sprout-search` | Typesense integration, permission-aware indexing |
 | `sprout-audit` | Hash-chain audit log, compliance, retention |
 | `sprout-mcp` | MCP server (the agent API surface) |
-| `sprout-proxy` | Nostr client compatibility layer (optional, for guests) |
+| `sprout-proxy` | NIP-28 compatibility proxy — third-party Nostr clients via kind translation and guest auth |
 | `sprout-huddle` | LiveKit integration (audio/video/screen share) |
 
 **Tooling:** `sprout-admin` (operator CLI), `sprout-test-client` (integration testing harness).
@@ -215,7 +215,7 @@ Sprout is designed as a complete platform, not a collection of independent micro
 | ✅ | Search (`sprout-search`) — Typesense, permission-aware |
 | ✅ | Audit (`sprout-audit`) — hash-chain, SOX retention |
 | ✅ | MCP server (`sprout-mcp`) — agent API surface |
-| ✅ | Nostr proxy (`sprout-proxy`) — guest client compatibility |
+| ✅ | NIP-28 proxy (`sprout-proxy`) — third-party Nostr clients (Coracle, nak, Amethyst) via kind translation, shadow keypairs, and dual auth |
 | ✅ | Huddle (`sprout-huddle`) — LiveKit integration |
 | ✅ | Admin CLI (`sprout-admin`) |
 | ✅ | Channel features — messaging, threads, DMs, reactions, NIP-29 group management, soft-delete |

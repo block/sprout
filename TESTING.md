@@ -1,13 +1,13 @@
 # Sprout Testing Guide
 
-This guide enables an AI agent (the **operator**) to run the full Sprout test suite: automated `cargo test` suites and a three-agent multi-agent E2E run that exercises all 41 MCP tools against a live relay.
+This guide enables an AI agent (the **operator**) to run the full Sprout test suite: automated `cargo test` suites and a three-agent multi-agent E2E run that exercises all 43 MCP tools against a live relay.
 
 ## Two Test Modes
 
 | Mode | What It Does | When to Use |
 |------|-------------|-------------|
 | **Automated** (`cargo test`) | Unit tests + REST/WebSocket/MCP integration tests | Fast CI check; verify no unit regressions |
-| **Multi-Agent E2E** | Three agents (Alice, Bob, Charlie) run via `sprout-acp` harness, exercising all 41 MCP tools via real Nostr identities | Before merging relay/MCP/auth changes; full regression run; exploring new features |
+| **Multi-Agent E2E** | Three agents (Alice, Bob, Charlie) run via `sprout-acp` harness, exercising all 43 MCP tools via real Nostr identities | Before merging relay/MCP/auth changes; full regression run; exploring new features |
 
 Run both modes for a complete regression check. Run automated-only for a fast sanity check.
 
@@ -27,9 +27,10 @@ Run both modes for a complete regression check. Run automated-only for a fast sa
    - [3.7 Expected Results](#37-expected-results)
 4. [Advanced: ACP Harness Scenarios](#4-advanced-acp-harness-scenarios)
 5. [Workflow YAML Reference](#5-workflow-yaml-reference)
-6. [The 41 MCP Tools](#6-the-41-mcp-tools)
+6. [The 43 MCP Tools](#6-the-43-mcp-tools)
 7. [Cleanup](#7-cleanup)
 8. [Known Issues / Troubleshooting](#8-known-issues--troubleshooting)
+9. [Proxy Tests](#9-proxy-tests)
 
 ---
 
@@ -202,7 +203,7 @@ Operator (you)
 Sprout Relay  ──WS (NIP-01)──►  sprout-acp (harness)  ──stdio (ACP)──►  goose
                                                                             │
                                                                        sprout-mcp-server
-                                                                        (41 MCP tools)
+                                                                        (43 MCP tools)
                                                                             │
                                                                        Sprout Relay
                                                                     (send_message, etc.)
@@ -1011,9 +1012,9 @@ steps:
 
 ---
 
-## 6. The 41 MCP Tools
+## 6. The 43 MCP Tools
 
-The `sprout-mcp-server` exposes 41 tools covering the full Sprout feature surface. All are available to agents running via the `sprout-acp` harness.
+The `sprout-mcp-server` exposes 43 tools covering the full Sprout feature surface. All are available to agents running via the `sprout-acp` harness.
 
 ### Channels (8)
 
@@ -1028,11 +1029,12 @@ The `sprout-mcp-server` exposes 41 tools covering the full Sprout feature surfac
 | `join_channel` | Join an open channel |
 | `leave_channel` | Leave a channel |
 
-### Messages (2)
+### Messages (3)
 
 | Tool | Description |
 |------|-------------|
 | `send_message` | Post a message to a channel |
+| `send_diff_message` | Send a code diff to a channel with syntax highlighting and structured metadata |
 | `get_channel_history` | Get recent messages from a channel |
 
 ### Threads (2)
@@ -1099,7 +1101,7 @@ The `sprout-mcp-server` exposes 41 tools covering the full Sprout feature surfac
 | `get_user_profile` | Get any user's profile by pubkey (omit pubkey for own profile) |
 | `get_users_batch` | Bulk resolve display names and NIP-05 handles for multiple pubkeys |
 
-### Presence (1)
+### Presence (2)
 
 | Tool | Description |
 |------|-------------|
@@ -1120,6 +1122,12 @@ The `sprout-mcp-server` exposes 41 tools covering the full Sprout feature surfac
 |------|-------------|
 | `set_channel_topic` | Set the topic for a channel |
 | `set_channel_purpose` | Set the purpose for a channel |
+
+### Policy (1)
+
+| Tool | Description |
+|------|-------------|
+| `set_channel_add_policy` | Set the caller's channel-add policy (`anyone`, `owner_only`, `nobody`) |
 
 ---
 
@@ -1323,6 +1331,39 @@ docker compose down -v && docker compose up -d
 # Wait 30s then re-run migrations:
 sqlx migrate run --database-url "$DATABASE_URL"
 ```
+
+---
+
+## 9. Proxy Tests
+
+The `sprout-proxy` crate has its own test suite, separate from the relay tests above.
+
+### Unit tests (no infra required)
+
+```bash
+cargo test -p sprout-proxy
+```
+
+Runs 79 unit tests covering kind translation, filter splitting, shadow keys, channel map, and access control.
+
+### E2E tests (require relay + proxy running)
+
+```bash
+# Start relay and proxy
+just relay &
+just proxy &
+
+# Shell-based integration tests (8 tests)
+./scripts/test-proxy-e2e-live.sh
+
+# nostr-tools v2.23 E2E (6 tests) — requires Node.js
+cd scripts && cp nostr-tools-test-package.json package.json && npm install && node test-proxy-nostr-tools.mjs
+
+# nostr-sdk v0.44 E2E (5 tests) — requires Python + nostr-sdk
+python3 scripts/test-proxy-nostr-sdk-python.py
+```
+
+See [NOSTR.md](NOSTR.md) for proxy setup, guest registration, and client configuration.
 
 ---
 
