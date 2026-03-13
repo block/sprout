@@ -96,14 +96,14 @@ impl EventQueue {
     /// In [`DedupMode::Drop`], events for the currently in-flight channel are
     /// silently discarded (debug-logged).
     pub fn push(&mut self, event: QueuedEvent) {
-        if matches!(self.dedup_mode, DedupMode::Drop) {
-            if self.in_flight_channel == Some(event.channel_id) {
-                tracing::debug!(
-                    channel_id = %event.channel_id,
-                    "dropping event for in-flight channel (drop mode)"
-                );
-                return;
-            }
+        if matches!(self.dedup_mode, DedupMode::Drop)
+            && self.in_flight_channel == Some(event.channel_id)
+        {
+            tracing::debug!(
+                channel_id = %event.channel_id,
+                "dropping event for in-flight channel (drop mode)"
+            );
+            return;
         }
         self.queues
             .entry(event.channel_id)

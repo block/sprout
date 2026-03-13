@@ -103,6 +103,7 @@ pub struct SubscriptionRule {
 #[derive(Debug, Clone)]
 pub struct MatchedRule {
     /// Zero-based index of the matching rule in the rules slice.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub rule_index: usize,
     /// Prompt tag to use (rule's `prompt_tag` or its `name`).
     pub prompt_tag: String,
@@ -276,8 +277,7 @@ pub async fn match_event(
         // 3. Mention check — look for a `p` tag whose value equals agent_pubkey_hex.
         if rule.require_mention {
             let mentioned = event.tags.iter().any(|tag| {
-                tag.kind().to_string() == "p"
-                    && tag.content().map_or(false, |v| v == agent_pubkey_hex)
+                tag.kind().to_string() == "p" && (tag.content() == Some(agent_pubkey_hex))
             });
             if !mentioned {
                 continue;

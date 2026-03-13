@@ -201,16 +201,25 @@ export function ChannelManagementSheet({
   const [inviteRole, setInviteRole] =
     React.useState<Exclude<ChannelMember["role"], "owner">>("member");
 
+  // Sync drafts from server only when the sheet opens or the channel changes —
+  // not on every background refetch, which would clobber in-flight edits.
+  const syncedForRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     if (!detail) {
       return;
     }
 
+    const key = `${detail.id}:${open}`;
+    if (!open || syncedForRef.current === key) {
+      return;
+    }
+    syncedForRef.current = key;
+
     setNameDraft(detail.name);
     setDescriptionDraft(detail.description);
     setTopicDraft(detail.topic ?? "");
     setPurposeDraft(detail.purpose ?? "");
-  }, [detail]);
+  }, [detail, open]);
 
   if (!channel) {
     return null;
