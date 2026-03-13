@@ -297,10 +297,7 @@ pub async fn match_event(
         }
 
         // All checks passed — this rule wins.
-        let prompt_tag = rule
-            .prompt_tag
-            .clone()
-            .unwrap_or_else(|| rule.name.clone());
+        let prompt_tag = rule.prompt_tag.clone().unwrap_or_else(|| rule.name.clone());
 
         return Some(MatchedRule {
             rule_index: index,

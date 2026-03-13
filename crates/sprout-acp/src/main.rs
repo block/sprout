@@ -115,9 +115,7 @@ async fn main() -> Result<()> {
         match sprout_event {
             Some(sprout_event) => {
                 // Self-event filter: drop events authored by this agent.
-                if config.ignore_self
-                    && sprout_event.event.pubkey.to_hex() == pubkey_hex
-                {
+                if config.ignore_self && sprout_event.event.pubkey.to_hex() == pubkey_hex {
                     tracing::debug!(
                         channel_id = %sprout_event.channel_id,
                         "dropping self-authored event"
@@ -163,8 +161,7 @@ async fn main() -> Result<()> {
 
                     let channel_id = batch.channel_id;
                     // Format prompt before potentially requeuing (borrows batch by ref).
-                    let prompt_text =
-                        queue::format_prompt(&batch, config.system_prompt.as_deref());
+                    let prompt_text = queue::format_prompt(&batch, config.system_prompt.as_deref());
 
                     // Get or create session for this channel.
                     let session_id = match get_or_create_session(
@@ -334,11 +331,13 @@ async fn get_or_create_session(
 
     // Send initial message if configured.
     if let Some(ref initial_message) = config.initial_message {
-        tracing::info!(
-            "sending initial message to session {session_id} for channel {channel_id}"
-        );
+        tracing::info!("sending initial message to session {session_id} for channel {channel_id}");
         let turn_timeout = Duration::from_secs(config.turn_timeout_secs);
-        let result = timeout(turn_timeout, acp.session_prompt(&session_id, initial_message)).await;
+        let result = timeout(
+            turn_timeout,
+            acp.session_prompt(&session_id, initial_message),
+        )
+        .await;
         match result {
             Ok(Ok(stop_reason)) => {
                 tracing::info!(

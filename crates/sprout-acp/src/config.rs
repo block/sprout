@@ -45,7 +45,10 @@ pub enum DedupMode {
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Parser)]
-#[command(name = "sprout-acp", about = "ACP harness that bridges Sprout events to AI agents")]
+#[command(
+    name = "sprout-acp",
+    about = "ACP harness that bridges Sprout events to AI agents"
+)]
 pub struct CliArgs {
     #[arg(long, env = "SPROUT_RELAY_URL", default_value = "ws://localhost:3000")]
     pub relay_url: String,
@@ -59,25 +62,47 @@ pub struct CliArgs {
     #[arg(long, env = "SPROUT_ACP_AGENT_COMMAND", default_value = "goose")]
     pub agent_command: String,
 
-    #[arg(long, env = "SPROUT_ACP_AGENT_ARGS", default_value = "acp", value_delimiter = ',')]
+    #[arg(
+        long,
+        env = "SPROUT_ACP_AGENT_ARGS",
+        default_value = "acp",
+        value_delimiter = ','
+    )]
     pub agent_args: Vec<String>,
 
-    #[arg(long, env = "SPROUT_ACP_MCP_COMMAND", default_value = "sprout-mcp-server")]
+    #[arg(
+        long,
+        env = "SPROUT_ACP_MCP_COMMAND",
+        default_value = "sprout-mcp-server"
+    )]
     pub mcp_command: String,
 
     #[arg(long, env = "SPROUT_ACP_TURN_TIMEOUT", default_value = "300")]
     pub turn_timeout: u64,
 
-    #[arg(long, env = "SPROUT_ACP_SYSTEM_PROMPT", conflicts_with = "system_prompt_file")]
+    #[arg(
+        long,
+        env = "SPROUT_ACP_SYSTEM_PROMPT",
+        conflicts_with = "system_prompt_file"
+    )]
     pub system_prompt: Option<String>,
 
-    #[arg(long, env = "SPROUT_ACP_SYSTEM_PROMPT_FILE", conflicts_with = "system_prompt")]
+    #[arg(
+        long,
+        env = "SPROUT_ACP_SYSTEM_PROMPT_FILE",
+        conflicts_with = "system_prompt"
+    )]
     pub system_prompt_file: Option<PathBuf>,
 
     #[arg(long, env = "SPROUT_ACP_INITIAL_MESSAGE")]
     pub initial_message: Option<String>,
 
-    #[arg(long, env = "SPROUT_ACP_SUBSCRIBE", default_value = "mentions", value_enum)]
+    #[arg(
+        long,
+        env = "SPROUT_ACP_SUBSCRIBE",
+        default_value = "mentions",
+        value_enum
+    )]
     pub subscribe: SubscribeMode,
 
     #[arg(long, env = "SPROUT_ACP_KINDS", value_delimiter = ',')]
@@ -217,7 +242,9 @@ pub fn load_rules(path: &std::path::Path) -> Result<Vec<SubscriptionRule>, Confi
     let mut seen_names = std::collections::HashSet::new();
     for rule in &config.rules {
         if rule.name.trim().is_empty() {
-            return Err(ConfigError::ConfigFile("rule name must not be empty".into()));
+            return Err(ConfigError::ConfigFile(
+                "rule name must not be empty".into(),
+            ));
         }
         if !seen_names.insert(&rule.name) {
             return Err(ConfigError::ConfigFile(format!(
@@ -274,12 +301,24 @@ pub fn resolve_channel_filters(
             });
             let require_mention = !config.no_mention_filter;
             for ch in &target_channels {
-                result.insert(*ch, ChannelFilter { kinds: Some(kinds.clone()), require_mention });
+                result.insert(
+                    *ch,
+                    ChannelFilter {
+                        kinds: Some(kinds.clone()),
+                        require_mention,
+                    },
+                );
             }
         }
         SubscribeMode::All => {
             for ch in &target_channels {
-                result.insert(*ch, ChannelFilter { kinds: config.kinds_override.clone(), require_mention: false });
+                result.insert(
+                    *ch,
+                    ChannelFilter {
+                        kinds: config.kinds_override.clone(),
+                        require_mention: false,
+                    },
+                );
             }
         }
         SubscribeMode::Config => {
@@ -308,7 +347,13 @@ pub fn resolve_channel_filters(
                 }
 
                 if has_rule {
-                    result.insert(*ch, ChannelFilter { kinds: merged_kinds, require_mention });
+                    result.insert(
+                        *ch,
+                        ChannelFilter {
+                            kinds: merged_kinds,
+                            require_mention,
+                        },
+                    );
                 }
             }
         }
@@ -321,7 +366,9 @@ fn rule_applies_to_channel(rule: &SubscriptionRule, channel_id: Uuid) -> bool {
     use crate::filter::ChannelScope;
     match &rule.channels {
         ChannelScope::All(s) if s == "all" => true,
-        ChannelScope::List(ids) => ids.iter().any(|id| id.parse::<Uuid>().ok() == Some(channel_id)),
+        ChannelScope::List(ids) => ids
+            .iter()
+            .any(|id| id.parse::<Uuid>().ok() == Some(channel_id)),
         _ => false,
     }
 }
