@@ -200,7 +200,10 @@ impl Default for EventQueue {
 // ── Prompt formatting ─────────────────────────────────────────────────────────
 
 /// Stream-message kinds — these get the compact format (no raw Tags line).
-const STREAM_MESSAGE_KINDS: &[u32] = &[40001, 40002];
+const STREAM_MESSAGE_KINDS: &[u32] = &[
+    sprout_core::kind::KIND_STREAM_MESSAGE,
+    sprout_core::kind::KIND_STREAM_MESSAGE_V2,
+];
 
 /// Format the per-event block lines for a single [`BatchEvent`].
 ///
