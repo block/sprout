@@ -2,6 +2,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Settings2 } from "lucide-react";
 
+import { AgentsView } from "@/features/agents/ui/AgentsView";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
   channelsQueryKey,
@@ -50,7 +51,7 @@ import {
   SidebarTrigger,
 } from "@/shared/ui/sidebar";
 
-type AppView = "home" | "channel" | "settings";
+type AppView = "home" | "channel" | "settings" | "agents";
 
 function createSearchAnchorEvent(hit: SearchHit): RelayEvent {
   return {
@@ -200,9 +201,11 @@ export function AppShell() {
   const contentPaneKey =
     selectedView === "home"
       ? "home"
-      : selectedView === "settings"
-        ? "settings"
-        : `channel:${activeChannel?.id ?? "none"}`;
+      : selectedView === "agents"
+        ? "agents"
+        : selectedView === "settings"
+          ? "settings"
+          : `channel:${activeChannel?.id ?? "none"}`;
   const isTimelineLoading =
     messagesQuery.isLoading && resolvedMessages.length === 0;
 
@@ -434,6 +437,11 @@ export function AppShell() {
           setIsSearchOpen(true);
           void refetchChannels();
         }}
+        onSelectAgents={() => {
+          React.startTransition(() => {
+            setSelectedView("agents");
+          });
+        }}
         onSelectHome={() => {
           React.startTransition(() => {
             setSelectedView("home");
@@ -458,6 +466,12 @@ export function AppShell() {
             description="Personalized feed for mentions, reminders, channel activity, and agent work."
             mode="home"
             title="Home"
+          />
+        ) : selectedView === "agents" ? (
+          <ChatHeader
+            description="Create local ACP workers, mint agent tokens, and monitor the relay-visible agent directory."
+            mode="agents"
+            title="Agents"
           />
         ) : selectedView === "settings" ? (
           <ChatHeader
@@ -514,6 +528,8 @@ export function AppShell() {
                 void homeFeedQuery.refetch();
               }}
             />
+          ) : selectedView === "agents" ? (
+            <AgentsView />
           ) : selectedView === "settings" ? (
             <SettingsView
               currentPubkey={identityQuery.data?.pubkey}

@@ -1,6 +1,7 @@
 import { Paperclip, SendHorizontal, SmilePlus } from "lucide-react";
 import * as React from "react";
 
+import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
@@ -68,6 +69,17 @@ export function MessageComposer({
 
   const membersQuery = useChannelMembersQuery(channelId);
   const members = membersQuery.data ?? [];
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const managedAgentNamesByPubkey = React.useMemo(
+    () =>
+      new Map(
+        (managedAgentsQuery.data ?? []).map((agent) => [
+          agent.pubkey.toLowerCase(),
+          agent.name,
+        ]),
+      ),
+    [managedAgentsQuery.data],
+  );
 
   const suggestions = React.useMemo<MentionSuggestion[]>(() => {
     if (mentionQuery === null) {
@@ -76,16 +88,28 @@ export function MessageComposer({
 
     const lowerQuery = mentionQuery.toLowerCase();
     return members
-      .filter((member) =>
-        member.displayName?.toLowerCase().includes(lowerQuery),
+      .map((member) => {
+        const fallbackName =
+          managedAgentNamesByPubkey.get(member.pubkey.toLowerCase()) ??
+          member.pubkey.slice(0, 8);
+
+        return {
+          member,
+          label: member.displayName ?? fallbackName,
+        };
+      })
+      .filter(
+        ({ label, member }) =>
+          label.toLowerCase().includes(lowerQuery) ||
+          member.pubkey.toLowerCase().includes(lowerQuery),
       )
       .slice(0, 8)
-      .map((member) => ({
+      .map(({ member, label }) => ({
         pubkey: member.pubkey,
-        displayName: member.displayName ?? member.pubkey.slice(0, 8),
+        displayName: label,
         role: member.role === "admin" ? "admin" : null,
       }));
-  }, [members, mentionQuery]);
+  }, [managedAgentNamesByPubkey, members, mentionQuery]);
 
   const isMentionOpen = mentionQuery !== null && suggestions.length > 0;
 
