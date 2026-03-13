@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { CircleDot, FileText, Hash, Home, Settings2 } from "lucide-react";
+import { Bot, CircleDot, FileText, Hash, Home, Settings2 } from "lucide-react";
 import type * as React from "react";
 
 import type { ChannelType } from "@/shared/api/types";
@@ -9,7 +9,7 @@ type ChatHeaderProps = {
   title: string;
   description: string;
   channelType?: ChannelType;
-  mode?: "home" | "channel" | "settings";
+  mode?: "home" | "channel" | "settings" | "agents";
   statusBadge?: React.ReactNode;
 };
 
@@ -18,10 +18,14 @@ function ChannelIcon({
   mode = "channel",
 }: {
   channelType?: ChannelType;
-  mode?: "home" | "channel" | "settings";
+  mode?: "home" | "channel" | "settings" | "agents";
 }) {
   if (mode === "home") {
     return <Home className="h-5 w-5 text-primary" />;
+  }
+
+  if (mode === "agents") {
+    return <Bot className="h-5 w-5 text-primary" />;
   }
 
   if (mode === "settings") {

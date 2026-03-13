@@ -233,3 +233,90 @@ export type MintTokenResponse = {
   createdAt: string;
   expiresAt: string | null;
 };
+
+export type RelayAgent = {
+  pubkey: string;
+  name: string;
+  agentType: string;
+  channels: string[];
+  capabilities: string[];
+  status: "online" | "away" | "offline";
+};
+
+export type ManagedAgent = {
+  pubkey: string;
+  name: string;
+  relayUrl: string;
+  acpCommand: string;
+  agentCommand: string;
+  agentArgs: string[];
+  mcpCommand: string;
+  turnTimeoutSeconds: number;
+  hasApiToken: boolean;
+  status: "running" | "stopped";
+  pid: number | null;
+  createdAt: string;
+  updatedAt: string;
+  lastStartedAt: string | null;
+  lastStoppedAt: string | null;
+  lastExitCode: number | null;
+  lastError: string | null;
+  logPath: string;
+};
+
+export type CreateManagedAgentInput = {
+  name: string;
+  relayUrl?: string;
+  acpCommand?: string;
+  agentCommand?: string;
+  agentArgs?: string[];
+  mcpCommand?: string;
+  turnTimeoutSeconds?: number;
+  mintToken?: boolean;
+  tokenScopes?: TokenScope[];
+  tokenName?: string;
+  spawnAfterCreate?: boolean;
+};
+
+export type CreateManagedAgentResponse = {
+  agent: ManagedAgent;
+  privateKeyNsec: string;
+  apiToken: string | null;
+  spawnError: string | null;
+};
+
+export type MintManagedAgentTokenInput = {
+  pubkey: string;
+  tokenName?: string;
+  scopes?: TokenScope[];
+};
+
+export type MintManagedAgentTokenResponse = {
+  agent: ManagedAgent;
+  token: string;
+};
+
+export type ManagedAgentLog = {
+  content: string;
+  logPath: string;
+};
+
+export type AcpProvider = {
+  id: string;
+  label: string;
+  command: string;
+  binaryPath: string;
+  defaultArgs: string[];
+};
+
+export type CommandAvailability = {
+  command: string;
+  resolvedPath: string | null;
+  available: boolean;
+};
+
+export type ManagedAgentPrereqs = {
+  admin: CommandAvailability;
+  acp: CommandAvailability;
+  mcp: CommandAvailability;
+};

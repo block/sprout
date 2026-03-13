@@ -190,8 +190,81 @@ type RawRevokeAllTokensResponse = {
   revoked_count: number;
 };
 
+type RawRelayAgent = {
+  pubkey: string;
+  name: string;
+  agent_type: string;
+  channels: string[];
+  capabilities: string[];
+  status: PresenceStatus;
+};
+
+type RawManagedAgent = {
+  pubkey: string;
+  name: string;
+  relay_url: string;
+  acp_command: string;
+  agent_command: string;
+  agent_args: string[];
+  mcp_command: string;
+  turn_timeout_seconds: number;
+  has_api_token: boolean;
+  status: "running" | "stopped";
+  pid: number | null;
+  created_at: string;
+  updated_at: string;
+  last_started_at: string | null;
+  last_stopped_at: string | null;
+  last_exit_code: number | null;
+  last_error: string | null;
+  log_path: string;
+};
+
+type RawCreateManagedAgentResponse = {
+  agent: RawManagedAgent;
+  private_key_nsec: string;
+  api_token: string | null;
+  spawn_error: string | null;
+};
+
+type RawMintManagedAgentTokenResponse = {
+  agent: RawManagedAgent;
+  token: string;
+};
+
+type RawManagedAgentLog = {
+  content: string;
+  log_path: string;
+};
+
+type RawAcpProvider = {
+  id: string;
+  label: string;
+  command: string;
+  binary_path: string;
+  default_args: string[];
+};
+
+type RawCommandAvailability = {
+  command: string;
+  resolved_path: string | null;
+  available: boolean;
+};
+
+type RawManagedAgentPrereqs = {
+  admin: RawCommandAvailability;
+  acp: RawCommandAvailability;
+  mcp: RawCommandAvailability;
+};
+
 type MockToken = RawToken & {
   token: string;
+};
+
+type MockManagedAgent = RawManagedAgent & {
+  private_key_nsec: string;
+  api_token: string | null;
+  log_lines: string[];
 };
 
 type WsHandler = (message: unknown) => void;
@@ -377,6 +450,37 @@ function cloneMintedToken(token: MockToken): RawMintTokenResponse {
   };
 }
 
+function cloneRelayAgent(agent: RawRelayAgent): RawRelayAgent {
+  return {
+    ...agent,
+    channels: [...agent.channels],
+    capabilities: [...agent.capabilities],
+  };
+}
+
+function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
+  return {
+    pubkey: agent.pubkey,
+    name: agent.name,
+    relay_url: agent.relay_url,
+    acp_command: agent.acp_command,
+    agent_command: agent.agent_command,
+    agent_args: [...agent.agent_args],
+    mcp_command: agent.mcp_command,
+    turn_timeout_seconds: agent.turn_timeout_seconds,
+    has_api_token: agent.has_api_token,
+    status: agent.status,
+    pid: agent.pid,
+    created_at: agent.created_at,
+    updated_at: agent.updated_at,
+    last_started_at: agent.last_started_at,
+    last_stopped_at: agent.last_stopped_at,
+    last_exit_code: agent.last_exit_code,
+    last_error: agent.last_error,
+    log_path: agent.log_path,
+  };
+}
+
 function toMockToken(seed: RawMockTokenSeed): MockToken {
   return {
     ...cloneToken(seed),
@@ -389,6 +493,11 @@ function toMockToken(seed: RawMockTokenSeed): MockToken {
 function resetMockTokens(config: E2eConfig | undefined) {
   mockTokens = (config?.mock?.seededTokens ?? []).map(toMockToken);
   mockMintTokenError = config?.mock?.mintTokenError ?? null;
+}
+
+function resetMockManagedAgents() {
+  mockManagedAgents = [];
+  syncMockRelayAgentsFromManagedAgents();
 }
 
 function getMockProfileByPubkey(pubkey: string): RawProfile | null {
@@ -709,6 +818,25 @@ const mockSockets = new Map<number, MockSocket>();
 const realSockets = new Map<number, WebSocket>();
 let mockTokens: MockToken[] = [];
 let mockMintTokenError: string | null = null;
+let mockManagedAgents: MockManagedAgent[] = [];
+let mockRelayAgents: RawRelayAgent[] = [
+  {
+    pubkey: ALICE_PUBKEY,
+    name: "alice",
+    agent_type: "goose",
+    channels: ["general", "agents"],
+    capabilities: ["search", "summaries", "workflows"],
+    status: "online",
+  },
+  {
+    pubkey: CHARLIE_PUBKEY,
+    name: "charlie",
+    agent_type: "codex",
+    channels: ["general"],
+    capabilities: ["code", "reviews"],
+    status: "away",
+  },
+];
 const mockProfiles = new Map<string, RawProfile>([
   [
     MOCK_IDENTITY_PUBKEY,
@@ -732,6 +860,25 @@ const mockPresence = new Map<string, PresenceStatus>([
 
 let installed = false;
 let nextSocketId = 1;
+
+function syncMockRelayAgentsFromManagedAgents() {
+  const baseAgents = mockRelayAgents.filter(
+    (agent) =>
+      !mockManagedAgents.some((managed) => managed.pubkey === agent.pubkey),
+  );
+  const managedAgentsAsRelay: RawRelayAgent[] = mockManagedAgents.map(
+    (agent) => ({
+      pubkey: agent.pubkey,
+      name: agent.name,
+      agent_type: agent.agent_command,
+      channels: ["agents"],
+      capabilities: ["messages", "channels", "mcp"],
+      status: agent.status === "running" ? "online" : "offline",
+    }),
+  );
+
+  mockRelayAgents = [...baseAgents, ...managedAgentsAsRelay];
+}
 
 function getConfig(): E2eConfig | undefined {
   return window.__SPROUT_E2E__;
@@ -1817,6 +1964,211 @@ async function handleRevokeAllTokens(
   });
 }
 
+async function handleListRelayAgents(): Promise<RawRelayAgent[]> {
+  syncMockRelayAgentsFromManagedAgents();
+  return mockRelayAgents.map(cloneRelayAgent);
+}
+
+async function handleDiscoverAcpProviders(): Promise<RawAcpProvider[]> {
+  return [
+    {
+      id: "goose",
+      label: "Goose",
+      command: "goose",
+      binary_path: "/usr/local/bin/goose",
+      default_args: ["acp"],
+    },
+    {
+      id: "codex",
+      label: "Codex",
+      command: "codex-acp",
+      binary_path: "/usr/local/bin/codex-acp",
+      default_args: [],
+    },
+  ];
+}
+
+async function handleDiscoverManagedAgentPrereqs(args: {
+  input?: {
+    acpCommand?: string;
+    mcpCommand?: string;
+  };
+}): Promise<RawManagedAgentPrereqs> {
+  return {
+    admin: {
+      command: "sprout-admin",
+      resolved_path: "/Users/wesb/dev/sprout/target/debug/sprout-admin",
+      available: true,
+    },
+    acp: {
+      command: args.input?.acpCommand ?? "sprout-acp",
+      resolved_path: "/Users/wesb/dev/sprout/target/debug/sprout-acp",
+      available: true,
+    },
+    mcp: {
+      command: args.input?.mcpCommand ?? "sprout-mcp-server",
+      resolved_path: "/Users/wesb/dev/sprout/target/debug/sprout-mcp-server",
+      available: true,
+    },
+  };
+}
+
+async function handleListManagedAgents(): Promise<RawManagedAgent[]> {
+  return mockManagedAgents.map(cloneManagedAgent);
+}
+
+async function handleCreateManagedAgent(args: {
+  input: {
+    name: string;
+    relayUrl?: string;
+    acpCommand?: string;
+    agentCommand?: string;
+    agentArgs?: string[];
+    mcpCommand?: string;
+    turnTimeoutSeconds?: number;
+    mintToken?: boolean;
+    tokenScopes?: string[];
+    tokenName?: string;
+    spawnAfterCreate?: boolean;
+  };
+}): Promise<RawCreateManagedAgentResponse> {
+  const name = args.input.name.trim();
+  const now = new Date().toISOString();
+  const pubkey = crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .padEnd(64, "0")
+    .slice(0, 64);
+  const token =
+    args.input.mintToken === false
+      ? null
+      : `spr_tok_mock_${crypto.randomUUID().replace(/-/g, "")}`;
+  const managedAgent: MockManagedAgent = {
+    pubkey,
+    name,
+    relay_url: args.input.relayUrl ?? DEFAULT_RELAY_WS_URL,
+    acp_command: args.input.acpCommand ?? "sprout-acp",
+    agent_command: args.input.agentCommand ?? "goose",
+    agent_args:
+      args.input.agentArgs && args.input.agentArgs.length > 0
+        ? [...args.input.agentArgs]
+        : ["acp"],
+    mcp_command: args.input.mcpCommand ?? "sprout-mcp-server",
+    turn_timeout_seconds: args.input.turnTimeoutSeconds ?? 300,
+    has_api_token: token !== null,
+    status: args.input.spawnAfterCreate ? "running" : "stopped",
+    pid: args.input.spawnAfterCreate ? 42000 + mockManagedAgents.length : null,
+    created_at: now,
+    updated_at: now,
+    last_started_at: args.input.spawnAfterCreate ? now : null,
+    last_stopped_at: null,
+    last_exit_code: null,
+    last_error: null,
+    log_path: `/tmp/mock-agent-${pubkey}.log`,
+    private_key_nsec: `nsec1mock${pubkey.slice(0, 20)}`,
+    api_token: token,
+    log_lines: [
+      `sprout-acp starting: relay=${args.input.relayUrl ?? DEFAULT_RELAY_WS_URL} agent_pubkey=${pubkey}`,
+      args.input.spawnAfterCreate
+        ? "connected to relay at ws://localhost:3000"
+        : "profile created; harness not started",
+    ],
+  };
+
+  mockManagedAgents.unshift(managedAgent);
+  syncMockRelayAgentsFromManagedAgents();
+
+  return {
+    agent: cloneManagedAgent(managedAgent),
+    private_key_nsec: managedAgent.private_key_nsec,
+    api_token: managedAgent.api_token,
+    spawn_error: null,
+  };
+}
+
+function getMockManagedAgent(pubkey: string): MockManagedAgent {
+  const agent = mockManagedAgents.find(
+    (candidate) => candidate.pubkey === pubkey,
+  );
+  if (!agent) {
+    throw new Error(`Managed agent ${pubkey} not found.`);
+  }
+
+  return agent;
+}
+
+async function handleStartManagedAgent(args: {
+  pubkey: string;
+}): Promise<RawManagedAgent> {
+  const agent = getMockManagedAgent(args.pubkey);
+  const now = new Date().toISOString();
+  agent.status = "running";
+  agent.pid = agent.pid ?? 42000 + mockManagedAgents.indexOf(agent);
+  agent.updated_at = now;
+  agent.last_started_at = now;
+  agent.last_error = null;
+  agent.log_lines.push(`started mock harness at ${now}`);
+  syncMockRelayAgentsFromManagedAgents();
+  return cloneManagedAgent(agent);
+}
+
+async function handleStopManagedAgent(args: {
+  pubkey: string;
+}): Promise<RawManagedAgent> {
+  const agent = getMockManagedAgent(args.pubkey);
+  const now = new Date().toISOString();
+  agent.status = "stopped";
+  agent.pid = null;
+  agent.updated_at = now;
+  agent.last_stopped_at = now;
+  agent.log_lines.push(`stopped mock harness at ${now}`);
+  syncMockRelayAgentsFromManagedAgents();
+  return cloneManagedAgent(agent);
+}
+
+async function handleDeleteManagedAgent(args: {
+  pubkey: string;
+}): Promise<void> {
+  mockManagedAgents = mockManagedAgents.filter(
+    (candidate) => candidate.pubkey !== args.pubkey,
+  );
+  syncMockRelayAgentsFromManagedAgents();
+}
+
+async function handleMintManagedAgentToken(args: {
+  input: {
+    pubkey: string;
+    tokenName?: string;
+    scopes?: string[];
+  };
+}): Promise<RawMintManagedAgentTokenResponse> {
+  const agent = getMockManagedAgent(args.input.pubkey);
+  const now = new Date().toISOString();
+  agent.api_token = `spr_tok_mock_${crypto.randomUUID().replace(/-/g, "")}`;
+  agent.has_api_token = true;
+  agent.updated_at = now;
+  agent.log_lines.push(
+    `minted token ${args.input.tokenName ?? `${agent.name}-token`} at ${now}`,
+  );
+
+  return {
+    agent: cloneManagedAgent(agent),
+    token: agent.api_token ?? "",
+  };
+}
+
+async function handleGetManagedAgentLog(args: {
+  pubkey: string;
+  lineCount?: number;
+}): Promise<RawManagedAgentLog> {
+  const agent = getMockManagedAgent(args.pubkey);
+  const count = args.lineCount ?? 120;
+  return {
+    content: agent.log_lines.slice(-count).join("\n"),
+    log_path: agent.log_path,
+  };
+}
+
 async function handleSearchMessages(
   args: {
     q: string;
@@ -2242,6 +2594,7 @@ export function maybeInstallE2eTauriMocks() {
   }
 
   resetMockTokens(config);
+  resetMockManagedAgents();
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({ channelName, content }) => {
@@ -2300,6 +2653,12 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "get_relay_ws_url":
         return getRelayWsUrl(activeConfig);
+      case "discover_acp_providers":
+        return handleDiscoverAcpProviders();
+      case "discover_managed_agent_prereqs":
+        return handleDiscoverManagedAgentPrereqs(
+          payload as Parameters<typeof handleDiscoverManagedAgentPrereqs>[0],
+        );
       case "get_channels":
         return handleGetChannels(activeConfig);
       case "get_feed":
@@ -2321,6 +2680,34 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "revoke_all_tokens":
         return handleRevokeAllTokens(activeConfig);
+      case "list_relay_agents":
+        return handleListRelayAgents();
+      case "list_managed_agents":
+        return handleListManagedAgents();
+      case "create_managed_agent":
+        return handleCreateManagedAgent(
+          payload as Parameters<typeof handleCreateManagedAgent>[0],
+        );
+      case "start_managed_agent":
+        return handleStartManagedAgent(
+          payload as Parameters<typeof handleStartManagedAgent>[0],
+        );
+      case "stop_managed_agent":
+        return handleStopManagedAgent(
+          payload as Parameters<typeof handleStopManagedAgent>[0],
+        );
+      case "delete_managed_agent":
+        return handleDeleteManagedAgent(
+          payload as Parameters<typeof handleDeleteManagedAgent>[0],
+        );
+      case "mint_managed_agent_token":
+        return handleMintManagedAgentToken(
+          payload as Parameters<typeof handleMintManagedAgentToken>[0],
+        );
+      case "get_managed_agent_log":
+        return handleGetManagedAgentLog(
+          payload as Parameters<typeof handleGetManagedAgentLog>[0],
+        );
       case "create_channel":
         return handleCreateChannel(
           payload as Parameters<typeof handleCreateChannel>[0],
