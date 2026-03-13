@@ -1,12 +1,4 @@
-import {
-  Activity,
-  AtSign,
-  Bot,
-  CircleAlert,
-  RefreshCcw,
-  Sparkles,
-  type LucideIcon,
-} from "lucide-react";
+import { AtSign, CircleAlert, RefreshCcw, type LucideIcon } from "lucide-react";
 
 import {
   resolveUserLabel,
@@ -14,7 +6,6 @@ import {
 } from "@/features/profile/lib/identity";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
-import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
 import { Skeleton } from "@/shared/ui/skeleton";
@@ -49,13 +40,6 @@ function formatRelativeTime(unixSeconds: number) {
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(unixSeconds * 1_000));
-}
-
-function formatUpdatedAt(unixSeconds: number) {
-  return new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(unixSeconds * 1_000));
@@ -257,65 +241,17 @@ function FeedSection({
   );
 }
 
-function SummaryCard({
-  title,
-  value,
-  icon: Icon,
-  tone,
-}: {
-  title: string;
-  value: number;
-  icon: LucideIcon;
-  tone: "urgent" | "calm";
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-lg border p-4 shadow-sm",
-        tone === "urgent"
-          ? "border-primary/20 bg-primary/10"
-          : "border-border/80 bg-background/70",
-      )}
-    >
-      <div className="flex items-center gap-3">
-        <div
-          className={cn(
-            "flex h-10 w-10 items-center justify-center rounded-lg",
-            tone === "urgent"
-              ? "bg-primary text-primary-foreground"
-              : "bg-secondary text-secondary-foreground",
-          )}
-        >
-          <Icon className="h-4 w-4" />
-        </div>
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-            {title}
-          </p>
-          <p className="text-2xl font-semibold tracking-tight">{value}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function HomeLoadingState() {
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-4 sm:px-6">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
         <div className="rounded-xl border border-border/80 bg-card/80 p-5 shadow-sm">
-          <Skeleton className="h-6 w-44" />
-          <Skeleton className="mt-3 h-4 w-full max-w-xl" />
-
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {["first", "second", "third", "fourth"].map((item) => (
-              <Skeleton className="h-24 rounded-lg" key={item} />
-            ))}
-          </div>
+          <Skeleton className="h-6 w-32" />
+          <Skeleton className="mt-3 h-4 w-full max-w-lg" />
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
-          {["mentions", "actions", "activity", "agents"].map((section) => (
+          {["mentions", "actions"].map((section) => (
             <div
               className="rounded-xl border border-border/80 bg-card/80 p-5 shadow-sm"
               key={section}
@@ -338,7 +274,6 @@ function HomeLoadingState() {
 type HomeViewProps = {
   feed?: HomeFeedResponse;
   isLoading?: boolean;
-  isRefreshing?: boolean;
   errorMessage?: string;
   currentPubkey?: string;
   availableChannelIds: ReadonlySet<string>;
@@ -349,7 +284,6 @@ type HomeViewProps = {
 export function HomeView({
   feed,
   isLoading = false,
-  isRefreshing = false,
   errorMessage,
   currentPubkey,
   availableChannelIds,
@@ -357,12 +291,7 @@ export function HomeView({
   onRefresh,
 }: HomeViewProps) {
   const feedItems = feed
-    ? [
-        ...feed.feed.mentions,
-        ...feed.feed.needsAction,
-        ...feed.feed.activity,
-        ...feed.feed.agentActivity,
-      ]
+    ? [...feed.feed.mentions, ...feed.feed.needsAction]
     : [];
   const feedProfilesQuery = useUsersBatchQuery(
     feedItems.map((item) => item.pubkey),
@@ -397,80 +326,9 @@ export function HomeView({
     );
   }
 
-  const totalUrgent = feed.feed.mentions.length + feed.feed.needsAction.length;
-
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-4 sm:px-6">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-        <section className="rounded-xl border border-border/80 bg-card/80 p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div className="min-w-0">
-              <div className="flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-                  <Sparkles className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-semibold tracking-tight">
-                    Focus queue
-                  </h2>
-                  <p className="text-sm text-muted-foreground">
-                    Mentions, reminders, channel activity, and agent work in one
-                    feed.
-                  </p>
-                </div>
-              </div>
-
-              {errorMessage ? (
-                <p className="mt-3 text-sm text-destructive">{errorMessage}</p>
-              ) : null}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                Updated {formatUpdatedAt(feed.meta.generatedAt)}
-              </p>
-              <Button
-                onClick={onRefresh}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                <RefreshCcw
-                  className={cn("h-4 w-4", isRefreshing ? "animate-spin" : "")}
-                />
-                {isRefreshing ? "Refreshing" : "Refresh"}
-              </Button>
-            </div>
-          </div>
-
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <SummaryCard
-              icon={CircleAlert}
-              title="Urgent"
-              tone="urgent"
-              value={totalUrgent}
-            />
-            <SummaryCard
-              icon={AtSign}
-              title="Mentions"
-              tone="urgent"
-              value={feed.feed.mentions.length}
-            />
-            <SummaryCard
-              icon={Activity}
-              title="Channels"
-              tone="calm"
-              value={feed.feed.activity.length}
-            />
-            <SummaryCard
-              icon={Bot}
-              title="Agents"
-              tone="calm"
-              value={feed.feed.agentActivity.length}
-            />
-          </div>
-        </section>
-
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
         <div className="grid gap-4 xl:grid-cols-2">
           <FeedSection
             availableChannelIds={availableChannelIds}
@@ -495,30 +353,6 @@ export function HomeView({
             items={feed.feed.needsAction}
             onOpenChannel={onOpenChannel}
             title="Needs Action"
-          />
-          <FeedSection
-            availableChannelIds={availableChannelIds}
-            currentPubkey={currentPubkey}
-            profiles={feedProfiles}
-            description="Recent updates from channels you can access."
-            emptyDescription="Channel activity will populate here once the relay has recent events."
-            emptyTitle="No recent channel activity"
-            icon={Activity}
-            items={feed.feed.activity}
-            onOpenChannel={onOpenChannel}
-            title="Channel Activity"
-          />
-          <FeedSection
-            availableChannelIds={availableChannelIds}
-            currentPubkey={currentPubkey}
-            profiles={feedProfiles}
-            description="Agent jobs, progress, and results."
-            emptyDescription="Agent activity appears here once agents start posting into accessible channels."
-            emptyTitle="No agent activity yet"
-            icon={Bot}
-            items={feed.feed.agentActivity}
-            onOpenChannel={onOpenChannel}
-            title="Agent Activity"
           />
         </div>
       </div>

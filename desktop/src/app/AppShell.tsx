@@ -126,9 +126,6 @@ export function AppShell() {
     activeChannel,
     identityQuery.data,
   );
-  const homeUrgentCount =
-    (homeFeedQuery.data?.feed.mentions.length ?? 0) +
-    (homeFeedQuery.data?.feed.needsAction.length ?? 0);
   const availableChannelIds = React.useMemo(
     () => new Set(channels.map((channel) => channel.id)),
     [channels],
@@ -411,7 +408,6 @@ export function AppShell() {
             : undefined
         }
         fallbackDisplayName={identityQuery.data?.displayName}
-        homeUrgentCount={homeUrgentCount}
         isCreatingChannel={createChannelMutation.isPending}
         isLoading={channelsQuery.isLoading}
         selfPresenceStatus={presenceSession.currentStatus}
@@ -511,7 +507,6 @@ export function AppShell() {
               }
               feed={homeFeedQuery.data}
               isLoading={homeFeedQuery.isLoading}
-              isRefreshing={homeFeedQuery.isRefetching}
               onOpenChannel={handleOpenChannel}
               onRefresh={() => {
                 void homeFeedQuery.refetch();
