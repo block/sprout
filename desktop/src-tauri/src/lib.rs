@@ -1197,6 +1197,26 @@ fn auth_pubkey_header(state: &AppState) -> Result<String, String> {
     Ok(keys.public_key().to_hex())
 }
 
+async fn managed_agent_owner_pubkey(state: &AppState) -> Result<String, String> {
+    if state.configured_api_token.is_none() {
+        return auth_pubkey_header(state);
+    }
+
+    let request = build_authed_request(
+        &state.http_client,
+        Method::GET,
+        "/api/users/me/profile",
+        state,
+    )?;
+    let profile: ProfileInfo = send_json_request(request).await.map_err(|e| {
+        format!(
+            "failed to resolve the authenticated token owner: {e}. Managed-agent minting with SPROUT_API_TOKEN requires a token for the desktop identity with `users:read`."
+        )
+    })?;
+
+    Ok(profile.pubkey)
+}
+
 fn session_api_token(state: &AppState) -> Result<Option<String>, String> {
     let token = state.session_token.lock().map_err(|e| e.to_string())?;
     Ok(token.clone())
@@ -1874,7 +1894,7 @@ fn list_managed_agents(
 }
 
 #[tauri::command]
-fn create_managed_agent(
+async fn create_managed_agent(
     input: CreateManagedAgentRequest,
     app: AppHandle,
     state: tauri::State<'_, AppState>,
@@ -1883,6 +1903,12 @@ fn create_managed_agent(
     if name.is_empty() {
         return Err("agent name is required".to_string());
     }
+
+    let owner_pubkey = if input.mint_token {
+        Some(managed_agent_owner_pubkey(&state).await?)
+    } else {
+        None
+    };
 
     let _store_guard = state
         .managed_agents_store_lock
@@ -1924,7 +1950,6 @@ fn create_managed_agent(
         Vec::new()
     };
     let minted = if input.mint_token {
-        let owner_pubkey = auth_pubkey_header(&state)?;
         let token_name = input
             .token_name
             .as_deref()
@@ -1934,7 +1959,9 @@ fn create_managed_agent(
         Some(run_sprout_admin_mint_token(
             &app,
             &pubkey,
-            &owner_pubkey,
+            owner_pubkey
+                .as_deref()
+                .ok_or_else(|| "managed agent owner pubkey was not resolved".to_string())?,
             token_name,
             &token_scopes,
         )?)
@@ -2122,11 +2149,13 @@ fn delete_managed_agent(
 }
 
 #[tauri::command]
-fn mint_managed_agent_token(
+async fn mint_managed_agent_token(
     input: MintManagedAgentTokenRequest,
     app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<MintManagedAgentTokenResponse, String> {
+    let owner_pubkey = managed_agent_owner_pubkey(&state).await?;
+
     let _store_guard = state
         .managed_agents_store_lock
         .lock()
@@ -2141,7 +2170,6 @@ fn mint_managed_agent_token(
         save_managed_agents(&app, &records)?;
     }
 
-    let owner_pubkey = auth_pubkey_header(&state)?;
     let record = find_managed_agent_mut(&mut records, &input.pubkey)?;
     let scopes = input
         .scopes
