@@ -171,16 +171,19 @@ pub async fn add_reaction_handler(
         .map_err(|e| internal_error(&format!("event signing error: {e}")))?;
 
     let reaction_event_id = event.id.to_hex();
-    let (stored_event, was_inserted) = state
-        .db
-        .insert_event(&event, stored.channel_id)
-        .await
-        .map_err(|e| {
-            // Compensate: deactivate the reaction row we just created since
-            // we can't store its source event.
-            tracing::error!("failed to insert reaction event, rolling back reaction row: {e}");
-            internal_error(&format!("db error: {e}"))
-        })?;
+    let insert_result = state.db.insert_event(&event, stored.channel_id).await;
+
+    let (stored_event, was_inserted) = match insert_result {
+        Ok(pair) => pair,
+        Err(e) => {
+            // Compensate: deactivate the reaction row so the user can retry.
+            let _ = state
+                .db
+                .remove_reaction(&event_id_bytes, event_created_at, &pubkey_bytes, &emoji)
+                .await;
+            return Err(internal_error(&format!("db error: {e}")));
+        }
+    };
 
     if !was_inserted {
         // Event ID collision (INSERT IGNORE no-op) — e.g. rapid remove/re-add
@@ -287,8 +290,27 @@ pub async fn remove_reaction_handler(
             .db
             .get_event_by_id(&reaction_event_id)
             .await
-            .map_err(|e| internal_error(&format!("db error: {e}")))?
-            .ok_or_else(|| not_found("reaction event not found"))?;
+            .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+        // If the source event is missing (e.g. soft-deleted from a prior
+        // remove/re-add cycle), skip kind:5 creation and fall through to
+        // direct row removal below.
+        let reaction_event = match reaction_event {
+            Some(ev) => ev,
+            None => {
+                tracing::warn!(
+                    reaction_event_id = reaction_event_hex,
+                    "reaction source event missing — falling back to direct row removal"
+                );
+                // Direct row removal — no kind:5 event needed.
+                state
+                    .db
+                    .remove_reaction(&event_id_bytes, event_created_at, &pubkey_bytes, &emoji)
+                    .await
+                    .map_err(|e| internal_error(&format!("db error: {e}")))?;
+                return Ok(Json(serde_json::json!({ "removed": true })));
+            }
+        };
 
         let user_pubkey_hex = nostr_hex::encode(&pubkey_bytes);
         let mut tags = build_actor_tags(&user_pubkey_hex)?;
