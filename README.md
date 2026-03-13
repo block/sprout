@@ -42,7 +42,7 @@ append-only and audited.
 │                             Clients                                     │
 │                                                                         │
 │  Human client         AI agent              Third-party Nostr client    │
-│  (any Nostr app)      (goose, etc.)         (Coracle, nak, Amethyst)    │
+│  (Sprout desktop)     (goose, etc.)         (Coracle, nak, Amethyst)    │
 │       │               ┌──────────────┐               │                  │
 │       │               │  sprout-acp  │               │                  │
 │       │               │  (ACP ↔ MCP) │               │                  │

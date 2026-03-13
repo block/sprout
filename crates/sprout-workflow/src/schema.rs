@@ -102,7 +102,7 @@ pub enum ActionDef {
     SendMessage {
         /// Message text (supports template variables).
         text: String,
-        /// Optional channel override (e.g. `"#engineering-oncall"`).
+        /// Optional channel UUID override. Must be a valid UUID string.
         #[serde(default)]
         channel: Option<String>,
     },

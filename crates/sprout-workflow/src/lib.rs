@@ -27,16 +27,19 @@
 //! tokio::spawn(async move { engine.run().await });
 //! ```
 
+pub mod action_sink;
 pub mod error;
 pub mod executor;
 pub mod schema;
 
+pub use action_sink::{ActionSink, ActionSinkError};
 pub use error::{PartialProgress, WorkflowError};
 pub use executor::ExecutionResult;
 pub use schema::{ActionDef, Step, TriggerDef, WorkflowDef};
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -78,6 +81,9 @@ pub struct WorkflowEngine {
     /// In-memory only — lost on restart. Missed fires during downtime are
     /// not replayed (acceptable for MVP).
     pub(crate) last_fired: DashMap<Uuid, DateTime<Utc>>,
+    /// Action sink for executing side-effects (SendMessage, etc.).
+    /// Late-initialized via [`set_action_sink`] after `AppState` construction.
+    pub(crate) action_sink: OnceLock<Arc<dyn ActionSink>>,
 }
 
 impl WorkflowEngine {
@@ -90,7 +96,28 @@ impl WorkflowEngine {
             config,
             run_semaphore,
             last_fired: DashMap::new(),
+            action_sink: OnceLock::new(),
         }
+    }
+
+    /// Set the action sink. Called once after `AppState` construction.
+    ///
+    /// # Panics
+    /// Panics if called more than once.
+    pub fn set_action_sink(&self, sink: Arc<dyn ActionSink>) {
+        if self.action_sink.set(sink).is_err() {
+            panic!("action_sink already initialized");
+        }
+    }
+
+    /// Get the action sink reference. Panics if not yet initialized.
+    pub(crate) fn action_sink(&self) -> &dyn ActionSink {
+        self.action_sink
+            .get()
+            .expect(
+                "action_sink not initialized — call set_action_sink() before executing workflows",
+            )
+            .as_ref()
     }
 
     /// Parse and validate a YAML workflow definition.
@@ -217,6 +244,22 @@ impl WorkflowEngine {
 
         // Exclude workflow execution events to prevent infinite loops.
         if is_workflow_execution_kind(kind_u32) {
+            return Ok(());
+        }
+
+        // Exclude workflow-generated messages (tagged with "sprout:workflow")
+        // to prevent recursive triggering (e.g. a SendMessage action
+        // re-triggering the same workflow that produced it).
+        if event
+            .event
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("sprout:workflow"))
+        {
+            tracing::debug!(
+                event_id = %event.event.id.to_hex(),
+                "Skipping workflow trigger — event is workflow-generated"
+            );
             return Ok(());
         }
 

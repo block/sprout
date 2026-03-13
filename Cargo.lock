@@ -2928,6 +2928,7 @@ dependencies = [
  "cron",
  "dashmap",
  "evalexpr",
+ "hex",
  "nostr",
  "reqwest",
  "serde",

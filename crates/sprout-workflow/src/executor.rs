@@ -505,7 +505,7 @@ pub enum StepResult {
 pub async fn dispatch_action(
     step_id: &str,
     action: &ActionDef,
-    _engine: &WorkflowEngine,
+    engine: &WorkflowEngine,
     run_id: Uuid,
     trigger_ctx: &TriggerContext,
 ) -> Result<StepResult, WorkflowError> {
@@ -535,23 +535,34 @@ pub async fn dispatch_action(
                 ));
             }
 
-            #[cfg(feature = "reqwest")]
-            {
-                let result = send_message_impl(channel_id, text).await?;
-                Ok(StepResult::Completed(result))
-            }
-
-            #[cfg(not(feature = "reqwest"))]
-            {
-                warn!(
-                    run_id = %run_id,
-                    step = step_id,
-                    "SendMessage: reqwest feature not enabled, skipping HTTP call"
-                );
-                Ok(StepResult::Completed(
-                    serde_json::json!({ "sent": false, "skipped": true }),
+            // Look up workflow owner for message attribution.
+            let wf_run = engine.db.get_workflow_run(run_id).await.map_err(|e| {
+                WorkflowError::WebhookError(format!(
+                    "SendMessage: failed to load workflow run {run_id}: {e}"
                 ))
-            }
+            })?;
+            let workflow = engine
+                .db
+                .get_workflow(wf_run.workflow_id)
+                .await
+                .map_err(|e| {
+                    WorkflowError::WebhookError(format!(
+                        "SendMessage: failed to load workflow {}: {e}",
+                        wf_run.workflow_id
+                    ))
+                })?;
+            let owner_pubkey_hex = hex::encode(&workflow.owner_pubkey);
+
+            let event_id = engine
+                .action_sink()
+                .send_message(channel_id, text, &owner_pubkey_hex)
+                .await
+                .map_err(WorkflowError::from)?;
+
+            Ok(StepResult::Completed(serde_json::json!({
+                "sent": true,
+                "event_id": event_id,
+            })))
         }
 
         SendDm { to, text } => {
@@ -826,82 +837,6 @@ async fn call_webhook_impl(
     Ok(serde_json::json!({
         "status": status,
         "body": body_text,
-    }))
-}
-
-// ── send_message implementation (feature-gated) ──────────────────────────────
-
-/// POST `{"content": text}` to `POST /api/channels/{channel_id}/messages`.
-///
-/// Relay base URL is read from `SPROUT_RELAY_BASE_URL` (default: `http://localhost:3000`).
-///
-/// Auth strategy (in priority order):
-/// 1. `SPROUT_API_TOKEN` env var → `Authorization: Bearer <token>` (production)
-/// 2. `SPROUT_RELAY_PUBKEY` env var → `X-Pubkey: <hex>` (dev mode only,
-///    requires `SPROUT_REQUIRE_AUTH_TOKEN=false`)
-///
-/// NOTE: This implementation uses X-Pubkey auth which only works in dev mode
-/// (SPROUT_REQUIRE_AUTH_TOKEN=false). For production, the executor needs to
-/// either: (a) use an API token (SPROUT_API_TOKEN env var), or (b) sign
-/// events directly and submit via WebSocket. See WF-07.
-/// TODO(WF-07): Support production auth for workflow-generated messages.
-///
-/// This is an internal call — the workflow engine runs inside the relay process,
-/// so `localhost:3000` is always reachable without SSRF concerns.
-#[cfg(feature = "reqwest")]
-async fn send_message_impl(channel_id: &str, text: &str) -> Result<JsonValue, WorkflowError> {
-    use reqwest::Client;
-    use std::time::Duration;
-
-    let base_url = std::env::var("SPROUT_RELAY_BASE_URL")
-        .unwrap_or_else(|_| "http://localhost:3000".to_owned());
-
-    let url = format!("{base_url}/api/channels/{channel_id}/messages");
-
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| WorkflowError::WebhookError(format!("failed to build HTTP client: {e}")))?;
-
-    let mut req = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "content": text }));
-
-    // Attach auth header: prefer API token (production), fall back to X-Pubkey (dev mode).
-    if let Ok(token) = std::env::var("SPROUT_API_TOKEN") {
-        req = req.header("Authorization", format!("Bearer {token}"));
-    } else if let Ok(pubkey) = std::env::var("SPROUT_RELAY_PUBKEY") {
-        req = req.header("X-Pubkey", pubkey);
-    }
-
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| WorkflowError::WebhookError(format!("SendMessage HTTP error: {e}")))?;
-
-    let status = resp.status();
-
-    if !status.is_success() {
-        let body = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "<unreadable>".to_owned());
-        return Err(WorkflowError::WebhookError(format!(
-            "SendMessage: relay returned {status} for channel {channel_id}: {body}"
-        )));
-    }
-
-    let body_text = resp.text().await.unwrap_or_else(|_| String::new());
-
-    // Try to parse the response as JSON; fall back to wrapping the raw text.
-    let body_json: JsonValue = serde_json::from_str(&body_text)
-        .unwrap_or_else(|_| serde_json::json!({ "raw": body_text }));
-
-    Ok(serde_json::json!({
-        "sent": true,
-        "status": status.as_u16(),
-        "response": body_json,
     }))
 }
 
