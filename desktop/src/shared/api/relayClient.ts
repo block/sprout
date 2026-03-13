@@ -7,66 +7,13 @@ import {
 } from "@/shared/api/tauri";
 import type { PresenceStatus, RelayEvent } from "@/shared/api/types";
 import { CHANNEL_EVENT_KINDS } from "@/shared/constants/kinds";
-
-type RelaySubscriptionFilter = {
-  kinds: number[];
-  "#h": string[];
-  limit: number;
-};
-
-type HistorySubscription = {
-  mode: "history";
-  events: RelayEvent[];
-  resolve: (events: RelayEvent[]) => void;
-  reject: (error: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
-};
-
-type LiveSubscription = {
-  mode: "live";
-  onEvent: (event: RelayEvent) => void;
-};
-
-type PendingEvent = {
-  event: RelayEvent;
-  resolve: (event: RelayEvent) => void;
-  reject: (error: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
-};
-
-type RelaySubscription = HistorySubscription | LiveSubscription;
-
-function sortEvents(events: RelayEvent[]) {
-  return [...events].sort((left, right) => left.created_at - right.created_at);
-}
-
-function getTextPayload(message: unknown) {
-  if (typeof message === "string") {
-    return message;
-  }
-
-  if (
-    typeof message === "object" &&
-    message !== null &&
-    "type" in message &&
-    message.type === "Text" &&
-    "data" in message &&
-    typeof message.data === "string"
-  ) {
-    return message.data;
-  }
-
-  if (
-    typeof message === "object" &&
-    message !== null &&
-    "Text" in message &&
-    typeof message.Text === "string"
-  ) {
-    return message.Text;
-  }
-
-  return null;
-}
+import {
+  getTextPayload,
+  sortEvents,
+  type PendingEvent,
+  type RelaySubscription,
+  type RelaySubscriptionFilter,
+} from "@/shared/api/relayClientShared";
 
 class RelayClient {
   private wsId: number | null = null;
@@ -161,26 +108,15 @@ class RelayClient {
     channelId: string,
     onEvent: (event: RelayEvent) => void,
   ) {
+    return this.subscribe(this.buildChannelFilter(channelId, 50), onEvent);
+  }
+
+  async subscribeToAllStreamMessages(onEvent: (event: RelayEvent) => void) {
+    return this.subscribe(this.buildGlobalStreamFilter(50), onEvent);
+  }
+
+  async preconnect() {
     await this.ensureConnected();
-
-    const subId = `live-${crypto.randomUUID()}`;
-
-    this.subscriptions.set(subId, {
-      mode: "live",
-      onEvent,
-    });
-
-    await this.sendRaw(["REQ", subId, this.buildChannelFilter(channelId, 50)]);
-
-    return async () => {
-      const active = this.subscriptions.get(subId);
-      if (!active || active.mode !== "live") {
-        return;
-      }
-
-      this.subscriptions.delete(subId);
-      await this.closeSubscription(subId);
-    };
   }
 
   private async ensureConnected() {
@@ -242,6 +178,53 @@ class RelayClient {
       kinds: [...CHANNEL_EVENT_KINDS],
       "#h": [channelId],
       limit,
+    };
+  }
+
+  private buildGlobalStreamFilter(limit: number): RelaySubscriptionFilter {
+    return {
+      kinds: [...CHANNEL_EVENT_KINDS],
+      limit,
+    };
+  }
+
+  private async subscribe(
+    filter: RelaySubscriptionFilter,
+    onEvent: (event: RelayEvent) => void,
+  ) {
+    await this.ensureConnected();
+
+    const subId = `live-${crypto.randomUUID()}`;
+    let resolveReady = () => {
+      return;
+    };
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = () => {
+        window.clearTimeout(fallbackTimeout);
+        resolve();
+      };
+    });
+    const fallbackTimeout = window.setTimeout(() => {
+      resolveReady();
+    }, 250);
+
+    this.subscriptions.set(subId, {
+      mode: "live",
+      onEvent,
+      resolveReady,
+    });
+
+    await this.sendRaw(["REQ", subId, filter]);
+    await ready;
+
+    return async () => {
+      const active = this.subscriptions.get(subId);
+      if (!active || active.mode !== "live") {
+        return;
+      }
+
+      this.subscriptions.delete(subId);
+      await this.closeSubscription(subId);
     };
   }
 
@@ -393,7 +376,13 @@ class RelayClient {
 
   private handleEose(subId: string) {
     const subscription = this.subscriptions.get(subId);
-    if (!subscription || subscription.mode !== "history") {
+    if (!subscription) {
+      return;
+    }
+
+    if (subscription.mode === "live") {
+      subscription.resolveReady?.();
+      subscription.resolveReady = undefined;
       return;
     }
 
