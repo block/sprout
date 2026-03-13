@@ -53,6 +53,10 @@ pub enum WorkflowError {
     /// A database operation failed.
     #[error("database error: {0}")]
     Database(String),
+
+    /// The action is defined but not yet implemented.
+    #[error("action not implemented: {0}")]
+    NotImplemented(String),
 }
 
 impl From<sprout_db::error::DbError> for WorkflowError {

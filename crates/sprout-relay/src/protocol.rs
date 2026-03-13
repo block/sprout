@@ -141,7 +141,7 @@ impl RelayMessage {
     /// Format an EVENT message delivering an event to a subscriber.
     pub fn event(sub_id: &str, event: &Event) -> String {
         let event_json = serde_json::to_value(event)
-            .expect("nostr::Event serialization is infallible for well-formed events");
+            .expect("SAFETY: nostr::Event serialization is infallible for well-formed events");
         serde_json::json!(["EVENT", sub_id, event_json]).to_string()
     }
 

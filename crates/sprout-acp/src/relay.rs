@@ -207,7 +207,12 @@ impl HarnessRelay {
         Ok(Self {
             event_rx,
             cmd_tx,
-            http: reqwest::Client::new(),
+            // SAFETY: default builder with only timeout config cannot fail
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+                .expect("SAFETY: default builder with only timeout config cannot fail"),
             relay_url: relay_url.to_string(),
             api_token: api_token.map(|t| t.to_string()),
             keys: keys.clone(),

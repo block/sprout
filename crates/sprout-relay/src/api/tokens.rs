@@ -80,7 +80,7 @@ impl MintRateLimiter {
             .cache
             .entry(*pubkey_bytes)
             .or_insert_with(|| Arc::new(std::sync::Mutex::new(VecDeque::new())));
-        let mut timestamps = entry.value().lock().unwrap();
+        let mut timestamps = entry.value().lock().unwrap_or_else(|e| e.into_inner());
 
         // Evict timestamps that have fallen outside the rolling window.
         while timestamps
@@ -92,6 +92,7 @@ impl MintRateLimiter {
         }
 
         if timestamps.len() >= self.limit {
+            // SAFETY: vec is guaranteed non-empty by prior check (len >= limit > 0)
             let retry_after = MINT_WINDOW - now.duration_since(*timestamps.front().unwrap());
             return Err(retry_after);
         }
@@ -244,7 +245,8 @@ pub async fn post_tokens(
                     // POST /api/tokens requires the payload tag — body must be
                     // cryptographically bound to the signed event.
                     let event: nostr::Event =
-                        nostr::Event::from_json(&event_json).expect("already verified");
+                        // SAFETY: event_json was already parsed and verified by verify_nip98_event above
+                        nostr::Event::from_json(&event_json).expect("SAFETY: already verified by verify_nip98_event");
                     let has_payload = event.tags.find(nostr::TagKind::Payload).is_some();
                     if !has_payload {
                         tracing::warn!("post_tokens: NIP-98 event missing required payload tag");
@@ -305,7 +307,8 @@ pub async fn post_tokens(
 
     let mut parsed_scopes: Vec<Scope> = Vec::with_capacity(req.scopes.len());
     for s in &req.scopes {
-        let scope: Scope = s.parse().expect("infallible");
+        // SAFETY: Scope::from_str is infallible — unknown values map to Scope::Unknown(_)
+        let scope: Scope = s.parse().expect("SAFETY: Scope::from_str is infallible");
         match &scope {
             Scope::Unknown(_) => {
                 return Err((
@@ -556,9 +559,13 @@ pub async fn post_tokens(
         expires_at: expires_at.map(|t| t.to_rfc3339()),
     };
 
+    // SAFETY: MintTokenResponse contains only String/Uuid/Vec fields — serialization is infallible
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::to_value(resp).unwrap()),
+        Json(
+            serde_json::to_value(resp)
+                .expect("SAFETY: MintTokenResponse serialization is infallible"),
+        ),
     ))
 }
 
