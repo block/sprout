@@ -934,6 +934,33 @@ impl Db {
         Ok(row.is_some())
     }
 
+    // ── Addressable Event Replacement ────────────────────────────────────────
+
+    /// Soft-deletes previous addressable events matching (kind, pubkey, channel_id).
+    /// Used for NIP-29 group discovery events (39000/39001/39002) which should
+    /// only have one active version per group.
+    pub async fn soft_delete_previous_addressable(
+        &self,
+        kind: i32,
+        pubkey: &[u8],
+        channel_id: Uuid,
+    ) -> Result<u64> {
+        let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
+        let result = sqlx::query(
+            r#"
+            UPDATE events
+            SET deleted_at = NOW(6)
+            WHERE kind = ? AND pubkey = ? AND channel_id = ? AND deleted_at IS NULL
+            "#,
+        )
+        .bind(kind)
+        .bind(pubkey)
+        .bind(&channel_id_bytes)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     /// Adds a pubkey to the allowlist.
     pub async fn add_to_allowlist(
         &self,

@@ -354,7 +354,13 @@ pub async fn emit_group_discovery_events(
             .sign_with_keys(&state.relay_keypair)
             .map_err(|e| anyhow::anyhow!("failed to sign 39000: {e}"))?;
 
-        let (stored, _) = state.db.insert_event(&event, None).await?;
+        // Replace previous 39000 for this group (addressable event semantics).
+        let _ = state.db.soft_delete_previous_addressable(
+            KIND_NIP29_GROUP_METADATA as i32,
+            &state.relay_keypair.public_key().serialize(),
+            channel_id,
+        ).await;
+        let (stored, _) = state.db.insert_event(&event, Some(channel_id)).await?;
         let kind_u32 = event_kind_u32(&stored.event);
         dispatch_persistent_event(state, &stored, kind_u32, &relay_pubkey_hex).await;
     }
@@ -371,7 +377,12 @@ pub async fn emit_group_discovery_events(
             .sign_with_keys(&state.relay_keypair)
             .map_err(|e| anyhow::anyhow!("failed to sign 39001: {e}"))?;
 
-        let (stored, _) = state.db.insert_event(&event, None).await?;
+        let _ = state.db.soft_delete_previous_addressable(
+            KIND_NIP29_GROUP_ADMINS as i32,
+            &state.relay_keypair.public_key().serialize(),
+            channel_id,
+        ).await;
+        let (stored, _) = state.db.insert_event(&event, Some(channel_id)).await?;
         let kind_u32 = event_kind_u32(&stored.event);
         dispatch_persistent_event(state, &stored, kind_u32, &relay_pubkey_hex).await;
     }
@@ -388,7 +399,12 @@ pub async fn emit_group_discovery_events(
             .sign_with_keys(&state.relay_keypair)
             .map_err(|e| anyhow::anyhow!("failed to sign 39002: {e}"))?;
 
-        let (stored, _) = state.db.insert_event(&event, None).await?;
+        let _ = state.db.soft_delete_previous_addressable(
+            KIND_NIP29_GROUP_MEMBERS as i32,
+            &state.relay_keypair.public_key().serialize(),
+            channel_id,
+        ).await;
+        let (stored, _) = state.db.insert_event(&event, Some(channel_id)).await?;
         let kind_u32 = event_kind_u32(&stored.event);
         dispatch_persistent_event(state, &stored, kind_u32, &relay_pubkey_hex).await;
     }
