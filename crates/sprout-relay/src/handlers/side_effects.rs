@@ -312,7 +312,9 @@ pub async fn emit_system_message(
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign system message: {e}"))?;
 
-    let _ = state.db.insert_event(&event, Some(channel_id)).await;
+    if let Err(e) = state.db.insert_event(&event, Some(channel_id)).await {
+        warn!(channel = %channel_id, error = %e, "system message insert failed");
+    }
 
     // Fan out to subscribers
     if let Err(e) = state.pubsub.publish_event(channel_id, &event).await {
@@ -336,7 +338,7 @@ async fn emit_addressable_discovery_event(
 
     let (stored, _) = state
         .db
-        .replace_addressable_event(&event, channel_id, kind as i32)
+        .replace_addressable_event(&event, channel_id)
         .await?;
     let kind_u32 = event_kind_u32(&stored.event);
     dispatch_persistent_event(state, &stored, kind_u32, relay_pubkey_hex).await;

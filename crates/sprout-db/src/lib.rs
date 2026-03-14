@@ -948,7 +948,6 @@ impl Db {
         &self,
         event: &nostr::Event,
         channel_id: Uuid,
-        kind_i32: i32,
     ) -> Result<(StoredEvent, bool)> {
         use sprout_core::kind::event_kind_i32;
 
@@ -956,7 +955,7 @@ impl Db {
         let pubkey_bytes = event.pubkey.to_bytes();
         let sig_bytes = event.sig.serialize();
         let tags_json = serde_json::to_value(&event.tags)?;
-        let kind = event_kind_i32(event);
+        let kind_i32 = event_kind_i32(event);
         let created_at_secs = event.created_at.as_u64() as i64;
         let created_at = DateTime::from_timestamp(created_at_secs, 0)
             .ok_or(crate::error::DbError::InvalidTimestamp(created_at_secs))?;
@@ -985,7 +984,7 @@ impl Db {
         .bind(id_bytes.as_slice())
         .bind(pubkey_bytes.as_slice())
         .bind(created_at)
-        .bind(kind)
+        .bind(kind_i32)
         .bind(&tags_json)
         .bind(&event.content)
         .bind(sig_bytes.as_slice())
