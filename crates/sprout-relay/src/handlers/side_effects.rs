@@ -324,7 +324,12 @@ pub async fn emit_system_message(
 
 /// Emit NIP-29 group discovery events (39000, 39001, 39002) signed by the relay keypair.
 /// Called after group creation, metadata changes, or membership changes.
-/// Events are stored globally (channel_id = None) for fan-out to all subscribers.
+/// Events are stored channel-scoped (`channel_id = Some(...)`) so that existing
+/// access control applies — private channel member lists are only visible to members.
+///
+/// NOTE: Channel-scoped storage means live global subscriptions (e.g. `{kinds:[39000]}`)
+/// won't receive these events via fan-out. Clients discover groups via historical REQ
+/// queries. Live push for open-channel discovery is a future enhancement.
 pub async fn emit_group_discovery_events(
     state: &Arc<AppState>,
     channel_id: Uuid,

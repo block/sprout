@@ -51,7 +51,7 @@ pub struct Config {
     /// When true, NIP-42 pubkey-only authentication (no JWT or API token) is
     /// restricted to pubkeys in the `pubkey_allowlist` table. Users with valid
     /// API tokens or Okta JWTs bypass the allowlist entirely.
-    /// Has no effect when `require_auth_token` is false (open-relay mode).
+    /// Applies to all NIP-42 pubkey-only connections, regardless of `require_auth_token`.
     pub pubkey_allowlist_enabled: bool,
 }
 
