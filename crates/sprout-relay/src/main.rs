@@ -61,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
         cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .map_err(|e| anyhow::anyhow!("Redis pool creation failed: {e}"))?
     };
+    let redis_health_pool = redis_pool.clone(); // cheap Arc clone — shared with readiness handler
     let pubsub = Arc::new(
         PubSubManager::new(&config.redis_url, redis_pool)
             .await
@@ -101,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState::new(
         config.clone(),
         db,
+        redis_health_pool,
         audit,
         pubsub,
         auth,
@@ -184,14 +186,59 @@ async fn main() -> anyhow::Result<()> {
 
     let router = build_router(Arc::clone(&state));
 
-    let listener = tokio::net::TcpListener::bind(&config.bind_addr)
+    serve_dual(router, &config).await
+}
+
+/// Bind TCP (always) and optionally UDS, then run both concurrently.
+/// If either listener exits, the function returns and the process exits.
+async fn serve_dual(router: axum::Router, config: &Config) -> anyhow::Result<()> {
+    let tcp_listener = tokio::net::TcpListener::bind(&config.bind_addr)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to bind {}: {e}", config.bind_addr))?;
+    info!(addr = %config.bind_addr, "sprout-relay TCP listening");
 
-    info!(addr = %config.bind_addr, "sprout-relay listening");
+    #[cfg(unix)]
+    if let Some(ref uds_path) = config.uds_path {
+        // Only remove stale socket files — refuse to delete non-socket paths.
+        use std::os::unix::fs::FileTypeExt as _;
+        match std::fs::symlink_metadata(uds_path) {
+            Ok(meta) if meta.file_type().is_socket() => {
+                let _ = std::fs::remove_file(uds_path);
+            }
+            Ok(_) => {
+                return Err(anyhow::anyhow!(
+                    "SPROUT_UDS_PATH {uds_path} exists but is not a socket — refusing to delete"
+                ));
+            }
+            Err(_) => {} // Path doesn't exist — fine, we'll create it
+        }
+        let uds_listener = tokio::net::UnixListener::bind(uds_path)
+            .map_err(|e| anyhow::anyhow!("Failed to bind UDS {uds_path}: {e}"))?;
+        info!(path = %uds_path, "sprout-relay UDS listening");
 
+        let router_uds = router.clone();
+        tokio::select! {
+            r = axum::serve(
+                tcp_listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            ) => r.map_err(|e| anyhow::anyhow!("TCP server error: {e}")),
+            r = axum::serve(uds_listener, router_uds.into_make_service()) =>
+                r.map_err(|e| anyhow::anyhow!("UDS server error: {e}")),
+        }?;
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    if config.uds_path.is_some() {
+        tracing::warn!(
+            "SPROUT_UDS_PATH is set but UDS is not supported on this platform — \
+             falling back to TCP only"
+        );
+    }
+
+    // TCP-only path (non-unix, or unix without uds_path set).
     axum::serve(
-        listener,
+        tcp_listener,
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .await

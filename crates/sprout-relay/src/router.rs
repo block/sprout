@@ -9,6 +9,7 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
+use serde_json::json;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
@@ -26,6 +27,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/info", get(relay_info_handler))
         .route("/.well-known/nostr.json", get(api::nip05::nostr_nip05))
         .route("/health", get(health_handler))
+        .route("/_liveness", get(liveness_handler))
+        .route("/_readiness", get(readiness_handler))
         // Token self-service routes
         .route(
             "/api/tokens",
@@ -153,12 +156,23 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 ///
 /// Uses `axum::extract::Request` to manually attempt WS upgrade, so non-WS
 /// requests aren't rejected by the extractor.
+///
+/// `ConnectInfo` is read from request extensions rather than as an extractor —
+/// UDS connections have no `SocketAddr`, so the extractor would panic.
+/// TCP connections populate it via `into_make_service_with_connect_info`; UDS
+/// connections fall back to `0.0.0.0:0`.
 async fn nip11_or_ws_handler(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
+    // Read peer address from extensions (set by TCP serve; absent for UDS).
+    let addr = req
+        .extensions()
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0)
+        .unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
+
     let accept = headers
         .get("accept")
         .and_then(|v| v.to_str().ok())
@@ -183,6 +197,43 @@ async fn nip11_or_ws_handler(
 
 async fn health_handler() -> impl IntoResponse {
     (StatusCode::OK, "ok")
+}
+
+async fn liveness_handler() -> impl IntoResponse {
+    (StatusCode::OK, "ok")
+}
+
+/// Readiness probe — checks MySQL and Redis connectivity.
+///
+/// Returns 200 `{"status":"ready"}` when both are reachable, or
+/// 503 `{"status":"not_ready","mysql":bool,"redis":bool}` otherwise.
+///
+/// Note: Redis pool exhaustion (all connections in use) also returns 503.
+/// This is intentionally conservative — if we can't acquire a connection,
+/// the pod shouldn't receive traffic.
+async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    use std::time::Duration;
+
+    let check = async {
+        let (mysql_ok, redis_ok) = tokio::join!(state.db.ping(), async {
+            state.redis_pool.get().await.is_ok()
+        },);
+        (mysql_ok, redis_ok)
+    };
+
+    let (mysql_ok, redis_ok) = tokio::time::timeout(Duration::from_secs(2), check)
+        .await
+        .unwrap_or((false, false));
+
+    if mysql_ok && redis_ok {
+        (StatusCode::OK, Json(json!({"status": "ready"}))).into_response()
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"status": "not_ready", "mysql": mysql_ok, "redis": redis_ok})),
+        )
+            .into_response()
+    }
 }
 
 /// Build a CORS layer from the configured origins list.
