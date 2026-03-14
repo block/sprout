@@ -173,6 +173,10 @@ mod tests {
         assert!(!config.redis_url.is_empty());
         assert!(config.max_connections > 0);
         assert!(config.send_buffer_size > 0);
+        assert!(
+            !config.pubkey_allowlist_enabled,
+            "pubkey_allowlist_enabled should default to false"
+        );
     }
 
     #[test]
