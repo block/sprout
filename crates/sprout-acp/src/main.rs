@@ -191,10 +191,12 @@ async fn main() -> Result<()> {
             tokio::select! {
                 biased;
                 r = result_rx.recv() => Some(PoolEvent::Result(r.expect("result channel closed"))),
-                j = join_set.join_next() => match j {
-                    Some(Err(e)) => Some(PoolEvent::Panic(e)),
-                    _ => None,
-                },
+                // Guard: join_next() returns None immediately when JoinSet is
+                // empty, which would cause a tight spin. Only poll when there
+                // are in-flight tasks.
+                Some(Err(e)) = join_set.join_next(), if !join_set.is_empty() => {
+                    Some(PoolEvent::Panic(e))
+                }
                 // Remaining branches don't touch pool — evaluated when pool is idle.
                 sprout_event = relay.next_event() => {
                     let _ = result_rx; // end split borrow before relay handling
