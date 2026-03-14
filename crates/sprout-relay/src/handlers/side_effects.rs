@@ -6,10 +6,14 @@ use nostr::{Event, EventBuilder, Kind, Tag};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use sprout_core::kind::KIND_REACTION;
+use sprout_core::kind::{
+    event_kind_u32, KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS, KIND_NIP29_GROUP_METADATA,
+    KIND_REACTION,
+};
 use sprout_db::channel::MemberRole;
 
 use crate::state::AppState;
+use super::event::dispatch_persistent_event;
 
 /// Check if a kind is an admin kind (9000-9022) that needs pre-storage validation.
 pub fn is_admin_kind(kind: u32) -> bool {
@@ -318,6 +322,80 @@ pub async fn emit_system_message(
     Ok(())
 }
 
+/// Emit NIP-29 group discovery events (39000, 39001, 39002) signed by the relay keypair.
+/// Called after group creation, metadata changes, or membership changes.
+/// Events are stored globally (channel_id = None) for fan-out to all subscribers.
+pub async fn emit_group_discovery_events(
+    state: &Arc<AppState>,
+    channel_id: Uuid,
+) -> anyhow::Result<()> {
+    let channel = state.db.get_channel(channel_id).await?;
+    let members = state.db.get_members(channel_id).await?;
+
+    let relay_pubkey_hex = hex::encode(state.relay_keypair.public_key().serialize());
+    let group_id = channel_id.to_string();
+
+    // ── kind:39000 group metadata ────────────────────────────────────────────
+    {
+        let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &group_id])?];
+        tags.push(Tag::parse(&["name", &channel.name])?);
+        if let Some(ref desc) = channel.description {
+            if !desc.is_empty() {
+                tags.push(Tag::parse(&["about", desc])?);
+            }
+        }
+        if channel.visibility == "private" {
+            tags.push(Tag::parse(&["private"])?);
+        }
+        // Sprout channels always require explicit membership
+        tags.push(Tag::parse(&["closed"])?);
+
+        let event = EventBuilder::new(Kind::Custom(KIND_NIP29_GROUP_METADATA as u16), "", tags)
+            .sign_with_keys(&state.relay_keypair)
+            .map_err(|e| anyhow::anyhow!("failed to sign 39000: {e}"))?;
+
+        let (stored, _) = state.db.insert_event(&event, None).await?;
+        let kind_u32 = event_kind_u32(&stored.event);
+        dispatch_persistent_event(state, &stored, kind_u32, &relay_pubkey_hex).await;
+    }
+
+    // ── kind:39001 group admins ──────────────────────────────────────────────
+    {
+        let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &group_id])?];
+        for m in members.iter().filter(|m| m.role == "owner" || m.role == "admin") {
+            let pubkey_hex = hex::encode(&m.pubkey);
+            tags.push(Tag::parse(&["p", &pubkey_hex, &m.role])?);
+        }
+
+        let event = EventBuilder::new(Kind::Custom(KIND_NIP29_GROUP_ADMINS as u16), "", tags)
+            .sign_with_keys(&state.relay_keypair)
+            .map_err(|e| anyhow::anyhow!("failed to sign 39001: {e}"))?;
+
+        let (stored, _) = state.db.insert_event(&event, None).await?;
+        let kind_u32 = event_kind_u32(&stored.event);
+        dispatch_persistent_event(state, &stored, kind_u32, &relay_pubkey_hex).await;
+    }
+
+    // ── kind:39002 group members ─────────────────────────────────────────────
+    {
+        let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &group_id])?];
+        for m in &members {
+            let pubkey_hex = hex::encode(&m.pubkey);
+            tags.push(Tag::parse(&["p", &pubkey_hex])?);
+        }
+
+        let event = EventBuilder::new(Kind::Custom(KIND_NIP29_GROUP_MEMBERS as u16), "", tags)
+            .sign_with_keys(&state.relay_keypair)
+            .map_err(|e| anyhow::anyhow!("failed to sign 39002: {e}"))?;
+
+        let (stored, _) = state.db.insert_event(&event, None).await?;
+        let kind_u32 = event_kind_u32(&stored.event);
+        dispatch_persistent_event(state, &stored, kind_u32, &relay_pubkey_hex).await;
+    }
+
+    Ok(())
+}
+
 // ── NIP-01 Kind:0 Handler ────────────────────────────────────────────────────
 
 /// Kind:0 (NIP-01 profile metadata) side effect — sync profile fields to users table.
@@ -425,6 +503,10 @@ async fn handle_put_user(event: &Event, state: &Arc<AppState>) -> anyhow::Result
     )
     .await?;
 
+    if let Err(e) = emit_group_discovery_events(state, channel_id).await {
+        warn!(channel = %channel_id, error = %e, "NIP-29 group discovery emission failed");
+    }
+
     info!(channel = %channel_id, target = %target_hex, "NIP-29 PUT_USER processed");
     Ok(())
 }
@@ -471,6 +553,10 @@ async fn handle_remove_user(event: &Event, state: &Arc<AppState>) -> anyhow::Res
         }),
     )
     .await?;
+
+    if let Err(e) = emit_group_discovery_events(state, channel_id).await {
+        warn!(channel = %channel_id, error = %e, "NIP-29 group discovery emission failed");
+    }
 
     Ok(())
 }
@@ -535,6 +621,11 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
             }
         }
     }
+
+    if let Err(e) = emit_group_discovery_events(state, channel_id).await {
+        warn!(channel = %channel_id, error = %e, "NIP-29 group discovery emission failed");
+    }
+
     Ok(())
 }
 
@@ -657,6 +748,10 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
     )
     .await?;
 
+    if let Err(e) = emit_group_discovery_events(state, channel.id).await {
+        warn!(channel = %channel.id, error = %e, "NIP-29 group discovery emission failed");
+    }
+
     info!(channel_id = %channel.id, name = %name, "NIP-29 CREATE_GROUP processed");
     Ok(())
 }
@@ -724,6 +819,10 @@ async fn handle_leave_request(event: &Event, state: &Arc<AppState>) -> anyhow::R
         }),
     )
     .await?;
+
+    if let Err(e) = emit_group_discovery_events(state, channel_id).await {
+        warn!(channel = %channel_id, error = %e, "NIP-29 group discovery emission failed");
+    }
 
     Ok(())
 }
