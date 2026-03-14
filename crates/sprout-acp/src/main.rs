@@ -88,7 +88,16 @@ async fn main() -> Result<()> {
                 prompt_tag: Some("all".into()),
             }]
         }
-        SubscribeMode::Config => config::load_rules(&config.config_path)?,
+        SubscribeMode::Config => {
+            let loaded = config::load_rules(&config.config_path)?;
+            if loaded.is_empty() {
+                tracing::warn!(
+                    "config file {} contains zero rules — agent will receive no events",
+                    config.config_path.display()
+                );
+            }
+            loaded
+        }
     };
 
     // ── Step 4: Subscribe to channels ────────────────────────────────────────
@@ -183,6 +192,17 @@ async fn main() -> Result<()> {
                     .await
                     {
                         Ok(id) => id,
+                        Err(AcpError::AgentExited) => {
+                            tracing::error!("agent exited during session setup — respawning");
+                            sessions.clear();
+                            match dedup_mode {
+                                DedupMode::Queue => queue.requeue(batch),
+                                DedupMode::Drop => { /* discard */ }
+                            }
+                            queue.mark_complete();
+                            acp = respawn_agent(&config).await?;
+                            break;
+                        }
                         Err(e) => {
                             tracing::error!(
                                 "failed to create session for channel {channel_id}: {e}"
@@ -246,7 +266,10 @@ async fn main() -> Result<()> {
                                     acp = respawn_agent(&config).await?;
                                 }
                                 Err(e) => {
-                                    tracing::error!("cancel_with_cleanup error: {e}");
+                                    tracing::error!(
+                                        "cancel_with_cleanup error for channel {channel_id}: {e} — invalidating session"
+                                    );
+                                    sessions.remove(&channel_id);
                                 }
                             }
                             queue.mark_complete();
@@ -256,19 +279,12 @@ async fn main() -> Result<()> {
                 }
             }
             None => {
-                // Relay connection lost — reconnect.
-                tracing::warn!("relay connection lost — reconnecting");
-                loop {
-                    match relay.reconnect().await {
-                        Ok(()) => {
-                            tracing::info!("relay reconnected");
-                            break;
-                        }
-                        Err(e) => {
-                            tracing::error!("relay reconnect failed: {e} — retrying in 5s");
-                            tokio::time::sleep(Duration::from_secs(5)).await;
-                        }
-                    }
+                // Relay event stream ended — request background reconnect.
+                // The background task handles the actual reconnection and
+                // resubscription asynchronously; we just resume waiting for events.
+                tracing::warn!("relay event stream ended — requesting reconnect");
+                if let Err(e) = relay.reconnect().await {
+                    tracing::error!("failed to send reconnect command: {e}");
                 }
             }
         }
@@ -362,10 +378,27 @@ async fn get_or_create_session(
             }
             Err(_elapsed) => {
                 tracing::warn!(
-                    "initial message timed out for channel {channel_id} — invalidating session"
+                    "initial message timed out for channel {channel_id} — cancelling and invalidating session"
                 );
-                sessions.remove(&channel_id);
-                return Err(AcpError::AgentExited);
+                // Cancel the in-flight prompt to keep the NDJSON stream in sync,
+                // matching the cleanup path used by the main event loop.
+                match acp.cancel_with_cleanup(&session_id).await {
+                    Ok(_) => {
+                        // Agent is still alive — just this session timed out.
+                        sessions.remove(&channel_id);
+                        return Err(AcpError::Timeout);
+                    }
+                    Err(AcpError::AgentExited) => {
+                        // Agent actually died during cancel.
+                        sessions.remove(&channel_id);
+                        return Err(AcpError::AgentExited);
+                    }
+                    Err(cancel_err) => {
+                        tracing::error!("cancel_with_cleanup failed during initial message timeout: {cancel_err}");
+                        sessions.remove(&channel_id);
+                        return Err(AcpError::Timeout);
+                    }
+                }
             }
         }
     }
@@ -388,7 +421,11 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                 },
                 EnvVar {
                     name: "SPROUT_PRIVATE_KEY".into(),
-                    value: config.keys.secret_key().to_bech32().unwrap_or_default(),
+                    value: config
+                        .keys
+                        .secret_key()
+                        .to_bech32()
+                        .expect("secret key bech32 encoding should never fail"),
                 },
             ];
             if let Some(ref token) = config.api_token {

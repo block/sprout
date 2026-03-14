@@ -161,6 +161,8 @@ impl Config {
     pub fn from_cli() -> Result<Self, ConfigError> {
         // Propagate legacy env vars so clap sees them under the canonical names.
         // Only set if the canonical var is absent — clap's `env` reads these.
+        // SAFETY: This runs in main() before the tokio runtime spawns threads.
+        // std::env::set_var will require `unsafe` in Rust edition 2024.
         for (legacy, canonical) in [
             ("SPROUT_ACP_PRIVATE_KEY", "SPROUT_PRIVATE_KEY"),
             ("SPROUT_ACP_API_TOKEN", "SPROUT_API_TOKEN"),
@@ -400,5 +402,442 @@ fn rule_applies_to_channel(rule: &SubscriptionRule, channel_id: Uuid) -> bool {
             .iter()
             .any(|id| id.parse::<Uuid>().ok() == Some(channel_id)),
         _ => false,
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::{ChannelScope, SubscriptionRule};
+
+    /// Build a minimal Config for testing without CLI parsing.
+    fn test_config(mode: SubscribeMode) -> Config {
+        Config {
+            keys: nostr::Keys::generate(),
+            api_token: None,
+            relay_url: "ws://localhost:3000".into(),
+            agent_command: "goose".into(),
+            agent_args: vec!["acp".into()],
+            mcp_command: "sprout-mcp-server".into(),
+            turn_timeout_secs: 300,
+            system_prompt: None,
+            initial_message: None,
+            subscribe_mode: mode,
+            dedup_mode: DedupMode::Drop,
+            ignore_self: true,
+            kinds_override: None,
+            channels_override: None,
+            no_mention_filter: false,
+            config_path: PathBuf::from("./sprout-acp.toml"),
+        }
+    }
+
+    fn make_rule(
+        name: &str,
+        channels: ChannelScope,
+        kinds: Vec<u32>,
+        mention: bool,
+    ) -> SubscriptionRule {
+        SubscriptionRule {
+            name: name.into(),
+            channels,
+            kinds,
+            require_mention: mention,
+            filter: None,
+            prompt_tag: None,
+        }
+    }
+
+    // ── resolve_channel_filters: Mentions mode ───────────────────────────────
+
+    #[test]
+    fn test_mentions_mode_default_kinds() {
+        let config = test_config(SubscribeMode::Mentions);
+        let channels = vec![Uuid::new_v4(), Uuid::new_v4()];
+        let result = resolve_channel_filters(&config, &channels, &[]);
+
+        assert_eq!(result.len(), 2);
+        for ch in &channels {
+            let f = result.get(ch).expect("channel should be present");
+            assert!(f.require_mention, "mentions mode requires mention");
+            let kinds = f.kinds.as_ref().expect("should have kinds");
+            assert!(kinds.contains(&sprout_core::kind::KIND_STREAM_MESSAGE));
+            assert!(kinds.contains(&sprout_core::kind::KIND_WORKFLOW_APPROVAL_REQUESTED));
+            assert!(kinds.contains(&sprout_core::kind::KIND_STREAM_REMINDER));
+        }
+    }
+
+    #[test]
+    fn test_mentions_mode_custom_kinds() {
+        let mut config = test_config(SubscribeMode::Mentions);
+        config.kinds_override = Some(vec![1, 7]);
+        let channels = vec![Uuid::new_v4()];
+        let result = resolve_channel_filters(&config, &channels, &[]);
+
+        let f = result.get(&channels[0]).unwrap();
+        assert_eq!(f.kinds.as_ref().unwrap(), &[1, 7]);
+    }
+
+    #[test]
+    fn test_mentions_mode_no_mention_filter() {
+        let mut config = test_config(SubscribeMode::Mentions);
+        config.no_mention_filter = true;
+        let channels = vec![Uuid::new_v4()];
+        let result = resolve_channel_filters(&config, &channels, &[]);
+
+        let f = result.get(&channels[0]).unwrap();
+        assert!(!f.require_mention);
+    }
+
+    // ── resolve_channel_filters: All mode ────────────────────────────────────
+
+    #[test]
+    fn test_all_mode_wildcard() {
+        let config = test_config(SubscribeMode::All);
+        let channels = vec![Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let result = resolve_channel_filters(&config, &channels, &[]);
+
+        assert_eq!(result.len(), 3);
+        for ch in &channels {
+            let f = result.get(ch).unwrap();
+            assert!(
+                f.kinds.is_none(),
+                "all mode with no override = wildcard kinds"
+            );
+            assert!(!f.require_mention);
+        }
+    }
+
+    #[test]
+    fn test_all_mode_with_kinds_override() {
+        let mut config = test_config(SubscribeMode::All);
+        config.kinds_override = Some(vec![40001, 7]);
+        let channels = vec![Uuid::new_v4()];
+        let result = resolve_channel_filters(&config, &channels, &[]);
+
+        let f = result.get(&channels[0]).unwrap();
+        assert_eq!(f.kinds.as_ref().unwrap(), &[40001, 7]);
+    }
+
+    // ── resolve_channel_filters: channels_override ───────────────────────────
+
+    #[test]
+    fn test_channels_override_filters_to_discovered() {
+        let mut config = test_config(SubscribeMode::All);
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+        let ch_unknown = Uuid::new_v4();
+        // Override includes ch_a and an unknown channel.
+        config.channels_override = Some(vec![ch_a.to_string(), ch_unknown.to_string()]);
+
+        let discovered = vec![ch_a, ch_b];
+        let result = resolve_channel_filters(&config, &discovered, &[]);
+
+        // Only ch_a should be present (intersection of override and discovered).
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key(&ch_a));
+        assert!(!result.contains_key(&ch_b));
+        assert!(!result.contains_key(&ch_unknown));
+    }
+
+    // ── resolve_channel_filters: Config mode ─────────────────────────────────
+
+    #[test]
+    fn test_config_mode_single_rule_all_channels() {
+        let config = test_config(SubscribeMode::Config);
+        let ch = Uuid::new_v4();
+        let rules = vec![make_rule(
+            "catch-all",
+            ChannelScope::All("all".into()),
+            vec![40001],
+            false,
+        )];
+
+        let result = resolve_channel_filters(&config, &[ch], &rules);
+        assert_eq!(result.len(), 1);
+        let f = result.get(&ch).unwrap();
+        assert_eq!(f.kinds.as_ref().unwrap(), &[40001]);
+        assert!(!f.require_mention);
+    }
+
+    #[test]
+    fn test_config_mode_rule_targets_specific_channel() {
+        let config = test_config(SubscribeMode::Config);
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+        let rules = vec![make_rule(
+            "only-a",
+            ChannelScope::List(vec![ch_a.to_string()]),
+            vec![40001],
+            false,
+        )];
+
+        let result = resolve_channel_filters(&config, &[ch_a, ch_b], &rules);
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key(&ch_a));
+        assert!(!result.contains_key(&ch_b));
+    }
+
+    #[test]
+    fn test_config_mode_merge_overlapping_rules() {
+        let config = test_config(SubscribeMode::Config);
+        let ch = Uuid::new_v4();
+        // Two rules both match the same channel with different kinds.
+        let rules = vec![
+            make_rule(
+                "messages",
+                ChannelScope::All("all".into()),
+                vec![40001],
+                true,
+            ),
+            make_rule("reactions", ChannelScope::All("all".into()), vec![7], false),
+        ];
+
+        let result = resolve_channel_filters(&config, &[ch], &rules);
+        let f = result.get(&ch).unwrap();
+        // Kinds should be the union: [40001, 7].
+        let kinds = f.kinds.as_ref().expect("should have merged kinds");
+        assert!(kinds.contains(&40001));
+        assert!(kinds.contains(&7));
+        // require_mention should be false (most permissive wins).
+        assert!(!f.require_mention);
+    }
+
+    #[test]
+    fn test_config_mode_wildcard_kinds_propagates() {
+        let config = test_config(SubscribeMode::Config);
+        let ch = Uuid::new_v4();
+        // First rule has specific kinds, second has empty (wildcard).
+        let rules = vec![
+            make_rule(
+                "narrow",
+                ChannelScope::All("all".into()),
+                vec![40001],
+                false,
+            ),
+            make_rule("broad", ChannelScope::All("all".into()), vec![], false),
+        ];
+
+        let result = resolve_channel_filters(&config, &[ch], &rules);
+        let f = result.get(&ch).unwrap();
+        // Once any rule has empty kinds (wildcard), merged result is None (wildcard).
+        assert!(f.kinds.is_none(), "wildcard should propagate");
+    }
+
+    #[test]
+    fn test_config_mode_no_matching_rules_empty_result() {
+        let config = test_config(SubscribeMode::Config);
+        let ch = Uuid::new_v4();
+        let other_ch = Uuid::new_v4();
+        // Rule only targets other_ch.
+        let rules = vec![make_rule(
+            "other",
+            ChannelScope::List(vec![other_ch.to_string()]),
+            vec![40001],
+            false,
+        )];
+
+        let result = resolve_channel_filters(&config, &[ch], &rules);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_config_mode_require_mention_most_permissive() {
+        let config = test_config(SubscribeMode::Config);
+        let ch = Uuid::new_v4();
+        // First rule requires mention, second doesn't.
+        let rules = vec![
+            make_rule("strict", ChannelScope::All("all".into()), vec![40001], true),
+            make_rule("lax", ChannelScope::All("all".into()), vec![7], false),
+        ];
+
+        let result = resolve_channel_filters(&config, &[ch], &rules);
+        let f = result.get(&ch).unwrap();
+        assert!(!f.require_mention, "most permissive (false) should win");
+    }
+
+    // ── rule_applies_to_channel ──────────────────────────────────────────────
+
+    #[test]
+    fn test_rule_applies_all() {
+        let rule = make_rule("test", ChannelScope::All("all".into()), vec![], false);
+        assert!(rule_applies_to_channel(&rule, Uuid::new_v4()));
+    }
+
+    #[test]
+    fn test_rule_applies_all_invalid_string() {
+        let rule = make_rule("test", ChannelScope::All("ALL".into()), vec![], false);
+        assert!(!rule_applies_to_channel(&rule, Uuid::new_v4()));
+    }
+
+    #[test]
+    fn test_rule_applies_list_match() {
+        let ch = Uuid::new_v4();
+        let rule = make_rule(
+            "test",
+            ChannelScope::List(vec![ch.to_string()]),
+            vec![],
+            false,
+        );
+        assert!(rule_applies_to_channel(&rule, ch));
+    }
+
+    #[test]
+    fn test_rule_applies_list_no_match() {
+        let rule = make_rule(
+            "test",
+            ChannelScope::List(vec![Uuid::new_v4().to_string()]),
+            vec![],
+            false,
+        );
+        assert!(!rule_applies_to_channel(&rule, Uuid::new_v4()));
+    }
+
+    // ── load_rules validation ────────────────────────────────────────────────
+
+    #[test]
+    fn test_load_rules_valid_toml() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-valid");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"
+[[rules]]
+name = "catch-all"
+channels = "all"
+kinds = [40001]
+require_mention = false
+"#,
+        )
+        .unwrap();
+
+        let rules = load_rules(&path).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].name, "catch-all");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_rules_empty_name_rejected() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-empty-name");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"
+[[rules]]
+name = "  "
+channels = "all"
+"#,
+        )
+        .unwrap();
+
+        let err = load_rules(&path).unwrap_err();
+        assert!(err.to_string().contains("name must not be empty"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_rules_duplicate_name_rejected() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-dup-name");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"
+[[rules]]
+name = "dup"
+channels = "all"
+
+[[rules]]
+name = "dup"
+channels = "all"
+"#,
+        )
+        .unwrap();
+
+        let err = load_rules(&path).unwrap_err();
+        assert!(err.to_string().contains("duplicate rule name"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_rules_invalid_filter_rejected() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-bad-filter");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        // evalexpr rejects unbalanced parens at parse time.
+        std::fs::write(
+            &path,
+            r#"
+[[rules]]
+name = "bad"
+channels = "all"
+filter = "((("
+"#,
+        )
+        .unwrap();
+
+        let err = load_rules(&path).unwrap_err();
+        assert!(err.to_string().contains("invalid filter expression"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_rules_channel_scope_typo_rejected() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-scope-typo");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"
+[[rules]]
+name = "typo"
+channels = "ALL"
+"#,
+        )
+        .unwrap();
+
+        let err = load_rules(&path).unwrap_err();
+        assert!(err.to_string().contains("must be \"all\" or a list"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_rules_too_many_rules_rejected() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-too-many");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut toml = String::new();
+        for i in 0..101 {
+            toml.push_str(&format!(
+                "[[rules]]\nname = \"rule-{i}\"\nchannels = \"all\"\n\n"
+            ));
+        }
+        std::fs::write(&path, &toml).unwrap();
+
+        let err = load_rules(&path).unwrap_err();
+        assert!(err.to_string().contains("too many rules"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_rules_filter_too_long_rejected() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-long-filter");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        let long_expr = format!("\"{}\"", "a".repeat(4097));
+        std::fs::write(
+            &path,
+            format!("[[rules]]\nname = \"long\"\nchannels = \"all\"\nfilter = {long_expr}\n"),
+        )
+        .unwrap();
+
+        let err = load_rules(&path).unwrap_err();
+        assert!(err.to_string().contains("filter too long"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
