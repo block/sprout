@@ -104,13 +104,19 @@ pub struct CliArgs {
     pub heartbeat_interval: u64,
 
     /// Heartbeat prompt text. Conflicts with --heartbeat-prompt-file.
-    #[arg(long, env = "SPROUT_ACP_HEARTBEAT_PROMPT",
-          conflicts_with = "heartbeat_prompt_file")]
+    #[arg(
+        long,
+        env = "SPROUT_ACP_HEARTBEAT_PROMPT",
+        conflicts_with = "heartbeat_prompt_file"
+    )]
     pub heartbeat_prompt: Option<String>,
 
     /// Read heartbeat prompt from file.
-    #[arg(long, env = "SPROUT_ACP_HEARTBEAT_PROMPT_FILE",
-          conflicts_with = "heartbeat_prompt")]
+    #[arg(
+        long,
+        env = "SPROUT_ACP_HEARTBEAT_PROMPT_FILE",
+        conflicts_with = "heartbeat_prompt"
+    )]
     pub heartbeat_prompt_file: Option<PathBuf>,
 
     #[arg(long, env = "SPROUT_ACP_INITIAL_MESSAGE")]
@@ -927,8 +933,14 @@ channels = "ALL"
     fn test_summary_includes_agents_and_heartbeat() {
         let config = test_config(SubscribeMode::Mentions);
         let s = config.summary();
-        assert!(s.contains("agents=1"), "summary should include agents=1, got: {s}");
-        assert!(s.contains("heartbeat=0s"), "summary should include heartbeat=0s, got: {s}");
+        assert!(
+            s.contains("agents=1"),
+            "summary should include agents=1, got: {s}"
+        );
+        assert!(
+            s.contains("heartbeat=0s"),
+            "summary should include heartbeat=0s, got: {s}"
+        );
     }
 
     #[test]
@@ -937,7 +949,13 @@ channels = "ALL"
         config.agents = 4;
         config.heartbeat_interval_secs = 30;
         let s = config.summary();
-        assert!(s.contains("agents=4"), "summary should include agents=4, got: {s}");
-        assert!(s.contains("heartbeat=30s"), "summary should include heartbeat=30s, got: {s}");
+        assert!(
+            s.contains("agents=4"),
+            "summary should include agents=4, got: {s}"
+        );
+        assert!(
+            s.contains("heartbeat=30s"),
+            "summary should include heartbeat=30s, got: {s}"
+        );
     }
 }

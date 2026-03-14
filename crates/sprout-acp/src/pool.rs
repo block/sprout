@@ -134,14 +134,11 @@ impl AgentPool {
     pub fn try_claim(&mut self, channel_id: Option<Uuid>) -> Option<OwnedAgent> {
         // Pass 1: prefer agent with existing session for this channel.
         if let Some(cid) = channel_id {
-            let idx = self
-                .agents
-                .iter()
-                .position(|slot| {
-                    slot.as_ref()
-                        .map(|a| a.sessions.contains_key(&cid))
-                        .unwrap_or(false)
-                });
+            let idx = self.agents.iter().position(|slot| {
+                slot.as_ref()
+                    .map(|a| a.sessions.contains_key(&cid))
+                    .unwrap_or(false)
+            });
             if let Some(i) = idx {
                 return self.agents[i].take();
             }
@@ -155,7 +152,10 @@ impl AgentPool {
     /// Return an agent to its slot after a task completes.
     pub fn return_agent(&mut self, agent: OwnedAgent) {
         let idx = agent.index;
-        debug_assert!(self.agents[idx].is_none(), "return_agent: slot {idx} already occupied");
+        debug_assert!(
+            self.agents[idx].is_none(),
+            "return_agent: slot {idx} already occupied"
+        );
         self.agents[idx] = Some(agent);
     }
 
@@ -202,10 +202,7 @@ impl AgentPool {
     /// without a double-borrow error on `&mut AgentPool`.
     pub fn rx_and_join_set(
         &mut self,
-    ) -> (
-        &mut mpsc::UnboundedReceiver<PromptResult>,
-        &mut JoinSet<()>,
-    ) {
+    ) -> (&mut mpsc::UnboundedReceiver<PromptResult>, &mut JoinSet<()>) {
         (&mut self.result_rx, &mut self.join_set)
     }
 
@@ -247,7 +244,11 @@ pub async fn run_prompt_task(
                 (sid.clone(), false)
             } else {
                 // Create new session.
-                match agent.acp.session_new(&ctx.cwd, ctx.mcp_servers.clone()).await {
+                match agent
+                    .acp
+                    .session_new(&ctx.cwd, ctx.mcp_servers.clone())
+                    .await
+                {
                     Ok(sid) => {
                         tracing::info!(
                             target: "pool::session",
@@ -283,7 +284,11 @@ pub async fn run_prompt_task(
             if let Some(sid) = &agent.heartbeat_session {
                 (sid.clone(), false)
             } else {
-                match agent.acp.session_new(&ctx.cwd, ctx.mcp_servers.clone()).await {
+                match agent
+                    .acp
+                    .session_new(&ctx.cwd, ctx.mcp_servers.clone())
+                    .await
+                {
                     Ok(sid) => {
                         tracing::info!(
                             target: "pool::session",
@@ -321,16 +326,17 @@ pub async fn run_prompt_task(
     // ── Send initial_message on new channel sessions ──────────────────────
 
     if is_new_session {
-        if let (PromptSource::Channel(cid), Some(ref initial_msg)) =
-            (&source, &ctx.initial_message)
+        if let (PromptSource::Channel(cid), Some(ref initial_msg)) = (&source, &ctx.initial_message)
         {
             tracing::info!(
                 target: "pool::session",
                 "sending initial_message to session {session_id} for channel {cid}"
             );
-            let init_result =
-                timeout(ctx.turn_timeout, agent.acp.session_prompt(&session_id, initial_msg))
-                    .await;
+            let init_result = timeout(
+                ctx.turn_timeout,
+                agent.acp.session_prompt(&session_id, initial_msg),
+            )
+            .await;
 
             match init_result {
                 Ok(Ok(stop_reason)) => {
@@ -406,8 +412,11 @@ pub async fn run_prompt_task(
 
     // ── Send the actual prompt ────────────────────────────────────────────
 
-    let prompt_result =
-        timeout(ctx.turn_timeout, agent.acp.session_prompt(&session_id, &prompt_text)).await;
+    let prompt_result = timeout(
+        ctx.turn_timeout,
+        agent.acp.session_prompt(&session_id, &prompt_text),
+    )
+    .await;
 
     match prompt_result {
         Ok(Ok(stop_reason)) => {

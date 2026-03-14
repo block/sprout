@@ -11,20 +11,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
-use futures_util::FutureExt;
-use nostr::ToBech32;
-use tokio::sync::watch;
-use tracing_subscriber::EnvFilter;
 use acp::{AcpClient, EnvVar, McpServer};
+use anyhow::Result;
 use config::{Config, DedupMode, SubscribeMode};
 use filter::SubscriptionRule;
+use futures_util::FutureExt;
+use nostr::ToBech32;
 use pool::{AgentPool, OwnedAgent, PromptContext, PromptOutcome, PromptResult, PromptSource};
 use queue::{EventQueue, QueuedEvent};
 use relay::HarnessRelay;
 use sprout_core::kind::{
     KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
+use tokio::sync::watch;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -180,7 +180,7 @@ async fn main() -> Result<()> {
     // fields (result_rx vs join_set). We use `rx_and_join_set()` to split the
     // borrow, yielding a typed enum so the outer code can dispatch cleanly.
     enum PoolEvent {
-        Result(PromptResult),
+        Result(Box<PromptResult>),
         Panic(tokio::task::JoinError),
     }
 
@@ -190,7 +190,7 @@ async fn main() -> Result<()> {
             let (result_rx, join_set) = pool.rx_and_join_set();
             tokio::select! {
                 biased;
-                r = result_rx.recv() => Some(PoolEvent::Result(r.expect("result channel closed"))),
+                r = result_rx.recv() => Some(PoolEvent::Result(Box::new(r.expect("result channel closed")))),
                 // Guard: join_next() returns None immediately when JoinSet is
                 // empty, which would cause a tight spin. Only poll when there
                 // are in-flight tasks.
@@ -259,17 +259,41 @@ async fn main() -> Result<()> {
 
         match pool_event {
             Some(PoolEvent::Result(result)) => {
-                if handle_prompt_result(&mut pool, &mut queue, &config, result, &mut heartbeat_in_flight).await == LoopAction::Exit {
+                if handle_prompt_result(
+                    &mut pool,
+                    &mut queue,
+                    &config,
+                    *result,
+                    &mut heartbeat_in_flight,
+                )
+                .await
+                    == LoopAction::Exit
+                {
                     break;
                 }
-                if drain_ready_join_results(&mut pool, &mut queue, &config, &mut heartbeat_in_flight).await == LoopAction::Exit {
+                if drain_ready_join_results(
+                    &mut pool,
+                    &mut queue,
+                    &config,
+                    &mut heartbeat_in_flight,
+                )
+                .await
+                    == LoopAction::Exit
+                {
                     break;
                 }
                 dispatch_pending(&mut pool, &mut queue, &ctx);
             }
             Some(PoolEvent::Panic(join_error)) => {
                 tracing::error!("agent task panicked: {join_error}");
-                recover_panicked_agent(&mut pool, &mut queue, &config, join_error, &mut heartbeat_in_flight).await;
+                recover_panicked_agent(
+                    &mut pool,
+                    &mut queue,
+                    &config,
+                    join_error,
+                    &mut heartbeat_in_flight,
+                )
+                .await;
                 if pool.live_count() == 0 {
                     tracing::error!("all agents dead — exiting");
                     break;
@@ -356,7 +380,11 @@ fn dispatch_pending(pool: &mut AgentPool, queue: &mut EventQueue, ctx: &Arc<Prom
         );
         dispatched += 1;
     }
-    tracing::debug!(dispatched, queue_depth = queue.pending_channels(), "dispatch_pending");
+    tracing::debug!(
+        dispatched,
+        queue_depth = queue.pending_channels(),
+        "dispatch_pending"
+    );
 }
 
 // ── handle_prompt_result ──────────────────────────────────────────────────────
@@ -370,7 +398,8 @@ async fn handle_prompt_result(
 ) -> LoopAction {
     let before = pool.task_map().len();
     let agent_index = result.agent.index;
-    pool.task_map_mut().retain(|_, meta| meta.agent_index != agent_index);
+    pool.task_map_mut()
+        .retain(|_, meta| meta.agent_index != agent_index);
     debug_assert_eq!(before, pool.task_map().len() + 1);
 
     match &result.source {
@@ -392,7 +421,11 @@ async fn handle_prompt_result(
 
     match result.outcome {
         PromptOutcome::AgentExited => {
-            tracing::debug!(agent = agent_index, outcome = outcome_label, "agent_returned");
+            tracing::debug!(
+                agent = agent_index,
+                outcome = outcome_label,
+                "agent_returned"
+            );
             let index = result.agent.index;
             match respawn_agent_into(result.agent, config).await {
                 Ok(agent) => pool.return_agent(agent),
@@ -406,7 +439,11 @@ async fn handle_prompt_result(
             }
         }
         _ => {
-            tracing::debug!(agent = agent_index, outcome = outcome_label, "agent_returned");
+            tracing::debug!(
+                agent = agent_index,
+                outcome = outcome_label,
+                "agent_returned"
+            );
             pool.return_agent(result.agent);
         }
     }

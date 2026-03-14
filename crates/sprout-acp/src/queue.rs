@@ -136,7 +136,7 @@ impl EventQueue {
             .filter(|(id, q)| {
                 !q.is_empty()
                     && !self.in_flight_channels.contains(id)
-                    && self.retry_after.get(id).map_or(true, |&t| t <= now)
+                    && self.retry_after.get(id).is_none_or(|&t| t <= now)
             })
             .min_by_key(|(_, q)| q.front().unwrap().received_at)
             .map(|(id, _)| *id)?;
@@ -220,7 +220,7 @@ impl EventQueue {
         self.queues.iter().any(|(id, q)| {
             !q.is_empty()
                 && !self.in_flight_channels.contains(id)
-                && self.retry_after.get(id).map_or(true, |&t| t <= now)
+                && self.retry_after.get(id).is_none_or(|&t| t <= now)
         })
     }
 
@@ -923,7 +923,7 @@ mod tests {
         q.mark_complete(ch);
 
         // No retry_after — channel should be immediately flushable.
-        assert!(q.retry_after.get(&ch).is_none());
+        assert!(!q.retry_after.contains_key(&ch));
         assert!(q.flush_next().is_some());
     }
 
@@ -953,11 +953,18 @@ mod tests {
         let batch2 = q.flush_next().expect("flush2");
         q.requeue(batch2);
         q.mark_complete(ch);
-        assert!(!q.has_flushable_work(), "throttled channel should not be flushable");
+        assert!(
+            !q.has_flushable_work(),
+            "throttled channel should not be flushable"
+        );
 
         // Manually expire the retry_after to simulate time passing.
-        q.retry_after.insert(ch, Instant::now() - Duration::from_secs(1));
-        assert!(q.has_flushable_work(), "expired throttle should be flushable");
+        q.retry_after
+            .insert(ch, Instant::now() - Duration::from_secs(1));
+        assert!(
+            q.has_flushable_work(),
+            "expired throttle should be flushable"
+        );
     }
 
     // ── Test 22: retry throttle blocks re-flush for 5 seconds ─────────────────
@@ -984,9 +991,12 @@ mod tests {
         assert_eq!(batch2.channel_id, ch2);
 
         // After retry_after expires, ch should be flushable again.
-        q.retry_after.insert(ch, Instant::now() - Duration::from_secs(1));
+        q.retry_after
+            .insert(ch, Instant::now() - Duration::from_secs(1));
         q.mark_complete(ch2);
-        let batch3 = q.flush_next().expect("ch should be flushable after throttle expires");
+        let batch3 = q
+            .flush_next()
+            .expect("ch should be flushable after throttle expires");
         assert_eq!(batch3.channel_id, ch);
     }
 }
