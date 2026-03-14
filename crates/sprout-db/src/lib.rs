@@ -970,10 +970,12 @@ impl Db {
 
         let mut tx = self.pool.begin().await?;
 
-        // Step 0: Acquire an exclusive lock on any existing active rows for this
-        // logical address (kind, pubkey, channel_id). This serializes concurrent
-        // replacements — a second transaction will block here until the first
-        // commits, preventing duplicate active rows.
+        // Step 0: Acquire an exclusive next-key lock on the logical address
+        // (kind, pubkey, channel_id) via idx_events_addressable. This serializes
+        // concurrent replacements — a second transaction blocks here until the
+        // first commits. The index is required so InnoDB can take a gap lock
+        // even on a cold address (no existing rows), preventing two concurrent
+        // first-time emissions from both inserting.
         sqlx::query(
             "SELECT id FROM events \
              WHERE kind = ? AND pubkey = ? AND channel_id = ? AND deleted_at IS NULL \
