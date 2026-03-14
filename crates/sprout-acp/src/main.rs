@@ -324,7 +324,7 @@ fn dispatch_pending(pool: &mut AgentPool, queue: &mut EventQueue, ctx: &Arc<Prom
             Some(a) => a,
             None => {
                 let pending = queue.pending_channels();
-                tracing::warn!(pending_channels = pending, "pool_exhausted");
+                tracing::debug!(pending_channels = pending, "pool_exhausted");
                 queue.requeue_preserve_timestamps(batch);
                 queue.mark_complete(channel_id);
                 break;

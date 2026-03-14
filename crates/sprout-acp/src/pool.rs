@@ -13,7 +13,7 @@
 //!     try_claim() → OwnedAgent (removed from slot)
 //!     spawn run_prompt_task(agent, ...) into join_set
 //!     task sends PromptResult { agent, outcome } via result_tx
-//!     next_result() → PromptResult
+//!     rx_and_join_set() → poll result_rx for PromptResult
 //!     return_agent(agent) → puts agent back in slot
 //! ```
 //!
@@ -154,8 +154,9 @@ impl AgentPool {
 
     /// Return an agent to its slot after a task completes.
     pub fn return_agent(&mut self, agent: OwnedAgent) {
-        let index = agent.index;
-        self.agents[index] = Some(agent);
+        let idx = agent.index;
+        debug_assert!(self.agents[idx].is_none(), "return_agent: slot {idx} already occupied");
+        self.agents[idx] = Some(agent);
     }
 
     /// Whether any agent is currently idle (sitting in its slot).
@@ -182,17 +183,6 @@ impl AgentPool {
         idle + checked_out
     }
 
-    /// Wait for the next completed prompt result.
-    ///
-    /// Panics if the channel closes (impossible while pool is alive).
-    #[allow(dead_code)]
-    pub async fn next_result(&mut self) -> PromptResult {
-        self.result_rx
-            .recv()
-            .await
-            .expect("result channel closed — pool invariant violated")
-    }
-
     // ── Accessors ─────────────────────────────────────────────────────────
 
     pub fn task_map(&self) -> &HashMap<tokio::task::Id, TaskMeta> {
@@ -205,11 +195,6 @@ impl AgentPool {
 
     pub fn result_tx(&self) -> mpsc::UnboundedSender<PromptResult> {
         self.result_tx.clone()
-    }
-
-    #[allow(dead_code)]
-    pub fn result_rx_mut(&mut self) -> &mut mpsc::UnboundedReceiver<PromptResult> {
-        &mut self.result_rx
     }
 
     /// Split-borrow: returns mutable refs to `result_rx` and `join_set`

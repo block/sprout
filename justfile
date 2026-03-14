@@ -174,7 +174,7 @@ check-compile:
 # ─── Agent Harness ────────────────────────────────────────────────────────────
 
 # Run a goose agent connected to a Sprout relay (foreground)
-goose relay="ws://localhost:3000" agents="1" prompt="" key="$SPROUT_PRIVATE_KEY" token="$SPROUT_ACP_API_TOKEN":
+goose relay="ws://localhost:3000" agents="1" heartbeat="0" prompt="" key="$SPROUT_PRIVATE_KEY" token="$SPROUT_ACP_API_TOKEN":
     #!/usr/bin/env bash
     set -euo pipefail
     cargo build --release -p sprout-acp -p sprout-mcp
@@ -189,10 +189,13 @@ goose relay="ws://localhost:3000" agents="1" prompt="" key="$SPROUT_PRIVATE_KEY"
     )
     [[ -n "{{token}}"  ]] && env_args+=(SPROUT_ACP_API_TOKEN="{{token}}")
     [[ -n "{{prompt}}" ]] && env_args+=(SPROUT_ACP_SYSTEM_PROMPT="{{prompt}}")
+    if [[ "{{heartbeat}}" != "0" ]]; then
+        env_args+=(SPROUT_ACP_HEARTBEAT_INTERVAL={{heartbeat}})
+    fi
     exec env "${env_args[@]}" ./target/release/sprout-acp
 
-# Run a goose agent in the background (screen session named 'goose-agent')
-goose-bg relay="ws://localhost:3000" agents="1" prompt="" key="$SPROUT_PRIVATE_KEY" token="$SPROUT_ACP_API_TOKEN":
+# Run a goose agent in the background (screen session named 'goose-agent-N')
+goose-bg relay="ws://localhost:3000" agents="1" heartbeat="0" prompt="" key="$SPROUT_PRIVATE_KEY" token="$SPROUT_ACP_API_TOKEN":
     #!/usr/bin/env bash
     set -euo pipefail
     cargo build --release -p sprout-acp -p sprout-mcp
@@ -207,5 +210,8 @@ goose-bg relay="ws://localhost:3000" agents="1" prompt="" key="$SPROUT_PRIVATE_K
     )
     [[ -n "{{token}}"  ]] && env_args+=(SPROUT_ACP_API_TOKEN="{{token}}")
     [[ -n "{{prompt}}" ]] && env_args+=(SPROUT_ACP_SYSTEM_PROMPT="{{prompt}}")
-    screen -dmS goose-agent bash -c "$(printf '%q ' env "${env_args[@]}") ./target/release/sprout-acp"
-    echo "Agent running in screen session 'goose-agent'. Attach with: screen -r goose-agent"
+    if [[ "{{heartbeat}}" != "0" ]]; then
+        env_args+=(SPROUT_ACP_HEARTBEAT_INTERVAL={{heartbeat}})
+    fi
+    screen -dmS goose-agent-{{agents}} bash -c "$(printf '%q ' env "${env_args[@]}") ./target/release/sprout-acp"
+    echo "Agent running in screen session 'goose-agent-{{agents}}'. Attach with: screen -r goose-agent-{{agents}}"

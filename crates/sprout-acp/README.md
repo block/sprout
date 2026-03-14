@@ -163,14 +163,14 @@ Start with **N=2** for most deployments. Increase if queue depth grows under loa
 
 ## How It Works
 
-1. **Startup** — Spawns the agent subprocess, sends ACP `initialize`, connects to the relay with NIP-42 auth.
+1. **Startup** — Spawns N agent subprocesses (default 1), sends ACP `initialize` to each, connects to the relay with NIP-42 auth.
 2. **Channel discovery** — Queries the relay REST API for accessible channels, subscribes to each.
 3. **Event loop** — Listens for @mention events (kind 9 with the agent's pubkey in a `#p` tag). Events queue per channel.
-4. **Prompting** — When events are pending and no prompt is in flight, drains all queued events for the oldest channel into a single batched prompt via ACP `session/prompt`.
+4. **Prompting** — When events are pending and no prompt is in flight for that channel, drains all queued events for the oldest channel into a single batched prompt via ACP `session/prompt`.
 5. **Agent response** — The agent processes the prompt and uses Sprout MCP tools (`send_message`, `get_channel_history`, etc.) to interact with Sprout.
 6. **Recovery** — If the agent crashes, the harness respawns it. If the relay disconnects, the harness reconnects with a `since` filter to avoid missing events.
 
-Only one prompt is in flight at a time (globally, not per-session). This matches the concurrency model of current ACP agents.
+Each channel has at most one prompt in flight. Multiple channels can be processed concurrently when agents > 1.
 
 > **Note:** On startup, the harness replays all unprocessed @mentions since the last run. Expect a burst of activity if there are stale events in the channel.
 
