@@ -970,6 +970,21 @@ impl Db {
 
         let mut tx = self.pool.begin().await?;
 
+        // Step 0: Acquire an exclusive lock on any existing active rows for this
+        // logical address (kind, pubkey, channel_id). This serializes concurrent
+        // replacements — a second transaction will block here until the first
+        // commits, preventing duplicate active rows.
+        sqlx::query(
+            "SELECT id FROM events \
+             WHERE kind = ? AND pubkey = ? AND channel_id = ? AND deleted_at IS NULL \
+             FOR UPDATE",
+        )
+        .bind(kind_i32)
+        .bind(pubkey_bytes.as_slice())
+        .bind(channel_id_bytes.as_slice())
+        .fetch_all(&mut *tx)
+        .await?;
+
         // Step 1: Insert the new event first — guarantees at least one active row.
         let result = sqlx::query(
             "INSERT IGNORE INTO events \
