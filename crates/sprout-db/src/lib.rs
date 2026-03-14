@@ -936,12 +936,18 @@ impl Db {
 
     // ── Addressable Event Replacement ────────────────────────────────────────
 
-    /// Soft-deletes previous addressable events matching (kind, pubkey, channel_id).
-    /// Atomically soft-delete the previous addressable event and insert the new one.
+    /// Atomically replace the active addressable event for a (kind, pubkey, channel)
+    /// tuple. Insert-first ordering guarantees at least one active row at all times:
+    ///
+    /// 1. INSERT the new event (IGNORE on duplicate ID — a no-op, not an error).
+    /// 2. Soft-delete all OTHER active events for the same address, excluding the
+    ///    just-inserted row by ID.
+    ///
+    /// If the INSERT was a no-op (duplicate event ID), the delete step is skipped
+    /// entirely — the existing row is already the latest state.
     ///
     /// Used for NIP-29 group discovery events (39000/39001/39002) which should
-    /// only have one active version per group. Wraps both operations in a single
-    /// transaction to prevent a window where neither or both versions are live.
+    /// only have one active version per group.
     ///
     /// Returns `(StoredEvent, was_inserted)` — `was_inserted` is `false` on duplicate.
     pub async fn replace_addressable_event(
@@ -962,20 +968,9 @@ impl Db {
         let received_at = Utc::now();
         let channel_id_bytes: [u8; 16] = *channel_id.as_bytes();
 
-        let relay_pubkey = pubkey_bytes.as_slice();
-
         let mut tx = self.pool.begin().await?;
 
-        sqlx::query(
-            "UPDATE events SET deleted_at = NOW(6) \
-             WHERE kind = ? AND pubkey = ? AND channel_id = ? AND deleted_at IS NULL",
-        )
-        .bind(kind_i32)
-        .bind(relay_pubkey)
-        .bind(channel_id_bytes.as_slice())
-        .execute(&mut *tx)
-        .await?;
-
+        // Step 1: Insert the new event first — guarantees at least one active row.
         let result = sqlx::query(
             "INSERT IGNORE INTO events \
              (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id) \
@@ -993,9 +988,26 @@ impl Db {
         .execute(&mut *tx)
         .await?;
 
-        tx.commit().await?;
-
         let was_inserted = result.rows_affected() > 0;
+
+        // Step 2: Soft-delete previous active events for this address, excluding
+        // the row we just inserted. Skipped on duplicate (was_inserted == false)
+        // because the existing row is already the current state.
+        if was_inserted {
+            sqlx::query(
+                "UPDATE events SET deleted_at = NOW(6) \
+                 WHERE kind = ? AND pubkey = ? AND channel_id = ? \
+                 AND deleted_at IS NULL AND id != ?",
+            )
+            .bind(kind_i32)
+            .bind(pubkey_bytes.as_slice())
+            .bind(channel_id_bytes.as_slice())
+            .bind(id_bytes.as_slice())
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
 
         if was_inserted {
             if let Err(e) = insert_mentions(&self.pool, event, Some(channel_id)).await {
