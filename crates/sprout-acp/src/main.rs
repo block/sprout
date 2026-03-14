@@ -239,9 +239,12 @@ async fn main() -> Result<()> {
                 } => {
                     let _ = result_rx;
                     if queue.has_flushable_work() {
+                        tracing::debug!("heartbeat_skipped_events");
                         dispatch_pending(&mut pool, &mut queue, &ctx);
                     } else if pool.any_idle() {
                         dispatch_heartbeat(&mut pool, &ctx, &mut heartbeat_in_flight);
+                    } else {
+                        tracing::debug!("heartbeat_skipped_busy");
                     }
                     None
                 }
@@ -307,20 +310,25 @@ enum LoopAction {
 
 /// Flush queued work to available agents.
 fn dispatch_pending(pool: &mut AgentPool, queue: &mut EventQueue, ctx: &Arc<PromptContext>) {
+    let mut dispatched: usize = 0;
     loop {
         let batch = match queue.flush_next() {
             Some(b) => b,
             None => break,
         };
         let channel_id = batch.channel_id;
+        let affinity_hit = pool.has_session_for(channel_id);
         let agent = match pool.try_claim(Some(channel_id)) {
             Some(a) => a,
             None => {
+                let pending = queue.pending_channels();
+                tracing::warn!(pending_channels = pending, "pool_exhausted");
                 queue.requeue_preserve_timestamps(batch);
                 queue.mark_complete(channel_id);
                 break;
             }
         };
+        tracing::debug!(agent = agent.index, channel = %channel_id, affinity_hit, "agent_claimed");
 
         let prompt_text = queue::format_prompt(&batch, ctx.system_prompt.as_deref());
         let recoverable_batch = match ctx.dedup_mode {
@@ -344,7 +352,9 @@ fn dispatch_pending(pool: &mut AgentPool, queue: &mut EventQueue, ctx: &Arc<Prom
                 recoverable_batch,
             },
         );
+        dispatched += 1;
     }
+    tracing::debug!(dispatched, queue_depth = queue.pending_channels(), "dispatch_pending");
 }
 
 // ── handle_prompt_result ──────────────────────────────────────────────────────
@@ -370,8 +380,17 @@ async fn handle_prompt_result(
         queue.requeue(batch);
     }
 
+    let outcome_label = match &result.outcome {
+        PromptOutcome::Ok(_) => "ok",
+        PromptOutcome::Error(_) => "error",
+        PromptOutcome::Timeout => "timeout",
+        PromptOutcome::AgentExited => "exited",
+    };
+    let agent_index = result.agent.index;
+
     match result.outcome {
         PromptOutcome::AgentExited => {
+            tracing::debug!(agent = agent_index, outcome = outcome_label, "agent_returned");
             let index = result.agent.index;
             match respawn_agent_into(result.agent, config).await {
                 Ok(agent) => pool.return_agent(agent),
@@ -385,6 +404,7 @@ async fn handle_prompt_result(
             }
         }
         _ => {
+            tracing::debug!(agent = agent_index, outcome = outcome_label, "agent_returned");
             pool.return_agent(result.agent);
         }
     }
@@ -492,6 +512,7 @@ fn dispatch_heartbeat(
         },
     );
     *heartbeat_in_flight = true;
+    tracing::info!(agent = agent_index, "heartbeat_fired");
 }
 
 // ── default_heartbeat_prompt ──────────────────────────────────────────────────

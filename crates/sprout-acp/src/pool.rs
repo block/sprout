@@ -84,6 +84,7 @@ pub enum PromptSource {
 }
 
 /// Outcome of a prompt task.
+#[allow(dead_code)]
 pub enum PromptOutcome {
     Ok(StopReason),
     Error(AcpError),
@@ -162,6 +163,16 @@ impl AgentPool {
         self.agents.iter().any(|slot| slot.is_some())
     }
 
+    /// Whether any idle agent already has a session for `channel_id`.
+    /// Used to compute `affinity_hit` before calling `try_claim`.
+    pub fn has_session_for(&self, channel_id: Uuid) -> bool {
+        self.agents.iter().any(|slot| {
+            slot.as_ref()
+                .map(|a| a.sessions.contains_key(&channel_id))
+                .unwrap_or(false)
+        })
+    }
+
     /// Count of agents that are alive: idle OR checked out (have a task_map entry).
     ///
     /// Used to detect when all agents have exited so the caller can respawn.
@@ -174,6 +185,7 @@ impl AgentPool {
     /// Wait for the next completed prompt result.
     ///
     /// Panics if the channel closes (impossible while pool is alive).
+    #[allow(dead_code)]
     pub async fn next_result(&mut self) -> PromptResult {
         self.result_rx
             .recv()
@@ -195,6 +207,7 @@ impl AgentPool {
         self.result_tx.clone()
     }
 
+    #[allow(dead_code)]
     pub fn result_rx_mut(&mut self) -> &mut mpsc::UnboundedReceiver<PromptResult> {
         &mut self.result_rx
     }
