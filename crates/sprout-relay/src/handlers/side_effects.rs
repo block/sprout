@@ -322,6 +322,27 @@ pub async fn emit_system_message(
     Ok(())
 }
 
+/// Sign, store (replacing previous), and fan-out a single addressable discovery event.
+async fn emit_addressable_discovery_event(
+    state: &Arc<AppState>,
+    channel_id: Uuid,
+    kind: u32,
+    tags: Vec<Tag>,
+    relay_pubkey_hex: &str,
+) -> anyhow::Result<()> {
+    let event = EventBuilder::new(Kind::Custom(kind as u16), "", tags)
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| anyhow::anyhow!("failed to sign kind:{kind}: {e}"))?;
+
+    let (stored, _) = state
+        .db
+        .replace_addressable_event(&event, channel_id, kind as i32)
+        .await?;
+    let kind_u32 = event_kind_u32(&stored.event);
+    dispatch_persistent_event(state, &stored, kind_u32, relay_pubkey_hex).await;
+    Ok(())
+}
+
 /// Emit NIP-29 group discovery events (39000, 39001, 39002) signed by the relay keypair.
 /// Called after group creation, metadata changes, or membership changes.
 /// Events are stored channel-scoped (`channel_id = Some(...)`) so that existing
@@ -354,23 +375,14 @@ pub async fn emit_group_discovery_events(
         }
         // Sprout channels always require explicit membership
         tags.push(Tag::parse(&["closed"])?);
-
-        let event = EventBuilder::new(Kind::Custom(KIND_NIP29_GROUP_METADATA as u16), "", tags)
-            .sign_with_keys(&state.relay_keypair)
-            .map_err(|e| anyhow::anyhow!("failed to sign 39000: {e}"))?;
-
-        // Replace previous 39000 for this group (addressable event semantics).
-        let _ = state
-            .db
-            .soft_delete_previous_addressable(
-                KIND_NIP29_GROUP_METADATA as i32,
-                &state.relay_keypair.public_key().serialize(),
-                channel_id,
-            )
-            .await;
-        let (stored, _) = state.db.insert_event(&event, Some(channel_id)).await?;
-        let kind_u32 = event_kind_u32(&stored.event);
-        dispatch_persistent_event(state, &stored, kind_u32, &relay_pubkey_hex).await;
+        emit_addressable_discovery_event(
+            state,
+            channel_id,
+            KIND_NIP29_GROUP_METADATA,
+            tags,
+            &relay_pubkey_hex,
+        )
+        .await?;
     }
 
     // ── kind:39001 group admins ──────────────────────────────────────────────
@@ -383,22 +395,14 @@ pub async fn emit_group_discovery_events(
             let pubkey_hex = hex::encode(&m.pubkey);
             tags.push(Tag::parse(&["p", &pubkey_hex, &m.role])?);
         }
-
-        let event = EventBuilder::new(Kind::Custom(KIND_NIP29_GROUP_ADMINS as u16), "", tags)
-            .sign_with_keys(&state.relay_keypair)
-            .map_err(|e| anyhow::anyhow!("failed to sign 39001: {e}"))?;
-
-        let _ = state
-            .db
-            .soft_delete_previous_addressable(
-                KIND_NIP29_GROUP_ADMINS as i32,
-                &state.relay_keypair.public_key().serialize(),
-                channel_id,
-            )
-            .await;
-        let (stored, _) = state.db.insert_event(&event, Some(channel_id)).await?;
-        let kind_u32 = event_kind_u32(&stored.event);
-        dispatch_persistent_event(state, &stored, kind_u32, &relay_pubkey_hex).await;
+        emit_addressable_discovery_event(
+            state,
+            channel_id,
+            KIND_NIP29_GROUP_ADMINS,
+            tags,
+            &relay_pubkey_hex,
+        )
+        .await?;
     }
 
     // ── kind:39002 group members ─────────────────────────────────────────────
@@ -408,22 +412,14 @@ pub async fn emit_group_discovery_events(
             let pubkey_hex = hex::encode(&m.pubkey);
             tags.push(Tag::parse(&["p", &pubkey_hex])?);
         }
-
-        let event = EventBuilder::new(Kind::Custom(KIND_NIP29_GROUP_MEMBERS as u16), "", tags)
-            .sign_with_keys(&state.relay_keypair)
-            .map_err(|e| anyhow::anyhow!("failed to sign 39002: {e}"))?;
-
-        let _ = state
-            .db
-            .soft_delete_previous_addressable(
-                KIND_NIP29_GROUP_MEMBERS as i32,
-                &state.relay_keypair.public_key().serialize(),
-                channel_id,
-            )
-            .await;
-        let (stored, _) = state.db.insert_event(&event, Some(channel_id)).await?;
-        let kind_u32 = event_kind_u32(&stored.event);
-        dispatch_persistent_event(state, &stored, kind_u32, &relay_pubkey_hex).await;
+        emit_addressable_discovery_event(
+            state,
+            channel_id,
+            KIND_NIP29_GROUP_MEMBERS,
+            tags,
+            &relay_pubkey_hex,
+        )
+        .await?;
     }
 
     Ok(())
@@ -803,6 +799,15 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
 
     if !deleted {
         warn!(channel = %channel_id, "channel already deleted or not found");
+    }
+
+    // Clean up NIP-29 discovery events for the deleted group.
+    if let Err(e) = state
+        .db
+        .soft_delete_discovery_events(channel_id, &state.relay_keypair.public_key().serialize())
+        .await
+    {
+        warn!(channel = %channel_id, error = %e, "failed to clean up NIP-29 discovery events");
     }
 
     let actor_hex = nostr::util::hex::encode(&actor_bytes);

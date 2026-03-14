@@ -937,46 +937,98 @@ impl Db {
     // ── Addressable Event Replacement ────────────────────────────────────────
 
     /// Soft-deletes previous addressable events matching (kind, pubkey, channel_id).
+    /// Atomically soft-delete the previous addressable event and insert the new one.
+    ///
     /// Used for NIP-29 group discovery events (39000/39001/39002) which should
-    /// only have one active version per group.
-    pub async fn soft_delete_previous_addressable(
+    /// only have one active version per group. Wraps both operations in a single
+    /// transaction to prevent a window where neither or both versions are live.
+    ///
+    /// Returns `(StoredEvent, was_inserted)` — `was_inserted` is `false` on duplicate.
+    pub async fn replace_addressable_event(
         &self,
-        kind: i32,
-        pubkey: &[u8],
+        event: &nostr::Event,
         channel_id: Uuid,
+        kind_i32: i32,
+    ) -> Result<(StoredEvent, bool)> {
+        use sprout_core::kind::event_kind_i32;
+
+        let id_bytes = event.id.as_bytes();
+        let pubkey_bytes = event.pubkey.to_bytes();
+        let sig_bytes = event.sig.serialize();
+        let tags_json = serde_json::to_value(&event.tags)?;
+        let kind = event_kind_i32(event);
+        let created_at_secs = event.created_at.as_u64() as i64;
+        let created_at = DateTime::from_timestamp(created_at_secs, 0)
+            .ok_or(crate::error::DbError::InvalidTimestamp(created_at_secs))?;
+        let received_at = Utc::now();
+        let channel_id_bytes: [u8; 16] = *channel_id.as_bytes();
+
+        let relay_pubkey = pubkey_bytes.as_slice();
+
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            "UPDATE events SET deleted_at = NOW(6) \
+             WHERE kind = ? AND pubkey = ? AND channel_id = ? AND deleted_at IS NULL",
+        )
+        .bind(kind_i32)
+        .bind(relay_pubkey)
+        .bind(channel_id_bytes.as_slice())
+        .execute(&mut *tx)
+        .await?;
+
+        let result = sqlx::query(
+            "INSERT IGNORE INTO events \
+             (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id_bytes.as_slice())
+        .bind(pubkey_bytes.as_slice())
+        .bind(created_at)
+        .bind(kind)
+        .bind(&tags_json)
+        .bind(&event.content)
+        .bind(sig_bytes.as_slice())
+        .bind(received_at)
+        .bind(channel_id_bytes.as_slice())
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        let was_inserted = result.rows_affected() > 0;
+
+        if was_inserted {
+            if let Err(e) = insert_mentions(&self.pool, event, Some(channel_id)).await {
+                tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
+            }
+        }
+
+        Ok((
+            StoredEvent::with_received_at(event.clone(), received_at, Some(channel_id), true),
+            was_inserted,
+        ))
+    }
+
+    /// Soft-delete all NIP-29 discovery events (39000/39001/39002) for a channel.
+    ///
+    /// Used during group deletion to clean up addressable discovery events.
+    pub async fn soft_delete_discovery_events(
+        &self,
+        channel_id: Uuid,
+        relay_pubkey: &[u8],
     ) -> Result<u64> {
         let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
         let result = sqlx::query(
-            r#"
-            UPDATE events
-            SET deleted_at = NOW(6)
-            WHERE kind = ? AND pubkey = ? AND channel_id = ? AND deleted_at IS NULL
-            "#,
+            "UPDATE events SET deleted_at = NOW(6) \
+             WHERE kind IN (39000, 39001, 39002) AND pubkey = ? AND channel_id = ? \
+             AND deleted_at IS NULL",
         )
-        .bind(kind)
-        .bind(pubkey)
+        .bind(relay_pubkey)
         .bind(&channel_id_bytes)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected())
-    }
-
-    /// Adds a pubkey to the allowlist.
-    pub async fn add_to_allowlist(
-        &self,
-        pubkey: &[u8],
-        added_by: Option<&[u8]>,
-        note: Option<&str>,
-    ) -> Result<()> {
-        sqlx::query(
-            "INSERT IGNORE INTO pubkey_allowlist (pubkey, added_by, note) VALUES (?, ?, ?)",
-        )
-        .bind(pubkey)
-        .bind(added_by)
-        .bind(note)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
     }
 
     // ── Partitions ───────────────────────────────────────────────────────────
