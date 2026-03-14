@@ -69,9 +69,9 @@ pub const KIND_PRESENCE_UPDATE: u32 = 20001;
 /// Ephemeral: typing indicator for a channel.
 pub const KIND_TYPING_INDICATOR: u32 = 20002;
 
-// Stream messaging (40000–40999)
-/// V1 used kind:10001 (replaceable range — wrong).
-pub const KIND_STREAM_MESSAGE: u32 = 40001;
+// Stream messaging
+/// NIP-29 group chat message kind. V1 used kind:10001 (replaceable range — wrong), then 40001.
+pub const KIND_STREAM_MESSAGE: u32 = 9;
 /// V1 used kind:10002 (replaceable range — wrong).
 pub const KIND_STREAM_MESSAGE_V2: u32 = 40002;
 /// V1 used kind:10004 (replaceable range + NIP-51 collision — wrong).
