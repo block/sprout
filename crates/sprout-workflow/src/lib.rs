@@ -110,14 +110,18 @@ impl WorkflowEngine {
         }
     }
 
-    /// Get the action sink reference. Panics if not yet initialized.
-    pub(crate) fn action_sink(&self) -> &dyn ActionSink {
-        self.action_sink
-            .get()
-            .expect(
-                "action_sink not initialized — call set_action_sink() before executing workflows",
+    /// Get the action sink reference.
+    ///
+    /// Returns `Err(WorkflowError)` if the sink has not been initialized via
+    /// [`set_action_sink`]. This avoids a panic if the engine is used before
+    /// wiring is complete.
+    pub(crate) fn action_sink(&self) -> Result<&dyn ActionSink, WorkflowError> {
+        self.action_sink.get().map(|s| s.as_ref()).ok_or_else(|| {
+            WorkflowError::InvalidDefinition(
+                "action_sink not initialized — call set_action_sink() before executing workflows"
+                    .into(),
             )
-            .as_ref()
+        })
     }
 
     /// Parse and validate a YAML workflow definition.
@@ -244,22 +248,6 @@ impl WorkflowEngine {
 
         // Exclude workflow execution events to prevent infinite loops.
         if is_workflow_execution_kind(kind_u32) {
-            return Ok(());
-        }
-
-        // Exclude workflow-generated messages (tagged with "sprout:workflow")
-        // to prevent recursive triggering (e.g. a SendMessage action
-        // re-triggering the same workflow that produced it).
-        if event
-            .event
-            .tags
-            .iter()
-            .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("sprout:workflow"))
-        {
-            tracing::debug!(
-                event_id = %event.event.id.to_hex(),
-                "Skipping workflow trigger — event is workflow-generated"
-            );
             return Ok(());
         }
 

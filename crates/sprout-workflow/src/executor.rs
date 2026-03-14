@@ -554,7 +554,7 @@ pub async fn dispatch_action(
             let owner_pubkey_hex = hex::encode(&workflow.owner_pubkey);
 
             let event_id = engine
-                .action_sink()
+                .action_sink()?
                 .send_message(channel_id, text, &owner_pubkey_hex)
                 .await
                 .map_err(WorkflowError::from)?;
