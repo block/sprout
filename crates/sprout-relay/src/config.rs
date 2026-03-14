@@ -45,6 +45,9 @@ pub struct Config {
     /// Optional hex-encoded private key for the relay's signing keypair.
     /// If absent, a fresh keypair is generated at startup.
     pub relay_private_key: Option<String>,
+    /// Optional Unix Domain Socket path. When set, the relay also listens on this
+    /// UDS for traffic (e.g. service mesh sidecar). Health probes still use TCP.
+    pub uds_path: Option<String>,
 }
 
 impl Config {
@@ -118,6 +121,11 @@ impl Config {
 
         let relay_private_key = std::env::var("SPROUT_RELAY_PRIVATE_KEY").ok();
 
+        let uds_path = std::env::var("SPROUT_UDS_PATH")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
         Ok(Self {
             bind_addr,
             database_url,
@@ -132,6 +140,7 @@ impl Config {
             require_auth_token,
             cors_origins,
             relay_private_key,
+            uds_path,
         })
     }
 }

@@ -925,6 +925,11 @@ impl Db {
         partition::ensure_future_partitions(&self.pool, months_ahead).await
     }
 
+    /// Returns `true` if the database is reachable (used by readiness probes).
+    pub async fn ping(&self) -> bool {
+        sqlx::query("SELECT 1").execute(&self.pool).await.is_ok()
+    }
+
     // ── Workflows ─────────────────────────────────────────────────────────────
 
     /// Creates a new workflow definition and returns its UUID.

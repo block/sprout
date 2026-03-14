@@ -9,6 +9,7 @@ use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use deadpool_redis;
 use sprout_audit::AuditService;
 use sprout_auth::AuthService;
 use sprout_db::Db;
@@ -83,6 +84,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// Database connection pool.
     pub db: Db,
+    /// Redis pool for readiness health checks.
+    pub redis_pool: deadpool_redis::Pool,
     /// Audit event service.
     pub audit: Arc<AuditService>,
     /// Pub/sub manager for broadcasting events to subscribers.
@@ -122,6 +125,7 @@ impl AppState {
     pub fn new(
         config: Config,
         db: Db,
+        redis_pool: deadpool_redis::Pool,
         audit: AuditService,
         pubsub: Arc<PubSubManager>,
         auth: AuthService,
@@ -134,6 +138,7 @@ impl AppState {
         Self {
             config: Arc::new(config),
             db,
+            redis_pool,
             audit: Arc::new(audit),
             pubsub,
             auth: Arc::new(auth),
