@@ -39,11 +39,11 @@ use crate::queue::FlushBatch;
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /// Metadata stored per in-flight task for panic recovery.
-struct TaskMeta {
-    agent_index: usize,
-    channel_id: Option<Uuid>,
+pub struct TaskMeta {
+    pub agent_index: usize,
+    pub channel_id: Option<Uuid>,
     /// Clone of batch for Queue mode panic recovery.
-    recoverable_batch: Option<FlushBatch>,
+    pub recoverable_batch: Option<FlushBatch>,
 }
 
 /// An agent with its session state, owned by the pool or a running task.
@@ -153,7 +153,8 @@ impl AgentPool {
 
     /// Return an agent to its slot after a task completes.
     pub fn return_agent(&mut self, agent: OwnedAgent) {
-        self.agents[agent.index] = Some(agent);
+        let index = agent.index;
+        self.agents[index] = Some(agent);
     }
 
     /// Whether any agent is currently idle (sitting in its slot).
@@ -192,6 +193,22 @@ impl AgentPool {
 
     pub fn result_tx(&self) -> mpsc::UnboundedSender<PromptResult> {
         self.result_tx.clone()
+    }
+
+    pub fn result_rx_mut(&mut self) -> &mut mpsc::UnboundedReceiver<PromptResult> {
+        &mut self.result_rx
+    }
+
+    /// Split-borrow: returns mutable refs to `result_rx` and `join_set`
+    /// simultaneously. This lets callers poll both in a single `select!`
+    /// without a double-borrow error on `&mut AgentPool`.
+    pub fn rx_and_join_set(
+        &mut self,
+    ) -> (
+        &mut mpsc::UnboundedReceiver<PromptResult>,
+        &mut JoinSet<()>,
+    ) {
+        (&mut self.result_rx, &mut self.join_set)
     }
 
     pub fn agents_mut(&mut self) -> &mut Vec<Option<OwnedAgent>> {

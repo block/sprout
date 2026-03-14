@@ -3,21 +3,23 @@
 mod acp;
 mod config;
 mod filter;
+mod pool;
 mod queue;
 mod relay;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use futures_util::FutureExt;
 use nostr::ToBech32;
-use tokio::time::timeout;
+use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
-use uuid::Uuid;
-
-use acp::{AcpClient, AcpError, EnvVar, McpServer, StopReason};
+use acp::{AcpClient, EnvVar, McpServer};
 use config::{Config, DedupMode, SubscribeMode};
 use filter::SubscriptionRule;
+use pool::{AgentPool, OwnedAgent, PromptContext, PromptOutcome, PromptResult, PromptSource};
 use queue::{EventQueue, QueuedEvent};
 use relay::HarnessRelay;
 use sprout_core::kind::{
@@ -36,8 +38,19 @@ async fn main() -> Result<()> {
     let config = Config::from_cli().map_err(|e| anyhow::anyhow!("configuration error: {e}"))?;
     tracing::info!("sprout-acp starting: {}", config.summary());
 
-    // ── Step 1: Spawn ACP agent subprocess and initialize ─────────────────────
-    let mut acp = spawn_and_init(&config).await?;
+    // ── Step 1: Spawn N ACP agent subprocesses and initialize ─────────────────
+    let mut agents = Vec::with_capacity(config.agents as usize);
+    for i in 0..config.agents as usize {
+        let acp = spawn_and_init(&config).await?;
+        agents.push(OwnedAgent {
+            index: i,
+            acp,
+            sessions: HashMap::new(),
+            heartbeat_session: None,
+        });
+    }
+    tracing::info!("agent_pool_ready agents={}", agents.len());
+    let mut pool = AgentPool::new(agents);
 
     // ── Step 2: Connect to Sprout relay ──────────────────────────────────────
     let pubkey_hex = config.keys.public_key().to_hex();
@@ -60,7 +73,6 @@ async fn main() -> Result<()> {
 
     tracing::info!("discovered {} channel(s)", channels.len());
 
-    // Build subscription rules from the configured mode.
     let rules: Vec<SubscriptionRule> = match config.subscribe_mode {
         SubscribeMode::Mentions => {
             vec![SubscriptionRule {
@@ -113,207 +125,410 @@ async fn main() -> Result<()> {
         }
     }
 
-    // ── Step 5: Main orchestration loop ──────────────────────────────────────
-    let mut sessions: HashMap<Uuid, String> = HashMap::new();
+    // ── Step 5: Build shared prompt context ──────────────────────────────────
     let dedup_mode = config.dedup_mode;
     let mut queue = EventQueue::new(dedup_mode);
-    let mcp_servers = build_mcp_servers(&config);
-    let turn_timeout = Duration::from_secs(config.turn_timeout_secs);
+
+    let ctx = Arc::new(PromptContext {
+        mcp_servers: build_mcp_servers(&config),
+        initial_message: config.initial_message.clone(),
+        turn_timeout: Duration::from_secs(config.turn_timeout_secs),
+        dedup_mode: config.dedup_mode,
+        system_prompt: config.system_prompt.clone(),
+        heartbeat_prompt: config.heartbeat_prompt.clone(),
+        cwd: std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("/"))
+            .to_string_lossy()
+            .to_string(),
+    });
+
+    // ── Step 6: Heartbeat timer ───────────────────────────────────────────────
+    let mut heartbeat = if config.heartbeat_interval_secs > 0 {
+        let interval = Duration::from_secs(config.heartbeat_interval_secs);
+        Some(tokio::time::interval_at(
+            tokio::time::Instant::now() + interval,
+            interval,
+        ))
+    } else {
+        None
+    };
+    let mut heartbeat_in_flight = false;
+
+    // ── Step 7: Shutdown signal ───────────────────────────────────────────────
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(());
+
+    let tx = shutdown_tx.clone();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        let _ = tx.send(());
+    });
+
+    #[cfg(unix)]
+    {
+        let tx = shutdown_tx.clone();
+        tokio::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
+            sigterm.recv().await;
+            let _ = tx.send(());
+        });
+    }
+
+    // ── Step 8: Main orchestration loop ──────────────────────────────────────
+    //
+    // Branches 1 & 2 both need to borrow `pool`, but they access different
+    // fields (result_rx vs join_set). We use `rx_and_join_set()` to split the
+    // borrow, yielding a typed enum so the outer code can dispatch cleanly.
+    enum PoolEvent {
+        Result(PromptResult),
+        Panic(tokio::task::JoinError),
+    }
 
     loop {
-        // Wait for the next relay event or shutdown signal.
-        let sprout_event = tokio::select! {
-            event = relay.next_event() => event,
-            _ = tokio::signal::ctrl_c() => {
-                tracing::info!("shutting down (SIGINT/SIGTERM)");
-                break;
-            }
-        };
-
-        match sprout_event {
-            Some(sprout_event) => {
-                // Self-event filter: drop events authored by this agent.
-                if config.ignore_self && sprout_event.event.pubkey.to_hex() == pubkey_hex {
-                    tracing::debug!(
-                        channel_id = %sprout_event.channel_id,
-                        "dropping self-authored event"
-                    );
-                    continue;
-                }
-
-                // Rule match: find first matching rule.
-                let matched = filter::match_event(
-                    &sprout_event.event,
-                    sprout_event.channel_id,
-                    &rules,
-                    &pubkey_hex,
-                )
-                .await;
-
-                let prompt_tag = match matched {
-                    Some(m) => m.prompt_tag,
-                    None => {
-                        tracing::debug!(
-                            channel_id = %sprout_event.channel_id,
-                            kind = sprout_event.event.kind.as_u16(),
-                            "event matched no rule — dropping"
-                        );
-                        continue;
-                    }
-                };
-
-                // Push event into the queue.
-                queue.push(QueuedEvent {
-                    channel_id: sprout_event.channel_id,
-                    event: sprout_event.event,
-                    received_at: std::time::Instant::now(),
-                    prompt_tag,
-                });
-
-                // Try to flush and process batches.
-                loop {
-                    let batch = match queue.flush_next() {
-                        Some(b) => b,
-                        None => break,
-                    };
-
-                    let channel_id = batch.channel_id;
-                    // Format prompt before potentially requeuing (borrows batch by ref).
-                    let prompt_text = queue::format_prompt(&batch, config.system_prompt.as_deref());
-
-                    // Get or create session for this channel.
-                    let session_id = match get_or_create_session(
-                        &mut sessions,
-                        channel_id,
-                        &mut acp,
-                        &mcp_servers,
-                        &config,
-                    )
-                    .await
-                    {
-                        Ok(id) => id,
-                        Err(AcpError::AgentExited) => {
-                            tracing::error!("agent exited during session setup — respawning");
-                            sessions.clear();
-                            match dedup_mode {
-                                DedupMode::Queue => queue.requeue(batch),
-                                DedupMode::Drop => { /* discard */ }
+        // Borrow result_rx and join_set simultaneously via split-borrow helper.
+        let pool_event: Option<PoolEvent> = {
+            let (result_rx, join_set) = pool.rx_and_join_set();
+            tokio::select! {
+                biased;
+                r = result_rx.recv() => Some(PoolEvent::Result(r.expect("result channel closed"))),
+                j = join_set.join_next() => match j {
+                    Some(Err(e)) => Some(PoolEvent::Panic(e)),
+                    _ => None,
+                },
+                // Remaining branches don't touch pool — evaluated when pool is idle.
+                sprout_event = relay.next_event() => {
+                    let _ = result_rx; // end split borrow before relay handling
+                    match sprout_event {
+                        Some(sprout_event) => {
+                            if config.ignore_self && sprout_event.event.pubkey.to_hex() == pubkey_hex {
+                                tracing::debug!(channel_id = %sprout_event.channel_id, "dropping self-authored event");
+                                continue;
                             }
-                            queue.mark_complete(channel_id);
-                            acp = respawn_agent(&config).await?;
-                            break;
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "failed to create session for channel {channel_id}: {e}"
-                            );
-                            match dedup_mode {
-                                DedupMode::Queue => queue.requeue(batch),
-                                DedupMode::Drop => { /* discard */ }
-                            }
-                            queue.mark_complete(channel_id);
-                            break;
-                        }
-                    };
-
-                    tracing::info!(
-                        "prompting agent for channel {channel_id} (session {session_id}, {} event(s))",
-                        batch.events.len()
-                    );
-
-                    // Send prompt with turn timeout.
-                    let prompt_result =
-                        timeout(turn_timeout, acp.session_prompt(&session_id, &prompt_text)).await;
-
-                    match prompt_result {
-                        Ok(Ok(stop_reason)) => {
-                            log_stop_reason(channel_id, &stop_reason);
-                            queue.mark_complete(channel_id);
-                        }
-                        Ok(Err(AcpError::AgentExited)) => {
-                            tracing::error!("agent process exited — respawning");
-                            sessions.clear();
-                            match dedup_mode {
-                                DedupMode::Queue => queue.requeue(batch),
-                                DedupMode::Drop => { /* discard */ }
-                            }
-                            queue.mark_complete(channel_id);
-                            acp = respawn_agent(&config).await?;
-                            break;
-                        }
-                        Ok(Err(e)) => {
-                            tracing::error!("session_prompt error for channel {channel_id}: {e}");
-                            match dedup_mode {
-                                DedupMode::Queue => queue.requeue(batch),
-                                DedupMode::Drop => { /* discard */ }
-                            }
-                            queue.mark_complete(channel_id);
-                            sessions.remove(&channel_id);
-                            break;
-                        }
-                        Err(_elapsed) => {
-                            tracing::warn!(
-                                "turn timeout ({}s) for channel {channel_id} — cancelling",
-                                config.turn_timeout_secs
-                            );
-                            match acp.cancel_with_cleanup(&session_id).await {
-                                Ok(stop_reason) => {
-                                    log_stop_reason(channel_id, &stop_reason);
+                            let matched = filter::match_event(&sprout_event.event, sprout_event.channel_id, &rules, &pubkey_hex).await;
+                            let prompt_tag = match matched {
+                                Some(m) => m.prompt_tag,
+                                None => {
+                                    tracing::debug!(channel_id = %sprout_event.channel_id, kind = sprout_event.event.kind.as_u16(), "event matched no rule — dropping");
+                                    continue;
                                 }
-                                Err(AcpError::AgentExited) => {
-                                    tracing::error!("agent exited during cancel — respawning");
-                                    sessions.clear();
-                                    acp = respawn_agent(&config).await?;
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        "cancel_with_cleanup error for channel {channel_id}: {e} — invalidating session"
-                                    );
-                                    sessions.remove(&channel_id);
-                                }
+                            };
+                            queue.push(QueuedEvent {
+                                channel_id: sprout_event.channel_id,
+                                event: sprout_event.event,
+                                received_at: std::time::Instant::now(),
+                                prompt_tag,
+                            });
+                            dispatch_pending(&mut pool, &mut queue, &ctx);
+                        }
+                        None => {
+                            tracing::warn!("relay event stream ended — requesting reconnect");
+                            if let Err(e) = relay.reconnect().await {
+                                tracing::error!("relay background task is gone: {e} — exiting");
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                break;
                             }
-                            queue.mark_complete(channel_id);
-                            break;
                         }
                     }
+                    None
                 }
-            }
-            None => {
-                // Relay event stream ended — request background reconnect.
-                // The background task handles the actual reconnection and
-                // resubscription asynchronously; we just resume waiting for events.
-                tracing::warn!("relay event stream ended — requesting reconnect");
-                if let Err(e) = relay.reconnect().await {
-                    // Background task is dead (cmd_tx closed). Sleep to prevent
-                    // a CPU-burning spin loop, then exit — no recovery possible.
-                    tracing::error!("relay background task is gone: {e} — exiting");
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                _ = async {
+                    match heartbeat.as_mut() {
+                        Some(hb) => hb.tick().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let _ = result_rx;
+                    if queue.has_flushable_work() {
+                        dispatch_pending(&mut pool, &mut queue, &ctx);
+                    } else if pool.any_idle() {
+                        dispatch_heartbeat(&mut pool, &ctx, &mut heartbeat_in_flight);
+                    }
+                    None
+                }
+                _ = shutdown_rx.changed() => {
+                    tracing::info!("shutting down");
                     break;
                 }
             }
+        };
+
+        match pool_event {
+            Some(PoolEvent::Result(result)) => {
+                if handle_prompt_result(&mut pool, &mut queue, &config, result, &mut heartbeat_in_flight).await == LoopAction::Exit {
+                    break;
+                }
+                if drain_ready_join_results(&mut pool, &mut queue, &config, &mut heartbeat_in_flight).await == LoopAction::Exit {
+                    break;
+                }
+                dispatch_pending(&mut pool, &mut queue, &ctx);
+            }
+            Some(PoolEvent::Panic(join_error)) => {
+                tracing::error!("agent task panicked: {join_error}");
+                recover_panicked_agent(&mut pool, &mut queue, &config, join_error, &mut heartbeat_in_flight).await;
+                if pool.live_count() == 0 {
+                    tracing::error!("all agents dead — exiting");
+                    break;
+                }
+                dispatch_pending(&mut pool, &mut queue, &ctx);
+            }
+            None => {} // relay/heartbeat/shutdown branches handled inline above
         }
     }
 
+    // ── Shutdown sequence ─────────────────────────────────────────────────────
+    tracing::info!("shutdown: waiting for in-flight prompts");
+    let grace = Duration::from_secs(config.turn_timeout_secs + 5);
+    let shutdown_result = tokio::time::timeout(grace, async {
+        while let Some(result) = pool.join_set.join_next().await {
+            if let Err(e) = result {
+                tracing::warn!("task finished with error during shutdown: {e}");
+            }
+        }
+    })
+    .await;
+    if shutdown_result.is_err() {
+        tracing::warn!("grace period expired, aborting remaining tasks");
+        pool.join_set.shutdown().await;
+    }
+    drop(pool);
     tracing::info!("sprout-acp stopped");
     Ok(())
 }
 
-// ── Helper: respawn agent after exit ─────────────────────────────────────────
+// ── Loop control ──────────────────────────────────────────────────────────────
 
-async fn respawn_agent(config: &Config) -> Result<AcpClient> {
+#[derive(PartialEq)]
+enum LoopAction {
+    Continue,
+    Exit,
+}
+
+// ── dispatch_pending ──────────────────────────────────────────────────────────
+
+/// Flush queued work to available agents.
+fn dispatch_pending(pool: &mut AgentPool, queue: &mut EventQueue, ctx: &Arc<PromptContext>) {
+    loop {
+        let batch = match queue.flush_next() {
+            Some(b) => b,
+            None => break,
+        };
+        let channel_id = batch.channel_id;
+        let agent = match pool.try_claim(Some(channel_id)) {
+            Some(a) => a,
+            None => {
+                queue.requeue_preserve_timestamps(batch);
+                queue.mark_complete(channel_id);
+                break;
+            }
+        };
+
+        let prompt_text = queue::format_prompt(&batch, ctx.system_prompt.as_deref());
+        let recoverable_batch = match ctx.dedup_mode {
+            DedupMode::Queue => Some(batch.clone()),
+            DedupMode::Drop => None,
+        };
+
+        let result_tx = pool.result_tx();
+        let ctx_clone = Arc::clone(ctx);
+        let agent_index = agent.index;
+
+        let abort_handle = pool.join_set.spawn(async move {
+            pool::run_prompt_task(agent, Some(batch), prompt_text, ctx_clone, result_tx).await;
+        });
+
+        pool.task_map_mut().insert(
+            abort_handle.id(),
+            pool::TaskMeta {
+                agent_index,
+                channel_id: Some(channel_id),
+                recoverable_batch,
+            },
+        );
+    }
+}
+
+// ── handle_prompt_result ──────────────────────────────────────────────────────
+
+async fn handle_prompt_result(
+    pool: &mut AgentPool,
+    queue: &mut EventQueue,
+    config: &Config,
+    result: PromptResult,
+    heartbeat_in_flight: &mut bool,
+) -> LoopAction {
+    let before = pool.task_map().len();
+    let agent_index = result.agent.index;
+    pool.task_map_mut().retain(|_, meta| meta.agent_index != agent_index);
+    debug_assert_eq!(before, pool.task_map().len() + 1);
+
+    match &result.source {
+        PromptSource::Channel(ch) => queue.mark_complete(*ch),
+        PromptSource::Heartbeat => *heartbeat_in_flight = false,
+    }
+
+    if let Some(batch) = result.batch {
+        queue.requeue(batch);
+    }
+
+    match result.outcome {
+        PromptOutcome::AgentExited => {
+            let index = result.agent.index;
+            match respawn_agent_into(result.agent, config).await {
+                Ok(agent) => pool.return_agent(agent),
+                Err(e) => {
+                    tracing::error!("failed to respawn agent {index}: {e}");
+                    if pool.live_count() == 0 {
+                        tracing::error!("all agents dead — exiting");
+                        return LoopAction::Exit;
+                    }
+                }
+            }
+        }
+        _ => {
+            pool.return_agent(result.agent);
+        }
+    }
+    LoopAction::Continue
+}
+
+// ── recover_panicked_agent ────────────────────────────────────────────────────
+
+async fn recover_panicked_agent(
+    pool: &mut AgentPool,
+    queue: &mut EventQueue,
+    config: &Config,
+    join_error: tokio::task::JoinError,
+    heartbeat_in_flight: &mut bool,
+) {
+    let task_id = join_error.id();
+    let Some(meta) = pool.task_map_mut().remove(&task_id) else {
+        tracing::error!("panic for unknown task {task_id:?} — bug");
+        return;
+    };
+    let i = meta.agent_index;
+
+    if let Some(ch) = meta.channel_id {
+        queue.mark_complete(ch);
+        tracing::warn!("cleared wedged in-flight channel {ch} from panicked agent {i}");
+    } else {
+        *heartbeat_in_flight = false;
+        tracing::warn!("cleared wedged heartbeat_in_flight from panicked agent {i}");
+    }
+
+    if let Some(batch) = meta.recoverable_batch {
+        queue.requeue(batch);
+        tracing::warn!("requeued batch for panicked agent {i}");
+    }
+
     match spawn_and_init(config).await {
-        Ok(new_acp) => {
-            tracing::info!("agent respawned successfully");
-            Ok(new_acp)
+        Ok(acp) => {
+            pool.agents_mut()[i] = Some(OwnedAgent {
+                index: i,
+                acp,
+                sessions: HashMap::new(),
+                heartbeat_session: None,
+            });
+            tracing::info!("respawned agent {i} after panic");
         }
         Err(e) => {
-            tracing::error!("failed to respawn agent: {e}");
-            Err(e)
+            tracing::error!("failed to respawn agent {i} after panic: {e}");
         }
     }
 }
 
-// ── Helper: spawn agent and initialize ───────────────────────────────────────
+// ── drain_ready_join_results ──────────────────────────────────────────────────
+
+async fn drain_ready_join_results(
+    pool: &mut AgentPool,
+    queue: &mut EventQueue,
+    config: &Config,
+    heartbeat_in_flight: &mut bool,
+) -> LoopAction {
+    while let Some(Some(join_result)) = pool.join_set.join_next().now_or_never() {
+        if let Err(join_error) = join_result {
+            tracing::error!("agent task panicked: {join_error}");
+            recover_panicked_agent(pool, queue, config, join_error, heartbeat_in_flight).await;
+            if pool.live_count() == 0 {
+                return LoopAction::Exit;
+            }
+        }
+    }
+    LoopAction::Continue
+}
+
+// ── dispatch_heartbeat ────────────────────────────────────────────────────────
+
+fn dispatch_heartbeat(
+    pool: &mut AgentPool,
+    ctx: &Arc<PromptContext>,
+    heartbeat_in_flight: &mut bool,
+) {
+    if *heartbeat_in_flight {
+        return;
+    }
+    let agent = match pool.try_claim(None) {
+        Some(a) => a,
+        None => return,
+    };
+
+    let prompt_text = ctx
+        .heartbeat_prompt
+        .clone()
+        .unwrap_or_else(default_heartbeat_prompt);
+    let result_tx = pool.result_tx();
+    let ctx_clone = Arc::clone(ctx);
+    let agent_index = agent.index;
+
+    let abort_handle = pool.join_set.spawn(async move {
+        pool::run_prompt_task(agent, None, prompt_text, ctx_clone, result_tx).await;
+    });
+
+    pool.task_map_mut().insert(
+        abort_handle.id(),
+        pool::TaskMeta {
+            agent_index,
+            channel_id: None,
+            recoverable_batch: None,
+        },
+    );
+    *heartbeat_in_flight = true;
+}
+
+// ── default_heartbeat_prompt ──────────────────────────────────────────────────
+
+fn default_heartbeat_prompt() -> String {
+    let now = chrono::Utc::now().to_rfc3339();
+    format!(
+        "[System: Heartbeat]\nTime: {now}\n\n\
+         You have been awakened for a routine heartbeat. You have NO incoming messages or\n\
+         active channel context for this turn.\n\n\
+         Your tasks:\n\
+         1. Call `get_feed_actions()` to check for pending workflow approvals or\n\
+            high-priority requests addressed to you.\n\
+         2. Call `get_feed_mentions()` to check for unanswered @mentions.\n\
+         3. If you find actionable items, address them using the appropriate tools\n\
+            (e.g., `approve_workflow_step`, `send_message`, `send_reply`).\n\
+         4. If there are no pending actions or mentions, end your turn immediately.\n\n\
+         Do not call `list_channels()` or `search()` unless you have a specific reason.\n\
+         Do not invent work — only act on items surfaced by the feed tools."
+    )
+}
+
+// ── respawn_agent_into ────────────────────────────────────────────────────────
+
+async fn respawn_agent_into(old_agent: OwnedAgent, config: &Config) -> Result<OwnedAgent> {
+    let index = old_agent.index;
+    drop(old_agent); // kill the old process via AcpClient Drop
+    let acp = spawn_and_init(config).await?;
+    Ok(OwnedAgent {
+        index,
+        acp,
+        sessions: HashMap::new(),
+        heartbeat_session: None,
+    })
+}
+
+// ── spawn_and_init ────────────────────────────────────────────────────────────
 
 async fn spawn_and_init(config: &Config) -> Result<AcpClient> {
     let mut acp = AcpClient::spawn(&config.agent_command, &config.agent_args)
@@ -329,88 +544,7 @@ async fn spawn_and_init(config: &Config) -> Result<AcpClient> {
     Ok(acp)
 }
 
-// ── Helper: get or create session for a channel ───────────────────────────────
-
-/// Get or create an ACP session for the given channel.
-///
-/// If a session already exists, returns it immediately. Otherwise creates a new
-/// session and — if `config.initial_message` is set — sends it as the first
-/// prompt before returning. The initial-message turn counts against
-/// `in_flight_channel`, so in `drop` mode events for this channel are dropped
-/// while it runs.
-async fn get_or_create_session(
-    sessions: &mut HashMap<Uuid, String>,
-    channel_id: Uuid,
-    acp: &mut AcpClient,
-    mcp_servers: &[McpServer],
-    config: &Config,
-) -> Result<String, AcpError> {
-    if let Some(session_id) = sessions.get(&channel_id) {
-        return Ok(session_id.clone());
-    }
-
-    let cwd = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/"))
-        .to_string_lossy()
-        .to_string();
-
-    let session_id = acp.session_new(&cwd, mcp_servers.to_vec()).await?;
-    tracing::info!("created session {session_id} for channel {channel_id}");
-    sessions.insert(channel_id, session_id.clone());
-
-    // Send initial message if configured.
-    if let Some(ref initial_message) = config.initial_message {
-        tracing::info!("sending initial message to session {session_id} for channel {channel_id}");
-        let turn_timeout = Duration::from_secs(config.turn_timeout_secs);
-        let result = timeout(
-            turn_timeout,
-            acp.session_prompt(&session_id, initial_message),
-        )
-        .await;
-        match result {
-            Ok(Ok(stop_reason)) => {
-                tracing::info!(
-                    "initial message complete for channel {channel_id}: {stop_reason:?}"
-                );
-            }
-            Ok(Err(e)) => {
-                tracing::error!(
-                    "initial message failed for channel {channel_id}: {e} — invalidating session"
-                );
-                sessions.remove(&channel_id);
-                return Err(e);
-            }
-            Err(_elapsed) => {
-                tracing::warn!(
-                    "initial message timed out for channel {channel_id} — cancelling and invalidating session"
-                );
-                // Cancel the in-flight prompt to keep the NDJSON stream in sync,
-                // matching the cleanup path used by the main event loop.
-                match acp.cancel_with_cleanup(&session_id).await {
-                    Ok(_) => {
-                        // Agent is still alive — just this session timed out.
-                        sessions.remove(&channel_id);
-                        return Err(AcpError::Timeout);
-                    }
-                    Err(AcpError::AgentExited) => {
-                        // Agent actually died during cancel.
-                        sessions.remove(&channel_id);
-                        return Err(AcpError::AgentExited);
-                    }
-                    Err(cancel_err) => {
-                        tracing::error!("cancel_with_cleanup failed during initial message timeout: {cancel_err}");
-                        sessions.remove(&channel_id);
-                        return Err(AcpError::Timeout);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(session_id)
-}
-
-// ── Helper: build MCP server config from Config ───────────────────────────────
+// ── build_mcp_servers ─────────────────────────────────────────────────────────
 
 fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
     vec![McpServer {
@@ -441,26 +575,4 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
             env
         },
     }]
-}
-
-// ── Helper: log stop reason at appropriate level ──────────────────────────────
-
-fn log_stop_reason(channel_id: Uuid, stop_reason: &StopReason) {
-    match stop_reason {
-        StopReason::EndTurn => {
-            tracing::info!("turn complete for channel {channel_id}: end_turn");
-        }
-        StopReason::Cancelled => {
-            tracing::warn!("turn cancelled for channel {channel_id}");
-        }
-        StopReason::MaxTokens => {
-            tracing::warn!("turn hit max_tokens for channel {channel_id}");
-        }
-        StopReason::MaxTurnRequests => {
-            tracing::warn!("turn hit max_turn_requests for channel {channel_id}");
-        }
-        StopReason::Refusal => {
-            tracing::warn!("turn refused for channel {channel_id}");
-        }
-    }
 }
