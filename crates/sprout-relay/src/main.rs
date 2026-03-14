@@ -89,9 +89,6 @@ async fn main() -> anyhow::Result<()> {
     let workflow_config = sprout_workflow::WorkflowConfig::default();
     let workflow_engine = Arc::new(WorkflowEngine::new(db.clone(), workflow_config));
 
-    let wf_cron = Arc::clone(&workflow_engine);
-    tokio::spawn(async move { wf_cron.run().await });
-
     let relay_keypair = if let Some(hex) = &config.relay_private_key {
         nostr::Keys::parse(hex)
             .map_err(|e| anyhow::anyhow!("invalid SPROUT_RELAY_PRIVATE_KEY: {e}"))?
@@ -108,9 +105,19 @@ async fn main() -> anyhow::Result<()> {
         pubsub,
         auth,
         search,
-        workflow_engine,
+        Arc::clone(&workflow_engine),
         relay_keypair,
     ));
+
+    // Wire the action sink — must happen after AppState (which creates
+    // sub_registry, conn_manager) and before the cron loop starts.
+    let action_sink = Arc::new(sprout_relay::workflow_sink::RelayActionSink::new(&state));
+    workflow_engine.set_action_sink(action_sink);
+
+    // Start the cron loop AFTER the action sink is wired.
+    let wf_cron = Arc::clone(&workflow_engine);
+    tokio::spawn(async move { wf_cron.run().await });
+
     // Multi-node fan-out consumer: receive events from Redis pub/sub
     // (published by other relay instances) and fan out to local WS subscribers.
     {

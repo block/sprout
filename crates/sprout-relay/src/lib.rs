@@ -24,6 +24,8 @@ pub mod state;
 pub mod subscription;
 /// Webhook secret generation and constant-time comparison.
 pub mod webhook_secret;
+/// Workflow action sink — relay-side implementation of [`sprout_workflow::ActionSink`].
+pub mod workflow_sink;
 
 pub use config::Config;
 pub use error::{RelayError, Result};

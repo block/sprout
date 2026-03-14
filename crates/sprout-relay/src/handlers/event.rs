@@ -94,7 +94,18 @@ pub(crate) async fn dispatch_persistent_event(
         }
     });
 
-    if !is_workflow_execution_kind(kind_u32) {
+    // Skip workflow triggering for workflow-execution kinds (46001+) and for
+    // relay-signed workflow-generated messages (sprout:workflow tag). The tag
+    // check is combined with a pubkey check so that user-submitted events
+    // carrying the same tag cannot bypass workflow triggers.
+    let is_relay_workflow_msg = stored_event.event.pubkey == state.relay_keypair.public_key()
+        && stored_event
+            .event
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("sprout:workflow"));
+
+    if !is_workflow_execution_kind(kind_u32) && !is_relay_workflow_msg {
         let workflow_engine = Arc::clone(&state.workflow_engine);
         let workflow_event = stored_event.clone();
         tokio::spawn(async move {

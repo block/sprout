@@ -10,6 +10,7 @@ description = "YAML-as-code workflow engine for Sprout"
 [dependencies]
 sprout-core = { workspace = true }
 sprout-db   = { workspace = true }
+hex         = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 serde_yaml  = { workspace = true }
