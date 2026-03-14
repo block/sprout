@@ -588,12 +588,7 @@ mod tests {
         let ch = Uuid::new_v4();
         // Two rules both match the same channel with different kinds.
         let rules = vec![
-            make_rule(
-                "messages",
-                ChannelScope::All("all".into()),
-                vec![9],
-                true,
-            ),
+            make_rule("messages", ChannelScope::All("all".into()), vec![9], true),
             make_rule("reactions", ChannelScope::All("all".into()), vec![7], false),
         ];
 
@@ -613,12 +608,7 @@ mod tests {
         let ch = Uuid::new_v4();
         // First rule has specific kinds, second has empty (wildcard).
         let rules = vec![
-            make_rule(
-                "narrow",
-                ChannelScope::All("all".into()),
-                vec![9],
-                false,
-            ),
+            make_rule("narrow", ChannelScope::All("all".into()), vec![9], false),
             make_rule("broad", ChannelScope::All("all".into()), vec![], false),
         ];
 

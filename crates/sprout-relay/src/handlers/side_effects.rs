@@ -12,8 +12,8 @@ use sprout_core::kind::{
 };
 use sprout_db::channel::MemberRole;
 
-use crate::state::AppState;
 use super::event::dispatch_persistent_event;
+use crate::state::AppState;
 
 /// Check if a kind is an admin kind (9000-9022) that needs pre-storage validation.
 pub fn is_admin_kind(kind: u32) -> bool {
@@ -355,11 +355,14 @@ pub async fn emit_group_discovery_events(
             .map_err(|e| anyhow::anyhow!("failed to sign 39000: {e}"))?;
 
         // Replace previous 39000 for this group (addressable event semantics).
-        let _ = state.db.soft_delete_previous_addressable(
-            KIND_NIP29_GROUP_METADATA as i32,
-            &state.relay_keypair.public_key().serialize(),
-            channel_id,
-        ).await;
+        let _ = state
+            .db
+            .soft_delete_previous_addressable(
+                KIND_NIP29_GROUP_METADATA as i32,
+                &state.relay_keypair.public_key().serialize(),
+                channel_id,
+            )
+            .await;
         let (stored, _) = state.db.insert_event(&event, Some(channel_id)).await?;
         let kind_u32 = event_kind_u32(&stored.event);
         dispatch_persistent_event(state, &stored, kind_u32, &relay_pubkey_hex).await;
@@ -368,7 +371,10 @@ pub async fn emit_group_discovery_events(
     // ── kind:39001 group admins ──────────────────────────────────────────────
     {
         let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &group_id])?];
-        for m in members.iter().filter(|m| m.role == "owner" || m.role == "admin") {
+        for m in members
+            .iter()
+            .filter(|m| m.role == "owner" || m.role == "admin")
+        {
             let pubkey_hex = hex::encode(&m.pubkey);
             tags.push(Tag::parse(&["p", &pubkey_hex, &m.role])?);
         }
@@ -377,11 +383,14 @@ pub async fn emit_group_discovery_events(
             .sign_with_keys(&state.relay_keypair)
             .map_err(|e| anyhow::anyhow!("failed to sign 39001: {e}"))?;
 
-        let _ = state.db.soft_delete_previous_addressable(
-            KIND_NIP29_GROUP_ADMINS as i32,
-            &state.relay_keypair.public_key().serialize(),
-            channel_id,
-        ).await;
+        let _ = state
+            .db
+            .soft_delete_previous_addressable(
+                KIND_NIP29_GROUP_ADMINS as i32,
+                &state.relay_keypair.public_key().serialize(),
+                channel_id,
+            )
+            .await;
         let (stored, _) = state.db.insert_event(&event, Some(channel_id)).await?;
         let kind_u32 = event_kind_u32(&stored.event);
         dispatch_persistent_event(state, &stored, kind_u32, &relay_pubkey_hex).await;
@@ -399,11 +408,14 @@ pub async fn emit_group_discovery_events(
             .sign_with_keys(&state.relay_keypair)
             .map_err(|e| anyhow::anyhow!("failed to sign 39002: {e}"))?;
 
-        let _ = state.db.soft_delete_previous_addressable(
-            KIND_NIP29_GROUP_MEMBERS as i32,
-            &state.relay_keypair.public_key().serialize(),
-            channel_id,
-        ).await;
+        let _ = state
+            .db
+            .soft_delete_previous_addressable(
+                KIND_NIP29_GROUP_MEMBERS as i32,
+                &state.relay_keypair.public_key().serialize(),
+                channel_id,
+            )
+            .await;
         let (stored, _) = state.db.insert_event(&event, Some(channel_id)).await?;
         let kind_u32 = event_kind_u32(&stored.event);
         dispatch_persistent_event(state, &stored, kind_u32, &relay_pubkey_hex).await;

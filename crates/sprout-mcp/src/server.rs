@@ -640,7 +640,10 @@ impl SproutMcpServer {
         // Threaded replies still go through REST because that path handles the
         // reply ancestry tags and DB bookkeeping for us.
         if p.parent_event_id.is_none() {
-            let kind = Kind::from(p.kind.unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE as u16));
+            let kind = Kind::from(
+                p.kind
+                    .unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE as u16),
+            );
             let tags = vec![match Tag::parse(&["h", &p.channel_id]) {
                 Ok(tag) => tag,
                 Err(e) => return format!("Error: failed to build channel tag: {e}"),

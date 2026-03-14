@@ -1041,12 +1041,10 @@ async fn test_nip29_standard_client_flow() {
 
     // 2. Subscribe to channel messages (kind:9 + h tag).
     let msg_sid = sub_id("messages");
-    let msg_filter = Filter::new()
-        .kind(Kind::Custom(9))
-        .custom_tag(
-            SingleLetterTag::lowercase(Alphabet::H),
-            [channel_id.as_str()],
-        );
+    let msg_filter = Filter::new().kind(Kind::Custom(9)).custom_tag(
+        SingleLetterTag::lowercase(Alphabet::H),
+        [channel_id.as_str()],
+    );
     client
         .subscribe(&msg_sid, vec![msg_filter])
         .await
@@ -1122,10 +1120,7 @@ async fn test_nip29_standard_client_flow() {
         .send_event(no_h_event)
         .await
         .expect("send no-h event");
-    assert!(
-        !ok.accepted,
-        "relay should reject kind:9 without h tag"
-    );
+    assert!(!ok.accepted, "relay should reject kind:9 without h tag");
 
     client.disconnect().await.expect("clean disconnect");
 }

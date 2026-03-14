@@ -350,10 +350,9 @@ steps:
         .expect("ws connect failed");
 
     let h_tag = Tag::parse(&["h", CHANNEL_GENERAL]).expect("tag parse failed");
-    let event =
-        nostr::EventBuilder::new(Kind::Custom(9), "trigger this workflow please", [h_tag])
-            .sign_with_keys(&sender_keys)
-            .expect("sign event");
+    let event = nostr::EventBuilder::new(Kind::Custom(9), "trigger this workflow please", [h_tag])
+        .sign_with_keys(&sender_keys)
+        .expect("sign event");
 
     ws_client
         .send_event(event)
@@ -477,10 +476,9 @@ steps:
     );
 
     // ── Step 3: Send a message that DOES match the filter ─────────────────────
-    let matching =
-        nostr::EventBuilder::new(Kind::Custom(9), "P1 alert: database is down", [h_tag])
-            .sign_with_keys(&sender_keys)
-            .expect("sign event");
+    let matching = nostr::EventBuilder::new(Kind::Custom(9), "P1 alert: database is down", [h_tag])
+        .sign_with_keys(&sender_keys)
+        .expect("sign event");
 
     ws_client
         .send_event(matching)
