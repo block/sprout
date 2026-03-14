@@ -179,7 +179,7 @@ nak event -k 42 -c "Hello!" --tag "e=<kind40_event_id>" --sec <nsec> "ws://local
 
 ## How It Works
 
-- **Kind translation:** kind:42 ↔ kind:40001, `#e(event_id)` ↔ `#h(uuid)`
+- **Kind translation:** kind:42 ↔ kind:9, `#e(event_id)` ↔ `#h(uuid)`
 - **Shadow keys:** Each external pubkey gets a deterministic shadow keypair (HMAC-SHA256 of salt + pubkey). The relay sees the shadow key; the external user's real key is never exposed.
 - **Channel map:** Loaded at startup from the relay's REST API. kind:40/41 events are synthesized locally — never forwarded upstream.
 - **Invite tokens:** In-memory, scoped to specific channels, time-limited, use-limited. Lost on proxy restart.

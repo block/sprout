@@ -20,7 +20,7 @@
 
 use std::time::Duration;
 
-use nostr::{Alphabet, Filter, Keys, Kind, SingleLetterTag};
+use nostr::{Alphabet, EventBuilder, Filter, Keys, Kind, SingleLetterTag, Tag};
 use sprout_test_client::{RelayMessage, SproutTestClient, TestClientError};
 
 fn relay_url() -> String {
@@ -77,7 +77,7 @@ async fn test_connect_and_authenticate() {
 #[ignore]
 async fn test_send_event_and_receive_via_subscription() {
     let url = relay_url();
-    let kind: u16 = 40001;
+    let kind: u16 = 9;
 
     let keys_a = Keys::generate();
     let keys_b = Keys::generate();
@@ -136,7 +136,7 @@ async fn test_send_event_and_receive_via_subscription() {
 #[ignore]
 async fn test_subscription_filters_by_kind() {
     let url = relay_url();
-    let target_kind: u16 = 40001;
+    let target_kind: u16 = 9;
     let other_kind: u16 = 40002;
 
     let keys = Keys::generate();
@@ -208,7 +208,7 @@ async fn test_subscription_filters_by_kind() {
 #[ignore]
 async fn test_close_subscription_stops_delivery() {
     let url = relay_url();
-    let kind: u16 = 40001;
+    let kind: u16 = 9;
 
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;
@@ -272,7 +272,7 @@ async fn test_unauthenticated_rejected() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let result = client
-        .send_text_message(&keys, "some-channel", "unauthenticated message", 40001)
+        .send_text_message(&keys, "some-channel", "unauthenticated message", 9)
         .await;
 
     match result {
@@ -300,7 +300,7 @@ async fn test_unauthenticated_rejected() {
 #[ignore]
 async fn test_multiple_concurrent_clients() {
     let url = relay_url();
-    let kind: u16 = 40001;
+    let kind: u16 = 9;
 
     let keys: Vec<Keys> = (0..3).map(|_| Keys::generate()).collect();
     let channel = create_test_channel(&keys[0]).await;
@@ -357,7 +357,7 @@ async fn test_multiple_concurrent_clients() {
 #[ignore]
 async fn test_stored_events_returned_before_eose() {
     let url = relay_url();
-    let kind: u16 = 40001;
+    let kind: u16 = 9;
 
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;
@@ -485,7 +485,7 @@ async fn test_subscription_limit_enforced() {
 
     for i in 0..100 {
         let sid = format!("limit-sub-{i}");
-        let filter = Filter::new().kind(Kind::Custom(40001));
+        let filter = Filter::new().kind(Kind::Custom(9));
         client
             .subscribe(&sid, vec![filter])
             .await
@@ -601,7 +601,7 @@ async fn test_pubkey_mismatch_rejected() {
         .expect("connect as keys_a");
 
     let ok = client
-        .send_text_message(&keys_b, &channel, "impersonation attempt", 40001)
+        .send_text_message(&keys_b, &channel, "impersonation attempt", 9)
         .await
         .expect("send");
 
@@ -617,7 +617,7 @@ async fn test_pubkey_mismatch_rejected() {
 #[ignore]
 async fn test_eose_sent_for_empty_subscription() {
     let url = relay_url();
-    let kind: u16 = 40001;
+    let kind: u16 = 9;
 
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;
@@ -989,4 +989,184 @@ async fn test_nip29_put_user_owner_only_blocks() {
     );
 
     ws.disconnect().await.expect("disconnect");
+}
+
+/// End-to-end test of the standard NIP-29 client flow:
+/// connect, authenticate, discover groups, subscribe, send/receive messages,
+/// react, and delete.
+#[tokio::test]
+#[ignore]
+async fn test_nip29_standard_client_flow() {
+    let url = relay_url();
+    let keys = Keys::generate();
+    let channel_id = create_test_channel(&keys).await;
+
+    let mut client = SproutTestClient::connect(&url, &keys)
+        .await
+        .expect("connect and authenticate via NIP-42");
+
+    // 1. Query group discovery events (kind:39000)
+    //    The channel was just created, so the relay should have emitted a 39000 event.
+    let discovery_sid = sub_id("discovery");
+    let discovery_filter = Filter::new().kind(Kind::Custom(39000));
+    client
+        .subscribe(&discovery_sid, vec![discovery_filter])
+        .await
+        .expect("subscribe to group discovery");
+    let discovery_events = client
+        .collect_until_eose(&discovery_sid, Duration::from_secs(5))
+        .await
+        .expect("collect discovery events");
+
+    // Find our channel's 39000 event by checking d tags.
+    let our_group = discovery_events.iter().find(|e| {
+        e.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.len() >= 2 && s[0] == "d" && s[1] == channel_id
+        })
+    });
+    assert!(
+        our_group.is_some(),
+        "should find kind:39000 for our channel among {} events",
+        discovery_events.len()
+    );
+
+    let group_meta = our_group.unwrap();
+    // Verify it has a name tag.
+    let has_name = group_meta.tags.iter().any(|t| {
+        let s = t.as_slice();
+        s.len() >= 2 && s[0] == "name"
+    });
+    assert!(has_name, "39000 event should have a name tag");
+
+    // 1b. Verify kind:39001 (group admins) was also emitted.
+    let admins_sid = sub_id("admins");
+    let admins_filter = Filter::new().kind(Kind::Custom(39001));
+    client
+        .subscribe(&admins_sid, vec![admins_filter])
+        .await
+        .expect("subscribe to group admins");
+    let admins_events = client
+        .collect_until_eose(&admins_sid, Duration::from_secs(5))
+        .await
+        .expect("collect admins events");
+    let our_admins = admins_events.iter().find(|e| {
+        e.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.len() >= 2 && s[0] == "d" && s[1] == channel_id
+        })
+    });
+    assert!(
+        our_admins.is_some(),
+        "should find kind:39001 for our channel among {} events",
+        admins_events.len()
+    );
+
+    // 1c. Verify kind:39002 (group members) was also emitted.
+    let members_sid = sub_id("members");
+    let members_filter = Filter::new().kind(Kind::Custom(39002));
+    client
+        .subscribe(&members_sid, vec![members_filter])
+        .await
+        .expect("subscribe to group members");
+    let members_events = client
+        .collect_until_eose(&members_sid, Duration::from_secs(5))
+        .await
+        .expect("collect members events");
+    let our_members = members_events.iter().find(|e| {
+        e.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.len() >= 2 && s[0] == "d" && s[1] == channel_id
+        })
+    });
+    assert!(
+        our_members.is_some(),
+        "should find kind:39002 for our channel among {} events",
+        members_events.len()
+    );
+
+    // 2. Subscribe to channel messages (kind:9 + h tag).
+    let msg_sid = sub_id("messages");
+    let msg_filter = Filter::new().kind(Kind::Custom(9)).custom_tag(
+        SingleLetterTag::lowercase(Alphabet::H),
+        [channel_id.as_str()],
+    );
+    client
+        .subscribe(&msg_sid, vec![msg_filter])
+        .await
+        .expect("subscribe to channel messages");
+    let _historical = client
+        .collect_until_eose(&msg_sid, Duration::from_secs(5))
+        .await
+        .expect("collect historical messages");
+
+    // 3. Send a kind:9 message with h tag.
+    let content = format!("nip29-test-{}", uuid::Uuid::new_v4());
+    let ok = client
+        .send_text_message(&keys, &channel_id, &content, 9)
+        .await
+        .expect("send kind:9 message");
+    assert!(
+        ok.accepted,
+        "relay should accept kind:9 with h tag: {}",
+        ok.message
+    );
+
+    // 4. Receive the message on the subscription and capture the event ID.
+    let msg = client
+        .recv_event(Duration::from_secs(5))
+        .await
+        .expect("receive kind:9 event");
+    let message_event_id = match msg {
+        RelayMessage::Event { ref event, .. } => {
+            assert_eq!(event.kind, Kind::Custom(9));
+            assert_eq!(event.content, content);
+            event.id.to_hex()
+        }
+        other => panic!("expected EVENT, got: {:?}", other),
+    };
+
+    // 5. Send a kind:7 reaction targeting the message.
+    let h_tag = Tag::parse(&["h", &channel_id]).expect("h tag");
+    let e_tag = Tag::parse(&["e", &message_event_id]).expect("e tag");
+    let reaction_event = EventBuilder::new(Kind::Custom(7), "+", [h_tag, e_tag])
+        .sign_with_keys(&keys)
+        .expect("sign reaction");
+    let ok = client
+        .send_event(reaction_event)
+        .await
+        .expect("send reaction");
+    assert!(
+        ok.accepted,
+        "relay should accept kind:7 reaction: {}",
+        ok.message
+    );
+
+    // 6. Send a kind:5 deletion targeting the message.
+    let h_tag2 = Tag::parse(&["h", &channel_id]).expect("h tag");
+    let e_tag2 = Tag::parse(&["e", &message_event_id]).expect("e tag");
+    let delete_event = EventBuilder::new(Kind::Custom(5), "test delete", [h_tag2, e_tag2])
+        .sign_with_keys(&keys)
+        .expect("sign deletion");
+    let ok = client
+        .send_event(delete_event)
+        .await
+        .expect("send deletion");
+    assert!(
+        ok.accepted,
+        "relay should accept kind:5 deletion: {}",
+        ok.message
+    );
+
+    // 7. Verify kind:9 without h tag is rejected.
+    let no_h_event = EventBuilder::new(Kind::Custom(9), "no h tag", [])
+        .sign_with_keys(&keys)
+        .expect("sign no-h event");
+    let ok = client
+        .send_event(no_h_event)
+        .await
+        .expect("send no-h event");
+    assert!(!ok.accepted, "relay should reject kind:9 without h tag");
+
+    client.disconnect().await.expect("clean disconnect");
 }

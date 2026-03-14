@@ -395,7 +395,7 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                                 }
                                 // Strip the connection prefix before sending to client.
                                 let client_sub_id = SubscriptionId::new(&sub_str[conn_prefix.len() + 1..]);
-                                // Translate outbound: kind:40001 → kind:42, #h → #e
+                                // Translate outbound: kind:9 → kind:42, #h → #e
                                 match state
                                     .translator
                                     .translate_outbound(&event, &allowed_channels)
@@ -549,7 +549,7 @@ async fn handle_client_message(
                 return;
             }
 
-            // Translate inbound: kind:42 → kind:40001, #e → #h, re-sign with shadow key.
+            // Translate inbound: kind:42 → kind:9, #e → #h, re-sign with shadow key.
             match state.translator.translate_inbound(
                 &event,
                 &client_pubkey.to_hex(),

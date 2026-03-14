@@ -112,7 +112,7 @@ All configuration is via environment variables.
 
 1. **Startup** — Spawns the agent subprocess, sends ACP `initialize`, connects to the relay with NIP-42 auth.
 2. **Channel discovery** — Queries the relay REST API for accessible channels, subscribes to each.
-3. **Event loop** — Listens for @mention events (kind 40001 with the agent's pubkey in a `#p` tag). Events queue per channel.
+3. **Event loop** — Listens for @mention events (kind 9 with the agent's pubkey in a `#p` tag). Events queue per channel.
 4. **Prompting** — When events are pending and no prompt is in flight, drains all queued events for the oldest channel into a single batched prompt via ACP `session/prompt`.
 5. **Agent response** — The agent processes the prompt and uses Sprout MCP tools (`send_message`, `get_channel_history`, etc.) to interact with Sprout.
 6. **Recovery** — If the agent crashes, the harness respawns it. If the relay disconnects, the harness reconnects with a `since` filter to avoid missing events.

@@ -16,10 +16,10 @@ sources:
 
 ## 1. Overview
 
-`sprout-proxy` is an optional compatibility layer that lets standard Nostr clients connect to a Sprout relay. Sprout uses custom event kinds (40001+) internally; most Nostr clients only understand NIP-28 (kind:40/41/42). The proxy translates between the two in real time.
+`sprout-proxy` is an optional compatibility layer that lets standard Nostr clients connect to a Sprout relay. Sprout uses NIP-29 group chat events (kind:9) internally; most Nostr clients only understand NIP-28 (kind:40/41/42). The proxy translates between the two in real time.
 
 **What it does:**
-- Translates Sprout's kind:40001 stream messages ↔ NIP-28 kind:42 channel messages
+- Translates Sprout's kind:9 (NIP-29 group chat) messages ↔ NIP-28 kind:42 channel messages
 - Maps Sprout channel UUIDs (`#h` tags) ↔ kind:40 event IDs (`#e` tags)
 - Synthesizes kind:40 (channel create) and kind:41 (channel metadata) events from Sprout's REST API
 - Enforces access control via two authentication paths (see below)
@@ -36,7 +36,7 @@ sources:
 - NIP-29 group navigation (group list, group join/leave)
 - NIP-50 full-text search
 - Direct Messages (DMs)
-- kind:40001 workflow/forum events (non-message kinds)
+- kind:9 workflow/forum events (non-message kinds)
 - Inbound edits (kind:41 from client → kind:40003) — outbound only for MVP (kind:40003 edits from the relay are translated to kind:41 for clients)
 
 ### Authentication Paths
@@ -313,7 +313,7 @@ nak event \
 nak req -k 41 -l 10 --auth "ws://localhost:4869"
 ```
 
-> **Note:** kind:40 and kind:41 events are served directly from the proxy's channel map (synthesized from the Sprout REST API). They are never forwarded to the upstream relay. kind:42 queries are translated to kind:40001 + `#h` tags and forwarded upstream.
+> **Note:** kind:40 and kind:41 events are served directly from the proxy's channel map (synthesized from the Sprout REST API). They are never forwarded to the upstream relay. kind:42 queries are translated to kind:9 + `#h` tags and forwarded upstream.
 
 ---
 
@@ -586,10 +586,10 @@ The proxy translates between Sprout's internal event kinds and NIP-28:
 
 | Direction | Sprout Internal | NIP-28 External | Notes |
 |-----------|----------------|-----------------|-------|
-| Outbound (relay → client) | kind:40001 | kind:42 | Stream message |
+| Outbound (relay → client) | kind:9 | kind:42 | NIP-29 group chat message |
 | Outbound (synthesized) | — | kind:40 | Channel create (from REST API) |
 | Outbound (synthesized) | — | kind:41 | Channel metadata (from REST API) |
-| Inbound (client → relay) | kind:40001 | kind:42 | Re-signed with shadow key |
+| Inbound (client → relay) | kind:9 | kind:42 | Re-signed with shadow key |
 
 ### Channel ID Mapping
 

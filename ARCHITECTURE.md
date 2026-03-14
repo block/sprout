@@ -121,7 +121,7 @@ The `kind` integer is the only dispatch switch. The relay routes, stores, and fa
 | Kind | Name | Description |
 |------|------|-------------|
 | 7 | KIND_REACTION | Emoji reaction (standard NIP-25) |
-| 40001 | KIND_STREAM_MESSAGE | Chat message in a Stream channel |
+| 9 | KIND_STREAM_MESSAGE | Chat message in a Stream channel (NIP-29 group chat) |
 | 40002 | KIND_STREAM_MESSAGE_V2 | Stream message v2 format |
 | 40003 | KIND_STREAM_MESSAGE_EDIT | Edit of a stream message |
 | 43001 | KIND_JOB_REQUEST | Agent job request |
@@ -224,7 +224,7 @@ Steps 10–12 are fire-and-forget: they are spawned as independent async tasks. 
 
 Step 9 (fan-out) explicitly **excludes** global subscriptions (no `channel_id` constraint) from channel-scoped events — global subscriptions do NOT receive events from private channels, regardless of filter match. This is a deliberate security boundary: only subscriptions scoped to an accessible `channel_id` receive those events.
 
-Workflow loop prevention: kinds 46001–46012 (workflow execution events) are excluded from triggering workflows. Exception: stream message kind 40001 (`KIND_STREAM_MESSAGE`) always triggers regardless of other exclusion rules. Kind 40002 (`KIND_STREAM_MESSAGE_V2`) does not trigger workflows.
+Workflow loop prevention: kinds 46001–46012 (workflow execution events) are excluded from triggering workflows. Exception: stream message kind 9 (`KIND_STREAM_MESSAGE`) always triggers regardless of other exclusion rules. Kind 40002 (`KIND_STREAM_MESSAGE_V2`) does not trigger workflows.
 
 ### Ephemeral Sub-Pipeline (kinds 20000–29999)
 

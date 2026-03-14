@@ -341,13 +341,13 @@ mod tests {
 
     #[test]
     fn test_filter_context_from_event() {
-        let event = make_event(40001, "hello world");
+        let event = make_event(9, "hello world");
         let channel_id = any_channel();
         let ctx = FilterContext::from_event(&event, channel_id);
 
         assert_eq!(ctx.content, "hello world");
         assert_eq!(ctx.author, event.pubkey.to_hex());
-        assert_eq!(ctx.kind, 40001);
+        assert_eq!(ctx.kind, 9);
         assert_eq!(ctx.channel_id, channel_id.to_string());
         assert_eq!(ctx.timestamp, event.created_at.as_u64());
     }
@@ -356,7 +356,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_evaluate_filter_str_contains() {
-        let event = make_event(40001, "P1 incident in production");
+        let event = make_event(9, "P1 incident in production");
         let ctx = FilterContext::from_event(&event, any_channel());
 
         let result = evaluate_filter(r#"str_contains(content, "P1")"#, &ctx)
@@ -372,10 +372,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_evaluate_filter_kind_check() {
-        let event = make_event(40001, "some content");
+        let event = make_event(9, "some content");
         let ctx = FilterContext::from_event(&event, any_channel());
 
-        let result = evaluate_filter("kind == 40001", &ctx).await.unwrap();
+        let result = evaluate_filter("kind == 9", &ctx).await.unwrap();
         assert!(result);
 
         let result = evaluate_filter("kind == 1", &ctx).await.unwrap();
@@ -384,7 +384,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_evaluate_filter_too_long() {
-        let event = make_event(40001, "content");
+        let event = make_event(9, "content");
         let ctx = FilterContext::from_event(&event, any_channel());
 
         let long_expr = "a".repeat(MAX_EXPR_LEN + 1);
@@ -401,7 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_match_event_first_match_wins() {
-        let event = make_event(40001, "hello");
+        let event = make_event(9, "hello");
         let channel_id = any_channel();
 
         let rules = vec![
@@ -430,7 +430,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_match_event_kind_filter() {
-        let event = make_event(40001, "hello");
+        let event = make_event(9, "hello");
         let channel_id = any_channel();
 
         let rules = vec![
@@ -445,7 +445,7 @@ mod tests {
             SubscriptionRule {
                 name: "right-kind".into(),
                 channels: ChannelScope::All("all".into()),
-                kinds: vec![40001],
+                kinds: vec![9],
                 require_mention: false,
                 filter: None,
                 prompt_tag: Some("matched".into()),
@@ -461,8 +461,8 @@ mod tests {
     async fn test_match_event_require_mention() {
         let agent_pubkey = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
-        let event_no_mention = make_event(40001, "hello");
-        let event_with_mention = make_event_with_p_tag(40001, "hello", agent_pubkey);
+        let event_no_mention = make_event(9, "hello");
+        let event_with_mention = make_event_with_p_tag(9, "hello", agent_pubkey);
         let channel_id = any_channel();
 
         let rules = vec![SubscriptionRule {
@@ -491,9 +491,9 @@ mod tests {
         let channel_id = any_channel();
 
         let rules = vec![SubscriptionRule {
-            name: "kind-40001-only".into(),
+            name: "kind-9-only".into(),
             channels: ChannelScope::All("all".into()),
-            kinds: vec![40001],
+            kinds: vec![9],
             require_mention: false,
             filter: None,
             prompt_tag: None,
@@ -539,7 +539,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_prompt_tag_falls_back_to_name() {
-        let event = make_event(40001, "hello");
+        let event = make_event(9, "hello");
         let channel_id = any_channel();
 
         let rules = vec![SubscriptionRule {
