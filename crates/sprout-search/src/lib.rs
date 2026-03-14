@@ -60,10 +60,12 @@ pub struct SearchService {
 impl SearchService {
     /// Creates a new `SearchService` with a default HTTP client.
     pub fn new(config: SearchConfig) -> Self {
+        // SAFETY: default builder with only timeout/connect_timeout config cannot fail
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
+            .connect_timeout(std::time::Duration::from_secs(5))
             .build()
-            .expect("failed to build reqwest client");
+            .expect("SAFETY: default builder with only timeout config cannot fail");
         Self { client, config }
     }
 

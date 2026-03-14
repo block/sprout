@@ -27,6 +27,8 @@ pub mod error;
 pub mod presence;
 /// Redis PUBLISH for channel event fan-out.
 pub mod publisher;
+/// Redis-backed rate limiter (fixed-window INCR + EXPIRE).
+pub mod rate_limiter;
 /// Redis SUBSCRIBE for channel event delivery.
 pub mod subscriber;
 /// Typing indicator tracking in Redis.

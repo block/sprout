@@ -45,6 +45,67 @@ use sprout_core::StoredEvent;
 
 use crate::event::uuid_from_bytes;
 
+/// Extract p-tag mentions from an event and insert into the `event_mentions` table.
+///
+/// Called after event insertion. Failures are logged but do not block event storage.
+/// Uses `INSERT IGNORE` so duplicate inserts (e.g. on retry) are silently skipped.
+pub async fn insert_mentions(
+    pool: &MySqlPool,
+    event: &nostr::Event,
+    channel_id: Option<Uuid>,
+) -> Result<()> {
+    let p_tags: Vec<&str> = event
+        .tags
+        .iter()
+        .filter_map(|tag| {
+            let tag_vec = tag.as_slice();
+            if tag_vec.len() >= 2 && tag_vec[0] == "p" {
+                Some(tag_vec[1].as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if p_tags.is_empty() {
+        return Ok(());
+    }
+
+    let event_id_bytes = event.id.as_bytes();
+    let created_at_secs = event.created_at.as_u64() as i64;
+    let created_at = DateTime::from_timestamp(created_at_secs, 0)
+        .ok_or(crate::error::DbError::InvalidTimestamp(created_at_secs))?;
+    let channel_id_bytes = channel_id.map(|id| id.as_bytes().to_vec());
+    let kind = event.kind.as_u16() as u32;
+
+    for pubkey_hex in p_tags {
+        // Validate: must be exactly 64 hex characters (32-byte pubkey)
+        if pubkey_hex.len() != 64 || !pubkey_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            tracing::debug!(
+                event_id = %event.id,
+                invalid_ptag = pubkey_hex,
+                "skipping malformed p-tag in mentions insert"
+            );
+            continue;
+        }
+        // Normalize to lowercase — queries use hex::encode which produces lowercase.
+        let pubkey_lower = pubkey_hex.to_ascii_lowercase();
+        sqlx::query(
+            "INSERT IGNORE INTO event_mentions \
+             (pubkey_hex, event_id, event_created_at, channel_id, event_kind) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&pubkey_lower)
+        .bind(event_id_bytes.as_slice())
+        .bind(created_at)
+        .bind(channel_id_bytes.as_deref())
+        .bind(kind)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
 /// Database handle. Clone is cheap (Arc-backed pool).
 #[derive(Clone, Debug)]
 pub struct Db {
@@ -131,7 +192,13 @@ impl Db {
         event: &nostr::Event,
         channel_id: Option<Uuid>,
     ) -> Result<(StoredEvent, bool)> {
-        event::insert_event(&self.pool, event, channel_id).await
+        let result = event::insert_event(&self.pool, event, channel_id).await?;
+        if result.1 {
+            if let Err(e) = insert_mentions(&self.pool, event, channel_id).await {
+                tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
+            }
+        }
+        Ok(result)
     }
 
     /// Queries events matching the given filter parameters.
@@ -166,7 +233,15 @@ impl Db {
         channel_id: Option<Uuid>,
         thread_meta: Option<event::ThreadMetadataParams<'_>>,
     ) -> Result<(StoredEvent, bool)> {
-        event::insert_event_with_thread_metadata(&self.pool, ev, channel_id, thread_meta).await
+        let result =
+            event::insert_event_with_thread_metadata(&self.pool, ev, channel_id, thread_meta)
+                .await?;
+        if result.1 {
+            if let Err(e) = insert_mentions(&self.pool, ev, channel_id).await {
+                tracing::warn!(event_id = %ev.id, "Failed to insert mentions: {e}");
+            }
+        }
+        Ok(result)
     }
 
     /// Soft-delete an event. Returns `true` if the event was deleted.
@@ -513,8 +588,17 @@ impl Db {
         event_created_at: DateTime<Utc>,
         pubkey: &[u8],
         emoji: &str,
+        reaction_event_id: Option<&[u8]>,
     ) -> Result<bool> {
-        reaction::add_reaction(&self.pool, event_id, event_created_at, pubkey, emoji).await
+        reaction::add_reaction(
+            &self.pool,
+            event_id,
+            event_created_at,
+            pubkey,
+            emoji,
+            reaction_event_id,
+        )
+        .await
     }
 
     /// Soft-delete a reaction.
@@ -526,6 +610,46 @@ impl Db {
         emoji: &str,
     ) -> Result<bool> {
         reaction::remove_reaction(&self.pool, event_id, event_created_at, pubkey, emoji).await
+    }
+
+    /// Soft-delete a reaction by the reaction event's own event ID.
+    pub async fn remove_reaction_by_source_event_id(
+        &self,
+        reaction_event_id: &[u8],
+    ) -> Result<bool> {
+        reaction::remove_reaction_by_source_event_id(&self.pool, reaction_event_id).await
+    }
+
+    /// Backfill the source event ID on an active reaction row.
+    pub async fn set_reaction_event_id(
+        &self,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        pubkey: &[u8],
+        emoji: &str,
+        reaction_event_id: &[u8],
+    ) -> Result<bool> {
+        reaction::set_reaction_event_id(
+            &self.pool,
+            event_id,
+            event_created_at,
+            pubkey,
+            emoji,
+            reaction_event_id,
+        )
+        .await
+    }
+
+    /// Look up the active reaction row for one actor + emoji + target tuple.
+    pub async fn get_active_reaction_record(
+        &self,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        pubkey: &[u8],
+        emoji: &str,
+    ) -> Result<Option<reaction::ActiveReactionRecord>> {
+        reaction::get_active_reaction_record(&self.pool, event_id, event_created_at, pubkey, emoji)
+            .await
     }
 
     /// Get all active reactions for an event, grouped by emoji.

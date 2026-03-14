@@ -44,9 +44,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use sprout_core::kind::{
-    KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
-};
+use crate::config::ChannelFilter;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -126,8 +124,11 @@ enum RelayMessage {
 
 /// Commands sent from `HarnessRelay` to the background WebSocket task.
 enum RelayCommand {
-    /// Subscribe to a channel (sends a NIP-01 REQ).
-    Subscribe { channel_id: Uuid },
+    /// Subscribe to a channel (sends a NIP-01 REQ) with the given filter.
+    Subscribe {
+        channel_id: Uuid,
+        filter: ChannelFilter,
+    },
     /// Unsubscribe from a channel (sends a NIP-01 CLOSE).
     #[allow(dead_code)]
     Unsubscribe { channel_id: Uuid },
@@ -207,7 +208,11 @@ impl HarnessRelay {
         Ok(Self {
             event_rx,
             cmd_tx,
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+                .map_err(|e| RelayError::Http(format!("failed to build HTTP client: {e}")))?,
             relay_url: relay_url.to_string(),
             api_token: api_token.map(|t| t.to_string()),
             keys: keys.clone(),
@@ -261,14 +266,17 @@ impl HarnessRelay {
         Ok(ids)
     }
 
-    /// Subscribe to events in a channel filtered by agent pubkey.
+    /// Subscribe to events in a channel using the given filter.
     ///
     /// Sends a `Subscribe` command to the background task, which issues the
-    /// NIP-01 `REQ` for kinds 40001, 46010, 40007 tagged with the channel UUID
-    /// and agent pubkey. Subscription ID is `ch-<uuid>`.
-    pub async fn subscribe_channel(&mut self, channel_id: Uuid) -> Result<(), RelayError> {
+    /// NIP-01 `REQ` built from `filter`. Subscription ID is `ch-<uuid>`.
+    pub async fn subscribe_channel(
+        &mut self,
+        channel_id: Uuid,
+        filter: ChannelFilter,
+    ) -> Result<(), RelayError> {
         self.cmd_tx
-            .send(RelayCommand::Subscribe { channel_id })
+            .send(RelayCommand::Subscribe { channel_id, filter })
             .await
             .map_err(|_| RelayError::ConnectionClosed)?;
         debug!("queued subscribe for channel {channel_id}");
@@ -325,6 +333,8 @@ struct BgState {
     last_seen: HashMap<Uuid, u64>,
     /// Set of event IDs seen, for deduplication.
     seen_ids: HashSet<String>,
+    /// Per-channel filter used on subscribe (for resubscribe after reconnect).
+    active_filters: HashMap<Uuid, ChannelFilter>,
 }
 
 impl BgState {
@@ -333,6 +343,7 @@ impl BgState {
             active_subscriptions: HashMap::new(),
             last_seen: HashMap::new(),
             seen_ids: HashSet::new(),
+            active_filters: HashMap::new(),
         }
     }
 
@@ -409,6 +420,7 @@ async fn run_background_task(
                                 &relay_url,
                                 api_token.as_deref(),
                                 &agent_pubkey_hex,
+                                false, // skip_drain: wait for Reconnect command
                             )
                             .await;
                         }
@@ -424,6 +436,7 @@ async fn run_background_task(
                             &relay_url,
                             api_token.as_deref(),
                             &agent_pubkey_hex,
+                            false,
                         )
                         .await;
                     }
@@ -438,6 +451,7 @@ async fn run_background_task(
                             &relay_url,
                             api_token.as_deref(),
                             &agent_pubkey_hex,
+                            false,
                         )
                         .await;
                     }
@@ -447,9 +461,10 @@ async fn run_background_task(
             // ── Command from HarnessRelay ─────────────────────────────────────
             cmd = cmd_rx.recv() => {
                 match cmd {
-                    Some(RelayCommand::Subscribe { channel_id }) => {
-                        send_subscribe(&mut ws, &state, channel_id, &agent_pubkey_hex, None).await;
+                    Some(RelayCommand::Subscribe { channel_id, filter }) => {
+                        send_subscribe(&mut ws, &state, channel_id, &agent_pubkey_hex, None, &filter).await;
                         state.active_subscriptions.insert(channel_id, channel_sub_id(channel_id));
+                        state.active_filters.insert(channel_id, filter);
                     }
                     Some(RelayCommand::Unsubscribe { channel_id }) => {
                         if let Some(sub_id) = state.active_subscriptions.remove(&channel_id) {
@@ -461,7 +476,7 @@ async fn run_background_task(
                         }
                     }
                     Some(RelayCommand::Reconnect) => {
-                        // Caller already got None from next_event(); drive reconnect now.
+                        // Reconnect command already consumed — skip the drain loop.
                         wait_for_reconnect(
                             &mut ws,
                             &mut cmd_rx,
@@ -470,6 +485,7 @@ async fn run_background_task(
                             &relay_url,
                             api_token.as_deref(),
                             &agent_pubkey_hex,
+                            true, // skip_drain: command already consumed
                         )
                         .await;
                     }
@@ -582,9 +598,15 @@ async fn handle_ws_message(
     }
 }
 
-/// Wait for a `Reconnect` command from the caller, then attempt reconnection
-/// with exponential backoff. Resubscribes all active channels with `since`
-/// filters on success.
+/// Attempt reconnection with exponential backoff. Resubscribes all active
+/// channels with `since` filters on success.
+///
+/// If `skip_drain` is `false`, drains the command channel until a `Reconnect`
+/// command arrives (used when called from the WS-error path where the caller
+/// hasn't sent Reconnect yet). If `true`, skips the drain and reconnects
+/// immediately (used when called from the `RelayCommand::Reconnect` arm where
+/// the command was already consumed).
+#[allow(clippy::too_many_arguments)]
 async fn wait_for_reconnect(
     ws: &mut WsStream,
     cmd_rx: &mut mpsc::Receiver<RelayCommand>,
@@ -593,15 +615,27 @@ async fn wait_for_reconnect(
     relay_url: &str,
     api_token: Option<&str>,
     agent_pubkey_hex: &str,
+    skip_drain: bool,
 ) {
-    // Drain commands until we get Reconnect (or Shutdown).
-    loop {
-        match cmd_rx.recv().await {
-            Some(RelayCommand::Reconnect) => break,
-            Some(RelayCommand::Shutdown) | None => return,
-            // Ignore Subscribe/Unsubscribe while disconnected — they'll be
-            // resubmitted after reconnect via active_subscriptions.
-            _ => {}
+    if !skip_drain {
+        // Drain commands until we get Reconnect (or Shutdown).
+        loop {
+            match cmd_rx.recv().await {
+                Some(RelayCommand::Reconnect) => break,
+                Some(RelayCommand::Shutdown) | None => return,
+                // Apply Subscribe/Unsubscribe to state so reconnect reflects
+                // the latest caller intent (not just pre-disconnect state).
+                Some(RelayCommand::Subscribe { channel_id, filter }) => {
+                    state
+                        .active_subscriptions
+                        .insert(channel_id, channel_sub_id(channel_id));
+                    state.active_filters.insert(channel_id, filter);
+                }
+                Some(RelayCommand::Unsubscribe { channel_id }) => {
+                    state.active_subscriptions.remove(&channel_id);
+                    state.active_filters.remove(&channel_id);
+                }
+            }
         }
     }
 
@@ -620,7 +654,14 @@ async fn wait_for_reconnect(
                     info!("resubscribing to {} channel(s)", channels.len());
                     for channel_id in channels {
                         let since = state.last_seen.get(&channel_id).copied();
-                        send_subscribe(ws, state, channel_id, agent_pubkey_hex, since).await;
+                        let filter = state.active_filters.get(&channel_id).cloned().unwrap_or(
+                            ChannelFilter {
+                                kinds: None,
+                                require_mention: false,
+                            },
+                        );
+                        send_subscribe(ws, state, channel_id, agent_pubkey_hex, since, &filter)
+                            .await;
                     }
                 }
 
@@ -638,32 +679,50 @@ async fn wait_for_reconnect(
     }
 }
 
-/// Send a NIP-01 REQ for a channel, optionally with a `since` filter.
+/// Send a NIP-01 REQ for a channel, built from a [`ChannelFilter`].
+///
+/// - `kinds` is included only when `filter.kinds` is `Some`; `None` = wildcard.
+/// - `#p` is included only when `filter.require_mention` is `true`.
+/// - `#h` is always included (channel-scoped subscription).
+/// - On first subscribe (`since` is `None`) adds `since=now` to avoid replaying
+///   history. On reconnect (`since` is `Some`) subtracts [`SINCE_SKEW_SECS`].
 async fn send_subscribe(
     ws: &mut WsStream,
     _state: &BgState,
     channel_id: Uuid,
     agent_pubkey_hex: &str,
     since: Option<u64>,
+    filter: &ChannelFilter,
 ) {
     let sub_id = channel_sub_id(channel_id);
 
-    let mut filter = json!({
-        "kinds": [
-            KIND_STREAM_MESSAGE,
-            KIND_WORKFLOW_APPROVAL_REQUESTED,
-            KIND_STREAM_REMINDER,
-        ],
-        "#h": [channel_id.to_string()],
-        "#p": [agent_pubkey_hex],
-    });
+    let mut req_filter = serde_json::Map::new();
 
-    // Fix 2: Add `since` filter on reconnect (with 5-second skew buffer).
-    if let Some(ts) = since {
-        filter["since"] = json!(ts.saturating_sub(SINCE_SKEW_SECS));
+    // kinds — omit entirely for wildcard subscriptions.
+    if let Some(ref kinds) = filter.kinds {
+        req_filter.insert("kinds".into(), json!(kinds));
     }
 
-    let req = json!(["REQ", sub_id, filter]);
+    // #h — always present (channel scope).
+    req_filter.insert("#h".into(), json!([channel_id.to_string()]));
+
+    // #p — only when require_mention is true.
+    if filter.require_mention {
+        req_filter.insert("#p".into(), json!([agent_pubkey_hex]));
+    }
+
+    // since — on first subscribe use current time to skip history; on reconnect
+    // subtract skew buffer to catch events missed during the disconnect window.
+    let since_ts = match since {
+        Some(ts) => ts.saturating_sub(SINCE_SKEW_SECS),
+        None => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+    req_filter.insert("since".into(), json!(since_ts));
+
+    let req = json!(["REQ", sub_id, Value::Object(req_filter)]);
 
     match serde_json::to_string(&req) {
         Ok(text) => {
@@ -675,7 +734,7 @@ async fn send_subscribe(
                     if since.is_some() {
                         " (with since filter)"
                     } else {
-                        ""
+                        " (since=now)"
                     }
                 );
             }

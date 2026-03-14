@@ -191,3 +191,43 @@ test("shows your avatar on your own message when profile avatar is set", async (
     avatarUrl,
   );
 });
+
+test("supports nested replies with visible indentation", async ({ page }) => {
+  const firstReply = `First threaded reply ${Date.now()}`;
+  const nestedReply = `Nested threaded reply ${Date.now()}`;
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Welcome to #general",
+  );
+
+  const rows = page.getByTestId("message-row");
+  const replyButtons = page.locator('[data-testid^="reply-message-"]');
+
+  await rows.first().hover();
+  await replyButtons.first().click();
+  await expect(page.getByTestId("reply-target")).toContainText("Replying to");
+  await page.getByTestId("message-input").fill(firstReply);
+  await page.getByTestId("send-message").click();
+  await expect(rows.last()).toContainText(firstReply);
+
+  await rows.last().hover();
+  await replyButtons.last().click();
+  await expect(page.getByTestId("reply-target")).toContainText(firstReply);
+  await page.getByTestId("message-input").fill(nestedReply);
+  await page.getByTestId("send-message").click();
+  await expect(rows.last()).toContainText(nestedReply);
+
+  const rootBox = await rows.nth(0).boundingBox();
+  const firstReplyBox = await rows.nth(1).boundingBox();
+  const nestedReplyBox = await rows.nth(2).boundingBox();
+
+  if (!rootBox || !firstReplyBox || !nestedReplyBox) {
+    throw new Error("Expected reply rows to be rendered.");
+  }
+
+  expect(firstReplyBox.x).toBeGreaterThan(rootBox.x + 8);
+  expect(nestedReplyBox.x).toBeGreaterThan(firstReplyBox.x + 8);
+});

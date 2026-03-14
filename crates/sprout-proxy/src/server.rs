@@ -396,7 +396,11 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                                 // Strip the connection prefix before sending to client.
                                 let client_sub_id = SubscriptionId::new(&sub_str[conn_prefix.len() + 1..]);
                                 // Translate outbound: kind:40001 → kind:42, #h → #e
-                                match state.translator.translate_outbound(&event, &allowed_channels) {
+                                match state
+                                    .translator
+                                    .translate_outbound(&event, &allowed_channels)
+                                    .await
+                                {
                                     Ok(Some(translated)) => {
                                         let out = RelayMessage::event(client_sub_id, translated);
                                         if socket.send(Message::Text(out.as_json().into())).await.is_err() {
@@ -1051,6 +1055,9 @@ mod tests {
         let translator = Arc::new(crate::translate::Translator::new(
             shadow_keys,
             channel_map.clone(),
+            "http://localhost:3000",
+            "sprout_test",
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         ));
         let upstream = Arc::new(UpstreamClient::new("ws://localhost:3000", "sprout_test"));
         ProxyState {

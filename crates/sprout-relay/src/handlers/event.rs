@@ -10,7 +10,7 @@ use sprout_audit::{AuditAction, NewAuditEntry};
 use sprout_core::event::StoredEvent;
 use sprout_core::kind::{
     event_kind_u32, is_ephemeral, is_workflow_execution_kind, KIND_AUTH, KIND_CANVAS,
-    KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE,
+    KIND_DELETION, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE,
     KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
     KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
     KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
@@ -33,7 +33,12 @@ pub(crate) async fn dispatch_persistent_event(
     let event_id_hex = stored_event.event.id.to_hex();
 
     if let Some(ch_id) = stored_event.channel_id {
+        state.mark_local_event(&stored_event.event.id);
         if let Err(e) = state.pubsub.publish_event(ch_id, &stored_event.event).await {
+            // Publish failed — remove from dedup cache so the ID doesn't leak.
+            state
+                .local_event_ids
+                .invalidate(&stored_event.event.id.to_bytes());
             warn!(event_id = %event_id_hex, "Redis publish failed: {e}");
         }
     }
@@ -48,9 +53,19 @@ pub(crate) async fn dispatch_persistent_event(
 
     let event_json = serde_json::to_string(&stored_event.event)
         .expect("nostr::Event serialization is infallible for well-formed events");
+    let mut drop_count = 0u32;
     for (target_conn_id, sub_id) in &matches {
         let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
-        state.conn_manager.send_to(*target_conn_id, msg);
+        if !state.conn_manager.send_to(*target_conn_id, msg) {
+            drop_count += 1;
+        }
+    }
+    if drop_count > 0 {
+        tracing::warn!(
+            event_id = %event_id_hex,
+            drop_count,
+            "fan-out: {drop_count} connection(s) cancelled due to full/closed buffers"
+        );
     }
 
     let search = Arc::clone(&state.search);
@@ -289,6 +304,19 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         }
     }
 
+    if kind_u32 == KIND_DELETION {
+        if let Err(e) =
+            crate::handlers::side_effects::validate_standard_deletion_event(&event, &state).await
+        {
+            conn.send(RelayMessage::ok(
+                &event_id_hex,
+                false,
+                &format!("invalid: {e}"),
+            ));
+            return;
+        }
+    }
+
     // Reject reactions (kind 7) targeting archived channels before storage.
     // This prevents invalid events from being stored and fanned out.
     if kind_u32 == 7 {
@@ -416,9 +444,19 @@ async fn handle_ephemeral_event(
         let matches = state.sub_registry.fan_out(&stored_event);
         let event_json = serde_json::to_string(&event)
             .expect("nostr::Event serialization is infallible for well-formed events");
+        let mut drop_count = 0u32;
         for (target_conn_id, sub_id) in &matches {
             let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
-            state.conn_manager.send_to(*target_conn_id, msg);
+            if !state.conn_manager.send_to(*target_conn_id, msg) {
+                drop_count += 1;
+            }
+        }
+        if drop_count > 0 {
+            tracing::warn!(
+                event_id = %event_id_hex,
+                drop_count,
+                "fan-out: {drop_count} connection(s) cancelled due to full/closed buffers"
+            );
         }
 
         conn.send(RelayMessage::ok(event_id_hex, true, ""));

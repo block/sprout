@@ -2,7 +2,16 @@ import { useEffect, useEffectEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { updateChannelLastMessageAt } from "@/features/channels/hooks";
+import {
+  buildReplyTags,
+  resolveReplyRootId,
+} from "@/features/messages/lib/threading";
 import { relayClient } from "@/shared/api/relayClient";
+import {
+  addReaction,
+  removeReaction,
+  sendChannelMessage,
+} from "@/shared/api/tauri";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
 
 type MessageQueryContext = {
@@ -49,11 +58,26 @@ function createOptimisticMessage(
   channelId: string,
   content: string,
   identity: Identity,
+  currentMessages: RelayEvent[],
   mentionPubkeys: string[] = [],
+  parentEventId: string | null = null,
 ): RelayEvent {
-  const tags: string[][] = [["h", channelId]];
-  for (const pubkey of mentionPubkeys) {
-    tags.push(["p", pubkey]);
+  const tags: string[][] = [];
+
+  if (parentEventId) {
+    tags.push(
+      ...buildReplyTags(
+        channelId,
+        identity.pubkey,
+        parentEventId,
+        resolveReplyRootId(parentEventId, currentMessages),
+      ),
+    );
+  } else {
+    tags.push(["h", channelId]);
+    for (const pubkey of mentionPubkeys) {
+      tags.push(["p", pubkey]);
+    }
   }
 
   return {
@@ -69,16 +93,27 @@ function createOptimisticMessage(
 }
 
 export function useChannelMessagesQuery(channel: Channel | null) {
+  const queryClient = useQueryClient();
+  const queryKey = ["channel-messages", channel?.id ?? "none"] as const;
+
   return useQuery({
     enabled: channel !== null && channel.channelType !== "forum",
-    queryKey: ["channel-messages", channel?.id ?? "none"],
+    placeholderData: () => queryClient.getQueryData<RelayEvent[]>(queryKey),
+    queryKey,
     queryFn: async () => {
       if (!channel) {
         throw new Error("No channel selected.");
       }
 
-      const history = await relayClient.fetchChannelHistory(channel.id);
-      return dedupeMessagesById(history);
+      const history = await relayClient.fetchChannelHistory(channel.id, 200);
+      const currentMessages =
+        queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];
+      const mergedHistory = dedupeMessagesById([
+        ...currentMessages,
+        ...history,
+      ]).sort((left, right) => left.created_at - right.created_at);
+
+      return mergedHistory;
     },
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 30 * 60 * 1_000,
@@ -89,6 +124,24 @@ export function useChannelSubscription(channel: Channel | null) {
   const queryClient = useQueryClient();
   const channelId = channel?.id ?? null;
   const channelType = channel?.channelType ?? null;
+  const syncLatestHistory = useEffectEvent(async () => {
+    if (!channelId) {
+      return;
+    }
+
+    const history = await relayClient.fetchChannelHistory(channelId, 200);
+
+    queryClient.setQueryData<RelayEvent[]>(
+      ["channel-messages", channelId],
+      (current = []) => {
+        const mergedHistory = dedupeMessagesById([...current, ...history]).sort(
+          (left, right) => left.created_at - right.created_at,
+        );
+
+        return mergedHistory;
+      },
+    );
+  });
 
   const appendMessage = useEffectEvent((event: RelayEvent) => {
     if (!channelId) {
@@ -127,6 +180,16 @@ export function useChannelSubscription(channel: Channel | null) {
         }
 
         cleanup = dispose;
+
+        void syncLatestHistory().catch((error) => {
+          if (!isDisposed) {
+            console.error(
+              "Failed to refresh channel history after subscribing",
+              channelId,
+              error,
+            );
+          }
+        });
       })
       .catch((error) => {
         console.error("Failed to subscribe to channel", channelId, error);
@@ -150,17 +213,53 @@ export function useSendMessageMutation(
   return useMutation<
     RelayEvent,
     Error,
-    { content: string; mentionPubkeys?: string[] },
+    {
+      content: string;
+      mentionPubkeys?: string[];
+      parentEventId?: string | null;
+    },
     MessageQueryContext | undefined
   >({
-    mutationFn: async ({ content, mentionPubkeys }) => {
+    mutationFn: async ({ content, mentionPubkeys, parentEventId }) => {
       if (!channel || channel.channelType === "forum") {
         throw new Error("This channel does not support message sending yet.");
       }
 
+      if (!identity) {
+        throw new Error("No identity available for sending messages.");
+      }
+
+      if (parentEventId) {
+        const cachedMessages =
+          queryClient.getQueryData<RelayEvent[]>([
+            "channel-messages",
+            channel.id,
+          ]) ?? [];
+        const result = await sendChannelMessage(
+          channel.id,
+          content,
+          parentEventId,
+        );
+
+        return {
+          id: result.eventId,
+          pubkey: identity.pubkey,
+          created_at: result.createdAt,
+          kind: 4_0001,
+          tags: buildReplyTags(
+            channel.id,
+            identity.pubkey,
+            parentEventId,
+            resolveReplyRootId(parentEventId, cachedMessages),
+          ),
+          content: content.trim(),
+          sig: "",
+        };
+      }
+
       return relayClient.sendMessage(channel.id, content, mentionPubkeys ?? []);
     },
-    onMutate: async ({ content, mentionPubkeys }) => {
+    onMutate: async ({ content, mentionPubkeys, parentEventId }) => {
       if (!channel || !identity || channel.channelType === "forum") {
         return undefined;
       }
@@ -174,7 +273,9 @@ export function useSendMessageMutation(
         channel.id,
         content.trim(),
         identity,
+        previousMessages,
         mentionPubkeys ?? [],
+        parentEventId ?? null,
       );
 
       queryClient.setQueryData<RelayEvent[]>(
@@ -217,6 +318,27 @@ export function useSendMessageMutation(
           return mergeMessages(withoutOptimistic, message);
         },
       );
+    },
+  });
+}
+
+export function useToggleReactionMutation() {
+  return useMutation<
+    void,
+    Error,
+    {
+      eventId: string;
+      emoji: string;
+      remove: boolean;
+    }
+  >({
+    mutationFn: async ({ eventId, emoji, remove }) => {
+      if (remove) {
+        await removeReaction(eventId, emoji);
+        return;
+      }
+
+      await addReaction(eventId, emoji);
     },
   });
 }

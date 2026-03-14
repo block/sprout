@@ -6,6 +6,7 @@ use std::time::Instant;
 use axum::extract::ws::Message as WsMessage;
 use dashmap::DashMap;
 use tokio::sync::{mpsc, Semaphore};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use sprout_audit::AuditService;
@@ -21,8 +22,9 @@ use crate::subscription::SubscriptionRegistry;
 
 /// Tracks active WebSocket connections and provides message routing by connection ID.
 pub struct ConnectionManager {
-    /// Map from connection ID to the sender half of the connection's outbound channel.
-    connections: DashMap<Uuid, mpsc::Sender<WsMessage>>,
+    /// Map from connection ID to the sender half of the connection's outbound channel
+    /// and the cancellation token for the connection.
+    connections: DashMap<Uuid, (mpsc::Sender<WsMessage>, CancellationToken)>,
 }
 
 impl ConnectionManager {
@@ -33,9 +35,9 @@ impl ConnectionManager {
         }
     }
 
-    /// Registers a connection with its outbound sender.
-    pub fn register(&self, conn_id: Uuid, tx: mpsc::Sender<WsMessage>) {
-        self.connections.insert(conn_id, tx);
+    /// Registers a connection with its outbound sender and cancellation token.
+    pub fn register(&self, conn_id: Uuid, tx: mpsc::Sender<WsMessage>, cancel: CancellationToken) {
+        self.connections.insert(conn_id, (tx, cancel));
     }
 
     /// Removes a connection from the registry.
@@ -43,10 +45,25 @@ impl ConnectionManager {
         self.connections.remove(&conn_id);
     }
 
-    /// Sends a text message to the given connection. Returns `false` if the connection is gone or the buffer is full.
+    /// Sends a text message to the given connection.
+    ///
+    /// Returns `false` if the connection is gone or the buffer is full.
+    /// On a full buffer, cancels the slow client's connection to prevent silent drops.
     pub fn send_to(&self, conn_id: Uuid, msg: String) -> bool {
-        if let Some(tx) = self.connections.get(&conn_id) {
-            tx.try_send(WsMessage::Text(msg.into())).is_ok()
+        if let Some(entry) = self.connections.get(&conn_id) {
+            let (tx, cancel) = entry.value();
+            match tx.try_send(WsMessage::Text(msg.into())) {
+                Ok(_) => true,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!(conn_id = %conn_id, "fan-out: send buffer full — cancelling slow client");
+                    cancel.cancel();
+                    false
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    tracing::debug!(conn_id = %conn_id, "fan-out: send channel closed");
+                    false
+                }
+            }
         } else {
             false
         }
@@ -92,6 +109,11 @@ pub struct AppState {
     /// Entries map token UUID → last time we wrote `last_used_at` to the DB.
     /// Resets on restart (acceptable — `last_used_at` is informational, not security-critical).
     pub last_used_cache: Arc<DashMap<Uuid, Instant>>,
+    /// Recently-published event IDs for local-echo deduplication.
+    /// Events fanned out in-process are added here; the Redis subscriber
+    /// consumer skips them to avoid double delivery. Entries expire after
+    /// 60 seconds via moka's TTL eviction — bounded regardless of subscriber health.
+    pub local_event_ids: Arc<moka::sync::Cache<[u8; 32], ()>>,
 }
 
 impl AppState {
@@ -124,7 +146,19 @@ impl AppState {
             relay_keypair,
             mint_rate_limiter: Arc::new(MintRateLimiter::new()),
             last_used_cache: Arc::new(DashMap::new()),
+            local_event_ids: Arc::new(
+                moka::sync::Cache::builder()
+                    .max_capacity(10_000)
+                    .time_to_live(std::time::Duration::from_secs(60))
+                    .build(),
+            ),
         }
+    }
+
+    /// Record an event ID as locally-published for dedup.
+    /// Called before Redis publish so the multi-node consumer can skip the echo.
+    pub fn mark_local_event(&self, event_id: &nostr::EventId) {
+        self.local_event_ids.insert(event_id.to_bytes(), ());
     }
 }
 

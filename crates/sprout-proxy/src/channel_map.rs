@@ -85,10 +85,11 @@ impl ChannelMap {
         .to_string();
 
         // nostr 0.36: EventBuilder::new(kind, content, tags)
+        // SAFETY: signing with a pre-validated Keys instance cannot fail
         EventBuilder::new(Kind::ChannelCreation, content, [])
             .custom_created_at(Timestamp::from(created_at_unix))
             .sign_with_keys(&self.server_keys)
-            .expect("signing with valid keys cannot fail")
+            .expect("SAFETY: signing with valid keys cannot fail")
     }
 
     /// Synthesize a NIP-28 kind:41 channel metadata event that references the
@@ -101,14 +102,17 @@ impl ChannelMap {
         })
         .to_string();
 
+        // SAFETY: kind40_event_id is always a valid hex string — it was produced by event.id.to_hex() in register()
         let e_tag = Tag::event(
-            EventId::from_hex(&info.kind40_event_id).expect("kind40_event_id is valid hex"),
+            EventId::from_hex(&info.kind40_event_id)
+                .expect("SAFETY: kind40_event_id is always valid hex from event.id.to_hex()"),
         );
 
+        // SAFETY: signing with a pre-validated Keys instance cannot fail
         EventBuilder::new(Kind::ChannelMetadata, content, [e_tag])
             .custom_created_at(Timestamp::from(info.created_at_unix))
             .sign_with_keys(&self.server_keys)
-            .expect("signing with valid keys cannot fail")
+            .expect("SAFETY: signing with valid keys cannot fail")
     }
 }
 
@@ -135,7 +139,12 @@ impl ChannelMap {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let map = Self::new(server_keys);
 
-        let client = reqwest::Client::new();
+        // SAFETY: default builder with only timeout config cannot fail
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("SAFETY: default builder with only timeout config cannot fail");
         let channels: Vec<ChannelDto> = client
             .get(format!("{}/api/channels", api_base))
             .header("Authorization", format!("Bearer {}", api_token))

@@ -49,6 +49,13 @@ pub struct ReactionSummary {
     pub count: i64,
 }
 
+/// Active reaction row metadata for a specific actor + emoji + target tuple.
+#[derive(Debug, Clone)]
+pub struct ActiveReactionRecord {
+    /// Nostr event ID of the reaction event, if this row came from a real kind:7 event.
+    pub reaction_event_id: Option<Vec<u8>>,
+}
+
 // ── Write operations ──────────────────────────────────────────────────────────
 
 /// Add (or re-activate) a reaction.
@@ -68,20 +75,27 @@ pub async fn add_reaction(
     event_created_at: DateTime<Utc>,
     pubkey: &[u8],
     emoji: &str,
+    reaction_event_id: Option<&[u8]>,
 ) -> Result<bool> {
     let result = sqlx::query(
         r#"
-        INSERT INTO reactions (event_created_at, event_id, pubkey, emoji)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO reactions (event_created_at, event_id, pubkey, emoji, reaction_event_id)
+        VALUES (?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
             created_at = IF(removed_at IS NOT NULL, NOW(6), created_at),
-            removed_at = NULL
+            removed_at = NULL,
+            -- Keep existing non-NULL event ID if the new value is NULL.
+            -- REST calls add_reaction(None) first, then backfills via
+            -- set_reaction_event_id. Without COALESCE, a re-add would
+            -- clobber the existing event ID with NULL.
+            reaction_event_id = COALESCE(VALUES(reaction_event_id), reaction_event_id)
         "#,
     )
     .bind(event_created_at)
     .bind(event_id)
     .bind(pubkey)
     .bind(emoji)
+    .bind(reaction_event_id)
     .execute(pool)
     .await?;
 
@@ -111,6 +125,97 @@ pub async fn remove_reaction(
           AND removed_at IS NULL
         "#,
     )
+    .bind(event_created_at)
+    .bind(event_id)
+    .bind(pubkey)
+    .bind(emoji)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Soft-delete a reaction by the reaction event's own ID.
+///
+/// Returns `true` if a row was updated, `false` if not found or already removed.
+pub async fn remove_reaction_by_source_event_id(
+    pool: &MySqlPool,
+    reaction_event_id: &[u8],
+) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        UPDATE reactions
+        SET removed_at = NOW(6)
+        WHERE reaction_event_id = ?
+          AND removed_at IS NULL
+        "#,
+    )
+    .bind(reaction_event_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Look up the active reaction row for one actor + emoji + target tuple.
+pub async fn get_active_reaction_record(
+    pool: &MySqlPool,
+    event_id: &[u8],
+    event_created_at: DateTime<Utc>,
+    pubkey: &[u8],
+    emoji: &str,
+) -> Result<Option<ActiveReactionRecord>> {
+    let row = sqlx::query(
+        r#"
+        SELECT reaction_event_id
+        FROM reactions
+        WHERE event_id = ?
+          AND event_created_at = ?
+          AND pubkey = ?
+          AND emoji = ?
+          AND removed_at IS NULL
+        LIMIT 1
+        "#,
+    )
+    .bind(event_id)
+    .bind(event_created_at)
+    .bind(pubkey)
+    .bind(emoji)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|row| -> Result<ActiveReactionRecord> {
+        Ok(ActiveReactionRecord {
+            reaction_event_id: row.try_get("reaction_event_id")?,
+        })
+    })
+    .transpose()
+}
+
+/// Backfill the source event ID on an active reaction row.
+///
+/// Called after the kind:7 event is created and stored, to link the
+/// reaction row to its source event. Returns `true` if the row was updated.
+pub async fn set_reaction_event_id(
+    pool: &MySqlPool,
+    event_id: &[u8],
+    event_created_at: DateTime<Utc>,
+    pubkey: &[u8],
+    emoji: &str,
+    reaction_event_id: &[u8],
+) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        UPDATE reactions
+        SET reaction_event_id = ?
+        WHERE event_created_at = ?
+          AND event_id = ?
+          AND pubkey = ?
+          AND emoji = ?
+          AND removed_at IS NULL
+        "#,
+    )
+    .bind(reaction_event_id)
     .bind(event_created_at)
     .bind(event_id)
     .bind(pubkey)

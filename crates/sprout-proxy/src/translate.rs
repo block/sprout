@@ -15,14 +15,17 @@
 //! each external user maps to a consistent shadow pubkey across sessions.
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use moka::sync::Cache;
 use nostr::prelude::*;
 use sprout_core::kind::{
-    event_kind_u32, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_V2,
+    event_kind_u32, KIND_DELETION, KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT,
+    KIND_STREAM_MESSAGE_V2,
 };
 use uuid::Uuid;
 
-use crate::channel_map::ChannelMap;
+use crate::channel_map::{ChannelInfo, ChannelMap};
 use crate::kind_translator::KindTranslator;
 use crate::shadow_keys::ShadowKeyManager;
 use crate::ProxyError;
@@ -38,15 +41,50 @@ pub struct Translator {
     kind_translator: KindTranslator,
     shadow_keys: Arc<ShadowKeyManager>,
     channel_map: Arc<ChannelMap>,
+    http_client: reqwest::Client,
+    api_base: String,
+    api_token: String,
+    /// Hex-encoded public key of the relay. Only events signed by this key
+    /// may carry trusted `actor`/`p` attribution tags.
+    relay_pubkey: String,
+    internal_to_external_event_ids: Cache<String, String>,
+    external_to_internal_event_ids: Cache<String, String>,
+    internal_event_channels: Cache<String, Uuid>,
 }
 
 impl Translator {
     /// Create a new [`Translator`].
-    pub fn new(shadow_keys: Arc<ShadowKeyManager>, channel_map: Arc<ChannelMap>) -> Self {
+    pub fn new(
+        shadow_keys: Arc<ShadowKeyManager>,
+        channel_map: Arc<ChannelMap>,
+        api_base: impl Into<String>,
+        api_token: impl Into<String>,
+        relay_pubkey: impl Into<String>,
+    ) -> Self {
+        let cache_ttl = Duration::from_secs(3600);
         Self {
             kind_translator: KindTranslator::new(),
             shadow_keys,
             channel_map,
+            http_client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .expect("HTTP client build must succeed"),
+            api_base: api_base.into(),
+            api_token: api_token.into(),
+            relay_pubkey: relay_pubkey.into(),
+            internal_to_external_event_ids: Cache::builder()
+                .max_capacity(100_000)
+                .time_to_idle(cache_ttl)
+                .build(),
+            external_to_internal_event_ids: Cache::builder()
+                .max_capacity(100_000)
+                .time_to_idle(cache_ttl)
+                .build(),
+            internal_event_channels: Cache::builder()
+                .max_capacity(100_000)
+                .time_to_idle(cache_ttl)
+                .build(),
         }
     }
 }
@@ -54,6 +92,275 @@ impl Translator {
 // ─── Outbound translation (Sprout → NIP-28 client) ───────────────────────────
 
 impl Translator {
+    fn cache_event_mapping(&self, internal_event_id: &str, external_event_id: &str) {
+        self.internal_to_external_event_ids
+            .insert(internal_event_id.to_string(), external_event_id.to_string());
+        self.external_to_internal_event_ids
+            .insert(external_event_id.to_string(), internal_event_id.to_string());
+    }
+
+    fn lookup_external_event_id(&self, internal_event_id: &str) -> Option<String> {
+        self.internal_to_external_event_ids.get(internal_event_id)
+    }
+
+    fn lookup_internal_event_id(&self, external_event_id: &str) -> Option<String> {
+        self.external_to_internal_event_ids.get(external_event_id)
+    }
+
+    fn cache_internal_channel(&self, internal_event_id: &str, channel_uuid: Uuid) {
+        self.internal_event_channels
+            .insert(internal_event_id.to_string(), channel_uuid);
+    }
+
+    fn lookup_internal_channel(&self, internal_event_id: &str) -> Option<Uuid> {
+        self.internal_event_channels.get(internal_event_id)
+    }
+
+    fn resolve_shadow_author_hex(&self, event: &Event) -> String {
+        // Only trust actor/p tags on relay-signed events (API-originated).
+        // User-signed events could carry spoofed actor/p tags — if the event
+        // pubkey doesn't match the relay's keypair, fall back to the event
+        // pubkey directly.
+        if event.pubkey.to_hex() == self.relay_pubkey {
+            for tag_name in &["actor", "p"] {
+                for tag in event.tags.iter() {
+                    let slice = tag.as_slice();
+                    if slice.len() >= 2 && slice[0] == *tag_name {
+                        let hex = &slice[1];
+                        if hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                            // Normalize to lowercase for consistent shadow-key derivation.
+                            return hex.to_lowercase();
+                        }
+                    }
+                }
+            }
+        }
+        event.pubkey.to_hex()
+    }
+
+    fn resolve_channel_info(
+        &self,
+        event: &Event,
+        allowed_channels: &[Uuid],
+    ) -> Result<Option<(String, ChannelInfo)>, ProxyError> {
+        let Some((uuid_str, channel_info)) = event
+            .tags
+            .iter()
+            .filter(|tag| {
+                let slice = tag.as_slice();
+                slice.len() >= 2 && slice[0] == "h"
+            })
+            .find_map(|tag| {
+                let uuid_str = tag.as_slice().get(1)?.clone();
+                let uuid: Uuid = uuid_str.parse().ok()?;
+                let info = self.channel_map.lookup_by_uuid(&uuid)?;
+                Some((uuid_str, info))
+            })
+        else {
+            return Ok(None);
+        };
+
+        if !allowed_channels.contains(&channel_info.uuid) {
+            return Err(ProxyError::PermissionDenied(format!(
+                "channel {} not in invite scope",
+                channel_info.uuid
+            )));
+        }
+
+        Ok(Some((uuid_str, channel_info)))
+    }
+
+    async fn fetch_internal_event(&self, event_id: &str) -> Result<Option<Event>, ProxyError> {
+        let response = self
+            .http_client
+            .get(format!("{}/api/events/{}", self.api_base, event_id))
+            .header("Authorization", format!("Bearer {}", self.api_token))
+            .send()
+            .await
+            .map_err(|e| ProxyError::Upstream(format!("event fetch failed: {e}")))?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        let response = response
+            .error_for_status()
+            .map_err(|e| ProxyError::Upstream(format!("event fetch failed: {e}")))?;
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ProxyError::Upstream(format!("event fetch body failed: {e}")))?;
+
+        serde_json::from_str::<Event>(&body)
+            .map(Some)
+            .map_err(|e| ProxyError::Upstream(format!("event decode failed: {e}")))
+    }
+
+    async fn ensure_external_event_id(
+        &self,
+        internal_event_id: &str,
+        allowed_channels: &[Uuid],
+    ) -> Result<Option<String>, ProxyError> {
+        if let Some(mapped) = self.lookup_external_event_id(internal_event_id) {
+            return Ok(Some(mapped));
+        }
+
+        let Some(event) = self.fetch_internal_event(internal_event_id).await? else {
+            return Ok(None);
+        };
+
+        let translated = self.translate_outbound_message_like(&event, allowed_channels)?;
+        Ok(translated.map(|translated| translated.id.to_hex()))
+    }
+
+    fn translate_outbound_message_like(
+        &self,
+        event: &Event,
+        allowed_channels: &[Uuid],
+    ) -> Result<Option<Event>, ProxyError> {
+        let kind_u32 = event_kind_u32(event);
+        let is_stream_message =
+            kind_u32 == KIND_STREAM_MESSAGE || kind_u32 == KIND_STREAM_MESSAGE_V2;
+        let is_edit = kind_u32 == KIND_STREAM_MESSAGE_EDIT;
+
+        if !is_stream_message && !is_edit {
+            return Ok(None);
+        }
+
+        let Some((uuid_str, channel_info)) = self.resolve_channel_info(event, allowed_channels)?
+        else {
+            return Ok(None);
+        };
+
+        let mut new_tags: Vec<Tag> = Vec::new();
+        new_tags.push(
+            Tag::parse(&["e", &channel_info.kind40_event_id]).expect("e tag is always valid"),
+        );
+        for tag in event.tags.iter() {
+            let slice = tag.as_slice();
+            if slice.first().map(|value| value.as_str()) == Some("h")
+                && slice.get(1).map(|value| value.as_str()) == Some(uuid_str.as_str())
+            {
+                continue;
+            }
+            if slice.first().map(|value| value.as_str()) == Some("actor") {
+                continue;
+            }
+            new_tags.push(tag.clone());
+        }
+
+        let standard_kind = self.kind_translator.to_standard(kind_u32);
+        let content = if kind_u32 == KIND_STREAM_MESSAGE_V2 {
+            extract_plain_text(&event.content)
+        } else {
+            event.content.clone()
+        };
+
+        let shadow_keys = self
+            .shadow_keys
+            .get_or_create(&self.resolve_shadow_author_hex(event))?;
+
+        let translated = EventBuilder::new(
+            Kind::Custom(u16::try_from(standard_kind).expect("standard kind must fit in u16")),
+            content,
+            new_tags,
+        )
+        .custom_created_at(event.created_at)
+        .sign_with_keys(&shadow_keys)
+        .map_err(|e| ProxyError::Upstream(format!("outbound signing failed: {e}")))?;
+
+        self.cache_event_mapping(&event.id.to_hex(), &translated.id.to_hex());
+        self.cache_internal_channel(&event.id.to_hex(), channel_info.uuid);
+        Ok(Some(translated))
+    }
+
+    async fn translate_outbound_reaction(
+        &self,
+        event: &Event,
+        allowed_channels: &[Uuid],
+    ) -> Result<Option<Event>, ProxyError> {
+        self.translate_outbound_tag_targeted(event, allowed_channels, Kind::Reaction)
+            .await
+    }
+
+    async fn translate_outbound_deletion(
+        &self,
+        event: &Event,
+        allowed_channels: &[Uuid],
+    ) -> Result<Option<Event>, ProxyError> {
+        self.translate_outbound_tag_targeted(event, allowed_channels, Kind::EventDeletion)
+            .await
+    }
+
+    /// Shared outbound translation for tag-targeted events (reactions, deletions).
+    ///
+    /// Resolves the channel via `#h`, translates all internal `#e` event IDs to
+    /// their external counterparts, strips `#h` and `actor` tags, and re-signs
+    /// with the shadow key for the original author.
+    async fn translate_outbound_tag_targeted(
+        &self,
+        event: &Event,
+        allowed_channels: &[Uuid],
+        kind: Kind,
+    ) -> Result<Option<Event>, ProxyError> {
+        let Some((_uuid_str, channel_info)) = self.resolve_channel_info(event, allowed_channels)?
+        else {
+            return Ok(None);
+        };
+
+        let mut new_tags: Vec<Tag> = Vec::new();
+        let mut saw_target = false;
+
+        for tag in event.tags.iter() {
+            let slice = tag.as_slice();
+            if slice.first().map(|value| value.as_str()) == Some("h") {
+                continue;
+            }
+            if slice.first().map(|value| value.as_str()) == Some("actor") {
+                continue;
+            }
+            if slice.len() >= 2
+                && slice[0] == "e"
+                && slice[1].len() == 64
+                && slice[1].chars().all(|ch| ch.is_ascii_hexdigit())
+            {
+                let Some(external_target_id) = self
+                    .ensure_external_event_id(&slice[1], allowed_channels)
+                    .await?
+                else {
+                    return Ok(None);
+                };
+
+                let mut parts = vec!["e".to_string(), external_target_id];
+                parts.extend(slice.iter().skip(2).cloned());
+                let part_refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+                new_tags.push(Tag::parse(&part_refs).map_err(|e| {
+                    ProxyError::Upstream(format!("outbound tag build failed: {e}"))
+                })?);
+                saw_target = true;
+                continue;
+            }
+            new_tags.push(tag.clone());
+        }
+
+        if !saw_target {
+            return Ok(None);
+        }
+
+        let shadow_keys = self
+            .shadow_keys
+            .get_or_create(&self.resolve_shadow_author_hex(event))?;
+
+        let translated = EventBuilder::new(kind, event.content.clone(), new_tags)
+            .custom_created_at(event.created_at)
+            .sign_with_keys(&shadow_keys)
+            .map_err(|e| ProxyError::Upstream(format!("outbound signing failed: {e}")))?;
+
+        self.cache_event_mapping(&event.id.to_hex(), &translated.id.to_hex());
+        self.cache_internal_channel(&event.id.to_hex(), channel_info.uuid);
+        Ok(Some(translated))
+    }
+
     /// Translate a Sprout event to NIP-28 format for delivery to external clients.
     ///
     /// Returns `Ok(Some(event))` on success, `Ok(None)` if the event should be
@@ -67,100 +374,24 @@ impl Translator {
     /// - All other tags are preserved unchanged
     /// - Re-signed with the shadow key for the original author's pubkey
     /// - V2 rich content (JSON with `"text"` field) is unwrapped to plain text
-    pub fn translate_outbound(
+    pub async fn translate_outbound(
         &self,
         event: &Event,
         allowed_channels: &[Uuid],
     ) -> Result<Option<Event>, ProxyError> {
         let kind_u32 = event_kind_u32(event);
-
-        // Only translate stream messages and edits; pass through or drop everything else.
-        let is_stream_message =
-            kind_u32 == KIND_STREAM_MESSAGE || kind_u32 == KIND_STREAM_MESSAGE_V2;
-        let is_edit = kind_u32 == KIND_STREAM_MESSAGE_EDIT;
-
-        if !is_stream_message && !is_edit {
-            // Drop all non-stream, non-edit kinds. The proxy only exposes a
-            // strict NIP-28 surface (kind:40/41/42) to external clients.
-            // Passing unknown kinds through would leak raw Sprout internals.
-            return Ok(None);
+        if kind_u32 == KIND_REACTION {
+            return self
+                .translate_outbound_reaction(event, allowed_channels)
+                .await;
+        }
+        if kind_u32 == KIND_DELETION {
+            return self
+                .translate_outbound_deletion(event, allowed_channels)
+                .await;
         }
 
-        // Find the channel `#h` tag by looking up each `#h` value against the
-        // channel map. This is robust to ordering — non-channel `#h` tags (e.g.
-        // hashtags) may appear before the real channel tag.
-        let (uuid_str, uuid) = match event
-            .tags
-            .iter()
-            .filter(|t| {
-                let s = t.as_slice();
-                s.len() >= 2 && s[0] == "h"
-            })
-            .find_map(|t| {
-                let val = t.as_slice().get(1)?;
-                let parsed: Uuid = val.parse().ok()?;
-                // Verify it's a known channel, not just any UUID-shaped string.
-                self.channel_map.lookup_by_uuid(&parsed)?;
-                Some((val.clone(), parsed))
-            }) {
-            Some(pair) => pair,
-            None => return Ok(None), // No recognized channel tag — drop silently.
-        };
-
-        // Enforce channel-level access control.
-        if !allowed_channels.contains(&uuid) {
-            return Err(ProxyError::PermissionDenied(format!(
-                "channel {} not in invite scope",
-                uuid
-            )));
-        }
-
-        // Resolve the kind:40 event ID for this channel.
-        let channel_info = self
-            .channel_map
-            .lookup_by_uuid(&uuid)
-            .ok_or_else(|| ProxyError::ChannelNotFound(uuid.to_string()))?;
-
-        // Build translated tag list: replace the channel `#h` with `#e`, keep everything else.
-        let mut new_tags: Vec<Tag> = Vec::new();
-        new_tags.push(
-            Tag::parse(&["e", &channel_info.kind40_event_id]).expect("e tag is always valid"),
-        );
-        for tag in event.tags.iter() {
-            let s = tag.as_slice();
-            // Only strip the specific `#h` tag whose value matches the channel UUID.
-            // Preserve any other `#h` tags.
-            if s.first().map(|v| v.as_str()) == Some("h")
-                && s.get(1).map(|v| v.as_str()) == Some(uuid_str.as_str())
-            {
-                continue; // Drop only the channel `#h` tag.
-            }
-            new_tags.push(tag.clone());
-        }
-
-        // Translate kind number.
-        let standard_kind = self.kind_translator.to_standard(kind_u32);
-
-        // Unwrap V2 rich content to plain text; V1 and edit content passes through.
-        let content = if kind_u32 == KIND_STREAM_MESSAGE_V2 {
-            extract_plain_text(&event.content)
-        } else {
-            event.content.clone()
-        };
-
-        // Re-sign with the shadow key for the original author.
-        let shadow_keys = self.shadow_keys.get_or_create(&event.pubkey.to_hex())?;
-
-        let translated = EventBuilder::new(
-            Kind::Custom(u16::try_from(standard_kind).expect("standard kind must fit in u16")),
-            content,
-            new_tags,
-        )
-        .custom_created_at(event.created_at)
-        .sign_with_keys(&shadow_keys)
-        .map_err(|e| ProxyError::Upstream(format!("outbound signing failed: {e}")))?;
-
-        Ok(Some(translated))
+        self.translate_outbound_message_like(event, allowed_channels)
     }
 }
 
@@ -188,12 +419,27 @@ impl Translator {
         let kind_u32 = event.kind.as_u16() as u32;
 
         // Accept kind:42 (channel message), kind:41 (channel metadata edit),
-        // and kind:1 (text note). Everything else is rejected.
-        if kind_u32 != 42 && kind_u32 != 41 && kind_u32 != 1 {
+        // kind:1 (text note), and kind:7 (reaction).
+        // kind:5 (deletion) is intentionally NOT accepted inbound.
+        // Inbound kind:5 blocked: relay deletion handler lacks author-match authorization.
+        // External clients could delete any user's messages. Re-enable after adding
+        // author validation to handle_standard_deletion_event.
+        // Everything else is rejected.
+        if kind_u32 != 42 && kind_u32 != 41 && kind_u32 != 1 && kind_u32 != 7 {
             return Err(ProxyError::PermissionDenied(format!(
-                "kind {} not accepted by proxy (expected 1, 41, or 42)",
+                "kind {} not accepted by proxy (expected 1, 7, 41, or 42)",
                 kind_u32
             )));
+        }
+
+        if kind_u32 == 7 {
+            return self.translate_inbound_tag_targeted(
+                event,
+                external_pubkey,
+                allowed_channels,
+                Kind::Reaction,
+                "reaction",
+            );
         }
 
         // Find the channel-reference `#e` tag by looking up each `#e` value
@@ -228,8 +474,10 @@ impl Translator {
 
         // Build translated tag list: replace the channel `#e` with `#h`, keep everything else.
         let mut new_tags: Vec<Tag> = Vec::new();
+        // SAFETY: ["h", <uuid_string>] is always a valid 2-element tag structure
         new_tags.push(
-            Tag::parse(&["h", &channel_info.uuid.to_string()]).expect("h tag is always valid"),
+            Tag::parse(&["h", &channel_info.uuid.to_string()])
+                .expect("SAFETY: [\"h\", uuid_string] is always a valid tag structure"),
         );
         for tag in event.tags.iter() {
             let s = tag.as_slice();
@@ -254,8 +502,12 @@ impl Translator {
         // Re-sign with the shadow key for the external user.
         let shadow_keys = self.shadow_keys.get_or_create(external_pubkey)?;
 
+        // SAFETY: sprout_kind is derived from KindTranslator which maps to known Sprout kinds (40001, 40002, 40003) that fit in u16
         let translated = EventBuilder::new(
-            Kind::Custom(u16::try_from(sprout_kind).expect("sprout kind must fit in u16")),
+            Kind::Custom(
+                u16::try_from(sprout_kind)
+                    .expect("SAFETY: sprout kind values (40001, 40002, 40003) always fit in u16"),
+            ),
             &event.content,
             new_tags,
         )
@@ -263,6 +515,150 @@ impl Translator {
         .sign_with_keys(&shadow_keys)
         .map_err(|e| ProxyError::Upstream(format!("inbound signing failed: {e}")))?;
 
+        self.cache_event_mapping(&translated.id.to_hex(), &event.id.to_hex());
+        self.cache_internal_channel(&translated.id.to_hex(), channel_info.uuid);
+        Ok(translated)
+    }
+
+    /// Shared inbound translation for tag-targeted events (kind:5 deletion, kind:7 reaction).
+    ///
+    /// # Security
+    ///
+    /// Collects ALL hex `#e` tags and verifies every one resolves to the **same**
+    /// channel UUID that is in `allowed_channels`. A mixed-target event (targets
+    /// spanning multiple channels) is rejected outright — this prevents a client
+    /// from smuggling out-of-scope event IDs inside a single deletion or reaction.
+    fn translate_inbound_tag_targeted(
+        &self,
+        event: &Event,
+        external_pubkey: &str,
+        allowed_channels: &[Uuid],
+        kind: Kind,
+        label: &str,
+    ) -> Result<Event, ProxyError> {
+        // Collect all hex #e tag values.
+        let e_tag_values: Vec<String> = event
+            .tags
+            .iter()
+            .filter_map(|tag| {
+                let slice = tag.as_slice();
+                if slice.len() >= 2
+                    && slice[0] == "e"
+                    && slice[1].len() == 64
+                    && slice[1].chars().all(|ch| ch.is_ascii_hexdigit())
+                {
+                    Some(slice[1].clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if e_tag_values.is_empty() {
+            return Err(ProxyError::PermissionDenied(format!(
+                "kind:{} event must reference a target message via #e",
+                event.kind.as_u16()
+            )));
+        }
+
+        // Resolve every #e tag to an internal event ID and channel UUID.
+        // All targets must resolve to the same channel — cross-channel targeting
+        // is rejected to prevent authorization bypass.
+        let mut resolved_channel: Option<Uuid> = None;
+        // Resolve all external → internal ID mappings upfront. We store
+        // the resolved pairs so the tag-building loop below never re-reads
+        // the moka cache (which could evict entries between passes).
+        let mut resolved_ids: Vec<(String, String)> = Vec::with_capacity(e_tag_values.len());
+        for external_id in &e_tag_values {
+            let internal_id = self.lookup_internal_event_id(external_id).ok_or_else(|| {
+                ProxyError::PermissionDenied(format!(
+                    "{label} target is unknown to the proxy; fetch the message first"
+                ))
+            })?;
+            let channel_uuid = self.lookup_internal_channel(&internal_id).ok_or_else(|| {
+                ProxyError::PermissionDenied(format!(
+                    "{label} target is unknown to the proxy; fetch the message first"
+                ))
+            })?;
+            match resolved_channel {
+                None => resolved_channel = Some(channel_uuid),
+                Some(existing) if existing != channel_uuid => {
+                    return Err(ProxyError::PermissionDenied(format!(
+                        "{label} targets span multiple channels — cross-channel targeting rejected"
+                    )));
+                }
+                Some(_) => {}
+            }
+            resolved_ids.push((external_id.clone(), internal_id));
+        }
+        let id_map: std::collections::HashMap<&str, &str> = resolved_ids
+            .iter()
+            .map(|(ext, int)| (ext.as_str(), int.as_str()))
+            .collect();
+
+        let channel_uuid = resolved_channel.expect("e_tag_values non-empty guarantees Some");
+
+        if !allowed_channels.contains(&channel_uuid) {
+            return Err(ProxyError::PermissionDenied(format!(
+                "{label} target channel not in invite scope"
+            )));
+        }
+
+        // Build translated tag list: prepend #h, translate all #e values, drop
+        // any client-supplied #h tags (prevent unauthorized channel injection).
+        let mut new_tags: Vec<Tag> =
+            vec![Tag::parse(&["h", &channel_uuid.to_string()]).expect("h tag is always valid")];
+        let mut saw_target = false;
+
+        for tag in event.tags.iter() {
+            let slice = tag.as_slice();
+            // Strip client-supplied #h tags (authorized #h already added above).
+            if slice.first().map(|v| v.as_str()) == Some("h") {
+                continue;
+            }
+            // Strip actor tags — untrusted client data should not persist.
+            if slice.first().map(|v| v.as_str()) == Some("actor") {
+                continue;
+            }
+            if slice.len() >= 2
+                && slice[0] == "e"
+                && slice[1].len() == 64
+                && slice[1].chars().all(|ch| ch.is_ascii_hexdigit())
+            {
+                let internal_id = *id_map.get(slice[1].as_str()).ok_or_else(|| {
+                    ProxyError::PermissionDenied(format!(
+                        "{label} target is unknown to the proxy; fetch the message first"
+                    ))
+                })?;
+                let mut parts = vec!["e".to_string(), internal_id.to_string()];
+                parts.extend(slice.iter().skip(2).cloned());
+                let part_refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+                new_tags.push(
+                    Tag::parse(&part_refs).map_err(|e| {
+                        ProxyError::Upstream(format!("{label} tag build failed: {e}"))
+                    })?,
+                );
+                saw_target = true;
+                continue;
+            }
+            new_tags.push(tag.clone());
+        }
+
+        if !saw_target {
+            return Err(ProxyError::PermissionDenied(format!(
+                "kind:{} event must reference a target message via #e",
+                event.kind.as_u16()
+            )));
+        }
+
+        let shadow_keys = self.shadow_keys.get_or_create(external_pubkey)?;
+        let translated = EventBuilder::new(kind, &event.content, new_tags)
+            .custom_created_at(event.created_at)
+            .sign_with_keys(&shadow_keys)
+            .map_err(|e| ProxyError::Upstream(format!("inbound signing failed: {e}")))?;
+
+        self.cache_event_mapping(&translated.id.to_hex(), &event.id.to_hex());
+        self.cache_internal_channel(&translated.id.to_hex(), channel_uuid);
         Ok(translated)
     }
 }
@@ -287,7 +683,11 @@ impl Translator {
                 .map(|k| {
                     let k_u32 = k.as_u16() as u32;
                     let sprout_k = self.kind_translator.to_sprout(k_u32);
-                    Kind::Custom(u16::try_from(sprout_k).expect("sprout kind must fit in u16"))
+                    // SAFETY: sprout kind values (40001, 40002, 40003) always fit in u16
+                    Kind::Custom(
+                        u16::try_from(sprout_k)
+                            .expect("SAFETY: sprout kind values always fit in u16"),
+                    )
                 })
                 .collect();
             // Rebuild via the builder to stay consistent with nostr's internal state.
@@ -359,7 +759,11 @@ impl Translator {
                 .map(|k| {
                     let k_u32 = k.as_u16() as u32;
                     let standard_k = self.kind_translator.to_standard(k_u32);
-                    Kind::Custom(u16::try_from(standard_k).expect("standard kind must fit in u16"))
+                    // SAFETY: standard kind values (42, 41) always fit in u16
+                    Kind::Custom(
+                        u16::try_from(standard_k)
+                            .expect("SAFETY: standard kind values always fit in u16"),
+                    )
                 })
                 .collect();
             f = f.remove_kinds(kinds.iter().cloned()).kinds(new_kinds);
@@ -417,7 +821,13 @@ mod tests {
         let shadow_mgr = Arc::new(
             ShadowKeyManager::new(TEST_SALT).expect("shadow key manager creation must succeed"),
         );
-        let translator = Translator::new(shadow_mgr, channel_map.clone());
+        let translator = Translator::new(
+            shadow_mgr,
+            channel_map.clone(),
+            "http://localhost:3000",
+            "sprout_test",
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        );
 
         // Retrieve the kind:40 event ID for the test channel.
         let uuid: Uuid = TEST_UUID.parse().unwrap();
@@ -435,8 +845,8 @@ mod tests {
 
     // ── Test 1: Outbound — kind:40001 + #h → kind:42 + #e ───────────────────
 
-    #[test]
-    fn outbound_translates_stream_message() {
+    #[tokio::test]
+    async fn outbound_translates_stream_message() {
         let (translator, kind40_event_id) = make_translator();
         let author_keys = Keys::generate();
 
@@ -452,6 +862,7 @@ mod tests {
 
         let result = translator
             .translate_outbound(&sprout_event, &allowed())
+            .await
             .expect("outbound translation must not error");
 
         let translated = result.expect("should produce a translated event");
@@ -538,8 +949,8 @@ mod tests {
 
     // ── Test 3: Outbound — channel not in allowed_channels → PermissionDenied
 
-    #[test]
-    fn outbound_rejects_channel_not_in_scope() {
+    #[tokio::test]
+    async fn outbound_rejects_channel_not_in_scope() {
         let (translator, _) = make_translator();
         let author_keys = Keys::generate();
 
@@ -549,7 +960,9 @@ mod tests {
                 .sign_with_keys(&author_keys)
                 .unwrap();
 
-        let result = translator.translate_outbound(&sprout_event, &no_channels());
+        let result = translator
+            .translate_outbound(&sprout_event, &no_channels())
+            .await;
 
         assert!(
             matches!(result, Err(ProxyError::PermissionDenied(_))),
@@ -582,8 +995,8 @@ mod tests {
 
     // ── Test 5: V2 content extraction ────────────────────────────────────────
 
-    #[test]
-    fn v2_content_plain_text_extracted() {
+    #[tokio::test]
+    async fn v2_content_plain_text_extracted() {
         // extract_plain_text is a private helper; test it indirectly via outbound.
         let (translator, _) = make_translator();
         let author_keys = Keys::generate();
@@ -600,6 +1013,7 @@ mod tests {
 
         let translated = translator
             .translate_outbound(&sprout_event, &allowed())
+            .await
             .unwrap()
             .expect("should produce translated event");
 
@@ -806,8 +1220,8 @@ mod tests {
 
     // ── Test 8: Outbound — non-channel #h tags are preserved (FIX 2) ────────
 
-    #[test]
-    fn outbound_preserves_non_channel_h_tags() {
+    #[tokio::test]
+    async fn outbound_preserves_non_channel_h_tags() {
         let (translator, kind40_event_id) = make_translator();
         let author_keys = Keys::generate();
 
@@ -825,6 +1239,7 @@ mod tests {
 
         let result = translator
             .translate_outbound(&sprout_event, &allowed())
+            .await
             .expect("outbound translation must not error");
 
         let translated = result.expect("should produce a translated event");
@@ -940,8 +1355,8 @@ mod tests {
 
     // ── Test 12: Outbound — kind:40003 (edit) → kind:41 (FIX 4) ─────────────
 
-    #[test]
-    fn outbound_translates_edit_message() {
+    #[tokio::test]
+    async fn outbound_translates_edit_message() {
         use sprout_core::kind::KIND_STREAM_MESSAGE_EDIT;
 
         let (translator, _) = make_translator();
@@ -958,6 +1373,7 @@ mod tests {
 
         let result = translator
             .translate_outbound(&sprout_event, &allowed())
+            .await
             .expect("outbound translation of edit must not error");
 
         let translated = result.expect("edit must produce a translated event, not None");
@@ -1027,8 +1443,8 @@ mod tests {
 
     // ── Test 15: Outbound — unknown kinds are dropped (not leaked) ───────
 
-    #[test]
-    fn outbound_drops_unknown_kinds() {
+    #[tokio::test]
+    async fn outbound_drops_unknown_kinds() {
         let (translator, _) = make_translator();
         let author_keys = Keys::generate();
 
@@ -1040,6 +1456,7 @@ mod tests {
 
         let result = translator
             .translate_outbound(&event, &allowed())
+            .await
             .expect("outbound must not error");
 
         assert!(

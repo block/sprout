@@ -1,0 +1,102 @@
+import type { CreateManagedAgentResponse } from "@/shared/api/types";
+import { Button } from "@/shared/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/dialog";
+import { CopyButton } from "./CopyButton";
+
+export function SecretRevealDialog({
+  created,
+  onOpenChange,
+}: {
+  created: CreateManagedAgentResponse | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Dialog onOpenChange={onOpenChange} open={created !== null}>
+      <DialogContent className="max-w-2xl overflow-hidden p-0">
+        <div className="flex max-h-[85vh] flex-col">
+          <DialogHeader className="border-b border-border/60 px-6 py-5 pr-14">
+            <DialogTitle>Agent created</DialogTitle>
+            <DialogDescription>
+              Save the private key and token now. The app can keep running the
+              harness locally, but these secrets are only revealed here.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
+            {created ? (
+              <>
+                <div className="rounded-2xl border border-border/70 bg-muted/20 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold tracking-tight">
+                        Private key (nsec)
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        This is the agent identity used by `sprout-acp`.
+                      </p>
+                    </div>
+                    <CopyButton
+                      label="Copy key"
+                      value={created.privateKeyNsec}
+                    />
+                  </div>
+                  <code className="mt-3 block break-all rounded-xl border border-border/70 bg-background/80 px-3 py-2 text-xs">
+                    {created.privateKeyNsec}
+                  </code>
+                </div>
+
+                {created.apiToken ? (
+                  <div className="rounded-2xl border border-border/70 bg-muted/20 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold tracking-tight">
+                          API token
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          Optional for local dev, required when the relay
+                          enforces bearer auth.
+                        </p>
+                      </div>
+                      <CopyButton label="Copy token" value={created.apiToken} />
+                    </div>
+                    <code className="mt-3 block break-all rounded-xl border border-border/70 bg-background/80 px-3 py-2 text-xs">
+                      {created.apiToken}
+                    </code>
+                  </div>
+                ) : null}
+
+                {created.spawnError ? (
+                  <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                    {created.spawnError}
+                  </p>
+                ) : (
+                  <p className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-primary">
+                    {created.agent.name} is ready
+                    {created.agent.status === "running" ? " and running." : "."}
+                  </p>
+                )}
+              </>
+            ) : null}
+          </div>
+
+          <div className="flex justify-end border-t border-border/60 px-6 py-4">
+            <Button
+              onClick={() => onOpenChange(false)}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              Done
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

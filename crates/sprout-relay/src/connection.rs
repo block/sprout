@@ -117,7 +117,9 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
     }
 
     // Register after challenge succeeds — avoids leaked entries on early disconnect.
-    state.conn_manager.register(conn_id, tx.clone());
+    state
+        .conn_manager
+        .register(conn_id, tx.clone(), cancel.clone());
 
     let (ws_send, ws_recv) = socket.split();
 

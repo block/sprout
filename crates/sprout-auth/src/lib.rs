@@ -113,7 +113,11 @@ impl AuthService {
         Self {
             config,
             jwks_cache: JwksCache::new(),
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+                .expect("SAFETY: default builder with timeout config cannot fail"),
         }
     }
 
@@ -319,7 +323,7 @@ impl AuthService {
 ///
 /// # ⚠️ SECURITY — Dev/test only
 ///
-/// This function is gated behind `#[cfg(any(test, feature = "dev", debug_assertions))]`
+/// This function is gated behind `#[cfg(any(test, feature = "dev"))]`
 /// and **must never be compiled into a production release build**.
 ///
 /// - The derived keys are deterministic and predictable from the username alone.
@@ -331,9 +335,8 @@ impl AuthService {
 /// | Build command | Included? | Reason |
 /// |---|---|---|
 /// | `cargo test` | ✅ Yes | `test` cfg |
-/// | `cargo build` (debug) | ✅ Yes | `debug_assertions` |
-/// | `cargo run` (debug) | ✅ Yes | `debug_assertions` |
-/// | `cargo build --release` | ❌ No | Neither `test` nor `debug_assertions` nor `dev` feature |
+/// | `cargo build` (debug) | ❌ No | Not included without `dev` feature |
+/// | `cargo build --release` | ❌ No | Neither `test` nor `dev` feature |
 /// | `cargo build --release --features dev` | ✅ Yes | `dev` feature — use only for integration harnesses |
 ///
 /// ## The `dev` feature
@@ -342,6 +345,7 @@ impl AuthService {
 /// helpers) in release-mode integration test harnesses. It must **not** be
 /// enabled in production relay deployments. Check `sprout-relay/Cargo.toml` to
 /// ensure `sprout-auth` is not listed with `features = ["dev"]` in production.
+#[cfg(any(test, feature = "dev"))]
 pub fn derive_pubkey_from_username(username: &str) -> Result<nostr::PublicKey, AuthError> {
     use sha2::{Digest, Sha256};
     let seed = format!("sprout-test-key:{username}");

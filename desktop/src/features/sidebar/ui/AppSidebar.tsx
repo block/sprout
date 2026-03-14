@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  Bot,
   CircleDot,
   Compass,
   FileText,
@@ -43,9 +44,8 @@ type AppSidebarProps = {
   profile?: Profile;
   selfPresenceStatus: PresenceStatus;
   errorMessage?: string;
-  homeUrgentCount?: number;
   selectedChannelId: string | null;
-  selectedView: "home" | "channel" | "settings";
+  selectedView: "home" | "channel" | "settings" | "agents";
   unreadChannelIds: Set<string>;
   onCreateChannel: (input: {
     name: string;
@@ -53,6 +53,7 @@ type AppSidebarProps = {
   }) => Promise<void>;
   onOpenBrowseChannels: () => void;
   onOpenSearch: () => void;
+  onSelectAgents: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
   onSelectSettings: () => void;
@@ -294,13 +295,13 @@ export function AppSidebar({
   profile,
   selfPresenceStatus,
   errorMessage,
-  homeUrgentCount,
   selectedChannelId,
   selectedView,
   unreadChannelIds,
   onCreateChannel,
   onOpenBrowseChannels,
   onOpenSearch,
+  onSelectAgents,
   onSelectHome,
   onSelectChannel,
   onSelectSettings,
@@ -435,11 +436,17 @@ export function AppSidebar({
             >
               <Home className="h-4 w-4" />
               <span>Home</span>
-              {homeUrgentCount && homeUrgentCount > 0 ? (
-                <span className="ml-auto rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary-foreground">
-                  {homeUrgentCount}
-                </span>
-              ) : null}
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={selectedView === "agents"}
+              onClick={onSelectAgents}
+              tooltip="Agents"
+              type="button"
+            >
+              <Bot className="h-4 w-4" />
+              <span>Agents</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

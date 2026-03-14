@@ -1,107 +1,845 @@
+//! Configuration for the sprout-acp harness.
+//!
+//! CLI-first: every option is a CLI flag with env var fallback.
+//! Config file (TOML) for complex subscription rules.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use clap::Parser;
 use nostr::Keys;
 use thiserror::Error;
+use uuid::Uuid;
 
-/// Errors that can occur when loading configuration from environment variables.
+use crate::filter::SubscriptionRule;
+
+// ── Errors ────────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("required environment variable {0} is not set")]
-    MissingVar(&'static str),
+    #[error("failed to parse nostr keys: {0}")]
+    KeyParse(#[from] nostr::key::Error),
 
-    #[error("failed to parse nostr keys from {var}: {source}")]
-    KeyParse {
-        var: &'static str,
-        #[source]
-        source: nostr::key::Error,
-    },
+    #[error("failed to read file: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("config file error: {0}")]
+    ConfigFile(String),
 }
 
-/// Configuration for the sprout-acp harness.
-#[derive(Debug)]
-pub struct Config {
-    /// Agent's nostr keypair — used for both relay auth and agent identity.
-    ///
-    /// Parsed from `SPROUT_PRIVATE_KEY` (preferred) or the legacy
-    /// `SPROUT_ACP_PRIVATE_KEY` + `SPROUT_AGENT_PRIVATE_KEY` pair.
-    pub keys: Keys,
-    /// API token, optional. Required if the relay enforces token auth.
-    pub api_token: Option<String>,
-    /// Relay WebSocket URL (`SPROUT_RELAY_URL`). Default: `ws://localhost:3000`.
+// ── Enums ─────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum SubscribeMode {
+    Mentions,
+    All,
+    Config,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum DedupMode {
+    Drop,
+    Queue,
+}
+
+// ── CLI ───────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "sprout-acp",
+    about = "ACP harness that bridges Sprout events to AI agents"
+)]
+pub struct CliArgs {
+    #[arg(long, env = "SPROUT_RELAY_URL", default_value = "ws://localhost:3000")]
     pub relay_url: String,
 
-    // --- Agent binary ---
-    /// Agent command (`SPROUT_ACP_AGENT_COMMAND`). Default: `goose`.
+    #[arg(long, env = "SPROUT_PRIVATE_KEY")]
+    pub private_key: String,
+
+    #[arg(long, env = "SPROUT_API_TOKEN")]
+    pub api_token: Option<String>,
+
+    #[arg(long, env = "SPROUT_ACP_AGENT_COMMAND", default_value = "goose")]
     pub agent_command: String,
-    /// Agent arguments (`SPROUT_ACP_AGENT_ARGS`, comma-separated). Default: `["acp"]`.
+
+    #[arg(
+        long,
+        env = "SPROUT_ACP_AGENT_ARGS",
+        default_value = "acp",
+        value_delimiter = ','
+    )]
     pub agent_args: Vec<String>,
 
-    // --- MCP server ---
-    /// MCP server binary path (`SPROUT_ACP_MCP_COMMAND`). Default: `sprout-mcp-server`.
+    #[arg(
+        long,
+        env = "SPROUT_ACP_MCP_COMMAND",
+        default_value = "sprout-mcp-server"
+    )]
     pub mcp_command: String,
 
-    // --- Tuning ---
-    /// Maximum turn duration in seconds (`SPROUT_ACP_TURN_TIMEOUT`). Default: 300.
-    pub turn_timeout_secs: u64,
+    #[arg(long, env = "SPROUT_ACP_TURN_TIMEOUT", default_value = "300")]
+    pub turn_timeout: u64,
+
+    #[arg(
+        long,
+        env = "SPROUT_ACP_SYSTEM_PROMPT",
+        conflicts_with = "system_prompt_file"
+    )]
+    pub system_prompt: Option<String>,
+
+    #[arg(
+        long,
+        env = "SPROUT_ACP_SYSTEM_PROMPT_FILE",
+        conflicts_with = "system_prompt"
+    )]
+    pub system_prompt_file: Option<PathBuf>,
+
+    #[arg(long, env = "SPROUT_ACP_INITIAL_MESSAGE")]
+    pub initial_message: Option<String>,
+
+    #[arg(
+        long,
+        env = "SPROUT_ACP_SUBSCRIBE",
+        default_value = "mentions",
+        value_enum
+    )]
+    pub subscribe: SubscribeMode,
+
+    #[arg(long, env = "SPROUT_ACP_KINDS", value_delimiter = ',')]
+    pub kinds: Option<Vec<u32>>,
+
+    #[arg(long, env = "SPROUT_ACP_CHANNELS", value_delimiter = ',')]
+    pub channels: Option<Vec<String>>,
+
+    #[arg(long, env = "SPROUT_ACP_NO_MENTION_FILTER")]
+    pub no_mention_filter: bool,
+
+    #[arg(long, env = "SPROUT_ACP_CONFIG", default_value = "./sprout-acp.toml")]
+    pub config: PathBuf,
+
+    #[arg(long, env = "SPROUT_ACP_DEDUP", default_value = "drop", value_enum)]
+    pub dedup: DedupMode,
+
+    #[arg(long, env = "SPROUT_ACP_NO_IGNORE_SELF")]
+    pub no_ignore_self: bool,
 }
 
-/// Parse a nostr `Keys` from the named environment variable.
-fn parse_keys_var(var: &'static str) -> Result<Keys, ConfigError> {
-    let nsec = std::env::var(var).map_err(|_| ConfigError::MissingVar(var))?;
-    Keys::parse(&nsec).map_err(|e| ConfigError::KeyParse { var, source: e })
+// ── Merged NIP-01 filter ──────────────────────────────────────────────────────
+
+/// Merged NIP-01 subscription filter for a single channel.
+#[derive(Debug, Clone)]
+pub struct ChannelFilter {
+    /// Event kinds to subscribe to. None = wildcard (all kinds).
+    pub kinds: Option<Vec<u32>>,
+    /// Whether to include `#p` tag filter for agent pubkey.
+    pub require_mention: bool,
+}
+
+// ── Resolved config ───────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+pub struct Config {
+    pub keys: Keys,
+    pub api_token: Option<String>,
+    pub relay_url: String,
+    pub agent_command: String,
+    pub agent_args: Vec<String>,
+    pub mcp_command: String,
+    pub turn_timeout_secs: u64,
+    pub system_prompt: Option<String>,
+    pub initial_message: Option<String>,
+    pub subscribe_mode: SubscribeMode,
+    pub dedup_mode: DedupMode,
+    pub ignore_self: bool,
+    pub kinds_override: Option<Vec<u32>>,
+    pub channels_override: Option<Vec<String>>,
+    pub no_mention_filter: bool,
+    pub config_path: PathBuf,
 }
 
 impl Config {
-    /// Load configuration from environment variables.
-    ///
-    /// Key resolution order:
-    /// 1. `SPROUT_PRIVATE_KEY` — single key for everything (preferred)
-    /// 2. `SPROUT_ACP_PRIVATE_KEY` — legacy harness key (fallback)
-    pub fn from_env() -> Result<Self, ConfigError> {
-        let keys = parse_keys_var("SPROUT_PRIVATE_KEY")
-            .or_else(|_| parse_keys_var("SPROUT_ACP_PRIVATE_KEY"))?;
+    pub fn from_cli() -> Result<Self, ConfigError> {
+        // Propagate legacy env vars so clap sees them under the canonical names.
+        // Only set if the canonical var is absent — clap's `env` reads these.
+        // NOTE: std::env::set_var is safe in edition 2021 but will require
+        // `unsafe` in edition 2024. This runs inside #[tokio::main] so worker
+        // threads are already alive. When migrating to edition 2024, move this
+        // to a non-async fn main() wrapper that runs before the runtime starts.
+        for (legacy, canonical) in [
+            ("SPROUT_ACP_PRIVATE_KEY", "SPROUT_PRIVATE_KEY"),
+            ("SPROUT_ACP_API_TOKEN", "SPROUT_API_TOKEN"),
+        ] {
+            if std::env::var(canonical).is_err() {
+                if let Ok(val) = std::env::var(legacy) {
+                    std::env::set_var(canonical, &val);
+                }
+            }
+        }
 
-        let api_token = std::env::var("SPROUT_API_TOKEN")
-            .or_else(|_| std::env::var("SPROUT_ACP_API_TOKEN"))
-            .ok();
+        let args = CliArgs::parse();
+        let keys = Keys::parse(&args.private_key)?;
 
-        let relay_url =
-            std::env::var("SPROUT_RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string());
+        let system_prompt = if let Some(text) = args.system_prompt {
+            Some(text)
+        } else if let Some(ref path) = args.system_prompt_file {
+            Some(std::fs::read_to_string(path)?)
+        } else {
+            None
+        };
 
-        let agent_command =
-            std::env::var("SPROUT_ACP_AGENT_COMMAND").unwrap_or_else(|_| "goose".to_string());
-
-        let agent_args = std::env::var("SPROUT_ACP_AGENT_ARGS")
-            .map(|s| s.split(',').map(|a| a.trim().to_string()).collect())
-            .unwrap_or_else(|_| vec!["acp".to_string()]);
-
-        let mcp_command = std::env::var("SPROUT_ACP_MCP_COMMAND")
-            .unwrap_or_else(|_| "sprout-mcp-server".to_string());
-
-        let turn_timeout_secs = std::env::var("SPROUT_ACP_TURN_TIMEOUT")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(300);
+        if matches!(args.subscribe, SubscribeMode::Config) {
+            if args.kinds.is_some() {
+                tracing::warn!("--kinds is ignored in config mode");
+            }
+            if args.channels.is_some() {
+                tracing::warn!("--channels is ignored in config mode");
+            }
+            if args.no_mention_filter {
+                tracing::warn!("--no-mention-filter is ignored in config mode");
+            }
+        }
 
         Ok(Config {
             keys,
-            api_token,
-            relay_url,
-            agent_command,
-            agent_args,
-            mcp_command,
-            turn_timeout_secs,
+            api_token: args.api_token,
+            relay_url: args.relay_url,
+            agent_command: args.agent_command,
+            agent_args: args.agent_args,
+            mcp_command: args.mcp_command,
+            turn_timeout_secs: args.turn_timeout,
+            system_prompt,
+            initial_message: args.initial_message,
+            subscribe_mode: args.subscribe,
+            dedup_mode: args.dedup,
+            ignore_self: !args.no_ignore_self,
+            kinds_override: args.kinds,
+            channels_override: args.channels,
+            no_mention_filter: args.no_mention_filter,
+            config_path: args.config,
         })
     }
 
-    /// Return a human-readable summary (no secrets).
+    /// Human-readable summary (no secrets).
     pub fn summary(&self) -> String {
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} turn_timeout={}s",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} timeout={}s subscribe={:?} dedup={:?} ignore_self={}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
             self.agent_args.join(" "),
             self.mcp_command,
             self.turn_timeout_secs,
+            self.subscribe_mode,
+            self.dedup_mode,
+            self.ignore_self,
         )
+    }
+}
+
+// ── TOML config file ──────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct TomlConfig {
+    #[serde(default)]
+    rules: Vec<SubscriptionRule>,
+}
+
+pub fn load_rules(path: &std::path::Path) -> Result<Vec<SubscriptionRule>, ConfigError> {
+    let content = std::fs::read_to_string(path)?;
+    let config: TomlConfig =
+        toml::from_str(&content).map_err(|e| ConfigError::ConfigFile(e.to_string()))?;
+
+    if config.rules.len() > 100 {
+        return Err(ConfigError::ConfigFile(format!(
+            "too many rules ({}, max 100)",
+            config.rules.len()
+        )));
+    }
+
+    let mut seen_names = std::collections::HashSet::new();
+    for rule in &config.rules {
+        if rule.name.trim().is_empty() {
+            return Err(ConfigError::ConfigFile(
+                "rule name must not be empty".into(),
+            ));
+        }
+        if !seen_names.insert(&rule.name) {
+            return Err(ConfigError::ConfigFile(format!(
+                "duplicate rule name: {}",
+                rule.name
+            )));
+        }
+        if let Some(ref expr) = rule.filter {
+            if expr.len() > 4096 {
+                return Err(ConfigError::ConfigFile(format!(
+                    "rule '{}': filter too long ({} bytes, max 4096)",
+                    rule.name,
+                    expr.len()
+                )));
+            }
+            // Fail fast: parse the expression at load time so typos don't
+            // silently produce dead rules at runtime.
+            if let Err(e) = evalexpr::build_operator_tree(expr) {
+                return Err(ConfigError::ConfigFile(format!(
+                    "rule '{}': invalid filter expression: {e}",
+                    rule.name,
+                )));
+            }
+        }
+        // Validate channel scope — catch typos like "ALL" or "All" early.
+        if let crate::filter::ChannelScope::All(ref s) = rule.channels {
+            if s != "all" {
+                return Err(ConfigError::ConfigFile(format!(
+                    "rule '{}': channels must be \"all\" or a list, got {:?}",
+                    rule.name, s,
+                )));
+            }
+        }
+    }
+
+    Ok(config.rules)
+}
+
+// ── Subscription resolution ───────────────────────────────────────────────────
+
+/// Resolve per-channel NIP-01 filters from config + discovered channels.
+pub fn resolve_channel_filters(
+    config: &Config,
+    discovered_channels: &[Uuid],
+    rules: &[SubscriptionRule],
+) -> HashMap<Uuid, ChannelFilter> {
+    use sprout_core::kind::{
+        KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
+    };
+
+    let target_channels: Vec<Uuid> = if let Some(ref overrides) = config.channels_override {
+        overrides
+            .iter()
+            .filter_map(|s| s.parse::<Uuid>().ok())
+            .filter(|id| discovered_channels.contains(id))
+            .collect()
+    } else {
+        discovered_channels.to_vec()
+    };
+
+    let mut result = HashMap::new();
+
+    match config.subscribe_mode {
+        SubscribeMode::Mentions => {
+            let kinds = config.kinds_override.clone().unwrap_or_else(|| {
+                vec![
+                    KIND_STREAM_MESSAGE,
+                    KIND_WORKFLOW_APPROVAL_REQUESTED,
+                    KIND_STREAM_REMINDER,
+                ]
+            });
+            let require_mention = !config.no_mention_filter;
+            for ch in &target_channels {
+                result.insert(
+                    *ch,
+                    ChannelFilter {
+                        kinds: Some(kinds.clone()),
+                        require_mention,
+                    },
+                );
+            }
+        }
+        SubscribeMode::All => {
+            for ch in &target_channels {
+                result.insert(
+                    *ch,
+                    ChannelFilter {
+                        kinds: config.kinds_override.clone(),
+                        require_mention: false,
+                    },
+                );
+            }
+        }
+        SubscribeMode::Config => {
+            for ch in discovered_channels {
+                let mut merged_kinds: Option<Vec<u32>> = Some(vec![]);
+                let mut require_mention = true;
+                let mut has_rule = false;
+
+                for rule in rules {
+                    if !rule_applies_to_channel(rule, *ch) {
+                        continue;
+                    }
+                    has_rule = true;
+                    if rule.kinds.is_empty() {
+                        merged_kinds = None;
+                    } else if let Some(ref mut kinds) = merged_kinds {
+                        for k in &rule.kinds {
+                            if !kinds.contains(k) {
+                                kinds.push(*k);
+                            }
+                        }
+                    }
+                    if !rule.require_mention {
+                        require_mention = false;
+                    }
+                }
+
+                if has_rule {
+                    result.insert(
+                        *ch,
+                        ChannelFilter {
+                            kinds: merged_kinds,
+                            require_mention,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    result
+}
+
+fn rule_applies_to_channel(rule: &SubscriptionRule, channel_id: Uuid) -> bool {
+    use crate::filter::ChannelScope;
+    match &rule.channels {
+        ChannelScope::All(s) if s == "all" => true,
+        ChannelScope::List(ids) => ids
+            .iter()
+            .any(|id| id.parse::<Uuid>().ok() == Some(channel_id)),
+        _ => false,
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::{ChannelScope, SubscriptionRule};
+
+    /// Build a minimal Config for testing without CLI parsing.
+    fn test_config(mode: SubscribeMode) -> Config {
+        Config {
+            keys: nostr::Keys::generate(),
+            api_token: None,
+            relay_url: "ws://localhost:3000".into(),
+            agent_command: "goose".into(),
+            agent_args: vec!["acp".into()],
+            mcp_command: "sprout-mcp-server".into(),
+            turn_timeout_secs: 300,
+            system_prompt: None,
+            initial_message: None,
+            subscribe_mode: mode,
+            dedup_mode: DedupMode::Drop,
+            ignore_self: true,
+            kinds_override: None,
+            channels_override: None,
+            no_mention_filter: false,
+            config_path: PathBuf::from("./sprout-acp.toml"),
+        }
+    }
+
+    fn make_rule(
+        name: &str,
+        channels: ChannelScope,
+        kinds: Vec<u32>,
+        mention: bool,
+    ) -> SubscriptionRule {
+        SubscriptionRule {
+            name: name.into(),
+            channels,
+            kinds,
+            require_mention: mention,
+            filter: None,
+            prompt_tag: None,
+        }
+    }
+
+    // ── resolve_channel_filters: Mentions mode ───────────────────────────────
+
+    #[test]
+    fn test_mentions_mode_default_kinds() {
+        let config = test_config(SubscribeMode::Mentions);
+        let channels = vec![Uuid::new_v4(), Uuid::new_v4()];
+        let result = resolve_channel_filters(&config, &channels, &[]);
+
+        assert_eq!(result.len(), 2);
+        for ch in &channels {
+            let f = result.get(ch).expect("channel should be present");
+            assert!(f.require_mention, "mentions mode requires mention");
+            let kinds = f.kinds.as_ref().expect("should have kinds");
+            assert!(kinds.contains(&sprout_core::kind::KIND_STREAM_MESSAGE));
+            assert!(kinds.contains(&sprout_core::kind::KIND_WORKFLOW_APPROVAL_REQUESTED));
+            assert!(kinds.contains(&sprout_core::kind::KIND_STREAM_REMINDER));
+        }
+    }
+
+    #[test]
+    fn test_mentions_mode_custom_kinds() {
+        let mut config = test_config(SubscribeMode::Mentions);
+        config.kinds_override = Some(vec![1, 7]);
+        let channels = vec![Uuid::new_v4()];
+        let result = resolve_channel_filters(&config, &channels, &[]);
+
+        let f = result.get(&channels[0]).unwrap();
+        assert_eq!(f.kinds.as_ref().unwrap(), &[1, 7]);
+    }
+
+    #[test]
+    fn test_mentions_mode_no_mention_filter() {
+        let mut config = test_config(SubscribeMode::Mentions);
+        config.no_mention_filter = true;
+        let channels = vec![Uuid::new_v4()];
+        let result = resolve_channel_filters(&config, &channels, &[]);
+
+        let f = result.get(&channels[0]).unwrap();
+        assert!(!f.require_mention);
+    }
+
+    // ── resolve_channel_filters: All mode ────────────────────────────────────
+
+    #[test]
+    fn test_all_mode_wildcard() {
+        let config = test_config(SubscribeMode::All);
+        let channels = vec![Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let result = resolve_channel_filters(&config, &channels, &[]);
+
+        assert_eq!(result.len(), 3);
+        for ch in &channels {
+            let f = result.get(ch).unwrap();
+            assert!(
+                f.kinds.is_none(),
+                "all mode with no override = wildcard kinds"
+            );
+            assert!(!f.require_mention);
+        }
+    }
+
+    #[test]
+    fn test_all_mode_with_kinds_override() {
+        let mut config = test_config(SubscribeMode::All);
+        config.kinds_override = Some(vec![40001, 7]);
+        let channels = vec![Uuid::new_v4()];
+        let result = resolve_channel_filters(&config, &channels, &[]);
+
+        let f = result.get(&channels[0]).unwrap();
+        assert_eq!(f.kinds.as_ref().unwrap(), &[40001, 7]);
+    }
+
+    // ── resolve_channel_filters: channels_override ───────────────────────────
+
+    #[test]
+    fn test_channels_override_filters_to_discovered() {
+        let mut config = test_config(SubscribeMode::All);
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+        let ch_unknown = Uuid::new_v4();
+        // Override includes ch_a and an unknown channel.
+        config.channels_override = Some(vec![ch_a.to_string(), ch_unknown.to_string()]);
+
+        let discovered = vec![ch_a, ch_b];
+        let result = resolve_channel_filters(&config, &discovered, &[]);
+
+        // Only ch_a should be present (intersection of override and discovered).
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key(&ch_a));
+        assert!(!result.contains_key(&ch_b));
+        assert!(!result.contains_key(&ch_unknown));
+    }
+
+    // ── resolve_channel_filters: Config mode ─────────────────────────────────
+
+    #[test]
+    fn test_config_mode_single_rule_all_channels() {
+        let config = test_config(SubscribeMode::Config);
+        let ch = Uuid::new_v4();
+        let rules = vec![make_rule(
+            "catch-all",
+            ChannelScope::All("all".into()),
+            vec![40001],
+            false,
+        )];
+
+        let result = resolve_channel_filters(&config, &[ch], &rules);
+        assert_eq!(result.len(), 1);
+        let f = result.get(&ch).unwrap();
+        assert_eq!(f.kinds.as_ref().unwrap(), &[40001]);
+        assert!(!f.require_mention);
+    }
+
+    #[test]
+    fn test_config_mode_rule_targets_specific_channel() {
+        let config = test_config(SubscribeMode::Config);
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+        let rules = vec![make_rule(
+            "only-a",
+            ChannelScope::List(vec![ch_a.to_string()]),
+            vec![40001],
+            false,
+        )];
+
+        let result = resolve_channel_filters(&config, &[ch_a, ch_b], &rules);
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key(&ch_a));
+        assert!(!result.contains_key(&ch_b));
+    }
+
+    #[test]
+    fn test_config_mode_merge_overlapping_rules() {
+        let config = test_config(SubscribeMode::Config);
+        let ch = Uuid::new_v4();
+        // Two rules both match the same channel with different kinds.
+        let rules = vec![
+            make_rule(
+                "messages",
+                ChannelScope::All("all".into()),
+                vec![40001],
+                true,
+            ),
+            make_rule("reactions", ChannelScope::All("all".into()), vec![7], false),
+        ];
+
+        let result = resolve_channel_filters(&config, &[ch], &rules);
+        let f = result.get(&ch).unwrap();
+        // Kinds should be the union: [40001, 7].
+        let kinds = f.kinds.as_ref().expect("should have merged kinds");
+        assert!(kinds.contains(&40001));
+        assert!(kinds.contains(&7));
+        // require_mention should be false (most permissive wins).
+        assert!(!f.require_mention);
+    }
+
+    #[test]
+    fn test_config_mode_wildcard_kinds_propagates() {
+        let config = test_config(SubscribeMode::Config);
+        let ch = Uuid::new_v4();
+        // First rule has specific kinds, second has empty (wildcard).
+        let rules = vec![
+            make_rule(
+                "narrow",
+                ChannelScope::All("all".into()),
+                vec![40001],
+                false,
+            ),
+            make_rule("broad", ChannelScope::All("all".into()), vec![], false),
+        ];
+
+        let result = resolve_channel_filters(&config, &[ch], &rules);
+        let f = result.get(&ch).unwrap();
+        // Once any rule has empty kinds (wildcard), merged result is None (wildcard).
+        assert!(f.kinds.is_none(), "wildcard should propagate");
+    }
+
+    #[test]
+    fn test_config_mode_no_matching_rules_empty_result() {
+        let config = test_config(SubscribeMode::Config);
+        let ch = Uuid::new_v4();
+        let other_ch = Uuid::new_v4();
+        // Rule only targets other_ch.
+        let rules = vec![make_rule(
+            "other",
+            ChannelScope::List(vec![other_ch.to_string()]),
+            vec![40001],
+            false,
+        )];
+
+        let result = resolve_channel_filters(&config, &[ch], &rules);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_config_mode_require_mention_most_permissive() {
+        let config = test_config(SubscribeMode::Config);
+        let ch = Uuid::new_v4();
+        // First rule requires mention, second doesn't.
+        let rules = vec![
+            make_rule("strict", ChannelScope::All("all".into()), vec![40001], true),
+            make_rule("lax", ChannelScope::All("all".into()), vec![7], false),
+        ];
+
+        let result = resolve_channel_filters(&config, &[ch], &rules);
+        let f = result.get(&ch).unwrap();
+        assert!(!f.require_mention, "most permissive (false) should win");
+    }
+
+    // ── rule_applies_to_channel ──────────────────────────────────────────────
+
+    #[test]
+    fn test_rule_applies_all() {
+        let rule = make_rule("test", ChannelScope::All("all".into()), vec![], false);
+        assert!(rule_applies_to_channel(&rule, Uuid::new_v4()));
+    }
+
+    #[test]
+    fn test_rule_applies_all_invalid_string() {
+        let rule = make_rule("test", ChannelScope::All("ALL".into()), vec![], false);
+        assert!(!rule_applies_to_channel(&rule, Uuid::new_v4()));
+    }
+
+    #[test]
+    fn test_rule_applies_list_match() {
+        let ch = Uuid::new_v4();
+        let rule = make_rule(
+            "test",
+            ChannelScope::List(vec![ch.to_string()]),
+            vec![],
+            false,
+        );
+        assert!(rule_applies_to_channel(&rule, ch));
+    }
+
+    #[test]
+    fn test_rule_applies_list_no_match() {
+        let rule = make_rule(
+            "test",
+            ChannelScope::List(vec![Uuid::new_v4().to_string()]),
+            vec![],
+            false,
+        );
+        assert!(!rule_applies_to_channel(&rule, Uuid::new_v4()));
+    }
+
+    // ── load_rules validation ────────────────────────────────────────────────
+
+    #[test]
+    fn test_load_rules_valid_toml() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-valid");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"
+[[rules]]
+name = "catch-all"
+channels = "all"
+kinds = [40001]
+require_mention = false
+"#,
+        )
+        .unwrap();
+
+        let rules = load_rules(&path).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].name, "catch-all");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_rules_empty_name_rejected() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-empty-name");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"
+[[rules]]
+name = "  "
+channels = "all"
+"#,
+        )
+        .unwrap();
+
+        let err = load_rules(&path).unwrap_err();
+        assert!(err.to_string().contains("name must not be empty"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_rules_duplicate_name_rejected() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-dup-name");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"
+[[rules]]
+name = "dup"
+channels = "all"
+
+[[rules]]
+name = "dup"
+channels = "all"
+"#,
+        )
+        .unwrap();
+
+        let err = load_rules(&path).unwrap_err();
+        assert!(err.to_string().contains("duplicate rule name"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_rules_invalid_filter_rejected() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-bad-filter");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        // evalexpr rejects unbalanced parens at parse time.
+        std::fs::write(
+            &path,
+            r#"
+[[rules]]
+name = "bad"
+channels = "all"
+filter = "((("
+"#,
+        )
+        .unwrap();
+
+        let err = load_rules(&path).unwrap_err();
+        assert!(err.to_string().contains("invalid filter expression"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_rules_channel_scope_typo_rejected() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-scope-typo");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"
+[[rules]]
+name = "typo"
+channels = "ALL"
+"#,
+        )
+        .unwrap();
+
+        let err = load_rules(&path).unwrap_err();
+        assert!(err.to_string().contains("must be \"all\" or a list"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_rules_too_many_rules_rejected() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-too-many");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut toml = String::new();
+        for i in 0..101 {
+            toml.push_str(&format!(
+                "[[rules]]\nname = \"rule-{i}\"\nchannels = \"all\"\n\n"
+            ));
+        }
+        std::fs::write(&path, &toml).unwrap();
+
+        let err = load_rules(&path).unwrap_err();
+        assert!(err.to_string().contains("too many rules"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_rules_filter_too_long_rejected() {
+        let dir = std::env::temp_dir().join("sprout-acp-test-long-filter");
+        let path = dir.join("rules.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        let long_expr = format!("\"{}\"", "a".repeat(4097));
+        std::fs::write(
+            &path,
+            format!("[[rules]]\nname = \"long\"\nchannels = \"all\"\nfilter = {long_expr}\n"),
+        )
+        .unwrap();
+
+        let err = load_rules(&path).unwrap_err();
+        assert!(err.to_string().contains("filter too long"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

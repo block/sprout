@@ -45,5 +45,9 @@ hex             = { workspace = true }
 url             = { workspace = true }
 moka            = { workspace = true }
 
+[features]
+dev = ["sprout-auth/dev"]
+
 [dev-dependencies]
 sprout-core = { workspace = true, features = ["test-utils"] }
+sprout-auth = { workspace = true, features = ["dev"] }

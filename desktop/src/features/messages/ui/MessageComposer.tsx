@@ -1,6 +1,7 @@
 import { Paperclip, SendHorizontal, SmilePlus } from "lucide-react";
 import * as React from "react";
 
+import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
@@ -14,8 +15,14 @@ type MessageComposerProps = {
   channelName: string;
   disabled?: boolean;
   isSending?: boolean;
+  onCancelReply?: () => void;
   onSend: (content: string, mentionPubkeys: string[]) => Promise<void>;
   placeholder?: string;
+  replyTarget?: {
+    author: string;
+    body: string;
+    id: string;
+  } | null;
 };
 
 const MAX_TEXTAREA_ROWS = 4;
@@ -45,8 +52,10 @@ export function MessageComposer({
   channelName,
   disabled = false,
   isSending = false,
+  onCancelReply,
   onSend,
   placeholder,
+  replyTarget = null,
 }: MessageComposerProps) {
   const [content, setContent] = React.useState("");
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -60,6 +69,17 @@ export function MessageComposer({
 
   const membersQuery = useChannelMembersQuery(channelId);
   const members = membersQuery.data ?? [];
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const managedAgentNamesByPubkey = React.useMemo(
+    () =>
+      new Map(
+        (managedAgentsQuery.data ?? []).map((agent) => [
+          agent.pubkey.toLowerCase(),
+          agent.name,
+        ]),
+      ),
+    [managedAgentsQuery.data],
+  );
 
   const suggestions = React.useMemo<MentionSuggestion[]>(() => {
     if (mentionQuery === null) {
@@ -68,16 +88,28 @@ export function MessageComposer({
 
     const lowerQuery = mentionQuery.toLowerCase();
     return members
-      .filter((member) =>
-        member.displayName?.toLowerCase().includes(lowerQuery),
+      .map((member) => {
+        const fallbackName =
+          managedAgentNamesByPubkey.get(member.pubkey.toLowerCase()) ??
+          member.pubkey.slice(0, 8);
+
+        return {
+          member,
+          label: member.displayName ?? fallbackName,
+        };
+      })
+      .filter(
+        ({ label, member }) =>
+          label.toLowerCase().includes(lowerQuery) ||
+          member.pubkey.toLowerCase().includes(lowerQuery),
       )
       .slice(0, 8)
-      .map((member) => ({
+      .map(({ member, label }) => ({
         pubkey: member.pubkey,
-        displayName: member.displayName ?? member.pubkey.slice(0, 8),
+        displayName: label,
         role: member.role === "admin" ? "admin" : null,
       }));
-  }, [members, mentionQuery]);
+  }, [managedAgentNamesByPubkey, members, mentionQuery]);
 
   const isMentionOpen = mentionQuery !== null && suggestions.length > 0;
 
@@ -258,6 +290,14 @@ export function MessageComposer({
     }
   });
 
+  React.useEffect(() => {
+    if (!replyTarget || disabled) {
+      return;
+    }
+
+    textareaRef.current?.focus();
+  }, [disabled, replyTarget]);
+
   return (
     <footer className="border-t border-border/80 bg-background p-4">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
@@ -274,6 +314,31 @@ export function MessageComposer({
             suggestions={isMentionOpen ? suggestions : []}
           />
 
+          {replyTarget ? (
+            <div
+              className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-border/70 bg-muted/40 px-3 py-2"
+              data-testid="reply-target"
+            >
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  Replying to {replyTarget.author}
+                </p>
+                <p className="truncate text-sm text-foreground/80">
+                  {replyTarget.body}
+                </p>
+              </div>
+              <Button
+                className="shrink-0"
+                onClick={onCancelReply}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                Cancel
+              </Button>
+            </div>
+          ) : null}
+
           <Textarea
             aria-label="Message channel"
             className="min-h-0 resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 text-sm leading-6 shadow-none focus-visible:ring-0"
@@ -281,7 +346,12 @@ export function MessageComposer({
             disabled={disabled}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            placeholder={placeholder ?? `Message #${channelName}`}
+            placeholder={
+              placeholder ??
+              (replyTarget
+                ? `Reply to ${replyTarget.author} in #${channelName}`
+                : `Message #${channelName}`)
+            }
             ref={textareaRef}
             rows={1}
             value={content}

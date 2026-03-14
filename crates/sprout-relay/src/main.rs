@@ -68,9 +68,11 @@ async fn main() -> anyhow::Result<()> {
     );
     info!("Redis pub/sub connected");
 
-    // TODO: spawn pubsub.run_subscriber() for multi-node fan-out.
-    // Currently no consumer calls subscribe_local(), so the subscriber
-    // would process Redis messages into a broadcast channel with zero receivers.
+    // Spawn Redis pub/sub subscriber for multi-node fan-out.
+    // Events published by other relay instances are received here and
+    // fanned out to local WebSocket subscribers.
+    let pubsub_for_sub = Arc::clone(&pubsub);
+    tokio::spawn(async move { pubsub_for_sub.run_subscriber().await });
 
     let auth = AuthService::new(config.auth.clone());
 
@@ -88,7 +90,8 @@ async fn main() -> anyhow::Result<()> {
     let workflow_engine = Arc::new(WorkflowEngine::new(db.clone(), workflow_config));
 
     let relay_keypair = if let Some(hex) = &config.relay_private_key {
-        nostr::Keys::parse(hex).expect("invalid SPROUT_RELAY_PRIVATE_KEY")
+        nostr::Keys::parse(hex)
+            .map_err(|e| anyhow::anyhow!("invalid SPROUT_RELAY_PRIVATE_KEY: {e}"))?
     } else {
         let keys = nostr::Keys::generate();
         tracing::info!("Generated relay keypair: {}", keys.public_key().to_hex());
@@ -114,6 +117,71 @@ async fn main() -> anyhow::Result<()> {
     // Start the cron loop AFTER the action sink is wired.
     let wf_cron = Arc::clone(&workflow_engine);
     tokio::spawn(async move { wf_cron.run().await });
+
+    // Multi-node fan-out consumer: receive events from Redis pub/sub
+    // (published by other relay instances) and fan out to local WS subscribers.
+    {
+        let state_for_sub = Arc::clone(&state);
+        let mut rx = state_for_sub.pubsub.subscribe_local();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(channel_event) => {
+                        let stored = sprout_core::StoredEvent::new(
+                            channel_event.event,
+                            Some(channel_event.channel_id),
+                        );
+
+                        // Skip events that were already fanned out in-process (local echo).
+                        // The cache has TTL-based eviction (60s) so entries are bounded
+                        // regardless of subscriber health.
+                        let event_id_bytes = stored.event.id.to_bytes();
+                        if state_for_sub.local_event_ids.get(&event_id_bytes).is_some() {
+                            state_for_sub.local_event_ids.invalidate(&event_id_bytes);
+                            continue;
+                        }
+
+                        let matches = state_for_sub.sub_registry.fan_out(&stored);
+                        if matches.is_empty() {
+                            continue;
+                        }
+
+                        let event_json = match serde_json::to_string(&stored.event) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to serialize event for multi-node fan-out: {e}"
+                                );
+                                continue;
+                            }
+                        };
+                        let mut drop_count = 0u32;
+                        for (conn_id, sub_id) in &matches {
+                            let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
+                            if !state_for_sub.conn_manager.send_to(*conn_id, msg) {
+                                drop_count += 1;
+                            }
+                        }
+                        if drop_count > 0 {
+                            tracing::warn!(
+                                event_id = %stored.event.id.to_hex(),
+                                drop_count,
+                                "multi-node fan-out: {drop_count} connection(s) dropped"
+                            );
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("Multi-node fan-out lagged by {n} messages");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::error!("Multi-node fan-out broadcast channel closed");
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
     let router = build_router(Arc::clone(&state));
 
     let listener = tokio::net::TcpListener::bind(&config.bind_addr)

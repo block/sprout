@@ -46,12 +46,14 @@ Sprout is a Rust monorepo (~22.7K LOC across 13 crates), licensed Apache 2.0 und
      │   audit)   │  │  PUBLISH) │
      └────────────┘  └───────────┘
 
-     Fan-out is IN-PROCESS: sub_registry.fan_out()
-     → conn_manager.send_to() (direct to WS connections)
+     Fan-out: sub_registry.fan_out() → conn_manager.send_to()
+     (in-process for local events; Redis round-trip for
+     events from other relay instances)
 
-     Redis PUBLISH occurs for channel-scoped events but
-     the subscriber loop's broadcast is not yet consumed
-     by the relay for cross-process fan-out.
+     Redis PUBLISH occurs for channel-scoped events.
+     PSUBSCRIBE subscriber loop runs and a consumer task
+     fans out received events to local WS connections
+     (multi-node fan-out wired; local-echo dedup is TODO).
 
      ┌──────────────┐
      │  Typesense   │  ← sprout-search (async, spawned per event)
@@ -130,7 +132,7 @@ The `kind` integer is the only dispatch switch. The relay routes, stores, and fa
 
 `sprout-core` defines all 74 kinds as `pub const KIND_*: u32` and exports `ALL_KINDS: &[u32]`. Kinds are `u32` (NIP-01 specifies unsigned integer; `u32` covers the full range). Sprout uses both standard Nostr kinds (e.g., kind 7 for reactions) and custom ranges (40000+).
 
-Note: some protocol-relevant kinds are defined ad hoc in other crates rather than in `sprout-core`. For example, `KIND_AUTH` (22242) is hardcoded as a `u16` constant in `sprout-relay/src/handlers/event.rs`, and canvas kind 40100 is used as a literal in `sprout-mcp/src/server.rs`. Neither has a corresponding `pub const` in `sprout-core`.
+Note: `KIND_AUTH` (22242) is `pub const KIND_AUTH: u32` in `sprout-core/src/kind.rs` and imported by `sprout-relay/src/handlers/event.rs`. `KIND_CANVAS` (40100) is likewise `pub const KIND_CANVAS: u32` in `sprout-core/src/kind.rs`; `sprout-mcp/src/server.rs` uses the constant via import.
 
 ### Wire Protocol (NIP-01 messages)
 
@@ -220,7 +222,7 @@ When the relay receives `["EVENT", <event>]`, the handler in `handlers/event.rs`
 
 Steps 10–12 are fire-and-forget: they are spawned as independent async tasks. A failure in search indexing or audit logging does not fail the event submission. The client receives `["OK", <id>, true, ""]` at the end of the pipeline (after all spawns), not immediately after DB insert.
 
-Step 9 (fan-out) also checks global subscriptions (no `channel_id` constraint) — broad subscriptions receive channel-scoped events if their filters match.
+Step 9 (fan-out) explicitly **excludes** global subscriptions (no `channel_id` constraint) from channel-scoped events — global subscriptions do NOT receive events from private channels, regardless of filter match. This is a deliberate security boundary: only subscriptions scoped to an accessible `channel_id` receive those events.
 
 Workflow loop prevention: kinds 46001–46012 (workflow execution events) are excluded from triggering workflows. Exception: stream message kind 40001 (`KIND_STREAM_MESSAGE`) always triggers regardless of other exclusion rules. Kind 40002 (`KIND_STREAM_MESSAGE_V2`) does not trigger workflows.
 
@@ -280,7 +282,7 @@ When an event arrives, `fan_out` consults three indexes in order:
 | 2 | `channel_wildcard_index` | `channel_id` | Subs with channel but no `kinds` constraint |
 | 3 | `subs` (linear scan) | — | Global subs (no channel_id) — fallback scan |
 
-Global subs also receive channel-scoped events if their filters match — tier 3 is always checked.
+Global subs (tier 3) are checked for non-channel-scoped events only. Channel-scoped events are delivered exclusively to subscriptions that carry a matching `channel_id` — global subscriptions are explicitly excluded from channel fan-out as a security boundary.
 
 ### NIP-01 Edge Cases
 
@@ -369,7 +371,7 @@ pub trait RateLimiter: Send + Sync { ... }
 - Token format: `sprout_<64-hex-chars>` (71 chars). `hash_token()` → SHA-256 → stored hash.
 - Scopeless JWT defaults to `[MessagesRead]` only (not read+write).
 - NIP-42 timestamp tolerance: ±60 seconds.
-- Dev-only key derivation: `SHA-256("sprout-test-key:{username}")` — gated behind `#[cfg(any(test, feature = "dev", debug_assertions))]`.
+- Dev-only key derivation: `SHA-256("sprout-test-key:{username}")` — gated behind `#[cfg(any(test, feature = "dev"))]`. The `dev` feature must not be enabled in production relay deployments.
 
 **Does NOT:** implement `RateLimiter` beyond a test stub (`AlwaysAllowRateLimiter`, gated behind `#[cfg(any(test, feature = "test-utils"))]`). No Redis-backed rate limiter exists anywhere in the codebase — rate limiting is not currently enforced. `RateLimitConfig` defines 4 tiers (human, agent-standard, agent-elevated, agent-platform) as a design target.
 
@@ -423,7 +425,7 @@ Subscriber → dedicated PubSub  → PSUBSCRIBE sprout:channel:*
 
 The subscriber uses a **dedicated** `redis::aio::PubSub` connection — not from the pool. This is intentional: pool connections cannot hold `PSUBSCRIBE` state.
 
-**Current state:** The subscriber loop runs and populates the broadcast channel, but `sprout-relay` does not currently consume the broadcast for WebSocket fan-out. Real-time delivery is handled entirely in-process via `sub_registry.fan_out()`. The Redis pub/sub infrastructure is in place for future multi-node fan-out.
+**Current state:** The subscriber loop is spawned in `sprout-relay/src/main.rs` and populates the broadcast channel. A consumer task subscribes via `pubsub.subscribe_local()`, calls `sub_registry.fan_out()` on each received event, and delivers matches to local WebSocket connections via `conn_manager.send_to()`. Multi-node fan-out is now wired end-to-end. Note: local-echo deduplication is not yet implemented — events published by the local relay instance are re-delivered to local subscribers via the Redis round-trip; NIP-01 client-side dedup handles this in practice (TODO: server-side dedup in a follow-up).
 
 **Reconnection:** exponential backoff 1s → 30s (`backoff_secs * 2`). Backoff resets to 1s only after a clean stream end, not on each reconnect attempt.
 
@@ -826,9 +828,9 @@ These are verified gaps in the current implementation — not design aspirations
 | 1 | **No sqlx offline query cache** | Uses `sqlx::query()` (runtime) not `sqlx::query!()` (compile-time). No `.sqlx/` directory. Queries are not validated at compile time. |
 | 2 | **Feed mentions: full table scan** | `query_mentions` uses `JSON_CONTAINS(tags, '["p","<pubkey>"]', '$')` — no index on JSON column. Phase 2 mitigation plan documented in `sprout-db/src/feed.rs`: normalized `mentions` table with composite index on `(pubkey_hex, created_at)`. |
 | 3 | **No rate limiting implementation** | `RateLimiter` trait exists in `sprout-auth`. Only implementation is `AlwaysAllowRateLimiter` (test stub, gated behind `#[cfg(any(test, feature = "test-utils"))]`). `RateLimitConfig` defines 4 tiers (human, agent-standard, agent-elevated, agent-platform) but none are enforced. |
-| 4 | **Single-process fan-out** | `SubscriptionRegistry` is in-process DashMap. Redis `PUBLISH` occurs for channel-scoped events, and a `PSUBSCRIBE` subscriber loop runs, but the relay does not consume the broadcast stream for WebSocket delivery. Fan-out is entirely in-process. Running multiple relay instances would result in split fan-out. |
+| 4 | **Local-echo deduplication** | Multi-node fan-out is wired: the Redis `PSUBSCRIBE` subscriber loop runs, and a consumer task fans out received events to local WebSocket connections. However, events published by the local relay instance are re-delivered to local subscribers via the Redis round-trip (no server-side dedup). NIP-01 client-side dedup handles this in practice. Server-side dedup is a TODO. |
 | 5 | **Cron scheduler is a stub** | `WorkflowEngine::run()` loops every 60 seconds but the loop body logs "not yet implemented" (TODO WF-07). Schedule-triggered workflows do not fire. |
-| 6 | **Typing indicators not delivered** | Typing events (kind 20002) are published to Redis via the ephemeral pipeline but never reach WebSocket subscribers — the relay does not consume the Redis broadcast stream, and non-presence ephemeral events have no local fan-out path. Typing state is queryable via the REST `/api/presence` endpoint but not pushed in real-time. |
+| 6 | **Typing indicators: cross-node only** | Typing events (kind 20002) are published to Redis via the ephemeral pipeline. The multi-node consumer task fans them out to local WS subscribers when received from Redis (cross-node path). However, there is no direct local fan-out for typing events on the originating node — they travel Redis → broadcast → WS rather than being fanned out in-process before the Redis round-trip. Typing state is also queryable via the REST `/api/presence` endpoint. |
 | 7 | **sprout-huddle is scaffolding** | `sprout-huddle` defines types, token generation, and webhook parsing, but relay-side lifecycle event emission is not implemented. Huddle state events are not wired into the relay's event pipeline. `sprout-proxy` is now functional — see its section above. |
 
 ---

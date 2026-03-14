@@ -565,24 +565,43 @@ pub async fn dispatch_action(
             })))
         }
 
-        SendDm { to, text } => {
-            info!(run_id = %run_id, step = step_id, "SendDm → {to}: {text}");
+        SendDm { to, text: _ } => {
+            warn!(run_id = %run_id, step = step_id, "SendDm not yet implemented (to={to})");
             // TODO (WF-07): emit DM event.
-            Ok(StepResult::Completed(serde_json::json!({ "sent": true })))
+            Err(WorkflowError::NotImplemented("SendDm".into()))
         }
 
-        SetChannelTopic { topic } => {
-            info!(run_id = %run_id, step = step_id, "SetChannelTopic → {topic}");
+        SetChannelTopic { topic: _ } => {
+            warn!(run_id = %run_id, step = step_id, "SetChannelTopic not yet implemented");
             // TODO (WF-07): update channel topic via DB.
-            Ok(StepResult::Completed(
-                serde_json::json!({ "updated": true }),
-            ))
+            Err(WorkflowError::NotImplemented("SetChannelTopic".into()))
         }
 
         AddReaction { emoji } => {
             info!(run_id = %run_id, step = step_id, "AddReaction → :{emoji}:");
-            // TODO (WF-07): emit reaction event.
-            Ok(StepResult::Completed(serde_json::json!({ "added": true })))
+            if trigger_ctx.message_id.is_empty() {
+                return Err(WorkflowError::InvalidDefinition(
+                    "AddReaction: no trigger.message_id available".into(),
+                ));
+            }
+
+            #[cfg(feature = "reqwest")]
+            {
+                let result = add_reaction_impl(&trigger_ctx.message_id, emoji).await?;
+                Ok(StepResult::Completed(result))
+            }
+
+            #[cfg(not(feature = "reqwest"))]
+            {
+                warn!(
+                    run_id = %run_id,
+                    step = step_id,
+                    "AddReaction: reqwest feature not enabled, skipping HTTP call"
+                );
+                Ok(StepResult::Completed(
+                    serde_json::json!({ "added": false, "skipped": true }),
+                ))
+            }
         }
 
         CallWebhook {
@@ -840,6 +859,71 @@ async fn call_webhook_impl(
     }))
 }
 
+// ── HTTP helpers for actions that still use the loopback (AddReaction) ────────
+
+/// Returns a shared `reqwest::Client` reused across all workflow HTTP calls.
+/// Sharing a single client reuses the underlying connection pool.
+#[cfg(feature = "reqwest")]
+fn shared_http_client() -> &'static reqwest::Client {
+    use std::sync::LazyLock;
+    use std::time::Duration;
+    static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("HTTP client build must succeed")
+    });
+    &CLIENT
+}
+
+/// POST `{"emoji": emoji}` to `POST /api/messages/{message_id}/reactions`.
+#[cfg(feature = "reqwest")]
+async fn add_reaction_impl(message_id: &str, emoji: &str) -> Result<JsonValue, WorkflowError> {
+    let base_url = std::env::var("SPROUT_RELAY_BASE_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_owned());
+
+    let url = format!("{base_url}/api/messages/{message_id}/reactions");
+
+    let client = shared_http_client();
+
+    let mut req = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "emoji": emoji }));
+
+    if let Ok(token) = std::env::var("SPROUT_API_TOKEN") {
+        req = req.header("Authorization", format!("Bearer {token}"));
+    } else if let Ok(pubkey) = std::env::var("SPROUT_RELAY_PUBKEY") {
+        req = req.header("X-Pubkey", pubkey);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| WorkflowError::WebhookError(format!("AddReaction HTTP error: {e}")))?;
+
+    let status = resp.status();
+
+    if !status.is_success() {
+        let body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<unreadable>".to_owned());
+        return Err(WorkflowError::WebhookError(format!(
+            "AddReaction: relay returned {status} for message {message_id}: {body}"
+        )));
+    }
+
+    let body_text = resp.text().await.unwrap_or_else(|_| String::new());
+    let body_json: JsonValue = serde_json::from_str(&body_text)
+        .unwrap_or_else(|_| serde_json::json!({ "raw": body_text }));
+
+    Ok(serde_json::json!({
+        "added": true,
+        "status": status.as_u16(),
+        "response": body_json,
+    }))
+}
 // ── Execution result ──────────────────────────────────────────────────────────
 
 /// Rich return type from `execute_run` / `execute_from_step`.

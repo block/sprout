@@ -1,0 +1,271 @@
+import * as React from "react";
+
+import {
+  useDeleteManagedAgentMutation,
+  useManagedAgentLogQuery,
+  useManagedAgentsQuery,
+  useMintManagedAgentTokenMutation,
+  useRelayAgentsQuery,
+  useStartManagedAgentMutation,
+  useStopManagedAgentMutation,
+} from "@/features/agents/hooks";
+import type {
+  Channel,
+  CreateManagedAgentResponse,
+  ManagedAgent,
+} from "@/shared/api/types";
+import { AddAgentToChannelDialog } from "./AddAgentToChannelDialog";
+import { CreateAgentDialog } from "./CreateAgentDialog";
+import { ManagedAgentLogPanel } from "./ManagedAgentLogPanel";
+import { ManagedAgentsSection } from "./ManagedAgentsSection";
+import { RelayDirectorySection } from "./RelayDirectorySection";
+import { SecretRevealDialog } from "./SecretRevealDialog";
+import { TokenRevealDialog } from "./TokenRevealDialog";
+
+export function AgentsView() {
+  const relayAgentsQuery = useRelayAgentsQuery();
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const startMutation = useStartManagedAgentMutation();
+  const stopMutation = useStopManagedAgentMutation();
+  const deleteMutation = useDeleteManagedAgentMutation();
+  const mintTokenMutation = useMintManagedAgentTokenMutation();
+  const [isCreateOpen, setIsCreateOpen] = React.useState(false);
+  const [agentToAddToChannel, setAgentToAddToChannel] =
+    React.useState<ManagedAgent | null>(null);
+  const [createdAgent, setCreatedAgent] =
+    React.useState<CreateManagedAgentResponse | null>(null);
+  const [revealedToken, setRevealedToken] = React.useState<{
+    name: string;
+    token: string;
+  } | null>(null);
+  const [actionNoticeMessage, setActionNoticeMessage] = React.useState<
+    string | null
+  >(null);
+  const [actionErrorMessage, setActionErrorMessage] = React.useState<
+    string | null
+  >(null);
+  const managedAgents = React.useMemo(
+    () =>
+      [...(managedAgentsQuery.data ?? [])].sort((left, right) => {
+        if (left.status !== right.status) {
+          return left.status === "running" ? -1 : 1;
+        }
+
+        return left.name.localeCompare(right.name);
+      }),
+    [managedAgentsQuery.data],
+  );
+  const [selectedAgentPubkey, setSelectedAgentPubkey] = React.useState<
+    string | null
+  >(null);
+  const selectedAgent =
+    managedAgents.find((agent) => agent.pubkey === selectedAgentPubkey) ??
+    managedAgents[0] ??
+    null;
+  const managedAgentLogQuery = useManagedAgentLogQuery(
+    selectedAgent?.pubkey ?? null,
+  );
+  const managedPubkeys = React.useMemo(
+    () => new Set(managedAgents.map((agent) => agent.pubkey)),
+    [managedAgents],
+  );
+
+  React.useEffect(() => {
+    if (
+      selectedAgentPubkey &&
+      managedAgents.some((agent) => agent.pubkey === selectedAgentPubkey)
+    ) {
+      return;
+    }
+
+    setSelectedAgentPubkey(managedAgents[0]?.pubkey ?? null);
+  }, [managedAgents, selectedAgentPubkey]);
+
+  async function handleStart(pubkey: string) {
+    setActionNoticeMessage(null);
+    setActionErrorMessage(null);
+
+    try {
+      await startMutation.mutateAsync(pubkey);
+    } catch (error) {
+      setActionErrorMessage(
+        error instanceof Error ? error.message : "Failed to start agent.",
+      );
+    }
+  }
+
+  async function handleStop(pubkey: string) {
+    setActionNoticeMessage(null);
+    setActionErrorMessage(null);
+
+    try {
+      await stopMutation.mutateAsync(pubkey);
+    } catch (error) {
+      setActionErrorMessage(
+        error instanceof Error ? error.message : "Failed to stop agent.",
+      );
+    }
+  }
+
+  async function handleDelete(pubkey: string) {
+    setActionNoticeMessage(null);
+    setActionErrorMessage(null);
+
+    try {
+      await deleteMutation.mutateAsync(pubkey);
+      if (selectedAgentPubkey === pubkey) {
+        setSelectedAgentPubkey(null);
+      }
+    } catch (error) {
+      setActionErrorMessage(
+        error instanceof Error ? error.message : "Failed to delete agent.",
+      );
+    }
+  }
+
+  async function handleMintToken(pubkey: string, name: string) {
+    setActionNoticeMessage(null);
+    setActionErrorMessage(null);
+
+    try {
+      const result = await mintTokenMutation.mutateAsync({
+        pubkey,
+        tokenName: `${name}-token`,
+      });
+      setRevealedToken({
+        name,
+        token: result.token,
+      });
+    } catch (error) {
+      setActionErrorMessage(
+        error instanceof Error ? error.message : "Failed to mint token.",
+      );
+    }
+  }
+
+  function handleAddedToChannel(channel: Channel, agent: ManagedAgent) {
+    setActionErrorMessage(null);
+    setActionNoticeMessage(
+      agent.status === "running"
+        ? `Added ${agent.name} to ${channel.name}. Restart the agent to subscribe to the new channel.`
+        : `Added ${agent.name} to ${channel.name}.`,
+    );
+    void managedAgentsQuery.refetch();
+    void relayAgentsQuery.refetch();
+  }
+
+  function handleRefresh() {
+    void managedAgentsQuery.refetch();
+    void relayAgentsQuery.refetch();
+    void managedAgentLogQuery.refetch();
+  }
+
+  const isActionPending =
+    startMutation.isPending ||
+    stopMutation.isPending ||
+    deleteMutation.isPending ||
+    mintTokenMutation.isPending;
+
+  return (
+    <>
+      <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-4 sm:px-6">
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+          <div className="grid gap-6 xl:grid-cols-[1.2fr,0.9fr]">
+            <ManagedAgentsSection
+              actionErrorMessage={actionErrorMessage}
+              actionNoticeMessage={actionNoticeMessage}
+              agents={managedAgents}
+              error={
+                managedAgentsQuery.error instanceof Error
+                  ? managedAgentsQuery.error
+                  : null
+              }
+              isActionPending={isActionPending}
+              isLoading={managedAgentsQuery.isLoading}
+              onAddToChannel={(agent) => {
+                setActionNoticeMessage(null);
+                setActionErrorMessage(null);
+                setAgentToAddToChannel(agent);
+              }}
+              onCreate={() => {
+                setIsCreateOpen(true);
+              }}
+              onDelete={(pubkey) => {
+                void handleDelete(pubkey);
+              }}
+              onMintToken={(pubkey, name) => {
+                void handleMintToken(pubkey, name);
+              }}
+              onRefresh={handleRefresh}
+              onSelect={setSelectedAgentPubkey}
+              onStart={(pubkey) => {
+                void handleStart(pubkey);
+              }}
+              onStop={(pubkey) => {
+                void handleStop(pubkey);
+              }}
+              selectedAgentPubkey={selectedAgent?.pubkey ?? null}
+            />
+
+            <RelayDirectorySection
+              error={
+                relayAgentsQuery.error instanceof Error
+                  ? relayAgentsQuery.error
+                  : null
+              }
+              isLoading={relayAgentsQuery.isLoading}
+              managedPubkeys={managedPubkeys}
+              relayAgents={relayAgentsQuery.data ?? []}
+            />
+          </div>
+
+          <ManagedAgentLogPanel
+            error={
+              managedAgentLogQuery.error instanceof Error
+                ? managedAgentLogQuery.error
+                : null
+            }
+            isLoading={managedAgentLogQuery.isLoading}
+            logContent={managedAgentLogQuery.data?.content ?? null}
+            selectedAgent={selectedAgent}
+          />
+        </div>
+      </div>
+
+      <CreateAgentDialog
+        onCreated={(result) => {
+          setCreatedAgent(result);
+        }}
+        onOpenChange={setIsCreateOpen}
+        open={isCreateOpen}
+      />
+      <AddAgentToChannelDialog
+        agent={agentToAddToChannel}
+        onAdded={handleAddedToChannel}
+        onOpenChange={(open) => {
+          if (!open) {
+            setAgentToAddToChannel(null);
+          }
+        }}
+        open={agentToAddToChannel !== null}
+      />
+      <SecretRevealDialog
+        created={createdAgent}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCreatedAgent(null);
+          }
+        }}
+      />
+      <TokenRevealDialog
+        name={revealedToken?.name ?? null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRevealedToken(null);
+          }
+        }}
+        token={revealedToken?.token ?? null}
+      />
+    </>
+  );
+}

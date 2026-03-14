@@ -7,18 +7,19 @@
 //!
 //! ## Performance characteristics
 //!
-//! `query_mentions` and `query_needs_action` use `JSON_CONTAINS` on the `tags` column.
-//! `JSON_CONTAINS` performs a **full table scan** — it cannot use a B-tree index on the
-//! JSON column.  For small deployments this is acceptable, but at scale (>100k events)
-//! it will become the dominant query cost.
+//! `query_mentions` and `query_needs_action` join against the `event_mentions` table,
+//! which carries composite indexes on `(pubkey_hex, event_created_at DESC)` and
+//! `(pubkey_hex, event_kind, event_created_at DESC)`.  This replaces the Phase 1
+//! `JSON_CONTAINS` full-table scan with an indexed lookup, keeping feed queries
+//! sub-millisecond at scale (>100k events).
 //!
-//! **Phase 2 mitigation**: replace the `JSON_CONTAINS` scan with a normalised `mentions`
-//! table (event_id, pubkey_hex) populated by a trigger or application-level write path.
-//! That table can carry a composite index on `(pubkey_hex, created_at)` and reduce the
-//! fan-out to a simple indexed lookup.
+//! **Phase 2 implemented**: the `event_mentions` table is populated by
+//! [`crate::insert_mentions`] on every event insert.  `query_mentions` and
+//! `query_needs_action` now use `INNER JOIN event_mentions` instead of
+//! `JSON_CONTAINS`.
 //!
-//! Until Phase 2 lands, all feed queries enforce a hard `LIMIT` cap of `FEED_MAX_LIMIT`
-//! rows to bound the result-set size and prevent runaway memory usage.
+//! All feed queries enforce a hard `LIMIT` cap of `FEED_MAX_LIMIT` rows to bound
+//! the result-set size and prevent runaway memory usage.
 
 /// Hard upper bound on rows returned by any feed query.
 ///
@@ -42,10 +43,8 @@ use crate::event::row_to_stored_event;
 
 /// Find events that @mention the given pubkey (have `["p", pubkey_hex]` in tags).
 ///
-/// Uses `JSON_CONTAINS` on the `tags` column — Phase 1 implementation.
-/// **Performance**: `JSON_CONTAINS` is a full table scan (no index).  See module-level
-/// docs for the Phase 2 migration plan.
-/// Phase 2: replace with indexed `mentions` table lookup.
+/// Joins against the `event_mentions` table — Phase 2 implementation.
+/// **Performance**: indexed lookup on `(pubkey_hex, event_created_at DESC)`.
 ///
 /// Only returns events from `accessible_channel_ids` for access control.
 /// `limit` is capped at [`FEED_MAX_LIMIT`] regardless of the value passed by the caller.
@@ -60,24 +59,21 @@ pub async fn query_mentions(
     let pubkey_hex = hex::encode(pubkey_bytes);
 
     let mut qb: QueryBuilder<sqlx::MySql> = QueryBuilder::new(
-        "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
-         FROM events WHERE 1=1",
+        "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, \
+         e.received_at, e.channel_id \
+         FROM events e \
+         INNER JOIN event_mentions m ON e.id = m.event_id \
+         WHERE m.pubkey_hex = ",
     );
-
-    // Tag filter: JSON array contains the sub-array ["p", "<pubkey_hex>"] as an element.
-    // We wrap in an outer array so MySQL checks for exact sub-array membership, not
-    // element-wise containment.  Without the outer array, JSON_CONTAINS(tags, '["p","x"]')
-    // returns TRUE whenever "p" AND "x" both appear *anywhere* in tags — wrong semantics.
-    qb.push(" AND JSON_CONTAINS(tags, ")
-        .push_bind(serde_json::json!([["p", pubkey_hex]]).to_string())
-        .push(", '$')");
+    qb.push_bind(&pubkey_hex);
+    qb.push(" AND e.deleted_at IS NULL");
 
     qb.push(format!(
-        " AND kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_FORUM_POST}, {KIND_FORUM_COMMENT})"
+        " AND e.kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_FORUM_POST}, {KIND_FORUM_COMMENT})"
     ));
 
     if !accessible_channel_ids.is_empty() {
-        qb.push(" AND channel_id IN (");
+        qb.push(" AND e.channel_id IN (");
         let mut sep = qb.separated(", ");
         for id in accessible_channel_ids {
             sep.push_bind(id.as_bytes().to_vec());
@@ -86,10 +82,11 @@ pub async fn query_mentions(
     }
 
     if let Some(s) = since {
-        qb.push(" AND created_at >= ").push_bind(s);
+        qb.push(" AND m.event_created_at >= ").push_bind(s);
     }
 
-    qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
+    qb.push(" ORDER BY m.event_created_at DESC LIMIT ")
+        .push_bind(limit);
 
     let rows = qb.build().fetch_all(pool).await?;
     let mut out = Vec::with_capacity(rows.len());
@@ -107,7 +104,8 @@ pub async fn query_mentions(
 ///
 /// Only returns events from channels the user has access to (`accessible_channel_ids`).
 /// This prevents surfacing approval requests from channels the user was removed from.
-/// **Performance**: uses `JSON_CONTAINS` — full table scan.  See module-level docs.
+/// **Performance**: indexed lookup via `event_mentions` join on
+/// `(pubkey_hex, event_kind, event_created_at DESC)`.
 /// `limit` is capped at [`FEED_MAX_LIMIT`] regardless of the value passed by the caller.
 pub async fn query_needs_action(
     pool: &MySqlPool,
@@ -120,22 +118,21 @@ pub async fn query_needs_action(
     let pubkey_hex = hex::encode(pubkey_bytes);
 
     let mut qb: QueryBuilder<sqlx::MySql> = QueryBuilder::new(
-        "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
-         FROM events WHERE 1=1",
+        "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, \
+         e.received_at, e.channel_id \
+         FROM events e \
+         INNER JOIN event_mentions m ON e.id = m.event_id \
+         WHERE m.pubkey_hex = ",
     );
+    qb.push_bind(&pubkey_hex);
+    qb.push(" AND e.deleted_at IS NULL");
 
     qb.push(format!(
-        " AND kind IN ({KIND_WORKFLOW_APPROVAL_REQUESTED}, {KIND_STREAM_REMINDER})"
+        " AND e.kind IN ({KIND_WORKFLOW_APPROVAL_REQUESTED}, {KIND_STREAM_REMINDER})"
     ));
 
-    // Wrap in outer array so MySQL checks for exact sub-array membership — see
-    // query_mentions for a full explanation of the JSON_CONTAINS semantics.
-    qb.push(" AND JSON_CONTAINS(tags, ")
-        .push_bind(serde_json::json!([["p", pubkey_hex]]).to_string())
-        .push(", '$')");
-
     if !accessible_channel_ids.is_empty() {
-        qb.push(" AND channel_id IN (");
+        qb.push(" AND e.channel_id IN (");
         let mut sep = qb.separated(", ");
         for id in accessible_channel_ids {
             sep.push_bind(id.as_bytes().to_vec());
@@ -144,10 +141,11 @@ pub async fn query_needs_action(
     }
 
     if let Some(s) = since {
-        qb.push(" AND created_at >= ").push_bind(s);
+        qb.push(" AND m.event_created_at >= ").push_bind(s);
     }
 
-    qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
+    qb.push(" ORDER BY m.event_created_at DESC LIMIT ")
+        .push_bind(limit);
 
     let rows = qb.build().fetch_all(pool).await?;
     let mut out = Vec::with_capacity(rows.len());
@@ -176,6 +174,8 @@ pub async fn query_activity(
         "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
          FROM events WHERE 1=1",
     );
+
+    qb.push(" AND deleted_at IS NULL");
 
     qb.push(format!(
         " AND kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_FORUM_POST}, {KIND_JOB_REQUEST}, {KIND_JOB_PROGRESS}, {KIND_JOB_RESULT})"

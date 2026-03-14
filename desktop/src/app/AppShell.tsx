@@ -2,6 +2,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Settings2 } from "lucide-react";
 
+import { AgentsView } from "@/features/agents/ui/AgentsView";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
   channelsQueryKey,
@@ -18,11 +19,16 @@ import {
   mergeMessages,
   useSendMessageMutation,
   useChannelSubscription,
+  useToggleReactionMutation,
 } from "@/features/messages/hooks";
 import {
   collectMessageAuthorPubkeys,
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
+import {
+  getChannelIdFromTags,
+  getThreadReference,
+} from "@/features/messages/lib/threading";
 import {
   usePresenceQuery,
   usePresenceSession,
@@ -35,6 +41,7 @@ import { ChannelBrowserDialog } from "@/features/channels/ui/ChannelBrowserDialo
 import { SearchDialog } from "@/features/search/ui/SearchDialog";
 import { SettingsView } from "@/features/settings/ui/SettingsView";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
+import { relayClient } from "@/shared/api/relayClient";
 import { getEventById, joinChannel } from "@/shared/api/tauri";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { Channel, RelayEvent, SearchHit } from "@/shared/api/types";
@@ -45,7 +52,7 @@ import {
   SidebarTrigger,
 } from "@/shared/ui/sidebar";
 
-type AppView = "home" | "channel" | "settings";
+type AppView = "home" | "channel" | "settings" | "agents";
 
 function createSearchAnchorEvent(hit: SearchHit): RelayEvent {
   return {
@@ -73,6 +80,7 @@ export function AppShell() {
   >(null);
   const [searchAnchorEvent, setSearchAnchorEvent] =
     React.useState<RelayEvent | null>(null);
+  const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
   const queryClient = useQueryClient();
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
@@ -91,6 +99,7 @@ export function AppShell() {
   );
   const createChannelMutation = useCreateChannelMutation();
   const activeChannel = selectedView === "channel" ? selectedChannel : null;
+  const activeChannelId = activeChannel?.id ?? null;
   const { unreadChannelIds } = useUnreadChannels(channels, activeChannel);
   const activeDmParticipantPubkeys = React.useMemo(() => {
     if (!activeChannel || activeChannel.channelType !== "dm") {
@@ -120,9 +129,7 @@ export function AppShell() {
     activeChannel,
     identityQuery.data,
   );
-  const homeUrgentCount =
-    (homeFeedQuery.data?.feed.mentions.length ?? 0) +
-    (homeFeedQuery.data?.feed.needsAction.length ?? 0);
+  const toggleReactionMutation = useToggleReactionMutation();
   const availableChannelIds = React.useMemo(
     () => new Set(channels.map((channel) => channel.id)),
     [channels],
@@ -170,6 +177,11 @@ export function AppShell() {
       resolvedMessages,
     ],
   );
+  const replyTargetMessage = React.useMemo(
+    () =>
+      timelineMessages.find((message) => message.id === replyTargetId) ?? null,
+    [replyTargetId, timelineMessages],
+  );
 
   const channelDescription = activeChannel
     ? [
@@ -190,11 +202,22 @@ export function AppShell() {
   const contentPaneKey =
     selectedView === "home"
       ? "home"
-      : selectedView === "settings"
-        ? "settings"
-        : `channel:${activeChannel?.id ?? "none"}`;
+      : selectedView === "agents"
+        ? "agents"
+        : selectedView === "settings"
+          ? "settings"
+          : `channel:${activeChannel?.id ?? "none"}`;
+  const shouldLoadTimeline =
+    activeChannel !== null && activeChannel.channelType !== "forum";
   const isTimelineLoading =
-    messagesQuery.isLoading && resolvedMessages.length === 0;
+    shouldLoadTimeline &&
+    (messagesQuery.isPending ||
+      (messagesQuery.isFetching && resolvedMessages.length === 0));
+
+  const requestedAncestorIdsRef = React.useRef<Set<string>>(new Set());
+  const previousActiveChannelIdRef = React.useRef<string | null>(
+    activeChannelId,
+  );
 
   const resolveChannel = React.useCallback(
     async (channelId: string): Promise<Channel | null> => {
@@ -283,6 +306,99 @@ export function AppShell() {
   );
 
   React.useEffect(() => {
+    let isCancelled = false;
+
+    void relayClient.preconnect().catch((error) => {
+      if (!isCancelled) {
+        console.error("Failed to preconnect to relay", error);
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (previousActiveChannelIdRef.current === activeChannelId) {
+      return;
+    }
+
+    previousActiveChannelIdRef.current = activeChannelId;
+    setReplyTargetId(null);
+    requestedAncestorIdsRef.current.clear();
+  }, [activeChannelId]);
+
+  React.useEffect(() => {
+    if (replyTargetId && !replyTargetMessage) {
+      setReplyTargetId(null);
+    }
+  }, [replyTargetId, replyTargetMessage]);
+
+  React.useEffect(() => {
+    if (!activeChannel || activeChannel.channelType === "forum") {
+      return;
+    }
+
+    const knownEvents = new Map(
+      resolvedMessages.map((message) => [message.id, message]),
+    );
+    const missingAncestorIds = new Set<string>();
+
+    for (const message of resolvedMessages) {
+      const thread = getThreadReference(message.tags);
+
+      for (const eventId of [thread.parentId, thread.rootId]) {
+        if (
+          !eventId ||
+          knownEvents.has(eventId) ||
+          requestedAncestorIdsRef.current.has(eventId)
+        ) {
+          continue;
+        }
+
+        missingAncestorIds.add(eventId);
+      }
+    }
+
+    if (missingAncestorIds.size === 0) {
+      return;
+    }
+
+    for (const eventId of missingAncestorIds) {
+      requestedAncestorIdsRef.current.add(eventId);
+    }
+
+    let isCancelled = false;
+
+    void Promise.all(
+      [...missingAncestorIds].map(async (eventId) => {
+        try {
+          const event = await getEventById(eventId);
+
+          if (
+            isCancelled ||
+            getChannelIdFromTags(event.tags) !== activeChannel.id
+          ) {
+            return;
+          }
+
+          queryClient.setQueryData<RelayEvent[]>(
+            ["channel-messages", activeChannel.id],
+            (current = []) => mergeMessages(current, event),
+          );
+        } catch (error) {
+          console.error("Failed to load ancestor event", eventId, error);
+        }
+      }),
+    );
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeChannel, queryClient, resolvedMessages]);
+
+  React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       const isSettingsShortcut =
         (event.key === "," || event.code === "Comma") &&
@@ -316,7 +432,6 @@ export function AppShell() {
             : undefined
         }
         fallbackDisplayName={identityQuery.data?.displayName}
-        homeUrgentCount={homeUrgentCount}
         isCreatingChannel={createChannelMutation.isPending}
         isLoading={channelsQuery.isLoading}
         selfPresenceStatus={presenceSession.currentStatus}
@@ -340,6 +455,11 @@ export function AppShell() {
         onOpenSearch={() => {
           setIsSearchOpen(true);
           void refetchChannels();
+        }}
+        onSelectAgents={() => {
+          React.startTransition(() => {
+            setSelectedView("agents");
+          });
         }}
         onSelectHome={() => {
           React.startTransition(() => {
@@ -365,6 +485,12 @@ export function AppShell() {
             description="Personalized feed for mentions, reminders, channel activity, and agent work."
             mode="home"
             title="Home"
+          />
+        ) : selectedView === "agents" ? (
+          <ChatHeader
+            description="Create local ACP workers, mint agent tokens, and monitor the relay-visible agent directory."
+            mode="agents"
+            title="Agents"
           />
         ) : selectedView === "settings" ? (
           <ChatHeader
@@ -416,12 +542,13 @@ export function AppShell() {
               }
               feed={homeFeedQuery.data}
               isLoading={homeFeedQuery.isLoading}
-              isRefreshing={homeFeedQuery.isRefetching}
               onOpenChannel={handleOpenChannel}
               onRefresh={() => {
                 void homeFeedQuery.refetch();
               }}
             />
+          ) : selectedView === "agents" ? (
+            <AgentsView />
           ) : selectedView === "settings" ? (
             <SettingsView
               currentPubkey={identityQuery.data?.pubkey}
@@ -433,12 +560,13 @@ export function AppShell() {
               presenceStatus={presenceSession.currentStatus}
             />
           ) : (
-            <>
+            <React.Fragment key={activeChannel?.id ?? "no-channel"}>
               <MessageTimeline
+                activeReplyTargetId={replyTargetId}
                 emptyDescription={
                   activeChannel?.channelType === "forum"
                     ? "Select a stream or DM to load real message history in this first integration pass."
-                    : "Messages will appear here once the relay has history for this channel."
+                    : "Messages and sub-replies will appear here once the relay has history for this channel."
                 }
                 emptyTitle={
                   activeChannel
@@ -448,8 +576,25 @@ export function AppShell() {
                     : "No channel selected"
                 }
                 isLoading={isTimelineLoading}
-                key={activeChannel?.id ?? "no-channel"}
                 messages={timelineMessages}
+                onReply={(message) => {
+                  setReplyTargetId((current) =>
+                    current === message.id ? null : message.id,
+                  );
+                }}
+                onToggleReaction={
+                  activeChannel &&
+                  activeChannel.archivedAt === null &&
+                  activeChannel.channelType !== "forum"
+                    ? async (message, emoji, remove) => {
+                        await toggleReactionMutation.mutateAsync({
+                          emoji,
+                          eventId: message.id,
+                          remove,
+                        });
+                      }
+                    : undefined
+                }
                 onTargetReached={(messageId) => {
                   setSearchAnchor((current) =>
                     current?.eventId === messageId ? null : current,
@@ -472,12 +617,16 @@ export function AppShell() {
                   sendMessageMutation.isPending
                 }
                 isSending={sendMessageMutation.isPending}
-                key={activeChannel?.id ?? "no-channel"}
+                onCancelReply={() => {
+                  setReplyTargetId(null);
+                }}
                 onSend={async (content, mentionPubkeys) => {
                   await sendMessageMutation.mutateAsync({
                     content,
                     mentionPubkeys,
+                    parentEventId: replyTargetId,
                   });
+                  setReplyTargetId(null);
                 }}
                 placeholder={
                   activeChannel?.archivedAt
@@ -490,8 +639,17 @@ export function AppShell() {
                           ? `Message #${activeChannel.name}`
                           : "Select a channel"
                 }
+                replyTarget={
+                  replyTargetMessage
+                    ? {
+                        author: replyTargetMessage.author,
+                        body: replyTargetMessage.body,
+                        id: replyTargetMessage.id,
+                      }
+                    : null
+                }
               />
-            </>
+            </React.Fragment>
           )}
         </div>
 

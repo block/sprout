@@ -13,12 +13,18 @@ import type {
   Identity,
   MintTokenInput,
   MintTokenResponse,
+  MintManagedAgentTokenInput,
+  MintManagedAgentTokenResponse,
+  ManagedAgent,
+  ManagedAgentLog,
+  RelayAgent,
   PresenceLookup,
   PresenceStatus,
   Profile,
   RelayEvent,
   SearchMessagesInput,
   SearchMessagesResponse,
+  SendChannelMessageResult,
   SetPresenceResult,
   SetChannelPurposeInput,
   SetChannelTopicInput,
@@ -28,6 +34,11 @@ import type {
   UpdateChannelInput,
   UserProfileSummary,
   UsersBatchResponse,
+  CreateManagedAgentInput,
+  CreateManagedAgentResponse,
+  AcpProvider,
+  CommandAvailability,
+  ManagedAgentPrereqs,
 } from "@/shared/api/types";
 
 type RawIdentity = {
@@ -152,6 +163,14 @@ type RawSearchResponse = {
   found: number;
 };
 
+type RawSendChannelMessageResult = {
+  event_id: string;
+  parent_event_id: string | null;
+  root_event_id: string | null;
+  depth: number;
+  created_at: number;
+};
+
 type RawToken = {
   id: string;
   name: string;
@@ -175,6 +194,73 @@ type RawMintTokenResponse = {
   channel_ids: string[];
   created_at: string;
   expires_at: string | null;
+};
+
+type RawRelayAgent = {
+  pubkey: string;
+  name: string;
+  agent_type: string;
+  channels: string[];
+  capabilities: string[];
+  status: RelayAgent["status"];
+};
+
+type RawManagedAgent = {
+  pubkey: string;
+  name: string;
+  relay_url: string;
+  acp_command: string;
+  agent_command: string;
+  agent_args: string[];
+  mcp_command: string;
+  turn_timeout_seconds: number;
+  has_api_token: boolean;
+  status: ManagedAgent["status"];
+  pid: number | null;
+  created_at: string;
+  updated_at: string;
+  last_started_at: string | null;
+  last_stopped_at: string | null;
+  last_exit_code: number | null;
+  last_error: string | null;
+  log_path: string;
+};
+
+type RawCreateManagedAgentResponse = {
+  agent: RawManagedAgent;
+  private_key_nsec: string;
+  api_token: string | null;
+  spawn_error: string | null;
+};
+
+type RawMintManagedAgentTokenResponse = {
+  agent: RawManagedAgent;
+  token: string;
+};
+
+type RawManagedAgentLog = {
+  content: string;
+  log_path: string;
+};
+
+type RawAcpProvider = {
+  id: string;
+  label: string;
+  command: string;
+  binary_path: string;
+  default_args: string[];
+};
+
+type RawCommandAvailability = {
+  command: string;
+  resolved_path: string | null;
+  available: boolean;
+};
+
+type RawManagedAgentPrereqs = {
+  admin: RawCommandAvailability;
+  acp: RawCommandAvailability;
+  mcp: RawCommandAvailability;
 };
 
 function toTauriError(error: unknown): Error {
@@ -501,6 +587,43 @@ export async function getEventById(eventId: string): Promise<RelayEvent> {
   return JSON.parse(eventJson) as RelayEvent;
 }
 
+export async function sendChannelMessage(
+  channelId: string,
+  content: string,
+  parentEventId?: string | null,
+): Promise<SendChannelMessageResult> {
+  const response = await invokeTauri<RawSendChannelMessageResult>(
+    "send_channel_message",
+    {
+      channelId,
+      content,
+      parentEventId,
+    },
+  );
+
+  return {
+    eventId: response.event_id,
+    parentEventId: response.parent_event_id,
+    rootEventId: response.root_event_id,
+    depth: response.depth,
+    createdAt: response.created_at,
+  };
+}
+
+export async function addReaction(
+  eventId: string,
+  emoji: string,
+): Promise<void> {
+  await invokeTauri("add_reaction", { eventId, emoji });
+}
+
+export async function removeReaction(
+  eventId: string,
+  emoji: string,
+): Promise<void> {
+  await invokeTauri("remove_reaction", { eventId, emoji });
+}
+
 export async function signRelayEvent(input: {
   kind: number;
   content: string;
@@ -528,6 +651,60 @@ function fromRawToken(token: RawToken): Token {
     expiresAt: token.expires_at,
     lastUsedAt: token.last_used_at,
     revokedAt: token.revoked_at,
+  };
+}
+
+function fromRawRelayAgent(agent: RawRelayAgent): RelayAgent {
+  return {
+    pubkey: agent.pubkey,
+    name: agent.name,
+    agentType: agent.agent_type,
+    channels: agent.channels,
+    capabilities: agent.capabilities,
+    status: agent.status,
+  };
+}
+
+function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
+  return {
+    pubkey: agent.pubkey,
+    name: agent.name,
+    relayUrl: agent.relay_url,
+    acpCommand: agent.acp_command,
+    agentCommand: agent.agent_command,
+    agentArgs: agent.agent_args,
+    mcpCommand: agent.mcp_command,
+    turnTimeoutSeconds: agent.turn_timeout_seconds,
+    hasApiToken: agent.has_api_token,
+    status: agent.status,
+    pid: agent.pid,
+    createdAt: agent.created_at,
+    updatedAt: agent.updated_at,
+    lastStartedAt: agent.last_started_at,
+    lastStoppedAt: agent.last_stopped_at,
+    lastExitCode: agent.last_exit_code,
+    lastError: agent.last_error,
+    logPath: agent.log_path,
+  };
+}
+
+function fromRawAcpProvider(provider: RawAcpProvider): AcpProvider {
+  return {
+    id: provider.id,
+    label: provider.label,
+    command: provider.command,
+    binaryPath: provider.binary_path,
+    defaultArgs: provider.default_args,
+  };
+}
+
+function fromRawCommandAvailability(
+  command: RawCommandAvailability,
+): CommandAvailability {
+  return {
+    command: command.command,
+    resolvedPath: command.resolved_path,
+    available: command.available,
   };
 }
 
@@ -565,4 +742,128 @@ export async function revokeAllTokens(): Promise<{ revokedCount: number }> {
     "revoke_all_tokens",
   );
   return { revokedCount: response.revoked_count };
+}
+
+export async function listRelayAgents(): Promise<RelayAgent[]> {
+  const response = await invokeTauri<RawRelayAgent[]>("list_relay_agents");
+  return response.map(fromRawRelayAgent);
+}
+
+export async function listManagedAgents(): Promise<ManagedAgent[]> {
+  const response = await invokeTauri<RawManagedAgent[]>("list_managed_agents");
+  return response.map(fromRawManagedAgent);
+}
+
+export async function createManagedAgent(
+  input: CreateManagedAgentInput,
+): Promise<CreateManagedAgentResponse> {
+  const response = await invokeTauri<RawCreateManagedAgentResponse>(
+    "create_managed_agent",
+    {
+      input: {
+        name: input.name,
+        relayUrl: input.relayUrl,
+        acpCommand: input.acpCommand,
+        agentCommand: input.agentCommand,
+        agentArgs: input.agentArgs,
+        mcpCommand: input.mcpCommand,
+        turnTimeoutSeconds: input.turnTimeoutSeconds,
+        mintToken: input.mintToken,
+        tokenScopes: input.tokenScopes,
+        tokenName: input.tokenName,
+        spawnAfterCreate: input.spawnAfterCreate,
+      },
+    },
+  );
+
+  return {
+    agent: fromRawManagedAgent(response.agent),
+    privateKeyNsec: response.private_key_nsec,
+    apiToken: response.api_token,
+    spawnError: response.spawn_error,
+  };
+}
+
+export async function startManagedAgent(pubkey: string): Promise<ManagedAgent> {
+  const response = await invokeTauri<RawManagedAgent>("start_managed_agent", {
+    pubkey,
+  });
+  return fromRawManagedAgent(response);
+}
+
+export async function stopManagedAgent(pubkey: string): Promise<ManagedAgent> {
+  const response = await invokeTauri<RawManagedAgent>("stop_managed_agent", {
+    pubkey,
+  });
+  return fromRawManagedAgent(response);
+}
+
+export async function deleteManagedAgent(pubkey: string): Promise<void> {
+  await invokeTauri("delete_managed_agent", { pubkey });
+}
+
+export async function mintManagedAgentToken(
+  input: MintManagedAgentTokenInput,
+): Promise<MintManagedAgentTokenResponse> {
+  const response = await invokeTauri<RawMintManagedAgentTokenResponse>(
+    "mint_managed_agent_token",
+    {
+      input: {
+        pubkey: input.pubkey,
+        tokenName: input.tokenName,
+        scopes: input.scopes,
+      },
+    },
+  );
+
+  return {
+    agent: fromRawManagedAgent(response.agent),
+    token: response.token,
+  };
+}
+
+export async function getManagedAgentLog(
+  pubkey: string,
+  lineCount?: number,
+): Promise<ManagedAgentLog> {
+  const response = await invokeTauri<RawManagedAgentLog>(
+    "get_managed_agent_log",
+    {
+      pubkey,
+      lineCount,
+    },
+  );
+
+  return {
+    content: response.content,
+    logPath: response.log_path,
+  };
+}
+
+export async function discoverAcpProviders(): Promise<AcpProvider[]> {
+  const response = await invokeTauri<RawAcpProvider[]>(
+    "discover_acp_providers",
+  );
+  return response.map(fromRawAcpProvider);
+}
+
+export async function discoverManagedAgentPrereqs(input: {
+  acpCommand?: string;
+  mcpCommand?: string;
+}): Promise<ManagedAgentPrereqs> {
+  const response = await invokeTauri<RawManagedAgentPrereqs>(
+    "discover_managed_agent_prereqs",
+    {
+      input: {
+        acpCommand: input.acpCommand,
+        mcpCommand: input.mcpCommand,
+      },
+    },
+  );
+
+  return {
+    admin: fromRawCommandAvailability(response.admin),
+    acp: fromRawCommandAvailability(response.acp),
+    mcp: fromRawCommandAvailability(response.mcp),
+  };
 }

@@ -76,9 +76,7 @@ test("opens a mocked channel from the home feed", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByTestId("chat-title")).toHaveText("Home");
-  await expect(
-    page.getByRole("heading", { name: "Focus queue" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "@Mentions" })).toBeVisible();
   await expect(
     page.getByText("Please review the release checklist."),
   ).toBeVisible();
@@ -91,20 +89,15 @@ test("opens a mocked channel from the home feed", async ({ page }) => {
   );
 });
 
-test("home feed uses your resolved profile label instead of You", async ({
-  page,
-}) => {
-  const activitySection = page.locator("section").filter({
-    has: page.getByRole("heading", { name: "Channel Activity" }),
+test("home feed renders resolved author labels", async ({ page }) => {
+  const mentionsSection = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "@Mentions" }),
   });
 
   await page.goto("/");
 
-  await expect(activitySection).toContainText(
-    "I posted a note about the launch checklist.",
-  );
-  await expect(activitySection).toContainText("npub1mock...");
-  await expect(activitySection).not.toContainText("You");
+  await expect(mentionsSection).toContainText("alice");
+  await expect(mentionsSection).not.toContainText("You");
 });
 
 test("opens relay-backed search from the sidebar and loads the exact result", async ({
