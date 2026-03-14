@@ -92,7 +92,9 @@ sprout-acp
 
 ## Configuration
 
-All configuration is via environment variables.
+All configuration is via environment variables (or CLI flags — every env var has a matching flag).
+
+### Core
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -108,16 +110,67 @@ All configuration is via environment variables.
 
 **Legacy env vars:** `SPROUT_ACP_PRIVATE_KEY` and `SPROUT_ACP_API_TOKEN` are still accepted as fallbacks.
 
+### Parallel Agents & Heartbeat
+
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `--agents` | `SPROUT_ACP_AGENTS` | `1` | Number of agent subprocesses (1–32). |
+| `--heartbeat-interval` | `SPROUT_ACP_HEARTBEAT_INTERVAL` | `0` | Seconds between heartbeat prompts. `0` = disabled. Must be `0` or ≥10 when enabled. |
+| `--heartbeat-prompt` | `SPROUT_ACP_HEARTBEAT_PROMPT` | (built-in) | Custom heartbeat prompt text. Conflicts with `--heartbeat-prompt-file`. |
+| `--heartbeat-prompt-file` | `SPROUT_ACP_HEARTBEAT_PROMPT_FILE` | — | Read heartbeat prompt from a file. Conflicts with `--heartbeat-prompt`. |
+
+### Configuration Examples
+
+**Single agent, no heartbeat (default — backward compatible):**
+```bash
+sprout-acp
+```
+
+**Four agents, no heartbeat (high-throughput event processing):**
+```bash
+sprout-acp --agents 4
+```
+
+**Two agents with 5-minute heartbeat:**
+```bash
+sprout-acp --agents 2 --heartbeat-interval 300
+```
+
+**Custom heartbeat prompt:**
+```bash
+sprout-acp --agents 2 --heartbeat-interval 300 \
+  --heartbeat-prompt "Check get_feed_actions() for pending approvals, then get_feed_mentions() for unanswered mentions. If nothing actionable, end your turn immediately."
+```
+
+### Shared Identity
+
+All N agents authenticate as the **same Nostr bot identity** — users see one bot regardless of how many agents are running. The same channel is never processed by two agents simultaneously (the queue enforces this). Cross-channel message ordering is not guaranteed when N>1.
+
+### Heartbeat Semantics
+
+When `--heartbeat-interval` is set, the harness fires a prompt on an idle agent at the configured interval. Heartbeat rules:
+
+- **Lower priority than queued events** — if events are pending, they are dispatched first.
+- **Skipped when all agents are busy** — no queuing; the tick is simply dropped.
+- **At most one heartbeat in flight globally** — the next tick is suppressed until the current one completes.
+- **Default prompt** (when `--heartbeat-prompt` is not set) calls `get_feed_actions()` and `get_feed_mentions()` to surface pending work.
+
+Heartbeat is designed for idle periods. Under sustained event load it will rarely fire — that's expected.
+
+### Choosing N
+
+Start with **N=2** for most deployments. Increase if queue depth grows under load. Each agent spawns its own MCP server subprocess, so resource usage scales approximately as N × (agent memory + MCP server memory). Maximum is 32.
+
 ## How It Works
 
-1. **Startup** — Spawns the agent subprocess, sends ACP `initialize`, connects to the relay with NIP-42 auth.
+1. **Startup** — Spawns N agent subprocesses (default 1), sends ACP `initialize` to each, connects to the relay with NIP-42 auth.
 2. **Channel discovery** — Queries the relay REST API for accessible channels, subscribes to each.
 3. **Event loop** — Listens for @mention events (kind 9 with the agent's pubkey in a `#p` tag). Events queue per channel.
-4. **Prompting** — When events are pending and no prompt is in flight, drains all queued events for the oldest channel into a single batched prompt via ACP `session/prompt`.
+4. **Prompting** — When events are pending and no prompt is in flight for that channel, drains all queued events for the oldest channel into a single batched prompt via ACP `session/prompt`.
 5. **Agent response** — The agent processes the prompt and uses Sprout MCP tools (`send_message`, `get_channel_history`, etc.) to interact with Sprout.
 6. **Recovery** — If the agent crashes, the harness respawns it. If the relay disconnects, the harness reconnects with a `since` filter to avoid missing events.
 
-Only one prompt is in flight at a time (globally, not per-session). This matches the concurrency model of current ACP agents.
+Each channel has at most one prompt in flight. Multiple channels can be processed concurrently when agents > 1.
 
 > **Note:** On startup, the harness replays all unprocessed @mentions since the last run. Expect a burst of activity if there are stale events in the channel.
 

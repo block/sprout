@@ -76,6 +76,7 @@ pub enum AcpError {
     #[error("Agent process exited unexpectedly")]
     AgentExited,
 
+    #[allow(dead_code)]
     #[error("Turn timed out")]
     Timeout,
 
