@@ -284,7 +284,11 @@ async fn main() -> Result<()> {
                 // resubscription asynchronously; we just resume waiting for events.
                 tracing::warn!("relay event stream ended — requesting reconnect");
                 if let Err(e) = relay.reconnect().await {
-                    tracing::error!("failed to send reconnect command: {e}");
+                    // Background task is dead (cmd_tx closed). Sleep to prevent
+                    // a CPU-burning spin loop, then exit — no recovery possible.
+                    tracing::error!("relay background task is gone: {e} — exiting");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    break;
                 }
             }
         }

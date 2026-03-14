@@ -420,6 +420,7 @@ async fn run_background_task(
                                 &relay_url,
                                 api_token.as_deref(),
                                 &agent_pubkey_hex,
+                                false, // skip_drain: wait for Reconnect command
                             )
                             .await;
                         }
@@ -435,6 +436,7 @@ async fn run_background_task(
                             &relay_url,
                             api_token.as_deref(),
                             &agent_pubkey_hex,
+                            false,
                         )
                         .await;
                     }
@@ -449,6 +451,7 @@ async fn run_background_task(
                             &relay_url,
                             api_token.as_deref(),
                             &agent_pubkey_hex,
+                            false,
                         )
                         .await;
                     }
@@ -473,7 +476,7 @@ async fn run_background_task(
                         }
                     }
                     Some(RelayCommand::Reconnect) => {
-                        // Caller already got None from next_event(); drive reconnect now.
+                        // Reconnect command already consumed — skip the drain loop.
                         wait_for_reconnect(
                             &mut ws,
                             &mut cmd_rx,
@@ -482,6 +485,7 @@ async fn run_background_task(
                             &relay_url,
                             api_token.as_deref(),
                             &agent_pubkey_hex,
+                            true, // skip_drain: command already consumed
                         )
                         .await;
                     }
@@ -594,9 +598,15 @@ async fn handle_ws_message(
     }
 }
 
-/// Wait for a `Reconnect` command from the caller, then attempt reconnection
-/// with exponential backoff. Resubscribes all active channels with `since`
-/// filters on success.
+/// Attempt reconnection with exponential backoff. Resubscribes all active
+/// channels with `since` filters on success.
+///
+/// If `skip_drain` is `false`, drains the command channel until a `Reconnect`
+/// command arrives (used when called from the WS-error path where the caller
+/// hasn't sent Reconnect yet). If `true`, skips the drain and reconnects
+/// immediately (used when called from the `RelayCommand::Reconnect` arm where
+/// the command was already consumed).
+#[allow(clippy::too_many_arguments)]
 async fn wait_for_reconnect(
     ws: &mut WsStream,
     cmd_rx: &mut mpsc::Receiver<RelayCommand>,
@@ -605,15 +615,27 @@ async fn wait_for_reconnect(
     relay_url: &str,
     api_token: Option<&str>,
     agent_pubkey_hex: &str,
+    skip_drain: bool,
 ) {
-    // Drain commands until we get Reconnect (or Shutdown).
-    loop {
-        match cmd_rx.recv().await {
-            Some(RelayCommand::Reconnect) => break,
-            Some(RelayCommand::Shutdown) | None => return,
-            // Ignore Subscribe/Unsubscribe while disconnected — they'll be
-            // resubmitted after reconnect via active_subscriptions.
-            _ => {}
+    if !skip_drain {
+        // Drain commands until we get Reconnect (or Shutdown).
+        loop {
+            match cmd_rx.recv().await {
+                Some(RelayCommand::Reconnect) => break,
+                Some(RelayCommand::Shutdown) | None => return,
+                // Apply Subscribe/Unsubscribe to state so reconnect reflects
+                // the latest caller intent (not just pre-disconnect state).
+                Some(RelayCommand::Subscribe { channel_id, filter }) => {
+                    state
+                        .active_subscriptions
+                        .insert(channel_id, channel_sub_id(channel_id));
+                    state.active_filters.insert(channel_id, filter);
+                }
+                Some(RelayCommand::Unsubscribe { channel_id }) => {
+                    state.active_subscriptions.remove(&channel_id);
+                    state.active_filters.remove(&channel_id);
+                }
+            }
         }
     }
 

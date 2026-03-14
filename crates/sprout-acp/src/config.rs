@@ -161,8 +161,10 @@ impl Config {
     pub fn from_cli() -> Result<Self, ConfigError> {
         // Propagate legacy env vars so clap sees them under the canonical names.
         // Only set if the canonical var is absent — clap's `env` reads these.
-        // SAFETY: This runs in main() before the tokio runtime spawns threads.
-        // std::env::set_var will require `unsafe` in Rust edition 2024.
+        // NOTE: std::env::set_var is safe in edition 2021 but will require
+        // `unsafe` in edition 2024. This runs inside #[tokio::main] so worker
+        // threads are already alive. When migrating to edition 2024, move this
+        // to a non-async fn main() wrapper that runs before the runtime starts.
         for (legacy, canonical) in [
             ("SPROUT_ACP_PRIVATE_KEY", "SPROUT_PRIVATE_KEY"),
             ("SPROUT_ACP_API_TOKEN", "SPROUT_API_TOKEN"),

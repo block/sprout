@@ -109,6 +109,10 @@ pub struct AcpClient {
     /// Guards against double-response if a timeout fires after the allow_once
     /// response was written but before `pending_permission_id` was cleared.
     permission_responded: bool,
+    /// The JSON-RPC id of the most recently sent `session/prompt` request.
+    /// Used by [`cancel_with_cleanup`] to drain the correct response.
+    /// Set in [`session_prompt`]; consumed in [`cancel_with_cleanup`].
+    last_prompt_id: Option<u64>,
 }
 
 impl AcpClient {
@@ -145,6 +149,7 @@ impl AcpClient {
             next_id: 0,
             pending_permission_id: None,
             permission_responded: false,
+            last_prompt_id: None,
         })
     }
 
@@ -202,7 +207,11 @@ impl AcpClient {
                 { "type": "text", "text": prompt_text }
             ]
         });
+        // Record the prompt request ID before send_request increments next_id.
+        // Used by cancel_with_cleanup to drain the correct response.
+        self.last_prompt_id = Some(self.next_id);
         let result = self.send_request("session/prompt", params).await?;
+        self.last_prompt_id = None; // Clear after normal completion.
         self.parse_stop_reason(&result)
     }
 
@@ -231,6 +240,13 @@ impl AcpClient {
     ///
     /// Returns the final [`StopReason`] (almost always [`StopReason::Cancelled`]).
     pub async fn cancel_with_cleanup(&mut self, session_id: &str) -> Result<StopReason, AcpError> {
+        // Validate precondition before any side effects — fail fast if there's
+        // no in-flight prompt (prevents writing permission responses or cancel
+        // notifications to the agent when no prompt is active).
+        let prompt_id = self.last_prompt_id.take().ok_or_else(|| {
+            AcpError::Protocol("cancel_with_cleanup called with no in-flight prompt".into())
+        })?;
+
         // Step 1: respond to any pending permission request with "cancelled",
         // but only if we haven't already responded (guards against double-response race).
         if let Some(perm_id) = self.pending_permission_id.clone() {
@@ -249,10 +265,6 @@ impl AcpClient {
         // Step 2: send session/cancel notification (no id)
         self.session_cancel(session_id).await?;
         tracing::info!(target: "acp::cancel", "sent session/cancel for {session_id}");
-
-        // Step 3: drain until we get the session/prompt response.
-        // The prompt id is next_id - 1 (the most recently sent request was session/prompt).
-        let prompt_id = self.next_id - 1;
         let result = self.read_until_response(prompt_id).await?;
         self.parse_stop_reason(&result)
     }
@@ -497,9 +509,11 @@ impl AcpClient {
             }
         };
 
-        self.write_ndjson(&response).await?;
-        // Mark as responded and clear pending now that we've successfully written the response.
+        // Mark as responded BEFORE the write — if the future is dropped by a
+        // timeout between write and flag-set, cancel_with_cleanup would otherwise
+        // see permission_responded=false and send a second response (protocol violation).
         self.permission_responded = true;
+        self.write_ndjson(&response).await?;
         self.pending_permission_id = None;
         Ok(())
     }
