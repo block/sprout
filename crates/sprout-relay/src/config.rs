@@ -45,6 +45,13 @@ pub struct Config {
     /// Optional hex-encoded private key for the relay's signing keypair.
     /// If absent, a fresh keypair is generated at startup.
     pub relay_private_key: Option<String>,
+    /// Optional Unix Domain Socket path. When set, the relay also listens on this
+    /// UDS for traffic (e.g. service mesh sidecar). Health probes still use TCP.
+    pub uds_path: Option<String>,
+    /// When true, only pubkeys in the `pubkey_allowlist` table may authenticate
+    /// via NIP-42 without a JWT or API token. Has no effect when
+    /// `require_auth_token` is false (open-relay mode already allows all pubkeys).
+    pub pubkey_allowlist_enabled: bool,
 }
 
 impl Config {
@@ -89,6 +96,10 @@ impl Config {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
+        let pubkey_allowlist_enabled = std::env::var("SPROUT_PUBKEY_ALLOWLIST")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
         let mut auth = sprout_auth::AuthConfig::default();
         auth.okta.require_token = require_auth_token;
 
@@ -118,6 +129,8 @@ impl Config {
 
         let relay_private_key = std::env::var("SPROUT_RELAY_PRIVATE_KEY").ok();
 
+        let uds_path = std::env::var("SPROUT_UDS_PATH").ok();
+
         Ok(Self {
             bind_addr,
             database_url,
@@ -132,6 +145,8 @@ impl Config {
             require_auth_token,
             cors_origins,
             relay_private_key,
+            uds_path,
+            pubkey_allowlist_enabled,
         })
     }
 }

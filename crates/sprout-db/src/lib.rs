@@ -184,6 +184,11 @@ impl Db {
         Ok(())
     }
 
+    /// Returns `true` if the database is reachable (used by readiness probes).
+    pub async fn ping(&self) -> bool {
+        sqlx::query("SELECT 1").execute(&self.pool).await.is_ok()
+    }
+
     // ── Events ───────────────────────────────────────────────────────────────
 
     /// Inserts an event. Returns `(StoredEvent, was_inserted)` — `false` on duplicate.
@@ -916,6 +921,35 @@ impl Db {
             });
         }
         Ok(out)
+    }
+
+    // ── Pubkey Allowlist ─────────────────────────────────────────────────────
+
+    /// Returns `true` if the given pubkey is in the allowlist.
+    pub async fn is_pubkey_allowed(&self, pubkey: &[u8]) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM pubkey_allowlist WHERE pubkey = ?")
+            .bind(pubkey)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
+    }
+
+    /// Adds a pubkey to the allowlist.
+    pub async fn add_to_allowlist(
+        &self,
+        pubkey: &[u8],
+        added_by: Option<&[u8]>,
+        note: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT IGNORE INTO pubkey_allowlist (pubkey, added_by, note) VALUES (?, ?, ?)",
+        )
+        .bind(pubkey)
+        .bind(added_by)
+        .bind(note)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     // ── Partitions ───────────────────────────────────────────────────────────
