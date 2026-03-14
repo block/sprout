@@ -13,6 +13,7 @@ import {
   sendChannelMessage,
 } from "@/shared/api/tauri";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
+import { KIND_STREAM_MESSAGE } from "@/shared/constants/kinds";
 
 type MessageQueryContext = {
   optimisticId: string;
@@ -84,7 +85,7 @@ function createOptimisticMessage(
     id: `optimistic-${crypto.randomUUID()}`,
     pubkey: identity.pubkey,
     created_at: Math.floor(Date.now() / 1_000),
-    kind: 4_0001,
+    kind: KIND_STREAM_MESSAGE,
     tags,
     content,
     sig: "",
@@ -245,7 +246,7 @@ export function useSendMessageMutation(
           id: result.eventId,
           pubkey: identity.pubkey,
           created_at: result.createdAt,
-          kind: 4_0001,
+          kind: KIND_STREAM_MESSAGE,
           tags: buildReplyTags(
             channel.id,
             identity.pubkey,
