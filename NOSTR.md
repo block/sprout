@@ -1,6 +1,6 @@
 # Using Third-Party Nostr Clients with Sprout
 
-Sprout speaks the Nostr wire protocol internally, but uses custom event kinds (40001+) and
+Sprout speaks the Nostr wire protocol internally, but uses NIP-29 group chat events (kind:9) and
 channel-scoped `#h` tags that standard NIP-28 clients don't understand. **sprout-proxy** bridges
 this gap — it translates between Sprout's internal protocol and standard NIP-28 (Public Chat
 Channels), so any Nostr client that supports NIP-28 and NIP-42 can read and write Sprout channels.
@@ -46,7 +46,7 @@ curl -X POST http://localhost:4869/admin/guests \
 | **NIP-42 authentication** | ✅ | Proactive challenge + reactive-auth compatible |
 | **Channel discovery (kind:40)** | ✅ | Synthesized from Sprout REST API; served locally |
 | **Channel metadata (kind:41)** | ✅ | Name, description, picture; served locally |
-| **Channel messages (kind:42)** | ✅ | Translated to/from Sprout kind:40001 |
+| **Channel messages (kind:42)** | ✅ | Translated to/from Sprout kind:9 |
 | **Message editing** | ✅ | Sprout kind:40003 ↔ kind:41 (NIP-28 uses kind:41 for both metadata and edits; the proxy routes to both local metadata and upstream edits) |
 | **Real-time streaming** | ✅ | Live event delivery via open subscriptions |
 | **Multi-channel access** | ✅ | Guests can be granted access to multiple channels |
@@ -225,15 +225,15 @@ curl -X POST http://localhost:4869/admin/invite \
 │  Nostr Client        │        │  sprout-proxy          │        │  Sprout Relay     │
 │  (Coracle, nak,      │◄──────►│  :4869                 │◄──────►│  :3000            │
 │   nostr-tools, etc.) │ NIP-28 │                        │internal│                   │
-└─────────────────────┘        │  kind:42 ↔ kind:40001  │        └──────────────────┘
+└─────────────────────┘        │  kind:42 ↔ kind:9       │        └──────────────────┘
                                 │  #e(id)  ↔ #h(uuid)   │
                                 │  shadow key re-signing │
                                 └───────────────────────┘
 ```
 
 **Translation pipeline:**
-- **Outbound** (relay → client): kind:40001 + `#h(uuid)` → kind:42 + `#e(event_id)`
-- **Inbound** (client → relay): kind:42 + `#e(event_id)` → kind:40001 + `#h(uuid)`
+- **Outbound** (relay → client): kind:9 + `#h(uuid)` → kind:42 + `#e(event_id)`
+- **Inbound** (client → relay): kind:42 + `#e(event_id)` → kind:9 + `#h(uuid)`
 - **Channel metadata**: kind:40/41 synthesized locally from Sprout REST API (never forwarded upstream)
 - **Shadow keys**: Each guest gets a deterministic keypair via HMAC-SHA256 for re-signing translated events
 
