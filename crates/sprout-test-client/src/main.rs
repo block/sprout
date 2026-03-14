@@ -10,7 +10,7 @@
 //!   --send <MESSAGE>   Send a text message to a channel
 //!   --channel <ID>     Channel ID for send/subscribe
 //!   --subscribe        Subscribe to a channel and print events
-//!   --kind <KIND>      Event kind [default: 40001]
+//!   --kind <KIND>      Event kind [default: 9]
 //! ```
 //!
 //! # Examples
@@ -45,7 +45,7 @@ async fn main() {
 
     let url = opts.url.as_deref().unwrap_or("ws://localhost:3000");
     let channel = opts.channel.as_deref().unwrap_or("default");
-    let kind = opts.kind.unwrap_or(40001);
+    let kind = opts.kind.unwrap_or(9);
 
     let keys = match std::env::var("SPROUT_PRIVATE_KEY") {
         Ok(sk) => Keys::parse(&sk).expect("invalid SPROUT_PRIVATE_KEY"),
@@ -219,7 +219,7 @@ OPTIONS:
     --send <MESSAGE>   Send a text message to a channel
     --channel <ID>     Channel ID for send/subscribe [default: default]
     --subscribe        Subscribe to a channel and print events
-    --kind <KIND>      Event kind [default: 40001]
+    --kind <KIND>      Event kind [default: 9]
     --help             Print this help message
 
 EXAMPLES:

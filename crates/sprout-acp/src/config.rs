@@ -515,12 +515,12 @@ mod tests {
     #[test]
     fn test_all_mode_with_kinds_override() {
         let mut config = test_config(SubscribeMode::All);
-        config.kinds_override = Some(vec![40001, 7]);
+        config.kinds_override = Some(vec![9, 7]);
         let channels = vec![Uuid::new_v4()];
         let result = resolve_channel_filters(&config, &channels, &[]);
 
         let f = result.get(&channels[0]).unwrap();
-        assert_eq!(f.kinds.as_ref().unwrap(), &[40001, 7]);
+        assert_eq!(f.kinds.as_ref().unwrap(), &[9, 7]);
     }
 
     // ── resolve_channel_filters: channels_override ───────────────────────────
@@ -553,14 +553,14 @@ mod tests {
         let rules = vec![make_rule(
             "catch-all",
             ChannelScope::All("all".into()),
-            vec![40001],
+            vec![9],
             false,
         )];
 
         let result = resolve_channel_filters(&config, &[ch], &rules);
         assert_eq!(result.len(), 1);
         let f = result.get(&ch).unwrap();
-        assert_eq!(f.kinds.as_ref().unwrap(), &[40001]);
+        assert_eq!(f.kinds.as_ref().unwrap(), &[9]);
         assert!(!f.require_mention);
     }
 
@@ -572,7 +572,7 @@ mod tests {
         let rules = vec![make_rule(
             "only-a",
             ChannelScope::List(vec![ch_a.to_string()]),
-            vec![40001],
+            vec![9],
             false,
         )];
 
@@ -591,7 +591,7 @@ mod tests {
             make_rule(
                 "messages",
                 ChannelScope::All("all".into()),
-                vec![40001],
+                vec![9],
                 true,
             ),
             make_rule("reactions", ChannelScope::All("all".into()), vec![7], false),
@@ -599,9 +599,9 @@ mod tests {
 
         let result = resolve_channel_filters(&config, &[ch], &rules);
         let f = result.get(&ch).unwrap();
-        // Kinds should be the union: [40001, 7].
+        // Kinds should be the union: [9, 7].
         let kinds = f.kinds.as_ref().expect("should have merged kinds");
-        assert!(kinds.contains(&40001));
+        assert!(kinds.contains(&9));
         assert!(kinds.contains(&7));
         // require_mention should be false (most permissive wins).
         assert!(!f.require_mention);
@@ -616,7 +616,7 @@ mod tests {
             make_rule(
                 "narrow",
                 ChannelScope::All("all".into()),
-                vec![40001],
+                vec![9],
                 false,
             ),
             make_rule("broad", ChannelScope::All("all".into()), vec![], false),
@@ -637,7 +637,7 @@ mod tests {
         let rules = vec![make_rule(
             "other",
             ChannelScope::List(vec![other_ch.to_string()]),
-            vec![40001],
+            vec![9],
             false,
         )];
 
@@ -651,7 +651,7 @@ mod tests {
         let ch = Uuid::new_v4();
         // First rule requires mention, second doesn't.
         let rules = vec![
-            make_rule("strict", ChannelScope::All("all".into()), vec![40001], true),
+            make_rule("strict", ChannelScope::All("all".into()), vec![9], true),
             make_rule("lax", ChannelScope::All("all".into()), vec![7], false),
         ];
 
@@ -710,7 +710,7 @@ mod tests {
 [[rules]]
 name = "catch-all"
 channels = "all"
-kinds = [40001]
+kinds = [9]
 require_mention = false
 "#,
         )

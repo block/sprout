@@ -46,7 +46,7 @@
 //! ## Available Tools
 //!
 //! ### Messaging
-//! - **`send_message`** — Post a message to a channel (Nostr kind 40001 by default).
+//! - **`send_message`** — Post a message to a channel (Nostr kind 9 by default).
 //! - **`get_channel_history`** — Fetch recent messages from a channel (default 50, max 200).
 //!
 //! ### Channels

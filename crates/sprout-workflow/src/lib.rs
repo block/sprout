@@ -941,10 +941,10 @@ steps:
     // ── Trigger matching edge cases ───────────────────────────────────────────
 
     #[test]
-    fn message_posted_matches_kind_40001_only() {
+    fn message_posted_matches_kind_9_only() {
         let trigger = TriggerDef::MessagePosted { filter: None };
-        // Must match KIND_STREAM_MESSAGE = 40001.
-        assert!(trigger_matches_event(&trigger, 40001));
+        // Must match KIND_STREAM_MESSAGE = 9.
+        assert!(trigger_matches_event(&trigger, 9));
         // Must NOT match reaction (kind 7).
         assert!(!trigger_matches_event(&trigger, 7));
         // Must NOT match forum post (kind 45001).
@@ -958,8 +958,8 @@ steps:
         let trigger = TriggerDef::ReactionAdded { emoji: None };
         // Must match KIND_REACTION = 7.
         assert!(trigger_matches_event(&trigger, 7));
-        // Must NOT match stream message (kind 40001).
-        assert!(!trigger_matches_event(&trigger, 40001));
+        // Must NOT match stream message (kind 9).
+        assert!(!trigger_matches_event(&trigger, 9));
         // Must NOT match forum post (kind 45001).
         assert!(!trigger_matches_event(&trigger, 45001));
     }
@@ -972,16 +972,16 @@ steps:
             emoji: Some("thumbsup".to_owned()),
         };
         assert!(trigger_matches_event(&trigger, 7));
-        assert!(!trigger_matches_event(&trigger, 40001));
+        assert!(!trigger_matches_event(&trigger, 9));
     }
 
     #[test]
-    fn message_posted_with_filter_still_matches_kind_40001() {
+    fn message_posted_with_filter_still_matches_kind_9() {
         // The filter expression is evaluated at execution time, not trigger-matching time.
         let trigger = TriggerDef::MessagePosted {
             filter: Some("str_contains(trigger_text, \"P1\")".to_owned()),
         };
-        assert!(trigger_matches_event(&trigger, 40001));
+        assert!(trigger_matches_event(&trigger, 9));
         assert!(!trigger_matches_event(&trigger, 7));
     }
 
@@ -1029,7 +1029,7 @@ steps:
     fn diff_posted_matches_kind_40008_only() {
         let trigger = TriggerDef::DiffPosted { filter: None };
         assert!(trigger_matches_event(&trigger, 40008));
-        assert!(!trigger_matches_event(&trigger, 40001));
+        assert!(!trigger_matches_event(&trigger, 9));
         assert!(!trigger_matches_event(&trigger, 7));
     }
 
@@ -1037,7 +1037,7 @@ steps:
     fn message_posted_does_not_match_kind_40008() {
         let trigger = TriggerDef::MessagePosted { filter: None };
         assert!(!trigger_matches_event(&trigger, 40008));
-        assert!(trigger_matches_event(&trigger, 40001));
+        assert!(trigger_matches_event(&trigger, 9));
     }
 
     #[test]
@@ -1056,7 +1056,7 @@ steps:
         use nostr::{EventBuilder, Keys, Kind};
         use uuid::Uuid;
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::Custom(40001), "hello world", [])
+        let event = EventBuilder::new(Kind::Custom(9), "hello world", [])
             .sign_with_keys(&keys)
             .expect("sign");
         sprout_core::StoredEvent::new(event, Some(Uuid::new_v4()))
@@ -1069,7 +1069,7 @@ steps:
         let keys = Keys::generate();
         // Create a dummy target message ID (64-char hex).
         let target_keys = Keys::generate();
-        let target_event = EventBuilder::new(Kind::Custom(40001), "target msg", [])
+        let target_event = EventBuilder::new(Kind::Custom(9), "target msg", [])
             .sign_with_keys(&target_keys)
             .expect("sign target");
         let target_id_hex = target_event.id.to_hex();
@@ -1118,7 +1118,7 @@ steps:
     fn build_trigger_context_no_channel_id() {
         use nostr::{EventBuilder, Keys, Kind};
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::Custom(40001), "msg", [])
+        let event = EventBuilder::new(Kind::Custom(9), "msg", [])
             .sign_with_keys(&keys)
             .expect("sign");
         // channel_id = None (global/DM event)

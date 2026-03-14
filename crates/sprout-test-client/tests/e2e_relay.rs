@@ -77,7 +77,7 @@ async fn test_connect_and_authenticate() {
 #[ignore]
 async fn test_send_event_and_receive_via_subscription() {
     let url = relay_url();
-    let kind: u16 = 40001;
+    let kind: u16 = 9;
 
     let keys_a = Keys::generate();
     let keys_b = Keys::generate();
@@ -136,7 +136,7 @@ async fn test_send_event_and_receive_via_subscription() {
 #[ignore]
 async fn test_subscription_filters_by_kind() {
     let url = relay_url();
-    let target_kind: u16 = 40001;
+    let target_kind: u16 = 9;
     let other_kind: u16 = 40002;
 
     let keys = Keys::generate();
@@ -208,7 +208,7 @@ async fn test_subscription_filters_by_kind() {
 #[ignore]
 async fn test_close_subscription_stops_delivery() {
     let url = relay_url();
-    let kind: u16 = 40001;
+    let kind: u16 = 9;
 
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;
@@ -272,7 +272,7 @@ async fn test_unauthenticated_rejected() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let result = client
-        .send_text_message(&keys, "some-channel", "unauthenticated message", 40001)
+        .send_text_message(&keys, "some-channel", "unauthenticated message", 9)
         .await;
 
     match result {
@@ -300,7 +300,7 @@ async fn test_unauthenticated_rejected() {
 #[ignore]
 async fn test_multiple_concurrent_clients() {
     let url = relay_url();
-    let kind: u16 = 40001;
+    let kind: u16 = 9;
 
     let keys: Vec<Keys> = (0..3).map(|_| Keys::generate()).collect();
     let channel = create_test_channel(&keys[0]).await;
@@ -357,7 +357,7 @@ async fn test_multiple_concurrent_clients() {
 #[ignore]
 async fn test_stored_events_returned_before_eose() {
     let url = relay_url();
-    let kind: u16 = 40001;
+    let kind: u16 = 9;
 
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;
@@ -485,7 +485,7 @@ async fn test_subscription_limit_enforced() {
 
     for i in 0..100 {
         let sid = format!("limit-sub-{i}");
-        let filter = Filter::new().kind(Kind::Custom(40001));
+        let filter = Filter::new().kind(Kind::Custom(9));
         client
             .subscribe(&sid, vec![filter])
             .await
@@ -601,7 +601,7 @@ async fn test_pubkey_mismatch_rejected() {
         .expect("connect as keys_a");
 
     let ok = client
-        .send_text_message(&keys_b, &channel, "impersonation attempt", 40001)
+        .send_text_message(&keys_b, &channel, "impersonation attempt", 9)
         .await
         .expect("send");
 
@@ -617,7 +617,7 @@ async fn test_pubkey_mismatch_rejected() {
 #[ignore]
 async fn test_eose_sent_for_empty_subscription() {
     let url = relay_url();
-    let kind: u16 = 40001;
+    let kind: u16 = 9;
 
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;

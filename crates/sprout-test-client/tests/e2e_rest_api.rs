@@ -308,7 +308,7 @@ async fn test_rest_send_message_reaches_websocket_channel_subscriptions() {
         .expect("WebSocket connect failed");
 
     let sid = format!("rest-live-{}", uuid::Uuid::new_v4().simple());
-    let filter = Filter::new().kind(Kind::Custom(40001)).custom_tag(
+    let filter = Filter::new().kind(Kind::Custom(9)).custom_tag(
         SingleLetterTag::lowercase(Alphabet::H),
         [channel_id.as_str()],
     );
@@ -457,7 +457,7 @@ async fn test_search_returns_indexed_event() {
         .expect("WebSocket connect failed");
 
     let h_tag = Tag::parse(&["h", &channel_id]).expect("tag parse failed");
-    let event = nostr::EventBuilder::new(Kind::Custom(40001), &content, [h_tag])
+    let event = nostr::EventBuilder::new(Kind::Custom(9), &content, [h_tag])
         .sign_with_keys(&keys)
         .expect("event sign failed");
 
@@ -965,7 +965,7 @@ async fn test_feed_returns_activity() {
         .expect("WebSocket connect failed");
 
     let h_tag = Tag::parse(&["h", &channel_id]).expect("tag parse failed");
-    let event = nostr::EventBuilder::new(Kind::Custom(40001), &content, [h_tag])
+    let event = nostr::EventBuilder::new(Kind::Custom(9), &content, [h_tag])
         .sign_with_keys(&keys)
         .expect("event sign failed");
 

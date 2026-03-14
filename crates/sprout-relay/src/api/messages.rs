@@ -244,7 +244,7 @@ pub struct SendMessageBody {
     /// When `true`, a reply is also surfaced in the channel feed (broadcast).
     #[serde(default)]
     pub broadcast_to_channel: bool,
-    /// Nostr kind for this message. Defaults to `KIND_STREAM_MESSAGE` (40001).
+    /// Nostr kind for this message. Defaults to `KIND_STREAM_MESSAGE` (9).
     pub kind: Option<u32>,
     // Diff metadata fields (only used when kind == KIND_STREAM_MESSAGE_DIFF)
     /// Repository URL for the diff (required for kind:40008; must be http/https).
@@ -306,7 +306,7 @@ pub async fn send_message(
         return Err(api_error(StatusCode::BAD_REQUEST, "content is required"));
     }
 
-    // Resolve kind — default to KIND_STREAM_MESSAGE (40001).
+    // Resolve kind — default to KIND_STREAM_MESSAGE (9).
     let kind_u32 = body.kind.unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE);
 
     if kind_u32 == sprout_core::kind::KIND_STREAM_MESSAGE_DIFF && body.content.len() > 60 * 1024 {

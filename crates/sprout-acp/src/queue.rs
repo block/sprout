@@ -207,7 +207,7 @@ const STREAM_MESSAGE_KINDS: &[u32] = &[
 
 /// Format the per-event block lines for a single [`BatchEvent`].
 ///
-/// Non-stream-message kinds (anything not in `[40001, 40002]`) include a
+/// Non-stream-message kinds (anything not in `[9, 40002]`) include a
 /// `Tags:` line with the raw Nostr tags serialised as a JSON array-of-arrays.
 fn format_event_block(channel_id: Uuid, be: &BatchEvent) -> String {
     let npub = be
@@ -298,7 +298,7 @@ mod tests {
     /// Build a test event with the given content and kind.
     fn make_event(content: &str) -> Event {
         let keys = Keys::generate();
-        EventBuilder::new(Kind::Custom(40001), content, [])
+        EventBuilder::new(Kind::Custom(9), content, [])
             .sign_with_keys(&keys)
             .unwrap()
     }

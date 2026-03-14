@@ -538,11 +538,11 @@ mod tests {
         let keys = Keys::generate();
         let channel_id = "my-channel-123";
         let h_tag = Tag::parse(&["h", channel_id]).unwrap();
-        let event = EventBuilder::new(Kind::Custom(40001), "hello", [h_tag])
+        let event = EventBuilder::new(Kind::Custom(9), "hello", [h_tag])
             .sign_with_keys(&keys)
             .unwrap();
 
-        assert_eq!(event.kind, Kind::Custom(40001));
+        assert_eq!(event.kind, Kind::Custom(9));
         let tags: Vec<Vec<String>> = event
             .tags
             .iter()
