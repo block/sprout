@@ -1024,7 +1024,7 @@ function getMockMessageStore(channelId: string): RelayEvent[] {
             id: "mock-general-welcome",
             pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
             created_at: Math.floor(Date.now() / 1000),
-            kind: 40001,
+            kind: 9,
             tags: [["h", channelId]],
             content: "Welcome to #general",
             sig: "mocksig".repeat(20).slice(0, 128),
@@ -1071,7 +1071,7 @@ function recordMockMessage(channelId: string, event: RelayEvent) {
 }
 
 function emitMockChannelMessage(channelId: string, content: string) {
-  const event = createMockEvent(40001, content, [["h", channelId]]);
+  const event = createMockEvent(9, content, [["h", channelId]]);
   recordMockMessage(channelId, event);
   emitMockLiveEvent(channelId, event);
   return event;
@@ -1740,7 +1740,7 @@ async function handleGetFeed(
       ? [
           {
             id: "mock-feed-mention",
-            kind: 40001,
+            kind: 9,
             pubkey:
               "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
             content: "Please review the release checklist.",
@@ -1780,7 +1780,7 @@ async function handleGetFeed(
       ? [
           {
             id: "mock-feed-self-activity",
-            kind: 40001,
+            kind: 9,
             pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
             content: "I posted a note about the launch checklist.",
             created_at: now - 25 * 60,
@@ -1791,7 +1791,7 @@ async function handleGetFeed(
           },
           {
             id: "mock-feed-activity",
-            kind: 40001,
+            kind: 9,
             pubkey:
               "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
             content: "Engineering shipped the desktop build.",
@@ -2190,7 +2190,7 @@ async function handleSearchMessages(
       {
         event_id: "mock-general-welcome",
         content: "Welcome to #general",
-        kind: 40001,
+        kind: 9,
         pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
         channel_id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
         channel_name: "general",
@@ -2200,7 +2200,7 @@ async function handleSearchMessages(
       {
         event_id: "mock-engineering-shipped",
         content: "Engineering shipped the desktop build.",
-        kind: 40001,
+        kind: 9,
         pubkey:
           "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
         channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
@@ -2211,7 +2211,7 @@ async function handleSearchMessages(
       {
         event_id: "mock-design-critique",
         content: "Design critique notes for the browse flow.",
-        kind: 40001,
+        kind: 9,
         pubkey:
           "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
         channel_id: "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e",
@@ -2279,9 +2279,7 @@ async function handleSendChannelMessage(
     const createdAt = Math.floor(Date.now() / 1000);
 
     if (!args.parentEventId) {
-      const event = createMockEvent(40001, args.content, [
-        ["h", args.channelId],
-      ]);
+      const event = createMockEvent(9, args.content, [["h", args.channelId]]);
       recordMockMessage(args.channelId, event);
       emitMockLiveEvent(args.channelId, event);
 
@@ -2330,7 +2328,7 @@ async function handleSendChannelMessage(
       id: crypto.randomUUID().replace(/-/g, ""),
       pubkey: getMockMemberPubkey(config),
       created_at: createdAt,
-      kind: 40001,
+      kind: 9,
       tags:
         rootEventId === args.parentEventId
           ? [
@@ -2389,7 +2387,7 @@ async function handleGetEvent(
         pubkey:
           "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
         created_at: Math.floor(Date.now() / 1000) - 42 * 60,
-        kind: 40001,
+        kind: 9,
         tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
         content: "Engineering shipped the desktop build.",
         sig: "mocksig".repeat(20).slice(0, 128),
@@ -2399,7 +2397,7 @@ async function handleGetEvent(
         pubkey:
           "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
         created_at: Math.floor(Date.now() / 1000) - 75 * 60,
-        kind: 40001,
+        kind: 9,
         tags: [["h", "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e"]],
         content: "Design critique notes for the browse flow.",
         sig: "mocksig".repeat(20).slice(0, 128),

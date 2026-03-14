@@ -510,12 +510,14 @@ async fn check_channel_membership(
     match state.db.is_member(ch_id, pubkey_bytes).await {
         Ok(true) => Ok(()),
         Ok(false) => {
-            let is_open = state
-                .db
-                .get_channel(ch_id)
-                .await
-                .map(|ch| ch.visibility == "open")
-                .unwrap_or(false);
+            let is_open = match state.db.get_channel(ch_id).await {
+                Ok(ch) => ch.visibility == "open",
+                Err(e) => {
+                    tracing::warn!(conn_id = %conn_id, channel = %ch_id, error = %e,
+                                   "channel lookup failed during membership fallback, denying");
+                    false
+                }
+            };
             if is_open {
                 Ok(())
             } else {

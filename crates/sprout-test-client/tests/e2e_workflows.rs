@@ -310,7 +310,7 @@ async fn test_trigger_workflow_and_check_run() {
 
 // ── Test 5: Event-driven workflow execution ───────────────────────────────────
 
-/// Send a kind:40001 message to a channel that has a `message_posted` workflow.
+/// Send a kind:9 message to a channel that has a `message_posted` workflow.
 /// Verify that the workflow engine creates a run record.
 ///
 /// NOTE: Uses `SEEDED_PUBKEY` for workflow ownership due to the FK constraint
@@ -342,18 +342,17 @@ steps:
         .expect("created workflow must have 'id'")
         .to_string();
 
-    // ── Step 2: Connect via WebSocket and send a kind:40001 message ───────────
+    // ── Step 2: Connect via WebSocket and send a kind:9 message ───────────
     // Use fresh keys for the sender (channel is open, no auth required to post).
     let sender_keys = Keys::generate();
     let mut ws_client = SproutTestClient::connect(&relay_ws_url(), &sender_keys)
         .await
         .expect("ws connect failed");
 
-    let e_tag = Tag::parse(&["e", CHANNEL_GENERAL]).expect("tag parse failed");
-    let event =
-        nostr::EventBuilder::new(Kind::Custom(40001), "trigger this workflow please", [e_tag])
-            .sign_with_keys(&sender_keys)
-            .expect("sign event");
+    let h_tag = Tag::parse(&["h", CHANNEL_GENERAL]).expect("tag parse failed");
+    let event = nostr::EventBuilder::new(Kind::Custom(9), "trigger this workflow please", [h_tag])
+        .sign_with_keys(&sender_keys)
+        .expect("sign event");
 
     ws_client
         .send_event(event)
@@ -376,7 +375,7 @@ steps:
     let runs: Vec<serde_json::Value> = runs_resp.json().await.expect("runs must be JSON array");
     assert!(
         !runs.is_empty(),
-        "expected at least one workflow run after sending kind:40001 event"
+        "expected at least one workflow run after sending kind:9 event"
     );
 
     let run = &runs[0];
@@ -444,11 +443,11 @@ steps:
         .expect("ws connect failed");
 
     // ── Step 2: Send a message that does NOT match the filter ─────────────────
-    let e_tag = Tag::parse(&["e", CHANNEL_GENERAL]).expect("tag parse failed");
+    let h_tag = Tag::parse(&["h", CHANNEL_GENERAL]).expect("tag parse failed");
     let non_matching = nostr::EventBuilder::new(
-        Kind::Custom(40001),
+        Kind::Custom(9),
         "this is a routine update, nothing urgent",
-        [e_tag.clone()],
+        [h_tag.clone()],
     )
     .sign_with_keys(&sender_keys)
     .expect("sign event");
@@ -477,10 +476,9 @@ steps:
     );
 
     // ── Step 3: Send a message that DOES match the filter ─────────────────────
-    let matching =
-        nostr::EventBuilder::new(Kind::Custom(40001), "P1 alert: database is down", [e_tag])
-            .sign_with_keys(&sender_keys)
-            .expect("sign event");
+    let matching = nostr::EventBuilder::new(Kind::Custom(9), "P1 alert: database is down", [h_tag])
+        .sign_with_keys(&sender_keys)
+        .expect("sign event");
 
     ws_client
         .send_event(matching)

@@ -52,7 +52,7 @@ pub struct SendMessageParams {
     pub channel_id: String,
     /// Message body text.
     pub content: String,
-    /// Nostr event kind. Defaults to 40001 (channel message).
+    /// Nostr event kind. Defaults to KIND_STREAM_MESSAGE (NIP-29 group chat message).
     #[serde(default = "default_kind")]
     pub kind: Option<u16>,
     /// Optional parent event ID. If provided, sends a reply via REST instead of WebSocket.
@@ -60,7 +60,7 @@ pub struct SendMessageParams {
     pub parent_event_id: Option<String>,
 }
 fn default_kind() -> Option<u16> {
-    Some(40001)
+    Some(sprout_core::kind::KIND_STREAM_MESSAGE as u16)
 }
 
 /// Parameters for the `get_channel_history` tool.
@@ -640,7 +640,10 @@ impl SproutMcpServer {
         // Threaded replies still go through REST because that path handles the
         // reply ancestry tags and DB bookkeeping for us.
         if p.parent_event_id.is_none() {
-            let kind = Kind::from(p.kind.unwrap_or(40001));
+            let kind = Kind::from(
+                p.kind
+                    .unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE as u16),
+            );
             let tags = vec![match Tag::parse(&["h", &p.channel_id]) {
                 Ok(tag) => tag,
                 Err(e) => return format!("Error: failed to build channel tag: {e}"),

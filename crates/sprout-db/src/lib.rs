@@ -184,6 +184,11 @@ impl Db {
         Ok(())
     }
 
+    /// Returns `true` if the database is reachable (used by readiness probes).
+    pub async fn ping(&self) -> bool {
+        sqlx::query("SELECT 1").execute(&self.pool).await.is_ok()
+    }
+
     // ── Events ───────────────────────────────────────────────────────────────
 
     /// Inserts an event. Returns `(StoredEvent, was_inserted)` — `false` on duplicate.
@@ -918,16 +923,147 @@ impl Db {
         Ok(out)
     }
 
+    // ── Pubkey Allowlist ─────────────────────────────────────────────────────
+
+    /// Returns `true` if the given pubkey is in the allowlist.
+    pub async fn is_pubkey_allowed(&self, pubkey: &[u8]) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM pubkey_allowlist WHERE pubkey = ?")
+            .bind(pubkey)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
+    }
+
+    // ── Addressable Event Replacement ────────────────────────────────────────
+
+    /// Atomically replace the active addressable event for a (kind, pubkey, channel)
+    /// tuple. Insert-first ordering guarantees at least one active row at all times:
+    ///
+    /// 1. INSERT the new event (IGNORE on duplicate ID — a no-op, not an error).
+    /// 2. Soft-delete all OTHER active events for the same address, excluding the
+    ///    just-inserted row by ID.
+    ///
+    /// If the INSERT was a no-op (duplicate event ID), the delete step is skipped
+    /// entirely — the existing row is already the latest state.
+    ///
+    /// Used for NIP-29 group discovery events (39000/39001/39002) which should
+    /// only have one active version per group.
+    ///
+    /// Returns `(StoredEvent, was_inserted)` — `was_inserted` is `false` on duplicate.
+    pub async fn replace_addressable_event(
+        &self,
+        event: &nostr::Event,
+        channel_id: Uuid,
+    ) -> Result<(StoredEvent, bool)> {
+        use sprout_core::kind::event_kind_i32;
+
+        let id_bytes = event.id.as_bytes();
+        let pubkey_bytes = event.pubkey.to_bytes();
+        let sig_bytes = event.sig.serialize();
+        let tags_json = serde_json::to_value(&event.tags)?;
+        let kind_i32 = event_kind_i32(event);
+        let created_at_secs = event.created_at.as_u64() as i64;
+        let created_at = DateTime::from_timestamp(created_at_secs, 0)
+            .ok_or(crate::error::DbError::InvalidTimestamp(created_at_secs))?;
+        let received_at = Utc::now();
+        let channel_id_bytes: [u8; 16] = *channel_id.as_bytes();
+
+        let mut tx = self.pool.begin().await?;
+
+        // Step 0: Acquire an exclusive next-key lock on the logical address
+        // (kind, pubkey, channel_id) via idx_events_addressable. This serializes
+        // concurrent replacements — a second transaction blocks here until the
+        // first commits. The index is required so InnoDB can take a gap lock
+        // even on a cold address (no existing rows), preventing two concurrent
+        // first-time emissions from both inserting.
+        sqlx::query(
+            "SELECT id FROM events \
+             WHERE kind = ? AND pubkey = ? AND channel_id = ? AND deleted_at IS NULL \
+             FOR UPDATE",
+        )
+        .bind(kind_i32)
+        .bind(pubkey_bytes.as_slice())
+        .bind(channel_id_bytes.as_slice())
+        .fetch_all(&mut *tx)
+        .await?;
+
+        // Step 1: Insert the new event first — guarantees at least one active row.
+        let result = sqlx::query(
+            "INSERT IGNORE INTO events \
+             (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id_bytes.as_slice())
+        .bind(pubkey_bytes.as_slice())
+        .bind(created_at)
+        .bind(kind_i32)
+        .bind(&tags_json)
+        .bind(&event.content)
+        .bind(sig_bytes.as_slice())
+        .bind(received_at)
+        .bind(channel_id_bytes.as_slice())
+        .execute(&mut *tx)
+        .await?;
+
+        let was_inserted = result.rows_affected() > 0;
+
+        // Step 2: Soft-delete previous active events for this address, excluding
+        // the row we just inserted. Skipped on duplicate (was_inserted == false)
+        // because the existing row is already the current state.
+        if was_inserted {
+            sqlx::query(
+                "UPDATE events SET deleted_at = NOW(6) \
+                 WHERE kind = ? AND pubkey = ? AND channel_id = ? \
+                 AND deleted_at IS NULL AND id != ?",
+            )
+            .bind(kind_i32)
+            .bind(pubkey_bytes.as_slice())
+            .bind(channel_id_bytes.as_slice())
+            .bind(id_bytes.as_slice())
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+
+        if was_inserted {
+            if let Err(e) = insert_mentions(&self.pool, event, Some(channel_id)).await {
+                tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
+            }
+        }
+
+        Ok((
+            StoredEvent::with_received_at(event.clone(), received_at, Some(channel_id), true),
+            was_inserted,
+        ))
+    }
+
+    /// Soft-delete all NIP-29 discovery events (39000/39001/39002) for a channel.
+    ///
+    /// Used during group deletion to clean up addressable discovery events.
+    pub async fn soft_delete_discovery_events(
+        &self,
+        channel_id: Uuid,
+        relay_pubkey: &[u8],
+    ) -> Result<u64> {
+        let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
+        let result = sqlx::query(
+            "UPDATE events SET deleted_at = NOW(6) \
+             WHERE kind IN (39000, 39001, 39002) AND pubkey = ? AND channel_id = ? \
+             AND deleted_at IS NULL",
+        )
+        .bind(relay_pubkey)
+        .bind(&channel_id_bytes)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     // ── Partitions ───────────────────────────────────────────────────────────
 
     /// Ensures monthly partition tables exist for the next `months_ahead` months.
     pub async fn ensure_future_partitions(&self, months_ahead: u32) -> Result<()> {
         partition::ensure_future_partitions(&self.pool, months_ahead).await
-    }
-
-    /// Returns `true` if the database is reachable (used by readiness probes).
-    pub async fn ping(&self) -> bool {
-        sqlx::query("SELECT 1").execute(&self.pool).await.is_ok()
     }
 
     // ── Workflows ─────────────────────────────────────────────────────────────

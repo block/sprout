@@ -3,13 +3,13 @@
 //! # Overview
 //!
 //! The proxy sits between standard Nostr clients (NIP-28) and the Sprout relay.
-//! Sprout stores messages as kind:40001 events with `#h <uuid>` channel tags.
+//! Sprout stores messages as kind:9 events with `#h <uuid>` channel tags.
 //! NIP-28 clients expect kind:42 events with `#e <kind40_event_id>` channel tags.
 //!
 //! This module handles bidirectional translation:
 //!
-//! - **Outbound** (Sprout → client): kind:40001 + `#h(uuid)` → kind:42 + `#e(event_id)`
-//! - **Inbound** (client → Sprout): kind:42 + `#e(event_id)` → kind:40001 + `#h(uuid)`
+//! - **Outbound** (Sprout → client): kind:9 + `#h(uuid)` → kind:42 + `#e(event_id)`
+//! - **Inbound** (client → Sprout): kind:42 + `#e(event_id)` → kind:9 + `#h(uuid)`
 //!
 //! All translated events are re-signed with deterministic shadow keys so that
 //! each external user maps to a consistent shadow pubkey across sessions.
@@ -369,7 +369,7 @@ impl Translator {
     ///
     /// # Translation rules
     ///
-    /// - kind:40001 / kind:40002 → kind:42
+    /// - kind:9 / kind:40002 → kind:42
     /// - `#h <uuid>` tag → `#e <kind40_event_id>` tag
     /// - All other tags are preserved unchanged
     /// - Re-signed with the shadow key for the original author's pubkey
@@ -402,7 +402,7 @@ impl Translator {
     ///
     /// # Translation rules
     ///
-    /// - kind:42 (or kind:1) → kind:40001
+    /// - kind:42 (or kind:1) → kind:9
     /// - `#e <kind40_event_id>` tag → `#h <uuid>` tag
     /// - All other tags are preserved unchanged
     /// - Re-signed with the shadow key for `external_pubkey`
@@ -502,11 +502,11 @@ impl Translator {
         // Re-sign with the shadow key for the external user.
         let shadow_keys = self.shadow_keys.get_or_create(external_pubkey)?;
 
-        // SAFETY: sprout_kind is derived from KindTranslator which maps to known Sprout kinds (40001, 40002, 40003) that fit in u16
+        // SAFETY: sprout_kind is derived from KindTranslator which maps to known Sprout kinds (9, 40002, 40003) that fit in u16
         let translated = EventBuilder::new(
             Kind::Custom(
                 u16::try_from(sprout_kind)
-                    .expect("SAFETY: sprout kind values (40001, 40002, 40003) always fit in u16"),
+                    .expect("SAFETY: sprout kind values (9, 40002, 40003) always fit in u16"),
             ),
             &event.content,
             new_tags,
@@ -668,7 +668,7 @@ impl Translator {
 impl Translator {
     /// Translate a NIP-28 REQ filter to Sprout format.
     ///
-    /// - kind:42 / kind:1 → kind:40001
+    /// - kind:42 / kind:1 → kind:9
     /// - Injects `#h` tag filters from `allowed_channels` so the client can
     ///   only receive events from channels they have access to.
     ///
@@ -683,7 +683,7 @@ impl Translator {
                 .map(|k| {
                     let k_u32 = k.as_u16() as u32;
                     let sprout_k = self.kind_translator.to_sprout(k_u32);
-                    // SAFETY: sprout kind values (40001, 40002, 40003) always fit in u16
+                    // SAFETY: sprout kind values (9, 40002, 40003) always fit in u16
                     Kind::Custom(
                         u16::try_from(sprout_k)
                             .expect("SAFETY: sprout kind values always fit in u16"),
@@ -749,7 +749,7 @@ impl Translator {
     /// Translate a Sprout REQ filter to NIP-28 format (for outbound subscription
     /// forwarding, e.g. when the proxy subscribes on behalf of a client).
     ///
-    /// - kind:40001 / kind:40002 → kind:42
+    /// - kind:9 / kind:40002 → kind:42
     pub fn translate_filter_outbound(&self, filter: &Filter) -> Filter {
         let mut f = filter.clone();
 
@@ -843,14 +843,14 @@ mod tests {
         vec![]
     }
 
-    // ── Test 1: Outbound — kind:40001 + #h → kind:42 + #e ───────────────────
+    // ── Test 1: Outbound — kind:9 + #h → kind:42 + #e ───────────────────
 
     #[tokio::test]
     async fn outbound_translates_stream_message() {
         let (translator, kind40_event_id) = make_translator();
         let author_keys = Keys::generate();
 
-        // Build a synthetic kind:40001 event with an #h tag.
+        // Build a synthetic kind:9 event with an #h tag.
         let h_tag = Tag::parse(&["h", TEST_UUID]).unwrap();
         let sprout_event = EventBuilder::new(
             Kind::Custom(KIND_STREAM_MESSAGE as u16),
@@ -896,7 +896,7 @@ mod tests {
             .expect("translated event signature must be valid");
     }
 
-    // ── Test 2: Inbound — kind:42 + #e → kind:40001 + #h ───────────────────
+    // ── Test 2: Inbound — kind:42 + #e → kind:9 + #h ───────────────────
 
     #[test]
     fn inbound_translates_channel_message() {
@@ -1030,7 +1030,7 @@ mod tests {
         assert_eq!(content, "not json at all");
     }
 
-    // ── Test 6: Filter translation — kind:42 → kind:40001 ───────────────────
+    // ── Test 6: Filter translation — kind:42 → kind:9 ───────────────────
 
     #[test]
     fn filter_inbound_translates_kind() {

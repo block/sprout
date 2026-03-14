@@ -84,7 +84,7 @@ impl ActionSink for RelayActionSink {
                 ));
             }
 
-            // 3. Build kind:40001 Nostr event
+            // 3. Build kind:9 Nostr event
             //    - Signed by relay keypair (event.pubkey = relay pubkey)
             //    - `p` tag attributes the message to the workflow owner
             //    - `h` tag scopes to the channel (NIP-29, canonical UUID)
