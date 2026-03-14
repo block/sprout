@@ -112,19 +112,8 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         scopes,
                         auth_method: sprout_auth::AuthMethod::Nip42ApiToken,
                     };
-                    // Pubkey allowlist gate — reject if enabled and pubkey not listed.
-                    if state.config.pubkey_allowlist_enabled {
-                        if !state.db.is_pubkey_allowed(&pubkey.serialize()).await.unwrap_or(false) {
-                            warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "pubkey not in allowlist");
-                            *conn.auth_state.write().await = AuthState::Failed;
-                            conn.send(RelayMessage::ok(
-                                &event_id_hex,
-                                false,
-                                "auth-required: pubkey not in allowlist",
-                            ));
-                            return;
-                        }
-                    }
+                    // API token users have already proven authorization via their token —
+                    // the pubkey allowlist does not apply here.
                     *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
                     conn.send(RelayMessage::ok(&event_id_hex, true, ""));
                 }
@@ -150,15 +139,23 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
     {
         Ok(auth_ctx) => {
             let pubkey = auth_ctx.pubkey;
-            // Pubkey allowlist gate
-            if state.config.pubkey_allowlist_enabled {
-                if !state.db.is_pubkey_allowed(&pubkey.serialize()).await.unwrap_or(false) {
+            // Pubkey allowlist gate — only for pubkey-only auth (no JWT/token).
+            // Users with valid API tokens or Okta JWTs bypass the allowlist.
+            if state.config.pubkey_allowlist_enabled
+                && auth_ctx.auth_method == sprout_auth::AuthMethod::Nip42PubkeyOnly
+            {
+                if !state
+                    .db
+                    .is_pubkey_allowed(&pubkey.serialize())
+                    .await
+                    .unwrap_or(false)
+                {
                     warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "pubkey not in allowlist");
                     *conn.auth_state.write().await = AuthState::Failed;
                     conn.send(RelayMessage::ok(
                         &event_id_hex,
                         false,
-                        "auth-required: pubkey not in allowlist",
+                        "auth-required: verification failed",
                     ));
                     return;
                 }

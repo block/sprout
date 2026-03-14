@@ -48,9 +48,10 @@ pub struct Config {
     /// Optional Unix Domain Socket path. When set, the relay also listens on this
     /// UDS for traffic (e.g. service mesh sidecar). Health probes still use TCP.
     pub uds_path: Option<String>,
-    /// When true, only pubkeys in the `pubkey_allowlist` table may authenticate
-    /// via NIP-42 without a JWT or API token. Has no effect when
-    /// `require_auth_token` is false (open-relay mode already allows all pubkeys).
+    /// When true, NIP-42 pubkey-only authentication (no JWT or API token) is
+    /// restricted to pubkeys in the `pubkey_allowlist` table. Users with valid
+    /// API tokens or Okta JWTs bypass the allowlist entirely.
+    /// Has no effect when `require_auth_token` is false (open-relay mode).
     pub pubkey_allowlist_enabled: bool,
 }
 
@@ -129,7 +130,10 @@ impl Config {
 
         let relay_private_key = std::env::var("SPROUT_RELAY_PRIVATE_KEY").ok();
 
-        let uds_path = std::env::var("SPROUT_UDS_PATH").ok();
+        let uds_path = std::env::var("SPROUT_UDS_PATH")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         Ok(Self {
             bind_addr,
