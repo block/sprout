@@ -2279,9 +2279,7 @@ async function handleSendChannelMessage(
     const createdAt = Math.floor(Date.now() / 1000);
 
     if (!args.parentEventId) {
-      const event = createMockEvent(9, args.content, [
-        ["h", args.channelId],
-      ]);
+      const event = createMockEvent(9, args.content, [["h", args.channelId]]);
       recordMockMessage(args.channelId, event);
       emitMockLiveEvent(args.channelId, event);
 

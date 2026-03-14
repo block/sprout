@@ -6,7 +6,10 @@ import {
   signRelayEvent,
 } from "@/shared/api/tauri";
 import type { PresenceStatus, RelayEvent } from "@/shared/api/types";
-import { CHANNEL_EVENT_KINDS, KIND_STREAM_MESSAGE } from "@/shared/constants/kinds";
+import {
+  CHANNEL_EVENT_KINDS,
+  KIND_STREAM_MESSAGE,
+} from "@/shared/constants/kinds";
 import {
   getTextPayload,
   sortEvents,
