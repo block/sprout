@@ -94,6 +94,25 @@ pub struct CliArgs {
     )]
     pub system_prompt_file: Option<PathBuf>,
 
+    /// Number of parallel agent subprocesses.
+    #[arg(long, env = "SPROUT_ACP_AGENTS", default_value_t = 1,
+          value_parser = clap::value_parser!(u32).range(1..=32))]
+    pub agents: u32,
+
+    /// Seconds between heartbeat prompts. 0 = disabled.
+    #[arg(long, env = "SPROUT_ACP_HEARTBEAT_INTERVAL", default_value_t = 0)]
+    pub heartbeat_interval: u64,
+
+    /// Heartbeat prompt text. Conflicts with --heartbeat-prompt-file.
+    #[arg(long, env = "SPROUT_ACP_HEARTBEAT_PROMPT",
+          conflicts_with = "heartbeat_prompt_file")]
+    pub heartbeat_prompt: Option<String>,
+
+    /// Read heartbeat prompt from file.
+    #[arg(long, env = "SPROUT_ACP_HEARTBEAT_PROMPT_FILE",
+          conflicts_with = "heartbeat_prompt")]
+    pub heartbeat_prompt_file: Option<PathBuf>,
+
     #[arg(long, env = "SPROUT_ACP_INITIAL_MESSAGE")]
     pub initial_message: Option<String>,
 
@@ -146,6 +165,9 @@ pub struct Config {
     pub agent_args: Vec<String>,
     pub mcp_command: String,
     pub turn_timeout_secs: u64,
+    pub agents: u32,
+    pub heartbeat_interval_secs: u64,
+    pub heartbeat_prompt: Option<String>,
     pub system_prompt: Option<String>,
     pub initial_message: Option<String>,
     pub subscribe_mode: SubscribeMode,
@@ -187,6 +209,20 @@ impl Config {
             None
         };
 
+        if args.heartbeat_interval > 0 && args.heartbeat_interval < 10 {
+            return Err(ConfigError::ConfigFile(
+                "heartbeat interval must be 0 (disabled) or ≥10 seconds".into(),
+            ));
+        }
+
+        let heartbeat_prompt = if let Some(text) = args.heartbeat_prompt {
+            Some(text)
+        } else if let Some(ref path) = args.heartbeat_prompt_file {
+            Some(std::fs::read_to_string(path)?)
+        } else {
+            None
+        };
+
         if matches!(args.subscribe, SubscribeMode::Config) {
             if args.kinds.is_some() {
                 tracing::warn!("--kinds is ignored in config mode");
@@ -207,6 +243,9 @@ impl Config {
             agent_args: args.agent_args,
             mcp_command: args.mcp_command,
             turn_timeout_secs: args.turn_timeout,
+            agents: args.agents,
+            heartbeat_interval_secs: args.heartbeat_interval,
+            heartbeat_prompt,
             system_prompt,
             initial_message: args.initial_message,
             subscribe_mode: args.subscribe,
@@ -222,13 +261,15 @@ impl Config {
     /// Human-readable summary (no secrets).
     pub fn summary(&self) -> String {
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} timeout={}s subscribe={:?} dedup={:?} ignore_self={}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} timeout={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
             self.agent_args.join(" "),
             self.mcp_command,
             self.turn_timeout_secs,
+            self.agents,
+            self.heartbeat_interval_secs,
             self.subscribe_mode,
             self.dedup_mode,
             self.ignore_self,
@@ -424,6 +465,9 @@ mod tests {
             agent_args: vec!["acp".into()],
             mcp_command: "sprout-mcp-server".into(),
             turn_timeout_secs: 300,
+            agents: 1,
+            heartbeat_interval_secs: 0,
+            heartbeat_prompt: None,
             system_prompt: None,
             initial_message: None,
             subscribe_mode: mode,
@@ -841,5 +885,69 @@ channels = "ALL"
         let err = load_rules(&path).unwrap_err();
         assert!(err.to_string().contains("filter too long"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── heartbeat validation ─────────────────────────────────────────────────
+
+    fn validate_heartbeat_interval(secs: u64) -> Result<(), ConfigError> {
+        if secs > 0 && secs < 10 {
+            return Err(ConfigError::ConfigFile(
+                "heartbeat interval must be 0 (disabled) or ≥10 seconds".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_heartbeat_interval_zero_ok() {
+        assert!(validate_heartbeat_interval(0).is_ok());
+    }
+
+    #[test]
+    fn test_heartbeat_interval_ten_ok() {
+        assert!(validate_heartbeat_interval(10).is_ok());
+    }
+
+    #[test]
+    fn test_heartbeat_interval_large_ok() {
+        assert!(validate_heartbeat_interval(300).is_ok());
+    }
+
+    #[test]
+    fn test_heartbeat_interval_five_rejected() {
+        let err = validate_heartbeat_interval(5).unwrap_err();
+        assert!(err.to_string().contains("heartbeat interval must be 0"));
+    }
+
+    #[test]
+    fn test_heartbeat_interval_one_rejected() {
+        let err = validate_heartbeat_interval(1).unwrap_err();
+        assert!(err.to_string().contains("heartbeat interval must be 0"));
+    }
+
+    #[test]
+    fn test_heartbeat_interval_nine_rejected() {
+        let err = validate_heartbeat_interval(9).unwrap_err();
+        assert!(err.to_string().contains("heartbeat interval must be 0"));
+    }
+
+    // ── summary includes agents and heartbeat ────────────────────────────────
+
+    #[test]
+    fn test_summary_includes_agents_and_heartbeat() {
+        let config = test_config(SubscribeMode::Mentions);
+        let s = config.summary();
+        assert!(s.contains("agents=1"), "summary should include agents=1, got: {s}");
+        assert!(s.contains("heartbeat=0s"), "summary should include heartbeat=0s, got: {s}");
+    }
+
+    #[test]
+    fn test_summary_reflects_custom_agents_and_heartbeat() {
+        let mut config = test_config(SubscribeMode::Mentions);
+        config.agents = 4;
+        config.heartbeat_interval_secs = 30;
+        let s = config.summary();
+        assert!(s.contains("agents=4"), "summary should include agents=4, got: {s}");
+        assert!(s.contains("heartbeat=30s"), "summary should include heartbeat=30s, got: {s}");
     }
 }

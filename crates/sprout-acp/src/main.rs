@@ -199,7 +199,7 @@ async fn main() -> Result<()> {
                                 DedupMode::Queue => queue.requeue(batch),
                                 DedupMode::Drop => { /* discard */ }
                             }
-                            queue.mark_complete();
+                            queue.mark_complete(channel_id);
                             acp = respawn_agent(&config).await?;
                             break;
                         }
@@ -211,7 +211,7 @@ async fn main() -> Result<()> {
                                 DedupMode::Queue => queue.requeue(batch),
                                 DedupMode::Drop => { /* discard */ }
                             }
-                            queue.mark_complete();
+                            queue.mark_complete(channel_id);
                             break;
                         }
                     };
@@ -228,7 +228,7 @@ async fn main() -> Result<()> {
                     match prompt_result {
                         Ok(Ok(stop_reason)) => {
                             log_stop_reason(channel_id, &stop_reason);
-                            queue.mark_complete();
+                            queue.mark_complete(channel_id);
                         }
                         Ok(Err(AcpError::AgentExited)) => {
                             tracing::error!("agent process exited — respawning");
@@ -237,7 +237,7 @@ async fn main() -> Result<()> {
                                 DedupMode::Queue => queue.requeue(batch),
                                 DedupMode::Drop => { /* discard */ }
                             }
-                            queue.mark_complete();
+                            queue.mark_complete(channel_id);
                             acp = respawn_agent(&config).await?;
                             break;
                         }
@@ -247,7 +247,7 @@ async fn main() -> Result<()> {
                                 DedupMode::Queue => queue.requeue(batch),
                                 DedupMode::Drop => { /* discard */ }
                             }
-                            queue.mark_complete();
+                            queue.mark_complete(channel_id);
                             sessions.remove(&channel_id);
                             break;
                         }
@@ -272,7 +272,7 @@ async fn main() -> Result<()> {
                                     sessions.remove(&channel_id);
                                 }
                             }
-                            queue.mark_complete();
+                            queue.mark_complete(channel_id);
                             break;
                         }
                     }

@@ -1,9 +1,10 @@
 //! Event queue state machine for sprout-acp.
 //!
-//! Manages per-channel event queues with a global one-in-flight constraint.
+//! Manages per-channel event queues with per-channel in-flight tracking.
 //! When the harness is ready to prompt the agent, it flushes the channel with
 //! the oldest pending event, draining ALL events for that channel into a single
-//! batch. Only one `session/prompt` is in flight at a time across all channels.
+//! batch. Multiple channels can be in-flight simultaneously; each channel is
+//! independent.
 //!
 //! ## Dedup modes
 //!
@@ -13,8 +14,8 @@
 //! - **Queue** — all events accumulate; batched on the next flush cycle.
 
 use nostr::{Event, ToBech32};
-use std::collections::{HashMap, VecDeque};
-use std::time::Instant;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::config::DedupMode;
@@ -32,14 +33,15 @@ pub struct QueuedEvent {
 }
 
 /// A single event inside a [`FlushBatch`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BatchEvent {
     pub event: Event,
     pub prompt_tag: String,
+    pub received_at: Instant,
 }
 
 /// A batch of events to prompt the agent with.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FlushBatch {
     pub channel_id: Uuid,
     pub events: Vec<BatchEvent>,
@@ -47,37 +49,42 @@ pub struct FlushBatch {
 
 // ── EventQueue ────────────────────────────────────────────────────────────────
 
-/// Per-channel event queue with global one-in-flight enforcement.
+/// Per-channel event queue with per-channel in-flight enforcement.
 ///
 /// # State Machine
 ///
 /// ```text
 /// State:
 ///   queues:            Map<channel_id, VecDeque<QueuedEvent>>
-///   in_flight_channel: Option<Uuid>
+///   in_flight_channels: HashSet<Uuid>
+///   retry_after:       Map<channel_id, Instant>
 ///   dedup_mode:        DedupMode
 ///
 /// Transitions:
 ///   push(event):
-///     if dedup_mode == Drop AND in_flight_channel == Some(event.channel_id):
+///     if dedup_mode == Drop AND in_flight_channels.contains(event.channel_id):
 ///       debug log + discard
 ///     else:
 ///       queues[event.channel_id].push_back(event)
 ///
 ///   flush_next() → Option<FlushBatch>:
-///     if in_flight_channel.is_some(): return None
-///     if all queues empty: return None
-///     channel = pick channel with oldest head event (min received_at)
+///     candidates = channels where queue non-empty
+///                  AND NOT in in_flight_channels
+///                  AND (no retry_after OR retry_after[c] <= now)
+///     if candidates empty: return None
+///     channel = pick candidate with oldest head event (min received_at)
 ///     events = drain queues[channel]
-///     in_flight_channel = Some(channel)
+///     in_flight_channels.insert(channel)
 ///     return Some(FlushBatch { channel, events })
 ///
-///   mark_complete():
-///     in_flight_channel = None
+///   mark_complete(channel_id):
+///     in_flight_channels.remove(channel_id)
+///     (retry_after entries expire naturally via Instant check)
 /// ```
 pub struct EventQueue {
     queues: HashMap<Uuid, VecDeque<QueuedEvent>>,
-    in_flight_channel: Option<Uuid>,
+    in_flight_channels: HashSet<Uuid>,
+    retry_after: HashMap<Uuid, Instant>,
     dedup_mode: DedupMode,
 }
 
@@ -86,18 +93,19 @@ impl EventQueue {
     pub fn new(dedup_mode: DedupMode) -> Self {
         Self {
             queues: HashMap::new(),
-            in_flight_channel: None,
+            in_flight_channels: HashSet::new(),
+            retry_after: HashMap::new(),
             dedup_mode,
         }
     }
 
     /// Push an event into the queue for its channel.
     ///
-    /// In [`DedupMode::Drop`], events for the currently in-flight channel are
+    /// In [`DedupMode::Drop`], events for any currently in-flight channel are
     /// silently discarded (debug-logged).
     pub fn push(&mut self, event: QueuedEvent) {
         if matches!(self.dedup_mode, DedupMode::Drop)
-            && self.in_flight_channel == Some(event.channel_id)
+            && self.in_flight_channels.contains(&event.channel_id)
         {
             tracing::debug!(
                 channel_id = %event.channel_id,
@@ -113,20 +121,23 @@ impl EventQueue {
 
     /// Try to flush the next batch.
     ///
-    /// Returns `None` if a prompt is already in flight or if all queues are
-    /// empty. Otherwise picks the channel with the oldest pending event (FIFO
-    /// fairness across channels), drains ALL events for that channel into a
-    /// single batch, sets `in_flight_channel`, and returns the batch.
+    /// Returns `None` if all non-in-flight, non-throttled queues are empty.
+    /// Otherwise picks the channel with the oldest pending event (FIFO fairness
+    /// across channels), drains ALL events for that channel into a single batch,
+    /// inserts into `in_flight_channels`, and returns the batch.
     pub fn flush_next(&mut self) -> Option<FlushBatch> {
-        if self.in_flight_channel.is_some() {
-            return None;
-        }
+        let now = Instant::now();
 
-        // Find the channel whose head event has the oldest received_at.
+        // Find the channel whose head event has the oldest received_at,
+        // excluding in-flight channels and throttled channels.
         let channel_id = self
             .queues
             .iter()
-            .filter(|(_, q)| !q.is_empty())
+            .filter(|(id, q)| {
+                !q.is_empty()
+                    && !self.in_flight_channels.contains(id)
+                    && self.retry_after.get(id).map_or(true, |&t| t <= now)
+            })
             .min_by_key(|(_, q)| q.front().unwrap().received_at)
             .map(|(id, _)| *id)?;
 
@@ -137,17 +148,21 @@ impl EventQueue {
             .map(|qe| BatchEvent {
                 event: qe.event,
                 prompt_tag: qe.prompt_tag,
+                received_at: qe.received_at,
             })
             .collect();
 
-        self.in_flight_channel = Some(channel_id);
+        self.in_flight_channels.insert(channel_id);
 
         Some(FlushBatch { channel_id, events })
     }
 
-    /// Mark the current prompt as complete. Clears `in_flight_channel`.
-    pub fn mark_complete(&mut self) {
-        self.in_flight_channel = None;
+    /// Mark the prompt for `channel_id` as complete.
+    ///
+    /// Removes the channel from `in_flight_channels`. Does NOT clear
+    /// `retry_after` — those entries expire naturally via Instant check.
+    pub fn mark_complete(&mut self, channel_id: Uuid) {
+        self.in_flight_channels.remove(&channel_id);
     }
 
     /// Re-queue a batch of events that failed to process.
@@ -156,9 +171,12 @@ impl EventQueue {
     /// are processed first on the next flush cycle. This prevents event loss
     /// when session creation or `session/prompt` fails transiently.
     ///
-    /// Note: `received_at` is reset to `Instant::now()` for re-queued events.
-    /// This means a re-queued channel competes fairly with other channels rather
-    /// than always winning due to stale timestamps.
+    /// `received_at` is reset to `Instant::now()` for re-queued events.
+    /// A 5-second `retry_after` throttle is set so the channel is not
+    /// immediately re-flushed.
+    ///
+    /// Note: does NOT remove from `in_flight_channels` — caller must call
+    /// `mark_complete` separately.
     pub fn requeue(&mut self, batch: FlushBatch) {
         let queue = self.queues.entry(batch.channel_id).or_default();
         // Push to front in reverse order so original order is preserved.
@@ -170,12 +188,46 @@ impl EventQueue {
                 received_at: Instant::now(),
             });
         }
+        self.retry_after
+            .insert(batch.channel_id, Instant::now() + Duration::from_secs(5));
     }
 
-    /// Whether a prompt is currently in flight.
+    /// Re-queue a batch preserving original `received_at` timestamps.
+    ///
+    /// Used when a batch was flushed but no agent was available — we want to
+    /// retry without penalizing the channel's position in the fairness queue
+    /// and without imposing a retry throttle.
+    ///
+    /// Does NOT set `retry_after`. Does NOT remove from `in_flight_channels` —
+    /// caller must call `mark_complete` separately.
+    pub fn requeue_preserve_timestamps(&mut self, batch: FlushBatch) {
+        let queue = self.queues.entry(batch.channel_id).or_default();
+        // Push to front in reverse order so original order is preserved.
+        for be in batch.events.into_iter().rev() {
+            queue.push_front(QueuedEvent {
+                channel_id: batch.channel_id,
+                event: be.event,
+                prompt_tag: be.prompt_tag,
+                received_at: be.received_at,
+            });
+        }
+    }
+
+    /// Returns `true` if any channel has pending events that are not in-flight
+    /// and not throttled by `retry_after`.
+    pub fn has_flushable_work(&self) -> bool {
+        let now = Instant::now();
+        self.queues.iter().any(|(id, q)| {
+            !q.is_empty()
+                && !self.in_flight_channels.contains(id)
+                && self.retry_after.get(id).map_or(true, |&t| t <= now)
+        })
+    }
+
+    /// Whether any prompt is currently in flight.
     #[allow(dead_code)]
     pub fn is_in_flight(&self) -> bool {
-        self.in_flight_channel.is_some()
+        !self.in_flight_channels.is_empty()
     }
 
     /// Total number of pending events across all channels.
@@ -342,10 +394,10 @@ mod tests {
         assert_eq!(q.pending_channels(), 0);
     }
 
-    // ── Test 2: in_flight blocks flush ───────────────────────────────────────
+    // ── Test 2: same channel cannot be flushed twice ─────────────────────────
 
     #[test]
-    fn test_in_flight_blocks_flush() {
+    fn test_in_flight_blocks_same_channel() {
         let mut q = EventQueue::new(DedupMode::Queue);
         let ch = Uuid::new_v4();
 
@@ -356,7 +408,8 @@ mod tests {
         // Push another event while in-flight.
         q.push(make_queued(ch, "second"));
 
-        // flush_next must return None while in-flight.
+        // flush_next for the same channel must return None (it's in-flight).
+        // No other channels exist, so result is None.
         assert!(q.flush_next().is_none());
     }
 
@@ -370,12 +423,12 @@ mod tests {
         q.push(make_queued(ch, "first"));
         let _batch = q.flush_next().expect("first flush should succeed");
 
-        // Push while in-flight; flush blocked.
+        // Push while in-flight; flush blocked (same channel in-flight).
         q.push(make_queued(ch, "second"));
         assert!(q.flush_next().is_none());
 
         // Complete the in-flight prompt.
-        q.mark_complete();
+        q.mark_complete(ch);
         assert!(!q.is_in_flight());
 
         // Now flush should succeed.
@@ -449,7 +502,7 @@ mod tests {
         assert_eq!(q.pending_count(), 1);
         assert_eq!(q.pending_channels(), 1);
 
-        q.mark_complete();
+        q.mark_complete(ch_a);
 
         // Second flush picks B.
         let batch_b = q.flush_next().expect("second flush");
@@ -490,7 +543,7 @@ mod tests {
         assert_eq!(q.pending_count(), 1);
         assert_eq!(q.pending_channels(), 1);
 
-        q.mark_complete();
+        q.mark_complete(ch_a);
 
         // Flush B (1 event drained).
         let _ = q.flush_next();
@@ -514,6 +567,7 @@ mod tests {
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
+                received_at: Instant::now(),
             }],
         };
 
@@ -542,7 +596,10 @@ mod tests {
 
         // Simulate failure — requeue the batch.
         queue.requeue(batch);
-        queue.mark_complete();
+        queue.mark_complete(ch);
+
+        // retry_after is set, so manually clear it for this test.
+        queue.retry_after.remove(&ch);
 
         // Should be able to flush again and get the same events in order.
         let batch2 = queue.flush_next().unwrap();
@@ -567,9 +624,9 @@ mod tests {
 
         // Requeue ch_a (simulating failure) and complete.
         queue.requeue(batch_a);
-        queue.mark_complete();
+        queue.mark_complete(ch_a);
 
-        // After requeue, ch_a's received_at is reset to now, so ch_b (older) goes first.
+        // After requeue, ch_a has retry_after set (5s), so ch_b goes first.
         let next_batch = queue.flush_next().unwrap();
         assert_eq!(next_batch.channel_id, ch_b);
     }
@@ -589,14 +646,17 @@ mod tests {
                 BatchEvent {
                     event: e1,
                     prompt_tag: "tag-a".into(),
+                    received_at: Instant::now(),
                 },
                 BatchEvent {
                     event: e2,
                     prompt_tag: "tag-b".into(),
+                    received_at: Instant::now(),
                 },
                 BatchEvent {
                     event: e3,
                     prompt_tag: "tag-c".into(),
+                    received_at: Instant::now(),
                 },
             ],
         };
@@ -630,6 +690,7 @@ mod tests {
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
+                received_at: Instant::now(),
             }],
         };
 
@@ -652,7 +713,7 @@ mod tests {
         q.push(make_queued(ch, "dropped"));
         assert_eq!(q.pending_count(), 0, "event should be dropped");
 
-        q.mark_complete();
+        q.mark_complete(ch);
         // Nothing to flush.
         assert!(q.flush_next().is_none());
     }
@@ -673,8 +734,259 @@ mod tests {
         q.push(make_queued(ch_b, "B-event"));
         assert_eq!(q.pending_count(), 1);
 
-        q.mark_complete();
+        q.mark_complete(ch_a);
         let batch_b = q.flush_next().expect("flush B");
         assert_eq!(batch_b.channel_id, ch_b);
+    }
+
+    // ── Test 14: multiple channels can be in-flight simultaneously ────────────
+
+    #[test]
+    fn test_multiple_channels_in_flight_simultaneously() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+
+        q.push(make_queued_at(ch_a, "A-event", Duration::from_secs(2)));
+        q.push(make_queued_at(ch_b, "B-event", Duration::from_secs(1)));
+
+        // Flush A — now A is in-flight.
+        let batch_a = q.flush_next().expect("flush A");
+        assert_eq!(batch_a.channel_id, ch_a);
+        assert!(q.is_in_flight());
+
+        // Flush B — B should also be flushable (different channel).
+        let batch_b = q.flush_next().expect("flush B while A in-flight");
+        assert_eq!(batch_b.channel_id, ch_b);
+
+        // Both in-flight.
+        assert_eq!(q.in_flight_channels.len(), 2);
+
+        // Complete A only.
+        q.mark_complete(ch_a);
+        assert!(q.is_in_flight()); // B still in-flight.
+
+        // Complete B.
+        q.mark_complete(ch_b);
+        assert!(!q.is_in_flight());
+    }
+
+    // ── Test 15: same channel cannot be flushed twice ─────────────────────────
+
+    #[test]
+    fn test_same_channel_not_flushed_twice() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let ch2 = Uuid::new_v4();
+
+        q.push(make_queued(ch, "first"));
+        let _batch = q.flush_next().expect("first flush");
+
+        // Push more events for same channel while in-flight.
+        q.push(make_queued(ch, "second"));
+        // Also push for another channel.
+        q.push(make_queued(ch2, "other"));
+
+        // flush_next should pick ch2, not ch (ch is in-flight).
+        let batch2 = q.flush_next().expect("should flush ch2");
+        assert_eq!(batch2.channel_id, ch2);
+
+        // ch still in-flight — no more candidates.
+        assert!(q.flush_next().is_none());
+    }
+
+    // ── Test 16: drop mode drops events for any in-flight channel ─────────────
+
+    #[test]
+    fn test_drop_mode_drops_for_any_in_flight_channel() {
+        let mut q = EventQueue::new(DedupMode::Drop);
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+
+        q.push(make_queued_at(ch_a, "A-event", Duration::from_secs(2)));
+        q.push(make_queued_at(ch_b, "B-event", Duration::from_secs(1)));
+
+        // Flush both — both in-flight.
+        let _batch_a = q.flush_next().expect("flush A");
+        let _batch_b = q.flush_next().expect("flush B");
+
+        // Drop mode: pushing to either in-flight channel is dropped.
+        q.push(make_queued(ch_a, "A-dropped"));
+        q.push(make_queued(ch_b, "B-dropped"));
+        assert_eq!(q.pending_count(), 0);
+
+        q.mark_complete(ch_a);
+        q.mark_complete(ch_b);
+    }
+
+    // ── Test 17: flush_next picks oldest non-in-flight, non-throttled channel ─
+
+    #[test]
+    fn test_flush_next_picks_oldest_non_throttled() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+        let ch_c = Uuid::new_v4();
+
+        // A is oldest, B is middle, C is newest.
+        q.push(make_queued_at(ch_a, "A", Duration::from_secs(10)));
+        q.push(make_queued_at(ch_b, "B", Duration::from_secs(5)));
+        q.push(make_queued_at(ch_c, "C", Duration::from_secs(1)));
+
+        // Flush A (oldest).
+        let batch = q.flush_next().expect("flush A");
+        assert_eq!(batch.channel_id, ch_a);
+
+        // A is in-flight; next oldest non-in-flight is B.
+        let batch2 = q.flush_next().expect("flush B");
+        assert_eq!(batch2.channel_id, ch_b);
+
+        // A and B in-flight; only C left.
+        let batch3 = q.flush_next().expect("flush C");
+        assert_eq!(batch3.channel_id, ch_c);
+
+        // All in-flight.
+        assert!(q.flush_next().is_none());
+
+        q.mark_complete(ch_a);
+        q.mark_complete(ch_b);
+        q.mark_complete(ch_c);
+    }
+
+    // ── Test 18: mark_complete(channel_id) clears only that channel ───────────
+
+    #[test]
+    fn test_mark_complete_clears_only_specified_channel() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+
+        q.push(make_queued_at(ch_a, "A", Duration::from_secs(2)));
+        q.push(make_queued_at(ch_b, "B", Duration::from_secs(1)));
+
+        let _batch_a = q.flush_next().expect("flush A");
+        let _batch_b = q.flush_next().expect("flush B");
+
+        assert_eq!(q.in_flight_channels.len(), 2);
+
+        // Complete only A.
+        q.mark_complete(ch_a);
+        assert_eq!(q.in_flight_channels.len(), 1);
+        assert!(q.in_flight_channels.contains(&ch_b));
+        assert!(!q.in_flight_channels.contains(&ch_a));
+
+        // B still in-flight.
+        assert!(q.is_in_flight());
+
+        q.mark_complete(ch_b);
+        assert!(!q.is_in_flight());
+    }
+
+    // ── Test 19: requeue_preserve_timestamps preserves received_at ───────────
+
+    #[test]
+    fn test_requeue_preserve_timestamps() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let old_time = Instant::now() - Duration::from_secs(10);
+
+        q.push(QueuedEvent {
+            channel_id: ch,
+            event: make_event("old-msg"),
+            received_at: old_time,
+            prompt_tag: "test".into(),
+        });
+
+        let batch = q.flush_next().expect("flush");
+        let original_received_at = batch.events[0].received_at;
+
+        // requeue_preserve_timestamps should keep the original timestamp.
+        q.requeue_preserve_timestamps(batch);
+        q.mark_complete(ch);
+
+        // No retry_after set — should be immediately flushable.
+        let batch2 = q.flush_next().expect("flush after requeue_preserve");
+        assert_eq!(batch2.events[0].received_at, original_received_at);
+    }
+
+    // ── Test 20: requeue_preserve_timestamps does not set retry_after ─────────
+
+    #[test]
+    fn test_requeue_preserve_timestamps_no_retry_after() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        q.push(make_queued(ch, "msg"));
+        let batch = q.flush_next().expect("flush");
+
+        q.requeue_preserve_timestamps(batch);
+        q.mark_complete(ch);
+
+        // No retry_after — channel should be immediately flushable.
+        assert!(q.retry_after.get(&ch).is_none());
+        assert!(q.flush_next().is_some());
+    }
+
+    // ── Test 21: has_flushable_work returns correct results ───────────────────
+
+    #[test]
+    fn test_has_flushable_work() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // Empty queue — no flushable work.
+        assert!(!q.has_flushable_work());
+
+        q.push(make_queued(ch, "msg"));
+        assert!(q.has_flushable_work());
+
+        // Flush — now in-flight, no flushable work.
+        let _batch = q.flush_next().expect("flush");
+        assert!(!q.has_flushable_work());
+
+        // Complete — no pending events, no flushable work.
+        q.mark_complete(ch);
+        assert!(!q.has_flushable_work());
+
+        // Requeue with retry_after — throttled, no flushable work.
+        q.push(make_queued(ch, "msg2"));
+        let batch2 = q.flush_next().expect("flush2");
+        q.requeue(batch2);
+        q.mark_complete(ch);
+        assert!(!q.has_flushable_work(), "throttled channel should not be flushable");
+
+        // Manually expire the retry_after to simulate time passing.
+        q.retry_after.insert(ch, Instant::now() - Duration::from_secs(1));
+        assert!(q.has_flushable_work(), "expired throttle should be flushable");
+    }
+
+    // ── Test 22: retry throttle blocks re-flush for 5 seconds ─────────────────
+
+    #[test]
+    fn test_retry_throttle_blocks_requeue_channel() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let ch2 = Uuid::new_v4();
+
+        q.push(make_queued(ch, "msg"));
+        let batch = q.flush_next().expect("flush");
+
+        // Requeue sets retry_after.
+        q.requeue(batch);
+        q.mark_complete(ch);
+
+        // Channel is throttled — flush_next should return None (no other channels).
+        assert!(q.flush_next().is_none());
+
+        // Add a different channel — it should be flushable.
+        q.push(make_queued(ch2, "other"));
+        let batch2 = q.flush_next().expect("ch2 should be flushable");
+        assert_eq!(batch2.channel_id, ch2);
+
+        // After retry_after expires, ch should be flushable again.
+        q.retry_after.insert(ch, Instant::now() - Duration::from_secs(1));
+        q.mark_complete(ch2);
+        let batch3 = q.flush_next().expect("ch should be flushable after throttle expires");
+        assert_eq!(batch3.channel_id, ch);
     }
 }
