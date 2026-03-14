@@ -1039,6 +1039,52 @@ async fn test_nip29_standard_client_flow() {
     });
     assert!(has_name, "39000 event should have a name tag");
 
+    // 1b. Verify kind:39001 (group admins) was also emitted.
+    let admins_sid = sub_id("admins");
+    let admins_filter = Filter::new().kind(Kind::Custom(39001));
+    client
+        .subscribe(&admins_sid, vec![admins_filter])
+        .await
+        .expect("subscribe to group admins");
+    let admins_events = client
+        .collect_until_eose(&admins_sid, Duration::from_secs(5))
+        .await
+        .expect("collect admins events");
+    let our_admins = admins_events.iter().find(|e| {
+        e.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.len() >= 2 && s[0] == "d" && s[1] == channel_id
+        })
+    });
+    assert!(
+        our_admins.is_some(),
+        "should find kind:39001 for our channel among {} events",
+        admins_events.len()
+    );
+
+    // 1c. Verify kind:39002 (group members) was also emitted.
+    let members_sid = sub_id("members");
+    let members_filter = Filter::new().kind(Kind::Custom(39002));
+    client
+        .subscribe(&members_sid, vec![members_filter])
+        .await
+        .expect("subscribe to group members");
+    let members_events = client
+        .collect_until_eose(&members_sid, Duration::from_secs(5))
+        .await
+        .expect("collect members events");
+    let our_members = members_events.iter().find(|e| {
+        e.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.len() >= 2 && s[0] == "d" && s[1] == channel_id
+        })
+    });
+    assert!(
+        our_members.is_some(),
+        "should find kind:39002 for our channel among {} events",
+        members_events.len()
+    );
+
     // 2. Subscribe to channel messages (kind:9 + h tag).
     let msg_sid = sub_id("messages");
     let msg_filter = Filter::new().kind(Kind::Custom(9)).custom_tag(
