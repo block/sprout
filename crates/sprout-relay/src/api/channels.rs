@@ -155,7 +155,9 @@ pub async fn create_channel(
 
     // Emit NIP-29 group discovery events so standard clients can find this channel.
     // Non-fatal — channel creation succeeds even if discovery emission fails.
-    if let Err(e) = crate::handlers::side_effects::emit_group_discovery_events(&state, channel.id).await {
+    if let Err(e) =
+        crate::handlers::side_effects::emit_group_discovery_events(&state, channel.id).await
+    {
         tracing::warn!(channel_id = %channel.id, error = %e, "NIP-29 discovery emission failed");
     }
 
