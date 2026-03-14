@@ -620,6 +620,26 @@ impl Db {
         reaction::remove_reaction_by_source_event_id(&self.pool, reaction_event_id).await
     }
 
+    /// Backfill the source event ID on an active reaction row.
+    pub async fn set_reaction_event_id(
+        &self,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        pubkey: &[u8],
+        emoji: &str,
+        reaction_event_id: &[u8],
+    ) -> Result<bool> {
+        reaction::set_reaction_event_id(
+            &self.pool,
+            event_id,
+            event_created_at,
+            pubkey,
+            emoji,
+            reaction_event_id,
+        )
+        .await
+    }
+
     /// Look up the active reaction row for one actor + emoji + target tuple.
     pub async fn get_active_reaction_record(
         &self,

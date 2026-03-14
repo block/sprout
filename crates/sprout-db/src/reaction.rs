@@ -84,10 +84,11 @@ pub async fn add_reaction(
         ON DUPLICATE KEY UPDATE
             created_at = IF(removed_at IS NOT NULL, NOW(6), created_at),
             removed_at = NULL,
-            reaction_event_id = CASE
-                WHEN removed_at IS NOT NULL THEN VALUES(reaction_event_id)
-                ELSE COALESCE(reaction_event_id, VALUES(reaction_event_id))
-            END
+            -- Keep existing non-NULL event ID if the new value is NULL.
+            -- REST calls add_reaction(None) first, then backfills via
+            -- set_reaction_event_id. Without COALESCE, a re-add would
+            -- clobber the existing event ID with NULL.
+            reaction_event_id = COALESCE(VALUES(reaction_event_id), reaction_event_id)
         "#,
     )
     .bind(event_created_at)
@@ -189,6 +190,40 @@ pub async fn get_active_reaction_record(
         })
     })
     .transpose()
+}
+
+/// Backfill the source event ID on an active reaction row.
+///
+/// Called after the kind:7 event is created and stored, to link the
+/// reaction row to its source event. Returns `true` if the row was updated.
+pub async fn set_reaction_event_id(
+    pool: &MySqlPool,
+    event_id: &[u8],
+    event_created_at: DateTime<Utc>,
+    pubkey: &[u8],
+    emoji: &str,
+    reaction_event_id: &[u8],
+) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        UPDATE reactions
+        SET reaction_event_id = ?
+        WHERE event_created_at = ?
+          AND event_id = ?
+          AND pubkey = ?
+          AND emoji = ?
+          AND removed_at IS NULL
+        "#,
+    )
+    .bind(reaction_event_id)
+    .bind(event_created_at)
+    .bind(event_id)
+    .bind(pubkey)
+    .bind(emoji)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
 }
 
 // ── Read operations ───────────────────────────────────────────────────────────

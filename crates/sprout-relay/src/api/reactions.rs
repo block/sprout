@@ -96,6 +96,12 @@ pub async fn add_reaction_handler(
     if emoji.is_empty() {
         return Err(api_error(StatusCode::BAD_REQUEST, "emoji is required"));
     }
+    if emoji.chars().count() > 64 {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "emoji too long (max 64 characters)",
+        ));
+    }
 
     let event_id_bytes = decode_event_id(&event_id_hex)?;
 
@@ -128,16 +134,25 @@ pub async fn add_reaction_handler(
         .single()
         .unwrap_or_default();
 
-    if state
+    // Atomically add the reaction. ON DUPLICATE KEY UPDATE returns
+    // rows_affected=0 if the row is already active — no TOCTOU race.
+    let added = state
         .db
-        .get_active_reaction_record(&event_id_bytes, event_created_at, &pubkey_bytes, &emoji)
+        .add_reaction(
+            &event_id_bytes,
+            event_created_at,
+            &pubkey_bytes,
+            &emoji,
+            None,
+        )
         .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?
-        .is_some()
-    {
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    if !added {
         return Err(api_error(StatusCode::CONFLICT, "reaction already exists"));
     }
 
+    // Reaction is now active in DB. Build and store the kind:7 source event.
     let user_pubkey_hex = nostr_hex::encode(&pubkey_bytes);
     let mut tags = build_actor_tags(&user_pubkey_hex)?;
     tags.push(
@@ -155,31 +170,60 @@ pub async fn add_reaction_handler(
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| internal_error(&format!("event signing error: {e}")))?;
 
-    let event_id = event.id.to_hex();
-    let (stored_event, was_inserted) = state
-        .db
-        .insert_event(&event, stored.channel_id)
-        .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+    let reaction_event_id = event.id.to_hex();
+    let insert_result = state.db.insert_event(&event, stored.channel_id).await;
+
+    let (stored_event, was_inserted) = match insert_result {
+        Ok(pair) => pair,
+        Err(e) => {
+            // Compensate: deactivate the reaction row so the user can retry.
+            let _ = state
+                .db
+                .remove_reaction(&event_id_bytes, event_created_at, &pubkey_bytes, &emoji)
+                .await;
+            return Err(internal_error(&format!("db error: {e}")));
+        }
+    };
 
     if !was_inserted {
-        return Err(api_error(
-            StatusCode::CONFLICT,
-            "reaction event already exists",
-        ));
+        // Event ID collision (INSERT IGNORE no-op) — e.g. rapid remove/re-add
+        // within the same second produces a deterministic event ID that already
+        // exists as a soft-deleted row. Log and continue; the reaction row is
+        // still valid, it just won't have a backfilled event ID.
+        tracing::warn!(
+            reaction_event_id,
+            "reaction source event already existed (INSERT IGNORE no-op)"
+        );
     }
 
-    crate::handlers::side_effects::handle_side_effects(7, &event, &state)
+    // Backfill the source event ID on the reaction row.
+    if let Err(e) = state
+        .db
+        .set_reaction_event_id(
+            &event_id_bytes,
+            event_created_at,
+            &pubkey_bytes,
+            &emoji,
+            event.id.as_bytes(),
+        )
         .await
-        .map_err(|e| internal_error(&format!("reaction side effect failed: {e}")))?;
+    {
+        tracing::warn!(
+            reaction_event_id,
+            "failed to backfill reaction_event_id: {e}"
+        );
+    }
 
+    // Dispatch to connected clients. Skip handle_side_effects(7, ...) since
+    // we already wrote the reaction row above — calling it again would be a
+    // redundant no-op (ON DUPLICATE KEY UPDATE with same values).
     let _ = dispatch_persistent_event(&state, &stored_event, 7, &user_pubkey_hex).await;
 
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
             "added": true,
-            "event_id": event_id,
+            "event_id": reaction_event_id,
         })),
     ))
 }
@@ -246,8 +290,27 @@ pub async fn remove_reaction_handler(
             .db
             .get_event_by_id(&reaction_event_id)
             .await
-            .map_err(|e| internal_error(&format!("db error: {e}")))?
-            .ok_or_else(|| not_found("reaction event not found"))?;
+            .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+        // If the source event is missing (e.g. soft-deleted from a prior
+        // remove/re-add cycle), skip kind:5 creation and fall through to
+        // direct row removal below.
+        let reaction_event = match reaction_event {
+            Some(ev) => ev,
+            None => {
+                tracing::warn!(
+                    reaction_event_id = reaction_event_hex,
+                    "reaction source event missing — falling back to direct row removal"
+                );
+                // Direct row removal — no kind:5 event needed.
+                state
+                    .db
+                    .remove_reaction(&event_id_bytes, event_created_at, &pubkey_bytes, &emoji)
+                    .await
+                    .map_err(|e| internal_error(&format!("db error: {e}")))?;
+                return Ok(Json(serde_json::json!({ "removed": true })));
+            }
+        };
 
         let user_pubkey_hex = nostr_hex::encode(&pubkey_bytes);
         let mut tags = build_actor_tags(&user_pubkey_hex)?;
@@ -305,7 +368,6 @@ pub async fn remove_reaction_handler(
 
     Ok(Json(serde_json::json!({
         "removed": true,
-        "legacy": true,
     })))
 }
 
