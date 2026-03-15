@@ -3475,6 +3475,7 @@ dependencies = [
  "futures-util",
  "hex",
  "nostr",
+ "rand 0.8.5",
  "reqwest",
  "serde",
  "serde_json",

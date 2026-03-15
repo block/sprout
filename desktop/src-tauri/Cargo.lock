@@ -4054,6 +4054,7 @@ dependencies = [
  "chrono",
  "hex",
  "infer 0.16.0",
+ "libc",
  "nostr 0.37.0",
  "reqwest 0.12.28",
  "serde",

@@ -33,14 +33,8 @@ pub fn generate_image_metadata_sync(
 
     // Blurhash from thumbnail (faster than full image)
     let rgba = thumb.to_rgba8();
-    let bh = blurhash::encode(
-        4,
-        3,
-        thumb.width(),
-        thumb.height(),
-        rgba.as_raw(),
-    )
-    .unwrap_or_default();
+    let bh =
+        blurhash::encode(4, 3, thumb.width(), thumb.height(), rgba.as_raw()).unwrap_or_default();
 
     Ok((
         BlobMeta {
@@ -50,7 +44,7 @@ pub fn generate_image_metadata_sync(
             ext: ext.to_string(),
             mime_type: mime.to_string(),
             size: bytes.len() as u64,
-            uploaded_at: 0, // Set by caller — single source of truth in process_upload
+            ..BlobMeta::default() // uploaded_at set by caller (process_upload)
         },
         Some(thumb_bytes),
     ))

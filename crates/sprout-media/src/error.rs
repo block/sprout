@@ -103,7 +103,10 @@ impl IntoResponse for MediaError {
             | Self::ServerMismatch
             | Self::MissingTag(_) => {
                 tracing::warn!(error = %self, "authentication failed");
-                (StatusCode::UNAUTHORIZED, "authentication failed".to_string())
+                (
+                    StatusCode::UNAUTHORIZED,
+                    "authentication failed".to_string(),
+                )
             }
             Self::InsufficientScope => (StatusCode::FORBIDDEN, self.to_string()),
             Self::UnknownContentType | Self::InvalidImage => {

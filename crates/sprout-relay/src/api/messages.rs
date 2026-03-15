@@ -43,9 +43,7 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
     const ALLOWED_IMETA_KEYS: &[&str] = &[
         "url", "m", "x", "size", "dim", "blurhash", "alt", "thumb", "fallback",
     ];
-    const SINGLETON_KEYS: &[&str] = &[
-        "url", "m", "x", "size", "dim", "blurhash", "thumb", "alt",
-    ];
+    const SINGLETON_KEYS: &[&str] = &["url", "m", "x", "size", "dim", "blurhash", "thumb", "alt"];
     const ALLOWED_MIME: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
 
     for tag in tags {
@@ -58,6 +56,10 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
         let mut has_x = false;
         let mut has_size = false;
         let mut seen_keys = std::collections::HashSet::new();
+        let mut url_value = String::new();
+        let mut x_value = String::new();
+        let mut m_value = String::new();
+        let mut thumb_value = String::new();
 
         for part in tag.iter().skip(1) {
             let mut parts = part.splitn(2, ' ');
@@ -76,35 +78,48 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
                     if !is_local_media_url(value, media_base_url) {
                         return Err("imeta url must be a local /media/ path".into());
                     }
-                    // Thumbnails belong in the thumb field, not url
                     if value.contains(".thumb.") {
-                        return Err("imeta url must not be a thumbnail path; use thumb field".into());
+                        return Err(
+                            "imeta url must not be a thumbnail path; use thumb field".into()
+                        );
                     }
+                    url_value = value.to_string();
                     has_url = true;
                 }
                 "m" => {
                     if !ALLOWED_MIME.contains(&value) {
-                        return Err("imeta m must be image/jpeg, image/png, image/gif, or image/webp".into());
+                        return Err(
+                            "imeta m must be image/jpeg, image/png, image/gif, or image/webp"
+                                .into(),
+                        );
                     }
+                    m_value = value.to_string();
                     has_m = true;
                 }
                 "x" => {
-                    if value.len() != 64 || !value.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+                    if value.len() != 64
+                        || !value.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+                    {
                         return Err("imeta x must be a 64-char lowercase hex SHA-256".into());
                     }
+                    x_value = value.to_string();
                     has_x = true;
                 }
                 "size" => {
                     match value.parse::<u64>() {
-                        Ok(0) | Err(_) => return Err("imeta size must be a positive integer".into()),
+                        Ok(0) | Err(_) => {
+                            return Err("imeta size must be a positive integer".into())
+                        }
                         Ok(_) => {}
                     }
                     has_size = true;
                 }
                 "thumb" => {
-                    if !is_local_media_url(value, media_base_url) || !value.ends_with(".thumb.jpg") {
+                    if !is_local_media_url(value, media_base_url) || !value.ends_with(".thumb.jpg")
+                    {
                         return Err("imeta thumb must be a local .thumb.jpg path".into());
                     }
+                    thumb_value = value.to_string();
                 }
                 _ => {}
             }
@@ -113,23 +128,79 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
         if !has_url || !has_m || !has_x || !has_size {
             return Err("imeta tag must include url, m, x, and size".into());
         }
+
+        // Cross-check internal consistency: url hash must match x, url ext must match m.
+        if let Some(hash_in_url) = extract_hash_from_media_url(&url_value) {
+            if hash_in_url != x_value {
+                return Err("imeta url hash does not match x".into());
+            }
+        }
+        if let Some(ext_in_url) = extract_ext_from_media_url(&url_value) {
+            let expected_ext = mime_to_canonical_ext(&m_value);
+            if ext_in_url != expected_ext {
+                return Err("imeta url extension does not match m".into());
+            }
+        }
+        // Thumb hash must match x (same blob, different variant).
+        if !thumb_value.is_empty() {
+            if let Some(thumb_hash) = extract_hash_from_media_url(&thumb_value) {
+                if thumb_hash != x_value {
+                    return Err("imeta thumb hash does not match x".into());
+                }
+            }
+        }
     }
     Ok(())
 }
 
+/// Extract the 64-char hex hash from a `/media/{hash}.{ext}` or `/media/{hash}.thumb.jpg` URL.
+fn extract_hash_from_media_url(url: &str) -> Option<&str> {
+    let after = url.rsplit("/media/").next()?;
+    let hash = after.split('.').next()?;
+    if hash.len() == 64 && hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+        Some(hash)
+    } else {
+        None
+    }
+}
+
+/// Extract the primary extension from a `/media/{hash}.{ext}` URL (not thumb).
+fn extract_ext_from_media_url(url: &str) -> Option<&str> {
+    let after = url.rsplit("/media/").next()?;
+    let segments: Vec<&str> = after.split('.').collect();
+    if segments.len() == 2 {
+        Some(segments[1])
+    } else {
+        None // bare hash or thumb — no primary ext to check
+    }
+}
+
+/// Map MIME to canonical extension (must match sprout-media's mime_to_ext).
+fn mime_to_canonical_ext(mime: &str) -> &str {
+    match mime {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "bin",
+    }
+}
+
 /// Validate that a URL references a valid local media blob path.
+///
 /// Accepts:
 ///   - Relative: `/media/<sha256>.<ext>` or `/media/<sha256>.thumb.jpg`
 ///   - Absolute: `<media_base_url>/<sha256>.<ext>` or `<media_base_url>/<sha256>.thumb.jpg`
-/// Where sha256 is exactly 64 lowercase hex chars and ext is an allowed image extension.
-/// Thumbnails are always JPEG — only `.thumb.jpg` is accepted.
-/// Rejects percent-encoded traversal, query strings, fragments, and external origins.
+///
+///     Where sha256 is exactly 64 lowercase hex chars and ext is an allowed image extension.
+///     Thumbnails are always JPEG — only `.thumb.jpg` is accepted.
+///     Rejects percent-encoded traversal, query strings, fragments, and external origins.
 fn is_local_media_url(url: &str, media_base_url: &str) -> bool {
     const ALLOWED_EXTS: &[&str] = &["jpg", "png", "gif", "webp"];
 
     // Extract the path portion after /media/
-    let path_after_media = if url.starts_with("/media/") {
-        &url["/media/".len()..]
+    let path_after_media = if let Some(rest) = url.strip_prefix("/media/") {
+        rest
     } else {
         let base = media_base_url.trim_end_matches('/');
         let prefix = format!("{}/", base);
@@ -559,7 +630,11 @@ pub async fn send_message(
     // Mention p tags — distinct from the author-attribution p tag above.
     for mention_hex in &body.mention_pubkeys {
         // Validate hex format (32-byte pubkey = 64 hex chars)
-        if mention_hex.len() == 64 && mention_hex.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+        if mention_hex.len() == 64
+            && mention_hex
+                .chars()
+                .all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+        {
             tags.push(
                 Tag::parse(&["p", mention_hex])
                     .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
@@ -1078,25 +1153,43 @@ mod tests {
 
     #[test]
     fn test_local_media_url_thumb_jpg_only() {
-        assert!(is_local_media_url(&format!("/media/{HASH}.thumb.jpg"), BASE));
+        assert!(is_local_media_url(
+            &format!("/media/{HASH}.thumb.jpg"),
+            BASE
+        ));
         // Other thumb extensions rejected
-        assert!(!is_local_media_url(&format!("/media/{HASH}.thumb.png"), BASE));
-        assert!(!is_local_media_url(&format!("/media/{HASH}.thumb.webp"), BASE));
+        assert!(!is_local_media_url(
+            &format!("/media/{HASH}.thumb.png"),
+            BASE
+        ));
+        assert!(!is_local_media_url(
+            &format!("/media/{HASH}.thumb.webp"),
+            BASE
+        ));
     }
 
     #[test]
     fn test_local_media_url_rejects_external() {
-        assert!(!is_local_media_url(&format!("https://evil.com/media/{HASH}.jpg"), BASE));
+        assert!(!is_local_media_url(
+            &format!("https://evil.com/media/{HASH}.jpg"),
+            BASE
+        ));
     }
 
     #[test]
     fn test_local_media_url_rejects_query_string() {
-        assert!(!is_local_media_url(&format!("/media/{HASH}.jpg?foo=bar"), BASE));
+        assert!(!is_local_media_url(
+            &format!("/media/{HASH}.jpg?foo=bar"),
+            BASE
+        ));
     }
 
     #[test]
     fn test_local_media_url_rejects_fragment() {
-        assert!(!is_local_media_url(&format!("/media/{HASH}.jpg#frag"), BASE));
+        assert!(!is_local_media_url(
+            &format!("/media/{HASH}.jpg#frag"),
+            BASE
+        ));
     }
 
     #[test]
@@ -1130,10 +1223,65 @@ mod tests {
     fn test_thumb_must_be_thumb_jpg() {
         let thumb = format!("/media/{HASH}.thumb.jpg");
         let blob = format!("/media/{HASH}.jpg");
-        // Thumb URL: valid local media AND ends with .thumb.jpg
         assert!(is_local_media_url(&thumb, BASE) && thumb.ends_with(".thumb.jpg"));
-        // Full-size blob: valid local media but NOT a thumb
         assert!(is_local_media_url(&blob, BASE));
         assert!(!blob.ends_with(".thumb.jpg"));
+    }
+
+    // ── imeta consistency cross-checks ──────────────────────────────────────
+
+    #[test]
+    fn test_imeta_url_hash_must_match_x() {
+        let other = "b".repeat(64);
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.jpg"),
+            "m image/jpeg".into(),
+            format!("x {other}"),
+            "size 100".into(),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("url hash does not match x"), "{err}");
+    }
+
+    #[test]
+    fn test_imeta_url_ext_must_match_m() {
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.png"),
+            "m image/jpeg".into(),
+            format!("x {HASH}"),
+            "size 100".into(),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("url extension does not match m"), "{err}");
+    }
+
+    #[test]
+    fn test_imeta_thumb_hash_must_match_x() {
+        let other = "c".repeat(64);
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.jpg"),
+            "m image/jpeg".into(),
+            format!("x {HASH}"),
+            "size 100".into(),
+            format!("thumb /media/{other}.thumb.jpg"),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("thumb hash does not match x"), "{err}");
+    }
+
+    #[test]
+    fn test_imeta_consistent_tags_pass() {
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.jpg"),
+            "m image/jpeg".into(),
+            format!("x {HASH}"),
+            "size 100".into(),
+            format!("thumb /media/{HASH}.thumb.jpg"),
+        ];
+        assert!(validate_imeta_tags(&[tag], BASE).is_ok());
     }
 }

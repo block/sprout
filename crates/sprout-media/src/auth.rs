@@ -87,7 +87,7 @@ pub fn verify_blossom_auth_event(
     if !server_tags.is_empty() {
         match server_domain {
             Some(domain) => {
-                if !server_tags.iter().any(|s| *s == domain) {
+                if !server_tags.contains(&domain) {
                     return Err(MediaError::ServerMismatch);
                 }
             }
@@ -113,9 +113,10 @@ pub fn verify_blossom_upload_auth(
     verify_blossom_auth_event(auth_event, server_domain)?;
 
     // At least one x tag must match the body sha256 (BUD-11 §6)
-    let has_matching_x = auth_event.tags.iter().any(|tag| {
-        tag.kind().to_string() == "x" && tag.content().map_or(false, |v| v == sha256)
-    });
+    let has_matching_x = auth_event
+        .tags
+        .iter()
+        .any(|tag| tag.kind().to_string() == "x" && (tag.content() == Some(sha256)));
 
     if !has_matching_x {
         return Err(MediaError::HashMismatch);

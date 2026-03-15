@@ -68,9 +68,10 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
         }
 
         // 3. Validate X-SHA-256 matches at least one x tag in the auth event
-        let has_matching_x = auth_event.tags.iter().any(|tag| {
-            tag.kind().to_string() == "x" && tag.content().map_or(false, |v| v == claimed_hash)
-        });
+        let has_matching_x = auth_event
+            .tags
+            .iter()
+            .any(|tag| tag.kind().to_string() == "x" && (tag.content() == Some(claimed_hash)));
         if !has_matching_x {
             return Err(MediaError::HashMismatch);
         }
@@ -219,9 +220,11 @@ pub async fn get_blob(
             .ok_or(MediaError::NotFound)?;
         if sha256_ext.contains('.') {
             let requested_ext = sha256_ext.rsplit('.').next().unwrap_or("");
-            let sidecar = state.media_storage.get_sidecar(
-                sha256_ext.split('.').next().unwrap_or(&sha256_ext)
-            ).await.map_err(|_| MediaError::NotFound)?;
+            let sidecar = state
+                .media_storage
+                .get_sidecar(sha256_ext.split('.').next().unwrap_or(&sha256_ext))
+                .await
+                .map_err(|_| MediaError::NotFound)?;
             if requested_ext != sidecar.ext {
                 return Err(MediaError::NotFound);
             }
@@ -273,9 +276,11 @@ pub async fn head_blob(
             .ok_or(MediaError::NotFound)?;
         if sha256_ext.contains('.') {
             let requested_ext = sha256_ext.rsplit('.').next().unwrap_or("");
-            let sidecar = state.media_storage.get_sidecar(
-                sha256_ext.split('.').next().unwrap_or(&sha256_ext)
-            ).await.map_err(|_| MediaError::NotFound)?;
+            let sidecar = state
+                .media_storage
+                .get_sidecar(sha256_ext.split('.').next().unwrap_or(&sha256_ext))
+                .await
+                .map_err(|_| MediaError::NotFound)?;
             if requested_ext != sidecar.ext {
                 return Err(MediaError::NotFound);
             }
@@ -410,7 +415,9 @@ async fn resolve_upload_scopes(
 
     // Dev mode is active — any valid Blossom signer can upload.
     // This must never be enabled in production.
-    tracing::warn!("dev mode upload: no API token required — ensure require_auth_token=true in production");
+    tracing::warn!(
+        "dev mode upload: no API token required — ensure require_auth_token=true in production"
+    );
 
     // 3. Pubkey allowlist check (dev mode only).
     if state.config.pubkey_allowlist_enabled {

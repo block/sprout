@@ -45,9 +45,7 @@ impl MediaStorage {
     pub async fn get(&self, key: &str) -> Result<Vec<u8>, MediaError> {
         match self.bucket.get_object(key).await {
             Ok(response) => Ok(response.to_vec()),
-            Err(s3::error::S3Error::HttpFailWithBody(status, _)) if status == 404 => {
-                Err(MediaError::NotFound)
-            }
+            Err(s3::error::S3Error::HttpFailWithBody(404, _)) => Err(MediaError::NotFound),
             Err(e) => Err(MediaError::StorageError(e.to_string())),
         }
     }
@@ -56,7 +54,7 @@ impl MediaStorage {
     pub async fn head(&self, key: &str) -> Result<bool, MediaError> {
         match self.bucket.head_object(key).await {
             Ok(_) => Ok(true),
-            Err(s3::error::S3Error::HttpFailWithBody(status, _)) if status == 404 => Ok(false),
+            Err(s3::error::S3Error::HttpFailWithBody(404, _)) => Ok(false),
             Err(e) => Err(MediaError::StorageError(e.to_string())),
         }
     }
@@ -76,7 +74,7 @@ impl MediaStorage {
             Ok((result, _)) => Ok(Some(BlobHeadMeta {
                 size: result.content_length.unwrap_or(0) as u64,
             })),
-            Err(s3::error::S3Error::HttpFailWithBody(status, _)) if status == 404 => Ok(None),
+            Err(s3::error::S3Error::HttpFailWithBody(404, _)) => Ok(None),
             Err(e) => Err(MediaError::StorageError(e.to_string())),
         }
     }

@@ -35,6 +35,39 @@ fn extract_server_authority(url_str: &str) -> Option<String> {
     }
 }
 
+/// Resolve the real filesystem path of an already-opened file descriptor.
+///
+/// This is the fd-based equivalent of `canonicalize()` — it returns the path
+/// the kernel associates with the inode, not the pathname used to open it.
+/// Immune to post-open renames/symlink swaps.
+#[cfg(target_os = "macos")]
+fn fd_real_path(file: &std::fs::File) -> Result<std::path::PathBuf, String> {
+    use std::os::unix::io::AsRawFd;
+    let fd = file.as_raw_fd();
+    let mut buf = vec![0u8; libc::PATH_MAX as usize];
+    let ret = unsafe { libc::fcntl(fd, libc::F_GETPATH, buf.as_mut_ptr()) };
+    if ret == -1 {
+        return Err(format!("fcntl F_GETPATH failed: {}", std::io::Error::last_os_error()));
+    }
+    let nul = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let s = std::str::from_utf8(&buf[..nul]).map_err(|e| e.to_string())?;
+    Ok(std::path::PathBuf::from(s))
+}
+
+#[cfg(target_os = "linux")]
+fn fd_real_path(file: &std::fs::File) -> Result<std::path::PathBuf, String> {
+    use std::os::unix::io::AsRawFd;
+    let fd = file.as_raw_fd();
+    std::fs::read_link(format!("/proc/self/fd/{fd}")).map_err(|e| e.to_string())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn fd_real_path(_file: &std::fs::File) -> Result<std::path::PathBuf, String> {
+    // Fallback: no fd-based path resolution available. The trust boundary
+    // relies on server-side content validation as defense-in-depth.
+    Err("fd_real_path not supported on this platform".to_string())
+}
+
 fn sign_blossom_upload_auth(keys: &Keys, sha256: &str) -> Result<nostr::Event, String> {
     let now = Timestamp::now().as_u64();
     let mut tags = vec![
@@ -65,32 +98,35 @@ pub async fn upload_media(
     // copies selected files to temp before invoking this command. This prevents a
     // compromised renderer from exfiltrating arbitrary local files.
     //
-    // Residual TOCTOU note: we canonicalize and read from the canonical path, which
-    // eliminates symlink-based attacks at the original path. A narrow race remains
-    // between canonicalize() and read() where the canonical path itself could be
-    // swapped, but exploiting this requires local filesystem access (not just renderer
-    // compromise). True fd-based O_NOFOLLOW reading would close this fully but is
-    // complex cross-platform; the server-side content validation (magic bytes, MIME
-    // allowlist, size caps) provides defense-in-depth against exfiltrated non-image data.
+    // Security: open the file FIRST, then resolve the fd's real filesystem path
+    // (not the original pathname) to verify it's inside temp_dir. This closes
+    // the TOCTOU gap — the fd is pinned to an inode, so path swaps after open()
+    // cannot redirect the read. On macOS we use F_GETPATH; on Linux, /proc/self/fd.
     let path = std::path::Path::new(&file_path);
-    // Canonicalize BOTH paths: on macOS, temp_dir() returns /var/... but
-    // canonicalize() resolves the symlink to /private/var/..., so a naive
-    // starts_with() would reject every legitimate temp file.
+
+    // Open the file — acquires an fd pinned to the inode.
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+
+    // Resolve the real path of the OPENED fd (not the original pathname).
+    let fd_path = fd_real_path(&file)?;
     let canonical_temp = std::env::temp_dir()
         .canonicalize()
         .unwrap_or_else(|_| std::env::temp_dir());
-    let canonical = path.canonicalize().map_err(|e| e.to_string())?;
-    if !canonical.starts_with(&canonical_temp) {
+    if !fd_path.starts_with(&canonical_temp) {
         return Err("upload source must be in system temp directory".to_string());
     }
-    // Read from the validated canonical path, not the original string.
-    let body_result = tokio::fs::read(&canonical).await;
-    // Clean up temp file (from drag-drop/paste) regardless of read success.
-    // Remove by canonical path to ensure we delete the validated file.
+
+    // Read from the already-opened fd — no second open(), no TOCTOU gap.
+    use std::io::Read;
+    let mut body = Vec::new();
+    file.read_to_end(&mut body)
+        .map_err(|e| format!("failed to read file: {e}"))?;
+    drop(file); // release fd before cleanup
+
+    // Clean up temp file using the fd-verified path.
     if is_temp {
-        let _ = tokio::fs::remove_file(&canonical).await;
+        let _ = std::fs::remove_file(&fd_path);
     }
-    let body = body_result.map_err(|e| format!("failed to read file: {e}"))?;
 
     // Detect MIME via magic bytes — enforce the same allowlist as the server.
     // Reject early to avoid wasting bandwidth on files the server will refuse.

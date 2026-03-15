@@ -99,7 +99,10 @@ async fn main() -> anyhow::Result<()> {
         keys
     };
 
-    config.media.validate().map_err(|e| anyhow::anyhow!("invalid media config: {e}"))?;
+    config
+        .media
+        .validate()
+        .map_err(|e| anyhow::anyhow!("invalid media config: {e}"))?;
     let media_storage = sprout_media::MediaStorage::new(&config.media)
         .map_err(|e| anyhow::anyhow!("failed to initialize media storage: {e}"))?;
     info!("Media storage connected");

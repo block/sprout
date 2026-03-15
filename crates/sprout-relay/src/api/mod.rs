@@ -12,8 +12,6 @@
 
 /// Agent directory and status endpoints.
 pub mod agents;
-/// Blossom-compatible media upload, retrieval, and existence check endpoints.
-pub mod media;
 /// Workflow approval grant/deny endpoints.
 pub mod approvals;
 /// Canvas (shared document) endpoints.
@@ -28,6 +26,8 @@ pub mod dms;
 pub mod events;
 /// Personalized home feed endpoint.
 pub mod feed;
+/// Blossom-compatible media upload, retrieval, and existence check endpoints.
+pub mod media;
 /// Channel membership endpoints.
 pub mod members;
 /// Message and thread endpoints.

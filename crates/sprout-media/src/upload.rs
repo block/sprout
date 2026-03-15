@@ -55,11 +55,18 @@ pub async fn process_upload(
     // Compute uploaded_at once — single source of truth for sidecar and response.
     let uploaded_at = chrono::Utc::now().timestamp();
 
-    // Store blob first, then generate metadata. On any downstream failure,
-    // delete the orphan blob to prevent storage exhaustion.
+    // Store blob first, then generate metadata.
+    // On failure we intentionally do NOT delete the orphan blob — concurrent
+    // uploads of the same hash could race and delete a blob that another
+    // request is about to reference via its sidecar. Orphan blobs are
+    // content-addressed and bounded by the upload size limit, so the storage
+    // cost is negligible. A V2 background GC job can sweep blobs with no
+    // matching sidecar after a grace period.
     storage.put(&key, &body, &mime).await?;
 
-    match generate_and_store_metadata(storage, config, &sha256, &ext, &mime, &body, uploaded_at).await {
+    match generate_and_store_metadata(storage, config, &sha256, &ext, &mime, &body, uploaded_at)
+        .await
+    {
         Ok(meta) => Ok(build_descriptor(
             config,
             &sha256,
@@ -70,20 +77,14 @@ pub async fn process_upload(
             uploaded_at,
         )),
         Err(e) => {
-            // Race-safe cleanup: only delete if no other request completed successfully.
-            // If the sidecar now exists, another concurrent upload finished — don't delete its objects.
-            let sidecar_now_exists = storage.head(&meta_key).await.unwrap_or(false);
-            if !sidecar_now_exists {
-                let _ = storage.delete(&key).await;
-                let _ = storage.delete(&format!("{sha256}.thumb.jpg")).await;
-            }
+            tracing::warn!(sha256 = %sha256, "metadata generation failed; orphan blob left for GC");
             Err(e)
         }
     }
 }
 
 /// Generate thumbnail, blurhash, and sidecar metadata, then store them.
-/// Returns the metadata and a list of S3 keys written (for cleanup on failure).
+/// Returns the completed [`BlobMeta`] on success.
 async fn generate_and_store_metadata(
     storage: &MediaStorage,
     config: &MediaConfig,
