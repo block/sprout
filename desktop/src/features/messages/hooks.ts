@@ -285,7 +285,9 @@ export function useSendMessageMutation(
           tags: [
             ...baseTags,
             // For non-replies, add mention p-tags here (replies get them via buildReplyTags)
-            ...(!parentEventId ? (mentionPubkeys ?? []).map((pk) => ["p", pk]) : []),
+            ...(!parentEventId
+              ? (mentionPubkeys ?? []).map((pk) => ["p", pk])
+              : []),
             ...(mediaTags ?? []),
           ],
           content: content.trim(),

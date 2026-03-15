@@ -1320,7 +1320,8 @@ mod tests {
 
     #[test]
     fn normalize_rejects_invalid_hex() {
-        let input = vec!["zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_string()];
+        let input =
+            vec!["zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_string()];
         let err = normalize_mention_pubkeys(&input, SELF_PK);
         assert!(err.is_err());
     }

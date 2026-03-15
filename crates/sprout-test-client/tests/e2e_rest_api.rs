@@ -2124,7 +2124,11 @@ async fn test_rest_reply_with_mention_pubkeys_includes_p_tags() {
         }),
     )
     .await;
-    assert_eq!(reply_resp.status(), 200, "reply with mention_pubkeys failed");
+    assert_eq!(
+        reply_resp.status(),
+        200,
+        "reply with mention_pubkeys failed"
+    );
 
     // The agent subscriber should receive the reply because it has a p-tag
     // matching agent_hex.
@@ -2157,8 +2161,10 @@ async fn test_rest_reply_with_mention_pubkeys_includes_p_tags() {
             );
             // Must have the reply e-tag.
             assert!(
-                tags.iter()
-                    .any(|t| t.len() >= 4 && t[0] == "e" && t[1] == root_event_id && t[3] == "reply"),
+                tags.iter().any(|t| t.len() >= 4
+                    && t[0] == "e"
+                    && t[1] == root_event_id
+                    && t[3] == "reply"),
                 "reply is missing the NIP-10 reply e-tag: {tags:?}"
             );
         }
@@ -2221,7 +2227,11 @@ async fn test_rest_mention_pubkeys_validation() {
         }),
     )
     .await;
-    assert_eq!(resp.status(), 400, "exceeding 50 mentions should be rejected");
+    assert_eq!(
+        resp.status(),
+        400,
+        "exceeding 50 mentions should be rejected"
+    );
 
     // Empty array should succeed.
     let resp = authed_post_json(
@@ -2273,12 +2283,10 @@ async fn test_rest_mention_pubkeys_normalization_in_emitted_event() {
         .await
         .expect("WS connect");
     let sid = format!("norm-{}", uuid::Uuid::new_v4().simple());
-    let filter = Filter::new()
-        .kind(Kind::Custom(9))
-        .custom_tag(
-            SingleLetterTag::lowercase(Alphabet::H),
-            [channel_id.as_str()],
-        );
+    let filter = Filter::new().kind(Kind::Custom(9)).custom_tag(
+        SingleLetterTag::lowercase(Alphabet::H),
+        [channel_id.as_str()],
+    );
     sub.subscribe(&sid, vec![filter]).await.expect("subscribe");
     sub.collect_until_eose(&sid, Duration::from_secs(5))
         .await
@@ -2343,7 +2351,10 @@ async fn test_rest_mention_pubkeys_normalization_in_emitted_event() {
                 "expected exactly 2 p-tags (sender + agent), got {p_tags:?}"
             );
             assert_eq!(p_tags[0], poster_hex, "first p-tag must be sender");
-            assert_eq!(p_tags[1], agent_hex, "second p-tag must be the agent (lowercased, deduplicated)");
+            assert_eq!(
+                p_tags[1], agent_hex,
+                "second p-tag must be the agent (lowercased, deduplicated)"
+            );
         }
         other => panic!("expected EVENT, got {other:?}"),
     }
