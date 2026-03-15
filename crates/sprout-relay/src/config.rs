@@ -86,7 +86,7 @@ impl Config {
         let max_concurrent_handlers = std::env::var("SPROUT_MAX_CONCURRENT_HANDLERS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(64);
+            .unwrap_or(1024);
 
         let send_buffer_size = std::env::var("SPROUT_SEND_BUFFER")
             .ok()

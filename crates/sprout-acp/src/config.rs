@@ -460,6 +460,18 @@ pub fn resolve_dynamic_channel_filter(
         KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
     };
 
+    // If the operator explicitly constrained channels with --channels,
+    // only allow dynamic subscription to channels in that allowlist.
+    // This prevents membership notifications from bypassing operator scope.
+    if let Some(ref overrides) = config.channels_override {
+        let allowed = overrides
+            .iter()
+            .any(|s| s.parse::<Uuid>().ok() == Some(channel_id));
+        if !allowed {
+            return None;
+        }
+    }
+
     match config.subscribe_mode {
         SubscribeMode::Mentions => Some(ChannelFilter {
             kinds: Some(config.kinds_override.clone().unwrap_or_else(|| {
