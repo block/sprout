@@ -506,6 +506,17 @@ async fn run_background_task(
                         let _ =
                             send_membership_subscribe(&mut ws, &agent_pubkey_hex, None).await;
                         state.membership_sub_active = true;
+                        // Seed the watermark so reconnect replays from this point
+                        // rather than falling back to since=now (which could miss
+                        // notifications during the reconnect gap).
+                        if state.membership_last_seen.is_none() {
+                            state.membership_last_seen = Some(
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                            );
+                        }
                     }
                     Some(RelayCommand::Reconnect) => {
                         // Reconnect command already consumed — skip the drain loop.
