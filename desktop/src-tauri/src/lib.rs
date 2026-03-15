@@ -19,6 +19,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_websocket::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(build_app_state())
         .invoke_handler(tauri::generate_handler![
             get_identity,
@@ -53,6 +54,9 @@ pub fn run() {
             add_reaction,
             remove_reaction,
             get_event,
+            upload_media,
+            pick_and_upload_media,
+            upload_media_bytes,
             list_tokens,
             mint_token,
             revoke_token,

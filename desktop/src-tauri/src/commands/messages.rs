@@ -45,6 +45,7 @@ pub async fn send_channel_message(
     channel_id: String,
     content: String,
     parent_event_id: Option<String>,
+    media_tags: Option<Vec<Vec<String>>>,
     mention_pubkeys: Option<Vec<String>>,
     state: State<'_, AppState>,
 ) -> Result<SendChannelMessageResponse, String> {
@@ -56,6 +57,7 @@ pub async fn send_channel_message(
             content: content.trim(),
             parent_event_id: parent_event_id.as_deref(),
             broadcast_to_channel: false,
+            media_tags,
             mention_pubkeys: mention_refs,
         },
     );

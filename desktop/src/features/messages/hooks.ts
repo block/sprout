@@ -62,6 +62,7 @@ function createOptimisticMessage(
   currentMessages: RelayEvent[],
   mentionPubkeys: string[] = [],
   parentEventId: string | null = null,
+  mediaTags: string[][] = [],
 ): RelayEvent {
   const tags: string[][] = [];
 
@@ -80,6 +81,10 @@ function createOptimisticMessage(
     for (const pubkey of mentionPubkeys) {
       tags.push(["p", pubkey]);
     }
+  }
+
+  for (const tag of mediaTags) {
+    tags.push(tag);
   }
 
   return {
@@ -219,10 +224,16 @@ export function useSendMessageMutation(
       content: string;
       mentionPubkeys?: string[];
       parentEventId?: string | null;
+      mediaTags?: string[][];
     },
     MessageQueryContext | undefined
   >({
-    mutationFn: async ({ content, mentionPubkeys, parentEventId }) => {
+    mutationFn: async ({
+      content,
+      mentionPubkeys,
+      parentEventId,
+      mediaTags,
+    }) => {
       if (!channel || channel.channelType === "forum") {
         throw new Error("This channel does not support message sending yet.");
       }
@@ -231,7 +242,9 @@ export function useSendMessageMutation(
         throw new Error("No identity available for sending messages.");
       }
 
-      if (parentEventId) {
+      // Media-bearing messages MUST go through REST so the relay's imeta
+      // validation runs. The WebSocket path does not validate imeta tags.
+      if (parentEventId || (mediaTags && mediaTags.length > 0)) {
         const cachedMessages =
           queryClient.getQueryData<RelayEvent[]>([
             "channel-messages",
@@ -240,30 +253,54 @@ export function useSendMessageMutation(
         const result = await sendChannelMessage(
           channel.id,
           content,
-          parentEventId,
+          parentEventId ?? null,
+          mediaTags,
           mentionPubkeys,
         );
+
+        // Build tags matching relay-emitted shape: h, author p, mention ps, reply es, imeta.
+        // For replies, buildReplyTags already includes ["p", author] and ["h", channel].
+        // For non-replies (media-only), we add them ourselves.
+        const replyTags = parentEventId
+          ? buildReplyTags(
+              channel.id,
+              identity.pubkey,
+              parentEventId,
+              resolveReplyRootId(parentEventId, cachedMessages),
+              mentionPubkeys,
+            )
+          : [];
+        const baseTags = parentEventId
+          ? replyTags // buildReplyTags includes h + author p + mention ps
+          : [
+              ["h", channel.id],
+              ["p", identity.pubkey],
+            ]; // non-reply: add ourselves
 
         return {
           id: result.eventId,
           pubkey: identity.pubkey,
           created_at: result.createdAt,
           kind: KIND_STREAM_MESSAGE,
-          tags: buildReplyTags(
-            channel.id,
-            identity.pubkey,
-            parentEventId,
-            resolveReplyRootId(parentEventId, cachedMessages),
-            mentionPubkeys,
-          ),
+          tags: [
+            ...baseTags,
+            // For non-replies, add mention p-tags here (replies get them via buildReplyTags)
+            ...(!parentEventId ? (mentionPubkeys ?? []).map((pk) => ["p", pk]) : []),
+            ...(mediaTags ?? []),
+          ],
           content: content.trim(),
           sig: "",
         };
       }
 
-      return relayClient.sendMessage(channel.id, content, mentionPubkeys ?? []);
+      return relayClient.sendMessage(
+        channel.id,
+        content,
+        mentionPubkeys ?? [],
+        [],
+      );
     },
-    onMutate: async ({ content, mentionPubkeys, parentEventId }) => {
+    onMutate: async ({ content, mentionPubkeys, parentEventId, mediaTags }) => {
       if (!channel || !identity || channel.channelType === "forum") {
         return undefined;
       }
@@ -280,6 +317,7 @@ export function useSendMessageMutation(
         previousMessages,
         mentionPubkeys ?? [],
         parentEventId ?? null,
+        mediaTags ?? [],
       );
 
       queryClient.setQueryData<RelayEvent[]>(

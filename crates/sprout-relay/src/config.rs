@@ -53,6 +53,8 @@ pub struct Config {
     /// API tokens or Okta JWTs bypass the allowlist entirely.
     /// Applies to all NIP-42 pubkey-only connections, regardless of `require_auth_token`.
     pub pubkey_allowlist_enabled: bool,
+    /// Media storage configuration (S3/MinIO).
+    pub media: sprout_media::MediaConfig,
 }
 
 impl Config {
@@ -135,6 +137,47 @@ impl Config {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
+        let media = sprout_media::MediaConfig {
+            s3_endpoint: std::env::var("SPROUT_S3_ENDPOINT")
+                .unwrap_or_else(|_| "http://localhost:9000".to_string()),
+            s3_access_key: std::env::var("SPROUT_S3_ACCESS_KEY")
+                .unwrap_or_else(|_| "sprout_dev".to_string()),
+            s3_secret_key: std::env::var("SPROUT_S3_SECRET_KEY")
+                .unwrap_or_else(|_| "sprout_dev_secret".to_string()),
+            s3_bucket: std::env::var("SPROUT_S3_BUCKET")
+                .unwrap_or_else(|_| "sprout-media".to_string()),
+            max_image_bytes: std::env::var("SPROUT_MAX_IMAGE_BYTES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(50 * 1024 * 1024),
+            max_gif_bytes: std::env::var("SPROUT_MAX_GIF_BYTES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10 * 1024 * 1024),
+            public_base_url: std::env::var("SPROUT_MEDIA_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:3000/media".to_string()),
+            server_domain: std::env::var("SPROUT_MEDIA_SERVER_DOMAIN")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    // Auto-derive from RELAY_URL so desktop uploads work out-of-the-box
+                    // without requiring an extra env var in dev mode.
+                    url::Url::parse(
+                        &relay_url
+                            .replace("ws://", "http://")
+                            .replace("wss://", "https://"),
+                    )
+                    .ok()
+                    .and_then(|u| {
+                        let host = u.host_str()?.to_string();
+                        match u.port() {
+                            Some(p) => Some(format!("{host}:{p}")),
+                            None => Some(host),
+                        }
+                    })
+                }),
+        };
+
         Ok(Self {
             bind_addr,
             database_url,
@@ -151,6 +194,7 @@ impl Config {
             relay_private_key,
             uds_path,
             pubkey_allowlist_enabled,
+            media,
         })
     }
 }
@@ -186,5 +230,46 @@ mod tests {
         let result = Config::from_env();
         std::env::remove_var("SPROUT_BIND_ADDR");
         assert!(matches!(result, Err(ConfigError::InvalidBindAddr(_))));
+    }
+
+    #[test]
+    fn server_domain_auto_derived_from_relay_url() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Clear explicit override so auto-derive kicks in
+        std::env::remove_var("SPROUT_MEDIA_SERVER_DOMAIN");
+        std::env::set_var("RELAY_URL", "ws://localhost:3000");
+        let config = Config::from_env().expect("config");
+        std::env::remove_var("RELAY_URL");
+        assert_eq!(
+            config.media.server_domain.as_deref(),
+            Some("localhost:3000")
+        );
+    }
+
+    #[test]
+    fn server_domain_auto_derived_default_port() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::remove_var("SPROUT_MEDIA_SERVER_DOMAIN");
+        std::env::set_var("RELAY_URL", "wss://relay.example.com");
+        let config = Config::from_env().expect("config");
+        std::env::remove_var("RELAY_URL");
+        assert_eq!(
+            config.media.server_domain.as_deref(),
+            Some("relay.example.com")
+        );
+    }
+
+    #[test]
+    fn server_domain_explicit_override_wins() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::set_var("SPROUT_MEDIA_SERVER_DOMAIN", "custom.example.com");
+        std::env::set_var("RELAY_URL", "ws://localhost:3000");
+        let config = Config::from_env().expect("config");
+        std::env::remove_var("SPROUT_MEDIA_SERVER_DOMAIN");
+        std::env::remove_var("RELAY_URL");
+        assert_eq!(
+            config.media.server_domain.as_deref(),
+            Some("custom.example.com")
+        );
     }
 }

@@ -14,6 +14,7 @@ members = [
     "crates/sprout-test-client",
     "crates/sprout-admin",
     "crates/sprout-workflow",
+    "crates/sprout-media",
 ]
 exclude = ["desktop/src-tauri"]
 resolver = "2"
@@ -105,3 +106,4 @@ sprout-mcp = { path = "crates/sprout-mcp" }
 sprout-proxy = { path = "crates/sprout-proxy" }
 sprout-huddle = { path = "crates/sprout-huddle" }
 sprout-workflow = { path = "crates/sprout-workflow" }
+sprout-media = { path = "crates/sprout-media" }
