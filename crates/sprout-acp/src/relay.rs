@@ -350,7 +350,12 @@ struct BgState {
     seen_ids: HashSet<String>,
     /// Per-channel filter used on subscribe (for resubscribe after reconnect).
     active_filters: HashMap<Uuid, ChannelFilter>,
-    /// Last seen timestamp for membership notifications (for reconnect replay).
+    /// Oldest timestamp of a membership notification that was dropped due to
+    /// backpressure. If set, reconnect replay must start from this timestamp
+    /// (minus skew) to re-deliver the lost event. Reset on successful reconnect.
+    membership_dropped_since: Option<u64>,
+    /// Newest successfully-enqueued membership notification timestamp.
+    /// Used as the `since` for reconnect replay when no events were dropped.
     membership_last_seen: Option<u64>,
     /// Whether the membership notification subscription is active.
     membership_sub_active: bool,
@@ -363,6 +368,7 @@ impl BgState {
             last_seen: HashMap::new(),
             seen_ids: HashSet::new(),
             active_filters: HashMap::new(),
+            membership_dropped_since: None,
             membership_last_seen: None,
             membership_sub_active: false,
         }
@@ -568,13 +574,19 @@ async fn handle_ws_message(
                         };
                         match event_tx.try_send(Some(sprout_event)) {
                             Ok(()) => {
-                                // Only advance watermark after successful enqueue —
-                                // if dropped, reconnect replay must re-deliver it.
                                 state.membership_last_seen =
                                     Some(state.membership_last_seen.unwrap_or(0).max(ts));
                             }
                             Err(mpsc::error::TrySendError::Full(_)) => {
-                                warn!("event channel full — dropping membership notification (watermark NOT advanced, will replay on reconnect)");
+                                // Track the oldest dropped timestamp so reconnect
+                                // replay starts early enough to re-deliver it.
+                                state.membership_dropped_since =
+                                    Some(state.membership_dropped_since.map_or(ts, |d| d.min(ts)));
+                                warn!(
+                                    channel_id = %channel_uuid,
+                                    ts,
+                                    "membership notification dropped (backpressure) — will replay from {ts} on reconnect"
+                                );
                             }
                             Err(mpsc::error::TrySendError::Closed(_)) => return false,
                         }
@@ -720,9 +732,18 @@ async fn wait_for_reconnect(
                 }
 
                 // Resubscribe to membership notifications if active.
+                // Use the oldest of (dropped, last_seen) so dropped events are replayed.
                 if state.membership_sub_active {
-                    send_membership_subscribe(ws, agent_pubkey_hex, state.membership_last_seen)
-                        .await;
+                    let replay_since =
+                        match (state.membership_dropped_since, state.membership_last_seen) {
+                            (Some(d), Some(l)) => Some(d.min(l)),
+                            (Some(d), None) => Some(d),
+                            (None, Some(l)) => Some(l),
+                            (None, None) => None,
+                        };
+                    send_membership_subscribe(ws, agent_pubkey_hex, replay_since).await;
+                    // Reset drop tracker — reconnect replay will re-deliver them.
+                    state.membership_dropped_since = None;
                 }
 
                 return;
