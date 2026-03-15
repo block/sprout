@@ -227,7 +227,12 @@ export function useSendMessageMutation(
     },
     MessageQueryContext | undefined
   >({
-    mutationFn: async ({ content, mentionPubkeys, parentEventId, mediaTags }) => {
+    mutationFn: async ({
+      content,
+      mentionPubkeys,
+      parentEventId,
+      mediaTags,
+    }) => {
       if (!channel || channel.channelType === "forum") {
         throw new Error("This channel does not support message sending yet.");
       }
@@ -265,7 +270,10 @@ export function useSendMessageMutation(
           : [];
         const baseTags = parentEventId
           ? replyTags // buildReplyTags includes h + author p
-          : [["h", channel.id], ["p", identity.pubkey]]; // non-reply: add ourselves
+          : [
+              ["h", channel.id],
+              ["p", identity.pubkey],
+            ]; // non-reply: add ourselves
 
         return {
           id: result.eventId,

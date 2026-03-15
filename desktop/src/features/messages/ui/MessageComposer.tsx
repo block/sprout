@@ -166,7 +166,9 @@ export function MessageComposer({
       setUploadState({ status: "uploading" });
       try {
         const descriptor = await uploadMedia(filePath, isTemp, filename);
-        const name = (filename ?? "").replace(/[^a-zA-Z0-9._\- ]/g, "_").slice(0, 100);
+        const name = (filename ?? "")
+          .replace(/[^a-zA-Z0-9._\- ]/g, "_")
+          .slice(0, 100);
         const markdown = `\n![${name}](${descriptor.url})\n`;
         setContent((prev) => prev + markdown);
         setPendingImeta((prev) => [...prev, descriptor]);
@@ -190,15 +192,18 @@ export function MessageComposer({
       ],
     });
     if (selected) {
-      const filePath = typeof selected === "string" ? selected : selected.path;
+      const filePath = selected;
       // Copy to temp dir before upload — the Tauri command restricts reads to
       // the OS temp directory to prevent file exfiltration from compromised renderers.
       try {
         const { tempDir } = await import("@tauri-apps/api/path");
         const { copyFile } = await import("@tauri-apps/plugin-fs");
         const tmp = await tempDir();
-        const ext = filePath.split(".").pop() ?? "bin";
-        const safeName = filePath.split(/[/\\]/).pop()?.replace(/[^a-zA-Z0-9._\- ]/g, "_") ?? "file";
+        const safeName =
+          filePath
+            .split(/[/\\]/)
+            .pop()
+            ?.replace(/[^a-zA-Z0-9._\- ]/g, "_") ?? "file";
         const tempPath = `${tmp}sprout-dialog-${crypto.randomUUID()}-${safeName}`;
         await copyFile(filePath, tempPath);
         await handleFileUpload(tempPath, true, safeName);
@@ -218,9 +223,17 @@ export function MessageComposer({
       if (!file) return;
 
       // Client-side image filter — server also validates, but reject early for UX
-      const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+      const ALLOWED_TYPES = [
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+      ];
       if (!ALLOWED_TYPES.includes(file.type)) {
-        setUploadState({ status: "error", message: "Only JPEG, PNG, GIF, and WebP images are supported" });
+        setUploadState({
+          status: "error",
+          message: "Only JPEG, PNG, GIF, and WebP images are supported",
+        });
         return;
       }
 
@@ -251,7 +264,12 @@ export function MessageComposer({
   const handlePaste = React.useCallback(
     async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
       const items = Array.from(event.clipboardData.items);
-      const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+      const ALLOWED_TYPES = [
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+      ];
       const imageItem = items.find((item) => ALLOWED_TYPES.includes(item.type));
       if (!imageItem) return;
 
@@ -560,7 +578,11 @@ export function MessageComposer({
             <Button
               className="gap-2"
               data-testid="send-message"
-              disabled={disabled || isSending || (content.trim().length === 0 && pendingImeta.length === 0)}
+              disabled={
+                disabled ||
+                isSending ||
+                (content.trim().length === 0 && pendingImeta.length === 0)
+              }
               title="Send (Enter)"
               type="submit"
             >
