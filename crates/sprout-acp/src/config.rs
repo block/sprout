@@ -29,7 +29,7 @@ pub enum ConfigError {
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, clap::ValueEnum)]
+#[derive(Debug, Clone, PartialEq, clap::ValueEnum)]
 pub enum SubscribeMode {
     Mentions,
     All,
@@ -441,6 +441,95 @@ pub fn resolve_channel_filters(
     }
 
     result
+}
+
+/// Resolve the subscription filter for a single dynamically-discovered channel.
+///
+/// In Mentions/All mode, `channels_override` (--channels) is enforced — the agent
+/// won't subscribe to channels outside the operator's allowlist. In Config mode,
+/// `--channels` is ignored (per CLI contract) and rule-matching determines scope.
+///
+/// Returns `None` when the channel is outside the agent's configured scope:
+/// - Mentions/All: channel not in `channels_override` (if set)
+/// - Config: no subscription rules match the channel
+pub fn resolve_dynamic_channel_filter(
+    config: &Config,
+    channel_id: Uuid,
+    rules: &[crate::filter::SubscriptionRule],
+) -> Option<ChannelFilter> {
+    use sprout_core::kind::{
+        KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
+    };
+
+    // In Mentions/All mode, if the operator explicitly constrained channels
+    // with --channels, only allow dynamic subscription to channels in that
+    // allowlist. Config mode ignores --channels (per CLI contract) and uses
+    // rule-matching instead.
+    if config.subscribe_mode != SubscribeMode::Config {
+        if let Some(ref overrides) = config.channels_override {
+            let allowed = overrides
+                .iter()
+                .any(|s| s.parse::<Uuid>().ok() == Some(channel_id));
+            if !allowed {
+                return None;
+            }
+        }
+    }
+
+    match config.subscribe_mode {
+        SubscribeMode::Mentions => Some(ChannelFilter {
+            kinds: Some(config.kinds_override.clone().unwrap_or_else(|| {
+                vec![
+                    KIND_STREAM_MESSAGE,
+                    KIND_WORKFLOW_APPROVAL_REQUESTED,
+                    KIND_STREAM_REMINDER,
+                ]
+            })),
+            require_mention: !config.no_mention_filter,
+        }),
+        SubscribeMode::All => Some(ChannelFilter {
+            kinds: config.kinds_override.clone(),
+            require_mention: false,
+        }),
+        SubscribeMode::Config => {
+            // Same merge logic as resolve_channel_filters() Config branch:
+            // evaluate ALL rules against this specific channel (including
+            // channel-specific rules, not just ChannelScope::All).
+            let mut merged_kinds: Option<Vec<u32>> = Some(vec![]);
+            let mut require_mention = true;
+            let mut has_rule = false;
+
+            for rule in rules {
+                if !rule_applies_to_channel(rule, channel_id) {
+                    continue;
+                }
+                has_rule = true;
+                if rule.kinds.is_empty() {
+                    merged_kinds = None;
+                } else if let Some(ref mut kinds) = merged_kinds {
+                    for k in &rule.kinds {
+                        if !kinds.contains(k) {
+                            kinds.push(*k);
+                        }
+                    }
+                }
+                if !rule.require_mention {
+                    require_mention = false;
+                }
+            }
+
+            if !has_rule {
+                // No rules match — don't subscribe. Consistent with
+                // resolve_channel_filters() which omits unmatched channels.
+                return None;
+            }
+
+            Some(ChannelFilter {
+                kinds: merged_kinds,
+                require_mention,
+            })
+        }
+    }
 }
 
 fn rule_applies_to_channel(rule: &SubscriptionRule, channel_id: Uuid) -> bool {

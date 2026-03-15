@@ -21,10 +21,12 @@ use pool::{AgentPool, OwnedAgent, PromptContext, PromptOutcome, PromptResult, Pr
 use queue::{EventQueue, QueuedEvent};
 use relay::HarnessRelay;
 use sprout_core::kind::{
-    KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
+    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
+    KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -64,6 +66,13 @@ async fn main() -> Result<()> {
     .map_err(|e| anyhow::anyhow!("relay connect error: {e}"))?;
 
     tracing::info!("connected to relay at {}", config.relay_url);
+
+    // ── Step 2b: Subscribe to membership notifications ────────────────────────
+    relay
+        .subscribe_membership_notifications()
+        .await
+        .map_err(|e| anyhow::anyhow!("membership notification subscribe error: {e}"))?;
+    tracing::info!("subscribed to membership notifications");
 
     // ── Step 3: Discover channels and build subscription rules ────────────────
     let channels = relay
@@ -174,6 +183,12 @@ async fn main() -> Result<()> {
         });
     }
 
+    // Track the newest membership notification timestamp per channel so that
+    // replayed events (returned in DESC order on reconnect) don't override the
+    // correct final state. The first event seen per channel is the newest; any
+    // older duplicate for the same channel is skipped.
+    let mut membership_newest_ts: HashMap<Uuid, u64> = HashMap::new();
+
     // ── Step 8: Main orchestration loop ──────────────────────────────────────
     //
     // Branches 1 & 2 both need to borrow `pool`, but they access different
@@ -202,6 +217,55 @@ async fn main() -> Result<()> {
                     let _ = result_rx; // end split borrow before relay handling
                     match sprout_event {
                         Some(sprout_event) => {
+                            let kind_u32 = sprout_event.event.kind.as_u16() as u32;
+
+                            // ── Membership notification handling ──────────────
+                            if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION
+                                || kind_u32 == KIND_MEMBER_REMOVED_NOTIFICATION
+                            {
+                                let ch = sprout_event.channel_id;
+                                let ts = sprout_event.event.created_at.as_u64();
+
+                                // Skip stale membership events: on reconnect the relay
+                                // replays events newest-first, so the first event per
+                                // channel is authoritative. Any later (older) event for
+                                // the same channel is outdated and must be ignored.
+                                let dominated = membership_newest_ts
+                                    .get(&ch)
+                                    .is_some_and(|&newest| ts < newest);
+                                if dominated {
+                                    tracing::debug!(
+                                        channel_id = %ch,
+                                        kind = kind_u32,
+                                        ts,
+                                        "skipping stale membership notification (newer already processed)"
+                                    );
+                                    continue;
+                                }
+                                membership_newest_ts
+                                    .entry(ch)
+                                    .and_modify(|v| *v = (*v).max(ts))
+                                    .or_insert(ts);
+
+                                if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION {
+                                    if let Some(filter) = config::resolve_dynamic_channel_filter(&config, ch, &rules) {
+                                        tracing::info!(channel_id = %ch, "membership notification: subscribing to new channel");
+                                        if let Err(e) = relay.subscribe_channel(ch, filter).await {
+                                            tracing::warn!("failed to subscribe to new channel {ch}: {e}");
+                                        }
+                                    } else {
+                                        tracing::debug!(channel_id = %ch, "membership notification: no matching rules — skipping");
+                                    }
+                                } else {
+                                    tracing::info!(channel_id = %ch, "membership notification: unsubscribing from channel");
+                                    if let Err(e) = relay.unsubscribe_channel(ch).await {
+                                        tracing::warn!("failed to unsubscribe from channel {ch}: {e}");
+                                    }
+                                }
+                                continue;
+                            }
+                            // ── End membership notification handling ──────────
+
                             if config.ignore_self && sprout_event.event.pubkey.to_hex() == pubkey_hex {
                                 tracing::debug!(channel_id = %sprout_event.channel_id, "dropping self-authored event");
                                 continue;

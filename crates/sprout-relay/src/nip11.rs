@@ -61,7 +61,7 @@ impl RelayInfo {
             version: env!("CARGO_PKG_VERSION").to_string(),
             limitation: Some(RelayLimitation {
                 max_message_length: Some(MAX_FRAME_BYTES as u64),
-                max_subscriptions: Some(100),
+                max_subscriptions: Some(1024),
                 max_filters: Some(10),
                 max_limit: Some(500),
                 max_subid_length: Some(256),

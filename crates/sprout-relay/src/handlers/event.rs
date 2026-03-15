@@ -10,7 +10,8 @@ use sprout_audit::{AuditAction, NewAuditEntry};
 use sprout_core::event::StoredEvent;
 use sprout_core::kind::{
     event_kind_u32, is_ephemeral, is_workflow_execution_kind, KIND_AUTH, KIND_CANVAS,
-    KIND_DELETION, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE,
+    KIND_DELETION, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
+    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_PRESENCE_UPDATE,
     KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
     KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
     KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
@@ -183,6 +184,16 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
             &event_id_hex,
             false,
             "invalid: AUTH events cannot be submitted",
+        ));
+        return;
+    }
+
+    // Membership notification events are relay-signed only — reject client submissions.
+    if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION || kind_u32 == KIND_MEMBER_REMOVED_NOTIFICATION {
+        conn.send(RelayMessage::ok(
+            &event_id_hex,
+            false,
+            "invalid: membership notifications are relay-signed only",
         ));
         return;
     }

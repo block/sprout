@@ -160,6 +160,17 @@ pub async fn create_channel(
     {
         tracing::warn!(channel_id = %channel.id, error = %e, "NIP-29 discovery emission failed");
     }
+    if let Err(e) = crate::handlers::side_effects::emit_membership_notification(
+        &state,
+        channel.id,
+        &pubkey_bytes,
+        &pubkey_bytes,
+        sprout_core::kind::KIND_MEMBER_ADDED_NOTIFICATION,
+    )
+    .await
+    {
+        tracing::warn!("membership notification for channel creator failed: {e}");
+    }
 
     Ok((
         StatusCode::CREATED,

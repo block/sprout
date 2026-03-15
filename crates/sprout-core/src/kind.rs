@@ -132,6 +132,14 @@ pub const KIND_SUBSCRIPTION_PAUSED: u32 = 44003;
 /// A paused subscription was resumed.
 pub const KIND_SUBSCRIPTION_RESUMED: u32 = 44004;
 
+/// Relay-signed notification: the target pubkey was added to a channel.
+/// Stored globally (channel_id = None) with p-tag = target, h-tag = channel UUID.
+pub const KIND_MEMBER_ADDED_NOTIFICATION: u32 = 44100;
+
+/// Relay-signed notification: the target pubkey was removed from a channel.
+/// Stored globally (channel_id = None) with p-tag = target, h-tag = channel UUID.
+pub const KIND_MEMBER_REMOVED_NOTIFICATION: u32 = 44101;
+
 // Forum / social (45000–45999)
 // V1 used addressable range (30001–30003) — wrong.
 /// A forum post (thread root).
@@ -247,6 +255,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_SUBSCRIPTION_MATCHED,
     KIND_SUBSCRIPTION_PAUSED,
     KIND_SUBSCRIPTION_RESUMED,
+    KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_FORUM_POST,
     KIND_FORUM_VOTE,
     KIND_FORUM_COMMENT,

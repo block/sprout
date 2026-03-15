@@ -1170,3 +1170,577 @@ async fn test_nip29_standard_client_flow() {
 
     client.disconnect().await.expect("clean disconnect");
 }
+
+/// Client-submitted kind:44100 (member-added notification) must be rejected.
+/// Only the relay keypair may sign these events.
+#[tokio::test]
+#[ignore]
+async fn test_membership_notification_kind_rejected() {
+    let url = relay_url();
+    let keys = Keys::generate();
+    let channel_id = create_test_channel(&keys).await;
+
+    let mut client = SproutTestClient::connect(&url, &keys)
+        .await
+        .expect("connect");
+
+    let p_tag = Tag::parse(&["p", &keys.public_key().to_hex()]).expect("p tag");
+    let h_tag = Tag::parse(&["h", &channel_id]).expect("h tag");
+    let event = EventBuilder::new(Kind::Custom(44100), "", [p_tag, h_tag])
+        .sign_with_keys(&keys)
+        .expect("sign kind:44100");
+
+    let ok = client.send_event(event).await.expect("send");
+
+    assert!(
+        !ok.accepted,
+        "relay must reject client-submitted kind:44100, but accepted it"
+    );
+    let msg_lower = ok.message.to_lowercase();
+    assert!(
+        msg_lower.contains("relay-signed only")
+            || msg_lower.contains("relay signed only")
+            || msg_lower.contains("relay"),
+        "rejection message should mention relay-signed restriction, got: {}",
+        ok.message
+    );
+
+    client.disconnect().await.expect("disconnect");
+}
+
+/// When a member is added via REST, the relay must emit a kind:44100 notification
+/// to any subscriber filtering on `#p` = that member's pubkey.
+#[tokio::test]
+#[ignore]
+async fn test_membership_notification_emitted_on_add() {
+    let url = relay_url();
+
+    let owner_keys = Keys::generate();
+    let agent_keys = Keys::generate();
+    let agent_pubkey_hex = agent_keys.public_key().to_hex();
+
+    // Connect as agent — NIP-42 auth establishes the authenticated pubkey.
+    let mut agent_client = SproutTestClient::connect(&url, &agent_keys)
+        .await
+        .expect("connect as agent");
+
+    // Create a channel owned by owner (not agent).
+    let channel_id = create_test_channel(&owner_keys).await;
+
+    // Subscribe to membership notifications for agent's own pubkey.
+    let sid = sub_id("membership-notif");
+    let filter = Filter::new()
+        .kinds(vec![Kind::Custom(44100), Kind::Custom(44101)])
+        .custom_tag(
+            SingleLetterTag::lowercase(Alphabet::P),
+            [agent_pubkey_hex.as_str()],
+        )
+        .since(nostr::Timestamp::now() - 5u64);
+
+    agent_client
+        .subscribe(&sid, vec![filter])
+        .await
+        .expect("subscribe to membership notifications");
+
+    // Drain EOSE — no historical events expected.
+    agent_client
+        .collect_until_eose(&sid, Duration::from_secs(5))
+        .await
+        .expect("EOSE for membership sub");
+
+    // Add agent to the channel via REST (owner's X-Pubkey header).
+    let http_client = reqwest::Client::new();
+    let resp = http_client
+        .post(format!(
+            "{}/api/channels/{}/members",
+            relay_http_url(),
+            channel_id
+        ))
+        .header("X-Pubkey", &owner_keys.public_key().to_hex())
+        .json(&serde_json::json!({ "pubkeys": [agent_pubkey_hex] }))
+        .send()
+        .await
+        .expect("add member request");
+    assert!(
+        resp.status().is_success(),
+        "add member failed: {}",
+        resp.status()
+    );
+
+    // Wait for the kind:44100 notification.
+    let msg = agent_client
+        .recv_event(Duration::from_secs(5))
+        .await
+        .expect("recv kind:44100 notification");
+
+    match msg {
+        RelayMessage::Event { event, .. } => {
+            assert_eq!(
+                event.kind,
+                Kind::Custom(44100),
+                "expected kind:44100, got {}",
+                event.kind.as_u16()
+            );
+
+            let tags: Vec<Vec<String>> = event
+                .tags
+                .iter()
+                .map(|t| t.as_slice().iter().map(|s| s.to_string()).collect())
+                .collect();
+
+            let has_p = tags
+                .iter()
+                .any(|t| t.len() >= 2 && t[0] == "p" && t[1] == agent_pubkey_hex);
+            assert!(
+                has_p,
+                "kind:44100 missing p tag = agent pubkey. tags: {tags:?}"
+            );
+
+            let has_h = tags
+                .iter()
+                .any(|t| t.len() >= 2 && t[0] == "h" && t[1] == channel_id);
+            assert!(
+                has_h,
+                "kind:44100 missing h tag = channel uuid. tags: {tags:?}"
+            );
+        }
+        other => panic!("expected EVENT kind:44100, got {other:?}"),
+    }
+
+    agent_client.disconnect().await.expect("disconnect");
+}
+
+/// Subscribing to kind:44100/44101 without a `#p` filter must be rejected with CLOSED.
+#[tokio::test]
+#[ignore]
+async fn test_membership_notification_requires_p_filter() {
+    let url = relay_url();
+    let keys = Keys::generate();
+
+    let mut client = SproutTestClient::connect(&url, &keys)
+        .await
+        .expect("connect");
+
+    let sid = sub_id("no-p-filter");
+    let filter = Filter::new().kinds(vec![Kind::Custom(44100), Kind::Custom(44101)]);
+
+    client
+        .subscribe(&sid, vec![filter])
+        .await
+        .expect("send REQ");
+
+    // Drain until we get the CLOSED for our subscription.
+    let msg = loop {
+        let m = client
+            .recv_event(Duration::from_secs(5))
+            .await
+            .expect("recv CLOSED");
+        match &m {
+            RelayMessage::Eose { .. } => continue,
+            RelayMessage::Event { .. } => continue,
+            _ => break m,
+        }
+    };
+
+    match msg {
+        RelayMessage::Closed {
+            subscription_id,
+            message,
+        } => {
+            assert_eq!(
+                subscription_id, sid,
+                "CLOSED for wrong subscription: {subscription_id}"
+            );
+            assert!(
+                message.to_lowercase().contains("restricted"),
+                "expected 'restricted' in CLOSED message, got: {message}"
+            );
+        }
+        other => panic!("expected CLOSED, got {other:?}"),
+    }
+
+    client.disconnect().await.expect("disconnect");
+}
+
+/// A subscription with NO kinds filter and NO #p filter (wildcard) must be rejected with CLOSED
+/// because it can match kind:44100/44101.
+#[tokio::test]
+#[ignore]
+async fn test_membership_notification_wildcard_filter_rejected() {
+    let url = relay_url();
+    let keys = Keys::generate();
+
+    let mut client = SproutTestClient::connect(&url, &keys)
+        .await
+        .expect("connect");
+
+    let sid = sub_id("wildcard-filter");
+    // Empty filter — no kinds, no #p — can match kind:44100/44101.
+    let filter = Filter::new();
+
+    client
+        .subscribe(&sid, vec![filter])
+        .await
+        .expect("send REQ");
+
+    // Drain until we get the CLOSED for our subscription.
+    let msg = loop {
+        let m = client
+            .recv_event(Duration::from_secs(5))
+            .await
+            .expect("recv CLOSED");
+        match &m {
+            RelayMessage::Eose { .. } => continue,
+            RelayMessage::Event { .. } => continue,
+            _ => break m,
+        }
+    };
+
+    match msg {
+        RelayMessage::Closed {
+            subscription_id,
+            message,
+        } => {
+            assert_eq!(
+                subscription_id, sid,
+                "CLOSED for wrong subscription: {subscription_id}"
+            );
+            assert!(
+                message.to_lowercase().contains("restricted"),
+                "expected 'restricted' in CLOSED message, got: {message}"
+            );
+        }
+        other => panic!("expected CLOSED, got {other:?}"),
+    }
+
+    client.disconnect().await.expect("disconnect");
+}
+
+/// Subscribing to kind:44100/44101 with someone else's `#p` must be rejected with CLOSED.
+#[tokio::test]
+#[ignore]
+async fn test_membership_notification_requires_own_p_filter() {
+    let url = relay_url();
+
+    let keys_a = Keys::generate();
+    let keys_b = Keys::generate();
+    let keys_b_pubkey_hex = keys_b.public_key().to_hex();
+
+    // Connect as keys_a.
+    let mut client = SproutTestClient::connect(&url, &keys_a)
+        .await
+        .expect("connect as keys_a");
+
+    let sid = sub_id("wrong-p-filter");
+    // Filter uses keys_b's pubkey — not the authenticated pubkey (keys_a).
+    let filter = Filter::new()
+        .kinds(vec![Kind::Custom(44100), Kind::Custom(44101)])
+        .custom_tag(
+            SingleLetterTag::lowercase(Alphabet::P),
+            [keys_b_pubkey_hex.as_str()],
+        );
+
+    client
+        .subscribe(&sid, vec![filter])
+        .await
+        .expect("send REQ");
+
+    // Drain until we get the CLOSED for our subscription.
+    let msg = loop {
+        let m = client
+            .recv_event(Duration::from_secs(5))
+            .await
+            .expect("recv CLOSED");
+        match &m {
+            RelayMessage::Eose { .. } => continue,
+            RelayMessage::Event { .. } => continue,
+            _ => break m,
+        }
+    };
+
+    match msg {
+        RelayMessage::Closed {
+            subscription_id,
+            message,
+        } => {
+            assert_eq!(
+                subscription_id, sid,
+                "CLOSED for wrong subscription: {subscription_id}"
+            );
+            assert!(
+                message.to_lowercase().contains("restricted"),
+                "expected 'restricted' in CLOSED message, got: {message}"
+            );
+        }
+        other => panic!("expected CLOSED, got {other:?}"),
+    }
+
+    client.disconnect().await.expect("disconnect");
+}
+
+/// When a member is removed via REST, the relay must emit a kind:44101 notification
+/// to any subscriber filtering on `#p` = that member's pubkey.
+#[tokio::test]
+#[ignore]
+async fn test_membership_notification_emitted_on_remove() {
+    let url = relay_url();
+
+    let owner_keys = Keys::generate();
+    let agent_keys = Keys::generate();
+    let agent_pubkey_hex = agent_keys.public_key().to_hex();
+
+    // Connect as agent — NIP-42 auth establishes the authenticated pubkey.
+    let mut agent_client = SproutTestClient::connect(&url, &agent_keys)
+        .await
+        .expect("connect as agent");
+
+    // Create a channel owned by owner (not agent).
+    let channel_id = create_test_channel(&owner_keys).await;
+
+    // Subscribe to membership notifications for agent's own pubkey.
+    let sid = sub_id("membership-remove-notif");
+    let filter = Filter::new()
+        .kinds(vec![Kind::Custom(44100), Kind::Custom(44101)])
+        .custom_tag(
+            SingleLetterTag::lowercase(Alphabet::P),
+            [agent_pubkey_hex.as_str()],
+        )
+        .since(nostr::Timestamp::now() - 5u64);
+
+    agent_client
+        .subscribe(&sid, vec![filter])
+        .await
+        .expect("subscribe to membership notifications");
+
+    // Drain EOSE — no historical events expected.
+    agent_client
+        .collect_until_eose(&sid, Duration::from_secs(5))
+        .await
+        .expect("EOSE for membership sub");
+
+    let http_client = reqwest::Client::new();
+    let owner_pubkey_hex = owner_keys.public_key().to_hex();
+
+    // Add agent to the channel via REST (owner's X-Pubkey header).
+    let resp = http_client
+        .post(format!(
+            "{}/api/channels/{}/members",
+            relay_http_url(),
+            channel_id
+        ))
+        .header("X-Pubkey", &owner_pubkey_hex)
+        .json(&serde_json::json!({ "pubkeys": [agent_pubkey_hex] }))
+        .send()
+        .await
+        .expect("add member request");
+    assert!(
+        resp.status().is_success(),
+        "add member failed: {}",
+        resp.status()
+    );
+
+    // Consume the kind:44100 add notification before waiting for the remove.
+    let add_msg = agent_client
+        .recv_event(Duration::from_secs(5))
+        .await
+        .expect("recv kind:44100 notification");
+    match add_msg {
+        RelayMessage::Event { ref event, .. } => {
+            assert_eq!(
+                event.kind,
+                Kind::Custom(44100),
+                "expected kind:44100 add notification, got {}",
+                event.kind.as_u16()
+            );
+        }
+        other => panic!("expected EVENT kind:44100, got {other:?}"),
+    }
+
+    // Remove agent from the channel via REST DELETE.
+    let resp = http_client
+        .delete(format!(
+            "{}/api/channels/{}/members/{}",
+            relay_http_url(),
+            channel_id,
+            agent_pubkey_hex
+        ))
+        .header("X-Pubkey", &owner_pubkey_hex)
+        .send()
+        .await
+        .expect("remove member request");
+    assert!(
+        resp.status().is_success(),
+        "remove member failed: {}",
+        resp.status()
+    );
+
+    // Wait for the kind:44101 remove notification.
+    let msg = agent_client
+        .recv_event(Duration::from_secs(5))
+        .await
+        .expect("recv kind:44101 notification");
+
+    match msg {
+        RelayMessage::Event { event, .. } => {
+            assert_eq!(
+                event.kind,
+                Kind::Custom(44101),
+                "expected kind:44101, got {}",
+                event.kind.as_u16()
+            );
+
+            let tags: Vec<Vec<String>> = event
+                .tags
+                .iter()
+                .map(|t| t.as_slice().iter().map(|s| s.to_string()).collect())
+                .collect();
+
+            let has_p = tags
+                .iter()
+                .any(|t| t.len() >= 2 && t[0] == "p" && t[1] == agent_pubkey_hex);
+            assert!(
+                has_p,
+                "kind:44101 missing p tag = agent pubkey. tags: {tags:?}"
+            );
+
+            let has_h = tags
+                .iter()
+                .any(|t| t.len() >= 2 && t[0] == "h" && t[1] == channel_id);
+            assert!(
+                has_h,
+                "kind:44101 missing h tag = channel uuid. tags: {tags:?}"
+            );
+        }
+        other => panic!("expected EVENT kind:44101, got {other:?}"),
+    }
+
+    agent_client.disconnect().await.expect("disconnect");
+}
+
+/// Subscribing to kind:44100/44101 with `#p` containing BOTH the client's own pubkey AND
+/// a victim's pubkey must be rejected with CLOSED. All #p values must match the authenticated
+/// pubkey — including the victim's key is not allowed.
+#[tokio::test]
+#[ignore]
+async fn test_membership_notification_multi_p_rejected() {
+    let url = relay_url();
+
+    let keys_a = Keys::generate();
+    let keys_b = Keys::generate();
+    let keys_a_pubkey_hex = keys_a.public_key().to_hex();
+    let keys_b_pubkey_hex = keys_b.public_key().to_hex();
+
+    // Connect as keys_a.
+    let mut client = SproutTestClient::connect(&url, &keys_a)
+        .await
+        .expect("connect as keys_a");
+
+    let sid = sub_id("multi-p-filter");
+    // Filter includes keys_a's own pubkey AND keys_b's (victim) pubkey.
+    // The relay must reject this because not all #p values match the authenticated pubkey.
+    let filter = Filter::new()
+        .kinds(vec![Kind::Custom(44100), Kind::Custom(44101)])
+        .custom_tag(
+            SingleLetterTag::lowercase(Alphabet::P),
+            [keys_a_pubkey_hex.as_str(), keys_b_pubkey_hex.as_str()],
+        );
+
+    client
+        .subscribe(&sid, vec![filter])
+        .await
+        .expect("send REQ");
+
+    // Drain until we get the CLOSED for our subscription.
+    let msg = loop {
+        let m = client
+            .recv_event(Duration::from_secs(5))
+            .await
+            .expect("recv CLOSED");
+        match &m {
+            RelayMessage::Eose { .. } => continue,
+            RelayMessage::Event { .. } => continue,
+            _ => break m,
+        }
+    };
+
+    match msg {
+        RelayMessage::Closed {
+            subscription_id,
+            message,
+        } => {
+            assert_eq!(
+                subscription_id, sid,
+                "CLOSED for wrong subscription: {subscription_id}"
+            );
+            assert!(
+                message.to_lowercase().contains("restricted"),
+                "expected 'restricted' in CLOSED message, got: {message}"
+            );
+        }
+        other => panic!("expected CLOSED, got {other:?}"),
+    }
+
+    client.disconnect().await.expect("disconnect");
+}
+
+/// A mixed-filter subscription where one filter has `#h` + membership kinds and another
+/// filter makes the subscription globally scoped must be rejected with CLOSED.
+/// This prevents bypassing the #p requirement via mixed filters.
+#[tokio::test]
+#[ignore]
+async fn test_membership_notification_mixed_filter_rejected() {
+    let url = relay_url();
+    let keys = Keys::generate();
+    let channel_id = create_test_channel(&keys).await;
+
+    let mut client = SproutTestClient::connect(&url, &keys)
+        .await
+        .expect("connect");
+
+    let sid = sub_id("mixed-filter");
+    // Filter 1: has #h + membership kinds (would skip per-filter #h check)
+    let filter1 = Filter::new().kinds(vec![Kind::Custom(44100)]).custom_tag(
+        SingleLetterTag::lowercase(Alphabet::H),
+        [channel_id.as_str()],
+    );
+    // Filter 2: global filter (no #h) — makes the subscription globally scoped.
+    // No kinds = wildcard, no #p = should trigger rejection.
+    let filter2 = Filter::new().authors(vec![keys.public_key()]);
+
+    client
+        .subscribe(&sid, vec![filter1, filter2])
+        .await
+        .expect("send REQ");
+
+    // Drain until we get the CLOSED for our subscription.
+    let msg = loop {
+        let m = client
+            .recv_event(Duration::from_secs(5))
+            .await
+            .expect("recv CLOSED");
+        match &m {
+            RelayMessage::Eose { .. } => continue,
+            RelayMessage::Event { .. } => continue,
+            _ => break m,
+        }
+    };
+
+    match msg {
+        RelayMessage::Closed {
+            subscription_id,
+            message,
+        } => {
+            assert_eq!(
+                subscription_id, sid,
+                "CLOSED for wrong subscription: {subscription_id}"
+            );
+            assert!(
+                message.to_lowercase().contains("restricted"),
+                "expected 'restricted' in CLOSED message, got: {message}"
+            );
+        }
+        other => panic!("expected CLOSED, got {other:?}"),
+    }
+
+    client.disconnect().await.expect("disconnect");
+}

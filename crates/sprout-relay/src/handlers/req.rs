@@ -5,8 +5,10 @@ use std::sync::Arc;
 
 use tracing::{debug, warn};
 
+use hex;
 use nostr::Filter;
 use sprout_core::filter::filters_match;
+use sprout_core::kind::{KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION};
 use sprout_db::EventQuery;
 
 use sprout_auth::Scope;
@@ -16,7 +18,7 @@ use crate::protocol::RelayMessage;
 use crate::state::AppState;
 
 const MAX_HISTORICAL_LIMIT: i64 = 500;
-const MAX_SUBSCRIPTIONS: usize = 100;
+const MAX_SUBSCRIPTIONS: usize = 1024;
 
 /// Handle a REQ message: register the subscription, deliver historical events, then send EOSE.
 pub async fn handle_req(
@@ -74,6 +76,44 @@ pub async fn handle_req(
     };
 
     let channel_id = extract_channel_id_from_filters(&filters);
+
+    // Enforce #p filter for membership notification subscriptions.
+    //
+    // Only applies to GLOBAL subscriptions (channel_id = None). Channel-scoped
+    // subscriptions can never receive globally-stored membership events — the
+    // fan_out() invariant in subscription.rs prevents it.
+    //
+    // We use the resolved subscription scope (channel_id) rather than per-filter
+    // #h presence to prevent mixed-filter bypass: a client could send
+    // [{#h:..., kinds:[44100]}, {authors:[...]}] which resolves to global scope
+    // but would skip the #p check if we only looked at per-filter #h tags.
+    if channel_id.is_none() {
+        let authed_pubkey_hex = hex::encode(&pubkey_bytes);
+        for filter in &filters {
+            let can_match_membership = filter.kinds.as_ref().is_none_or(|ks| {
+                ks.iter().any(|k| {
+                    let ku = k.as_u16() as u32;
+                    ku == KIND_MEMBER_ADDED_NOTIFICATION || ku == KIND_MEMBER_REMOVED_NOTIFICATION
+                })
+            });
+            if can_match_membership {
+                let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
+                // ALL #p values must match the authenticated pubkey — prevents
+                // a client from sneaking in a victim's pubkey alongside their own
+                // (e.g. #p:[my_key, victim_key]) to receive the victim's notifications.
+                let has_matching_p = filter.generic_tags.get(&p_tag).is_some_and(|values| {
+                    !values.is_empty() && values.iter().all(|v| *v == authed_pubkey_hex)
+                });
+                if !has_matching_p {
+                    conn.send(RelayMessage::closed(
+                        &sub_id,
+                        "restricted: membership notifications require #p matching your pubkey",
+                    ));
+                    return;
+                }
+            }
+        }
+    }
 
     // Check channel access BEFORE registering the subscription.
     // Registering first would allow non-members to receive live fan-out events

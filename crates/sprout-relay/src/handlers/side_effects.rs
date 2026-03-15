@@ -7,8 +7,8 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use sprout_core::kind::{
-    event_kind_u32, KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS, KIND_NIP29_GROUP_METADATA,
-    KIND_REACTION,
+    event_kind_u32, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS, KIND_NIP29_GROUP_METADATA, KIND_REACTION,
 };
 use sprout_db::channel::MemberRole;
 
@@ -324,6 +324,83 @@ pub async fn emit_system_message(
     Ok(())
 }
 
+/// Emit a relay-signed membership notification event stored globally (channel_id = None).
+///
+/// kind:44100 = member added, kind:44101 = member removed.
+/// The p tag addresses the target pubkey; the h tag carries the channel UUID as metadata.
+/// Stored with channel_id = None so global subscribers receive it via slow-path fan-out.
+pub async fn emit_membership_notification(
+    state: &Arc<AppState>,
+    channel_id: Uuid,
+    target_pubkey: &[u8],
+    actor_pubkey: &[u8],
+    notification_kind: u32,
+) -> anyhow::Result<()> {
+    let target_hex = hex::encode(target_pubkey);
+    let actor_hex = hex::encode(actor_pubkey);
+    let channel_id_str = channel_id.to_string();
+
+    let p_tag = Tag::parse(&["p", &target_hex])
+        .map_err(|e| anyhow::anyhow!("failed to build p tag: {e}"))?;
+    let h_tag = Tag::parse(&["h", &channel_id_str])
+        .map_err(|e| anyhow::anyhow!("failed to build h tag: {e}"))?;
+
+    let event_type = match notification_kind {
+        KIND_MEMBER_ADDED_NOTIFICATION => "member_added",
+        KIND_MEMBER_REMOVED_NOTIFICATION => "member_removed",
+        _ => {
+            return Err(anyhow::anyhow!(
+                "invalid notification kind: {notification_kind}"
+            ))
+        }
+    };
+
+    let content = serde_json::json!({
+        "type": event_type,
+        "channel_id": channel_id_str,
+        "actor": actor_hex,
+    })
+    .to_string();
+
+    let event = EventBuilder::new(
+        Kind::Custom(notification_kind as u16),
+        content,
+        [p_tag, h_tag],
+    )
+    .sign_with_keys(&state.relay_keypair)
+    .map_err(|e| anyhow::anyhow!("failed to sign membership notification: {e}"))?;
+
+    // Store with channel_id = None → globally scoped, reachable by global subscribers.
+    let (stored, was_inserted) = state.db.insert_event(&event, None).await?;
+    if !was_inserted {
+        return Ok(());
+    }
+
+    // Fan-out only — skip search indexing and workflow evaluation.
+    let matches = state.sub_registry.fan_out(&stored);
+    if !matches.is_empty() {
+        let event_json = match serde_json::to_string(&stored.event) {
+            Ok(json) => json,
+            Err(e) => {
+                warn!("failed to serialize membership notification for fan-out: {e}");
+                return Ok(());
+            }
+        };
+        for (target_conn_id, sub_id) in &matches {
+            let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
+            state.conn_manager.send_to(*target_conn_id, msg);
+        }
+    }
+
+    info!(
+        channel = %channel_id,
+        target = %target_hex,
+        kind = notification_kind,
+        "membership notification emitted"
+    );
+    Ok(())
+}
+
 /// Sign, store (replacing previous), and fan-out a single addressable discovery event.
 async fn emit_addressable_discovery_event(
     state: &Arc<AppState>,
@@ -538,6 +615,18 @@ async fn handle_put_user(event: &Event, state: &Arc<AppState>) -> anyhow::Result
         warn!(channel = %channel_id, error = %e, "NIP-29 group discovery emission failed");
     }
 
+    if let Err(e) = emit_membership_notification(
+        state,
+        channel_id,
+        &target_pubkey,
+        &actor_bytes,
+        KIND_MEMBER_ADDED_NOTIFICATION,
+    )
+    .await
+    {
+        warn!(channel = %channel_id, error = %e, "membership notification emission failed");
+    }
+
     info!(channel = %channel_id, target = %target_hex, "NIP-29 PUT_USER processed");
     Ok(())
 }
@@ -587,6 +676,18 @@ async fn handle_remove_user(event: &Event, state: &Arc<AppState>) -> anyhow::Res
 
     if let Err(e) = emit_group_discovery_events(state, channel_id).await {
         warn!(channel = %channel_id, error = %e, "NIP-29 group discovery emission failed");
+    }
+
+    if let Err(e) = emit_membership_notification(
+        state,
+        channel_id,
+        &target_pubkey,
+        &actor_bytes,
+        KIND_MEMBER_REMOVED_NOTIFICATION,
+    )
+    .await
+    {
+        warn!(channel = %channel_id, error = %e, "membership notification emission failed");
     }
 
     Ok(())
@@ -783,6 +884,18 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         warn!(channel = %channel.id, error = %e, "NIP-29 group discovery emission failed");
     }
 
+    if let Err(e) = emit_membership_notification(
+        state,
+        channel.id,
+        &actor_bytes,
+        &actor_bytes, // creator is both actor and target
+        KIND_MEMBER_ADDED_NOTIFICATION,
+    )
+    .await
+    {
+        warn!(channel = %channel.id, error = %e, "membership notification emission failed");
+    }
+
     info!(channel_id = %channel.id, name = %name, "NIP-29 CREATE_GROUP processed");
     Ok(())
 }
@@ -862,6 +975,18 @@ async fn handle_leave_request(event: &Event, state: &Arc<AppState>) -> anyhow::R
 
     if let Err(e) = emit_group_discovery_events(state, channel_id).await {
         warn!(channel = %channel_id, error = %e, "NIP-29 group discovery emission failed");
+    }
+
+    if let Err(e) = emit_membership_notification(
+        state,
+        channel_id,
+        &actor_bytes,
+        &actor_bytes, // self-leave: actor == target
+        KIND_MEMBER_REMOVED_NOTIFICATION,
+    )
+    .await
+    {
+        warn!(channel = %channel_id, error = %e, "membership notification emission failed");
     }
 
     Ok(())
