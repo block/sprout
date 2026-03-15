@@ -226,24 +226,7 @@ async fn do_connect(
     // Wait for AUTH challenge (5s timeout).
     let challenge = wait_for_auth_challenge(&mut ws, Duration::from_secs(5)).await?;
 
-    let relay_nostr_url: Url = relay_url
-        .parse()
-        .map_err(|e: url::ParseError| RelayClientError::Url(e.to_string()))?;
-
-    let auth_event = if let Some(token) = api_token {
-        let tags = vec![
-            Tag::parse(&["relay", relay_url])
-                .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
-            Tag::parse(&["challenge", &challenge])
-                .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
-            Tag::parse(&["auth_token", token])
-                .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
-        ];
-        EventBuilder::new(Kind::Authentication, "", tags).sign_with_keys(keys)?
-    } else {
-        EventBuilder::auth(&challenge, relay_nostr_url).sign_with_keys(keys)?
-    };
-
+    let auth_event = build_auth_event(&challenge, relay_url, keys, api_token)?;
     let event_id = auth_event.id.to_hex();
     debug!("sending AUTH event {event_id}");
     let auth_msg = serde_json::to_string(&json!(["AUTH", auth_event]))?;
@@ -312,25 +295,35 @@ async fn wait_for_ok(ws: &mut WsStream, event_id: &str, timeout_dur: Duration) -
     }
 }
 
-/// Connect with exponential backoff. Never returns until successful.
-async fn connect_with_retry(relay_url: &str, keys: &Keys, api_token: Option<&str>) -> WsStream {
-    let mut delay = Duration::from_secs(1);
-    loop {
-        match do_connect(relay_url, keys, api_token).await {
-            Ok(ws) => {
-                tracing::info!("connected to relay at {relay_url}");
-                return ws;
-            }
-            Err(e) => {
-                warn!("connection failed: {e}, retrying in {delay:?}");
-                tokio::time::sleep(delay).await;
-                delay = (delay * 2).min(Duration::from_secs(30));
-            }
-        }
+/// Build a NIP-42 AUTH event for the given challenge.
+fn build_auth_event(
+    challenge: &str,
+    relay_url: &str,
+    keys: &Keys,
+    api_token: Option<&str>,
+) -> Result<Event, RelayClientError> {
+    let relay_nostr_url: Url = relay_url
+        .parse()
+        .map_err(|e: url::ParseError| RelayClientError::Url(e.to_string()))?;
+    if let Some(token) = api_token {
+        let tags = vec![
+            Tag::parse(&["relay", relay_url])
+                .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
+            Tag::parse(&["challenge", challenge])
+                .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
+            Tag::parse(&["auth_token", token])
+                .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
+        ];
+        Ok(EventBuilder::new(Kind::Authentication, "", tags).sign_with_keys(keys)?)
+    } else {
+        Ok(EventBuilder::auth(challenge, relay_nostr_url).sign_with_keys(keys)?)
     }
 }
 
 /// Send a NIP-42 AUTH response for a mid-session challenge.
+///
+/// Fire-and-forget: we don't wait for the relay's OK. If the relay rejects
+/// the re-auth it will close the connection, which triggers our reconnect logic.
 async fn send_auth_response(
     ws: &mut WsStream,
     challenge: &str,
@@ -339,22 +332,7 @@ async fn send_auth_response(
     api_token: Option<&str>,
 ) {
     let result: Result<(), RelayClientError> = async {
-        let relay_nostr_url: Url = relay_url
-            .parse()
-            .map_err(|e: url::ParseError| RelayClientError::Url(e.to_string()))?;
-        let auth_event = if let Some(token) = api_token {
-            let tags = vec![
-                Tag::parse(&["relay", relay_url])
-                    .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
-                Tag::parse(&["challenge", challenge])
-                    .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
-                Tag::parse(&["auth_token", token])
-                    .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
-            ];
-            EventBuilder::new(Kind::Authentication, "", tags).sign_with_keys(keys)?
-        } else {
-            EventBuilder::auth(challenge, relay_nostr_url).sign_with_keys(keys)?
-        };
+        let auth_event = build_auth_event(challenge, relay_url, keys, api_token)?;
         let msg = serde_json::to_string(&json!(["AUTH", auth_event]))?;
         ws.send(Message::Text(msg.into())).await?;
         debug!("sent AUTH response for mid-session challenge");
@@ -403,6 +381,8 @@ async fn handle_ws_message(
                 RelayMessage::Eose { subscription_id } => {
                     if let Some(sub) = state.pending_eose.remove(&subscription_id) {
                         let _ = sub.reply.send(Ok(sub.events));
+                        // One-shot subscription fulfilled — don't replay on reconnect.
+                        state.active_subscriptions.remove(&subscription_id);
                     } else {
                         debug!("EOSE for unknown subscription {subscription_id}");
                     }
@@ -439,40 +419,86 @@ async fn handle_ws_message(
 }
 
 /// Reconnect with backoff, cancel pending ops, then replay subscriptions.
+///
+/// Returns `true` on successful reconnect, `false` if the task should exit
+/// (Shutdown received or command channel closed during backoff).
+///
+/// Processes commands during backoff sleeps so that Shutdown is honoured
+/// promptly and new operations fail fast with `ConnectionClosed`.
 async fn do_reconnect(
     ws: &mut WsStream,
     state: &mut BgState,
+    cmd_rx: &mut mpsc::Receiver<RelayCommand>,
     keys: &Keys,
     relay_url: &str,
     api_token: Option<&str>,
-) {
+) -> bool {
     warn!("relay connection lost — reconnecting…");
     state.cancel_pending();
 
-    let new_ws = connect_with_retry(relay_url, keys, api_token).await;
-    *ws = new_ws;
+    let mut delay = Duration::from_secs(1);
+    loop {
+        match do_connect(relay_url, keys, api_token).await {
+            Ok(new_ws) => {
+                tracing::info!("reconnected to relay at {relay_url}");
+                *ws = new_ws;
 
-    // Replay active subscriptions.
-    let subs: Vec<(String, Vec<Filter>)> = state.active_subscriptions
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    for (sub_id, filters) in subs {
-        let mut msg: Vec<Value> = Vec::with_capacity(2 + filters.len());
-        msg.push(json!("REQ"));
-        msg.push(json!(sub_id));
-        for f in &filters {
-            match serde_json::to_value(f) {
-                Ok(v) => msg.push(v),
-                Err(e) => warn!("failed to serialize filter for {sub_id}: {e}"),
+                // Replay active subscriptions.
+                let subs: Vec<(String, Vec<Filter>)> = state
+                    .active_subscriptions
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                for (sub_id, filters) in subs {
+                    let mut msg: Vec<Value> = Vec::with_capacity(2 + filters.len());
+                    msg.push(json!("REQ"));
+                    msg.push(json!(sub_id));
+                    for f in &filters {
+                        match serde_json::to_value(f) {
+                            Ok(v) => msg.push(v),
+                            Err(e) => warn!("failed to serialize filter for {sub_id}: {e}"),
+                        }
+                    }
+                    let text = match serde_json::to_string(&Value::Array(msg)) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            warn!("failed to serialize REQ for {sub_id}: {e}");
+                            continue;
+                        }
+                    };
+                    if let Err(e) = ws.send(Message::Text(text.into())).await {
+                        warn!("failed to resubscribe to {sub_id}: {e}");
+                    }
+                }
+                return true;
             }
-        }
-        let text = match serde_json::to_string(&Value::Array(msg)) {
-            Ok(t) => t,
-            Err(e) => { warn!("failed to serialize REQ for {sub_id}: {e}"); continue; }
-        };
-        if let Err(e) = ws.send(Message::Text(text.into())).await {
-            warn!("failed to resubscribe to {sub_id}: {e}");
+            Err(e) => {
+                warn!("reconnect failed: {e}, retrying in {delay:?}");
+                // Wait for backoff delay while still processing commands.
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {}
+                    cmd = cmd_rx.recv() => {
+                        match cmd {
+                            Some(RelayCommand::Shutdown) | None => {
+                                debug!("shutdown during reconnect");
+                                state.cancel_pending();
+                                return false;
+                            }
+                            // Fail new operations immediately — we're disconnected.
+                            Some(RelayCommand::SendEvent { reply, .. }) => {
+                                let _ = reply.send(Err(RelayClientError::ConnectionClosed));
+                            }
+                            Some(RelayCommand::Subscribe { reply, .. }) => {
+                                let _ = reply.send(Err(RelayClientError::ConnectionClosed));
+                            }
+                            Some(RelayCommand::CloseSubscription { reply, .. }) => {
+                                let _ = reply.send(Err(RelayClientError::ConnectionClosed));
+                            }
+                        }
+                    }
+                }
+                delay = (delay * 2).min(Duration::from_secs(30));
+            }
         }
     }
 }
@@ -497,22 +523,18 @@ async fn run_background_task(
         tokio::select! {
             // ── Incoming WebSocket message ────────────────────────────────────
             raw = ws.next() => {
-                match raw {
+                let needs_reconnect = match raw {
                     Some(Ok(msg)) => {
-                        let ok = handle_ws_message(
+                        !handle_ws_message(
                             msg, &mut ws, &mut state, &keys, &relay_url, api_token.as_deref(),
-                        ).await;
-                        if !ok {
-                            do_reconnect(&mut ws, &mut state, &keys, &relay_url, api_token.as_deref()).await;
-                        }
+                        ).await
                     }
-                    Some(Err(e)) => {
-                        warn!("WebSocket error: {e}");
-                        do_reconnect(&mut ws, &mut state, &keys, &relay_url, api_token.as_deref()).await;
-                    }
-                    None => {
-                        debug!("WebSocket stream ended");
-                        do_reconnect(&mut ws, &mut state, &keys, &relay_url, api_token.as_deref()).await;
+                    Some(Err(e)) => { warn!("WebSocket error: {e}"); true }
+                    None => { debug!("WebSocket stream ended"); true }
+                };
+                if needs_reconnect {
+                    if !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref()).await {
+                        return; // Shutdown received during reconnect
                     }
                 }
             }
@@ -528,6 +550,9 @@ async fn run_background_task(
                         };
                         if let Err(e) = ws.send(Message::Text(msg.into())).await {
                             let _ = reply.send(Err(RelayClientError::WebSocket(e)));
+                            if !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref()).await {
+                                return;
+                            }
                             continue;
                         }
                         let deadline = tokio::time::Instant::now() + SEND_EVENT_TIMEOUT;
@@ -535,7 +560,6 @@ async fn run_background_task(
                     }
 
                     Some(RelayCommand::Subscribe { sub_id, filters, reply }) => {
-                        // Build and send REQ — serialize all filters first, then send.
                         let mut msg: Vec<Value> = Vec::with_capacity(2 + filters.len());
                         msg.push(json!("REQ"));
                         msg.push(json!(sub_id));
@@ -556,9 +580,11 @@ async fn run_background_task(
                         };
                         if let Err(e) = ws.send(Message::Text(text.into())).await {
                             let _ = reply.send(Err(RelayClientError::WebSocket(e)));
+                            if !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref()).await {
+                                return;
+                            }
                             continue;
                         }
-                        // Track for reconnect replay.
                         state.active_subscriptions.insert(sub_id.clone(), filters);
                         let deadline = tokio::time::Instant::now() + SUBSCRIBE_TIMEOUT;
                         state.pending_eose.insert(sub_id, PendingSubscription {
@@ -570,7 +596,6 @@ async fn run_background_task(
 
                     Some(RelayCommand::CloseSubscription { sub_id, reply }) => {
                         state.active_subscriptions.remove(&sub_id);
-                        // If there's a pending EOSE, cancel it.
                         if let Some(sub) = state.pending_eose.remove(&sub_id) {
                             let _ = sub.reply.send(Err(RelayClientError::ConnectionClosed));
                         }
@@ -601,21 +626,36 @@ async fn run_background_task(
 
 // ── Public client ─────────────────────────────────────────────────────────────
 
+/// Shared handle to the background task. When the last `Arc` clone drops,
+/// the task is signalled to shut down and then aborted as a safety net.
+struct BgTaskHandle {
+    cmd_tx: mpsc::Sender<RelayCommand>,
+    handle: JoinHandle<()>,
+}
+
+impl Drop for BgTaskHandle {
+    fn drop(&mut self) {
+        let _ = self.cmd_tx.try_send(RelayCommand::Shutdown);
+        self.handle.abort();
+    }
+}
+
 /// Clone-able WebSocket client for the Sprout relay.
 ///
 /// Internally, a background tokio task owns the WebSocket connection. All
-/// clones share the same `cmd_tx` channel to that task. The background task:
+/// clones share the same command channel to that task. The background task:
 /// - Responds to Ping frames immediately (prevents relay disconnect)
 /// - Handles mid-session AUTH challenges automatically
 /// - Reconnects with exponential backoff on connection loss
+/// - Processes Shutdown commands even during reconnect backoff
 /// - Replays active subscriptions after reconnect
+///
+/// When the last clone is dropped, the background task is automatically
+/// shut down via [`BgTaskHandle`]'s `Drop` implementation.
 #[derive(Clone)]
 pub struct RelayClient {
-    /// Channel to the background WebSocket task.
-    cmd_tx: mpsc::Sender<RelayCommand>,
-    /// Handle to the background task (kept alive to prevent task cancellation on drop).
-    #[allow(dead_code)]
-    bg_handle: std::sync::Arc<JoinHandle<()>>,
+    /// Shared background task handle — Drop sends Shutdown + abort.
+    bg: std::sync::Arc<BgTaskHandle>,
     keys: Keys,
     /// WebSocket URL of the relay (e.g. "ws://localhost:3000").
     relay_url: String,
@@ -643,13 +683,12 @@ impl RelayClient {
         let bg_relay_url = relay_url.to_string();
         let bg_api_token = api_token.map(|t| t.to_string());
 
-        let bg_handle = tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             run_background_task(ws, cmd_rx, bg_keys, bg_relay_url, bg_api_token).await;
         });
 
         Ok(Self {
-            cmd_tx,
-            bg_handle: std::sync::Arc::new(bg_handle),
+            bg: std::sync::Arc::new(BgTaskHandle { cmd_tx, handle }),
             keys: keys.clone(),
             relay_url: relay_url.to_string(),
             http: reqwest::Client::builder()
@@ -776,7 +815,7 @@ impl RelayClient {
     /// Publish a signed Nostr event to the relay and wait for the `OK` acknowledgement.
     pub async fn send_event(&self, event: Event) -> Result<OkResponse, RelayClientError> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.cmd_tx
+        self.bg.cmd_tx
             .send(RelayCommand::SendEvent { event, reply: reply_tx })
             .await
             .map_err(|_| RelayClientError::ConnectionClosed)?;
@@ -790,7 +829,7 @@ impl RelayClient {
         filters: Vec<Filter>,
     ) -> Result<Vec<Event>, RelayClientError> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.cmd_tx
+        self.bg.cmd_tx
             .send(RelayCommand::Subscribe {
                 sub_id: sub_id.to_string(),
                 filters,
@@ -804,7 +843,7 @@ impl RelayClient {
     /// Send a `CLOSE` message to the relay and remove the subscription from the active set.
     pub async fn close_subscription(&self, sub_id: &str) -> Result<(), RelayClientError> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.cmd_tx
+        self.bg.cmd_tx
             .send(RelayCommand::CloseSubscription {
                 sub_id: sub_id.to_string(),
                 reply: reply_tx,
@@ -814,10 +853,12 @@ impl RelayClient {
         reply_rx.await.map_err(|_| RelayClientError::ConnectionClosed)?
     }
 
-    /// Perform a clean WebSocket close handshake.
+    /// Signal the background task to shut down.
+    ///
+    /// The task will also be aborted when the last `RelayClient` clone is
+    /// dropped, so calling this explicitly is optional but allows a prompt stop.
     pub async fn close(&self) -> Result<(), RelayClientError> {
-        // Signal the background task to shut down.
-        let _ = self.cmd_tx.send(RelayCommand::Shutdown).await;
+        let _ = self.bg.cmd_tx.send(RelayCommand::Shutdown).await;
         Ok(())
     }
 }
@@ -1530,11 +1571,6 @@ mod tests {
                         .await
                         .unwrap();
 
-                        // Signal that the second relay is ready.
-                        if let Some(tx) = ok_tx.lock().await.take() {
-                            let _ = tx.send(());
-                        }
-
                         while let Some(Ok(msg)) = stream.next().await {
                             if let Message::Text(text) = msg {
                                 let arr: Vec<serde_json::Value> =
@@ -1548,6 +1584,10 @@ mod tests {
                                         ))
                                         .await
                                         .unwrap();
+                                        // Signal AFTER auth handshake completes.
+                                        if let Some(tx) = ok_tx.lock().await.take() {
+                                            let _ = tx.send(());
+                                        }
                                     }
                                     Some("EVENT") => {
                                         let event_id =
@@ -1570,14 +1610,11 @@ mod tests {
             let keys = Keys::generate();
             let client = RelayClient::connect(&url, &keys, None).await.unwrap();
 
-            // Wait for the second relay to be ready (background task reconnected).
+            // Wait for the second relay to complete auth (background task reconnected).
             tokio::time::timeout(Duration::from_secs(5), ok_rx)
                 .await
                 .expect("timed out waiting for reconnect")
                 .unwrap();
-
-            // Give the background task a moment to finish the auth handshake.
-            tokio::time::sleep(Duration::from_millis(100)).await;
 
             // send_event should succeed on the new connection.
             let event = EventBuilder::new(Kind::Custom(9), "after-reconnect", [])
@@ -1587,6 +1624,77 @@ mod tests {
             assert!(ok.accepted);
 
             let _ = client.close().await;
+        }
+
+        // ── Test 8: shutdown during reconnect ─────────────────────────────
+
+        #[tokio::test]
+        async fn shutdown_during_reconnect_exits_promptly() {
+            // Connect to a relay that closes immediately after auth,
+            // then never accepts again. The background task will be stuck
+            // in reconnect backoff. Verify that close() + drop causes
+            // the task to exit rather than retrying forever.
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let url = format!("ws://127.0.0.1:{}", port);
+
+            tokio::spawn(async move {
+                // Accept one connection, auth, then close.
+                let (stream, _) = listener.accept().await.unwrap();
+                let ws = accept_async(stream).await.unwrap();
+                let (mut sink, mut stream) = ws.split();
+
+                sink.send(Message::Text(
+                    r#"["AUTH","test-challenge"]"#.to_string().into(),
+                ))
+                .await
+                .unwrap();
+
+                while let Some(Ok(msg)) = stream.next().await {
+                    if let Message::Text(text) = msg {
+                        let arr: Vec<serde_json::Value> =
+                            serde_json::from_str(&text).unwrap_or_default();
+                        if arr.first().and_then(|v| v.as_str()) == Some("AUTH") {
+                            let event_id = arr[1]["id"].as_str().unwrap().to_string();
+                            sink.send(Message::Text(
+                                format!(r#"["OK","{}",true,""]"#, event_id).into(),
+                            ))
+                            .await
+                            .unwrap();
+                            break;
+                        }
+                    }
+                }
+                // Drop — closes connection, triggering reconnect.
+                // Don't accept any more connections — reconnect will fail forever.
+                drop(listener);
+            });
+
+            let keys = Keys::generate();
+            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+
+            // Give the background task a moment to notice the close.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // close() should succeed even though the task is reconnecting.
+            let _ = client.close().await;
+
+            // Drop the client — BgTaskHandle::drop sends Shutdown + abort.
+            // The task should exit promptly rather than retrying forever.
+            let bg = client.bg.clone();
+            drop(client);
+
+            // The Arc should be the last reference now. The task was aborted
+            // by Drop, so it should complete quickly.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            // If the task is still alive after abort, this would be 2
+            // (one in bg, one in our clone). After abort it should be 1.
+            assert_eq!(
+                std::sync::Arc::strong_count(&bg),
+                1,
+                "background task should have been aborted"
+            );
         }
     }
 }
