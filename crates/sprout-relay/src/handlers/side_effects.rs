@@ -348,7 +348,11 @@ pub async fn emit_membership_notification(
     let event_type = match notification_kind {
         KIND_MEMBER_ADDED_NOTIFICATION => "member_added",
         KIND_MEMBER_REMOVED_NOTIFICATION => "member_removed",
-        _ => return Err(anyhow::anyhow!("invalid notification kind: {notification_kind}")),
+        _ => {
+            return Err(anyhow::anyhow!(
+                "invalid notification kind: {notification_kind}"
+            ))
+        }
     };
 
     let content = serde_json::json!({
@@ -375,8 +379,8 @@ pub async fn emit_membership_notification(
     // Fan-out only — skip search indexing and workflow evaluation.
     let matches = state.sub_registry.fan_out(&stored);
     if !matches.is_empty() {
-        let event_json = serde_json::to_string(&stored.event)
-            .expect("event serialization is infallible");
+        let event_json =
+            serde_json::to_string(&stored.event).expect("event serialization is infallible");
         for (target_conn_id, sub_id) in &matches {
             let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
             state.conn_manager.send_to(*target_conn_id, msg);

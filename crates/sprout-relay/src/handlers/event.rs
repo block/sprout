@@ -189,9 +189,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     }
 
     // Membership notification events are relay-signed only — reject client submissions.
-    if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION
-        || kind_u32 == KIND_MEMBER_REMOVED_NOTIFICATION
-    {
+    if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION || kind_u32 == KIND_MEMBER_REMOVED_NOTIFICATION {
         conn.send(RelayMessage::ok(
             &event_id_hex,
             false,

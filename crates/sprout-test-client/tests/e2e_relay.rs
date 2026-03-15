@@ -1291,12 +1291,18 @@ async fn test_membership_notification_emitted_on_add() {
             let has_p = tags
                 .iter()
                 .any(|t| t.len() >= 2 && t[0] == "p" && t[1] == agent_pubkey_hex);
-            assert!(has_p, "kind:44100 missing p tag = agent pubkey. tags: {tags:?}");
+            assert!(
+                has_p,
+                "kind:44100 missing p tag = agent pubkey. tags: {tags:?}"
+            );
 
             let has_h = tags
                 .iter()
                 .any(|t| t.len() >= 2 && t[0] == "h" && t[1] == channel_id);
-            assert!(has_h, "kind:44100 missing h tag = channel uuid. tags: {tags:?}");
+            assert!(
+                has_h,
+                "kind:44100 missing h tag = channel uuid. tags: {tags:?}"
+            );
         }
         other => panic!("expected EVENT kind:44100, got {other:?}"),
     }
@@ -1592,12 +1598,18 @@ async fn test_membership_notification_emitted_on_remove() {
             let has_p = tags
                 .iter()
                 .any(|t| t.len() >= 2 && t[0] == "p" && t[1] == agent_pubkey_hex);
-            assert!(has_p, "kind:44101 missing p tag = agent pubkey. tags: {tags:?}");
+            assert!(
+                has_p,
+                "kind:44101 missing p tag = agent pubkey. tags: {tags:?}"
+            );
 
             let has_h = tags
                 .iter()
                 .any(|t| t.len() >= 2 && t[0] == "h" && t[1] == channel_id);
-            assert!(has_h, "kind:44101 missing h tag = channel uuid. tags: {tags:?}");
+            assert!(
+                has_h,
+                "kind:44101 missing h tag = channel uuid. tags: {tags:?}"
+            );
         }
         other => panic!("expected EVENT kind:44101, got {other:?}"),
     }

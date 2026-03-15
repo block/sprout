@@ -25,8 +25,8 @@ use sprout_core::kind::{
     KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
 use tokio::sync::watch;
-use uuid::Uuid;
 use tracing_subscriber::EnvFilter;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -232,7 +232,7 @@ async fn main() -> Result<()> {
                                 // the same channel is outdated and must be ignored.
                                 let dominated = membership_newest_ts
                                     .get(&ch)
-                                    .map_or(false, |&newest| ts < newest);
+                                    .is_some_and(|&newest| ts < newest);
                                 if dominated {
                                     tracing::debug!(
                                         channel_id = %ch,

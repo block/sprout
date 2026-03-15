@@ -92,24 +92,19 @@ pub async fn handle_req(
                 continue;
             }
 
-            let can_match_membership = filter.kinds.as_ref().map_or(
-                true, // kinds omitted → wildcard, matches everything
-                |ks| {
-                    ks.iter().any(|k| {
-                        let ku = k.as_u16() as u32;
-                        ku == KIND_MEMBER_ADDED_NOTIFICATION
-                            || ku == KIND_MEMBER_REMOVED_NOTIFICATION
-                    })
-                },
-            );
+            let can_match_membership = filter.kinds.as_ref().is_none_or(|ks| {
+                ks.iter().any(|k| {
+                    let ku = k.as_u16() as u32;
+                    ku == KIND_MEMBER_ADDED_NOTIFICATION || ku == KIND_MEMBER_REMOVED_NOTIFICATION
+                })
+            });
             if can_match_membership {
                 let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
                 // ALL #p values must match the authenticated pubkey — prevents
                 // a client from sneaking in a victim's pubkey alongside their own
                 // (e.g. #p:[my_key, victim_key]) to receive the victim's notifications.
-                let has_matching_p = filter.generic_tags.get(&p_tag).map_or(false, |values| {
-                    !values.is_empty()
-                        && values.iter().all(|v| v.to_string() == authed_pubkey_hex)
+                let has_matching_p = filter.generic_tags.get(&p_tag).is_some_and(|values| {
+                    !values.is_empty() && values.iter().all(|v| *v == authed_pubkey_hex)
                 });
                 if !has_matching_p {
                     conn.send(RelayMessage::closed(

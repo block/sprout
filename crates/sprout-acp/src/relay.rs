@@ -562,9 +562,8 @@ async fn handle_ws_message(
                             }
                         };
                         let ts = event.created_at.as_u64();
-                        state.membership_last_seen = Some(
-                            state.membership_last_seen.unwrap_or(0).max(ts)
-                        );
+                        state.membership_last_seen =
+                            Some(state.membership_last_seen.unwrap_or(0).max(ts));
                         let sprout_event = SproutEvent {
                             channel_id: channel_uuid,
                             event: *event,
@@ -804,15 +803,14 @@ async fn send_subscribe(
 }
 
 /// Send a NIP-01 REQ for membership notifications (kind:44100+44101, global, #p=[agent_pubkey]).
-async fn send_membership_subscribe(
-    ws: &mut WsStream,
-    agent_pubkey_hex: &str,
-    since: Option<u64>,
-) {
+async fn send_membership_subscribe(ws: &mut WsStream, agent_pubkey_hex: &str, since: Option<u64>) {
     let mut req_filter = serde_json::Map::new();
     req_filter.insert(
         "kinds".into(),
-        json!([KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION]),
+        json!([
+            KIND_MEMBER_ADDED_NOTIFICATION,
+            KIND_MEMBER_REMOVED_NOTIFICATION
+        ]),
     );
     req_filter.insert("#p".into(), json!([agent_pubkey_hex]));
 
