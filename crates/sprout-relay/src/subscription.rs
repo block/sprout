@@ -139,9 +139,16 @@ impl SubscriptionRegistry {
                 }
             }
         } else {
+            // Global event (channel_id = None) — only deliver to global subscriptions.
+            // Channel-scoped subscriptions are skipped: they target a specific channel
+            // and should not receive global infrastructure events (e.g. membership
+            // notifications) even if tag matching would succeed.
             for conn_entry in self.subs.iter() {
                 let conn_id = *conn_entry.key();
-                for (sub_id, (filters, _)) in conn_entry.value().iter() {
+                for (sub_id, (filters, sub_channel_id)) in conn_entry.value().iter() {
+                    if sub_channel_id.is_some() {
+                        continue; // skip channel-scoped subscriptions
+                    }
                     if filters_match(filters, event) {
                         results.push((conn_id, sub_id.clone()));
                     }
@@ -149,12 +156,12 @@ impl SubscriptionRegistry {
             }
         }
 
-        // NOTE: Global subscriptions (channel_id = None) intentionally do NOT
-        // receive channel-scoped events. Delivering channel events to global subs
-        // would bypass the channel membership check performed in req.rs, leaking
-        // private channel content to unauthorized subscribers. Clients must
-        // subscribe to a specific channel to receive its events — that path goes
-        // through the access-control check that verifies membership.
+        // NOTE: The scoping invariant is symmetric:
+        // - Global subscriptions (channel_id = None) do NOT receive channel-scoped events.
+        // - Channel-scoped subscriptions do NOT receive global events.
+        // This prevents both directions of information leakage: channel content
+        // leaking to global subscribers, and global infrastructure events (like
+        // membership notifications) leaking to channel subscribers.
 
         results
     }

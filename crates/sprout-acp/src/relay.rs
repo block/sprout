@@ -38,6 +38,7 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 use futures_util::{SinkExt, StreamExt};
 use nostr::{Event, EventBuilder, Keys, Kind, Tag, Url as NostrUrl};
 use serde_json::{json, Value};
+use sprout_core::kind::{KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
@@ -122,6 +123,9 @@ enum RelayMessage {
 
 // ── Commands sent from HarnessRelay to the background task ───────────────────
 
+/// Subscription ID for the global membership notification subscription.
+const MEMBERSHIP_NOTIF_SUB_ID: &str = "membership-notif";
+
 /// Commands sent from `HarnessRelay` to the background WebSocket task.
 enum RelayCommand {
     /// Subscribe to a channel (sends a NIP-01 REQ) with the given filter.
@@ -136,6 +140,8 @@ enum RelayCommand {
     Reconnect,
     /// Shut down the background task.
     Shutdown,
+    /// Subscribe to global membership notifications.
+    SubscribeMembership,
 }
 
 // ── WebSocket stream type alias ───────────────────────────────────────────────
@@ -283,6 +289,15 @@ impl HarnessRelay {
         Ok(())
     }
 
+    /// Subscribe to membership notifications for this agent.
+    pub async fn subscribe_membership_notifications(&mut self) -> Result<(), RelayError> {
+        self.cmd_tx
+            .send(RelayCommand::SubscribeMembership)
+            .await
+            .map_err(|_| RelayError::ConnectionClosed)?;
+        Ok(())
+    }
+
     /// Unsubscribe from a channel.
     #[allow(dead_code)]
     pub async fn unsubscribe_channel(&mut self, channel_id: Uuid) -> Result<(), RelayError> {
@@ -335,6 +350,10 @@ struct BgState {
     seen_ids: HashSet<String>,
     /// Per-channel filter used on subscribe (for resubscribe after reconnect).
     active_filters: HashMap<Uuid, ChannelFilter>,
+    /// Last seen timestamp for membership notifications (for reconnect replay).
+    membership_last_seen: Option<u64>,
+    /// Whether the membership notification subscription is active.
+    membership_sub_active: bool,
 }
 
 impl BgState {
@@ -344,6 +363,8 @@ impl BgState {
             last_seen: HashMap::new(),
             seen_ids: HashSet::new(),
             active_filters: HashMap::new(),
+            membership_last_seen: None,
+            membership_sub_active: false,
         }
     }
 
@@ -475,6 +496,10 @@ async fn run_background_task(
                             debug!("unsubscribed from channel {channel_id}");
                         }
                     }
+                    Some(RelayCommand::SubscribeMembership) => {
+                        send_membership_subscribe(&mut ws, &agent_pubkey_hex, None).await;
+                        state.membership_sub_active = true;
+                    }
                     Some(RelayCommand::Reconnect) => {
                         // Reconnect command already consumed — skip the drain loop.
                         wait_for_reconnect(
@@ -527,7 +552,31 @@ async fn handle_ws_message(
                     subscription_id,
                     event,
                 } => {
-                    if let Some(channel_id) = channel_id_from_sub_id(&subscription_id) {
+                    if subscription_id == MEMBERSHIP_NOTIF_SUB_ID {
+                        // Membership notification — extract channel UUID from h tag.
+                        let channel_uuid = match extract_h_tag_uuid(&event) {
+                            Some(uuid) => uuid,
+                            None => {
+                                warn!("membership notification missing h tag — dropping");
+                                return true;
+                            }
+                        };
+                        let ts = event.created_at.as_u64();
+                        state.membership_last_seen = Some(
+                            state.membership_last_seen.unwrap_or(0).max(ts)
+                        );
+                        let sprout_event = SproutEvent {
+                            channel_id: channel_uuid,
+                            event: *event,
+                        };
+                        match event_tx.try_send(Some(sprout_event)) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                warn!("event channel full — dropping membership notification");
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => return false,
+                        }
+                    } else if let Some(channel_id) = channel_id_from_sub_id(&subscription_id) {
                         if state.record_event(channel_id, &event) {
                             let sprout_event = SproutEvent {
                                 channel_id,
@@ -635,6 +684,9 @@ async fn wait_for_reconnect(
                     state.active_subscriptions.remove(&channel_id);
                     state.active_filters.remove(&channel_id);
                 }
+                Some(RelayCommand::SubscribeMembership) => {
+                    state.membership_sub_active = true;
+                }
             }
         }
     }
@@ -663,6 +715,12 @@ async fn wait_for_reconnect(
                         send_subscribe(ws, state, channel_id, agent_pubkey_hex, since, &filter)
                             .await;
                     }
+                }
+
+                // Resubscribe to membership notifications if active.
+                if state.membership_sub_active {
+                    send_membership_subscribe(ws, agent_pubkey_hex, state.membership_last_seen)
+                        .await;
                 }
 
                 return;
@@ -743,6 +801,53 @@ async fn send_subscribe(
             warn!("failed to serialize REQ for channel {channel_id}: {e}");
         }
     }
+}
+
+/// Send a NIP-01 REQ for membership notifications (kind:44100+44101, global, #p=[agent_pubkey]).
+async fn send_membership_subscribe(
+    ws: &mut WsStream,
+    agent_pubkey_hex: &str,
+    since: Option<u64>,
+) {
+    let mut req_filter = serde_json::Map::new();
+    req_filter.insert(
+        "kinds".into(),
+        json!([KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION]),
+    );
+    req_filter.insert("#p".into(), json!([agent_pubkey_hex]));
+
+    let since_ts = match since {
+        Some(ts) => ts.saturating_sub(SINCE_SKEW_SECS),
+        None => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+    req_filter.insert("since".into(), json!(since_ts));
+
+    let req = json!(["REQ", MEMBERSHIP_NOTIF_SUB_ID, Value::Object(req_filter)]);
+    match serde_json::to_string(&req) {
+        Ok(text) => {
+            if let Err(e) = ws.send(Message::Text(text.into())).await {
+                warn!("failed to send membership notification REQ: {e}");
+            } else {
+                debug!("subscribed to membership notifications (since={since_ts})");
+            }
+        }
+        Err(e) => warn!("failed to serialize membership notification REQ: {e}"),
+    }
+}
+
+/// Extract a channel UUID from the h tag of a Nostr event.
+fn extract_h_tag_uuid(event: &nostr::Event) -> Option<Uuid> {
+    event.tags.iter().find_map(|tag| {
+        let tag_vec = tag.as_slice();
+        if tag_vec.len() >= 2 && tag_vec[0] == "h" {
+            tag_vec[1].parse::<Uuid>().ok()
+        } else {
+            None
+        }
+    })
 }
 
 /// Build and send a NIP-42 AUTH response event.

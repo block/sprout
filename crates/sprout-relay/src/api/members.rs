@@ -21,8 +21,10 @@ use serde::Deserialize;
 use sprout_db::channel::MemberRole;
 use uuid::Uuid;
 
+use crate::handlers::side_effects::emit_membership_notification;
 use crate::handlers::side_effects::emit_system_message;
 use crate::state::AppState;
+use sprout_core::kind::{KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION};
 
 use super::{
     api_error, check_channel_access, check_token_channel_access, extract_auth_context, forbidden,
@@ -143,6 +145,17 @@ pub async fn add_members(
                     {
                         tracing::warn!("Failed to emit system message: {e}");
                     }
+                    if let Err(e) = emit_membership_notification(
+                        &state,
+                        channel_id,
+                        &pubkey_bytes,
+                        &actor_bytes,
+                        KIND_MEMBER_ADDED_NOTIFICATION,
+                    )
+                    .await
+                    {
+                        tracing::warn!("membership notification failed: {e}");
+                    }
                     added.push(hex_pk.clone());
                 }
                 Err(e) => {
@@ -223,6 +236,17 @@ pub async fn add_members(
                 .await
                 {
                     tracing::warn!("Failed to emit system message: {e}");
+                }
+                if let Err(e) = emit_membership_notification(
+                    &state,
+                    channel_id,
+                    &pubkey_bytes,
+                    &actor_bytes,
+                    KIND_MEMBER_ADDED_NOTIFICATION,
+                )
+                .await
+                {
+                    tracing::warn!("membership notification failed: {e}");
                 }
                 added.push(hex_pk.clone());
             }
@@ -328,6 +352,17 @@ pub async fn remove_member(
     .await
     {
         tracing::warn!("Failed to emit system message: {e}");
+    }
+    if let Err(e) = emit_membership_notification(
+        &state,
+        channel_id,
+        &target_bytes,
+        &actor_bytes,
+        KIND_MEMBER_REMOVED_NOTIFICATION,
+    )
+    .await
+    {
+        tracing::warn!("membership notification failed: {e}");
     }
 
     Ok(Json(serde_json::json!({ "removed": true })))
@@ -452,6 +487,17 @@ pub async fn join_channel(
     {
         tracing::warn!("Failed to emit system message: {e}");
     }
+    if let Err(e) = emit_membership_notification(
+        &state,
+        channel_id,
+        &pubkey_bytes,
+        &pubkey_bytes,
+        KIND_MEMBER_ADDED_NOTIFICATION,
+    )
+    .await
+    {
+        tracing::warn!("membership notification failed: {e}");
+    }
 
     Ok(Json(serde_json::json!({
         "joined": true,
@@ -521,6 +567,17 @@ pub async fn leave_channel(
     .await
     {
         tracing::warn!("Failed to emit system message: {e}");
+    }
+    if let Err(e) = emit_membership_notification(
+        &state,
+        channel_id,
+        &pubkey_bytes,
+        &pubkey_bytes,
+        KIND_MEMBER_REMOVED_NOTIFICATION,
+    )
+    .await
+    {
+        tracing::warn!("membership notification failed: {e}");
     }
 
     Ok(Json(serde_json::json!({ "left": true })))
