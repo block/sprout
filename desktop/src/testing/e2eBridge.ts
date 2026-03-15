@@ -2332,19 +2332,11 @@ async function handleSendChannelMessage(
       kind: 9,
       tags: (() => {
         const authorPubkey = getMockMemberPubkey(config);
-        const baseTags: string[][] =
-          rootEventId === args.parentEventId
-            ? [
-                ["p", authorPubkey],
-                ["h", args.channelId],
-                ["e", rootEventId, "", "reply"],
-              ]
-            : [
-                ["p", authorPubkey],
-                ["h", args.channelId],
-                ["e", rootEventId, "", "root"],
-                ["e", args.parentEventId, "", "reply"],
-              ];
+        // Match production tag ordering: author p, h, mention ps, then e-tags.
+        const tags: string[][] = [
+          ["p", authorPubkey],
+          ["h", args.channelId],
+        ];
         // Best-effort client-side normalization (relay is authoritative).
         const selfLower = authorPubkey.toLowerCase();
         const seen = new Set<string>([selfLower]);
@@ -2352,10 +2344,17 @@ async function handleSendChannelMessage(
           const lower = pk.toLowerCase();
           if (!seen.has(lower)) {
             seen.add(lower);
-            baseTags.push(["p", lower]);
+            tags.push(["p", lower]);
           }
         }
-        return baseTags;
+        // Thread e-tags come after mention p-tags.
+        if (rootEventId === args.parentEventId) {
+          tags.push(["e", rootEventId, "", "reply"]);
+        } else {
+          tags.push(["e", rootEventId, "", "root"]);
+          tags.push(["e", args.parentEventId, "", "reply"]);
+        }
+        return tags;
       })(),
       content: args.content.trim(),
       sig: "mocksig".repeat(20).slice(0, 128),

@@ -400,22 +400,13 @@ const MAX_MENTION_PUBKEYS: usize = 50;
 /// - Lowercases each entry (Nostr pubkeys are lowercase hex by convention).
 /// - Validates each is a 64-char hex string (32-byte pubkey).
 /// - Deduplicates (including against `self_pubkey_hex`).
-/// - Rejects arrays exceeding [`MAX_MENTION_PUBKEYS`].
+/// - Rejects results exceeding [`MAX_MENTION_PUBKEYS`] **after** normalization.
 ///
 /// Returns the deduplicated, canonical pubkeys (excluding self).
 fn normalize_mention_pubkeys(
     raw: &[String],
     self_pubkey_hex: &str,
 ) -> Result<Vec<String>, (StatusCode, axum::Json<serde_json::Value>)> {
-    if raw.len() > MAX_MENTION_PUBKEYS {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            &format!(
-                "mention_pubkeys exceeds maximum of {MAX_MENTION_PUBKEYS} (got {})",
-                raw.len()
-            ),
-        ));
-    }
     let mut seen = std::collections::HashSet::new();
     seen.insert(self_pubkey_hex.to_ascii_lowercase());
     let mut result = Vec::new();
@@ -430,6 +421,15 @@ fn normalize_mention_pubkeys(
         if seen.insert(canonical.clone()) {
             result.push(canonical);
         }
+    }
+    if result.len() > MAX_MENTION_PUBKEYS {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                "mention_pubkeys exceeds maximum of {MAX_MENTION_PUBKEYS} after deduplication (got {})",
+                result.len()
+            ),
+        ));
     }
     Ok(result)
 }
@@ -1348,6 +1348,20 @@ mod tests {
         let input: Vec<String> = (1..=MAX_MENTION_PUBKEYS)
             .map(|i| format!("{:064x}", i))
             .collect();
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result.len(), MAX_MENTION_PUBKEYS);
+    }
+
+    #[test]
+    fn normalize_over_cap_raw_but_under_after_dedupe() {
+        // 51 raw entries: 50 unique pubkeys + 1 duplicate + self-mention.
+        // After dedupe and self-skip the result should be exactly 50.
+        let mut input: Vec<String> = (1..=MAX_MENTION_PUBKEYS)
+            .map(|i| format!("{:064x}", i))
+            .collect();
+        input.push(SELF_PK.to_string()); // self-mention → skipped
+        input.push(format!("{:064x}", 1)); // duplicate → collapsed
+        assert!(input.len() > MAX_MENTION_PUBKEYS);
         let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
         assert_eq!(result.len(), MAX_MENTION_PUBKEYS);
     }
