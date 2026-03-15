@@ -403,12 +403,14 @@ impl Db {
     ///
     /// If `visibility_filter` is `Some("open")` or `Some("private")`, only channels
     /// with that visibility are returned.
+    /// If `member_only` is `Some(true)`, only channels the user is a member of are returned.
     pub async fn get_accessible_channels(
         &self,
         pubkey: &[u8],
         visibility_filter: Option<&str>,
+        member_only: Option<bool>,
     ) -> Result<Vec<channel::AccessibleChannel>> {
-        channel::get_accessible_channels(&self.pool, pubkey, visibility_filter).await
+        channel::get_accessible_channels(&self.pool, pubkey, visibility_filter, member_only).await
     }
 
     /// Returns all bot-role members with aggregated channel names.

@@ -707,8 +707,20 @@ pub async fn get_accessible_channels(
     pool: &MySqlPool,
     pubkey: &[u8],
     visibility_filter: Option<&str>,
+    member_only: Option<bool>,
 ) -> Result<Vec<AccessibleChannel>> {
-    let base = r#"
+    // When `member_only` is `Some(true)`, restrict to channels where the user
+    // has an active membership (cm.channel_id IS NOT NULL). This is a strict
+    // subset of the default result set and is pushed into SQL so the LIMIT 1000
+    // applies to the filtered set, not the pre-filter set.
+    let membership_clause = if member_only == Some(true) {
+        "AND cm.channel_id IS NOT NULL"
+    } else {
+        "AND (c.visibility = 'open' OR cm.channel_id IS NOT NULL)"
+    };
+
+    let base = format!(
+        r#"
         SELECT DISTINCT c.id, c.name, c.channel_type, c.visibility, c.description, c.canvas,
                c.created_by, c.created_at, c.updated_at, c.archived_at, c.deleted_at,
                c.nip29_group_id, c.topic_required, c.max_members,
@@ -719,8 +731,9 @@ pub async fn get_accessible_channels(
         LEFT JOIN channel_members cm
             ON c.id = cm.channel_id AND cm.pubkey = ? AND cm.removed_at IS NULL
         WHERE c.deleted_at IS NULL
-          AND (c.visibility = 'open' OR cm.channel_id IS NOT NULL)
-    "#;
+          {membership_clause}
+    "#
+    );
 
     let sql = if visibility_filter.is_some() {
         format!("{base}  AND c.visibility = ?\n        ORDER BY FIELD(c.channel_type, 'stream', 'forum', 'dm'), c.name\n        LIMIT 1000")

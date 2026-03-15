@@ -37,11 +37,27 @@
 //! `SPROUT_API_TOKEN` is set the token is embedded in the auth event tags so the relay can
 //! verify the agent's API permissions.
 //!
-//! ## WebSocket Reconnection
+//! ## WebSocket Connection Management
 //!
-//! [`relay_client::RelayClient`] supports automatic reconnection with exponential backoff
-//! (1 s → 2 s → 4 s → … → 30 s cap). After reconnecting it re-authenticates via NIP-42 and
-//! resubmits all subscriptions that were active at the time of the disconnect.
+//! [`relay_client::RelayClient`] uses a background tokio task that owns the WebSocket
+//! connection. The background task:
+//!
+//! - Responds to Ping frames immediately — preventing relay disconnects during long LLM turns
+//! - Handles mid-session NIP-42 AUTH challenges automatically
+//! - Reconnects with exponential backoff (1 s → 2 s → 4 s → … → 30 s cap) on any
+//!   connection loss, without any action required from the caller
+//! - Re-authenticates via NIP-42 after each reconnect
+//! - Replays all active subscriptions after reconnect
+//!
+//! ```text
+//! RelayClient (Clone)
+//!   ├── cmd_tx: mpsc::Sender<RelayCommand>   ← send_event / subscribe / close
+//!   └── bg_handle: JoinHandle<()>
+//!         └── run_background_task()
+//!               ├── ws.next()  → handle_ws_message()   // Ping→Pong, AUTH→respond, OK→resolve
+//!               ├── cmd_rx     → handle_command()       // SendEvent, Subscribe, Close
+//!               └── tick       → expire_timed_out()     // 10s timeouts
+//! ```
 //!
 //! ## Available Tools
 //!

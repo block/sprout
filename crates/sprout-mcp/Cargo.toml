@@ -41,3 +41,7 @@ tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 url = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite = { workspace = true }
