@@ -78,20 +78,18 @@ pub async fn handle_req(
     let channel_id = extract_channel_id_from_filters(&filters);
 
     // Enforce #p filter for membership notification subscriptions.
-    // Only applies to GLOBAL filters (no #h tag). Channel-scoped filters (with #h)
-    // can never receive globally-stored membership events — the fan_out() security
-    // invariant in subscription.rs prevents channel-scoped events from reaching
-    // global subscribers and vice versa.
-    {
+    //
+    // Only applies to GLOBAL subscriptions (channel_id = None). Channel-scoped
+    // subscriptions can never receive globally-stored membership events — the
+    // fan_out() invariant in subscription.rs prevents it.
+    //
+    // We use the resolved subscription scope (channel_id) rather than per-filter
+    // #h presence to prevent mixed-filter bypass: a client could send
+    // [{#h:..., kinds:[44100]}, {authors:[...]}] which resolves to global scope
+    // but would skip the #p check if we only looked at per-filter #h tags.
+    if channel_id.is_none() {
         let authed_pubkey_hex = hex::encode(&pubkey_bytes);
-        let h_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::H);
         for filter in &filters {
-            // Skip channel-scoped filters — they can't match global events.
-            let is_channel_scoped = filter.generic_tags.contains_key(&h_tag);
-            if is_channel_scoped {
-                continue;
-            }
-
             let can_match_membership = filter.kinds.as_ref().is_none_or(|ks| {
                 ks.iter().any(|k| {
                     let ku = k.as_u16() as u32;
