@@ -72,6 +72,7 @@ function createOptimisticMessage(
         identity.pubkey,
         parentEventId,
         resolveReplyRootId(parentEventId, currentMessages),
+        mentionPubkeys,
       ),
     );
   } else {
@@ -240,6 +241,7 @@ export function useSendMessageMutation(
           channel.id,
           content,
           parentEventId,
+          mentionPubkeys,
         );
 
         return {
@@ -252,6 +254,7 @@ export function useSendMessageMutation(
             identity.pubkey,
             parentEventId,
             resolveReplyRootId(parentEventId, cachedMessages),
+            mentionPubkeys,
           ),
           content: content.trim(),
           sig: "",

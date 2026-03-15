@@ -42,16 +42,47 @@ export function getThreadReference(tags: string[][]): ThreadReference {
   };
 }
 
+/**
+ * Best-effort client-side normalization of mention pubkeys: lowercase, deduplicate, skip self.
+ * The relay performs authoritative validation (hex format, 64-char length, cap of 50)
+ * on top of the same normalization — this helper keeps optimistic UI tags consistent.
+ */
+export function normalizeMentionPubkeys(
+  mentionPubkeys: string[],
+  selfPubkey: string,
+): string[] {
+  const selfLower = selfPubkey.toLowerCase();
+  const seen = new Set<string>([selfLower]);
+  const result: string[] = [];
+  for (const pk of mentionPubkeys) {
+    const lower = pk.toLowerCase();
+    if (seen.has(lower)) {
+      continue;
+    }
+    seen.add(lower);
+    result.push(lower);
+  }
+  return result;
+}
+
 export function buildReplyTags(
   channelId: string,
   authorPubkey: string,
   parentEventId: string,
   rootEventId: string,
+  mentionPubkeys: string[] = [],
 ) {
   const tags: string[][] = [
     ["p", authorPubkey],
     ["h", channelId],
   ];
+
+  // Add p-tags for mentioned users so mention-filtered subscriptions
+  // (e.g. ACP agent harness) receive the reply event.
+  // Best-effort normalization — relay performs authoritative validation.
+  for (const pubkey of normalizeMentionPubkeys(mentionPubkeys, authorPubkey)) {
+    tags.push(["p", pubkey]);
+  }
 
   if (parentEventId === rootEventId) {
     tags.push(["e", rootEventId, "", "reply"]);

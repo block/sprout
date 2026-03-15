@@ -174,6 +174,8 @@ pub struct SendChannelMessageBody<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_event_id: Option<&'a str>,
     pub broadcast_to_channel: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mention_pubkeys: Vec<&'a str>,
 }
 
 #[derive(Serialize)]

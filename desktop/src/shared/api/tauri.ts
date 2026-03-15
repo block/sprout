@@ -591,6 +591,7 @@ export async function sendChannelMessage(
   channelId: string,
   content: string,
   parentEventId?: string | null,
+  mentionPubkeys?: string[],
 ): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
     "send_channel_message",
@@ -598,6 +599,7 @@ export async function sendChannelMessage(
       channelId,
       content,
       parentEventId,
+      mentionPubkeys: mentionPubkeys ?? [],
     },
   );
 

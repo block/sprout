@@ -103,6 +103,48 @@ fn reactions_to_json(reactions: &[sprout_db::reaction::ReactionSummary]) -> serd
 
 // ── POST /api/channels/:channel_id/messages ───────────────────────────────────
 
+/// Maximum number of mention pubkeys allowed per message.
+const MAX_MENTION_PUBKEYS: usize = 50;
+
+/// Validate, canonicalize, and deduplicate mention pubkeys.
+///
+/// - Lowercases each entry (Nostr pubkeys are lowercase hex by convention).
+/// - Validates each is a 64-char hex string (32-byte pubkey).
+/// - Deduplicates (including against `self_pubkey_hex`).
+/// - Rejects arrays exceeding [`MAX_MENTION_PUBKEYS`].
+///
+/// Returns the deduplicated, canonical pubkeys (excluding self).
+fn normalize_mention_pubkeys(
+    raw: &[String],
+    self_pubkey_hex: &str,
+) -> Result<Vec<String>, (StatusCode, axum::Json<serde_json::Value>)> {
+    if raw.len() > MAX_MENTION_PUBKEYS {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                "mention_pubkeys exceeds maximum of {MAX_MENTION_PUBKEYS} (got {})",
+                raw.len()
+            ),
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(self_pubkey_hex.to_ascii_lowercase());
+    let mut result = Vec::new();
+    for entry in raw {
+        let canonical = entry.to_ascii_lowercase();
+        if canonical.len() != 64 || !canonical.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                &format!("invalid mention_pubkeys entry: {entry}"),
+            ));
+        }
+        if seen.insert(canonical.clone()) {
+            result.push(canonical);
+        }
+    }
+    Ok(result)
+}
+
 /// Build Nostr tags for a kind:40008 diff message.
 ///
 /// Required fields: `diff_repo_url` (must be http/https) and `diff_commit_sha`.
@@ -246,6 +288,10 @@ pub struct SendMessageBody {
     pub broadcast_to_channel: bool,
     /// Nostr kind for this message. Defaults to `KIND_STREAM_MESSAGE` (9).
     pub kind: Option<u32>,
+    /// Hex-encoded pubkeys of users mentioned in this message.
+    /// Each pubkey gets a `p` tag so mention-filtered subscriptions deliver the event.
+    #[serde(default)]
+    pub mention_pubkeys: Vec<String>,
     // Diff metadata fields (only used when kind == KIND_STREAM_MESSAGE_DIFF)
     /// Repository URL for the diff (required for kind:40008; must be http/https).
     pub diff_repo_url: Option<String>,
@@ -408,6 +454,15 @@ pub async fn send_message(
         Tag::parse(&["h", &channel_id.to_string()])
             .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
     ];
+
+    // Mention p-tags — each mentioned pubkey gets a `p` tag so that
+    // mention-filtered subscriptions (e.g. ACP agent harness) receive the event.
+    for mention in normalize_mention_pubkeys(&body.mention_pubkeys, &user_pubkey_hex)? {
+        tags.push(
+            Tag::parse(&["p", &mention])
+                .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        );
+    }
 
     // Thread reply tags (NIP-10 style).
     if let (Some(ref root_bytes), Some(ref parent_bytes)) = (&root_id_bytes, &parent_id_bytes) {
@@ -883,4 +938,106 @@ pub async fn get_thread(
         "total_replies": total_replies,
         "next_cursor":   next_cursor,
     })))
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SELF_PK: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OTHER_PK: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const THIRD_PK: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    #[test]
+    fn normalize_empty_array() {
+        let result = normalize_mention_pubkeys(&[], SELF_PK).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn normalize_single_valid_mention() {
+        let input = vec![OTHER_PK.to_string()];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result, vec![OTHER_PK]);
+    }
+
+    #[test]
+    fn normalize_skips_self_mention() {
+        let input = vec![SELF_PK.to_string()];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn normalize_skips_self_mention_case_insensitive() {
+        let upper_self = SELF_PK.to_uppercase();
+        let input = vec![upper_self];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn normalize_deduplicates() {
+        let input = vec![OTHER_PK.to_string(), OTHER_PK.to_string()];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], OTHER_PK);
+    }
+
+    #[test]
+    fn normalize_deduplicates_mixed_case() {
+        let input = vec![OTHER_PK.to_string(), OTHER_PK.to_uppercase()];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], OTHER_PK);
+    }
+
+    #[test]
+    fn normalize_canonicalizes_to_lowercase() {
+        let input = vec![OTHER_PK.to_uppercase()];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result, vec![OTHER_PK]);
+    }
+
+    #[test]
+    fn normalize_preserves_order() {
+        let input = vec![THIRD_PK.to_string(), OTHER_PK.to_string()];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result, vec![THIRD_PK, OTHER_PK]);
+    }
+
+    #[test]
+    fn normalize_rejects_invalid_hex() {
+        let input = vec!["zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_string()];
+        let err = normalize_mention_pubkeys(&input, SELF_PK);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn normalize_rejects_wrong_length() {
+        let input = vec!["aabb".to_string()];
+        let err = normalize_mention_pubkeys(&input, SELF_PK);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn normalize_rejects_exceeding_cap() {
+        let input: Vec<String> = (0..MAX_MENTION_PUBKEYS + 1)
+            .map(|i| format!("{:064x}", i))
+            .collect();
+        let err = normalize_mention_pubkeys(&input, SELF_PK);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn normalize_accepts_exactly_at_cap() {
+        // Generate MAX_MENTION_PUBKEYS unique pubkeys (none matching SELF_PK).
+        let input: Vec<String> = (1..=MAX_MENTION_PUBKEYS)
+            .map(|i| format!("{:064x}", i))
+            .collect();
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result.len(), MAX_MENTION_PUBKEYS);
+    }
 }

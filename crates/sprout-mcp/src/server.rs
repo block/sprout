@@ -306,6 +306,10 @@ pub struct SendReplyParams {
     /// If true, the reply is also broadcast to the main channel timeline.
     #[serde(default)]
     pub broadcast_to_channel: Option<bool>,
+    /// Hex-encoded pubkeys of users/agents mentioned in this reply.
+    /// Required for @mention notifications to reach mention-filtered subscribers.
+    #[serde(default)]
+    pub mention_pubkeys: Option<Vec<String>>,
 }
 
 /// Parameters for the `get_thread` tool.
@@ -1416,11 +1420,14 @@ impl SproutMcpServer {
             );
         }
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "content": p.content,
             "parent_event_id": p.parent_event_id,
             "broadcast_to_channel": p.broadcast_to_channel.unwrap_or(false),
         });
+        if let Some(ref mentions) = p.mention_pubkeys {
+            body["mention_pubkeys"] = serde_json::json!(mentions);
+        }
         match self
             .client
             .post(&format!("/api/channels/{}/messages", p.channel_id), &body)
