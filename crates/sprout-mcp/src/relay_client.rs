@@ -1122,4 +1122,471 @@ mod tests {
         let result = parse_relay_message(text);
         assert!(result.is_err());
     }
+
+    // ── Integration tests: mini relay ─────────────────────────────────────────
+    //
+    // Each test spins up a lightweight in-process WebSocket server that performs
+    // the NIP-42 handshake, then runs a caller-supplied scenario closure.
+    // The closure receives the split sink+stream so it can drive the test.
+
+    #[cfg(test)]
+    mod integration {
+        use super::*;
+        use futures_util::{SinkExt, StreamExt};
+        use std::future::Future;
+        use tokio::net::TcpListener;
+        use tokio_tungstenite::{
+            accept_async,
+            tungstenite::Message,
+            WebSocketStream,
+        };
+        use futures_util::stream::{SplitSink, SplitStream};
+
+        type PlainWs = WebSocketStream<tokio::net::TcpStream>;
+
+        /// Spawn a mini relay that performs NIP-42 auth handshake then runs `scenario`.
+        /// Returns the `ws://127.0.0.1:{port}` URL.
+        async fn spawn_mini_relay<F, Fut>(scenario: F) -> String
+        where
+            F: FnOnce(SplitSink<PlainWs, Message>, SplitStream<PlainWs>) -> Fut
+                + Send
+                + 'static,
+            Fut: Future<Output = ()> + Send,
+        {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+
+            tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let ws = accept_async(stream).await.unwrap();
+                let (mut sink, mut stream) = ws.split();
+
+                // Send AUTH challenge.
+                sink.send(Message::Text(
+                    r#"["AUTH","test-challenge"]"#.to_string().into(),
+                ))
+                .await
+                .unwrap();
+
+                // Wait for AUTH response, send OK for the event.
+                while let Some(Ok(msg)) = stream.next().await {
+                    if let Message::Text(text) = msg {
+                        let arr: Vec<serde_json::Value> =
+                            serde_json::from_str(&text).unwrap();
+                        if arr.first().and_then(|v| v.as_str()) == Some("AUTH") {
+                            let event_id =
+                                arr[1]["id"].as_str().unwrap().to_string();
+                            sink.send(Message::Text(
+                                format!(r#"["OK","{}",true,""]"#, event_id).into(),
+                            ))
+                            .await
+                            .unwrap();
+                            break;
+                        }
+                    }
+                }
+
+                scenario(sink, stream).await;
+            });
+
+            format!("ws://127.0.0.1:{}", port)
+        }
+
+        // ── Test 1: background task responds to Ping when idle ────────────────
+
+        #[tokio::test]
+        async fn bg_responds_to_ping_without_caller_activity() {
+            let url = spawn_mini_relay(|mut sink, mut stream| async move {
+                // Send a Ping — background task should Pong immediately.
+                sink.send(Message::Ping(b"abc".to_vec().into())).await.unwrap();
+
+                // Drain until we see the Pong.
+                while let Some(Ok(msg)) = stream.next().await {
+                    if let Message::Pong(data) = msg {
+                        assert_eq!(data.as_ref(), b"abc");
+                        return;
+                    }
+                }
+                panic!("never received Pong");
+            })
+            .await;
+
+            let keys = Keys::generate();
+            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+            // Give the background task a moment to process the Ping.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let _ = client.close().await;
+        }
+
+        // ── Test 2: background task handles mid-session AUTH challenge ────────
+
+        #[tokio::test]
+        async fn bg_handles_mid_session_auth_challenge() {
+            let url = spawn_mini_relay(|mut sink, mut stream| async move {
+                // Send a fresh AUTH challenge after initial handshake.
+                sink.send(Message::Text(
+                    r#"["AUTH","challenge-2"]"#.to_string().into(),
+                ))
+                .await
+                .unwrap();
+
+                // Expect a new AUTH event with kind 22242.
+                while let Some(Ok(msg)) = stream.next().await {
+                    if let Message::Text(text) = msg {
+                        let arr: Vec<serde_json::Value> =
+                            serde_json::from_str(&text).unwrap();
+                        if arr.first().and_then(|v| v.as_str()) == Some("AUTH") {
+                            let kind = arr[1]["kind"].as_u64().unwrap();
+                            assert_eq!(kind, 22242, "expected kind 22242 (Authentication)");
+                            // Verify the challenge tag is present.
+                            let tags = arr[1]["tags"].as_array().unwrap();
+                            let has_challenge = tags.iter().any(|t| {
+                                t.as_array()
+                                    .and_then(|a| a.get(1))
+                                    .and_then(|v| v.as_str())
+                                    == Some("challenge-2")
+                            });
+                            assert!(has_challenge, "AUTH event missing challenge tag");
+                            return;
+                        }
+                    }
+                }
+                panic!("never received AUTH response");
+            })
+            .await;
+
+            let keys = Keys::generate();
+            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let _ = client.close().await;
+        }
+
+        // ── Test 3: send_event receives OK response ───────────────────────────
+
+        #[tokio::test]
+        async fn send_event_receives_ok_response() {
+            let url = spawn_mini_relay(|mut sink, mut stream| async move {
+                // Wait for EVENT, send matching OK.
+                while let Some(Ok(msg)) = stream.next().await {
+                    if let Message::Text(text) = msg {
+                        let arr: Vec<serde_json::Value> =
+                            serde_json::from_str(&text).unwrap();
+                        if arr.first().and_then(|v| v.as_str()) == Some("EVENT") {
+                            let event_id = arr[1]["id"].as_str().unwrap().to_string();
+                            sink.send(Message::Text(
+                                format!(r#"["OK","{}",true,""]"#, event_id).into(),
+                            ))
+                            .await
+                            .unwrap();
+                            return;
+                        }
+                    }
+                }
+            })
+            .await;
+
+            let keys = Keys::generate();
+            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+
+            let event = EventBuilder::new(Kind::Custom(9), "test", [])
+                .sign_with_keys(&keys)
+                .unwrap();
+            let expected_id = event.id.to_hex();
+
+            let ok = client.send_event(event).await.unwrap();
+            assert_eq!(ok.event_id, expected_id);
+            assert!(ok.accepted);
+            assert_eq!(ok.message, "");
+
+            let _ = client.close().await;
+        }
+
+        // ── Test 4: subscribe collects events until EOSE ──────────────────────
+
+        #[tokio::test]
+        async fn subscribe_collects_events_until_eose() {
+            let url = spawn_mini_relay(|mut sink, mut stream| async move {
+                // Wait for REQ.
+                while let Some(Ok(msg)) = stream.next().await {
+                    if let Message::Text(text) = msg {
+                        let arr: Vec<serde_json::Value> =
+                            serde_json::from_str(&text).unwrap();
+                        if arr.first().and_then(|v| v.as_str()) == Some("REQ") {
+                            let sub_id = arr[1].as_str().unwrap().to_string();
+
+                            // Build 3 minimal valid events.
+                            let relay_keys = Keys::generate();
+                            for i in 0u8..3 {
+                                let ev = EventBuilder::new(
+                                    Kind::TextNote,
+                                    format!("msg {i}"),
+                                    [],
+                                )
+                                .sign_with_keys(&relay_keys)
+                                .unwrap();
+                                let frame = serde_json::to_string(
+                                    &serde_json::json!(["EVENT", sub_id, ev]),
+                                )
+                                .unwrap();
+                                sink.send(Message::Text(frame.into())).await.unwrap();
+                            }
+
+                            // Send EOSE.
+                            sink.send(Message::Text(
+                                format!(r#"["EOSE","{}"]"#, sub_id).into(),
+                            ))
+                            .await
+                            .unwrap();
+                            return;
+                        }
+                    }
+                }
+            })
+            .await;
+
+            let keys = Keys::generate();
+            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+
+            let events = client
+                .subscribe("sub-1", vec![Filter::new()])
+                .await
+                .unwrap();
+            assert_eq!(events.len(), 3, "expected 3 events before EOSE");
+
+            let _ = client.close().await;
+        }
+
+        // ── Test 5: send_event times out when relay never sends OK ────────────
+        //
+        // We connect first (real time), then pause time and advance past the
+        // 10s SEND_EVENT_TIMEOUT to avoid a real wait.
+
+        #[tokio::test]
+        async fn send_event_times_out_when_no_ok() {
+            let url = spawn_mini_relay(|_sink, mut stream| async move {
+                // Consume the EVENT frame but never respond with OK.
+                // Hold connection open by draining until the client drops.
+                while let Some(Ok(_)) = stream.next().await {}
+            })
+            .await;
+
+            let keys = Keys::generate();
+            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+
+            let event = EventBuilder::new(Kind::Custom(9), "timeout-test", [])
+                .sign_with_keys(&keys)
+                .unwrap();
+
+            // Pause time AFTER connecting so the auth handshake completes normally.
+            tokio::time::pause();
+
+            // Start the send — enqueues EVENT to background task.
+            let send_fut = client.send_event(event);
+            tokio::pin!(send_fut);
+
+            // Yield to let the background task send the EVENT frame.
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+
+            // Advance time past the 10s SEND_EVENT_TIMEOUT + 1s tick granularity.
+            tokio::time::advance(Duration::from_secs(12)).await;
+            // Let the background task's tick fire and expire the pending_ok entry.
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+
+            let result = send_fut.await;
+            assert!(
+                matches!(result, Err(RelayClientError::Timeout)),
+                "expected Timeout, got: {:?}",
+                result
+            );
+
+            let _ = client.close().await;
+        }
+
+        // ── Test 6: close_subscription sends CLOSE message to relay ──────────
+
+        #[tokio::test]
+        async fn close_subscription_sends_close_message() {
+            let (close_tx, close_rx) = tokio::sync::oneshot::channel::<String>();
+            let close_tx = std::sync::Arc::new(tokio::sync::Mutex::new(Some(close_tx)));
+
+            let url = spawn_mini_relay({
+                let close_tx = close_tx.clone();
+                move |mut sink, mut stream| async move {
+                    // Handle REQ, send EOSE immediately so subscribe() returns.
+                    while let Some(Ok(msg)) = stream.next().await {
+                        if let Message::Text(text) = msg {
+                            let arr: Vec<serde_json::Value> =
+                                serde_json::from_str(&text).unwrap_or_default();
+                            match arr.first().and_then(|v| v.as_str()) {
+                                Some("REQ") => {
+                                    let sub_id = arr[1].as_str().unwrap().to_string();
+                                    sink.send(Message::Text(
+                                        format!(r#"["EOSE","{}"]"#, sub_id).into(),
+                                    ))
+                                    .await
+                                    .unwrap();
+                                }
+                                Some("CLOSE") => {
+                                    let sub_id = arr[1].as_str().unwrap().to_string();
+                                    if let Some(tx) = close_tx.lock().await.take() {
+                                        let _ = tx.send(sub_id);
+                                    }
+                                    return;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            })
+            .await;
+
+            let keys = Keys::generate();
+            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+
+            // Subscribe (EOSE comes back immediately).
+            client
+                .subscribe("sub-close", vec![Filter::new()])
+                .await
+                .unwrap();
+
+            // Close the subscription — relay should receive CLOSE.
+            client.close_subscription("sub-close").await.unwrap();
+
+            let closed_id = tokio::time::timeout(
+                Duration::from_secs(2),
+                close_rx,
+            )
+            .await
+            .expect("timed out waiting for CLOSE")
+            .expect("channel dropped");
+
+            assert_eq!(closed_id, "sub-close");
+
+            let _ = client.close().await;
+        }
+
+        // ── Test 7: reconnect on transport close ──────────────────────────────
+        //
+        // Strategy: use a shared TcpListener that accepts two connections.
+        // First connection: close immediately after auth.
+        // Second connection: full relay that handles send_event.
+
+        #[tokio::test]
+        async fn bg_reconnects_on_transport_close() {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let url = format!("ws://127.0.0.1:{}", port);
+
+            // Channel so the test can wait until the second relay is ready.
+            let (ok_tx, ok_rx) = tokio::sync::oneshot::channel::<()>();
+            let ok_tx = std::sync::Arc::new(tokio::sync::Mutex::new(Some(ok_tx)));
+
+            tokio::spawn({
+                let ok_tx = ok_tx.clone();
+                async move {
+                    // ── Connection 1: close right after auth ──────────────────
+                    {
+                        let (stream, _) = listener.accept().await.unwrap();
+                        let ws = accept_async(stream).await.unwrap();
+                        let (mut sink, mut stream) = ws.split();
+
+                        sink.send(Message::Text(
+                            r#"["AUTH","test-challenge"]"#.to_string().into(),
+                        ))
+                        .await
+                        .unwrap();
+
+                        while let Some(Ok(msg)) = stream.next().await {
+                            if let Message::Text(text) = msg {
+                                let arr: Vec<serde_json::Value> =
+                                    serde_json::from_str(&text).unwrap_or_default();
+                                if arr.first().and_then(|v| v.as_str()) == Some("AUTH") {
+                                    let event_id =
+                                        arr[1]["id"].as_str().unwrap().to_string();
+                                    sink.send(Message::Text(
+                                        format!(r#"["OK","{}",true,""]"#, event_id).into(),
+                                    ))
+                                    .await
+                                    .unwrap();
+                                    break;
+                                }
+                            }
+                        }
+                        // Drop sink+stream — closes the WS connection.
+                    }
+
+                    // ── Connection 2: full relay that handles EVENT ────────────
+                    {
+                        let (stream, _) = listener.accept().await.unwrap();
+                        let ws = accept_async(stream).await.unwrap();
+                        let (mut sink, mut stream) = ws.split();
+
+                        sink.send(Message::Text(
+                            r#"["AUTH","test-challenge"]"#.to_string().into(),
+                        ))
+                        .await
+                        .unwrap();
+
+                        // Signal that the second relay is ready.
+                        if let Some(tx) = ok_tx.lock().await.take() {
+                            let _ = tx.send(());
+                        }
+
+                        while let Some(Ok(msg)) = stream.next().await {
+                            if let Message::Text(text) = msg {
+                                let arr: Vec<serde_json::Value> =
+                                    serde_json::from_str(&text).unwrap_or_default();
+                                match arr.first().and_then(|v| v.as_str()) {
+                                    Some("AUTH") => {
+                                        let event_id =
+                                            arr[1]["id"].as_str().unwrap().to_string();
+                                        sink.send(Message::Text(
+                                            format!(r#"["OK","{}",true,""]"#, event_id).into(),
+                                        ))
+                                        .await
+                                        .unwrap();
+                                    }
+                                    Some("EVENT") => {
+                                        let event_id =
+                                            arr[1]["id"].as_str().unwrap().to_string();
+                                        sink.send(Message::Text(
+                                            format!(r#"["OK","{}",true,""]"#, event_id).into(),
+                                        ))
+                                        .await
+                                        .unwrap();
+                                        return;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            let keys = Keys::generate();
+            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+
+            // Wait for the second relay to be ready (background task reconnected).
+            tokio::time::timeout(Duration::from_secs(5), ok_rx)
+                .await
+                .expect("timed out waiting for reconnect")
+                .unwrap();
+
+            // Give the background task a moment to finish the auth handshake.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            // send_event should succeed on the new connection.
+            let event = EventBuilder::new(Kind::Custom(9), "after-reconnect", [])
+                .sign_with_keys(&keys)
+                .unwrap();
+            let ok = client.send_event(event).await.unwrap();
+            assert!(ok.accepted);
+
+            let _ = client.close().await;
+        }
+    }
 }
