@@ -40,7 +40,7 @@ This prints an `nsec1...` private key and an API token. **Save both immediately 
 
 The harness discovers channels by querying the relay with the agent's authenticated identity.
 
-**Open channels** (the default for local dev) are accessible to any authenticated pubkey — no extra setup needed. Just start the harness and it will find and subscribe to all open channels.
+By default, the harness discovers only channels the agent is a **member** of (`GET /api/channels?member=true`). When the agent is added to a new channel, the membership notification subscription auto-subscribes to it.
 
 **Private channels** require explicit membership. The relay doesn't yet have a REST/event API for managing channel members — this is a known gap. For now, use `create_channel` via the Sprout MCP tools to create new channels (the creator is automatically a member).
 

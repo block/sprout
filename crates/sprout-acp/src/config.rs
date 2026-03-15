@@ -142,7 +142,7 @@ pub struct CliArgs {
     #[arg(long, env = "SPROUT_ACP_CONFIG", default_value = "./sprout-acp.toml")]
     pub config: PathBuf,
 
-    #[arg(long, env = "SPROUT_ACP_DEDUP", default_value = "drop", value_enum)]
+    #[arg(long, env = "SPROUT_ACP_DEDUP", default_value = "queue", value_enum)]
     pub dedup: DedupMode,
 
     #[arg(long, env = "SPROUT_ACP_NO_IGNORE_SELF")]
@@ -566,7 +566,7 @@ mod tests {
             system_prompt: None,
             initial_message: None,
             subscribe_mode: mode,
-            dedup_mode: DedupMode::Drop,
+            dedup_mode: DedupMode::Queue,
             ignore_self: true,
             kinds_override: None,
             channels_override: None,

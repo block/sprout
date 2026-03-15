@@ -26,6 +26,8 @@ use super::{api_error, extract_auth_context, internal_error};
 pub struct ListChannelsParams {
     /// Optional visibility filter: `"open"` or `"private"`.
     pub visibility: Option<String>,
+    /// When `true`, return only channels the user is a member of.
+    pub member: Option<bool>,
 }
 
 /// Returns all channels accessible to the authenticated user.
@@ -43,7 +45,7 @@ pub async fn channels_handler(
 
     let channels = state
         .db
-        .get_accessible_channels(&pubkey_bytes, params.visibility.as_deref())
+        .get_accessible_channels(&pubkey_bytes, params.visibility.as_deref(), params.member)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 

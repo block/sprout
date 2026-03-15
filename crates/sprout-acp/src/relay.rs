@@ -239,10 +239,10 @@ impl HarnessRelay {
         })
     }
 
-    /// Discover channels the harness is a member of via `GET /api/channels`.
+    /// Discover channels the agent is a member of via `GET /api/channels?member=true`.
     pub async fn discover_channels(&self) -> Result<Vec<Uuid>, RelayError> {
         let http_url = relay_ws_to_http(&self.relay_url);
-        let url = format!("{http_url}/api/channels");
+        let url = format!("{http_url}/api/channels?member=true");
 
         let builder = self.http.get(&url);
         let builder = apply_auth(builder, &self.api_token, &self.keys);
