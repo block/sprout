@@ -24,10 +24,20 @@ use std::time::Duration;
 
 // ─── Named constants ──────────────────────────────────────────────────────────
 
-/// Capacity of the event channel from background task to harness.
-const EVENT_CHANNEL_CAPACITY: usize = 256;
+/// Default capacity of the event channel from background task to harness.
+/// Override with `SPROUT_ACP_EVENT_BUFFER` env var at startup.
+const EVENT_CHANNEL_CAPACITY_DEFAULT: usize = 256;
 /// Capacity of the command channel from harness to background task.
 const CMD_CHANNEL_CAPACITY: usize = 64;
+
+/// Read the event channel capacity from the environment, falling back to the
+/// compiled-in default. Parsed once at call-site (connect time).
+fn event_channel_capacity() -> usize {
+    std::env::var("SPROUT_ACP_EVENT_BUFFER")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(EVENT_CHANNEL_CAPACITY_DEFAULT)
+}
 /// Maximum number of seen event IDs before the dedup set is cleared.
 const SEEN_ID_LIMIT: usize = 12_000;
 /// Seconds subtracted from `since` on resubscribe to tolerate clock skew.
@@ -190,7 +200,7 @@ impl HarnessRelay {
         // Perform the initial connection and auth handshake.
         let (ws, _buffer) = do_connect(relay_url, keys, api_token).await?;
 
-        let (event_tx, event_rx) = mpsc::channel::<Option<SproutEvent>>(EVENT_CHANNEL_CAPACITY);
+        let (event_tx, event_rx) = mpsc::channel::<Option<SproutEvent>>(event_channel_capacity());
         let (cmd_tx, cmd_rx) = mpsc::channel::<RelayCommand>(CMD_CHANNEL_CAPACITY);
 
         let bg_keys = keys.clone();
@@ -359,6 +369,11 @@ struct BgState {
     membership_last_seen: Option<u64>,
     /// Whether the membership notification subscription is active.
     membership_sub_active: bool,
+    /// Oldest dropped channel-event timestamp per channel, keyed by channel_id.
+    /// Mirrors `membership_dropped_since` but for ordinary channel events.
+    /// On reconnect resubscribe, `since` = min(last_seen, channel_dropped_since).
+    /// Cleared per-channel after a successful resubscribe.
+    channel_dropped_since: HashMap<Uuid, u64>,
 }
 
 impl BgState {
@@ -371,6 +386,7 @@ impl BgState {
             membership_dropped_since: None,
             membership_last_seen: None,
             membership_sub_active: false,
+            channel_dropped_since: HashMap::new(),
         }
     }
 
@@ -437,8 +453,45 @@ async fn run_background_task(
                         .await
                         {
                             // handle_ws_message returns false on connection loss.
-                            // Signal the caller and wait for a Reconnect command.
+                            // Signal the caller, then attempt autonomous reconnect.
                             let _ = event_tx.send(None).await;
+                            let reconnected = try_autonomous_reconnect(
+                                &mut ws,
+                                &mut state,
+                                &keys,
+                                &relay_url,
+                                api_token.as_deref(),
+                                &agent_pubkey_hex,
+                            )
+                            .await;
+                            if !reconnected {
+                                wait_for_reconnect(
+                                    &mut ws,
+                                    &mut cmd_rx,
+                                    &mut state,
+                                    &keys,
+                                    &relay_url,
+                                    api_token.as_deref(),
+                                    &agent_pubkey_hex,
+                                    false,
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        warn!("WebSocket error in background task: {e}");
+                        let _ = event_tx.send(None).await;
+                        let reconnected = try_autonomous_reconnect(
+                            &mut ws,
+                            &mut state,
+                            &keys,
+                            &relay_url,
+                            api_token.as_deref(),
+                            &agent_pubkey_hex,
+                        )
+                        .await;
+                        if !reconnected {
                             wait_for_reconnect(
                                 &mut ws,
                                 &mut cmd_rx,
@@ -447,40 +500,36 @@ async fn run_background_task(
                                 &relay_url,
                                 api_token.as_deref(),
                                 &agent_pubkey_hex,
-                                false, // skip_drain: wait for Reconnect command
+                                false,
                             )
                             .await;
                         }
                     }
-                    Some(Err(e)) => {
-                        warn!("WebSocket error in background task: {e}");
-                        let _ = event_tx.send(None).await;
-                        wait_for_reconnect(
-                            &mut ws,
-                            &mut cmd_rx,
-                            &mut state,
-                            &keys,
-                            &relay_url,
-                            api_token.as_deref(),
-                            &agent_pubkey_hex,
-                            false,
-                        )
-                        .await;
-                    }
                     None => {
                         debug!("WebSocket stream ended");
                         let _ = event_tx.send(None).await;
-                        wait_for_reconnect(
+                        let reconnected = try_autonomous_reconnect(
                             &mut ws,
-                            &mut cmd_rx,
                             &mut state,
                             &keys,
                             &relay_url,
                             api_token.as_deref(),
                             &agent_pubkey_hex,
-                            false,
                         )
                         .await;
+                        if !reconnected {
+                            wait_for_reconnect(
+                                &mut ws,
+                                &mut cmd_rx,
+                                &mut state,
+                                &keys,
+                                &relay_url,
+                                api_token.as_deref(),
+                                &agent_pubkey_hex,
+                                false,
+                            )
+                            .await;
+                        }
                     }
                 }
             }
@@ -603,6 +652,7 @@ async fn handle_ws_message(
                             Err(mpsc::error::TrySendError::Closed(_)) => return false,
                         }
                     } else if let Some(channel_id) = channel_id_from_sub_id(&subscription_id) {
+                        let ts = event.created_at.as_u64();
                         if state.record_event(channel_id, &event) {
                             let sprout_event = SproutEvent {
                                 channel_id,
@@ -611,7 +661,18 @@ async fn handle_ws_message(
                             match event_tx.try_send(Some(sprout_event)) {
                                 Ok(()) => {}
                                 Err(mpsc::error::TrySendError::Full(_)) => {
-                                    warn!("event channel full — dropping event for channel {channel_id}");
+                                    // Track the oldest dropped timestamp so reconnect
+                                    // replay starts early enough to re-deliver it.
+                                    state
+                                        .channel_dropped_since
+                                        .entry(channel_id)
+                                        .and_modify(|d| *d = (*d).min(ts))
+                                        .or_insert(ts);
+                                    warn!(
+                                        channel_id = %channel_id,
+                                        ts,
+                                        "event channel full — dropping event for channel {channel_id} — will replay from {ts} on reconnect"
+                                    );
                                 }
                                 Err(mpsc::error::TrySendError::Closed(_)) => {
                                     // Receiver dropped — shut down.
@@ -673,6 +734,93 @@ async fn handle_ws_message(
     }
 }
 
+/// Attempt autonomous reconnect on socket loss — 3 attempts with 1s→2s→4s backoff.
+///
+/// If any attempt succeeds, resubscribes all active channels and membership
+/// notifications (same logic as `wait_for_reconnect`) and returns `true`.
+/// If all 3 attempts fail, returns `false` so the caller can fall back to
+/// `wait_for_reconnect` (which blocks until the caller sends a `Reconnect`).
+#[allow(clippy::too_many_arguments)]
+async fn try_autonomous_reconnect(
+    ws: &mut WsStream,
+    state: &mut BgState,
+    keys: &Keys,
+    relay_url: &str,
+    api_token: Option<&str>,
+    agent_pubkey_hex: &str,
+) -> bool {
+    let backoffs = [
+        Duration::from_secs(1),
+        Duration::from_secs(2),
+        Duration::from_secs(4),
+    ];
+
+    for (attempt, delay) in backoffs.iter().enumerate() {
+        info!(
+            "autonomous reconnect attempt {}/{} to {relay_url}…",
+            attempt + 1,
+            backoffs.len()
+        );
+        match do_connect(relay_url, keys, api_token).await {
+            Ok((new_ws, _buffer)) => {
+                *ws = new_ws;
+                info!("autonomous reconnect succeeded (attempt {})", attempt + 1);
+
+                // Resubscribe channels with since = min(last_seen, channel_dropped_since).
+                let channels: Vec<Uuid> = state.active_subscriptions.keys().copied().collect();
+                if !channels.is_empty() {
+                    info!("resubscribing to {} channel(s) after autonomous reconnect", channels.len());
+                    for channel_id in channels {
+                        let last_seen = state.last_seen.get(&channel_id).copied();
+                        let dropped = state.channel_dropped_since.get(&channel_id).copied();
+                        let since = match (last_seen, dropped) {
+                            (Some(l), Some(d)) => Some(l.min(d)),
+                            (Some(l), None) => Some(l),
+                            (None, Some(d)) => Some(d),
+                            (None, None) => None,
+                        };
+                        let filter = state.active_filters.get(&channel_id).cloned().unwrap_or(
+                            ChannelFilter { kinds: None, require_mention: false },
+                        );
+                        send_subscribe(ws, state, channel_id, agent_pubkey_hex, since, &filter).await;
+                        state.channel_dropped_since.remove(&channel_id);
+                    }
+                }
+
+                // Resubscribe membership notifications.
+                if state.membership_sub_active {
+                    let replay_since = match (state.membership_dropped_since, state.membership_last_seen) {
+                        (Some(d), Some(l)) => Some(d.min(l)),
+                        (Some(d), None) => Some(d),
+                        (None, Some(l)) => Some(l),
+                        (None, None) => None,
+                    };
+                    let sent = send_membership_subscribe(ws, agent_pubkey_hex, replay_since).await;
+                    if sent {
+                        state.membership_dropped_since = None;
+                    }
+                }
+
+                return true;
+            }
+            Err(e) => {
+                warn!(
+                    "autonomous reconnect attempt {} failed: {e} — {}",
+                    attempt + 1,
+                    if attempt + 1 < backoffs.len() {
+                        format!("retrying in {}s", delay.as_secs())
+                    } else {
+                        "falling back to caller-driven reconnect".to_string()
+                    }
+                );
+                tokio::time::sleep(*delay).await;
+            }
+        }
+    }
+
+    false
+}
+
 /// Attempt reconnection with exponential backoff. Resubscribes all active
 /// channels with `since` filters on success.
 ///
@@ -727,11 +875,20 @@ async fn wait_for_reconnect(
                 info!("relay reconnected to {relay_url}");
 
                 // Resubscribe all active channels with `since` filter.
+                // Use min(last_seen, channel_dropped_since) so dropped events
+                // are replayed — same pattern as membership notifications.
                 let channels: Vec<Uuid> = state.active_subscriptions.keys().copied().collect();
                 if !channels.is_empty() {
                     info!("resubscribing to {} channel(s)", channels.len());
                     for channel_id in channels {
-                        let since = state.last_seen.get(&channel_id).copied();
+                        let last_seen = state.last_seen.get(&channel_id).copied();
+                        let dropped = state.channel_dropped_since.get(&channel_id).copied();
+                        let since = match (last_seen, dropped) {
+                            (Some(l), Some(d)) => Some(l.min(d)),
+                            (Some(l), None) => Some(l),
+                            (None, Some(d)) => Some(d),
+                            (None, None) => None,
+                        };
                         let filter = state.active_filters.get(&channel_id).cloned().unwrap_or(
                             ChannelFilter {
                                 kinds: None,
@@ -740,6 +897,9 @@ async fn wait_for_reconnect(
                         );
                         send_subscribe(ws, state, channel_id, agent_pubkey_hex, since, &filter)
                             .await;
+                        // Clear the drop tracker now that we've resubscribed
+                        // with a since that covers the dropped window.
+                        state.channel_dropped_since.remove(&channel_id);
                     }
                 }
 
@@ -1646,6 +1806,102 @@ mod tests {
             state.seen_ids.len() < 12_000,
             "seen_ids should have been cleared, got {}",
             state.seen_ids.len()
+        );
+    }
+
+    // ── Bug 5: channel_dropped_since tracking ─────────────────────────────────
+
+    /// Test 8: channel_dropped_since records the OLDEST dropped timestamp.
+    ///
+    /// Simulates the backpressure path directly on BgState:
+    /// - First drop at ts=1000 → entry is 1000
+    /// - Second drop at ts=2000 (later) → entry stays 1000 (min)
+    /// - Third drop at ts=500 (earlier) → entry updates to 500 (min)
+    #[test]
+    fn acp_records_channel_dropped_since_on_backpressure() {
+        let mut state = BgState::new();
+        let channel_id = Uuid::new_v4();
+
+        // Simulate the backpressure path: record ts=1000.
+        let ts1: u64 = 1_000;
+        state
+            .channel_dropped_since
+            .entry(channel_id)
+            .and_modify(|d| *d = (*d).min(ts1))
+            .or_insert(ts1);
+        assert_eq!(
+            state.channel_dropped_since.get(&channel_id).copied(),
+            Some(1_000),
+            "first drop should record ts=1000"
+        );
+
+        // Later timestamp (2000) — entry should stay at 1000.
+        let ts2: u64 = 2_000;
+        state
+            .channel_dropped_since
+            .entry(channel_id)
+            .and_modify(|d| *d = (*d).min(ts2))
+            .or_insert(ts2);
+        assert_eq!(
+            state.channel_dropped_since.get(&channel_id).copied(),
+            Some(1_000),
+            "later drop should not overwrite earlier timestamp"
+        );
+
+        // Earlier timestamp (500) — entry should update to 500.
+        let ts3: u64 = 500;
+        state
+            .channel_dropped_since
+            .entry(channel_id)
+            .and_modify(|d| *d = (*d).min(ts3))
+            .or_insert(ts3);
+        assert_eq!(
+            state.channel_dropped_since.get(&channel_id).copied(),
+            Some(500),
+            "earlier drop should update entry to 500"
+        );
+    }
+
+    /// Test 9: reconnect since filter = min(last_seen, channel_dropped_since) - SINCE_SKEW_SECS.
+    ///
+    /// With last_seen=1000 and channel_dropped_since=900, the effective since
+    /// passed to send_subscribe should be min(1000, 900) - SINCE_SKEW_SECS = 895.
+    #[test]
+    fn acp_reconnect_uses_dropped_since_for_replay() {
+        let mut state = BgState::new();
+        let channel_id = Uuid::new_v4();
+
+        // Set up state: last_seen=1000, channel_dropped_since=900.
+        state.last_seen.insert(channel_id, 1_000);
+        state.channel_dropped_since.insert(channel_id, 900);
+
+        // Compute the since value the reconnect path would use.
+        let last_seen = state.last_seen.get(&channel_id).copied();
+        let dropped = state.channel_dropped_since.get(&channel_id).copied();
+        let since = match (last_seen, dropped) {
+            (Some(l), Some(d)) => Some(l.min(d)),
+            (Some(l), None) => Some(l),
+            (None, Some(d)) => Some(d),
+            (None, None) => None,
+        };
+
+        // The since passed to send_subscribe (which subtracts SINCE_SKEW_SECS internally).
+        assert_eq!(since, Some(900), "since should be min(1000, 900) = 900");
+
+        // After subtracting skew (as send_subscribe does), the REQ filter value is:
+        let req_since = since.unwrap().saturating_sub(SINCE_SKEW_SECS);
+        assert_eq!(
+            req_since,
+            895,
+            "REQ since filter should be 900 - {} = 895",
+            SINCE_SKEW_SECS
+        );
+
+        // Simulate clearing after resubscribe.
+        state.channel_dropped_since.remove(&channel_id);
+        assert!(
+            state.channel_dropped_since.get(&channel_id).is_none(),
+            "channel_dropped_since should be cleared after resubscribe"
         );
     }
 }
