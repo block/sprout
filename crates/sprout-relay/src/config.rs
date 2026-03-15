@@ -53,6 +53,8 @@ pub struct Config {
     /// API tokens or Okta JWTs bypass the allowlist entirely.
     /// Applies to all NIP-42 pubkey-only connections, regardless of `require_auth_token`.
     pub pubkey_allowlist_enabled: bool,
+    /// Media storage configuration (S3/MinIO).
+    pub media: sprout_media::MediaConfig,
 }
 
 impl Config {
@@ -135,6 +137,24 @@ impl Config {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
+        let media = sprout_media::MediaConfig {
+            s3_endpoint: std::env::var("SPROUT_S3_ENDPOINT")
+                .unwrap_or_else(|_| "http://localhost:9000".to_string()),
+            s3_access_key: std::env::var("SPROUT_S3_ACCESS_KEY")
+                .unwrap_or_else(|_| "sprout_dev".to_string()),
+            s3_secret_key: std::env::var("SPROUT_S3_SECRET_KEY")
+                .unwrap_or_else(|_| "sprout_dev_secret".to_string()),
+            s3_bucket: std::env::var("SPROUT_S3_BUCKET")
+                .unwrap_or_else(|_| "sprout-media".to_string()),
+            max_image_bytes: std::env::var("SPROUT_MAX_IMAGE_BYTES")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(50 * 1024 * 1024),
+            max_gif_bytes: std::env::var("SPROUT_MAX_GIF_BYTES")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(10 * 1024 * 1024),
+            public_base_url: std::env::var("SPROUT_MEDIA_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:3000/media".to_string()),
+            server_domain: std::env::var("SPROUT_MEDIA_SERVER_DOMAIN").ok().filter(|s| !s.is_empty()),
+        };
+
         Ok(Self {
             bind_addr,
             database_url,
@@ -151,6 +171,7 @@ impl Config {
             relay_private_key,
             uds_path,
             pubkey_allowlist_enabled,
+            media,
         })
     }
 }

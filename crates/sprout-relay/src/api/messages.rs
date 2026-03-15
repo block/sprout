@@ -35,6 +35,144 @@ use super::{
     internal_error, not_found,
 };
 
+/// Validate imeta tags for correctness and safety.
+///
+/// Shared between REST (send_message) and WebSocket (handle_event) paths.
+/// Returns Ok(()) if all tags are valid, or a human-readable error string.
+pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result<(), String> {
+    const ALLOWED_IMETA_KEYS: &[&str] = &[
+        "url", "m", "x", "size", "dim", "blurhash", "alt", "thumb", "fallback",
+    ];
+    const SINGLETON_KEYS: &[&str] = &[
+        "url", "m", "x", "size", "dim", "blurhash", "thumb", "alt",
+    ];
+    const ALLOWED_MIME: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+    for tag in tags {
+        if tag.first().map(|s| s.as_str()) != Some("imeta") {
+            return Err("only imeta tags allowed in media_tags".into());
+        }
+
+        let mut has_url = false;
+        let mut has_m = false;
+        let mut has_x = false;
+        let mut has_size = false;
+        let mut seen_keys = std::collections::HashSet::new();
+
+        for part in tag.iter().skip(1) {
+            let mut parts = part.splitn(2, ' ');
+            let key = parts.next().unwrap_or("");
+            let value = parts.next().unwrap_or("");
+
+            if !ALLOWED_IMETA_KEYS.contains(&key) {
+                return Err(format!("disallowed imeta key: {key}"));
+            }
+            if SINGLETON_KEYS.contains(&key) && !seen_keys.insert(key.to_string()) {
+                return Err(format!("duplicate imeta key: {key}"));
+            }
+
+            match key {
+                "url" => {
+                    if !is_local_media_url(value, media_base_url) {
+                        return Err("imeta url must be a local /media/ path".into());
+                    }
+                    // Thumbnails belong in the thumb field, not url
+                    if value.contains(".thumb.") {
+                        return Err("imeta url must not be a thumbnail path; use thumb field".into());
+                    }
+                    has_url = true;
+                }
+                "m" => {
+                    if !ALLOWED_MIME.contains(&value) {
+                        return Err("imeta m must be image/jpeg, image/png, image/gif, or image/webp".into());
+                    }
+                    has_m = true;
+                }
+                "x" => {
+                    if value.len() != 64 || !value.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+                        return Err("imeta x must be a 64-char lowercase hex SHA-256".into());
+                    }
+                    has_x = true;
+                }
+                "size" => {
+                    match value.parse::<u64>() {
+                        Ok(0) | Err(_) => return Err("imeta size must be a positive integer".into()),
+                        Ok(_) => {}
+                    }
+                    has_size = true;
+                }
+                "thumb" => {
+                    if !is_local_media_url(value, media_base_url) || !value.ends_with(".thumb.jpg") {
+                        return Err("imeta thumb must be a local .thumb.jpg path".into());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if !has_url || !has_m || !has_x || !has_size {
+            return Err("imeta tag must include url, m, x, and size".into());
+        }
+    }
+    Ok(())
+}
+
+/// Validate that a URL references a valid local media blob path.
+/// Accepts:
+///   - Relative: `/media/<sha256>.<ext>` or `/media/<sha256>.thumb.jpg`
+///   - Absolute: `<media_base_url>/<sha256>.<ext>` or `<media_base_url>/<sha256>.thumb.jpg`
+/// Where sha256 is exactly 64 lowercase hex chars and ext is an allowed image extension.
+/// Thumbnails are always JPEG — only `.thumb.jpg` is accepted.
+/// Rejects percent-encoded traversal, query strings, fragments, and external origins.
+fn is_local_media_url(url: &str, media_base_url: &str) -> bool {
+    const ALLOWED_EXTS: &[&str] = &["jpg", "png", "gif", "webp"];
+
+    // Extract the path portion after /media/
+    let path_after_media = if url.starts_with("/media/") {
+        &url["/media/".len()..]
+    } else {
+        let base = media_base_url.trim_end_matches('/');
+        let prefix = format!("{}/", base);
+        if let Some(rest) = url.strip_prefix(&prefix) {
+            rest
+        } else {
+            return false;
+        }
+    };
+
+    // Reject query strings and fragments
+    if path_after_media.contains('?') || path_after_media.contains('#') {
+        return false;
+    }
+
+    // Reject percent-encoding (no legitimate blob path needs it)
+    if path_after_media.contains('%') {
+        return false;
+    }
+
+    // Parse segments: must be {sha256}.{ext} or {sha256}.thumb.{ext}
+    let segments: Vec<&str> = path_after_media.split('.').collect();
+    match segments.len() {
+        2 => {
+            // {sha256}.{ext}
+            let hash = segments[0];
+            let ext = segments[1];
+            hash.len() == 64
+                && hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+                && ALLOWED_EXTS.contains(&ext)
+        }
+        3 => {
+            // {sha256}.thumb.jpg — thumbnails are always JPEG
+            let hash = segments[0];
+            hash.len() == 64
+                && hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+                && segments[1] == "thumb"
+                && segments[2] == "jpg"
+        }
+        _ => false,
+    }
+}
+
 /// Extract the effective message author from a stored event.
 ///
 /// REST-created messages are signed by the relay keypair and attribute the real
@@ -241,6 +379,10 @@ pub struct SendMessageBody {
     pub content: String,
     /// Hex-encoded event ID of the parent message (for replies).
     pub parent_event_id: Option<String>,
+    /// Hex-encoded pubkeys to mention in the message (added as `p` tags).
+    /// Distinct from the author-attribution `p` tag which is always added.
+    #[serde(default)]
+    pub mention_pubkeys: Vec<String>,
     /// When `true`, a reply is also surfaced in the channel feed (broadcast).
     #[serde(default)]
     pub broadcast_to_channel: bool,
@@ -269,6 +411,10 @@ pub struct SendMessageBody {
     pub diff_truncated: Option<bool>,
     /// Plain-text alternative summary for clients that cannot render diffs.
     pub diff_alt: Option<String>,
+    /// Media attachment tags (imeta only). Whitelist-validated.
+    /// Each inner Vec is a single tag, e.g. `["imeta", "url https://...", "m image/jpeg"]`.
+    #[serde(default)]
+    pub media_tags: Vec<Vec<String>>,
 }
 
 /// Send a new channel message or reply to an existing thread.
@@ -302,7 +448,8 @@ pub async fn send_message(
         return Err(api_error(StatusCode::FORBIDDEN, "channel is archived"));
     }
 
-    if body.content.trim().is_empty() {
+    // Image-only messages: allow empty text content when media_tags are present.
+    if body.content.trim().is_empty() && body.media_tags.is_empty() {
         return Err(api_error(StatusCode::BAD_REQUEST, "content is required"));
     }
 
@@ -409,6 +556,17 @@ pub async fn send_message(
             .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
     ];
 
+    // Mention p tags — distinct from the author-attribution p tag above.
+    for mention_hex in &body.mention_pubkeys {
+        // Validate hex format (32-byte pubkey = 64 hex chars)
+        if mention_hex.len() == 64 && mention_hex.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+            tags.push(
+                Tag::parse(&["p", mention_hex])
+                    .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+            );
+        }
+    }
+
     // Thread reply tags (NIP-10 style).
     if let (Some(ref root_bytes), Some(ref parent_bytes)) = (&root_id_bytes, &parent_id_bytes) {
         let root_hex = nostr_hex::encode(root_bytes);
@@ -443,6 +601,19 @@ pub async fn send_message(
     if body.kind == Some(sprout_core::kind::KIND_STREAM_MESSAGE_DIFF) {
         let diff_tags = build_diff_tags(&body)?;
         tags.extend(diff_tags);
+    }
+
+    // Validate imeta tags via shared helper (used by both REST and WebSocket paths).
+    // TODO(v2): Cross-check url/x/m/size against stored blob sidecar metadata.
+    validate_imeta_tags(&body.media_tags, &state.config.media.public_base_url)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, &e))?;
+
+    for tag in &body.media_tags {
+        tags.push(
+            Tag::parse(tag).map_err(|e| {
+                api_error(StatusCode::BAD_REQUEST, &format!("invalid imeta tag: {e}"))
+            })?,
+        );
     }
 
     let event = EventBuilder::new(kind, &body.content, tags)
@@ -883,4 +1054,86 @@ pub async fn get_thread(
         "total_replies": total_replies,
         "next_cursor":   next_cursor,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HASH: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    const BASE: &str = "https://relay.example.com/media";
+
+    #[test]
+    fn test_local_media_url_relative() {
+        assert!(is_local_media_url(&format!("/media/{HASH}.jpg"), BASE));
+        assert!(is_local_media_url(&format!("/media/{HASH}.png"), BASE));
+        assert!(is_local_media_url(&format!("/media/{HASH}.gif"), BASE));
+        assert!(is_local_media_url(&format!("/media/{HASH}.webp"), BASE));
+    }
+
+    #[test]
+    fn test_local_media_url_absolute() {
+        assert!(is_local_media_url(&format!("{BASE}/{HASH}.jpg"), BASE));
+    }
+
+    #[test]
+    fn test_local_media_url_thumb_jpg_only() {
+        assert!(is_local_media_url(&format!("/media/{HASH}.thumb.jpg"), BASE));
+        // Other thumb extensions rejected
+        assert!(!is_local_media_url(&format!("/media/{HASH}.thumb.png"), BASE));
+        assert!(!is_local_media_url(&format!("/media/{HASH}.thumb.webp"), BASE));
+    }
+
+    #[test]
+    fn test_local_media_url_rejects_external() {
+        assert!(!is_local_media_url(&format!("https://evil.com/media/{HASH}.jpg"), BASE));
+    }
+
+    #[test]
+    fn test_local_media_url_rejects_query_string() {
+        assert!(!is_local_media_url(&format!("/media/{HASH}.jpg?foo=bar"), BASE));
+    }
+
+    #[test]
+    fn test_local_media_url_rejects_fragment() {
+        assert!(!is_local_media_url(&format!("/media/{HASH}.jpg#frag"), BASE));
+    }
+
+    #[test]
+    fn test_local_media_url_rejects_percent_encoding() {
+        assert!(!is_local_media_url(&format!("/media/{HASH}%2e.jpg"), BASE));
+        assert!(!is_local_media_url("/media/%2e%2e/etc/passwd", BASE));
+    }
+
+    #[test]
+    fn test_local_media_url_rejects_uppercase_hash() {
+        let upper = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789";
+        assert!(!is_local_media_url(&format!("/media/{upper}.jpg"), BASE));
+    }
+
+    #[test]
+    fn test_local_media_url_rejects_short_hash() {
+        assert!(!is_local_media_url("/media/abc123.jpg", BASE));
+    }
+
+    #[test]
+    fn test_local_media_url_rejects_bad_ext() {
+        assert!(!is_local_media_url(&format!("/media/{HASH}.svg"), BASE));
+        assert!(!is_local_media_url(&format!("/media/{HASH}.exe"), BASE));
+        // .jpeg is not canonical — uploads produce .jpg only
+        assert!(!is_local_media_url(&format!("/media/{HASH}.jpeg"), BASE));
+    }
+
+    /// Thumb validation requires BOTH is_local_media_url AND .thumb.jpg suffix.
+    /// A full-size blob URL must not be accepted as a thumbnail.
+    #[test]
+    fn test_thumb_must_be_thumb_jpg() {
+        let thumb = format!("/media/{HASH}.thumb.jpg");
+        let blob = format!("/media/{HASH}.jpg");
+        // Thumb URL: valid local media AND ends with .thumb.jpg
+        assert!(is_local_media_url(&thumb, BASE) && thumb.ends_with(".thumb.jpg"));
+        // Full-size blob: valid local media but NOT a thumb
+        assert!(is_local_media_url(&blob, BASE));
+        assert!(!blob.ends_with(".thumb.jpg"));
+    }
 }

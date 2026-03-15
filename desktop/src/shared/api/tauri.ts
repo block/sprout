@@ -591,6 +591,8 @@ export async function sendChannelMessage(
   channelId: string,
   content: string,
   parentEventId?: string | null,
+  mediaTags?: string[][],
+  mentionPubkeys?: string[],
 ): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
     "send_channel_message",
@@ -598,6 +600,8 @@ export async function sendChannelMessage(
       channelId,
       content,
       parentEventId,
+      mediaTags: mediaTags ?? null,
+      mentionPubkeys: mentionPubkeys ?? null,
     },
   );
 
@@ -608,6 +612,29 @@ export async function sendChannelMessage(
     depth: response.depth,
     createdAt: response.created_at,
   };
+}
+
+export type BlobDescriptor = {
+  url: string;
+  sha256: string;
+  size: number;
+  type: string;
+  uploaded: number;
+  dim?: string;
+  blurhash?: string;
+  thumb?: string;
+};
+
+export async function uploadMedia(
+  filePath: string,
+  isTemp: boolean,
+  filename?: string,
+): Promise<BlobDescriptor> {
+  return invokeTauri<BlobDescriptor>("upload_media", {
+    filePath,
+    isTemp,
+    filename,
+  });
 }
 
 export async function addReaction(

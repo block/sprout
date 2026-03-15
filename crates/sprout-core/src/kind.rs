@@ -203,6 +203,10 @@ pub const KIND_HUDDLE_TRACK_PUBLISHED: u32 = 48104;
 /// A huddle recording became available.
 pub const KIND_HUDDLE_RECORDING_AVAILABLE: u32 = 48105;
 
+// Media (49000–49999)
+/// Internal kind for media upload audit entries. Not a relay event kind.
+pub const KIND_MEDIA_UPLOAD: u32 = 49001;
+
 /// All registered kind constants — used for duplicate detection and iteration.
 pub const ALL_KINDS: &[u32] = &[
     KIND_PROFILE,
@@ -284,6 +288,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_HUDDLE_ENDED,
     KIND_HUDDLE_TRACK_PUBLISHED,
     KIND_HUDDLE_RECORDING_AVAILABLE,
+    KIND_MEDIA_UPLOAD,
 ];
 
 /// Returns `true` if `kind` is in the ephemeral range (20000–29999).

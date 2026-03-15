@@ -70,12 +70,16 @@ class RelayClient {
     channelId: string,
     content: string,
     mentionPubkeys: string[] = [],
+    extraTags: string[][] = [],
   ) {
     await this.ensureConnected();
 
     const tags: string[][] = [["h", channelId]];
     for (const pubkey of mentionPubkeys) {
       tags.push(["p", pubkey]);
+    }
+    for (const tag of extraTags) {
+      tags.push(tag);
     }
 
     const event = await signRelayEvent({

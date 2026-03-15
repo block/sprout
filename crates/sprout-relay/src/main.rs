@@ -99,6 +99,11 @@ async fn main() -> anyhow::Result<()> {
         keys
     };
 
+    config.media.validate().map_err(|e| anyhow::anyhow!("invalid media config: {e}"))?;
+    let media_storage = sprout_media::MediaStorage::new(&config.media)
+        .map_err(|e| anyhow::anyhow!("failed to initialize media storage: {e}"))?;
+    info!("Media storage connected");
+
     let state = Arc::new(AppState::new(
         config.clone(),
         db,
@@ -109,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
         search,
         Arc::clone(&workflow_engine),
         relay_keypair,
+        media_storage,
     ));
 
     // Wire the action sink — must happen after AppState (which creates

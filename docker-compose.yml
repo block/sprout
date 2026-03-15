@@ -126,6 +126,54 @@ services:
       com.sprout.env: "dev"
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:latest
+    container_name: sprout-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: sprout_dev
+      MINIO_ROOT_PASSWORD: sprout_dev_secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - sprout-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    labels:
+      com.sprout.service: "minio"
+      com.sprout.env: "dev"
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: sprout-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - sprout-net
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 sprout_dev sprout_dev_secret &&
+        mc mb --ignore-existing local/sprout-media &&
+        mc anonymous set none local/sprout-media
+      "
+    labels:
+      com.sprout.service: "minio-init"
+      com.sprout.env: "dev"
+    restart: "no"
+
 volumes:
   mysql-data:
     name: sprout-mysql-data
@@ -135,6 +183,10 @@ volumes:
     name: sprout-typesense-data
     labels:
       com.sprout.volume: "typesense"
+  minio-data:
+    name: sprout-minio-data
+    labels:
+      com.sprout.volume: "minio"
 
 networks:
   sprout-net:
