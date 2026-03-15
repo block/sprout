@@ -44,6 +44,8 @@ const SEEN_ID_LIMIT: usize = 12_000;
 const SINCE_SKEW_SECS: u64 = 5;
 /// Timeout for the NIP-42 auth handshake steps.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Timeout for the TCP + WebSocket handshake in `do_connect`.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 use futures_util::{SinkExt, StreamExt};
 use nostr::{Event, EventBuilder, Keys, Kind, Tag, Url as NostrUrl};
@@ -439,9 +441,10 @@ async fn run_background_task(
         tokio::select! {
             // ── Incoming WebSocket message ────────────────────────────────────
             raw = ws.next() => {
-                match raw {
+                // Determine if the socket is lost.
+                let socket_lost = match raw {
                     Some(Ok(msg)) => {
-                        if !handle_ws_message(
+                        !handle_ws_message(
                             msg,
                             &mut ws,
                             &event_tx,
@@ -451,85 +454,73 @@ async fn run_background_task(
                             api_token.as_deref(),
                         )
                         .await
-                        {
-                            // handle_ws_message returns false on connection loss.
-                            // Signal the caller, then attempt autonomous reconnect.
-                            let _ = event_tx.send(None).await;
-                            let reconnected = try_autonomous_reconnect(
-                                &mut ws,
-                                &mut state,
-                                &keys,
-                                &relay_url,
-                                api_token.as_deref(),
-                                &agent_pubkey_hex,
-                            )
-                            .await;
-                            if !reconnected {
-                                wait_for_reconnect(
-                                    &mut ws,
-                                    &mut cmd_rx,
-                                    &mut state,
-                                    &keys,
-                                    &relay_url,
-                                    api_token.as_deref(),
-                                    &agent_pubkey_hex,
-                                    false,
-                                )
-                                .await;
-                            }
-                        }
                     }
                     Some(Err(e)) => {
                         warn!("WebSocket error in background task: {e}");
-                        let _ = event_tx.send(None).await;
-                        let reconnected = try_autonomous_reconnect(
-                            &mut ws,
-                            &mut state,
-                            &keys,
-                            &relay_url,
-                            api_token.as_deref(),
-                            &agent_pubkey_hex,
-                        )
-                        .await;
-                        if !reconnected {
-                            wait_for_reconnect(
-                                &mut ws,
-                                &mut cmd_rx,
-                                &mut state,
-                                &keys,
-                                &relay_url,
-                                api_token.as_deref(),
-                                &agent_pubkey_hex,
-                                false,
-                            )
-                            .await;
-                        }
+                        true
                     }
                     None => {
                         debug!("WebSocket stream ended");
-                        let _ = event_tx.send(None).await;
-                        let reconnected = try_autonomous_reconnect(
+                        true
+                    }
+                };
+
+                if socket_lost {
+                    // Signal the caller, then attempt autonomous reconnect.
+                    let _ = event_tx.send(None).await;
+                    let reconnected = try_autonomous_reconnect(
+                        &mut ws,
+                        &mut state,
+                        &keys,
+                        &relay_url,
+                        api_token.as_deref(),
+                        &agent_pubkey_hex,
+                    )
+                    .await;
+                    if reconnected {
+                        // Drain stale Reconnect commands the caller queued after
+                        // seeing the None sentinel. Process other commands normally
+                        // so Subscribe/Unsubscribe/SubscribeMembership aren't lost.
+                        while let Ok(cmd) = cmd_rx.try_recv() {
+                            match cmd {
+                                RelayCommand::Reconnect => {
+                                    debug!("drained stale Reconnect command after autonomous reconnect");
+                                }
+                                RelayCommand::Shutdown => {
+                                    debug!("shutdown received during reconnect drain");
+                                    return;
+                                }
+                                RelayCommand::Subscribe { channel_id, filter } => {
+                                    send_subscribe(&mut ws, &state, channel_id, &agent_pubkey_hex, None, &filter).await;
+                                    state.active_subscriptions.insert(channel_id, channel_sub_id(channel_id));
+                                    state.active_filters.insert(channel_id, filter);
+                                }
+                                RelayCommand::Unsubscribe { channel_id } => {
+                                    if let Some(sub_id) = state.active_subscriptions.remove(&channel_id) {
+                                        let msg = json!(["CLOSE", sub_id]);
+                                        if let Ok(text) = serde_json::to_string(&msg) {
+                                            let _ = ws.send(Message::Text(text.into())).await;
+                                        }
+                                    }
+                                }
+                                RelayCommand::SubscribeMembership => {
+                                    let _ = send_membership_subscribe(&mut ws, &agent_pubkey_hex, None).await;
+                                    state.membership_sub_active = true;
+                                }
+                            }
+                        }
+                    } else {
+                        wait_for_reconnect(
                             &mut ws,
+                            &mut cmd_rx,
                             &mut state,
                             &keys,
                             &relay_url,
                             api_token.as_deref(),
                             &agent_pubkey_hex,
+                            false,
                         )
                         .await;
-                        if !reconnected {
-                            wait_for_reconnect(
-                                &mut ws,
-                                &mut cmd_rx,
-                                &mut state,
-                                &keys,
-                                &relay_url,
-                                api_token.as_deref(),
-                                &agent_pubkey_hex,
-                                false,
-                            )
-                            .await;
-                        }
                     }
                 }
             }
@@ -653,6 +644,7 @@ async fn handle_ws_message(
                         }
                     } else if let Some(channel_id) = channel_id_from_sub_id(&subscription_id) {
                         let ts = event.created_at.as_u64();
+                        let event_id_hex = event.id.to_hex();
                         if state.record_event(channel_id, &event) {
                             let sprout_event = SproutEvent {
                                 channel_id,
@@ -661,6 +653,9 @@ async fn handle_ws_message(
                             match event_tx.try_send(Some(sprout_event)) {
                                 Ok(()) => {}
                                 Err(mpsc::error::TrySendError::Full(_)) => {
+                                    // Remove from dedup set so the replayed event
+                                    // won't be rejected as a duplicate after reconnect.
+                                    state.seen_ids.remove(&event_id_hex);
                                     // Track the oldest dropped timestamp so reconnect
                                     // replay starts early enough to re-deliver it.
                                     state
@@ -734,10 +729,54 @@ async fn handle_ws_message(
     }
 }
 
+/// Resubscribe all active channels and membership notifications after a
+/// successful reconnect. Computes `since = min(last_seen, channel_dropped_since)`
+/// per channel, and only clears the drop tracker when the REQ is confirmed sent.
+async fn resubscribe_after_reconnect(
+    ws: &mut WsStream,
+    state: &mut BgState,
+    agent_pubkey_hex: &str,
+) {
+    let channels: Vec<Uuid> = state.active_subscriptions.keys().copied().collect();
+    if !channels.is_empty() {
+        info!("resubscribing to {} channel(s) after reconnect", channels.len());
+        for channel_id in channels {
+            let last_seen = state.last_seen.get(&channel_id).copied();
+            let dropped = state.channel_dropped_since.get(&channel_id).copied();
+            let since = match (last_seen, dropped) {
+                (Some(l), Some(d)) => Some(l.min(d)),
+                (Some(l), None) => Some(l),
+                (None, Some(d)) => Some(d),
+                (None, None) => None,
+            };
+            let filter = state.active_filters.get(&channel_id).cloned().unwrap_or(
+                ChannelFilter { kinds: None, require_mention: false },
+            );
+            let sent = send_subscribe(ws, state, channel_id, agent_pubkey_hex, since, &filter).await;
+            if sent {
+                state.channel_dropped_since.remove(&channel_id);
+            }
+        }
+    }
+
+    if state.membership_sub_active {
+        let replay_since = match (state.membership_dropped_since, state.membership_last_seen) {
+            (Some(d), Some(l)) => Some(d.min(l)),
+            (Some(d), None) => Some(d),
+            (None, Some(l)) => Some(l),
+            (None, None) => None,
+        };
+        let sent = send_membership_subscribe(ws, agent_pubkey_hex, replay_since).await;
+        if sent {
+            state.membership_dropped_since = None;
+        }
+    }
+}
+
 /// Attempt autonomous reconnect on socket loss — 3 attempts with 1s→2s→4s backoff.
 ///
 /// If any attempt succeeds, resubscribes all active channels and membership
-/// notifications (same logic as `wait_for_reconnect`) and returns `true`.
+/// notifications via [`resubscribe_after_reconnect`] and returns `true`.
 /// If all 3 attempts fail, returns `false` so the caller can fall back to
 /// `wait_for_reconnect` (which blocks until the caller sends a `Reconnect`).
 #[allow(clippy::too_many_arguments)]
@@ -765,42 +804,7 @@ async fn try_autonomous_reconnect(
             Ok((new_ws, _buffer)) => {
                 *ws = new_ws;
                 info!("autonomous reconnect succeeded (attempt {})", attempt + 1);
-
-                // Resubscribe channels with since = min(last_seen, channel_dropped_since).
-                let channels: Vec<Uuid> = state.active_subscriptions.keys().copied().collect();
-                if !channels.is_empty() {
-                    info!("resubscribing to {} channel(s) after autonomous reconnect", channels.len());
-                    for channel_id in channels {
-                        let last_seen = state.last_seen.get(&channel_id).copied();
-                        let dropped = state.channel_dropped_since.get(&channel_id).copied();
-                        let since = match (last_seen, dropped) {
-                            (Some(l), Some(d)) => Some(l.min(d)),
-                            (Some(l), None) => Some(l),
-                            (None, Some(d)) => Some(d),
-                            (None, None) => None,
-                        };
-                        let filter = state.active_filters.get(&channel_id).cloned().unwrap_or(
-                            ChannelFilter { kinds: None, require_mention: false },
-                        );
-                        send_subscribe(ws, state, channel_id, agent_pubkey_hex, since, &filter).await;
-                        state.channel_dropped_since.remove(&channel_id);
-                    }
-                }
-
-                // Resubscribe membership notifications.
-                if state.membership_sub_active {
-                    let replay_since = match (state.membership_dropped_since, state.membership_last_seen) {
-                        (Some(d), Some(l)) => Some(d.min(l)),
-                        (Some(d), None) => Some(d),
-                        (None, Some(l)) => Some(l),
-                        (None, None) => None,
-                    };
-                    let sent = send_membership_subscribe(ws, agent_pubkey_hex, replay_since).await;
-                    if sent {
-                        state.membership_dropped_since = None;
-                    }
-                }
-
+                resubscribe_after_reconnect(ws, state, agent_pubkey_hex).await;
                 return true;
             }
             Err(e) => {
@@ -813,7 +817,11 @@ async fn try_autonomous_reconnect(
                         "falling back to caller-driven reconnect".to_string()
                     }
                 );
-                tokio::time::sleep(*delay).await;
+                // Skip sleep on the final attempt — no point waiting before
+                // falling back to caller-driven reconnect.
+                if attempt + 1 < backoffs.len() {
+                    tokio::time::sleep(*delay).await;
+                }
             }
         }
     }
@@ -873,54 +881,7 @@ async fn wait_for_reconnect(
             Ok((new_ws, _buffer)) => {
                 *ws = new_ws;
                 info!("relay reconnected to {relay_url}");
-
-                // Resubscribe all active channels with `since` filter.
-                // Use min(last_seen, channel_dropped_since) so dropped events
-                // are replayed — same pattern as membership notifications.
-                let channels: Vec<Uuid> = state.active_subscriptions.keys().copied().collect();
-                if !channels.is_empty() {
-                    info!("resubscribing to {} channel(s)", channels.len());
-                    for channel_id in channels {
-                        let last_seen = state.last_seen.get(&channel_id).copied();
-                        let dropped = state.channel_dropped_since.get(&channel_id).copied();
-                        let since = match (last_seen, dropped) {
-                            (Some(l), Some(d)) => Some(l.min(d)),
-                            (Some(l), None) => Some(l),
-                            (None, Some(d)) => Some(d),
-                            (None, None) => None,
-                        };
-                        let filter = state.active_filters.get(&channel_id).cloned().unwrap_or(
-                            ChannelFilter {
-                                kinds: None,
-                                require_mention: false,
-                            },
-                        );
-                        send_subscribe(ws, state, channel_id, agent_pubkey_hex, since, &filter)
-                            .await;
-                        // Clear the drop tracker now that we've resubscribed
-                        // with a since that covers the dropped window.
-                        state.channel_dropped_since.remove(&channel_id);
-                    }
-                }
-
-                // Resubscribe to membership notifications if active.
-                // Use the oldest of (dropped, last_seen) so dropped events are replayed.
-                if state.membership_sub_active {
-                    let replay_since =
-                        match (state.membership_dropped_since, state.membership_last_seen) {
-                            (Some(d), Some(l)) => Some(d.min(l)),
-                            (Some(d), None) => Some(d),
-                            (None, Some(l)) => Some(l),
-                            (None, None) => None,
-                        };
-                    let sent = send_membership_subscribe(ws, agent_pubkey_hex, replay_since).await;
-                    if sent {
-                        // Only clear drop tracker if the REQ was actually sent —
-                        // if send failed, retain it so the next reconnect retries.
-                        state.membership_dropped_since = None;
-                    }
-                }
-
+                resubscribe_after_reconnect(ws, state, agent_pubkey_hex).await;
                 return;
             }
             Err(e) => {
@@ -942,6 +903,7 @@ async fn wait_for_reconnect(
 /// - `#h` is always included (channel-scoped subscription).
 /// - On first subscribe (`since` is `None`) adds `since=now` to avoid replaying
 ///   history. On reconnect (`since` is `Some`) subtracts [`SINCE_SKEW_SECS`].
+/// Returns `true` if the REQ was successfully written to the WebSocket.
 async fn send_subscribe(
     ws: &mut WsStream,
     _state: &BgState,
@@ -949,7 +911,7 @@ async fn send_subscribe(
     agent_pubkey_hex: &str,
     since: Option<u64>,
     filter: &ChannelFilter,
-) {
+) -> bool {
     let sub_id = channel_sub_id(channel_id);
 
     let mut req_filter = serde_json::Map::new();
@@ -981,10 +943,8 @@ async fn send_subscribe(
     let req = json!(["REQ", sub_id, Value::Object(req_filter)]);
 
     match serde_json::to_string(&req) {
-        Ok(text) => {
-            if let Err(e) = ws.send(Message::Text(text.into())).await {
-                warn!("failed to send REQ for channel {channel_id}: {e}");
-            } else {
+        Ok(text) => match ws.send(Message::Text(text.into())).await {
+            Ok(()) => {
                 debug!(
                     "subscribed to channel {channel_id}{}",
                     if since.is_some() {
@@ -993,10 +953,16 @@ async fn send_subscribe(
                         " (since=now)"
                     }
                 );
+                true
             }
-        }
+            Err(e) => {
+                warn!("failed to send REQ for channel {channel_id}: {e}");
+                false
+            }
+        },
         Err(e) => {
             warn!("failed to serialize REQ for channel {channel_id}: {e}");
+            false
         }
     }
 }
@@ -1238,8 +1204,9 @@ async fn do_connect(
         .parse::<url::Url>()
         .map_err(|e| RelayError::Http(format!("invalid relay URL: {e}")))?;
 
-    let (ws, _response) = connect_async(parsed.as_str())
+    let (ws, _response) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(parsed.as_str()))
         .await
+        .map_err(|_| RelayError::ConnectionClosed)? // timeout → treat as connection failure
         .map_err(|e| RelayError::WebSocket(Box::new(e)))?;
     debug!("connected to relay at {relay_url}");
 
