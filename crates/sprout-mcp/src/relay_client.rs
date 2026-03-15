@@ -16,6 +16,8 @@ use tracing::{debug, warn};
 const SEND_EVENT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to wait for EOSE after sending a REQ.
 const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Timeout for the TCP + WebSocket handshake in `do_connect`.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Capacity of the command channel.
 const CMD_CHANNEL_CAPACITY: usize = 64;
 
@@ -217,8 +219,9 @@ async fn do_connect(
         .parse::<url::Url>()
         .map_err(|e| RelayClientError::Url(e.to_string()))?;
 
-    let (mut ws, _) = connect_async(parsed.as_str())
+    let (mut ws, _) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(parsed.as_str()))
         .await
+        .map_err(|_| RelayClientError::ConnectionClosed)? // timeout → treat as connection failure
         .map_err(RelayClientError::WebSocket)?;
 
     debug!("connected to relay at {relay_url}");
@@ -1638,9 +1641,9 @@ mod tests {
         #[tokio::test]
         async fn shutdown_during_reconnect_exits_promptly() {
             // Connect to a relay that closes immediately after auth,
-            // then never accepts again. The background task will be stuck
-            // in reconnect backoff. Verify that close() + drop causes
-            // the task to exit rather than retrying forever.
+            // then never accepts again. The background task enters the
+            // reconnect loop. Verify that Shutdown is processed during
+            // reconnect backoff — the task exits gracefully, NOT via abort.
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let url = format!("ws://127.0.0.1:{}", port);
@@ -1680,27 +1683,26 @@ mod tests {
             let keys = Keys::generate();
             let client = RelayClient::connect(&url, &keys, None).await.unwrap();
 
-            // Give the background task a moment to notice the close.
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            // Give the background task time to notice the close and enter
+            // the reconnect backoff loop.
+            tokio::time::sleep(Duration::from_millis(200)).await;
 
-            // close() should succeed even though the task is reconnecting.
+            // Send Shutdown via close() — the reconnect loop processes this
+            // during its backoff sleep and exits the task gracefully.
             let _ = client.close().await;
 
-            // Drop the client — BgTaskHandle::drop sends Shutdown + abort.
-            // The task should exit promptly rather than retrying forever.
-            let bg = client.bg.clone();
-            drop(client);
+            // Wait for the task to process Shutdown. Do NOT drop the client
+            // yet — we want to prove the task exits via Shutdown processing,
+            // not via BgTaskHandle::drop calling abort().
+            tokio::time::sleep(Duration::from_millis(500)).await;
 
-            // The Arc should be the last reference now. The task was aborted
-            // by Drop, so it should complete quickly.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-
-            // If the task is still alive after abort, this would be 2
-            // (one in bg, one in our clone). After abort it should be 1.
-            assert_eq!(
-                std::sync::Arc::strong_count(&bg),
-                1,
-                "background task should have been aborted"
+            // After graceful shutdown, the background task dropped its cmd_rx.
+            // Sending another command should fail with a closed-channel error,
+            // proving the task exited on its own.
+            let result = client.bg.cmd_tx.send(RelayCommand::Shutdown).await;
+            assert!(
+                result.is_err(),
+                "cmd channel should be closed after graceful shutdown —                  task exited via Shutdown, not abort"
             );
         }
     }

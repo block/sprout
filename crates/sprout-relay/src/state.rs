@@ -207,3 +207,97 @@ impl std::fmt::Debug for AppState {
             .finish()
     }
 }
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use crate::connection::{AuthState, ConnectionState};
+    use tokio::sync::{Mutex, RwLock};
+
+    /// Helper: create a ConnectionManager with one registered connection.
+    /// Returns (manager, conn_id, receiver, cancel, shared_backpressure_count).
+    fn setup_conn(buffer_size: usize) -> (ConnectionManager, Uuid, mpsc::Receiver<WsMessage>, CancellationToken, Arc<AtomicU8>) {
+        let mgr = ConnectionManager::new();
+        let conn_id = Uuid::new_v4();
+        let (tx, rx) = mpsc::channel(buffer_size);
+        let cancel = CancellationToken::new();
+        let bp = Arc::new(AtomicU8::new(0));
+        mgr.register(conn_id, tx, cancel.clone(), Arc::clone(&bp));
+        (mgr, conn_id, rx, cancel, bp)
+    }
+
+    #[test]
+    fn send_to_resets_grace_counter_on_success() {
+        let (mgr, id, _rx, _cancel, bp) = setup_conn(16);
+        // Simulate prior backpressure.
+        bp.store(2, Ordering::Relaxed);
+        assert!(mgr.send_to(id, "hello".into()));
+        assert_eq!(bp.load(Ordering::Relaxed), 0, "successful send should reset counter");
+    }
+
+    #[test]
+    fn send_to_increments_grace_counter_on_full() {
+        // Buffer size 1 — fill it, then the next send is Full.
+        let (mgr, id, _rx, cancel, bp) = setup_conn(1);
+        assert!(mgr.send_to(id, "fill".into()));
+        // Buffer is now full.
+        assert!(!mgr.send_to(id, "overflow-1".into()));
+        assert_eq!(bp.load(Ordering::Relaxed), 1, "first overflow → count=1");
+        assert!(!cancel.is_cancelled(), "should not cancel on first overflow");
+
+        assert!(!mgr.send_to(id, "overflow-2".into()));
+        assert_eq!(bp.load(Ordering::Relaxed), 2);
+        assert!(!cancel.is_cancelled(), "should not cancel on second overflow");
+    }
+
+    #[test]
+    fn send_to_cancels_after_grace_limit() {
+        let (mgr, id, _rx, cancel, bp) = setup_conn(1);
+        assert!(mgr.send_to(id, "fill".into()));
+        // Exhaust grace: 3 consecutive Full events.
+        for _ in 0..SLOW_CLIENT_GRACE_LIMIT {
+            mgr.send_to(id, "overflow".into());
+        }
+        assert!(cancel.is_cancelled(), "should cancel after SLOW_CLIENT_GRACE_LIMIT overflows");
+    }
+
+    #[test]
+    fn shared_counter_between_direct_and_fanout() {
+        // Verify that ConnectionState::send() and ConnectionManager::send_to()
+        // share the same backpressure counter via Arc<AtomicU8>.
+        let conn_id = Uuid::new_v4();
+        let (tx, _rx) = mpsc::channel(1);
+        let (ctrl_tx, _ctrl_rx) = mpsc::channel(8);
+        let cancel = CancellationToken::new();
+        let bp = Arc::new(AtomicU8::new(0));
+
+        let conn = ConnectionState {
+            conn_id,
+            remote_addr: "127.0.0.1:1234".parse().unwrap(),
+            auth_state: RwLock::new(crate::connection::AuthState::Failed),
+            subscriptions: Mutex::new(HashMap::new()),
+            send_tx: tx.clone(),
+            ctrl_tx,
+            cancel: cancel.clone(),
+            backpressure_count: Arc::clone(&bp),
+        };
+
+        let mgr = ConnectionManager::new();
+        mgr.register(conn_id, tx, cancel.clone(), Arc::clone(&bp));
+
+        // Fill the buffer via direct send.
+        assert!(conn.send("fill".into()));
+        // Overflow via fan-out.
+        assert!(!mgr.send_to(conn_id, "overflow-fanout".into()));
+        assert_eq!(bp.load(Ordering::Relaxed), 1, "fan-out overflow increments shared counter");
+        // Overflow via direct send.
+        assert!(!conn.send("overflow-direct".into()));
+        assert_eq!(bp.load(Ordering::Relaxed), 2, "direct overflow increments same counter");
+        // One more fan-out overflow → should cancel (3 consecutive).
+        mgr.send_to(conn_id, "overflow-final".into());
+        assert!(cancel.is_cancelled(), "shared counter reached limit via mixed path");
+    }
+}
