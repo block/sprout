@@ -389,6 +389,7 @@ async fn handle_ws_message(
                 }
                 RelayMessage::Closed { subscription_id, message } => {
                     warn!("subscription {subscription_id} closed by relay: {message}");
+                    state.active_subscriptions.remove(&subscription_id);
                     if let Some(sub) = state.pending_eose.remove(&subscription_id) {
                         let _ = sub.reply.send(Err(RelayClientError::ConnectionClosed));
                     }
@@ -603,9 +604,14 @@ async fn run_background_task(
                             Ok(t) => t,
                             Err(e) => { let _ = reply.send(Err(e.into())); continue; }
                         };
-                        let result = ws.send(Message::Text(msg.into())).await
-                            .map_err(RelayClientError::WebSocket);
-                        let _ = reply.send(result);
+                        if let Err(e) = ws.send(Message::Text(msg.into())).await {
+                            let _ = reply.send(Err(RelayClientError::WebSocket(e)));
+                            if !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref()).await {
+                                return;
+                            }
+                            continue;
+                        }
+                        let _ = reply.send(Ok(()));
                     }
 
                     Some(RelayCommand::Shutdown) | None => {
@@ -691,11 +697,12 @@ impl RelayClient {
             bg: std::sync::Arc::new(BgTaskHandle { cmd_tx, handle }),
             keys: keys.clone(),
             relay_url: relay_url.to_string(),
+            // Default builder with only timeout config — infallible in practice.
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .build()
-                .expect("SAFETY: default builder with only timeout config cannot fail"),
+                .map_err(|e| RelayClientError::Url(format!("HTTP client build failed: {e}")))?,
             api_token: api_token.map(|t| t.to_string()),
         })
     }
