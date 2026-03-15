@@ -628,13 +628,21 @@ export type BlobDescriptor = {
 export async function uploadMedia(
   filePath: string,
   isTemp: boolean,
-  filename?: string,
 ): Promise<BlobDescriptor> {
   return invokeTauri<BlobDescriptor>("upload_media", {
     filePath,
     isTemp,
-    filename,
   });
+}
+
+export async function pickAndUploadMedia(): Promise<BlobDescriptor | null> {
+  return invokeTauri<BlobDescriptor | null>("pick_and_upload_media", {});
+}
+
+export async function uploadMediaBytes(
+  data: number[],
+): Promise<BlobDescriptor> {
+  return invokeTauri<BlobDescriptor>("upload_media_bytes", { data });
 }
 
 export async function addReaction(

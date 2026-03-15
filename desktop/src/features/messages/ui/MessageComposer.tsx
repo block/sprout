@@ -3,7 +3,11 @@ import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
-import { type BlobDescriptor, uploadMedia } from "@/shared/api/tauri";
+import {
+  type BlobDescriptor,
+  pickAndUploadMedia,
+  uploadMediaBytes,
+} from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
 import {
@@ -161,58 +165,32 @@ export function MessageComposer({
     return [...new Set(pubkeys)];
   }, []);
 
-  const handleFileUpload = React.useCallback(
-    async (filePath: string, isTemp: boolean, filename?: string) => {
-      setUploadState({ status: "uploading" });
-      try {
-        const descriptor = await uploadMedia(filePath, isTemp, filename);
-        const name = (filename ?? "")
-          .replace(/[^a-zA-Z0-9._\- ]/g, "_")
-          .slice(0, 100);
-        const markdown = `\n![${name}](${descriptor.url})\n`;
-        setContent((prev) => prev + markdown);
-        setPendingImeta((prev) => [...prev, descriptor]);
-        setUploadState({ status: "idle" });
-      } catch (err) {
-        setUploadState({ status: "error", message: String(err) });
-      }
-    },
-    [],
-  );
+  // Shared handler: got a descriptor back from any upload path.
+  const onUploaded = React.useCallback((descriptor: BlobDescriptor) => {
+    const markdown = `\n![image](${descriptor.url})\n`;
+    setContent((prev) => prev + markdown);
+    setPendingImeta((prev) => [...prev, descriptor]);
+    setUploadState({ status: "idle" });
+  }, []);
 
+  // 📎 Paperclip: native file dialog + read + upload, all in trusted Rust.
+  // The renderer never touches the filesystem.
   const handlePaperclip = React.useCallback(async () => {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({
-      multiple: false,
-      filters: [
-        {
-          name: "Images",
-          extensions: ["jpg", "jpeg", "png", "gif", "webp"],
-        },
-      ],
-    });
-    if (selected) {
-      const filePath = selected;
-      // Copy to temp dir before upload — the Tauri command restricts reads to
-      // the OS temp directory to prevent file exfiltration from compromised renderers.
-      try {
-        const { tempDir } = await import("@tauri-apps/api/path");
-        const { copyFile } = await import("@tauri-apps/plugin-fs");
-        const tmp = await tempDir();
-        const safeName =
-          filePath
-            .split(/[/\\]/)
-            .pop()
-            ?.replace(/[^a-zA-Z0-9._\- ]/g, "_") ?? "file";
-        const tempPath = `${tmp}sprout-dialog-${crypto.randomUUID()}-${safeName}`;
-        await copyFile(filePath, tempPath);
-        await handleFileUpload(tempPath, true, safeName);
-      } catch (err) {
-        setUploadState({ status: "error", message: String(err) });
+    setUploadState({ status: "uploading" });
+    try {
+      const descriptor = await pickAndUploadMedia();
+      if (descriptor) {
+        onUploaded(descriptor);
+      } else {
+        setUploadState({ status: "idle" }); // user cancelled dialog
       }
+    } catch (err) {
+      setUploadState({ status: "error", message: String(err) });
     }
-  }, [handleFileUpload]);
+  }, [onUploaded]);
 
+  // 🖱️ Drop: read bytes in JS, send via IPC to Rust for upload.
+  // No filesystem access needed — bytes come from the drag event.
   const handleDrop = React.useCallback(
     async (event: React.DragEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -222,7 +200,6 @@ export function MessageComposer({
       const file = files[0];
       if (!file) return;
 
-      // Client-side image filter — server also validates, but reject early for UX
       const ALLOWED_TYPES = [
         "image/jpeg",
         "image/png",
@@ -237,21 +214,16 @@ export function MessageComposer({
         return;
       }
 
-      // Write to temp file via Tauri fs plugin to avoid large IPC serialization
+      setUploadState({ status: "uploading" });
       try {
-        const { tempDir } = await import("@tauri-apps/api/path");
-        const { writeFile } = await import("@tauri-apps/plugin-fs");
-        const tmp = await tempDir();
-        const safeName = file.name.replace(/[/\\]/g, "_");
-        const tempPath = `${tmp}sprout-upload-${crypto.randomUUID()}-${safeName}`;
         const buffer = await file.arrayBuffer();
-        await writeFile(tempPath, new Uint8Array(buffer));
-        await handleFileUpload(tempPath, true, file.name);
+        const descriptor = await uploadMediaBytes([...new Uint8Array(buffer)]);
+        onUploaded(descriptor);
       } catch (err) {
         setUploadState({ status: "error", message: String(err) });
       }
     },
-    [handleFileUpload],
+    [onUploaded],
   );
 
   const handleDragOver = React.useCallback(
@@ -261,6 +233,7 @@ export function MessageComposer({
     [],
   );
 
+  // 📋 Paste: read bytes from clipboard, send via IPC to Rust for upload.
   const handlePaste = React.useCallback(
     async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
       const items = Array.from(event.clipboardData.items);
@@ -277,20 +250,16 @@ export function MessageComposer({
       const file = imageItem.getAsFile();
       if (!file) return;
 
+      setUploadState({ status: "uploading" });
       try {
-        const { tempDir } = await import("@tauri-apps/api/path");
-        const { writeFile } = await import("@tauri-apps/plugin-fs");
-        const tmp = await tempDir();
-        const ext = file.type.split("/")[1] ?? "png";
-        const tempPath = `${tmp}sprout-paste-${crypto.randomUUID()}.${ext}`;
         const buffer = await file.arrayBuffer();
-        await writeFile(tempPath, new Uint8Array(buffer));
-        await handleFileUpload(tempPath, true, file.name || `image.${ext}`);
+        const descriptor = await uploadMediaBytes([...new Uint8Array(buffer)]);
+        onUploaded(descriptor);
       } catch (err) {
         setUploadState({ status: "error", message: String(err) });
       }
     },
-    [handleFileUpload],
+    [onUploaded],
   );
 
   const submitMessage = React.useCallback(async () => {

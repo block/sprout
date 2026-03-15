@@ -4064,12 +4064,12 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
- "tauri-plugin-fs",
  "tauri-plugin-opener",
  "tauri-plugin-websocket",
  "tauri-plugin-window-state",
  "tokio",
  "url",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

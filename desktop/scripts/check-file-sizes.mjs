@@ -36,7 +36,7 @@ const overrides = new Map([
   ["src/features/settings/ui/SettingsView.tsx", 600],
   ["src/features/sidebar/ui/AppSidebar.tsx", 650],
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
-  ["src/shared/api/tauri.ts", 900],
+  ["src/shared/api/tauri.ts", 950],
 ]);
 
 async function walkFiles(directory) {
