@@ -18,7 +18,7 @@ use crate::protocol::RelayMessage;
 use crate::state::AppState;
 
 const MAX_HISTORICAL_LIMIT: i64 = 500;
-const MAX_SUBSCRIPTIONS: usize = 100;
+const MAX_SUBSCRIPTIONS: usize = 1024;
 
 /// Handle a REQ message: register the subscription, deliver historical events, then send EOSE.
 pub async fn handle_req(
