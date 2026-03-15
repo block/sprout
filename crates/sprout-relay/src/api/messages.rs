@@ -153,6 +153,68 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
     Ok(())
 }
 
+/// Verify that every imeta tag references a blob that actually exists in storage
+/// and that the claimed metadata (size, MIME) matches the sidecar.
+///
+/// Called after syntactic validation. Returns Ok(()) if all blobs exist and match,
+/// or a human-readable error string. This prevents clients from referencing
+/// nonexistent blobs or lying about size/MIME in imeta tags.
+pub async fn verify_imeta_blobs(
+    tags: &[Vec<String>],
+    storage: &sprout_media::MediaStorage,
+) -> Result<(), String> {
+    for tag in tags {
+        let mut url_value = String::new();
+        let mut x_value = String::new();
+        let mut m_value = String::new();
+        let mut size_value: u64 = 0;
+
+        for part in tag.iter().skip(1) {
+            let mut parts = part.splitn(2, ' ');
+            let key = parts.next().unwrap_or("");
+            let value = parts.next().unwrap_or("");
+            match key {
+                "url" => url_value = value.to_string(),
+                "x" => x_value = value.to_string(),
+                "m" => m_value = value.to_string(),
+                "size" => size_value = value.parse().unwrap_or(0),
+                _ => {}
+            }
+        }
+
+        if x_value.is_empty() {
+            continue; // syntactic validation already caught this
+        }
+
+        let sidecar = storage
+            .get_sidecar(&x_value)
+            .await
+            .map_err(|_| format!("imeta references nonexistent blob: {x_value}"))?;
+
+        if !m_value.is_empty() && sidecar.mime_type != m_value {
+            return Err(format!(
+                "imeta m ({m_value}) does not match stored MIME ({})",
+                sidecar.mime_type
+            ));
+        }
+        if size_value > 0 && sidecar.size != size_value {
+            return Err(format!(
+                "imeta size ({size_value}) does not match stored size ({})",
+                sidecar.size
+            ));
+        }
+        // Verify URL hash matches the blob we found (defense-in-depth).
+        if !url_value.is_empty() {
+            if let Some(hash_in_url) = extract_hash_from_media_url(&url_value) {
+                if hash_in_url != x_value {
+                    return Err("imeta url hash does not match x".into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Extract the 64-char hex hash from a `/media/{hash}.{ext}` or `/media/{hash}.thumb.jpg` URL.
 fn extract_hash_from_media_url(url: &str) -> Option<&str> {
     let after = url.rsplit("/media/").next()?;
@@ -678,9 +740,11 @@ pub async fn send_message(
         tags.extend(diff_tags);
     }
 
-    // Validate imeta tags via shared helper (used by both REST and WebSocket paths).
-    // TODO(v2): Cross-check url/x/m/size against stored blob sidecar metadata.
+    // Validate imeta tags: syntactic checks, then verify blobs exist in storage.
     validate_imeta_tags(&body.media_tags, &state.config.media.public_base_url)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, &e))?;
+    verify_imeta_blobs(&body.media_tags, &state.media_storage)
+        .await
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &e))?;
 
     for tag in &body.media_tags {

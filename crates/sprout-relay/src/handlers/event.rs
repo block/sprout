@@ -383,6 +383,15 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
             ));
             return;
         }
+        // Verify referenced blobs exist in storage and metadata matches.
+        if let Err(e) = crate::api::verify_imeta_blobs(&imeta_tags, &state.media_storage).await {
+            conn.send(RelayMessage::ok(
+                &event_id_hex,
+                false,
+                &format!("invalid: {e}"),
+            ));
+            return;
+        }
     }
 
     let (stored_event, was_inserted) = match state.db.insert_event(&event, channel_id).await {

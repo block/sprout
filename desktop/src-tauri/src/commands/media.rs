@@ -233,8 +233,17 @@ pub async fn pick_and_upload_media(
         None => return Ok(None),
     };
 
-    let body = std::fs::read(file_path.as_path().ok_or("invalid path")?)
+    // Use the same fd-first pattern as upload_media: open the file to pin
+    // the inode, then read from the handle. Prevents a local attacker from
+    // swapping the selected path between dialog return and read.
+    let path = file_path.as_path().ok_or("invalid path")?;
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+
+    use std::io::Read;
+    let mut body = Vec::new();
+    file.read_to_end(&mut body)
         .map_err(|e| format!("failed to read file: {e}"))?;
+    drop(file);
 
     let mime = detect_and_validate_mime(&body)?;
     do_upload(body, &mime, &state).await.map(Some)
