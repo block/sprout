@@ -1876,7 +1876,7 @@ mod tests {
         // Simulate clearing after resubscribe.
         state.channel_dropped_since.remove(&channel_id);
         assert!(
-            state.channel_dropped_since.get(&channel_id).is_none(),
+            !state.channel_dropped_since.contains_key(&channel_id),
             "channel_dropped_since should be cleared after resubscribe"
         );
     }

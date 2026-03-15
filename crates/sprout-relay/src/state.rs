@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn send_to_cancels_after_grace_limit() {
-        let (mgr, id, _rx, cancel, bp) = setup_conn(1);
+        let (mgr, id, _rx, cancel, _bp) = setup_conn(1);
         assert!(mgr.send_to(id, "fill".into()));
         // Exhaust grace: 3 consecutive Full events.
         for _ in 0..SLOW_CLIENT_GRACE_LIMIT {
@@ -298,7 +298,7 @@ mod tests {
         let conn = ConnectionState {
             conn_id,
             remote_addr: "127.0.0.1:1234".parse().unwrap(),
-            auth_state: RwLock::new(crate::connection::AuthState::Failed),
+            auth_state: RwLock::new(AuthState::Failed),
             subscriptions: Mutex::new(HashMap::new()),
             send_tx: tx.clone(),
             ctrl_tx,
