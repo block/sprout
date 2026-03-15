@@ -2039,3 +2039,325 @@ async fn test_batch_add_mixed_policies() {
         "error should mention policy:nobody; got: {error_msg}"
     );
 }
+
+// ── Thread reply mention p-tag tests ──────────────────────────────────────────
+
+/// Thread replies created via REST with `mention_pubkeys` must include the
+/// extra `p` tags so that `#p`-filtered subscribers (e.g. ACP agent harness)
+/// receive the event. This is the regression test for the bug where
+/// @mentioning an agent in a thread reply did not trigger the agent.
+#[tokio::test]
+#[ignore]
+async fn test_rest_reply_with_mention_pubkeys_includes_p_tags() {
+    let client = http_client();
+    let poster_keys = Keys::generate();
+    let agent_keys = Keys::generate();
+    let poster_hex = poster_keys.public_key().to_hex();
+    let agent_hex = agent_keys.public_key().to_hex();
+    let ws_url = relay_ws_url();
+
+    // Create an open channel.
+    let channels_url = format!("{}/api/channels", relay_http_url());
+    let channel_name = format!("e2e-reply-mention-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &channels_url,
+        &poster_hex,
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201, "failed to create test channel");
+    let created: serde_json::Value = create_resp.json().await.expect("JSON");
+    let channel_id = created["id"].as_str().expect("channel id").to_string();
+
+    // Subscribe as the "agent" with a #p filter matching agent_hex — this is
+    // exactly how the ACP harness subscribes.
+    let mut agent_sub = SproutTestClient::connect(&ws_url, &agent_keys)
+        .await
+        .expect("agent WS connect");
+    let sid = format!("agent-mention-{}", uuid::Uuid::new_v4().simple());
+    let filter = Filter::new()
+        .kind(Kind::Custom(9))
+        .custom_tag(
+            SingleLetterTag::lowercase(Alphabet::H),
+            [channel_id.as_str()],
+        )
+        .custom_tag(
+            SingleLetterTag::lowercase(Alphabet::P),
+            [agent_hex.as_str()],
+        );
+    agent_sub
+        .subscribe(&sid, vec![filter])
+        .await
+        .expect("subscribe");
+    agent_sub
+        .collect_until_eose(&sid, Duration::from_secs(5))
+        .await
+        .expect("EOSE");
+
+    // Post a top-level message (the future thread root).
+    let msg_url = format!("{}/api/channels/{}/messages", relay_http_url(), channel_id);
+    let root_resp = authed_post_json(
+        &client,
+        &msg_url,
+        &poster_hex,
+        serde_json::json!({ "content": "thread root" }),
+    )
+    .await;
+    assert_eq!(root_resp.status(), 200);
+    let root: serde_json::Value = root_resp.json().await.expect("JSON");
+    let root_event_id = root["event_id"].as_str().expect("event_id").to_string();
+
+    // Post a reply that @mentions the agent via mention_pubkeys.
+    let reply_resp = authed_post_json(
+        &client,
+        &msg_url,
+        &poster_hex,
+        serde_json::json!({
+            "content": "hey @agent check this out",
+            "parent_event_id": root_event_id,
+            "mention_pubkeys": [agent_hex],
+        }),
+    )
+    .await;
+    assert_eq!(
+        reply_resp.status(),
+        200,
+        "reply with mention_pubkeys failed"
+    );
+
+    // The agent subscriber should receive the reply because it has a p-tag
+    // matching agent_hex.
+    let msg = agent_sub
+        .recv_event(Duration::from_secs(5))
+        .await
+        .expect("agent subscriber did not receive the reply — p-tag likely missing");
+
+    match msg {
+        RelayMessage::Event { event, .. } => {
+            assert_eq!(event.content, "hey @agent check this out");
+
+            let tags: Vec<Vec<String>> = event
+                .tags
+                .iter()
+                .map(|tag| tag.as_slice().iter().map(|s| s.to_string()).collect())
+                .collect();
+
+            // Must have the agent's p-tag (the mention).
+            assert!(
+                tags.iter()
+                    .any(|t| t.len() >= 2 && t[0] == "p" && t[1] == agent_hex),
+                "reply is missing the agent mention p-tag: {tags:?}"
+            );
+            // Must still have the sender's p-tag (attribution).
+            assert!(
+                tags.iter()
+                    .any(|t| t.len() >= 2 && t[0] == "p" && t[1] == poster_hex),
+                "reply is missing the sender attribution p-tag: {tags:?}"
+            );
+            // Must have the reply e-tag.
+            assert!(
+                tags.iter().any(|t| t.len() >= 4
+                    && t[0] == "e"
+                    && t[1] == root_event_id
+                    && t[3] == "reply"),
+                "reply is missing the NIP-10 reply e-tag: {tags:?}"
+            );
+        }
+        other => panic!("expected EVENT, got {other:?}"),
+    }
+
+    agent_sub.disconnect().await.expect("disconnect");
+}
+
+/// mention_pubkeys validation: duplicates are deduplicated, self is skipped,
+/// mixed-case is canonicalized, and invalid entries are rejected.
+#[tokio::test]
+#[ignore]
+async fn test_rest_mention_pubkeys_validation() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Create a channel.
+    let channels_url = format!("{}/api/channels", relay_http_url());
+    let channel_name = format!("e2e-mention-val-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &channels_url,
+        &pubkey_hex,
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201);
+    let created: serde_json::Value = create_resp.json().await.expect("JSON");
+    let channel_id = created["id"].as_str().expect("channel id").to_string();
+    let msg_url = format!("{}/api/channels/{}/messages", relay_http_url(), channel_id);
+
+    // Invalid hex should be rejected.
+    let resp = authed_post_json(
+        &client,
+        &msg_url,
+        &pubkey_hex,
+        serde_json::json!({
+            "content": "bad mention",
+            "mention_pubkeys": ["not-valid-hex"],
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), 400, "invalid hex should be rejected");
+
+    // Too many mentions should be rejected.
+    let too_many: Vec<String> = (0..51).map(|i| format!("{:064x}", i)).collect();
+    let resp = authed_post_json(
+        &client,
+        &msg_url,
+        &pubkey_hex,
+        serde_json::json!({
+            "content": "too many mentions",
+            "mention_pubkeys": too_many,
+        }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "exceeding 50 mentions should be rejected"
+    );
+
+    // Empty array should succeed.
+    let resp = authed_post_json(
+        &client,
+        &msg_url,
+        &pubkey_hex,
+        serde_json::json!({
+            "content": "no mentions",
+            "mention_pubkeys": [],
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "empty mention_pubkeys should succeed");
+}
+
+/// Thread reply with duplicate, uppercase, and self mention_pubkeys must
+/// produce exactly the expected normalized p-tags: sender first, then each
+/// unique mentioned pubkey lowercased, with self and duplicates removed.
+#[tokio::test]
+#[ignore]
+async fn test_rest_mention_pubkeys_normalization_in_emitted_event() {
+    let client = http_client();
+    let poster_keys = Keys::generate();
+    let agent_keys = Keys::generate();
+    let poster_hex = poster_keys.public_key().to_hex();
+    let agent_hex = agent_keys.public_key().to_hex();
+    let ws_url = relay_ws_url();
+
+    // Create an open channel.
+    let channels_url = format!("{}/api/channels", relay_http_url());
+    let channel_name = format!("e2e-norm-{}", uuid::Uuid::new_v4().simple());
+    let create_resp = authed_post_json(
+        &client,
+        &channels_url,
+        &poster_hex,
+        serde_json::json!({
+            "name": channel_name,
+            "channel_type": "stream",
+            "visibility": "open"
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201);
+    let created: serde_json::Value = create_resp.json().await.expect("JSON");
+    let channel_id = created["id"].as_str().expect("channel id").to_string();
+
+    // Subscribe to the channel (no #p filter — we want to see all events).
+    let mut sub = SproutTestClient::connect(&ws_url, &poster_keys)
+        .await
+        .expect("WS connect");
+    let sid = format!("norm-{}", uuid::Uuid::new_v4().simple());
+    let filter = Filter::new().kind(Kind::Custom(9)).custom_tag(
+        SingleLetterTag::lowercase(Alphabet::H),
+        [channel_id.as_str()],
+    );
+    sub.subscribe(&sid, vec![filter]).await.expect("subscribe");
+    sub.collect_until_eose(&sid, Duration::from_secs(5))
+        .await
+        .expect("EOSE");
+
+    // Post a root message.
+    let msg_url = format!("{}/api/channels/{}/messages", relay_http_url(), channel_id);
+    let root_resp = authed_post_json(
+        &client,
+        &msg_url,
+        &poster_hex,
+        serde_json::json!({ "content": "root" }),
+    )
+    .await;
+    assert_eq!(root_resp.status(), 200);
+    let root: serde_json::Value = root_resp.json().await.expect("JSON");
+    let root_id = root["event_id"].as_str().expect("event_id").to_string();
+
+    // Consume the root event so it doesn't interfere.
+    sub.recv_event(Duration::from_secs(5))
+        .await
+        .expect("root event");
+
+    // Post a reply with: duplicate agent, uppercase agent, and self-mention.
+    let reply_resp = authed_post_json(
+        &client,
+        &msg_url,
+        &poster_hex,
+        serde_json::json!({
+            "content": "normalization test",
+            "parent_event_id": root_id,
+            "mention_pubkeys": [
+                agent_hex,
+                agent_hex.to_uppercase(),
+                agent_hex,
+                poster_hex,
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(reply_resp.status(), 200);
+
+    let msg = sub
+        .recv_event(Duration::from_secs(5))
+        .await
+        .expect("reply event");
+
+    match msg {
+        RelayMessage::Event { event, .. } => {
+            let p_tags: Vec<String> = event
+                .tags
+                .iter()
+                .filter(|t| t.kind().to_string() == "p")
+                .filter_map(|t| t.content().map(|s| s.to_string()))
+                .collect();
+
+            // Expect exactly 2 p-tags: sender (first) + agent (deduplicated, lowercased).
+            // Self-mention (poster_hex) must be suppressed.
+            assert_eq!(
+                p_tags.len(),
+                2,
+                "expected exactly 2 p-tags (sender + agent), got {p_tags:?}"
+            );
+            assert_eq!(p_tags[0], poster_hex, "first p-tag must be sender");
+            assert_eq!(
+                p_tags[1], agent_hex,
+                "second p-tag must be the agent (lowercased, deduplicated)"
+            );
+        }
+        other => panic!("expected EVENT, got {other:?}"),
+    }
+
+    sub.disconnect().await.expect("disconnect");
+}

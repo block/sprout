@@ -50,13 +50,15 @@ pub async fn send_channel_message(
     state: State<'_, AppState>,
 ) -> Result<SendChannelMessageResponse, String> {
     let path = format!("/api/channels/{channel_id}/messages");
+    let mentions = mention_pubkeys.unwrap_or_default();
+    let mention_refs: Vec<&str> = mentions.iter().map(|s| s.as_str()).collect();
     let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?.json(
         &SendChannelMessageBody {
             content: content.trim(),
             parent_event_id: parent_event_id.as_deref(),
             broadcast_to_channel: false,
             media_tags,
-            mention_pubkeys: mention_pubkeys.unwrap_or_default(),
+            mention_pubkeys: mention_refs,
         },
     );
 

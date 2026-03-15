@@ -392,6 +392,48 @@ fn reactions_to_json(reactions: &[sprout_db::reaction::ReactionSummary]) -> serd
 
 // ── POST /api/channels/:channel_id/messages ───────────────────────────────────
 
+/// Maximum number of mention pubkeys allowed per message.
+const MAX_MENTION_PUBKEYS: usize = 50;
+
+/// Validate, canonicalize, and deduplicate mention pubkeys.
+///
+/// - Lowercases each entry (Nostr pubkeys are lowercase hex by convention).
+/// - Validates each is a 64-char hex string (32-byte pubkey).
+/// - Deduplicates (including against `self_pubkey_hex`).
+/// - Rejects results exceeding [`MAX_MENTION_PUBKEYS`] **after** normalization.
+///
+/// Returns the deduplicated, canonical pubkeys (excluding self).
+fn normalize_mention_pubkeys(
+    raw: &[String],
+    self_pubkey_hex: &str,
+) -> Result<Vec<String>, (StatusCode, axum::Json<serde_json::Value>)> {
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(self_pubkey_hex.to_ascii_lowercase());
+    let mut result = Vec::new();
+    for entry in raw {
+        let canonical = entry.to_ascii_lowercase();
+        if canonical.len() != 64 || !canonical.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                &format!("invalid mention_pubkeys entry: {entry}"),
+            ));
+        }
+        if seen.insert(canonical.clone()) {
+            result.push(canonical);
+        }
+    }
+    if result.len() > MAX_MENTION_PUBKEYS {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                "mention_pubkeys exceeds maximum of {MAX_MENTION_PUBKEYS} after deduplication (got {})",
+                result.len()
+            ),
+        ));
+    }
+    Ok(result)
+}
+
 /// Build Nostr tags for a kind:40008 diff message.
 ///
 /// Required fields: `diff_repo_url` (must be http/https) and `diff_commit_sha`.
@@ -530,8 +572,9 @@ pub struct SendMessageBody {
     pub content: String,
     /// Hex-encoded event ID of the parent message (for replies).
     pub parent_event_id: Option<String>,
-    /// Hex-encoded pubkeys to mention in the message (added as `p` tags).
-    /// Distinct from the author-attribution `p` tag which is always added.
+    /// Hex-encoded pubkeys of users mentioned in this message.
+    /// Each pubkey gets a `p` tag so mention-filtered subscriptions deliver the event.
+    /// Normalized server-side: lowercased, deduplicated, self-mention skipped, capped at 50.
     #[serde(default)]
     pub mention_pubkeys: Vec<String>,
     /// When `true`, a reply is also surfaced in the channel feed (broadcast).
@@ -707,19 +750,13 @@ pub async fn send_message(
             .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
     ];
 
-    // Mention p tags — distinct from the author-attribution p tag above.
-    for mention_hex in &body.mention_pubkeys {
-        // Validate hex format (32-byte pubkey = 64 hex chars)
-        if mention_hex.len() == 64
-            && mention_hex
-                .chars()
-                .all(|c| matches!(c, '0'..='9' | 'a'..='f'))
-        {
-            tags.push(
-                Tag::parse(&["p", mention_hex])
-                    .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
-            );
-        }
+    // Mention p-tags — each mentioned pubkey gets a `p` tag so that
+    // mention-filtered subscriptions (e.g. ACP agent harness) receive the event.
+    for mention in normalize_mention_pubkeys(&body.mention_pubkeys, &user_pubkey_hex)? {
+        tags.push(
+            Tag::parse(&["p", &mention])
+                .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        );
     }
 
     // Thread reply tags (NIP-10 style).
@@ -1216,6 +1253,120 @@ pub async fn get_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── normalize_mention_pubkeys tests ─────────────────────────────────────
+
+    const SELF_PK: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OTHER_PK: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const THIRD_PK: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    #[test]
+    fn normalize_empty_array() {
+        let result = normalize_mention_pubkeys(&[], SELF_PK).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn normalize_single_valid_mention() {
+        let input = vec![OTHER_PK.to_string()];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result, vec![OTHER_PK]);
+    }
+
+    #[test]
+    fn normalize_skips_self_mention() {
+        let input = vec![SELF_PK.to_string()];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn normalize_skips_self_mention_case_insensitive() {
+        let upper_self = SELF_PK.to_uppercase();
+        let input = vec![upper_self];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn normalize_deduplicates() {
+        let input = vec![OTHER_PK.to_string(), OTHER_PK.to_string()];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], OTHER_PK);
+    }
+
+    #[test]
+    fn normalize_deduplicates_mixed_case() {
+        let input = vec![OTHER_PK.to_string(), OTHER_PK.to_uppercase()];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], OTHER_PK);
+    }
+
+    #[test]
+    fn normalize_canonicalizes_to_lowercase() {
+        let input = vec![OTHER_PK.to_uppercase()];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result, vec![OTHER_PK]);
+    }
+
+    #[test]
+    fn normalize_preserves_order() {
+        let input = vec![THIRD_PK.to_string(), OTHER_PK.to_string()];
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result, vec![THIRD_PK, OTHER_PK]);
+    }
+
+    #[test]
+    fn normalize_rejects_invalid_hex() {
+        let input =
+            vec!["zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_string()];
+        let err = normalize_mention_pubkeys(&input, SELF_PK);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn normalize_rejects_wrong_length() {
+        let input = vec!["aabb".to_string()];
+        let err = normalize_mention_pubkeys(&input, SELF_PK);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn normalize_rejects_exceeding_cap() {
+        let input: Vec<String> = (0..MAX_MENTION_PUBKEYS + 1)
+            .map(|i| format!("{:064x}", i))
+            .collect();
+        let err = normalize_mention_pubkeys(&input, SELF_PK);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn normalize_accepts_exactly_at_cap() {
+        // Generate MAX_MENTION_PUBKEYS unique pubkeys (none matching SELF_PK).
+        let input: Vec<String> = (1..=MAX_MENTION_PUBKEYS)
+            .map(|i| format!("{:064x}", i))
+            .collect();
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result.len(), MAX_MENTION_PUBKEYS);
+    }
+
+    #[test]
+    fn normalize_over_cap_raw_but_under_after_dedupe() {
+        // 51 raw entries: 50 unique pubkeys + 1 duplicate + self-mention.
+        // After dedupe and self-skip the result should be exactly 50.
+        let mut input: Vec<String> = (1..=MAX_MENTION_PUBKEYS)
+            .map(|i| format!("{:064x}", i))
+            .collect();
+        input.push(SELF_PK.to_string()); // self-mention → skipped
+        input.push(format!("{:064x}", 1)); // duplicate → collapsed
+        assert!(input.len() > MAX_MENTION_PUBKEYS);
+        let result = normalize_mention_pubkeys(&input, SELF_PK).unwrap();
+        assert_eq!(result.len(), MAX_MENTION_PUBKEYS);
+    }
+
+    // ── local media URL tests ───────────────────────────────────────────────
 
     const HASH: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
     const BASE: &str = "https://relay.example.com/media";

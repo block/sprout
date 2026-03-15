@@ -2271,6 +2271,7 @@ async function handleSendChannelMessage(
     channelId: string;
     content: string;
     parentEventId?: string | null;
+    mentionPubkeys?: string[];
   },
   config: E2eConfig | undefined,
 ): Promise<RawSendChannelMessageResponse> {
@@ -2329,19 +2330,32 @@ async function handleSendChannelMessage(
       pubkey: getMockMemberPubkey(config),
       created_at: createdAt,
       kind: 9,
-      tags:
-        rootEventId === args.parentEventId
-          ? [
-              ["p", getMockMemberPubkey(config)],
-              ["h", args.channelId],
-              ["e", rootEventId, "", "reply"],
-            ]
-          : [
-              ["p", getMockMemberPubkey(config)],
-              ["h", args.channelId],
-              ["e", rootEventId, "", "root"],
-              ["e", args.parentEventId, "", "reply"],
-            ],
+      tags: (() => {
+        const authorPubkey = getMockMemberPubkey(config);
+        // Match production tag ordering: author p, h, mention ps, then e-tags.
+        const tags: string[][] = [
+          ["p", authorPubkey],
+          ["h", args.channelId],
+        ];
+        // Best-effort client-side normalization (relay is authoritative).
+        const selfLower = authorPubkey.toLowerCase();
+        const seen = new Set<string>([selfLower]);
+        for (const pk of args.mentionPubkeys ?? []) {
+          const lower = pk.toLowerCase();
+          if (!seen.has(lower)) {
+            seen.add(lower);
+            tags.push(["p", lower]);
+          }
+        }
+        // Thread e-tags come after mention p-tags.
+        if (rootEventId === args.parentEventId) {
+          tags.push(["e", rootEventId, "", "reply"]);
+        } else {
+          tags.push(["e", rootEventId, "", "root"]);
+          tags.push(["e", args.parentEventId, "", "reply"]);
+        }
+        return tags;
+      })(),
       content: args.content.trim(),
       sig: "mocksig".repeat(20).slice(0, 128),
     };
@@ -2367,6 +2381,7 @@ async function handleSendChannelMessage(
         content: args.content,
         parent_event_id: args.parentEventId,
         broadcast_to_channel: false,
+        mention_pubkeys: args.mentionPubkeys ?? [],
       }),
     },
   );

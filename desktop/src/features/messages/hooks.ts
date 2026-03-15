@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { updateChannelLastMessageAt } from "@/features/channels/hooks";
 import {
   buildReplyTags,
+  normalizeMentionPubkeys,
   resolveReplyRootId,
 } from "@/features/messages/lib/threading";
 import { relayClient } from "@/shared/api/relayClient";
@@ -73,11 +74,16 @@ function createOptimisticMessage(
         identity.pubkey,
         parentEventId,
         resolveReplyRootId(parentEventId, currentMessages),
+        mentionPubkeys,
       ),
     );
   } else {
     tags.push(["h", channelId]);
-    for (const pubkey of mentionPubkeys) {
+    tags.push(["p", identity.pubkey]);
+    for (const pubkey of normalizeMentionPubkeys(
+      mentionPubkeys,
+      identity.pubkey,
+    )) {
       tags.push(["p", pubkey]);
     }
   }
@@ -266,10 +272,11 @@ export function useSendMessageMutation(
               identity.pubkey,
               parentEventId,
               resolveReplyRootId(parentEventId, cachedMessages),
+              mentionPubkeys,
             )
           : [];
         const baseTags = parentEventId
-          ? replyTags // buildReplyTags includes h + author p
+          ? replyTags // buildReplyTags includes h + author p + mention ps
           : [
               ["h", channel.id],
               ["p", identity.pubkey],
@@ -282,7 +289,13 @@ export function useSendMessageMutation(
           kind: KIND_STREAM_MESSAGE,
           tags: [
             ...baseTags,
-            ...(mentionPubkeys ?? []).map((pk) => ["p", pk]),
+            // For non-replies, add mention p-tags here (replies get them via buildReplyTags)
+            ...(!parentEventId
+              ? normalizeMentionPubkeys(
+                  mentionPubkeys ?? [],
+                  identity.pubkey,
+                ).map((pk) => ["p", pk])
+              : []),
             ...(mediaTags ?? []),
           ],
           content: content.trim(),
