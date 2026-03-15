@@ -1,5 +1,6 @@
 //! Shared application state — Arc-wrapped, shared across all connections.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -19,13 +20,21 @@ use sprout_workflow::WorkflowEngine;
 
 use crate::api::tokens::MintRateLimiter;
 use crate::config::Config;
+use crate::connection::SLOW_CLIENT_GRACE_LIMIT;
 use crate::subscription::SubscriptionRegistry;
+
+/// Per-connection entry in the connection manager.
+struct ConnEntry {
+    tx: mpsc::Sender<WsMessage>,
+    cancel: CancellationToken,
+    /// Shared with `ConnectionState` — both direct sends and fan-out
+    /// broadcasts track the same consecutive-full counter.
+    backpressure_count: Arc<AtomicU8>,
+}
 
 /// Tracks active WebSocket connections and provides message routing by connection ID.
 pub struct ConnectionManager {
-    /// Map from connection ID to the sender half of the connection's outbound channel
-    /// and the cancellation token for the connection.
-    connections: DashMap<Uuid, (mpsc::Sender<WsMessage>, CancellationToken)>,
+    connections: DashMap<Uuid, ConnEntry>,
 }
 
 impl ConnectionManager {
@@ -36,9 +45,23 @@ impl ConnectionManager {
         }
     }
 
-    /// Registers a connection with its outbound sender and cancellation token.
-    pub fn register(&self, conn_id: Uuid, tx: mpsc::Sender<WsMessage>, cancel: CancellationToken) {
-        self.connections.insert(conn_id, (tx, cancel));
+    /// Registers a connection with its outbound sender, cancellation token,
+    /// and shared backpressure counter (same `Arc` as `ConnectionState`).
+    pub fn register(
+        &self,
+        conn_id: Uuid,
+        tx: mpsc::Sender<WsMessage>,
+        cancel: CancellationToken,
+        backpressure_count: Arc<AtomicU8>,
+    ) {
+        self.connections.insert(
+            conn_id,
+            ConnEntry {
+                tx,
+                cancel,
+                backpressure_count,
+            },
+        );
     }
 
     /// Removes a connection from the registry.
@@ -49,15 +72,24 @@ impl ConnectionManager {
     /// Sends a text message to the given connection.
     ///
     /// Returns `false` if the connection is gone or the buffer is full.
-    /// On a full buffer, cancels the slow client's connection to prevent silent drops.
+    /// On sustained backpressure (>[`SLOW_CLIENT_GRACE_LIMIT`] consecutive full
+    /// buffers), cancels the connection. Transient stalls get a warning only.
     pub fn send_to(&self, conn_id: Uuid, msg: String) -> bool {
         if let Some(entry) = self.connections.get(&conn_id) {
-            let (tx, cancel) = entry.value();
-            match tx.try_send(WsMessage::Text(msg.into())) {
-                Ok(_) => true,
+            let conn = entry.value();
+            match conn.tx.try_send(WsMessage::Text(msg.into())) {
+                Ok(_) => {
+                    conn.backpressure_count.store(0, Ordering::Relaxed);
+                    true
+                }
                 Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                    tracing::warn!(conn_id = %conn_id, "fan-out: send buffer full — cancelling slow client");
-                    cancel.cancel();
+                    let count = conn.backpressure_count.fetch_add(1, Ordering::Relaxed) + 1;
+                    if count >= SLOW_CLIENT_GRACE_LIMIT {
+                        tracing::warn!(conn_id = %conn_id, count, "fan-out: sustained backpressure — cancelling slow client");
+                        conn.cancel.cancel();
+                    } else {
+                        tracing::warn!(conn_id = %conn_id, count, grace = SLOW_CLIENT_GRACE_LIMIT, "fan-out: send buffer full — grace {count}/{SLOW_CLIENT_GRACE_LIMIT}");
+                    }
                     false
                 }
                 Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {

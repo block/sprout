@@ -20,6 +20,10 @@ use crate::handlers;
 use crate::protocol::{ClientMessage, RelayMessage};
 use crate::state::AppState;
 
+/// Number of buffer-full events tolerated before cancelling a slow client.
+/// Prevents transient read stalls from hard-disconnecting agents mid-inference.
+pub(crate) const SLOW_CLIENT_GRACE_LIMIT: u8 = 3;
+
 /// NIP-42 authentication state for a single connection.
 #[derive(Debug, Clone)]
 pub enum AuthState {
@@ -37,7 +41,7 @@ pub enum AuthState {
 /// Per-connection state split by access pattern:
 /// - `auth_state`: RwLock (read-heavy after initial auth)
 /// - `subscriptions`: Mutex (write-heavy during REQ/CLOSE)
-/// - `send_tx`, `cancel`: outside any lock (Clone+Send, no coordination needed)
+/// - `send_tx`, `ctrl_tx`, `cancel`: outside any lock (Clone+Send, no coordination needed)
 pub struct ConnectionState {
     /// Unique identifier for this connection.
     pub conn_id: Uuid,
@@ -47,23 +51,41 @@ pub struct ConnectionState {
     pub auth_state: RwLock<AuthState>,
     /// Active subscriptions keyed by subscription ID.
     pub subscriptions: Mutex<HashMap<String, Vec<Filter>>>,
-    /// Sender for outbound WebSocket messages.
+    /// Sender for outbound data messages (EVENT, NOTICE, OK, etc.).
     pub send_tx: mpsc::Sender<WsMessage>,
+    /// Sender for outbound control frames (Pong, Close).
+    /// Separate channel with priority drain — if this channel fills too,
+    /// the connection is closed (writer is completely stalled).
+    pub ctrl_tx: mpsc::Sender<WsMessage>,
     /// Token used to signal graceful shutdown of this connection's tasks.
     pub cancel: CancellationToken,
+    /// Consecutive buffer-full events. Cancel only after [`SLOW_CLIENT_GRACE_LIMIT`].
+    /// Shared with `ConnectionManager::ConnEntry` so both direct sends and
+    /// fan-out broadcasts track the same counter.
+    pub backpressure_count: Arc<AtomicU8>,
 }
 
 impl ConnectionState {
-    /// Sends a message to this connection's outbound channel.
+    /// Sends a data message to this connection's outbound channel.
     ///
-    /// If the send buffer is full (slow client), cancels the connection
-    /// via the `CancellationToken` to prevent unbounded memory growth.
+    /// On a full buffer, increments the backpressure counter. The first
+    /// [`SLOW_CLIENT_GRACE_LIMIT`] occurrences log a warning; sustained
+    /// backpressure cancels the connection to prevent unbounded memory growth.
     pub fn send(&self, msg: String) -> bool {
         match self.send_tx.try_send(WsMessage::Text(msg.into())) {
-            Ok(_) => true,
+            Ok(_) => {
+                // Successful send resets the grace counter.
+                self.backpressure_count.store(0, Ordering::Relaxed);
+                true
+            }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                warn!(conn_id = %self.conn_id, "send buffer full — closing slow client");
-                self.cancel.cancel();
+                let count = self.backpressure_count.fetch_add(1, Ordering::Relaxed) + 1;
+                if count >= SLOW_CLIENT_GRACE_LIMIT {
+                    warn!(conn_id = %self.conn_id, count, "sustained backpressure — closing slow client");
+                    self.cancel.cancel();
+                } else {
+                    warn!(conn_id = %self.conn_id, count, grace = SLOW_CLIENT_GRACE_LIMIT, "send buffer full — grace {count}/{SLOW_CLIENT_GRACE_LIMIT}");
+                }
                 false
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
@@ -92,6 +114,11 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
     let cancel = CancellationToken::new();
 
     let (tx, rx) = mpsc::channel::<WsMessage>(state.config.send_buffer_size);
+    // Control channel for Pong/Close — small capacity, guaranteed delivery
+    // even when the data buffer is full.
+    let (ctrl_tx, ctrl_rx) = mpsc::channel::<WsMessage>(8);
+
+    let backpressure_count = Arc::new(AtomicU8::new(0));
 
     let conn = Arc::new(ConnectionState {
         conn_id,
@@ -101,7 +128,9 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
         }),
         subscriptions: Mutex::new(HashMap::new()),
         send_tx: tx.clone(),
+        ctrl_tx: ctrl_tx.clone(),
         cancel: cancel.clone(),
+        backpressure_count: Arc::clone(&backpressure_count),
     });
 
     info!(conn_id = %conn_id, addr = %addr, "WebSocket connection established");
@@ -119,17 +148,17 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
     // Register after challenge succeeds — avoids leaked entries on early disconnect.
     state
         .conn_manager
-        .register(conn_id, tx.clone(), cancel.clone());
+        .register(conn_id, tx.clone(), cancel.clone(), Arc::clone(&backpressure_count));
 
     let (ws_send, ws_recv) = socket.split();
 
     let send_cancel = cancel.child_token();
-    let send_task = tokio::spawn(send_loop(ws_send, rx, send_cancel));
+    let send_task = tokio::spawn(send_loop(ws_send, rx, ctrl_rx, send_cancel));
 
     let missed_pongs = Arc::new(AtomicU8::new(0));
     let heartbeat_cancel = cancel.clone();
     let heartbeat_task = tokio::spawn(heartbeat_loop(
-        tx.clone(),
+        ctrl_tx,
         Arc::clone(&missed_pongs),
         heartbeat_cancel,
     ));
@@ -154,29 +183,55 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
     drop(permit);
 }
 
+/// Outbound send loop with control-frame priority.
+///
+/// Control frames (Pong, Close) are drained first on every iteration,
+/// giving them priority over data frames. If the underlying socket writer
+/// is stalled, control frames queue in the small ctrl_rx buffer; callers
+/// treat a full control channel as terminal (Bug 7 fix).
 async fn send_loop(
     mut ws_send: futures_util::stream::SplitSink<WebSocket, WsMessage>,
-    mut rx: mpsc::Receiver<WsMessage>,
+    mut data_rx: mpsc::Receiver<WsMessage>,
+    mut ctrl_rx: mpsc::Receiver<WsMessage>,
     cancel: CancellationToken,
 ) {
     loop {
-        tokio::select! {
-            Some(msg) = rx.recv() => {
-                if ws_send.send(msg).await.is_err() {
-                    break;
-                }
+        // Priority: drain all pending control frames before data.
+        while let Ok(ctrl_msg) = ctrl_rx.try_recv() {
+            if ws_send.send(ctrl_msg).await.is_err() {
+                return;
             }
+        }
+
+        tokio::select! {
+            // Biased: cancel > control > data. Cancel must win immediately
+            // so backpressure-triggered shutdown isn't starved by queued data.
+            biased;
             _ = cancel.cancelled() => {
                 let _ = ws_send.send(WsMessage::Close(None)).await;
                 break;
+            }
+            Some(ctrl_msg) = ctrl_rx.recv() => {
+                if ws_send.send(ctrl_msg).await.is_err() {
+                    break;
+                }
+            }
+            Some(msg) = data_rx.recv() => {
+                if ws_send.send(msg).await.is_err() {
+                    break;
+                }
             }
         }
     }
 }
 
 /// 3 missed pongs → disconnect.
+///
+/// Sends Ping through the control channel so it isn't blocked by a full
+/// data buffer. Uses `try_send` to keep the select loop responsive to
+/// cancellation — a full control channel means the writer is stalled.
 async fn heartbeat_loop(
-    tx: mpsc::Sender<WsMessage>,
+    ctrl_tx: mpsc::Sender<WsMessage>,
     missed_pongs: Arc<AtomicU8>,
     cancel: CancellationToken,
 ) {
@@ -194,7 +249,9 @@ async fn heartbeat_loop(
                     cancel.cancel();
                     break;
                 }
-                if tx.send(WsMessage::Ping(axum::body::Bytes::new())).await.is_err() {
+                if ctrl_tx.try_send(WsMessage::Ping(axum::body::Bytes::new())).is_err() {
+                    warn!("control channel full — cannot send Ping, closing");
+                    cancel.cancel();
                     break;
                 }
             }
@@ -241,7 +298,14 @@ async fn recv_loop(
                         missed_pongs.store(0, Ordering::Relaxed);
                     }
                     Some(Ok(WsMessage::Ping(data))) => {
-                        let _ = conn.send_tx.try_send(WsMessage::Pong(data));
+                        // Send Pong through the control channel — priority
+                        // delivery even when the data buffer is full (Bug 7 fix).
+                        if conn.ctrl_tx.try_send(WsMessage::Pong(data)).is_err() {
+                            // Control channel full means the socket writer is
+                            // completely stalled — treat as terminal.
+                            warn!(conn_id = %conn.conn_id, "control channel full — cannot send Pong, closing");
+                            break;
+                        }
                     }
                     Some(Ok(WsMessage::Close(_))) | None => {
                         debug!("WebSocket closed by client");
