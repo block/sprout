@@ -164,20 +164,20 @@ pub async fn verify_imeta_blobs(
     storage: &sprout_media::MediaStorage,
 ) -> Result<(), String> {
     for tag in tags {
-        let mut url_value = String::new();
         let mut x_value = String::new();
         let mut m_value = String::new();
         let mut size_value: u64 = 0;
+        let mut thumb_value = String::new();
 
         for part in tag.iter().skip(1) {
             let mut parts = part.splitn(2, ' ');
             let key = parts.next().unwrap_or("");
             let value = parts.next().unwrap_or("");
             match key {
-                "url" => url_value = value.to_string(),
                 "x" => x_value = value.to_string(),
                 "m" => m_value = value.to_string(),
                 "size" => size_value = value.parse().unwrap_or(0),
+                "thumb" => thumb_value = value.to_string(),
                 _ => {}
             }
         }
@@ -186,11 +186,23 @@ pub async fn verify_imeta_blobs(
             continue; // syntactic validation already caught this
         }
 
+        // 1. Sidecar must exist — proves the upload pipeline completed.
         let sidecar = storage
             .get_sidecar(&x_value)
             .await
             .map_err(|_| format!("imeta references nonexistent blob: {x_value}"))?;
 
+        // 2. HEAD the actual blob object — sidecar alone is not proof of blob existence.
+        let blob_key = format!("{x_value}.{}", sidecar.ext);
+        let blob_exists = storage
+            .head(&blob_key)
+            .await
+            .map_err(|e| format!("storage error checking blob {x_value}: {e}"))?;
+        if !blob_exists {
+            return Err(format!("imeta blob object missing in storage: {x_value}"));
+        }
+
+        // 3. Cross-check claimed metadata against sidecar.
         if !m_value.is_empty() && sidecar.mime_type != m_value {
             return Err(format!(
                 "imeta m ({m_value}) does not match stored MIME ({})",
@@ -203,12 +215,18 @@ pub async fn verify_imeta_blobs(
                 sidecar.size
             ));
         }
-        // Verify URL hash matches the blob we found (defense-in-depth).
-        if !url_value.is_empty() {
-            if let Some(hash_in_url) = extract_hash_from_media_url(&url_value) {
-                if hash_in_url != x_value {
-                    return Err("imeta url hash does not match x".into());
-                }
+
+        // 4. If thumb is claimed, HEAD the thumbnail object too.
+        if !thumb_value.is_empty() {
+            let thumb_key = format!("{x_value}.thumb.jpg");
+            let thumb_exists = storage
+                .head(&thumb_key)
+                .await
+                .map_err(|e| format!("storage error checking thumbnail: {e}"))?;
+            if !thumb_exists {
+                return Err(format!(
+                    "imeta thumb references missing thumbnail: {x_value}"
+                ));
             }
         }
     }

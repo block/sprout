@@ -212,6 +212,14 @@ pub async fn upload_media(
 ///
 /// All file I/O happens in trusted Rust — the renderer never touches the
 /// filesystem. This is the secure path for the 📎 paperclip button.
+///
+/// **Residual TOCTOU note:** The Tauri dialog plugin returns a pathname, not
+/// a file handle, so there is a small race window between dialog return and
+/// `File::open()`. This is an inherent limitation of the OS file-picker API
+/// (no platform exposes a handle/bookmark from the open-file dialog in a way
+/// the Tauri plugin surfaces). The risk is bounded: the attacker must be local
+/// and must win a race against an immediate open. Server-side content validation
+/// (MIME, image decode, size caps) provides defense-in-depth.
 #[tauri::command]
 pub async fn pick_and_upload_media(
     app: tauri::AppHandle,

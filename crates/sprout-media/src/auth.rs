@@ -76,8 +76,16 @@ pub fn verify_blossom_auth_event(
         return Err(MediaError::TokenExpired);
     }
 
-    // 5. created_at must be in the past (5s tolerance for clock skew)
-    if auth_event.created_at.as_u64() > now + 5 {
+    // 5. created_at must be recent: not in the future (5s tolerance) and not
+    //    older than 10 minutes. This bounds the replay window — even if the
+    //    expiration tag allows a longer lifetime, the token must have been
+    //    freshly minted.
+    let created = auth_event.created_at.as_u64();
+    if created > now + 5 {
+        return Err(MediaError::TimestampOutOfWindow);
+    }
+    const MAX_AGE_SECS: u64 = 600; // 10 minutes
+    if now > created + MAX_AGE_SECS {
         return Err(MediaError::TimestampOutOfWindow);
     }
 
