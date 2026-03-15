@@ -1682,3 +1682,65 @@ async fn test_membership_notification_multi_p_rejected() {
 
     client.disconnect().await.expect("disconnect");
 }
+
+/// A mixed-filter subscription where one filter has `#h` + membership kinds and another
+/// filter makes the subscription globally scoped must be rejected with CLOSED.
+/// This prevents bypassing the #p requirement via mixed filters.
+#[tokio::test]
+#[ignore]
+async fn test_membership_notification_mixed_filter_rejected() {
+    let url = relay_url();
+    let keys = Keys::generate();
+    let channel_id = create_test_channel(&keys).await;
+
+    let mut client = SproutTestClient::connect(&url, &keys)
+        .await
+        .expect("connect");
+
+    let sid = sub_id("mixed-filter");
+    // Filter 1: has #h + membership kinds (would skip per-filter #h check)
+    let filter1 = Filter::new().kinds(vec![Kind::Custom(44100)]).custom_tag(
+        SingleLetterTag::lowercase(Alphabet::H),
+        [channel_id.as_str()],
+    );
+    // Filter 2: global filter (no #h) — makes the subscription globally scoped.
+    // No kinds = wildcard, no #p = should trigger rejection.
+    let filter2 = Filter::new().authors(vec![keys.public_key()]);
+
+    client
+        .subscribe(&sid, vec![filter1, filter2])
+        .await
+        .expect("send REQ");
+
+    // Drain until we get the CLOSED for our subscription.
+    let msg = loop {
+        let m = client
+            .recv_event(Duration::from_secs(5))
+            .await
+            .expect("recv CLOSED");
+        match &m {
+            RelayMessage::Eose { .. } => continue,
+            RelayMessage::Event { .. } => continue,
+            _ => break m,
+        }
+    };
+
+    match msg {
+        RelayMessage::Closed {
+            subscription_id,
+            message,
+        } => {
+            assert_eq!(
+                subscription_id, sid,
+                "CLOSED for wrong subscription: {subscription_id}"
+            );
+            assert!(
+                message.to_lowercase().contains("restricted"),
+                "expected 'restricted' in CLOSED message, got: {message}"
+            );
+        }
+        other => panic!("expected CLOSED, got {other:?}"),
+    }
+
+    client.disconnect().await.expect("disconnect");
+}
