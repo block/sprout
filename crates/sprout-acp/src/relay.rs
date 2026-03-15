@@ -503,7 +503,8 @@ async fn run_background_task(
                         }
                     }
                     Some(RelayCommand::SubscribeMembership) => {
-                        send_membership_subscribe(&mut ws, &agent_pubkey_hex, None).await;
+                        let _ =
+                            send_membership_subscribe(&mut ws, &agent_pubkey_hex, None).await;
                         state.membership_sub_active = true;
                     }
                     Some(RelayCommand::Reconnect) => {
@@ -741,9 +742,12 @@ async fn wait_for_reconnect(
                             (None, Some(l)) => Some(l),
                             (None, None) => None,
                         };
-                    send_membership_subscribe(ws, agent_pubkey_hex, replay_since).await;
-                    // Reset drop tracker — reconnect replay will re-deliver them.
-                    state.membership_dropped_since = None;
+                    let sent = send_membership_subscribe(ws, agent_pubkey_hex, replay_since).await;
+                    if sent {
+                        // Only clear drop tracker if the REQ was actually sent —
+                        // if send failed, retain it so the next reconnect retries.
+                        state.membership_dropped_since = None;
+                    }
                 }
 
                 return;
@@ -827,7 +831,12 @@ async fn send_subscribe(
 }
 
 /// Send a NIP-01 REQ for membership notifications (kind:44100+44101, global, #p=[agent_pubkey]).
-async fn send_membership_subscribe(ws: &mut WsStream, agent_pubkey_hex: &str, since: Option<u64>) {
+/// Returns `true` if the REQ was successfully written to the WebSocket.
+async fn send_membership_subscribe(
+    ws: &mut WsStream,
+    agent_pubkey_hex: &str,
+    since: Option<u64>,
+) -> bool {
     let mut req_filter = serde_json::Map::new();
     req_filter.insert(
         "kinds".into(),
@@ -849,14 +858,20 @@ async fn send_membership_subscribe(ws: &mut WsStream, agent_pubkey_hex: &str, si
 
     let req = json!(["REQ", MEMBERSHIP_NOTIF_SUB_ID, Value::Object(req_filter)]);
     match serde_json::to_string(&req) {
-        Ok(text) => {
-            if let Err(e) = ws.send(Message::Text(text.into())).await {
-                warn!("failed to send membership notification REQ: {e}");
-            } else {
+        Ok(text) => match ws.send(Message::Text(text.into())).await {
+            Ok(()) => {
                 debug!("subscribed to membership notifications (since={since_ts})");
+                true
             }
+            Err(e) => {
+                warn!("failed to send membership notification REQ: {e}");
+                false
+            }
+        },
+        Err(e) => {
+            warn!("failed to serialize membership notification REQ: {e}");
+            false
         }
-        Err(e) => warn!("failed to serialize membership notification REQ: {e}"),
     }
 }
 
