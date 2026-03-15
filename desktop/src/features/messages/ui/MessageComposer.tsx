@@ -136,18 +136,48 @@ export function MessageComposer({
     [content, mentionStartIndex],
   );
 
-  const extractMentionPubkeys = React.useCallback((text: string): string[] => {
-    const pubkeys: string[] = [];
-    const mentionMap = mentionMapRef.current;
+  const extractMentionPubkeys = React.useCallback(
+    (text: string): string[] => {
+      const pubkeys: string[] = [];
 
-    for (const [displayName, pubkey] of mentionMap) {
-      if (text.includes(`@${displayName}`)) {
-        pubkeys.push(pubkey);
+      /** Test whether `@name` appears as a mention token in `text`.
+       *  Left boundary: start-of-string or whitespace.
+       *  Right boundary: end-of-string, whitespace, or punctuation.
+       *  Case-insensitive. Prevents @Ann from matching @Anna or foo@Ann. */
+      const hasMention = (name: string): boolean => {
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const pattern = new RegExp(
+          `(?:^|\\s)@${escaped}(?=[\\s,;.!?:)\\]}]|$)`,
+          "i",
+        );
+        return pattern.test(text);
+      };
+
+      // 1. Check the autocomplete-inserted mention map.
+      for (const [displayName, pubkey] of mentionMapRef.current) {
+        if (hasMention(displayName)) {
+          pubkeys.push(pubkey);
+        }
       }
-    }
 
-    return [...new Set(pubkeys)];
-  }, []);
+      // 2. Fall back to scanning channel members for manually-typed @mentions
+      //    that bypassed autocomplete (e.g. user typed "@Daphne" without selecting).
+      for (const member of members) {
+        if (pubkeys.includes(member.pubkey)) {
+          continue; // already matched via autocomplete map
+        }
+        const name =
+          member.displayName ??
+          managedAgentNamesByPubkey.get(member.pubkey.toLowerCase());
+        if (name && hasMention(name)) {
+          pubkeys.push(member.pubkey);
+        }
+      }
+
+      return [...new Set(pubkeys)];
+    },
+    [members, managedAgentNamesByPubkey],
+  );
 
   const submitMessage = React.useCallback(async () => {
     const trimmed = content.trim();
