@@ -1,15 +1,25 @@
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use nostr::{Event, EventBuilder, Filter, Keys, Kind, Tag, Url};
 use serde_json::{json, Value};
 use thiserror::Error;
-use tokio::sync::Mutex;
-use tokio::time::timeout;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
-use tracing::debug;
+use tracing::{debug, warn};
+
+// ── Timeouts ──────────────────────────────────────────────────────────────────
+
+/// How long to wait for an OK acknowledgement after sending an event.
+const SEND_EVENT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long to wait for EOSE after sending a REQ.
+const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Capacity of the command channel.
+const CMD_CHANNEL_CAPACITY: usize = 64;
+
+// ── Public error type ─────────────────────────────────────────────────────────
 
 /// Errors that can occur when communicating with a Sprout relay.
 #[derive(Debug, Error)]
@@ -56,6 +66,8 @@ impl From<nostr::event::builder::Error> for RelayClientError {
         RelayClientError::EventBuilder(e.to_string())
     }
 }
+
+// ── Public relay message type ─────────────────────────────────────────────────
 
 /// A message received from a Nostr relay.
 #[derive(Debug, Clone)]
@@ -104,368 +116,549 @@ pub struct OkResponse {
     pub message: String,
 }
 
+// ── Internal types ────────────────────────────────────────────────────────────
+
 type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
-struct Inner {
-    ws: WsStream,
-    buffer: VecDeque<RelayMessage>,
-    pending_challenge: Option<String>,
+/// Commands sent from `RelayClient` to the background WebSocket task.
+enum RelayCommand {
+    SendEvent {
+        event: Event,
+        reply: oneshot::Sender<Result<OkResponse, RelayClientError>>,
+    },
+    Subscribe {
+        sub_id: String,
+        filters: Vec<Filter>,
+        reply: oneshot::Sender<Result<Vec<Event>, RelayClientError>>,
+    },
+    CloseSubscription {
+        sub_id: String,
+        reply: oneshot::Sender<Result<(), RelayClientError>>,
+    },
+    Shutdown,
 }
 
-impl Inner {
-    async fn send_raw(&mut self, value: &Value) -> Result<(), RelayClientError> {
-        let text = serde_json::to_string(value)?;
-        self.ws.send(Message::Text(text.into())).await?;
-        Ok(())
+/// A subscription waiting for EOSE.
+struct PendingSubscription {
+    events: Vec<Event>,
+    reply: oneshot::Sender<Result<Vec<Event>, RelayClientError>>,
+    deadline: tokio::time::Instant,
+}
+
+/// State owned exclusively by the background task.
+struct BgState {
+    /// Active subscriptions: sub_id → filters (for reconnect replay).
+    active_subscriptions: HashMap<String, Vec<Filter>>,
+    /// Pending OK waiters: event_id → (reply, deadline).
+    pending_ok: HashMap<String, (oneshot::Sender<Result<OkResponse, RelayClientError>>, tokio::time::Instant)>,
+    /// Pending EOSE collectors: sub_id → collector.
+    pending_eose: HashMap<String, PendingSubscription>,
+}
+
+impl BgState {
+    fn new() -> Self {
+        Self {
+            active_subscriptions: HashMap::new(),
+            pending_ok: HashMap::new(),
+            pending_eose: HashMap::new(),
+        }
     }
 
-    // wait_for_auth_challenge, wait_for_ok, and collect_until_eose share a similar
-    // deadline-loop structure but differ in termination condition and what they do
-    // with interleaved messages, so they cannot be collapsed into a single helper.
-    async fn wait_for_auth_challenge(
-        &mut self,
-        timeout_dur: Duration,
-    ) -> Result<String, RelayClientError> {
-        if let Some(challenge) = self.pending_challenge.take() {
-            return Ok(challenge);
+    /// Resolve all pending operations with `ConnectionClosed` (called on reconnect).
+    fn cancel_pending(&mut self) {
+        for (_, (reply, _)) in self.pending_ok.drain() {
+            let _ = reply.send(Err(RelayClientError::ConnectionClosed));
         }
+        for (_, sub) in self.pending_eose.drain() {
+            let _ = sub.reply.send(Err(RelayClientError::ConnectionClosed));
+        }
+    }
 
-        if let Some(idx) = self
-            .buffer
+    /// Expire any pending operations whose deadline has passed.
+    fn expire_timed_out(&mut self) {
+        let now = tokio::time::Instant::now();
+
+        let expired_ok: Vec<String> = self
+            .pending_ok
             .iter()
-            .position(|m| matches!(m, RelayMessage::Auth { .. }))
-        {
-            if let Some(RelayMessage::Auth { challenge }) = self.buffer.remove(idx) {
-                return Ok(challenge);
+            .filter(|(_, (_, dl))| now >= *dl)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in expired_ok {
+            if let Some((reply, _)) = self.pending_ok.remove(&k) {
+                let _ = reply.send(Err(RelayClientError::Timeout));
             }
         }
 
-        let deadline = tokio::time::Instant::now() + timeout_dur;
-
-        loop {
-            let remaining = deadline
-                .checked_duration_since(tokio::time::Instant::now())
-                .unwrap_or(Duration::ZERO);
-
-            if remaining.is_zero() {
-                return Err(RelayClientError::NoAuthChallenge);
-            }
-
-            let raw = timeout(remaining, self.ws.next())
-                .await
-                .map_err(|_| RelayClientError::NoAuthChallenge)?
-                .ok_or(RelayClientError::ConnectionClosed)?
-                .map_err(RelayClientError::WebSocket)?;
-
-            match raw {
-                Message::Text(text) => {
-                    let msg = parse_relay_message(&text)?;
-                    match msg {
-                        RelayMessage::Auth { challenge } => return Ok(challenge),
-                        other => self.buffer.push_back(other),
-                    }
-                }
-                Message::Ping(data) => {
-                    self.ws.send(Message::Pong(data)).await?;
-                }
-                Message::Close(_) => return Err(RelayClientError::ConnectionClosed),
-                _ => {}
-            }
-        }
-    }
-
-    async fn wait_for_ok(
-        &mut self,
-        event_id: &str,
-        timeout_dur: Duration,
-    ) -> Result<OkResponse, RelayClientError> {
-        let deadline = tokio::time::Instant::now() + timeout_dur;
-
-        if let Some(idx) = self
-            .buffer
+        let expired_eose: Vec<String> = self
+            .pending_eose
             .iter()
-            .position(|m| matches!(m, RelayMessage::Ok(ok) if ok.event_id == event_id))
-        {
-            if let Some(RelayMessage::Ok(ok)) = self.buffer.remove(idx) {
-                return Ok(ok);
-            }
-        }
-
-        loop {
-            let remaining = deadline
-                .checked_duration_since(tokio::time::Instant::now())
-                .unwrap_or(Duration::ZERO);
-
-            if remaining.is_zero() {
-                return Err(RelayClientError::Timeout);
-            }
-
-            let raw = timeout(remaining, self.ws.next())
-                .await
-                .map_err(|_| RelayClientError::Timeout)?
-                .ok_or(RelayClientError::ConnectionClosed)?
-                .map_err(RelayClientError::WebSocket)?;
-
-            match raw {
-                Message::Text(text) => {
-                    let msg = parse_relay_message(&text)?;
-                    match msg {
-                        RelayMessage::Ok(ok) if ok.event_id == event_id => return Ok(ok),
-                        RelayMessage::Auth { ref challenge } => {
-                            self.pending_challenge = Some(challenge.clone());
-                            self.buffer.push_back(msg);
-                        }
-                        other => self.buffer.push_back(other),
-                    }
-                }
-                Message::Ping(data) => {
-                    self.ws.send(Message::Pong(data)).await?;
-                }
-                Message::Close(_) => return Err(RelayClientError::ConnectionClosed),
-                _ => {}
-            }
-        }
-    }
-
-    async fn collect_until_eose(
-        &mut self,
-        sub_id: &str,
-        timeout_dur: Duration,
-    ) -> Result<Vec<Event>, RelayClientError> {
-        let deadline = tokio::time::Instant::now() + timeout_dur;
-        let mut events = Vec::new();
-
-        let old_buffer = std::mem::take(&mut self.buffer);
-        let mut found_eose = false;
-        for msg in old_buffer {
-            if found_eose {
-                self.buffer.push_back(msg);
-                continue;
-            }
-            match msg {
-                RelayMessage::Event {
-                    subscription_id,
-                    event,
-                } if subscription_id == sub_id => {
-                    events.push(*event);
-                }
-                RelayMessage::Eose { subscription_id } if subscription_id == sub_id => {
-                    found_eose = true;
-                }
-                other => self.buffer.push_back(other),
-            }
-        }
-        if found_eose {
-            return Ok(events);
-        }
-
-        loop {
-            let remaining = deadline
-                .checked_duration_since(tokio::time::Instant::now())
-                .unwrap_or(Duration::ZERO);
-
-            if remaining.is_zero() {
-                return Err(RelayClientError::Timeout);
-            }
-
-            let raw = timeout(remaining, self.ws.next())
-                .await
-                .map_err(|_| RelayClientError::Timeout)?
-                .ok_or(RelayClientError::ConnectionClosed)?
-                .map_err(RelayClientError::WebSocket)?;
-
-            match raw {
-                Message::Text(text) => {
-                    let msg = parse_relay_message(&text)?;
-                    match msg {
-                        RelayMessage::Event {
-                            subscription_id,
-                            event,
-                        } if subscription_id == sub_id => {
-                            events.push(*event);
-                        }
-                        RelayMessage::Eose { subscription_id } if subscription_id == sub_id => {
-                            return Ok(events);
-                        }
-                        RelayMessage::Auth { ref challenge } => {
-                            self.pending_challenge = Some(challenge.clone());
-                            self.buffer.push_back(msg);
-                        }
-                        other => self.buffer.push_back(other),
-                    }
-                }
-                Message::Ping(data) => {
-                    self.ws.send(Message::Pong(data)).await?;
-                }
-                Message::Close(_) => return Err(RelayClientError::ConnectionClosed),
-                _ => {}
+            .filter(|(_, sub)| now >= sub.deadline)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in expired_eose {
+            if let Some(sub) = self.pending_eose.remove(&k) {
+                let _ = sub.reply.send(Err(RelayClientError::Timeout));
             }
         }
     }
 }
 
-/// Clone-able WebSocket client for the Sprout relay.
-///
-/// All clones share the same underlying connection via `Arc<Mutex<Inner>>`.
-/// Active subscriptions are tracked so they can be resubmitted after a reconnect.
-#[derive(Clone)]
-pub struct RelayClient {
-    inner: Arc<Mutex<Inner>>,
-    keys: Keys,
-    /// WebSocket URL of the relay (e.g. "ws://localhost:3000").
-    relay_url: String,
-    /// Shared reqwest client for REST API calls.
-    http: reqwest::Client,
-    /// Optional API token for Bearer auth on REST endpoints.
-    /// When present, REST calls send `Authorization: Bearer <token>` instead of `X-Pubkey`.
-    api_token: Option<String>,
-    /// Active subscriptions: sub_id → filters. Used to resubscribe after reconnect.
-    active_subscriptions: Arc<Mutex<HashMap<String, Vec<Filter>>>>,
+// ── Background task ───────────────────────────────────────────────────────────
+
+/// Perform a single NIP-42 connection + auth handshake.
+/// Returns the authenticated WebSocket stream on success.
+async fn do_connect(
+    relay_url: &str,
+    keys: &Keys,
+    api_token: Option<&str>,
+) -> Result<WsStream, RelayClientError> {
+    let parsed = relay_url
+        .parse::<url::Url>()
+        .map_err(|e| RelayClientError::Url(e.to_string()))?;
+
+    let (mut ws, _) = connect_async(parsed.as_str())
+        .await
+        .map_err(RelayClientError::WebSocket)?;
+
+    debug!("connected to relay at {relay_url}");
+
+    // Wait for AUTH challenge (5s timeout).
+    let challenge = wait_for_auth_challenge(&mut ws, Duration::from_secs(5)).await?;
+
+    let relay_nostr_url: Url = relay_url
+        .parse()
+        .map_err(|e: url::ParseError| RelayClientError::Url(e.to_string()))?;
+
+    let auth_event = if let Some(token) = api_token {
+        let tags = vec![
+            Tag::parse(&["relay", relay_url])
+                .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
+            Tag::parse(&["challenge", &challenge])
+                .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
+            Tag::parse(&["auth_token", token])
+                .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
+        ];
+        EventBuilder::new(Kind::Authentication, "", tags).sign_with_keys(keys)?
+    } else {
+        EventBuilder::auth(&challenge, relay_nostr_url).sign_with_keys(keys)?
+    };
+
+    let event_id = auth_event.id.to_hex();
+    debug!("sending AUTH event {event_id}");
+    let auth_msg = serde_json::to_string(&json!(["AUTH", auth_event]))?;
+    ws.send(Message::Text(auth_msg.into())).await?;
+
+    let ok = wait_for_ok(&mut ws, &event_id, Duration::from_secs(5)).await?;
+    if !ok.accepted {
+        return Err(RelayClientError::AuthFailed(ok.message));
+    }
+
+    debug!("NIP-42 authentication successful");
+    Ok(ws)
 }
 
-impl RelayClient {
-    /// Perform a single connection + NIP-42 authentication attempt.
-    /// Returns the authenticated `Inner` on success.
-    async fn try_connect(
-        relay_url: &str,
-        keys: &Keys,
-        api_token: Option<&str>,
-    ) -> Result<Inner, RelayClientError> {
-        let parsed = relay_url
-            .parse::<url::Url>()
-            .map_err(|e| RelayClientError::Url(e.to_string()))?;
-
-        let (ws, _response) = connect_async(parsed.as_str())
+/// Wait for an AUTH challenge frame, responding to Pings along the way.
+async fn wait_for_auth_challenge(ws: &mut WsStream, timeout_dur: Duration) -> Result<String, RelayClientError> {
+    let deadline = tokio::time::Instant::now() + timeout_dur;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .unwrap_or(Duration::ZERO);
+        if remaining.is_zero() {
+            return Err(RelayClientError::NoAuthChallenge);
+        }
+        let raw = tokio::time::timeout(remaining, ws.next())
             .await
+            .map_err(|_| RelayClientError::NoAuthChallenge)?
+            .ok_or(RelayClientError::ConnectionClosed)?
             .map_err(RelayClientError::WebSocket)?;
+        match raw {
+            Message::Text(text) => match parse_relay_message(&text)? {
+                RelayMessage::Auth { challenge } => return Ok(challenge),
+                _ => {} // discard other messages during handshake
+            },
+            Message::Ping(data) => { ws.send(Message::Pong(data)).await?; }
+            Message::Close(_) => return Err(RelayClientError::ConnectionClosed),
+            _ => {}
+        }
+    }
+}
 
-        debug!("connected to relay at {relay_url}");
+/// Wait for an OK frame matching `event_id`, responding to Pings along the way.
+async fn wait_for_ok(ws: &mut WsStream, event_id: &str, timeout_dur: Duration) -> Result<OkResponse, RelayClientError> {
+    let deadline = tokio::time::Instant::now() + timeout_dur;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .unwrap_or(Duration::ZERO);
+        if remaining.is_zero() {
+            return Err(RelayClientError::Timeout);
+        }
+        let raw = tokio::time::timeout(remaining, ws.next())
+            .await
+            .map_err(|_| RelayClientError::Timeout)?
+            .ok_or(RelayClientError::ConnectionClosed)?
+            .map_err(RelayClientError::WebSocket)?;
+        match raw {
+            Message::Text(text) => match parse_relay_message(&text)? {
+                RelayMessage::Ok(ok) if ok.event_id == event_id => return Ok(ok),
+                _ => {} // discard other messages during handshake
+            },
+            Message::Ping(data) => { ws.send(Message::Pong(data)).await?; }
+            Message::Close(_) => return Err(RelayClientError::ConnectionClosed),
+            _ => {}
+        }
+    }
+}
 
-        let mut inner = Inner {
-            ws,
-            buffer: VecDeque::new(),
-            pending_challenge: None,
-        };
+/// Connect with exponential backoff. Never returns until successful.
+async fn connect_with_retry(relay_url: &str, keys: &Keys, api_token: Option<&str>) -> WsStream {
+    let mut delay = Duration::from_secs(1);
+    loop {
+        match do_connect(relay_url, keys, api_token).await {
+            Ok(ws) => {
+                tracing::info!("connected to relay at {relay_url}");
+                return ws;
+            }
+            Err(e) => {
+                warn!("connection failed: {e}, retrying in {delay:?}");
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(30));
+            }
+        }
+    }
+}
 
-        let challenge = inner
-            .wait_for_auth_challenge(Duration::from_secs(5))
-            .await?;
-
+/// Send a NIP-42 AUTH response for a mid-session challenge.
+async fn send_auth_response(
+    ws: &mut WsStream,
+    challenge: &str,
+    relay_url: &str,
+    keys: &Keys,
+    api_token: Option<&str>,
+) {
+    let result: Result<(), RelayClientError> = async {
         let relay_nostr_url: Url = relay_url
             .parse()
             .map_err(|e: url::ParseError| RelayClientError::Url(e.to_string()))?;
-
         let auth_event = if let Some(token) = api_token {
             let tags = vec![
                 Tag::parse(&["relay", relay_url])
                     .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
-                Tag::parse(&["challenge", &challenge])
+                Tag::parse(&["challenge", challenge])
                     .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
                 Tag::parse(&["auth_token", token])
                     .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
             ];
             EventBuilder::new(Kind::Authentication, "", tags).sign_with_keys(keys)?
         } else {
-            EventBuilder::auth(&challenge, relay_nostr_url).sign_with_keys(keys)?
+            EventBuilder::auth(challenge, relay_nostr_url).sign_with_keys(keys)?
         };
-
-        let event_id = auth_event.id.to_hex();
-        // Log only the event ID, never the full AUTH payload which may contain tokens.
-        debug!("sending AUTH event {event_id}");
-        let msg = json!(["AUTH", auth_event]);
-        inner.send_raw(&msg).await?;
-
-        let ok = inner.wait_for_ok(&event_id, Duration::from_secs(5)).await?;
-
-        if !ok.accepted {
-            return Err(RelayClientError::AuthFailed(ok.message));
-        }
-
-        debug!("NIP-42 authentication successful");
-        Ok(inner)
+        let msg = serde_json::to_string(&json!(["AUTH", auth_event]))?;
+        ws.send(Message::Text(msg.into())).await?;
+        debug!("sent AUTH response for mid-session challenge");
+        Ok(())
+    }.await;
+    if let Err(e) = result {
+        warn!("failed to respond to mid-session AUTH challenge: {e}");
     }
+}
 
-    /// Connect to the relay with exponential-backoff retry.
-    ///
-    /// Attempts `try_connect` in a loop, doubling the delay on each failure
-    /// (1 s → 2 s → 4 s → … → 30 s max). Returns only when a connection
-    /// and NIP-42 auth handshake succeed.
-    async fn connect_with_retry(relay_url: &str, keys: &Keys, api_token: Option<&str>) -> Inner {
-        let mut delay = Duration::from_secs(1);
-        let max_delay = Duration::from_secs(30);
-        loop {
-            match Self::try_connect(relay_url, keys, api_token).await {
-                Ok(inner) => {
-                    tracing::info!("connected to relay at {relay_url}");
-                    return inner;
-                }
+/// Handle a single WebSocket message in the background task.
+///
+/// Returns `false` if the connection has been lost (Close frame or error).
+async fn handle_ws_message(
+    msg: Message,
+    ws: &mut WsStream,
+    state: &mut BgState,
+    keys: &Keys,
+    relay_url: &str,
+    api_token: Option<&str>,
+) -> bool {
+    match msg {
+        Message::Text(text) => {
+            let relay_msg = match parse_relay_message(&text) {
+                Ok(m) => m,
                 Err(e) => {
-                    tracing::warn!("connection failed: {e}, retrying in {delay:?}");
-                    tokio::time::sleep(delay).await;
-                    delay = (delay * 2).min(max_delay);
+                    warn!("failed to parse relay message: {e}");
+                    return true;
                 }
+            };
+            match relay_msg {
+                RelayMessage::Event { subscription_id, event } => {
+                    if let Some(sub) = state.pending_eose.get_mut(&subscription_id) {
+                        sub.events.push(*event);
+                    } else {
+                        debug!("EVENT for unknown/completed subscription {subscription_id}");
+                    }
+                }
+                RelayMessage::Ok(ok) => {
+                    if let Some((reply, _)) = state.pending_ok.remove(&ok.event_id) {
+                        let _ = reply.send(Ok(ok));
+                    } else {
+                        debug!("OK for unknown event {}", ok.event_id);
+                    }
+                }
+                RelayMessage::Eose { subscription_id } => {
+                    if let Some(sub) = state.pending_eose.remove(&subscription_id) {
+                        let _ = sub.reply.send(Ok(sub.events));
+                    } else {
+                        debug!("EOSE for unknown subscription {subscription_id}");
+                    }
+                }
+                RelayMessage::Closed { subscription_id, message } => {
+                    warn!("subscription {subscription_id} closed by relay: {message}");
+                    if let Some(sub) = state.pending_eose.remove(&subscription_id) {
+                        let _ = sub.reply.send(Err(RelayClientError::ConnectionClosed));
+                    }
+                }
+                RelayMessage::Notice { message } => {
+                    debug!("relay NOTICE: {message}");
+                }
+                RelayMessage::Auth { challenge } => {
+                    debug!("received mid-session AUTH challenge — re-authenticating");
+                    send_auth_response(ws, &challenge, relay_url, keys, api_token).await;
+                }
+            }
+            true
+        }
+        Message::Ping(data) => {
+            if let Err(e) = ws.send(Message::Pong(data)).await {
+                warn!("failed to send Pong: {e}");
+                return false;
+            }
+            true
+        }
+        Message::Close(_) => {
+            debug!("relay sent Close frame");
+            false
+        }
+        _ => true,
+    }
+}
+
+/// Reconnect with backoff, cancel pending ops, then replay subscriptions.
+async fn do_reconnect(
+    ws: &mut WsStream,
+    state: &mut BgState,
+    keys: &Keys,
+    relay_url: &str,
+    api_token: Option<&str>,
+) {
+    warn!("relay connection lost — reconnecting…");
+    state.cancel_pending();
+
+    let new_ws = connect_with_retry(relay_url, keys, api_token).await;
+    *ws = new_ws;
+
+    // Replay active subscriptions.
+    let subs: Vec<(String, Vec<Filter>)> = state.active_subscriptions
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    for (sub_id, filters) in subs {
+        let mut msg: Vec<Value> = Vec::with_capacity(2 + filters.len());
+        msg.push(json!("REQ"));
+        msg.push(json!(sub_id));
+        for f in &filters {
+            match serde_json::to_value(f) {
+                Ok(v) => msg.push(v),
+                Err(e) => warn!("failed to serialize filter for {sub_id}: {e}"),
+            }
+        }
+        let text = match serde_json::to_string(&Value::Array(msg)) {
+            Ok(t) => t,
+            Err(e) => { warn!("failed to serialize REQ for {sub_id}: {e}"); continue; }
+        };
+        if let Err(e) = ws.send(Message::Text(text.into())).await {
+            warn!("failed to resubscribe to {sub_id}: {e}");
+        }
+    }
+}
+
+/// The main background task loop.
+///
+/// Owns the WebSocket, responds to Pings, routes relay messages to pending
+/// waiters, and handles reconnection transparently.
+async fn run_background_task(
+    mut ws: WsStream,
+    mut cmd_rx: mpsc::Receiver<RelayCommand>,
+    keys: Keys,
+    relay_url: String,
+    api_token: Option<String>,
+) {
+    let mut state = BgState::new();
+    // Ticker for expiring timed-out pending operations (~1s granularity).
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    loop {
+        tokio::select! {
+            // ── Incoming WebSocket message ────────────────────────────────────
+            raw = ws.next() => {
+                match raw {
+                    Some(Ok(msg)) => {
+                        let ok = handle_ws_message(
+                            msg, &mut ws, &mut state, &keys, &relay_url, api_token.as_deref(),
+                        ).await;
+                        if !ok {
+                            do_reconnect(&mut ws, &mut state, &keys, &relay_url, api_token.as_deref()).await;
+                        }
+                    }
+                    Some(Err(e)) => {
+                        warn!("WebSocket error: {e}");
+                        do_reconnect(&mut ws, &mut state, &keys, &relay_url, api_token.as_deref()).await;
+                    }
+                    None => {
+                        debug!("WebSocket stream ended");
+                        do_reconnect(&mut ws, &mut state, &keys, &relay_url, api_token.as_deref()).await;
+                    }
+                }
+            }
+
+            // ── Command from RelayClient ──────────────────────────────────────
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    Some(RelayCommand::SendEvent { event, reply }) => {
+                        let event_id = event.id.to_hex();
+                        let msg = match serde_json::to_string(&json!(["EVENT", event])) {
+                            Ok(t) => t,
+                            Err(e) => { let _ = reply.send(Err(e.into())); continue; }
+                        };
+                        if let Err(e) = ws.send(Message::Text(msg.into())).await {
+                            let _ = reply.send(Err(RelayClientError::WebSocket(e)));
+                            continue;
+                        }
+                        let deadline = tokio::time::Instant::now() + SEND_EVENT_TIMEOUT;
+                        state.pending_ok.insert(event_id, (reply, deadline));
+                    }
+
+                    Some(RelayCommand::Subscribe { sub_id, filters, reply }) => {
+                        // Build and send REQ — serialize all filters first, then send.
+                        let mut msg: Vec<Value> = Vec::with_capacity(2 + filters.len());
+                        msg.push(json!("REQ"));
+                        msg.push(json!(sub_id));
+                        let mut ser_err: Option<serde_json::Error> = None;
+                        for f in &filters {
+                            match serde_json::to_value(f) {
+                                Ok(v) => msg.push(v),
+                                Err(e) => { ser_err = Some(e); break; }
+                            }
+                        }
+                        if let Some(e) = ser_err {
+                            let _ = reply.send(Err(e.into()));
+                            continue;
+                        }
+                        let text = match serde_json::to_string(&Value::Array(msg)) {
+                            Ok(t) => t,
+                            Err(e) => { let _ = reply.send(Err(e.into())); continue; }
+                        };
+                        if let Err(e) = ws.send(Message::Text(text.into())).await {
+                            let _ = reply.send(Err(RelayClientError::WebSocket(e)));
+                            continue;
+                        }
+                        // Track for reconnect replay.
+                        state.active_subscriptions.insert(sub_id.clone(), filters);
+                        let deadline = tokio::time::Instant::now() + SUBSCRIBE_TIMEOUT;
+                        state.pending_eose.insert(sub_id, PendingSubscription {
+                            events: Vec::new(),
+                            reply,
+                            deadline,
+                        });
+                    }
+
+                    Some(RelayCommand::CloseSubscription { sub_id, reply }) => {
+                        state.active_subscriptions.remove(&sub_id);
+                        // If there's a pending EOSE, cancel it.
+                        if let Some(sub) = state.pending_eose.remove(&sub_id) {
+                            let _ = sub.reply.send(Err(RelayClientError::ConnectionClosed));
+                        }
+                        let msg = match serde_json::to_string(&json!(["CLOSE", sub_id])) {
+                            Ok(t) => t,
+                            Err(e) => { let _ = reply.send(Err(e.into())); continue; }
+                        };
+                        let result = ws.send(Message::Text(msg.into())).await
+                            .map_err(RelayClientError::WebSocket);
+                        let _ = reply.send(result);
+                    }
+
+                    Some(RelayCommand::Shutdown) | None => {
+                        debug!("background task shutting down");
+                        state.cancel_pending();
+                        return;
+                    }
+                }
+            }
+
+            // ── Timeout ticker ────────────────────────────────────────────────
+            _ = tick.tick() => {
+                state.expire_timed_out();
             }
         }
     }
+}
 
-    /// Connect to the relay (first connection; returns an error rather than retrying
-    /// so the caller can surface a startup failure immediately).
+// ── Public client ─────────────────────────────────────────────────────────────
+
+/// Clone-able WebSocket client for the Sprout relay.
+///
+/// Internally, a background tokio task owns the WebSocket connection. All
+/// clones share the same `cmd_tx` channel to that task. The background task:
+/// - Responds to Ping frames immediately (prevents relay disconnect)
+/// - Handles mid-session AUTH challenges automatically
+/// - Reconnects with exponential backoff on connection loss
+/// - Replays active subscriptions after reconnect
+#[derive(Clone)]
+pub struct RelayClient {
+    /// Channel to the background WebSocket task.
+    cmd_tx: mpsc::Sender<RelayCommand>,
+    /// Handle to the background task (kept alive to prevent task cancellation on drop).
+    #[allow(dead_code)]
+    bg_handle: std::sync::Arc<JoinHandle<()>>,
+    keys: Keys,
+    /// WebSocket URL of the relay (e.g. "ws://localhost:3000").
+    relay_url: String,
+    /// Shared reqwest client for REST API calls.
+    http: reqwest::Client,
+    /// Optional API token for Bearer auth on REST endpoints.
+    api_token: Option<String>,
+}
+
+impl RelayClient {
+    /// Connect to the relay and start the background task.
+    ///
+    /// Performs the initial NIP-42 handshake synchronously so startup failures
+    /// are surfaced immediately. After that, reconnection is automatic.
     pub async fn connect(
         relay_url: &str,
         keys: &Keys,
         api_token: Option<&str>,
     ) -> Result<Self, RelayClientError> {
-        let inner = Self::try_connect(relay_url, keys, api_token).await?;
+        let ws = do_connect(relay_url, keys, api_token).await?;
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_CAPACITY);
+
+        let bg_keys = keys.clone();
+        let bg_relay_url = relay_url.to_string();
+        let bg_api_token = api_token.map(|t| t.to_string());
+
+        let bg_handle = tokio::spawn(async move {
+            run_background_task(ws, cmd_rx, bg_keys, bg_relay_url, bg_api_token).await;
+        });
 
         Ok(Self {
+            cmd_tx,
+            bg_handle: std::sync::Arc::new(bg_handle),
             keys: keys.clone(),
             relay_url: relay_url.to_string(),
-            // SAFETY: default builder with only timeout config cannot fail
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .build()
                 .expect("SAFETY: default builder with only timeout config cannot fail"),
-            inner: Arc::new(Mutex::new(inner)),
             api_token: api_token.map(|t| t.to_string()),
-            active_subscriptions: Arc::new(Mutex::new(HashMap::new())),
         })
-    }
-
-    /// Reconnect after a connection loss: replace the inner WebSocket with a fresh
-    /// authenticated connection (using exponential backoff), then resubscribe to all
-    /// subscriptions that were active at the time of the disconnect.
-    pub async fn reconnect(&self) {
-        tracing::warn!("relay connection lost — reconnecting…");
-        let new_inner =
-            Self::connect_with_retry(&self.relay_url, &self.keys, self.api_token.as_deref()).await;
-
-        {
-            let mut inner = self.inner.lock().await;
-            *inner = new_inner;
-        }
-
-        let subs = self.active_subscriptions.lock().await.clone();
-        if !subs.is_empty() {
-            tracing::info!("resubscribing to {} active subscription(s)", subs.len());
-            for (sub_id, filters) in &subs {
-                let mut inner = self.inner.lock().await;
-                let mut msg: Vec<Value> = Vec::with_capacity(2 + filters.len());
-                msg.push(json!("REQ"));
-                msg.push(json!(sub_id));
-                for f in filters {
-                    match serde_json::to_value(f) {
-                        Ok(v) => msg.push(v),
-                        Err(e) => {
-                            tracing::warn!("failed to serialize filter for {sub_id}: {e}");
-                        }
-                    }
-                }
-                if let Err(e) = inner.send_raw(&Value::Array(msg)).await {
-                    tracing::warn!("failed to resubscribe to {sub_id}: {e}");
-                }
-            }
-        }
     }
 
     /// Returns the Nostr keypair used for signing and authentication.
@@ -582,11 +775,12 @@ impl RelayClient {
 
     /// Publish a signed Nostr event to the relay and wait for the `OK` acknowledgement.
     pub async fn send_event(&self, event: Event) -> Result<OkResponse, RelayClientError> {
-        let mut inner = self.inner.lock().await;
-        let event_id = event.id.to_hex();
-        let msg = json!(["EVENT", event]);
-        inner.send_raw(&msg).await?;
-        inner.wait_for_ok(&event_id, Duration::from_secs(10)).await
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.cmd_tx
+            .send(RelayCommand::SendEvent { event, reply: reply_tx })
+            .await
+            .map_err(|_| RelayClientError::ConnectionClosed)?;
+        reply_rx.await.map_err(|_| RelayClientError::ConnectionClosed)?
     }
 
     /// Open a subscription with the given filters and collect all stored events until `EOSE`.
@@ -595,44 +789,40 @@ impl RelayClient {
         sub_id: &str,
         filters: Vec<Filter>,
     ) -> Result<Vec<Event>, RelayClientError> {
-        // Track this subscription so it can be resubmitted after a reconnect.
-        self.active_subscriptions
-            .lock()
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.cmd_tx
+            .send(RelayCommand::Subscribe {
+                sub_id: sub_id.to_string(),
+                filters,
+                reply: reply_tx,
+            })
             .await
-            .insert(sub_id.to_string(), filters.clone());
-
-        let mut inner = self.inner.lock().await;
-
-        let mut msg: Vec<Value> = Vec::with_capacity(2 + filters.len());
-        msg.push(json!("REQ"));
-        msg.push(json!(sub_id));
-        for f in &filters {
-            msg.push(serde_json::to_value(f)?);
-        }
-        inner.send_raw(&Value::Array(msg)).await?;
-
-        inner
-            .collect_until_eose(sub_id, Duration::from_secs(10))
-            .await
+            .map_err(|_| RelayClientError::ConnectionClosed)?;
+        reply_rx.await.map_err(|_| RelayClientError::ConnectionClosed)?
     }
 
     /// Send a `CLOSE` message to the relay and remove the subscription from the active set.
     pub async fn close_subscription(&self, sub_id: &str) -> Result<(), RelayClientError> {
-        // Remove from active subscriptions — no longer needs to be resubscribed.
-        self.active_subscriptions.lock().await.remove(sub_id);
-
-        let mut inner = self.inner.lock().await;
-        let msg = json!(["CLOSE", sub_id]);
-        inner.send_raw(&msg).await
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.cmd_tx
+            .send(RelayCommand::CloseSubscription {
+                sub_id: sub_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| RelayClientError::ConnectionClosed)?;
+        reply_rx.await.map_err(|_| RelayClientError::ConnectionClosed)?
     }
 
     /// Perform a clean WebSocket close handshake.
     pub async fn close(&self) -> Result<(), RelayClientError> {
-        let mut inner = self.inner.lock().await;
-        inner.ws.close(None).await?;
+        // Signal the background task to shut down.
+        let _ = self.cmd_tx.send(RelayCommand::Shutdown).await;
         Ok(())
     }
 }
+
+// ── Free functions ────────────────────────────────────────────────────────────
 
 /// Convert a WebSocket URL to its HTTP equivalent.
 /// Converts `ws://` → `http://` and `wss://` → `https://`, strips trailing slash.
