@@ -123,6 +123,7 @@ pub struct OkResponse {
 type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// Commands sent from `RelayClient` to the background WebSocket task.
+#[allow(clippy::large_enum_variant)]
 enum RelayCommand {
     SendEvent {
         event: Event,
@@ -152,7 +153,13 @@ struct BgState {
     /// Active subscriptions: sub_id → filters (for reconnect replay).
     active_subscriptions: HashMap<String, Vec<Filter>>,
     /// Pending OK waiters: event_id → (reply, deadline).
-    pending_ok: HashMap<String, (oneshot::Sender<Result<OkResponse, RelayClientError>>, tokio::time::Instant)>,
+    pending_ok: HashMap<
+        String,
+        (
+            oneshot::Sender<Result<OkResponse, RelayClientError>>,
+            tokio::time::Instant,
+        ),
+    >,
     /// Pending EOSE collectors: sub_id → collector.
     pending_eose: HashMap<String, PendingSubscription>,
 }
@@ -245,7 +252,10 @@ async fn do_connect(
 }
 
 /// Wait for an AUTH challenge frame, responding to Pings along the way.
-async fn wait_for_auth_challenge(ws: &mut WsStream, timeout_dur: Duration) -> Result<String, RelayClientError> {
+async fn wait_for_auth_challenge(
+    ws: &mut WsStream,
+    timeout_dur: Duration,
+) -> Result<String, RelayClientError> {
     let deadline = tokio::time::Instant::now() + timeout_dur;
     loop {
         let remaining = deadline
@@ -260,11 +270,14 @@ async fn wait_for_auth_challenge(ws: &mut WsStream, timeout_dur: Duration) -> Re
             .ok_or(RelayClientError::ConnectionClosed)?
             .map_err(RelayClientError::WebSocket)?;
         match raw {
-            Message::Text(text) => match parse_relay_message(&text)? {
-                RelayMessage::Auth { challenge } => return Ok(challenge),
-                _ => {} // discard other messages during handshake
-            },
-            Message::Ping(data) => { ws.send(Message::Pong(data)).await?; }
+            Message::Text(text) => {
+                if let RelayMessage::Auth { challenge } = parse_relay_message(&text)? {
+                    return Ok(challenge);
+                }
+            }
+            Message::Ping(data) => {
+                ws.send(Message::Pong(data)).await?;
+            }
             Message::Close(_) => return Err(RelayClientError::ConnectionClosed),
             _ => {}
         }
@@ -272,7 +285,11 @@ async fn wait_for_auth_challenge(ws: &mut WsStream, timeout_dur: Duration) -> Re
 }
 
 /// Wait for an OK frame matching `event_id`, responding to Pings along the way.
-async fn wait_for_ok(ws: &mut WsStream, event_id: &str, timeout_dur: Duration) -> Result<OkResponse, RelayClientError> {
+async fn wait_for_ok(
+    ws: &mut WsStream,
+    event_id: &str,
+    timeout_dur: Duration,
+) -> Result<OkResponse, RelayClientError> {
     let deadline = tokio::time::Instant::now() + timeout_dur;
     loop {
         let remaining = deadline
@@ -291,7 +308,9 @@ async fn wait_for_ok(ws: &mut WsStream, event_id: &str, timeout_dur: Duration) -
                 RelayMessage::Ok(ok) if ok.event_id == event_id => return Ok(ok),
                 _ => {} // discard other messages during handshake
             },
-            Message::Ping(data) => { ws.send(Message::Pong(data)).await?; }
+            Message::Ping(data) => {
+                ws.send(Message::Pong(data)).await?;
+            }
             Message::Close(_) => return Err(RelayClientError::ConnectionClosed),
             _ => {}
         }
@@ -299,6 +318,7 @@ async fn wait_for_ok(ws: &mut WsStream, event_id: &str, timeout_dur: Duration) -
 }
 
 /// Build a NIP-42 AUTH event for the given challenge.
+#[allow(clippy::result_large_err)]
 fn build_auth_event(
     challenge: &str,
     relay_url: &str,
@@ -340,7 +360,8 @@ async fn send_auth_response(
         ws.send(Message::Text(msg.into())).await?;
         debug!("sent AUTH response for mid-session challenge");
         Ok(())
-    }.await;
+    }
+    .await;
     if let Err(e) = result {
         warn!("failed to respond to mid-session AUTH challenge: {e}");
     }
@@ -367,7 +388,10 @@ async fn handle_ws_message(
                 }
             };
             match relay_msg {
-                RelayMessage::Event { subscription_id, event } => {
+                RelayMessage::Event {
+                    subscription_id,
+                    event,
+                } => {
                     if let Some(sub) = state.pending_eose.get_mut(&subscription_id) {
                         sub.events.push(*event);
                     } else {
@@ -390,7 +414,10 @@ async fn handle_ws_message(
                         debug!("EOSE for unknown subscription {subscription_id}");
                     }
                 }
-                RelayMessage::Closed { subscription_id, message } => {
+                RelayMessage::Closed {
+                    subscription_id,
+                    message,
+                } => {
                     warn!("subscription {subscription_id} closed by relay: {message}");
                     state.active_subscriptions.remove(&subscription_id);
                     if let Some(sub) = state.pending_eose.remove(&subscription_id) {
@@ -536,10 +563,10 @@ async fn run_background_task(
                     Some(Err(e)) => { warn!("WebSocket error: {e}"); true }
                     None => { debug!("WebSocket stream ended"); true }
                 };
-                if needs_reconnect {
-                    if !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref()).await {
-                        return; // Shutdown received during reconnect
-                    }
+                if needs_reconnect
+                    && !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref()).await
+                {
+                    return; // Shutdown received during reconnect
                 }
             }
 
@@ -825,11 +852,17 @@ impl RelayClient {
     /// Publish a signed Nostr event to the relay and wait for the `OK` acknowledgement.
     pub async fn send_event(&self, event: Event) -> Result<OkResponse, RelayClientError> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.bg.cmd_tx
-            .send(RelayCommand::SendEvent { event, reply: reply_tx })
+        self.bg
+            .cmd_tx
+            .send(RelayCommand::SendEvent {
+                event,
+                reply: reply_tx,
+            })
             .await
             .map_err(|_| RelayClientError::ConnectionClosed)?;
-        reply_rx.await.map_err(|_| RelayClientError::ConnectionClosed)?
+        reply_rx
+            .await
+            .map_err(|_| RelayClientError::ConnectionClosed)?
     }
 
     /// Open a subscription with the given filters and collect all stored events until `EOSE`.
@@ -839,7 +872,8 @@ impl RelayClient {
         filters: Vec<Filter>,
     ) -> Result<Vec<Event>, RelayClientError> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.bg.cmd_tx
+        self.bg
+            .cmd_tx
             .send(RelayCommand::Subscribe {
                 sub_id: sub_id.to_string(),
                 filters,
@@ -847,20 +881,25 @@ impl RelayClient {
             })
             .await
             .map_err(|_| RelayClientError::ConnectionClosed)?;
-        reply_rx.await.map_err(|_| RelayClientError::ConnectionClosed)?
+        reply_rx
+            .await
+            .map_err(|_| RelayClientError::ConnectionClosed)?
     }
 
     /// Send a `CLOSE` message to the relay and remove the subscription from the active set.
     pub async fn close_subscription(&self, sub_id: &str) -> Result<(), RelayClientError> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.bg.cmd_tx
+        self.bg
+            .cmd_tx
             .send(RelayCommand::CloseSubscription {
                 sub_id: sub_id.to_string(),
                 reply: reply_tx,
             })
             .await
             .map_err(|_| RelayClientError::ConnectionClosed)?;
-        reply_rx.await.map_err(|_| RelayClientError::ConnectionClosed)?
+        reply_rx
+            .await
+            .map_err(|_| RelayClientError::ConnectionClosed)?
     }
 
     /// Signal the background task to shut down.
@@ -1183,15 +1222,11 @@ mod tests {
     #[cfg(test)]
     mod integration {
         use super::*;
+        use futures_util::stream::{SplitSink, SplitStream};
         use futures_util::{SinkExt, StreamExt};
         use std::future::Future;
         use tokio::net::TcpListener;
-        use tokio_tungstenite::{
-            accept_async,
-            tungstenite::Message,
-            WebSocketStream,
-        };
-        use futures_util::stream::{SplitSink, SplitStream};
+        use tokio_tungstenite::{accept_async, tungstenite::Message, WebSocketStream};
 
         type PlainWs = WebSocketStream<tokio::net::TcpStream>;
 
@@ -1199,9 +1234,7 @@ mod tests {
         /// Returns the `ws://127.0.0.1:{port}` URL.
         async fn spawn_mini_relay<F, Fut>(scenario: F) -> String
         where
-            F: FnOnce(SplitSink<PlainWs, Message>, SplitStream<PlainWs>) -> Fut
-                + Send
-                + 'static,
+            F: FnOnce(SplitSink<PlainWs, Message>, SplitStream<PlainWs>) -> Fut + Send + 'static,
             Fut: Future<Output = ()> + Send,
         {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1222,11 +1255,9 @@ mod tests {
                 // Wait for AUTH response, send OK for the event.
                 while let Some(Ok(msg)) = stream.next().await {
                     if let Message::Text(text) = msg {
-                        let arr: Vec<serde_json::Value> =
-                            serde_json::from_str(&text).unwrap();
+                        let arr: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
                         if arr.first().and_then(|v| v.as_str()) == Some("AUTH") {
-                            let event_id =
-                                arr[1]["id"].as_str().unwrap().to_string();
+                            let event_id = arr[1]["id"].as_str().unwrap().to_string();
                             sink.send(Message::Text(
                                 format!(r#"["OK","{}",true,""]"#, event_id).into(),
                             ))
@@ -1249,7 +1280,9 @@ mod tests {
         async fn bg_responds_to_ping_without_caller_activity() {
             let url = spawn_mini_relay(|mut sink, mut stream| async move {
                 // Send a Ping — background task should Pong immediately.
-                sink.send(Message::Ping(b"abc".to_vec().into())).await.unwrap();
+                sink.send(Message::Ping(b"abc".to_vec().into()))
+                    .await
+                    .unwrap();
 
                 // Drain until we see the Pong.
                 while let Some(Ok(msg)) = stream.next().await {
@@ -1284,17 +1317,14 @@ mod tests {
                 // Expect a new AUTH event with kind 22242.
                 while let Some(Ok(msg)) = stream.next().await {
                     if let Message::Text(text) = msg {
-                        let arr: Vec<serde_json::Value> =
-                            serde_json::from_str(&text).unwrap();
+                        let arr: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
                         if arr.first().and_then(|v| v.as_str()) == Some("AUTH") {
                             let kind = arr[1]["kind"].as_u64().unwrap();
                             assert_eq!(kind, 22242, "expected kind 22242 (Authentication)");
                             // Verify the challenge tag is present.
                             let tags = arr[1]["tags"].as_array().unwrap();
                             let has_challenge = tags.iter().any(|t| {
-                                t.as_array()
-                                    .and_then(|a| a.get(1))
-                                    .and_then(|v| v.as_str())
+                                t.as_array().and_then(|a| a.get(1)).and_then(|v| v.as_str())
                                     == Some("challenge-2")
                             });
                             assert!(has_challenge, "AUTH event missing challenge tag");
@@ -1320,8 +1350,7 @@ mod tests {
                 // Wait for EVENT, send matching OK.
                 while let Some(Ok(msg)) = stream.next().await {
                     if let Message::Text(text) = msg {
-                        let arr: Vec<serde_json::Value> =
-                            serde_json::from_str(&text).unwrap();
+                        let arr: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
                         if arr.first().and_then(|v| v.as_str()) == Some("EVENT") {
                             let event_id = arr[1]["id"].as_str().unwrap().to_string();
                             sink.send(Message::Text(
@@ -1360,34 +1389,27 @@ mod tests {
                 // Wait for REQ.
                 while let Some(Ok(msg)) = stream.next().await {
                     if let Message::Text(text) = msg {
-                        let arr: Vec<serde_json::Value> =
-                            serde_json::from_str(&text).unwrap();
+                        let arr: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
                         if arr.first().and_then(|v| v.as_str()) == Some("REQ") {
                             let sub_id = arr[1].as_str().unwrap().to_string();
 
                             // Build 3 minimal valid events.
                             let relay_keys = Keys::generate();
                             for i in 0u8..3 {
-                                let ev = EventBuilder::new(
-                                    Kind::TextNote,
-                                    format!("msg {i}"),
-                                    [],
-                                )
-                                .sign_with_keys(&relay_keys)
-                                .unwrap();
-                                let frame = serde_json::to_string(
-                                    &serde_json::json!(["EVENT", sub_id, ev]),
-                                )
+                                let ev = EventBuilder::new(Kind::TextNote, format!("msg {i}"), [])
+                                    .sign_with_keys(&relay_keys)
+                                    .unwrap();
+                                let frame = serde_json::to_string(&serde_json::json!([
+                                    "EVENT", sub_id, ev
+                                ]))
                                 .unwrap();
                                 sink.send(Message::Text(frame.into())).await.unwrap();
                             }
 
                             // Send EOSE.
-                            sink.send(Message::Text(
-                                format!(r#"["EOSE","{}"]"#, sub_id).into(),
-                            ))
-                            .await
-                            .unwrap();
+                            sink.send(Message::Text(format!(r#"["EOSE","{}"]"#, sub_id).into()))
+                                .await
+                                .unwrap();
                             return;
                         }
                     }
@@ -1506,13 +1528,10 @@ mod tests {
             // Close the subscription — relay should receive CLOSE.
             client.close_subscription("sub-close").await.unwrap();
 
-            let closed_id = tokio::time::timeout(
-                Duration::from_secs(2),
-                close_rx,
-            )
-            .await
-            .expect("timed out waiting for CLOSE")
-            .expect("channel dropped");
+            let closed_id = tokio::time::timeout(Duration::from_secs(2), close_rx)
+                .await
+                .expect("timed out waiting for CLOSE")
+                .expect("channel dropped");
 
             assert_eq!(closed_id, "sub-close");
 
@@ -1555,8 +1574,7 @@ mod tests {
                                 let arr: Vec<serde_json::Value> =
                                     serde_json::from_str(&text).unwrap_or_default();
                                 if arr.first().and_then(|v| v.as_str()) == Some("AUTH") {
-                                    let event_id =
-                                        arr[1]["id"].as_str().unwrap().to_string();
+                                    let event_id = arr[1]["id"].as_str().unwrap().to_string();
                                     sink.send(Message::Text(
                                         format!(r#"["OK","{}",true,""]"#, event_id).into(),
                                     ))
@@ -1587,8 +1605,7 @@ mod tests {
                                     serde_json::from_str(&text).unwrap_or_default();
                                 match arr.first().and_then(|v| v.as_str()) {
                                     Some("AUTH") => {
-                                        let event_id =
-                                            arr[1]["id"].as_str().unwrap().to_string();
+                                        let event_id = arr[1]["id"].as_str().unwrap().to_string();
                                         sink.send(Message::Text(
                                             format!(r#"["OK","{}",true,""]"#, event_id).into(),
                                         ))
@@ -1600,8 +1617,7 @@ mod tests {
                                         }
                                     }
                                     Some("EVENT") => {
-                                        let event_id =
-                                            arr[1]["id"].as_str().unwrap().to_string();
+                                        let event_id = arr[1]["id"].as_str().unwrap().to_string();
                                         sink.send(Message::Text(
                                             format!(r#"["OK","{}",true,""]"#, event_id).into(),
                                         ))

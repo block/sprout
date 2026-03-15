@@ -213,13 +213,21 @@ impl std::fmt::Debug for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::connection::{AuthState, ConnectionState};
+    use std::collections::HashMap;
     use tokio::sync::{Mutex, RwLock};
 
     /// Helper: create a ConnectionManager with one registered connection.
     /// Returns (manager, conn_id, receiver, cancel, shared_backpressure_count).
-    fn setup_conn(buffer_size: usize) -> (ConnectionManager, Uuid, mpsc::Receiver<WsMessage>, CancellationToken, Arc<AtomicU8>) {
+    fn setup_conn(
+        buffer_size: usize,
+    ) -> (
+        ConnectionManager,
+        Uuid,
+        mpsc::Receiver<WsMessage>,
+        CancellationToken,
+        Arc<AtomicU8>,
+    ) {
         let mgr = ConnectionManager::new();
         let conn_id = Uuid::new_v4();
         let (tx, rx) = mpsc::channel(buffer_size);
@@ -235,7 +243,11 @@ mod tests {
         // Simulate prior backpressure.
         bp.store(2, Ordering::Relaxed);
         assert!(mgr.send_to(id, "hello".into()));
-        assert_eq!(bp.load(Ordering::Relaxed), 0, "successful send should reset counter");
+        assert_eq!(
+            bp.load(Ordering::Relaxed),
+            0,
+            "successful send should reset counter"
+        );
     }
 
     #[test]
@@ -246,11 +258,17 @@ mod tests {
         // Buffer is now full.
         assert!(!mgr.send_to(id, "overflow-1".into()));
         assert_eq!(bp.load(Ordering::Relaxed), 1, "first overflow → count=1");
-        assert!(!cancel.is_cancelled(), "should not cancel on first overflow");
+        assert!(
+            !cancel.is_cancelled(),
+            "should not cancel on first overflow"
+        );
 
         assert!(!mgr.send_to(id, "overflow-2".into()));
         assert_eq!(bp.load(Ordering::Relaxed), 2);
-        assert!(!cancel.is_cancelled(), "should not cancel on second overflow");
+        assert!(
+            !cancel.is_cancelled(),
+            "should not cancel on second overflow"
+        );
     }
 
     #[test]
@@ -261,7 +279,10 @@ mod tests {
         for _ in 0..SLOW_CLIENT_GRACE_LIMIT {
             mgr.send_to(id, "overflow".into());
         }
-        assert!(cancel.is_cancelled(), "should cancel after SLOW_CLIENT_GRACE_LIMIT overflows");
+        assert!(
+            cancel.is_cancelled(),
+            "should cancel after SLOW_CLIENT_GRACE_LIMIT overflows"
+        );
     }
 
     #[test]
@@ -292,12 +313,23 @@ mod tests {
         assert!(conn.send("fill".into()));
         // Overflow via fan-out.
         assert!(!mgr.send_to(conn_id, "overflow-fanout".into()));
-        assert_eq!(bp.load(Ordering::Relaxed), 1, "fan-out overflow increments shared counter");
+        assert_eq!(
+            bp.load(Ordering::Relaxed),
+            1,
+            "fan-out overflow increments shared counter"
+        );
         // Overflow via direct send.
         assert!(!conn.send("overflow-direct".into()));
-        assert_eq!(bp.load(Ordering::Relaxed), 2, "direct overflow increments same counter");
+        assert_eq!(
+            bp.load(Ordering::Relaxed),
+            2,
+            "direct overflow increments same counter"
+        );
         // One more fan-out overflow → should cancel (3 consecutive).
         mgr.send_to(conn_id, "overflow-final".into());
-        assert!(cancel.is_cancelled(), "shared counter reached limit via mixed path");
+        assert!(
+            cancel.is_cancelled(),
+            "shared counter reached limit via mixed path"
+        );
     }
 }

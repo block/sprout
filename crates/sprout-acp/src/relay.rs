@@ -739,7 +739,10 @@ async fn resubscribe_after_reconnect(
 ) {
     let channels: Vec<Uuid> = state.active_subscriptions.keys().copied().collect();
     if !channels.is_empty() {
-        info!("resubscribing to {} channel(s) after reconnect", channels.len());
+        info!(
+            "resubscribing to {} channel(s) after reconnect",
+            channels.len()
+        );
         for channel_id in channels {
             let last_seen = state.last_seen.get(&channel_id).copied();
             let dropped = state.channel_dropped_since.get(&channel_id).copied();
@@ -749,10 +752,16 @@ async fn resubscribe_after_reconnect(
                 (None, Some(d)) => Some(d),
                 (None, None) => None,
             };
-            let filter = state.active_filters.get(&channel_id).cloned().unwrap_or(
-                ChannelFilter { kinds: None, require_mention: false },
-            );
-            let sent = send_subscribe(ws, state, channel_id, agent_pubkey_hex, since, &filter).await;
+            let filter = state
+                .active_filters
+                .get(&channel_id)
+                .cloned()
+                .unwrap_or(ChannelFilter {
+                    kinds: None,
+                    require_mention: false,
+                });
+            let sent =
+                send_subscribe(ws, state, channel_id, agent_pubkey_hex, since, &filter).await;
             if sent {
                 state.channel_dropped_since.remove(&channel_id);
             }
@@ -903,6 +912,7 @@ async fn wait_for_reconnect(
 /// - `#h` is always included (channel-scoped subscription).
 /// - On first subscribe (`since` is `None`) adds `since=now` to avoid replaying
 ///   history. On reconnect (`since` is `Some`) subtracts [`SINCE_SKEW_SECS`].
+///
 /// Returns `true` if the REQ was successfully written to the WebSocket.
 async fn send_subscribe(
     ws: &mut WsStream,
@@ -1858,8 +1868,7 @@ mod tests {
         // After subtracting skew (as send_subscribe does), the REQ filter value is:
         let req_since = since.unwrap().saturating_sub(SINCE_SKEW_SECS);
         assert_eq!(
-            req_since,
-            895,
+            req_since, 895,
             "REQ since filter should be 900 - {} = 895",
             SINCE_SKEW_SECS
         );
