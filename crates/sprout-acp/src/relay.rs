@@ -562,16 +562,19 @@ async fn handle_ws_message(
                             }
                         };
                         let ts = event.created_at.as_u64();
-                        state.membership_last_seen =
-                            Some(state.membership_last_seen.unwrap_or(0).max(ts));
                         let sprout_event = SproutEvent {
                             channel_id: channel_uuid,
                             event: *event,
                         };
                         match event_tx.try_send(Some(sprout_event)) {
-                            Ok(()) => {}
+                            Ok(()) => {
+                                // Only advance watermark after successful enqueue —
+                                // if dropped, reconnect replay must re-deliver it.
+                                state.membership_last_seen =
+                                    Some(state.membership_last_seen.unwrap_or(0).max(ts));
+                            }
                             Err(mpsc::error::TrySendError::Full(_)) => {
-                                warn!("event channel full — dropping membership notification");
+                                warn!("event channel full — dropping membership notification (watermark NOT advanced, will replay on reconnect)");
                             }
                             Err(mpsc::error::TrySendError::Closed(_)) => return false,
                         }

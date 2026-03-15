@@ -29,7 +29,7 @@ pub enum ConfigError {
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, clap::ValueEnum)]
+#[derive(Debug, Clone, PartialEq, clap::ValueEnum)]
 pub enum SubscribeMode {
     Mentions,
     All,
@@ -445,12 +445,13 @@ pub fn resolve_channel_filters(
 
 /// Resolve the subscription filter for a single dynamically-discovered channel.
 ///
-/// Uses the same rule-matching logic as `resolve_channel_filters()` but bypasses
-/// the `channels_override` / `discovered_channels` intersection — the channel was
-/// just discovered via membership notification and isn't in either list yet.
+/// In Mentions/All mode, `channels_override` (--channels) is enforced — the agent
+/// won't subscribe to channels outside the operator's allowlist. In Config mode,
+/// `--channels` is ignored (per CLI contract) and rule-matching determines scope.
 ///
-/// Returns `None` in Config mode when no rules match the channel — the agent
-/// should not subscribe to channels outside its configured scope.
+/// Returns `None` when the channel is outside the agent's configured scope:
+/// - Mentions/All: channel not in `channels_override` (if set)
+/// - Config: no subscription rules match the channel
 pub fn resolve_dynamic_channel_filter(
     config: &Config,
     channel_id: Uuid,
@@ -460,15 +461,18 @@ pub fn resolve_dynamic_channel_filter(
         KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
     };
 
-    // If the operator explicitly constrained channels with --channels,
-    // only allow dynamic subscription to channels in that allowlist.
-    // This prevents membership notifications from bypassing operator scope.
-    if let Some(ref overrides) = config.channels_override {
-        let allowed = overrides
-            .iter()
-            .any(|s| s.parse::<Uuid>().ok() == Some(channel_id));
-        if !allowed {
-            return None;
+    // In Mentions/All mode, if the operator explicitly constrained channels
+    // with --channels, only allow dynamic subscription to channels in that
+    // allowlist. Config mode ignores --channels (per CLI contract) and uses
+    // rule-matching instead.
+    if config.subscribe_mode != SubscribeMode::Config {
+        if let Some(ref overrides) = config.channels_override {
+            let allowed = overrides
+                .iter()
+                .any(|s| s.parse::<Uuid>().ok() == Some(channel_id));
+            if !allowed {
+                return None;
+            }
         }
     }
 
