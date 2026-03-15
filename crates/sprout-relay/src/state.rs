@@ -14,6 +14,7 @@ use deadpool_redis;
 use sprout_audit::AuditService;
 use sprout_auth::AuthService;
 use sprout_db::Db;
+use sprout_media::MediaStorage;
 use sprout_pubsub::PubSubManager;
 use sprout_search::SearchService;
 use sprout_workflow::WorkflowEngine;
@@ -149,6 +150,8 @@ pub struct AppState {
     /// consumer skips them to avoid double delivery. Entries expire after
     /// 60 seconds via moka's TTL eviction — bounded regardless of subscriber health.
     pub local_event_ids: Arc<moka::sync::Cache<[u8; 32], ()>>,
+    /// Media storage client (S3/MinIO).
+    pub media_storage: Arc<MediaStorage>,
 }
 
 impl AppState {
@@ -164,6 +167,7 @@ impl AppState {
         search: SearchService,
         workflow_engine: Arc<WorkflowEngine>,
         relay_keypair: nostr::Keys,
+        media_storage: MediaStorage,
     ) -> Self {
         let max_connections = config.max_connections;
         let max_concurrent_handlers = config.max_concurrent_handlers;
@@ -189,6 +193,7 @@ impl AppState {
                     .time_to_live(std::time::Duration::from_secs(60))
                     .build(),
             ),
+            media_storage: Arc::new(media_storage),
         }
     }
 

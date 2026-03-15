@@ -360,6 +360,40 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         }
     }
 
+    // Validate imeta tags on WebSocket-submitted events (same rules as REST path).
+    // Extract imeta tags from the event and validate them.
+    let imeta_tags: Vec<Vec<String>> = event
+        .tags
+        .iter()
+        .filter(|t| t.kind().to_string() == "imeta")
+        .map(|t| {
+            // Use as_slice() to capture ALL tag elements — no index cap.
+            // The first element is the tag kind ("imeta"), already included.
+            t.as_slice().iter().map(|s| s.to_string()).collect()
+        })
+        .collect();
+    if !imeta_tags.is_empty() {
+        if let Err(e) =
+            crate::api::validate_imeta_tags(&imeta_tags, &state.config.media.public_base_url)
+        {
+            conn.send(RelayMessage::ok(
+                &event_id_hex,
+                false,
+                &format!("invalid: {e}"),
+            ));
+            return;
+        }
+        // Verify referenced blobs exist in storage and metadata matches.
+        if let Err(e) = crate::api::verify_imeta_blobs(&imeta_tags, &state.media_storage).await {
+            conn.send(RelayMessage::ok(
+                &event_id_hex,
+                false,
+                &format!("invalid: {e}"),
+            ));
+            return;
+        }
+    }
+
     let (stored_event, was_inserted) = match state.db.insert_event(&event, channel_id).await {
         Ok(result) => result,
         Err(sprout_db::DbError::AuthEventRejected) => {

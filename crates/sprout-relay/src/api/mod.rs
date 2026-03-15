@@ -26,6 +26,8 @@ pub mod dms;
 pub mod events;
 /// Personalized home feed endpoint.
 pub mod feed;
+/// Blossom-compatible media upload, retrieval, and existence check endpoints.
+pub mod media;
 /// Channel membership endpoints.
 pub mod members;
 /// Message and thread endpoints.
@@ -60,7 +62,10 @@ pub use dms::{add_dm_member_handler, list_dms_handler, open_dm_handler};
 pub use events::get_event;
 pub use feed::feed_handler;
 pub use members::{add_members, join_channel, leave_channel, list_members, remove_member};
-pub use messages::{delete_message, get_thread, list_messages, send_message};
+pub use messages::{
+    delete_message, get_thread, list_messages, send_message, validate_imeta_tags,
+    verify_imeta_blobs,
+};
 pub use presence::{presence_handler, set_presence_handler};
 pub use reactions::{add_reaction_handler, list_reactions_handler, remove_reaction_handler};
 pub use search::search_handler;

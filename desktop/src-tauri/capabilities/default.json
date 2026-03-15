@@ -10,6 +10,7 @@
     "core:window:allow-close",
     "opener:default",
     "websocket:default",
-    "window-state:default"
+    "window-state:default",
+    "dialog:default"
   ]
 }

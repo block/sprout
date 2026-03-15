@@ -32,10 +32,11 @@ const rules = [
 const overrides = new Map([
   ["src/app/AppShell.tsx", 700],
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
+  ["src/features/messages/ui/MessageComposer.tsx", 650], // media upload handlers (paste, drop, dialog)
   ["src/features/settings/ui/SettingsView.tsx", 600],
   ["src/features/sidebar/ui/AppSidebar.tsx", 650],
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
-  ["src/shared/api/tauri.ts", 900],
+  ["src/shared/api/tauri.ts", 950],
 ]);
 
 async function walkFiles(directory) {

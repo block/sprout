@@ -620,11 +620,12 @@ export function AppShell() {
                 onCancelReply={() => {
                   setReplyTargetId(null);
                 }}
-                onSend={async (content, mentionPubkeys) => {
+                onSend={async (content, mentionPubkeys, mediaTags) => {
                   await sendMessageMutation.mutateAsync({
                     content,
                     mentionPubkeys,
                     parentEventId: replyTargetId,
+                    mediaTags,
                   });
                   setReplyTargetId(null);
                 }}

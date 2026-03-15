@@ -21,8 +21,28 @@ use crate::nip11::{relay_info_handler, RelayInfo};
 use crate::state::AppState;
 
 /// Build the axum [`Router`] with all relay routes, middleware, and CORS configuration.
+///
+/// Uses a dual sub-router pattern so media routes can carry a 50 MB body limit
+/// while all other routes remain capped at 1 MB.  Each sub-router attaches its
+/// own `RequestBodyLimitLayer` before merging; the outer layer adds tracing and
+/// CORS once over the combined router.
 pub fn build_router(state: Arc<AppState>) -> Router {
-    Router::new()
+    // ── Media routes: body limit derived from config ─────────────────────────
+    // Transport limit is max_image_bytes (50MB). GIFs have a stricter app-level cap (10MB)
+    // enforced in validation.rs after MIME detection. This means GIF uploads up to 50MB are
+    // buffered before rejection — acceptable for V1; streaming validation deferred to V2.
+    let media_body_limit = state.config.media.max_image_bytes as usize;
+    let media_router = Router::new()
+        .route("/media/upload", put(api::media::upload_blob))
+        .route(
+            "/media/{sha256_ext}",
+            get(api::media::get_blob).head(api::media::head_blob),
+        )
+        .layer(RequestBodyLimitLayer::new(media_body_limit))
+        .with_state(state.clone());
+
+    // ── All other routes: 1 MB body limit ────────────────────────────────────
+    let api_router = Router::new()
         .route("/", get(nip11_or_ws_handler))
         .route("/info", get(relay_info_handler))
         .route("/.well-known/nostr.json", get(api::nip05::nostr_nip05))
@@ -145,11 +165,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/users/batch", post(api::get_users_batch))
         // Feed route
         .route("/api/feed", get(api::feed_handler))
-        .layer(TraceLayer::new_for_http())
-        .layer(build_cors_layer(&state.config.cors_origins))
         // Reject request bodies larger than 1 MB to prevent resource exhaustion.
         .layer(RequestBodyLimitLayer::new(1024 * 1024))
-        .with_state(state)
+        .with_state(state.clone());
+
+    // Merge — each sub-router carries its own body limit.
+    // TraceLayer and CORS are applied once over the combined router.
+    api_router
+        .merge(media_router)
+        .layer(TraceLayer::new_for_http())
+        .layer(build_cors_layer(&state.config.cors_origins))
 }
 
 /// Content-negotiated: NIP-11 JSON for plain HTTP, WebSocket upgrade otherwise.

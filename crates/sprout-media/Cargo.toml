@@ -1,0 +1,30 @@
+[package]
+name = "sprout-media"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Media storage, validation, and thumbnail generation for Sprout"
+
+[dependencies]
+sprout-core = { workspace = true }
+nostr = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+chrono = { workspace = true }
+axum = { workspace = true }
+s3 = { version = "0.35", package = "rust-s3" }
+infer = "0.16"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+blurhash = "0.2"
+imagesize = "0.13"
+bytes = "1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
