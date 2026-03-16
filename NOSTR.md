@@ -64,6 +64,10 @@ mysql -u sprout -psprout_dev sprout -e \
 | **NIP-42 authentication** | ✅ | Proactive challenge; optional pubkey allowlist |
 | **NIP-11 relay info** | ✅ | `GET /` with `Accept: application/nostr+json` |
 | **Blossom media** | ✅ | `PUT /media/upload` (BUD-02), `GET /media/{sha256}.{ext}` (BUD-01) |
+| **NIP-50 search** | ✅ | One-shot search REQs: `{"search":"query","kinds":[9],"#h":["<uuid>"]}` → relevance-sorted results → EOSE. Not registered as persistent subscriptions. |
+| **NIP-10 threads** | ✅ | WS-submitted replies with `["e","<root>","","reply"]` tags create `thread_metadata` atomically. Visible in REST thread queries. Unknown parents rejected. |
+| **NIP-17 DMs (gift wrap)** | ✅ | kind:1059 accepted with ephemeral signing keys. Stored globally (channel_id=None). Delivered via `#p`-filtered subscriptions. Not indexed in search. |
+| **DM discovery** | ✅ | DM creation emits kind:39000 (with `hidden` tag) + kind:44100 membership notifications. NIP-29 clients discover DMs via standard group discovery flow. |
 | **Edits (kind:40003)** | ⚠️ | Works on the wire but Sprout-only — no standard NIP-29 client renders these |
 | **Rich content (kind:40002)** | ⚠️ | Works on the wire but Sprout-only — no standard NIP-29 client renders these |
 
@@ -74,9 +78,7 @@ mysql -u sprout -psprout_dev sprout -e \
 | **Create invite (kind:9009)** | ⚠️ | Accepted and stored, but side-effect handler is deferred (no-op with warning log) |
 | **Join request (kind:9021)** | ⚠️ | Accepted and stored, but side-effect handler is deferred (no-op with warning log) |
 | **Group roles (kind:39003)** | ❌ | Defined in kind registry but not emitted by the relay |
-| **Threads** | ⚠️ | Threading is REST-only (`parent_event_id`); no WebSocket-native thread model |
-| **NIP-50 search** | ❌ | Sprout uses Typesense; not exposed via NIP-50 |
-| **DMs** | ❌ | NIP-04/NIP-44 not implemented |
+| **DMs** | ⚠️ | NIP-17 gift wraps supported; NIP-04/NIP-44 not implemented. kind:10050 (DM relay list) deferred. |
 
 ### Pubkey Allowlist
 
@@ -166,6 +168,19 @@ nak event -k 5 -c "reason" --tag "h=<channel-uuid>" --tag "e=<message-event-id>"
 # Create a group
 nak event -k 9007 --tag "name=my-channel" --tag "visibility=open" \
   --auth --sec <privkey> ws://localhost:3000
+
+# Search messages (NIP-50)
+nak req -k 9 --tag "h=<channel-uuid>" --search "search query" -l 20 \
+  --auth --sec <privkey> ws://localhost:3000
+
+# Reply to a message (NIP-10 threading)
+nak event -k 9 -c "Reply text" --tag "h=<channel-uuid>" \
+  --tag "e=<parent-event-id>;;reply" \
+  --auth --sec <privkey> ws://localhost:3000
+
+# Fetch gift-wrapped DMs (NIP-17)
+nak req -k 1059 --tag "p=<your-hex-pubkey>" \
+  --auth --sec <privkey> ws://localhost:3000
 ```
 
 ### Tested Clients (Direct)
@@ -173,7 +188,8 @@ nak event -k 9007 --tag "name=my-channel" --tag "visibility=open" \
 | Client | Platform | Evidence | Notes |
 |--------|----------|:--------:|-------|
 | **SproutTestClient** | Rust (repo) | Automated E2E | Full NIP-29 flow: discovery (39000/39001/39002), kind:9 send/receive, reactions, deletions, h-tag enforcement |
-| **nak** | CLI | Manual (anecdotal) | Used during development; not automated in CI |
+| **E2E nostr interop** | Rust (repo) | Automated E2E | NIP-50 search (3 tests), NIP-10 threads (3 tests), NIP-17 gift wraps (3 tests), DM discovery (1 test) |
+| **nak** | CLI | Manual (verified) | kind:9 send/recv, NIP-50 search, NIP-10 thread replies, group discovery |
 
 **Not verified in-repo** (anecdotal / expected based on NIP-29 support):
 - **Chachi** (Web/Mobile) — NDK-based; NIP-29 native
@@ -254,8 +270,8 @@ curl -X POST http://localhost:4869/admin/guests \
 | **Inbound deletions (kind:5)** | ❌ | Blocked by proxy policy; not yet implemented |
 | **DMs (NIP-04/NIP-44)** | ❌ | Proxy only handles NIP-28 channel events |
 | **User profiles (kind:0)** | ❌ | Profiles managed via REST API or kind:0 (direct path) |
-| **NIP-10 reply threading** | ⚠️ | `#e` reply tags preserved but threading is REST-only in Sprout |
-| **NIP-50 search** | ❌ | Sprout uses Typesense; not exposed via NIP-50 |
+| **NIP-10 reply threading** | ⚠️ | Threading works on direct path; proxy preserves `#e` tags but does not translate thread metadata |
+| **NIP-50 search** | ❌ | Available on direct path only (ws://relay:3000); not proxied |
 | **File uploads (NIP-94/96)** | ❌ | Use Blossom on the relay directly (Path 1) |
 | **Relay lists / Outbox (NIP-65)** | ❌ | Single-relay architecture |
 
