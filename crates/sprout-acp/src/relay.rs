@@ -1,12 +1,9 @@
 //! Harness-side Sprout relay client.
 //!
 //! Connects to the Sprout relay via NIP-01 WebSocket, authenticates via NIP-42,
-//! discovers channels via REST API, and streams matching events back to the
-//! harness main loop.
-//!
-//! This is a simplified receive-only client adapted from `sprout-mcp`'s
-//! `relay_client.rs`. It does not publish events or perform queries — it only
-//! subscribes and receives.
+//! discovers channels via REST API, and streams events back to the harness main
+//! loop. Also publishes ephemeral events (typing indicators) via the same
+//! WebSocket connection.
 //!
 //! ## Architecture
 //!
@@ -15,6 +12,7 @@
 //! - Forwards `SproutEvent`s through an `mpsc` channel
 //! - Handles reconnection with `since` filters to avoid event loss
 //! - Responds to mid-session AUTH challenges
+//! - Publishes ephemeral events (typing indicators) via `PublishEvent` commands
 //!
 //! `HarnessRelay` communicates with the background task via a `RelayCommand`
 //! channel. `next_event()` reads from the event receiver.
@@ -51,7 +49,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 use futures_util::{SinkExt, StreamExt};
 use nostr::{Event, EventBuilder, Keys, Kind, Tag, Url as NostrUrl};
 use serde_json::{json, Value};
-use sprout_core::kind::{KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION};
+use sprout_core::kind::{
+    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_TYPING_INDICATOR,
+};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
@@ -107,6 +107,8 @@ impl RestClient {
     }
 
     /// PUT a JSON body to an endpoint, returning the parsed response.
+    ///
+    /// Returns `Value::Null` for empty response bodies (e.g. 204 No Content).
     pub async fn put_json(&self, path: &str, body: &Value) -> Result<Value, RelayError> {
         let url = format!("{}{}", self.base_url, path);
         let builder = self.http.put(&url).json(body);
@@ -125,9 +127,14 @@ impl RestClient {
             )));
         }
 
-        resp.json()
+        let text = resp
+            .text()
             .await
-            .map_err(|e| RelayError::Http(e.to_string()))
+            .map_err(|e| RelayError::Http(e.to_string()))?;
+        if text.is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text).map_err(|e| RelayError::Http(e.to_string()))
     }
 }
 
@@ -437,12 +444,12 @@ impl HarnessRelay {
             .map_err(|_| RelayError::ConnectionClosed)
     }
 
-    /// Build a kind:20002 typing indicator event for a channel.
+    /// Build a typing indicator event (kind:20002) for a channel.
     pub fn build_typing_event(&self, channel_id: Uuid) -> Result<Event, RelayError> {
         let h_tag = Tag::parse(&["h", &channel_id.to_string()])
             .map_err(|e| RelayError::AuthFailed(e.to_string()))?;
-        let event =
-            EventBuilder::new(Kind::Custom(20002), "", [h_tag]).sign_with_keys(&self.keys)?;
+        let event = EventBuilder::new(Kind::Custom(KIND_TYPING_INDICATOR as u16), "", [h_tag])
+            .sign_with_keys(&self.keys)?;
         Ok(event)
     }
 

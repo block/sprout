@@ -596,6 +596,8 @@ mod tests {
             no_mention_filter: false,
             config_path: PathBuf::from("./sprout-acp.toml"),
             context_message_limit: 12,
+            presence_enabled: true,
+            typing_enabled: true,
         }
     }
 

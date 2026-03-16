@@ -201,6 +201,7 @@ async fn main() -> Result<()> {
         None
     };
     let mut typing_channels: HashSet<Uuid> = HashSet::new();
+    let mut presence_task: Option<tokio::task::JoinHandle<()>> = None;
 
     // ── Step 7: Shutdown signal ───────────────────────────────────────────────
     let (shutdown_tx, mut shutdown_rx) = watch::channel(());
@@ -361,6 +362,7 @@ async fn main() -> Result<()> {
                                     // Track removed channels so checked-out agents get
                                     // their sessions stripped when they return to the pool.
                                     removed_channels.insert(ch);
+                                    typing_channels.remove(&ch);
                                     if drained > 0 || invalidated > 0 {
                                         tracing::info!(
                                             channel_id = %ch,
@@ -429,12 +431,16 @@ async fn main() -> Result<()> {
                     }
                 } => {
                     let _ = result_rx;
+                    // Abort previous heartbeat if still in flight (prevents race on shutdown).
+                    if let Some(h) = presence_task.take() {
+                        h.abort();
+                    }
                     let rc = rest_client_for_presence.clone();
-                    tokio::spawn(async move {
+                    presence_task = Some(tokio::spawn(async move {
                         if let Err(e) = rc.put_json("/api/presence", &serde_json::json!({"status": "online"})).await {
                             tracing::warn!("presence heartbeat failed: {e}");
                         }
-                    });
+                    }));
                     None
                 }
                 _ = async {
@@ -485,6 +491,7 @@ async fn main() -> Result<()> {
                     &config,
                     &mut heartbeat_in_flight,
                     &removed_channels,
+                    &mut typing_channels,
                 )
                 .await
                     == LoopAction::Exit
@@ -502,6 +509,7 @@ async fn main() -> Result<()> {
                     join_error,
                     &mut heartbeat_in_flight,
                     &removed_channels,
+                    &mut typing_channels,
                 )
                 .await;
                 if pool.live_count() == 0 {
@@ -531,15 +539,24 @@ async fn main() -> Result<()> {
     }
     drop(pool);
 
+    // Cancel any in-flight presence heartbeat before sending offline.
+    if let Some(h) = presence_task.take() {
+        h.abort();
+    }
+
     // Best-effort: set presence to offline before exiting.
     if config.presence_enabled {
-        let _ = tokio::time::timeout(
+        match tokio::time::timeout(
             Duration::from_secs(2),
             rest_client_for_presence
                 .put_json("/api/presence", &serde_json::json!({"status": "offline"})),
         )
-        .await;
-        tracing::info!("presence set to offline");
+        .await
+        {
+            Ok(Ok(_)) => tracing::info!("presence set to offline"),
+            Ok(Err(e)) => tracing::warn!("failed to set offline presence: {e}"),
+            Err(_) => tracing::warn!("offline presence timed out"),
+        }
     }
 
     tracing::info!("sprout-acp stopped");
@@ -708,6 +725,7 @@ async fn recover_panicked_agent(
     join_error: tokio::task::JoinError,
     heartbeat_in_flight: &mut bool,
     removed_channels: &HashSet<Uuid>,
+    typing_channels: &mut HashSet<Uuid>,
 ) {
     let task_id = join_error.id();
     let Some(meta) = pool.task_map_mut().remove(&task_id) else {
@@ -718,6 +736,7 @@ async fn recover_panicked_agent(
 
     if let Some(ch) = meta.channel_id {
         queue.mark_complete(ch);
+        typing_channels.remove(&ch);
         tracing::warn!("cleared wedged in-flight channel {ch} from panicked agent {i}");
     } else {
         *heartbeat_in_flight = false;
@@ -761,6 +780,7 @@ async fn drain_ready_join_results(
     config: &Config,
     heartbeat_in_flight: &mut bool,
     removed_channels: &HashSet<Uuid>,
+    typing_channels: &mut HashSet<Uuid>,
 ) -> LoopAction {
     while let Some(Some(join_result)) = pool.join_set.join_next().now_or_never() {
         if let Err(join_error) = join_result {
@@ -772,6 +792,7 @@ async fn drain_ready_join_results(
                 join_error,
                 heartbeat_in_flight,
                 removed_channels,
+                typing_channels,
             )
             .await;
             if pool.live_count() == 0 {
