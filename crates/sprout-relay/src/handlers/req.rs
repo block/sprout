@@ -175,15 +175,9 @@ pub async fn handle_req(
         };
 
         for stored in &events {
-            if !seen_ids.insert(stored.event.id) {
-                continue;
-            }
-
             // Per-filter NIP-01 matching — use the current filter only, not the
             // full filter set. OR semantics across filters are handled by the outer
-            // loop (each filter gets its own DB query). Using the full set here would
-            // let a row from query A pass because it matches filter B, consuming B's
-            // slot in the dedup set and causing under-fetch.
+            // loop (each filter gets its own DB query).
             if !filters_match(std::slice::from_ref(filter), stored) {
                 continue;
             }
@@ -192,6 +186,12 @@ pub async fn handle_req(
                 if !accessible_channels.contains(&ch_id) {
                     continue;
                 }
+            }
+
+            // Dedup AFTER acceptance — an event that fails filter A's constraints
+            // must remain eligible for filter B (NIP-01 OR semantics).
+            if !seen_ids.insert(stored.event.id) {
+                continue;
             }
 
             let msg = RelayMessage::event(&sub_id, &stored.event);
