@@ -153,6 +153,14 @@ pub struct CliArgs {
     #[arg(long, env = "SPROUT_ACP_CONTEXT_MESSAGE_LIMIT", default_value_t = 12,
           value_parser = clap::value_parser!(u32).range(0..=100))]
     pub context_message_limit: u32,
+
+    /// Disable automatic presence (online/offline) status.
+    #[arg(long, env = "SPROUT_ACP_NO_PRESENCE")]
+    pub no_presence: bool,
+
+    /// Disable typing indicators while agent is processing.
+    #[arg(long, env = "SPROUT_ACP_NO_TYPING")]
+    pub no_typing: bool,
 }
 
 // ── Merged NIP-01 filter ──────────────────────────────────────────────────────
@@ -190,6 +198,8 @@ pub struct Config {
     pub no_mention_filter: bool,
     pub config_path: PathBuf,
     pub context_message_limit: u32,
+    pub presence_enabled: bool,
+    pub typing_enabled: bool,
 }
 
 impl Config {
@@ -269,13 +279,15 @@ impl Config {
             no_mention_filter: args.no_mention_filter,
             config_path: args.config,
             context_message_limit: args.context_message_limit,
+            presence_enabled: !args.no_presence,
+            typing_enabled: !args.no_typing,
         })
     }
 
     /// Human-readable summary (no secrets).
     pub fn summary(&self) -> String {
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} timeout={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={} context_limit={}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} timeout={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={} context_limit={} presence={} typing={}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -288,6 +300,8 @@ impl Config {
             self.dedup_mode,
             self.ignore_self,
             self.context_message_limit,
+            self.presence_enabled,
+            self.typing_enabled,
         )
     }
 }

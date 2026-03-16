@@ -105,6 +105,30 @@ impl RestClient {
             .await
             .map_err(|e| RelayError::Http(e.to_string()))
     }
+
+    /// PUT a JSON body to an endpoint, returning the parsed response.
+    pub async fn put_json(&self, path: &str, body: &Value) -> Result<Value, RelayError> {
+        let url = format!("{}{}", self.base_url, path);
+        let builder = self.http.put(&url).json(body);
+        let builder = apply_auth(builder, &self.api_token, &self.keys);
+
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| RelayError::Http(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(RelayError::Http(format!(
+                "PUT {} returned HTTP {}",
+                path,
+                resp.status()
+            )));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| RelayError::Http(e.to_string()))
+    }
 }
 
 /// Events the harness cares about.
@@ -200,6 +224,8 @@ enum RelayCommand {
     Shutdown,
     /// Subscribe to global membership notifications.
     SubscribeMembership,
+    /// Publish a signed event to the relay (for typing indicators, etc.).
+    PublishEvent { event: Box<Event> },
 }
 
 // ── WebSocket stream type alias ───────────────────────────────────────────────
@@ -401,6 +427,25 @@ impl HarnessRelay {
         self.event_rx.recv().await.flatten()
     }
 
+    /// Publish a signed event to the relay via the background WebSocket task.
+    pub async fn publish_event(&self, event: Event) -> Result<(), RelayError> {
+        self.cmd_tx
+            .send(RelayCommand::PublishEvent {
+                event: Box::new(event),
+            })
+            .await
+            .map_err(|_| RelayError::ConnectionClosed)
+    }
+
+    /// Build a kind:20002 typing indicator event for a channel.
+    pub fn build_typing_event(&self, channel_id: Uuid) -> Result<Event, RelayError> {
+        let h_tag = Tag::parse(&["h", &channel_id.to_string()])
+            .map_err(|e| RelayError::AuthFailed(e.to_string()))?;
+        let event =
+            EventBuilder::new(Kind::Custom(20002), "", [h_tag]).sign_with_keys(&self.keys)?;
+        Ok(event)
+    }
+
     /// Reconnect after connection loss. Instructs the background task to
     /// re-authenticate and resubscribe to all previously active channels.
     pub async fn reconnect(&mut self) -> Result<(), RelayError> {
@@ -578,6 +623,12 @@ async fn run_background_task(
                                     let _ = send_membership_subscribe(&mut ws, &agent_pubkey_hex, None).await;
                                     state.membership_sub_active = true;
                                 }
+                                RelayCommand::PublishEvent { event } => {
+                                    let msg = json!(["EVENT", event]);
+                                    if let Ok(text) = serde_json::to_string(&msg) {
+                                        let _ = ws.send(Message::Text(text.into())).await;
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -627,6 +678,14 @@ async fn run_background_task(
                                     .unwrap_or_default()
                                     .as_secs(),
                             );
+                        }
+                    }
+                    Some(RelayCommand::PublishEvent { event }) => {
+                        let msg = json!(["EVENT", event]);
+                        if let Ok(text) = serde_json::to_string(&msg) {
+                            if let Err(e) = ws.send(Message::Text(text.into())).await {
+                                warn!("failed to publish event: {e}");
+                            }
                         }
                     }
                     Some(RelayCommand::Reconnect) => {
@@ -949,6 +1008,8 @@ async fn wait_for_reconnect(
                 Some(RelayCommand::SubscribeMembership) => {
                     state.membership_sub_active = true;
                 }
+                // Ephemeral events are meaningless while disconnected — drop silently.
+                Some(RelayCommand::PublishEvent { .. }) => {}
             }
         }
     }

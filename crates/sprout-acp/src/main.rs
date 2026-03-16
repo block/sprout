@@ -74,6 +74,18 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("membership notification subscribe error: {e}"))?;
     tracing::info!("subscribed to membership notifications");
 
+    // ── Step 2c: Set initial presence ─────────────────────────────────────────
+    let rest_client_for_presence = relay.rest_client();
+    if config.presence_enabled {
+        match rest_client_for_presence
+            .put_json("/api/presence", &serde_json::json!({"status": "online"}))
+            .await
+        {
+            Ok(_) => tracing::info!("presence set to online"),
+            Err(e) => tracing::warn!("failed to set initial presence: {e}"),
+        }
+    }
+
     // ── Step 3: Discover channels and build subscription rules ────────────────
     let channel_info_map = relay
         .discover_channels()
@@ -166,6 +178,29 @@ async fn main() -> Result<()> {
         None
     };
     let mut heartbeat_in_flight = false;
+
+    // ── Step 6b: Presence heartbeat timer (refreshes 90s TTL every 60s) ───────
+    let mut presence_heartbeat = if config.presence_enabled {
+        let interval = Duration::from_secs(60);
+        Some(tokio::time::interval_at(
+            tokio::time::Instant::now() + interval,
+            interval,
+        ))
+    } else {
+        None
+    };
+
+    // ── Step 6c: Typing refresh timer (re-publishes kind:20002 every 3s) ──────
+    let mut typing_refresh = if config.typing_enabled {
+        let interval = Duration::from_secs(3);
+        Some(tokio::time::interval_at(
+            tokio::time::Instant::now() + interval,
+            interval,
+        ))
+    } else {
+        None
+    };
+    let mut typing_channels: HashSet<Uuid> = HashSet::new();
 
     // ── Step 7: Shutdown signal ───────────────────────────────────────────────
     let (shutdown_tx, mut shutdown_rx) = watch::channel(());
@@ -357,7 +392,7 @@ async fn main() -> Result<()> {
                                 received_at: std::time::Instant::now(),
                                 prompt_tag,
                             });
-                            dispatch_pending(&mut pool, &mut queue, &ctx);
+                            typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
                         }
                         None => {
                             tracing::warn!("relay event stream ended — requesting reconnect");
@@ -379,11 +414,42 @@ async fn main() -> Result<()> {
                     let _ = result_rx;
                     if queue.has_flushable_work() {
                         tracing::debug!("heartbeat_skipped_events");
-                        dispatch_pending(&mut pool, &mut queue, &ctx);
+                        typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
                     } else if pool.any_idle() {
                         dispatch_heartbeat(&mut pool, &ctx, &mut heartbeat_in_flight);
                     } else {
                         tracing::debug!("heartbeat_skipped_busy");
+                    }
+                    None
+                }
+                _ = async {
+                    match presence_heartbeat.as_mut() {
+                        Some(t) => t.tick().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let _ = result_rx;
+                    let rc = rest_client_for_presence.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = rc.put_json("/api/presence", &serde_json::json!({"status": "online"})).await {
+                            tracing::warn!("presence heartbeat failed: {e}");
+                        }
+                    });
+                    None
+                }
+                _ = async {
+                    match typing_refresh.as_mut() {
+                        Some(t) => t.tick().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let _ = result_rx;
+                    for &ch in &typing_channels {
+                        if let Ok(event) = relay.build_typing_event(ch) {
+                            if let Err(e) = relay.publish_event(event).await {
+                                tracing::debug!("typing indicator failed for {ch}: {e}");
+                            }
+                        }
                     }
                     None
                 }
@@ -396,6 +462,10 @@ async fn main() -> Result<()> {
 
         match pool_event {
             Some(PoolEvent::Result(result)) => {
+                // Stop typing indicator for the completed channel.
+                if let PromptSource::Channel(ch) = &result.source {
+                    typing_channels.remove(ch);
+                }
                 if handle_prompt_result(
                     &mut pool,
                     &mut queue,
@@ -421,7 +491,7 @@ async fn main() -> Result<()> {
                 {
                     break;
                 }
-                dispatch_pending(&mut pool, &mut queue, &ctx);
+                typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
             }
             Some(PoolEvent::Panic(join_error)) => {
                 tracing::error!("agent task panicked: {join_error}");
@@ -438,7 +508,7 @@ async fn main() -> Result<()> {
                     tracing::error!("all agents dead — exiting");
                     break;
                 }
-                dispatch_pending(&mut pool, &mut queue, &ctx);
+                typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
             }
             None => {} // relay/heartbeat/shutdown branches handled inline above
         }
@@ -460,6 +530,18 @@ async fn main() -> Result<()> {
         pool.join_set.shutdown().await;
     }
     drop(pool);
+
+    // Best-effort: set presence to offline before exiting.
+    if config.presence_enabled {
+        let _ = tokio::time::timeout(
+            Duration::from_secs(2),
+            rest_client_for_presence
+                .put_json("/api/presence", &serde_json::json!({"status": "offline"})),
+        )
+        .await;
+        tracing::info!("presence set to offline");
+    }
+
     tracing::info!("sprout-acp stopped");
     Ok(())
 }
@@ -475,8 +557,12 @@ enum LoopAction {
 // ── dispatch_pending ──────────────────────────────────────────────────────────
 
 /// Flush queued work to available agents.
-fn dispatch_pending(pool: &mut AgentPool, queue: &mut EventQueue, ctx: &Arc<PromptContext>) {
-    let mut dispatched: usize = 0;
+fn dispatch_pending(
+    pool: &mut AgentPool,
+    queue: &mut EventQueue,
+    ctx: &Arc<PromptContext>,
+) -> Vec<Uuid> {
+    let mut dispatched_channels = Vec::new();
     loop {
         let batch = match queue.flush_next() {
             Some(b) => b,
@@ -519,13 +605,14 @@ fn dispatch_pending(pool: &mut AgentPool, queue: &mut EventQueue, ctx: &Arc<Prom
                 recoverable_batch,
             },
         );
-        dispatched += 1;
+        dispatched_channels.push(channel_id);
     }
     tracing::debug!(
-        dispatched,
+        dispatched = dispatched_channels.len(),
         queue_depth = queue.pending_channels(),
         "dispatch_pending"
     );
+    dispatched_channels
 }
 
 // ── handle_prompt_result ──────────────────────────────────────────────────────
