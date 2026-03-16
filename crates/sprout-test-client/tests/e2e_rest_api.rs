@@ -469,8 +469,9 @@ async fn test_search_returns_indexed_event() {
 
     ws_client.disconnect().await.ok();
 
-    // Wait briefly for the search index to catch up.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Wait for the async search index to catch up. Typesense indexing is
+    // fire-and-forget (tokio::spawn), so we need a generous delay.
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // The unique_token is UUID simple format (hex only) — safe to use directly in the URL.
     let url = format!("{}/api/search?q={unique_token}", relay_http_url());
