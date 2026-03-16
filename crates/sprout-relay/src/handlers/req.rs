@@ -346,9 +346,6 @@ async fn handle_search_req(
                         Some(ev) => ev,
                         None => continue,
                     };
-                    if !seen_ids.insert(stored.event.id) {
-                        continue;
-                    }
                     // NIP-01 post-filtering against THIS filter only (not OR of all filters).
                     if !filters_match(std::slice::from_ref(filter), stored) {
                         continue;
@@ -357,6 +354,11 @@ async fn handle_search_req(
                         if !accessible_channels.contains(&ch_id) {
                             continue;
                         }
+                    }
+                    // Dedup AFTER acceptance — an event that fails filter A's constraints
+                    // must remain eligible for filter B (NIP-01 OR semantics).
+                    if !seen_ids.insert(stored.event.id) {
+                        continue;
                     }
                     if !conn.send(RelayMessage::event(sub_id, &stored.event)) {
                         return;
