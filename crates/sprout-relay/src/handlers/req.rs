@@ -237,8 +237,11 @@ async fn handle_search_req(
         return;
     }
 
-    let channel_filter = {
-        let ids: Vec<String> = accessible_channels.iter().map(|id| id.to_string()).collect();
+    let all_channels_filter = {
+        let ids: Vec<String> = accessible_channels
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
         format!("channel_id:=[{}]", ids.join(","))
     };
 
@@ -257,11 +260,24 @@ async fn handle_search_req(
 
         // Push as many NIP-01 constraints into Typesense as possible so
         // post-filtering is a correction step, not the primary filter.
-        let mut filter_parts = vec![channel_filter.clone()];
+        //
+        // If the filter has a #h tag, push the specific channel(s) into Typesense
+        // instead of the full accessible set. This prevents cross-channel hits from
+        // consuming pagination budget and causing under-fetch.
+        let h_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::H);
+        let channel_scope = filter
+            .generic_tags
+            .get(&h_tag)
+            .filter(|vs| !vs.is_empty())
+            .map(|vs| {
+                let ids: Vec<&str> = vs.iter().map(|v| v.as_str()).collect();
+                format!("channel_id:=[{}]", ids.join(","))
+            })
+            .unwrap_or_else(|| all_channels_filter.clone());
+        let mut filter_parts = vec![channel_scope];
         if let Some(ref kinds) = filter.kinds {
             if !kinds.is_empty() {
-                let kind_vals: Vec<String> =
-                    kinds.iter().map(|k| k.as_u16().to_string()).collect();
+                let kind_vals: Vec<String> = kinds.iter().map(|k| k.as_u16().to_string()).collect();
                 filter_parts.push(format!("kind:=[{}]", kind_vals.join(",")));
             }
         }

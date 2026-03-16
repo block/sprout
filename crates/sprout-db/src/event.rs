@@ -575,5 +575,3 @@ pub async fn insert_event_with_thread_metadata(
 pub(crate) fn uuid_from_bytes(bytes: &[u8]) -> Result<Uuid> {
     Uuid::from_slice(bytes).map_err(|e| DbError::InvalidData(format!("invalid UUID: {e}")))
 }
-
-

@@ -432,7 +432,11 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     };
 
     let thread_params = thread_meta.as_ref().map(|m| m.as_params());
-    let (stored_event, was_inserted) = match state.db.insert_event_with_thread_metadata(&event, channel_id, thread_params).await {
+    let (stored_event, was_inserted) = match state
+        .db
+        .insert_event_with_thread_metadata(&event, channel_id, thread_params)
+        .await
+    {
         Ok(result) => result,
         Err(sprout_db::DbError::AuthEventRejected) => {
             conn.send(RelayMessage::ok(
@@ -826,8 +830,8 @@ async fn resolve_nip10_thread_meta(
     };
 
     // Decode and look up parent event.
-    let parent_bytes = hex::decode(&parent_hex)
-        .map_err(|_| "invalid parent event ID hex".to_string())?;
+    let parent_bytes =
+        hex::decode(&parent_hex).map_err(|_| "invalid parent event ID hex".to_string())?;
 
     let parent_event = state
         .db
@@ -866,15 +870,18 @@ async fn resolve_nip10_thread_meta(
             if client_root_bytes != effective_root {
                 return Err("root tag does not match thread ancestry".to_string());
             }
-            let root_ts = if let Ok(Some(root_ev)) =
-                state.db.get_event_by_id(&effective_root).await
+            let root_ts = if let Ok(Some(root_ev)) = state.db.get_event_by_id(&effective_root).await
             {
                 chrono::DateTime::from_timestamp(root_ev.event.created_at.as_u64() as i64, 0)
                     .unwrap_or(parent_created)
             } else {
                 parent_created
             };
-            (effective_root, root_ts, meta.depth + 1)
+            let depth = meta.depth + 1;
+            if depth > 100 {
+                return Err("thread depth limit exceeded".to_string());
+            }
+            (effective_root, root_ts, depth)
         }
         None => {
             // Parent has no thread metadata — parent is the root.
@@ -891,9 +898,8 @@ async fn resolve_nip10_thread_meta(
         parts.len() >= 2 && parts[0] == "broadcast" && parts[1] == "1"
     });
 
-    let event_created_at =
-        chrono::DateTime::from_timestamp(event.created_at.as_u64() as i64, 0)
-            .unwrap_or_else(Utc::now);
+    let event_created_at = chrono::DateTime::from_timestamp(event.created_at.as_u64() as i64, 0)
+        .unwrap_or_else(Utc::now);
 
     Ok(Some(ThreadMetadataOwned {
         event_id: event.id.as_bytes().to_vec(),

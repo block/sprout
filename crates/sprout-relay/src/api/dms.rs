@@ -18,7 +18,9 @@ use uuid::Uuid;
 
 use sprout_core::kind::KIND_MEMBER_ADDED_NOTIFICATION;
 
-use crate::handlers::side_effects::{emit_group_discovery_events, emit_membership_notification, emit_system_message};
+use crate::handlers::side_effects::{
+    emit_group_discovery_events, emit_membership_notification, emit_system_message,
+};
 use crate::state::AppState;
 
 use super::{api_error, extract_auth_context, internal_error};
@@ -142,7 +144,9 @@ pub async fn open_dm_handler(
                 participant,
                 &self_bytes,
                 KIND_MEMBER_ADDED_NOTIFICATION,
-            ).await {
+            )
+            .await
+            {
                 tracing::warn!("DM membership notification failed: {e}");
             }
         }
@@ -270,7 +274,9 @@ pub async fn add_dm_member_handler(
                 participant_bytes,
                 &self_bytes,
                 KIND_MEMBER_ADDED_NOTIFICATION,
-            ).await {
+            )
+            .await
+            {
                 tracing::warn!("DM membership notification failed: {e}");
             }
         }
