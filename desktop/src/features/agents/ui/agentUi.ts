@@ -7,6 +7,7 @@ export const AGENT_SCOPE_OPTIONS: Array<{ value: TokenScope; label: string }> =
     { value: "channels:read", label: "Channels read" },
     { value: "channels:write", label: "Channels write" },
     { value: "users:read", label: "Users read" },
+    { value: "users:write", label: "Users write" },
     { value: "files:read", label: "Files read" },
     { value: "files:write", label: "Files write" },
   ];

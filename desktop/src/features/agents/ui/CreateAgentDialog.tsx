@@ -49,7 +49,13 @@ export function CreateAgentDialog({
   const [tokenName, setTokenName] = React.useState("");
   const [selectedScopes, setSelectedScopes] = React.useState<Set<TokenScope>>(
     () =>
-      new Set<TokenScope>(["messages:read", "messages:write", "channels:read"]),
+      new Set<TokenScope>([
+        "messages:read",
+        "messages:write",
+        "channels:read",
+        "users:read",
+        "users:write",
+      ]),
   );
   const [turnTimeoutSeconds, setTurnTimeoutSeconds] = React.useState("300");
   const [selectedProviderId, setSelectedProviderId] =
@@ -138,7 +144,13 @@ export function CreateAgentDialog({
     setSpawnAfterCreate(true);
     setTokenName("");
     setSelectedScopes(
-      new Set<TokenScope>(["messages:read", "messages:write", "channels:read"]),
+      new Set<TokenScope>([
+        "messages:read",
+        "messages:write",
+        "channels:read",
+        "users:read",
+        "users:write",
+      ]),
     );
     setAcpCommand("sprout-acp");
     setAgentCommand("goose");
