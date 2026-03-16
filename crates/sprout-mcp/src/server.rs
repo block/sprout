@@ -604,6 +604,25 @@ impl SproutMcpServer {
                 tool_router.remove_route(name);
             }
         }
+
+        // Register backward-compat aliases. Each alias delegates to the canonical
+        // tool's handler. If the canonical tool was removed by toolset filtering,
+        // the alias is silently skipped (no point advertising a route that won't work).
+        for &(old_name, new_name) in crate::toolsets::ALIASES {
+            if let Some(route) = tool_router.map.get(new_name).cloned() {
+                let mut aliased = route;
+                aliased.attr.name = old_name.into();
+                aliased.attr.description = Some(
+                    match aliased.attr.description {
+                        Some(ref desc) => format!("[Deprecated: use {new_name}] {desc}"),
+                        None => format!("[Deprecated: use {new_name}]"),
+                    }
+                    .into(),
+                );
+                tool_router.add_route(aliased);
+            }
+        }
+
         Self {
             client,
             tool_router,
@@ -626,6 +645,26 @@ impl SproutMcpServer {
                 MAX_CONTENT_BYTES,
                 p.content.len()
             );
+        }
+
+        // Validate reply fields when present.
+        if let Some(ref parent_id) = p.parent_event_id {
+            if parent_id.len() != 64 || !parent_id.chars().all(|c| c.is_ascii_hexdigit()) {
+                return format!(
+                    "Error: parent_event_id must be a 64-character hex string (got {:?})",
+                    parent_id
+                );
+            }
+        }
+        if let Some(ref mentions) = p.mention_pubkeys {
+            for pk in mentions {
+                if pk.len() != 64 || !pk.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return format!(
+                        "Error: mention_pubkeys entry must be a 64-character hex string (got {:?})",
+                        pk
+                    );
+                }
+            }
         }
 
         // Use a user-signed WebSocket event for top-level messages so downstream
@@ -1596,6 +1635,17 @@ impl SproutMcpServer {
     )]
     pub async fn get_users(&self, Parameters(p): Parameters<GetUsersParams>) -> String {
         let pubkeys = p.pubkeys.unwrap_or_default();
+        if pubkeys.len() > 200 {
+            return "Error: max 200 pubkeys for batch lookup".to_string();
+        }
+        for pk in &pubkeys {
+            if pk.len() != 64 || !pk.chars().all(|c| c.is_ascii_hexdigit()) {
+                return format!(
+                    "Error: pubkey must be a 64-character hex string (got {:?})",
+                    pk
+                );
+            }
+        }
         match pubkeys.len() {
             0 => match self.client.get("/api/users/me/profile").await {
                 Ok(body) => body,
