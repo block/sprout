@@ -605,24 +605,6 @@ impl SproutMcpServer {
             }
         }
 
-        // Register backward-compat aliases. Each alias delegates to the canonical
-        // tool's handler. If the canonical tool was removed by toolset filtering,
-        // the alias is silently skipped (no point advertising a route that won't work).
-        for &(old_name, new_name) in crate::toolsets::ALIASES {
-            if let Some(route) = tool_router.map.get(new_name).cloned() {
-                let mut aliased = route;
-                aliased.attr.name = old_name.into();
-                aliased.attr.description = Some(
-                    match aliased.attr.description {
-                        Some(ref desc) => format!("[Deprecated: use {new_name}] {desc}"),
-                        None => format!("[Deprecated: use {new_name}]"),
-                    }
-                    .into(),
-                );
-                tool_router.add_route(aliased);
-            }
-        }
-
         Self {
             client,
             tool_router,

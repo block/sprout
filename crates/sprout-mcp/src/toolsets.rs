@@ -99,20 +99,6 @@ pub const DEFERRED_TOOLS: &[(&str, &str, bool)] = &[
     ("unsubscribe", "realtime", false),
 ];
 
-/// Backward-compatibility aliases: `(old_name, canonical_name)`.
-///
-/// Aliases are registered separately in the router — they are **not** members
-/// of any toolset and are therefore not filtered by toolset logic.
-pub const ALIASES: &[(&str, &str)] = &[
-    ("send_reply", "send_message"),
-    ("get_channel_history", "get_messages"),
-    ("get_user_profile", "get_users"),
-    ("get_users_batch", "get_users"),
-    ("get_feed_mentions", "get_feed"),
-    ("get_feed_actions", "get_feed"),
-    ("approve_workflow_step", "approve_step"),
-];
-
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -383,11 +369,6 @@ mod tests {
     #[test]
     fn deferred_tools_count_is_3() {
         assert_eq!(DEFERRED_TOOLS.len(), 3);
-    }
-
-    #[test]
-    fn aliases_count_is_7() {
-        assert_eq!(ALIASES.len(), 7);
     }
 
     #[test]
