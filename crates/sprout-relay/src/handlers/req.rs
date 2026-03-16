@@ -584,7 +584,7 @@ mod tests {
     fn test_mixed_search_and_non_search_detection() {
         let search_filter = Filter::new().search("hello");
         let plain_filter = Filter::new();
-        let filters = vec![search_filter, plain_filter];
+        let filters = [search_filter, plain_filter];
         let has_search = filters.iter().any(|f| f.search.is_some());
         let has_non_search = filters.iter().any(|f| f.search.is_none());
         assert!(has_search && has_non_search, "should detect mixed filters");
@@ -594,7 +594,7 @@ mod tests {
     fn test_all_search_filters_not_mixed() {
         let f1 = Filter::new().search("hello");
         let f2 = Filter::new().search("world");
-        let filters = vec![f1, f2];
+        let filters = [f1, f2];
         let has_search = filters.iter().any(|f| f.search.is_some());
         let has_non_search = filters.iter().any(|f| f.search.is_none());
         assert!(has_search);
