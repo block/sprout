@@ -1,7 +1,7 @@
 //! # Toolset System
 //!
 //! Controls which MCP tools are exposed based on the `SPROUT_TOOLSETS` environment
-//! variable (or `--toolsets` CLI flag).
+//! variable.
 //!
 //! ## Syntax
 //!
@@ -10,7 +10,7 @@
 //! ```
 //!
 //! Comma-separated list of toolset names with optional `:ro` / `:rw` suffix.
-//! Special keywords: `default`, `all`, `none`, `dynamic`.
+//! Special keywords: `default`, `all`, `none`.
 //!
 //! Later entries override earlier ones, so `all:ro,default:rw` gives read-only
 //! access everywhere except the default toolset which gets full write access.
@@ -24,11 +24,10 @@
 //! | `dms`           | 2     |
 //! | `canvas`        | 2     |
 //! | `workflow_admin`| 5     |
-//! | `media`         | 1     |
-//! | `realtime`      | 2     |
 //! | `identity`      | 1     |
 
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 // ---------------------------------------------------------------------------
 // Static data
@@ -39,6 +38,8 @@ use std::collections::{HashMap, HashSet};
 /// Single source of truth for every tool's toolset membership and read/write
 /// classification. `is_read = true` means the tool is safe to include under
 /// a `:ro` (read-only) mode restriction.
+///
+/// 41 tools total. See [`DEFERRED_TOOLS`] for tools planned but not yet implemented.
 pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     // ── default ─────────────────────────────────────────────────────────────
     ("send_message", "default", false),
@@ -85,13 +86,17 @@ pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     ("update_workflow", "workflow_admin", false),
     ("delete_workflow", "workflow_admin", false),
     ("get_workflow_runs", "workflow_admin", true),
-    // ── media ─────────────────────────────────────────────────────────────────
-    ("upload_file", "media", false),
-    // ── realtime ──────────────────────────────────────────────────────────────
-    ("subscribe", "realtime", false),
-    ("unsubscribe", "realtime", false),
     // ── identity ──────────────────────────────────────────────────────────────
     ("set_channel_add_policy", "identity", false),
+    // Deferred tools (not yet implemented): upload_file, subscribe, unsubscribe
+];
+
+/// Tools planned but not yet implemented. These will be added to ALL_TOOLS
+/// when their #[tool] handlers are created in server.rs.
+pub const DEFERRED_TOOLS: &[(&str, &str, bool)] = &[
+    ("upload_file", "media", false),
+    ("subscribe", "realtime", true),
+    ("unsubscribe", "realtime", false),
 ];
 
 /// Backward-compatibility aliases: `(old_name, canonical_name)`.
@@ -121,7 +126,7 @@ pub enum Mode {
     ReadOnly,
 }
 
-/// Metadata about a toolset (used by dynamic mode meta-tools).
+/// Metadata about a toolset.
 #[derive(Debug, Clone)]
 pub struct ToolsetDef {
     /// Toolset name, e.g. `"channel_admin"`.
@@ -130,7 +135,7 @@ pub struct ToolsetDef {
     pub tools: &'static [ToolDef],
 }
 
-/// Metadata about a single tool (used by dynamic mode meta-tools).
+/// Metadata about a single tool.
 #[derive(Debug, Clone, Copy)]
 pub struct ToolDef {
     /// Tool name, e.g. `"get_messages"`.
@@ -146,8 +151,6 @@ pub struct ToolDef {
 pub struct ToolsetConfig {
     /// `toolset_name → Mode`. Only explicitly enabled toolsets appear here.
     enabled: HashMap<&'static str, Mode>,
-    /// Whether dynamic toolsets mode is active.
-    dynamic: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -169,10 +172,7 @@ const KNOWN_TOOLSETS: &[&str] = &[
 // Lazy static toolset definitions (built from ALL_TOOLS)
 // ---------------------------------------------------------------------------
 
-/// Returns all toolset definitions, built lazily from [`ALL_TOOLS`].
-///
-/// Suitable for use by dynamic mode meta-tools that need to enumerate toolsets.
-pub fn all_toolsets() -> Vec<ToolsetDef> {
+static TOOLSET_DEFS: LazyLock<Vec<ToolsetDef>> = LazyLock::new(|| {
     let mut map: std::collections::BTreeMap<&'static str, Vec<ToolDef>> =
         std::collections::BTreeMap::new();
     for &(tool, ts, is_read) in ALL_TOOLS {
@@ -187,6 +187,11 @@ pub fn all_toolsets() -> Vec<ToolsetDef> {
             tools: Box::leak(tools.into_boxed_slice()),
         })
         .collect()
+});
+
+/// Returns all toolset definitions, built once from [`ALL_TOOLS`].
+pub fn all_toolsets() -> &'static [ToolsetDef] {
+    &TOOLSET_DEFS
 }
 
 /// Returns the tools belonging to `name`, or `None` if the toolset is unknown.
@@ -217,7 +222,6 @@ impl ToolsetConfig {
     /// - `default`  — enables the `default` toolset
     /// - `all`      — enables every toolset
     /// - `none`     — clears all enabled toolsets
-    /// - `dynamic`  — enables dynamic toolsets mode (meta-tools in server.rs)
     ///
     /// # Mode suffixes
     /// - `:ro`  — read-only (only tools with `is_read = true`)
@@ -226,7 +230,6 @@ impl ToolsetConfig {
     /// Later entries override earlier ones.
     pub fn parse(input: &str) -> Self {
         let mut enabled: HashMap<&'static str, Mode> = HashMap::new();
-        let mut dynamic = false;
 
         for token in input.split(',').map(str::trim).filter(|s| !s.is_empty()) {
             let (name, mode) = if let Some(n) = token.strip_suffix(":ro") {
@@ -240,9 +243,6 @@ impl ToolsetConfig {
             match name {
                 "none" => {
                     enabled.clear();
-                }
-                "dynamic" => {
-                    dynamic = true;
                 }
                 "all" => {
                     for &ts in KNOWN_TOOLSETS {
@@ -263,7 +263,7 @@ impl ToolsetConfig {
             }
         }
 
-        Self { enabled, dynamic }
+        Self { enabled }
     }
 
     /// Parse from `SPROUT_TOOLSETS`, falling back to `"default"`.
@@ -288,14 +288,6 @@ impl ToolsetConfig {
             })
             .map(|&(tool, _, _)| tool)
             .collect()
-    }
-
-    /// Whether dynamic toolsets mode is active.
-    ///
-    /// When `true`, `server.rs` should register the meta-tools
-    /// (`list_toolsets`, `enable_toolset`, `disable_toolset`).
-    pub fn is_dynamic(&self) -> bool {
-        self.dynamic
     }
 }
 
@@ -332,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn all_includes_all_44_tools() {
+    fn all_includes_all_41_tools() {
         assert_eq!(enabled_tools("all").len(), ALL_TOOLS.len());
     }
 
@@ -374,12 +366,6 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_flag_detected() {
-        assert!(ToolsetConfig::parse("default,dynamic").is_dynamic());
-        assert!(!ToolsetConfig::parse("default").is_dynamic());
-    }
-
-    #[test]
     fn none_after_all_clears() {
         assert!(enabled_tools("all,none").is_empty());
     }
@@ -390,8 +376,13 @@ mod tests {
     }
 
     #[test]
-    fn all_tools_count_is_44() {
-        assert_eq!(ALL_TOOLS.len(), 44);
+    fn all_tools_count_is_41() {
+        assert_eq!(ALL_TOOLS.len(), 41);
+    }
+
+    #[test]
+    fn deferred_tools_count_is_3() {
+        assert_eq!(DEFERRED_TOOLS.len(), 3);
     }
 
     #[test]
@@ -411,5 +402,16 @@ mod tests {
     #[test]
     fn tools_in_toolset_unknown_returns_none() {
         assert!(tools_in_toolset("bogus").is_none());
+    }
+
+    #[test]
+    fn all_toolsets_returns_correct_count() {
+        // ALL_TOOLS covers: default, channel_admin, dms, canvas, workflow_admin, identity
+        // (media and realtime have no implemented tools yet)
+        let defs = all_toolsets();
+        assert_eq!(defs.len(), 6);
+        let names: Vec<_> = defs.iter().map(|d| d.name).collect();
+        assert!(names.contains(&"default"));
+        assert!(names.contains(&"canvas"));
     }
 }
