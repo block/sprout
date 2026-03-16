@@ -260,14 +260,12 @@ async fn handle_search_req(
         // If the filter has a #h tag, push the specific channel(s) into Typesense
         // instead of the full accessible set. This prevents cross-channel hits from
         // consuming pagination budget and causing under-fetch.
+        // If the filter has #h, intersect with accessible channels. If all #h
+        // values are invalid/inaccessible, skip the filter entirely (match nothing)
+        // rather than broadening to all channels.
         let h_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::H);
-        let channel_scope = filter
-            .generic_tags
-            .get(&h_tag)
-            .filter(|vs| !vs.is_empty())
-            .map(|vs| {
-                // Intersect with accessible channels — prevents inaccessible or
-                // malformed #h values from consuming pagination budget.
+        let channel_scope =
+            if let Some(vs) = filter.generic_tags.get(&h_tag).filter(|vs| !vs.is_empty()) {
                 let valid: Vec<String> = vs
                     .iter()
                     .filter_map(|v| v.parse::<uuid::Uuid>().ok())
@@ -275,11 +273,12 @@ async fn handle_search_req(
                     .map(|id| id.to_string())
                     .collect();
                 if valid.is_empty() {
-                    return all_channels_filter.clone();
+                    continue; // all #h values invalid/inaccessible — skip filter
                 }
                 format!("channel_id:=[{}]", valid.join(","))
-            })
-            .unwrap_or_else(|| all_channels_filter.clone());
+            } else {
+                all_channels_filter.clone()
+            };
         let mut filter_parts = vec![channel_scope];
         if let Some(ref kinds) = filter.kinds {
             if !kinds.is_empty() {

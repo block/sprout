@@ -821,12 +821,12 @@ async fn resolve_nip10_thread_meta(
         return Ok(None);
     }
 
-    // Normalise: reply-only or root-only both mean "direct reply to that event".
+    // NIP-10: "reply" marker is required to indicate a reply. "root"-only
+    // is a thread-context reference, not a reply — skip thread metadata.
     let (root_hex, parent_hex) = match (root_hex, reply_hex) {
-        (Some(r), Some(p)) => (r, p),
-        (Some(r), None) => (r.clone(), r),
-        (None, Some(p)) => (p.clone(), p),
-        (None, None) => unreachable!(),
+        (Some(r), Some(p)) => (r, p),      // nested reply: root + parent
+        (None, Some(p)) => (p.clone(), p), // direct reply: single "reply" = both
+        (Some(_), None) | (None, None) => return Ok(None), // not a reply
     };
 
     // Decode and look up parent event.
