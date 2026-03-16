@@ -253,15 +253,19 @@ impl ToolsetConfig {
     }
 
     /// Parse from `SPROUT_TOOLSETS`, falling back to `"default"`.
+    ///
+    /// An empty string (e.g. `SPROUT_TOOLSETS=""`) is treated the same as unset.
     pub fn from_env() -> Self {
-        let val = std::env::var("SPROUT_TOOLSETS").unwrap_or_else(|_| "default".into());
-        Self::parse(&val)
+        let raw = std::env::var("SPROUT_TOOLSETS")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "default".to_string());
+        Self::parse(&raw)
     }
 
     /// Returns the set of tool names that should be **removed** from the router.
     ///
-    /// Callers pass each name to `ToolRouter::remove_route()`. Aliases are
-    /// never included — they are managed separately.
+    /// Callers pass each name to `ToolRouter::remove_route()`.
     pub fn tools_to_remove(&self) -> HashSet<&'static str> {
         ALL_TOOLS
             .iter()
@@ -394,5 +398,39 @@ mod tests {
         let names: Vec<_> = defs.iter().map(|d| d.name).collect();
         assert!(names.contains(&"default"));
         assert!(names.contains(&"canvas"));
+    }
+
+    // ── Cross-check: ALL_TOOLS integrity ────────────────────────────────────
+
+    #[test]
+    fn all_tools_has_no_duplicates() {
+        let mut seen = std::collections::HashSet::new();
+        for &(name, _, _) in ALL_TOOLS {
+            assert!(
+                seen.insert(name),
+                "duplicate tool name in ALL_TOOLS: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn all_tools_names_are_valid_identifiers() {
+        for &(name, _, _) in ALL_TOOLS {
+            assert!(!name.is_empty(), "empty tool name in ALL_TOOLS");
+            assert!(
+                name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                "invalid tool name in ALL_TOOLS: {name}"
+            );
+        }
+    }
+
+    // ── from_env empty-string fallback ──────────────────────────────────────
+
+    #[test]
+    fn parse_empty_string_enables_nothing() {
+        // parse("") is the raw parser — empty input → no toolsets enabled.
+        // from_env() adds the fallback before calling parse, so agents always
+        // get at least the default toolset even when SPROUT_TOOLSETS="".
+        assert!(enabled_tools("").is_empty());
     }
 }

@@ -61,34 +61,39 @@
 //!
 //! ## Available Tools
 //!
-//! ### Messaging
-//! - **`send_message`** — Post a message to a channel (Nostr kind 9 by default).
-//! - **`get_channel_history`** — Fetch recent messages from a channel (default 50, max 200).
+//! 41 tools total, organized into toolsets. Tools are organized into toolsets. Set
+//! `SPROUT_TOOLSETS` to control which are active (default: 25 core tools).
 //!
-//! ### Channels
-//! - **`list_channels`** — List channels accessible to this agent, optionally filtered by
-//!   visibility (`open` / `private`).
-//! - **`create_channel`** — Create a new channel with a given name, type, and visibility.
+//! ### Messaging (default toolset)
+//! - **`send_message`** — Post a message to a channel.
+//! - **`send_diff_message`** — Post a diff-formatted message.
+//! - **`edit_message`** — Edit an existing message.
+//! - **`delete_message`** — Delete a message.
+//! - **`get_messages`** — Fetch recent messages from a channel (default 50, max 200).
+//! - **`get_thread`** — Fetch replies in a message thread.
+//! - **`search`** — Full-text search across channels.
+//! - **`get_feed`** — Retrieve the agent's personalized home feed (mentions, needs-action
+//!   items, channel activity). Replaces the former `get_feed_mentions` / `get_feed_actions`.
+//! - **`add_reaction`** / **`remove_reaction`** / **`get_reactions`** — Emoji reactions.
 //!
-//! ### Canvas
+//! ### Channels (default toolset)
+//! - **`list_channels`** / **`get_channel`** — List or inspect channels.
+//! - **`join_channel`** / **`leave_channel`** — Membership management.
+//! - **`update_channel`** / **`set_channel_topic`** / **`set_channel_purpose`** — Metadata.
+//! - **`open_dm`** — Open a direct-message channel.
+//!
+//! ### Channel Admin (`channel_admin` toolset)
+//! - **`create_channel`** / **`archive_channel`** / **`unarchive_channel`**
+//! - **`add_channel_member`** / **`remove_channel_member`** / **`list_channel_members`**
+//!
+//! ### Canvas (`canvas` toolset)
 //! - **`get_canvas`** — Retrieve the shared canvas document for a channel.
 //! - **`set_canvas`** — Write or replace the canvas document for a channel.
 //!
 //! ### Workflows
-//! - **`list_workflows`** — List workflows defined in a channel.
-//! - **`create_workflow`** — Create a workflow from a YAML definition.
-//! - **`update_workflow`** — Replace an existing workflow's YAML definition.
-//! - **`delete_workflow`** — Delete a workflow by ID.
-//! - **`trigger_workflow`** — Manually trigger a workflow with optional input variables.
-//! - **`get_workflow_runs`** — Fetch execution history for a workflow (default 20, max 100).
-//! - **`approve_workflow_step`** — Approve or deny a pending human-approval step.
-//!
-//! ### Feed
-//! - **`get_feed`** — Retrieve the agent's personalized home feed (mentions, needs-action
-//!   items, channel activity, agent activity). Max 50 items per category.
-//! - **`get_feed_mentions`** — Fetch only `@mentions` for this agent. Max 50 items.
-//! - **`get_feed_actions`** — Fetch items requiring action (approval requests, reminders).
-//!   Max 50 items.
+//! - **`trigger_workflow`** / **`approve_step`** — Trigger and approve steps (default toolset).
+//! - **`list_workflows`** / **`create_workflow`** / **`update_workflow`** /
+//!   **`delete_workflow`** / **`get_workflow_runs`** — Workflow admin (`workflow_admin` toolset).
 //!
 //! ## Example Configuration (Claude Desktop)
 //!
