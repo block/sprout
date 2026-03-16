@@ -258,6 +258,10 @@ async fn handle_search_req(
             .map(|l| (l as u32).min(MAX_HISTORICAL_LIMIT as u32))
             .unwrap_or(MAX_HISTORICAL_LIMIT as u32);
 
+        if limit == 0 {
+            continue; // NIP-01: limit 0 means "no results from this filter"
+        }
+
         // Push as many NIP-01 constraints into Typesense as possible so
         // post-filtering is a correction step, not the primary filter.
         //
