@@ -262,8 +262,18 @@ async fn handle_search_req(
             .get(&h_tag)
             .filter(|vs| !vs.is_empty())
             .map(|vs| {
-                let ids: Vec<&str> = vs.iter().map(|v| v.as_str()).collect();
-                format!("channel_id:=[{}]", ids.join(","))
+                // Intersect with accessible channels — prevents inaccessible or
+                // malformed #h values from consuming pagination budget.
+                let valid: Vec<String> = vs
+                    .iter()
+                    .filter_map(|v| v.parse::<uuid::Uuid>().ok())
+                    .filter(|id| accessible_channels.contains(id))
+                    .map(|id| id.to_string())
+                    .collect();
+                if valid.is_empty() {
+                    return all_channels_filter.clone();
+                }
+                format!("channel_id:=[{}]", valid.join(","))
             })
             .unwrap_or_else(|| all_channels_filter.clone());
         let mut filter_parts = vec![channel_scope];

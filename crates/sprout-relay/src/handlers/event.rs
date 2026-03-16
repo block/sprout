@@ -919,8 +919,22 @@ async fn resolve_nip10_thread_meta(
             if client_root_bytes != parent_root {
                 return Err("root tag does not match thread ancestry".to_string());
             }
+            // depth=1 if parent is root, depth=2 if parent is a legacy reply.
+            // depth=2 is an approximation for deeper legacy chains (no metadata to
+            // determine true depth), but correct for the common direct-reply case.
             let depth = if parent_root == parent_bytes { 1 } else { 2 };
-            (parent_root, parent_created, depth)
+            // Look up actual root event for its timestamp (don't use parent_created).
+            let root_created = if parent_root != parent_bytes {
+                if let Ok(Some(root_ev)) = state.db.get_event_by_id(&parent_root).await {
+                    chrono::DateTime::from_timestamp(root_ev.event.created_at.as_u64() as i64, 0)
+                        .unwrap_or(parent_created)
+                } else {
+                    parent_created
+                }
+            } else {
+                parent_created
+            };
+            (parent_root, root_created, depth)
         }
     };
 

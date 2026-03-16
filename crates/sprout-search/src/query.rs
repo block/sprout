@@ -133,17 +133,20 @@ pub async fn search(
     // contains hundreds of channel UUIDs, the URL exceeds this. Use the
     // /multi_search POST endpoint which accepts the same params in a JSON body.
     let url = format!("{}/multi_search", base_url);
-    let body = serde_json::json!({
-        "searches": [{
-            "collection": collection_name,
-            "q": query.q,
-            "query_by": "content",
-            "page": query.page,
-            "per_page": query.per_page,
-            "filter_by": query.filter_by.as_deref().unwrap_or(""),
-            "sort_by": query.sort_by.as_deref().unwrap_or(""),
-        }]
+    let mut search_params = serde_json::json!({
+        "collection": collection_name,
+        "q": query.q,
+        "query_by": "content",
+        "page": query.page,
+        "per_page": query.per_page,
     });
+    if let Some(ref filter) = query.filter_by {
+        search_params["filter_by"] = serde_json::Value::String(filter.clone());
+    }
+    if let Some(ref sort) = query.sort_by {
+        search_params["sort_by"] = serde_json::Value::String(sort.clone());
+    }
+    let body = serde_json::json!({ "searches": [search_params] });
 
     let resp = client
         .post(&url)
