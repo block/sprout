@@ -887,6 +887,10 @@ async fn resolve_nip10_thread_meta(
             // Parent has no thread metadata — either it's a top-level message (the root)
             // or a legacy WS reply created before NIP-10 thread resolution was added.
             // Fall back to parsing the parent's own e-tags to find its root.
+            //
+            // Check "root" marker first, then "reply" — Sprout's REST emitter uses a
+            // single ["e", <root>, "", "reply"] tag for direct replies (no separate
+            // "root" tag), so we must handle both forms.
             let parent_root = parent_event
                 .event
                 .tags
@@ -899,12 +903,22 @@ async fn resolve_nip10_thread_meta(
                         None
                     }
                 })
+                .or_else(|| {
+                    // Direct-reply form: single "reply" tag = root reference
+                    parent_event.event.tags.iter().find_map(|t| {
+                        let parts = t.as_slice();
+                        if parts.len() >= 4 && parts[0] == "e" && parts[3] == "reply" {
+                            hex::decode(&parts[1]).ok().filter(|b| b.len() == 32)
+                        } else {
+                            None
+                        }
+                    })
+                })
                 .unwrap_or_else(|| parent_bytes.clone());
 
             if client_root_bytes != parent_root {
                 return Err("root tag does not match thread ancestry".to_string());
             }
-            // depth=1 if parent is root, depth=2 if parent is itself a reply (legacy)
             let depth = if parent_root == parent_bytes { 1 } else { 2 };
             (parent_root, parent_created, depth)
         }
