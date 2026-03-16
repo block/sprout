@@ -4,20 +4,35 @@ use reqwest::Method;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
-use crate::{app_state::AppState, models::ProfileInfo};
+use crate::{
+    app_state::AppState,
+    models::{ProfileInfo, UpdateProfileBody},
+};
 
 pub fn relay_ws_url() -> String {
     std::env::var("SPROUT_RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
 }
 
-pub fn relay_api_base_url() -> String {
-    if let Ok(base) = std::env::var("SPROUT_RELAY_HTTP") {
-        return base;
+pub fn relay_http_base_url(relay_url: &str) -> String {
+    let trimmed = relay_url.trim().trim_end_matches('/');
+
+    if let Some(suffix) = trimmed.strip_prefix("wss://") {
+        return format!("https://{suffix}");
     }
 
-    relay_ws_url()
-        .replace("wss://", "https://")
-        .replace("ws://", "http://")
+    if let Some(suffix) = trimmed.strip_prefix("ws://") {
+        return format!("http://{suffix}");
+    }
+
+    trimmed.to_string()
+}
+
+pub fn relay_api_base_url() -> String {
+    if let Ok(base) = std::env::var("SPROUT_RELAY_HTTP") {
+        return base.trim().trim_end_matches('/').to_string();
+    }
+
+    relay_http_base_url(&relay_ws_url())
 }
 
 pub fn build_authed_request(
@@ -60,6 +75,54 @@ pub async fn managed_agent_owner_pubkey(state: &AppState) -> Result<String, Stri
     })?;
 
     Ok(profile.pubkey)
+}
+
+fn token_supports_scope(scopes: &[String], required_scope: &str) -> bool {
+    scopes.iter().any(|scope| scope == required_scope)
+}
+
+pub async fn sync_managed_agent_profile_display_name(
+    state: &AppState,
+    relay_url: &str,
+    pubkey: &str,
+    api_token: Option<&str>,
+    token_scopes: &[String],
+    display_name: &str,
+) -> Result<(), String> {
+    let url = format!(
+        "{}{}",
+        relay_http_base_url(relay_url),
+        "/api/users/me/profile"
+    );
+    let use_bearer_token = api_token.is_some() && token_supports_scope(token_scopes, "users:write");
+    let mut request = state.http_client.request(Method::PUT, url);
+
+    if let Some(token) = api_token.filter(|_| use_bearer_token) {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    } else {
+        request = request.header("X-Pubkey", pubkey);
+    }
+
+    let request = request.json(&UpdateProfileBody {
+        display_name: Some(display_name),
+        avatar_url: None,
+        about: None,
+        nip05_handle: None,
+    });
+
+    send_empty_request(request).await.map_err(|error| {
+        if api_token.is_some() && !use_bearer_token {
+            format!(
+                "Created the agent, but could not sync its profile display name. The minted token does not include `users:write`, and the relay rejected dev-mode pubkey auth: {error}"
+            )
+        } else if api_token.is_some() {
+            format!("Created the agent, but could not sync its profile display name: {error}")
+        } else {
+            format!(
+                "Created the agent, but could not sync its profile display name without a token: {error}"
+            )
+        }
+    })
 }
 
 fn session_api_token(state: &AppState) -> Result<Option<String>, String> {

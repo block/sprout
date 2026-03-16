@@ -4,9 +4,10 @@ import type {
   ManagedAgentPrereqs,
   TokenScope,
 } from "@/shared/api/types";
+import { MANAGED_AGENT_SCOPE_OPTIONS } from "@/features/tokens/lib/scopeOptions";
 import { cn } from "@/shared/lib/cn";
 import { Input } from "@/shared/ui/input";
-import { AGENT_SCOPE_OPTIONS, describeResolvedCommand } from "./agentUi";
+import { describeResolvedCommand } from "./agentUi";
 
 export type PrerequisiteCard = {
   id: string;
@@ -17,41 +18,85 @@ export type PrerequisiteCard = {
 
 export function CreateAgentBasicsFields({
   name,
-  relayUrl,
   onNameChange,
-  onRelayUrlChange,
 }: {
   name: string;
-  relayUrl: string;
   onNameChange: (value: string) => void;
-  onRelayUrlChange: (value: string) => void;
 }) {
   return (
-    <div className="grid gap-4 md:grid-cols-2">
-      <div className="space-y-1.5">
-        <label className="text-sm font-medium" htmlFor="agent-name">
-          Name
-        </label>
-        <Input
-          data-testid="agent-name-input"
-          id="agent-name"
-          onChange={(event) => onNameChange(event.target.value)}
-          placeholder="alice"
-          value={name}
-        />
-      </div>
+    <div className="space-y-1.5">
+      <label className="text-sm font-medium" htmlFor="agent-name">
+        Agent name
+      </label>
+      <Input
+        autoCapitalize="none"
+        autoCorrect="off"
+        data-testid="agent-name-input"
+        id="agent-name"
+        onChange={(event) => onNameChange(event.target.value)}
+        placeholder="Support bot"
+        spellCheck={false}
+        value={name}
+      />
+      <p className="text-xs text-muted-foreground">
+        Used as the local label and synced to the agent profile display name
+        when the relay accepts the create-time auth.
+      </p>
+    </div>
+  );
+}
 
-      <div className="space-y-1.5">
-        <label className="text-sm font-medium" htmlFor="agent-relay-url">
-          Relay URL
-        </label>
-        <Input
-          id="agent-relay-url"
-          onChange={(event) => onRelayUrlChange(event.target.value)}
-          placeholder="Leave blank to use the desktop relay"
-          value={relayUrl}
-        />
-      </div>
+export function CreateAgentRuntimeProviderField({
+  providers,
+  providersLoading,
+  selectedProvider,
+  selectedProviderId,
+  onProviderChange,
+}: {
+  providers: AcpProvider[];
+  providersLoading: boolean;
+  selectedProvider: AcpProvider | null;
+  selectedProviderId: string;
+  onProviderChange: (value: string) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <label className="text-sm font-medium" htmlFor="agent-provider">
+        Agent runtime
+      </label>
+      <select
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+        id="agent-provider"
+        onChange={(event) => onProviderChange(event.target.value)}
+        value={selectedProviderId}
+      >
+        {providers.map((provider) => (
+          <option key={provider.id} value={provider.id}>
+            {provider.label}
+          </option>
+        ))}
+        <option value="custom">Custom command</option>
+      </select>
+      {selectedProvider ? (
+        <p className="text-xs text-muted-foreground">
+          Detected via{" "}
+          <span className="font-medium">
+            {describeResolvedCommand(
+              selectedProvider.command,
+              selectedProvider.binaryPath,
+            )}
+          </span>
+        </p>
+      ) : providersLoading ? (
+        <p className="text-xs text-muted-foreground">
+          Looking for installed ACP runtimes...
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          No known ACP runtime was detected. You can still enter a custom
+          command in Advanced setup.
+        </p>
+      )}
     </div>
   );
 }
@@ -61,37 +106,45 @@ export function CreateAgentRuntimeFields({
   agentArgs,
   agentCommand,
   mcpCommand,
-  providers,
-  providersLoading,
-  selectedProvider,
+  relayUrl,
   selectedProviderId,
   turnTimeoutSeconds,
   onAcpCommandChange,
   onAgentArgsChange,
   onAgentCommandChange,
   onMcpCommandChange,
-  onProviderChange,
+  onRelayUrlChange,
   onTurnTimeoutChange,
 }: {
   acpCommand: string;
   agentArgs: string;
   agentCommand: string;
   mcpCommand: string;
-  providers: AcpProvider[];
-  providersLoading: boolean;
-  selectedProvider: AcpProvider | null;
+  relayUrl: string;
   selectedProviderId: string;
   turnTimeoutSeconds: string;
   onAcpCommandChange: (value: string) => void;
   onAgentArgsChange: (value: string) => void;
   onAgentCommandChange: (value: string) => void;
   onMcpCommandChange: (value: string) => void;
-  onProviderChange: (value: string) => void;
+  onRelayUrlChange: (value: string) => void;
   onTurnTimeoutChange: (value: string) => void;
 }) {
   return (
     <>
       <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium" htmlFor="agent-relay-url">
+            Relay URL
+          </label>
+          <Input
+            id="agent-relay-url"
+            onChange={(event) => onRelayUrlChange(event.target.value)}
+            placeholder="Leave blank to use the desktop relay"
+            value={relayUrl}
+          />
+        </div>
+
         <div className="space-y-1.5">
           <label className="text-sm font-medium" htmlFor="agent-acp-command">
             ACP command
@@ -101,45 +154,6 @@ export function CreateAgentRuntimeFields({
             onChange={(event) => onAcpCommandChange(event.target.value)}
             value={acpCommand}
           />
-        </div>
-
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium" htmlFor="agent-provider">
-            Agent runtime
-          </label>
-          <select
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
-            id="agent-provider"
-            onChange={(event) => onProviderChange(event.target.value)}
-            value={selectedProviderId}
-          >
-            {providers.map((provider) => (
-              <option key={provider.id} value={provider.id}>
-                {provider.label}
-              </option>
-            ))}
-            <option value="custom">Custom command</option>
-          </select>
-          {selectedProvider ? (
-            <p className="text-xs text-muted-foreground">
-              Detected via{" "}
-              <span className="font-medium">
-                {describeResolvedCommand(
-                  selectedProvider.command,
-                  selectedProvider.binaryPath,
-                )}
-              </span>
-            </p>
-          ) : providersLoading ? (
-            <p className="text-xs text-muted-foreground">
-              Looking for installed ACP runtimes...
-            </p>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              No known ACP runtime was detected. You can still enter a custom
-              command below.
-            </p>
-          )}
         </div>
       </div>
 
@@ -365,17 +379,17 @@ export function CreateAgentTokenSection({
       </div>
 
       <div className="space-y-2">
-        <p className="text-sm font-medium">Token scopes</p>
-        <div className="grid gap-2 md:grid-cols-3">
-          {AGENT_SCOPE_OPTIONS.map((scope) => {
+        <p className="text-sm font-medium">Scopes</p>
+        <div className="grid grid-cols-2 gap-2">
+          {MANAGED_AGENT_SCOPE_OPTIONS.map((scope) => {
             const selected = selectedScopes.has(scope.value);
             return (
               <button
                 className={cn(
-                  "rounded-xl border px-3 py-2 text-left text-sm transition-colors",
+                  "rounded-lg border px-3 py-2 text-left text-sm transition-colors",
                   selected
-                    ? "border-primary bg-primary/10"
-                    : "border-border/70 bg-background/80 hover:bg-accent",
+                    ? "border-primary bg-primary/10 text-foreground"
+                    : "border-border/60 text-muted-foreground hover:bg-accent",
                 )}
                 key={scope.value}
                 onClick={() => onScopeToggle(scope.value)}

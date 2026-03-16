@@ -226,12 +226,15 @@ function StreamsSection({
           >
             <Input
               autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
               className="h-8 bg-background/80"
               data-testid="create-stream-name"
               disabled={isCreatingChannel}
               onChange={(event) => onChangeName(event.target.value)}
               placeholder="release-notes"
               ref={createInputRef}
+              spellCheck={false}
               value={draftName}
             />
             <Input

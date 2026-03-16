@@ -283,6 +283,7 @@ export type CreateManagedAgentResponse = {
   agent: ManagedAgent;
   privateKeyNsec: string;
   apiToken: string | null;
+  profileSyncError: string | null;
   spawnError: string | null;
 };
 
