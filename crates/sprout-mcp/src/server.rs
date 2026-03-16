@@ -58,6 +58,12 @@ pub struct SendMessageParams {
     /// Optional parent event ID. If provided, sends a reply via REST instead of WebSocket.
     #[serde(default)]
     pub parent_event_id: Option<String>,
+    /// If true and parent_event_id is set, surface the reply in the main channel timeline.
+    #[serde(default)]
+    pub broadcast_to_channel: Option<bool>,
+    /// Pubkeys to @mention in the message.
+    #[serde(default)]
+    pub mention_pubkeys: Option<Vec<String>>,
 }
 fn default_kind() -> Option<u16> {
     Some(sprout_core::kind::KIND_STREAM_MESSAGE as u16)
@@ -293,24 +299,6 @@ pub struct UnarchiveChannelParams {
 }
 
 // ── Thread tool parameter structs ─────────────────────────────────────────────
-
-/// Parameters for the `send_reply` tool.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct SendReplyParams {
-    /// UUID of the channel containing the parent message.
-    pub channel_id: String,
-    /// Event ID of the message being replied to.
-    pub parent_event_id: String,
-    /// Reply message body text.
-    pub content: String,
-    /// If true, the reply is also broadcast to the main channel timeline.
-    #[serde(default)]
-    pub broadcast_to_channel: Option<bool>,
-    /// Hex-encoded pubkeys of users/agents mentioned in this reply.
-    /// Required for @mention notifications to reach mention-filtered subscribers.
-    #[serde(default)]
-    pub mention_pubkeys: Option<Vec<String>>,
-}
 
 /// Parameters for the `get_thread` tool.
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -624,7 +612,7 @@ impl SproutMcpServer {
     /// Send a message to a Sprout channel.
     #[tool(
         name = "send_message",
-        description = "Send a message to a Sprout channel. Optionally supply parent_event_id to send as a threaded reply via REST."
+        description = "Send a message to a Sprout channel. Include `parent_event_id` to reply in a thread. Set `broadcast_to_channel` to also surface the reply in the main channel timeline."
     )]
     pub async fn send_message(&self, Parameters(p): Parameters<SendMessageParams>) -> String {
         if let Err(e) = validate_uuid(&p.channel_id) {
@@ -672,12 +660,16 @@ impl SproutMcpServer {
 
         let mut body = serde_json::json!({
             "content": p.content,
+            "broadcast_to_channel": p.broadcast_to_channel.unwrap_or(false),
         });
         if let Some(ref parent_id) = p.parent_event_id {
             body["parent_event_id"] = serde_json::Value::String(parent_id.clone());
         }
         if let Some(kind) = p.kind {
             body["kind"] = serde_json::json!(kind);
+        }
+        if let Some(ref mentions) = p.mention_pubkeys {
+            body["mention_pubkeys"] = serde_json::json!(mentions);
         }
         match self
             .client
@@ -1400,43 +1392,6 @@ impl SproutMcpServer {
     }
 
     // ── Thread tools ──────────────────────────────────────────────────────────
-
-    /// Send a reply to a message in a thread.
-    #[tool(
-        name = "send_reply",
-        description = "Send a reply to a message in a Sprout channel thread. \
-                       Optionally set broadcast_to_channel=true to also surface the reply in the main channel timeline."
-    )]
-    pub async fn send_reply(&self, Parameters(p): Parameters<SendReplyParams>) -> String {
-        if let Err(e) = validate_uuid(&p.channel_id) {
-            return format!("Error: {e}");
-        }
-
-        if p.content.len() > MAX_CONTENT_BYTES {
-            return format!(
-                "Error: content exceeds maximum size of {} bytes (got {})",
-                MAX_CONTENT_BYTES,
-                p.content.len()
-            );
-        }
-
-        let mut body = serde_json::json!({
-            "content": p.content,
-            "parent_event_id": p.parent_event_id,
-            "broadcast_to_channel": p.broadcast_to_channel.unwrap_or(false),
-        });
-        if let Some(ref mentions) = p.mention_pubkeys {
-            body["mention_pubkeys"] = serde_json::json!(mentions);
-        }
-        match self
-            .client
-            .post(&format!("/api/channels/{}/messages", p.channel_id), &body)
-            .await
-        {
-            Ok(b) => b,
-            Err(e) => format!("Error: {e}"),
-        }
-    }
 
     /// Get a message thread (replies to a message).
     #[tool(
