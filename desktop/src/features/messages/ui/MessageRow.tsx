@@ -122,7 +122,7 @@ export function MessageRow({
 
       <article
         className={cn(
-          "group/message flex gap-3 rounded-2xl px-2 py-2 transition-colors",
+          "group/message flex gap-3 rounded-2xl px-2 py-1.5 transition-colors",
           message.highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
           activeReplyTargetId === message.id
             ? "bg-muted/60 ring-1 ring-border"

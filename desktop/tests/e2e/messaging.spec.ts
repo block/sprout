@@ -64,6 +64,26 @@ test("message input clears after send", async ({ page }) => {
   await expect(input).toHaveValue("");
 });
 
+test("emoji picker inserts emoji into the draft and keeps focus in the composer", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill("Ship");
+
+  await page.getByTestId("composer-emoji-button").click();
+  await page.getByRole("button", { name: "Insert 🚀" }).click();
+
+  await expect(input).toHaveValue("Ship🚀");
+  await expect(input).toBeFocused();
+
+  await input.pressSequentially(" now");
+  await expect(input).toHaveValue("Ship🚀 now");
+});
+
 test("empty message cannot be sent", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("channel-general").click();

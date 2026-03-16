@@ -1,4 +1,4 @@
-import { Paperclip, SendHorizontal, SmilePlus } from "lucide-react";
+import { Paperclip, SendHorizontal } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
@@ -10,6 +10,7 @@ import {
 } from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
+import { ComposerEmojiPicker } from "./ComposerEmojiPicker";
 import {
   MentionAutocomplete,
   type MentionSuggestion,
@@ -36,16 +37,11 @@ type MessageComposerProps = {
 
 const MAX_TEXTAREA_ROWS = 4;
 
-/**
- * Detect an @mention query at the cursor position.
- * Returns the query string (after @) or null if no active mention trigger.
- */
 function detectMentionQuery(
   value: string,
   cursorPosition: number,
 ): { query: string; startIndex: number } | null {
   const beforeCursor = value.slice(0, cursorPosition);
-  // Find the last @ that is preceded by whitespace or is at the start
   const match = beforeCursor.match(/(?:^|[\s])@([^\s]*)$/);
   if (!match) {
     return null;
@@ -69,14 +65,14 @@ export function MessageComposer({
   const [content, setContent] = React.useState("");
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const pendingSelectionRef = React.useRef<number | null>(null);
+  const draftSelectionRef = React.useRef({ end: 0, start: 0 });
+  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
 
-  // Mention state
   const [mentionQuery, setMentionQuery] = React.useState<string | null>(null);
   const [mentionStartIndex, setMentionStartIndex] = React.useState(0);
   const [mentionSelectedIndex, setMentionSelectedIndex] = React.useState(0);
   const mentionMapRef = React.useRef<Map<string, string>>(new Map());
 
-  // Upload state
   const [uploadState, setUploadState] = React.useState<{
     status: "idle" | "uploading" | "error";
     message?: string;
@@ -144,6 +140,10 @@ export function MessageComposer({
       const nextCursor = before.length + inserted.length;
 
       mentionMapRef.current.set(displayName, suggestion.pubkey);
+      draftSelectionRef.current = {
+        end: nextCursor,
+        start: nextCursor,
+      };
       pendingSelectionRef.current = nextCursor;
       setContent(nextContent);
       setMentionQuery(null);
@@ -156,10 +156,6 @@ export function MessageComposer({
     (text: string): string[] => {
       const pubkeys: string[] = [];
 
-      /** Test whether `@name` appears as a mention token in `text`.
-       *  Left boundary: start-of-string or whitespace.
-       *  Right boundary: end-of-string, whitespace, or punctuation.
-       *  Case-insensitive. Prevents @Ann from matching @Anna or foo@Ann. */
       const hasMention = (name: string): boolean => {
         const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const pattern = new RegExp(
@@ -169,18 +165,15 @@ export function MessageComposer({
         return pattern.test(text);
       };
 
-      // 1. Check the autocomplete-inserted mention map.
       for (const [displayName, pubkey] of mentionMapRef.current) {
         if (hasMention(displayName)) {
           pubkeys.push(pubkey);
         }
       }
 
-      // 2. Fall back to scanning channel members for manually-typed @mentions
-      //    that bypassed autocomplete (e.g. user typed "@Daphne" without selecting).
       for (const member of members) {
         if (pubkeys.includes(member.pubkey)) {
-          continue; // already matched via autocomplete map
+          continue;
         }
         const name =
           member.displayName ??
@@ -195,7 +188,41 @@ export function MessageComposer({
     [members, managedAgentNamesByPubkey],
   );
 
-  // Shared handler: got a descriptor back from any upload path.
+  const updateDraftSelection = React.useCallback(
+    (target: HTMLTextAreaElement | null) => {
+      if (!target) {
+        return;
+      }
+
+      draftSelectionRef.current = {
+        end: target.selectionEnd ?? target.value.length,
+        start: target.selectionStart ?? target.value.length,
+      };
+    },
+    [],
+  );
+
+  const insertEmoji = React.useCallback(
+    (emoji: string) => {
+      const { end, start } = draftSelectionRef.current;
+      const nextStart = Math.min(start, content.length);
+      const nextEnd = Math.min(end, content.length);
+      const nextCursor = nextStart + emoji.length;
+      const nextContent = `${content.slice(0, nextStart)}${emoji}${content.slice(nextEnd)}`;
+
+      draftSelectionRef.current = {
+        end: nextCursor,
+        start: nextCursor,
+      };
+      pendingSelectionRef.current = nextCursor;
+      setContent(nextContent);
+      setIsEmojiPickerOpen(false);
+      setMentionQuery(null);
+      setMentionSelectedIndex(0);
+    },
+    [content],
+  );
+
   const onUploaded = React.useCallback((descriptor: BlobDescriptor) => {
     const markdown = `\n![image](${descriptor.url})\n`;
     setContent((prev) => prev + markdown);
@@ -203,8 +230,6 @@ export function MessageComposer({
     setUploadState({ status: "idle" });
   }, []);
 
-  // 📎 Paperclip: native file dialog + read + upload, all in trusted Rust.
-  // The renderer never touches the filesystem.
   const handlePaperclip = React.useCallback(async () => {
     setUploadState({ status: "uploading" });
     try {
@@ -212,15 +237,13 @@ export function MessageComposer({
       if (descriptor) {
         onUploaded(descriptor);
       } else {
-        setUploadState({ status: "idle" }); // user cancelled dialog
+        setUploadState({ status: "idle" });
       }
     } catch (err) {
       setUploadState({ status: "error", message: String(err) });
     }
   }, [onUploaded]);
 
-  // 🖱️ Drop: read bytes in JS, send via IPC to Rust for upload.
-  // No filesystem access needed — bytes come from the drag event.
   const handleDrop = React.useCallback(
     async (event: React.DragEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -263,7 +286,6 @@ export function MessageComposer({
     [],
   );
 
-  // 📋 Paste: read bytes from clipboard, send via IPC to Rust for upload.
   const handlePaste = React.useCallback(
     async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
       const items = Array.from(event.clipboardData.items);
@@ -301,7 +323,6 @@ export function MessageComposer({
 
     const pubkeys = extractMentionPubkeys(trimmed);
 
-    // Build imeta tags from pending descriptors
     const mediaTags =
       pendingImeta.length > 0
         ? pendingImeta.map((d) => [
@@ -320,9 +341,11 @@ export function MessageComposer({
     const savedImeta = [...pendingImeta];
 
     setContent("");
+    draftSelectionRef.current = { end: 0, start: 0 };
     setPendingImeta([]);
     mentionMapRef.current.clear();
     setMentionQuery(null);
+    setIsEmojiPickerOpen(false);
 
     try {
       await onSend(trimmed, pubkeys, mediaTags);
@@ -352,6 +375,7 @@ export function MessageComposer({
       const nextContent = event.target.value;
       const cursorPos = event.target.selectionStart;
       setContent(nextContent);
+      updateDraftSelection(event.target);
 
       const mention = detectMentionQuery(nextContent, cursorPos);
       if (mention) {
@@ -362,12 +386,11 @@ export function MessageComposer({
         setMentionQuery(null);
       }
     },
-    [],
+    [updateDraftSelection],
   );
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Handle mention autocomplete keyboard navigation
       if (isMentionOpen) {
         if (event.key === "ArrowDown") {
           event.preventDefault();
@@ -416,6 +439,10 @@ export function MessageComposer({
 
         event.preventDefault();
         pendingSelectionRef.current = selectionStart + 1;
+        draftSelectionRef.current = {
+          end: selectionStart + 1,
+          start: selectionStart + 1,
+        };
         setContent(nextContent);
         return;
       }
@@ -457,6 +484,7 @@ export function MessageComposer({
 
     const pendingSelection = pendingSelectionRef.current;
     if (pendingSelection !== null) {
+      textarea.focus();
       textarea.setSelectionRange(pendingSelection, pendingSelection);
       pendingSelectionRef.current = null;
     }
@@ -540,6 +568,9 @@ export function MessageComposer({
             onPaste={(e) => {
               void handlePaste(e);
             }}
+            onSelect={(event) => {
+              updateDraftSelection(event.currentTarget);
+            }}
             placeholder={
               placeholder ??
               (replyTarget
@@ -569,9 +600,15 @@ export function MessageComposer({
                   <Paperclip className="h-4 w-4" />
                 )}
               </Button>
-              <Button disabled size="icon" type="button" variant="ghost">
-                <SmilePlus className="h-4 w-4" />
-              </Button>
+              <ComposerEmojiPicker
+                disabled={disabled}
+                onEmojiSelect={insertEmoji}
+                onOpenChange={setIsEmojiPickerOpen}
+                onTriggerMouseDown={() => {
+                  updateDraftSelection(textareaRef.current);
+                }}
+                open={isEmojiPickerOpen}
+              />
             </div>
 
             <Button
