@@ -7,7 +7,7 @@ mod pool;
 mod queue;
 mod relay;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -75,12 +75,13 @@ async fn main() -> Result<()> {
     tracing::info!("subscribed to membership notifications");
 
     // ── Step 3: Discover channels and build subscription rules ────────────────
-    let channels = relay
+    let channel_info_map = relay
         .discover_channels()
         .await
         .map_err(|e| anyhow::anyhow!("channel discovery error: {e}"))?;
 
-    tracing::info!("discovered {} channel(s)", channels.len());
+    tracing::info!("discovered {} channel(s)", channel_info_map.len());
+    let channel_ids: Vec<Uuid> = channel_info_map.keys().copied().collect();
 
     let rules: Vec<SubscriptionRule> = match config.subscribe_mode {
         SubscribeMode::Mentions => {
@@ -122,7 +123,7 @@ async fn main() -> Result<()> {
     };
 
     // ── Step 4: Subscribe to channels ────────────────────────────────────────
-    let channel_filters = config::resolve_channel_filters(&config, &channels, &rules);
+    let channel_filters = config::resolve_channel_filters(&config, &channel_ids, &rules);
     if channel_filters.is_empty() {
         tracing::warn!("no channel subscriptions resolved — agent will sit idle");
     }
@@ -149,6 +150,9 @@ async fn main() -> Result<()> {
             .unwrap_or_else(|_| std::path::PathBuf::from("/"))
             .to_string_lossy()
             .to_string(),
+        rest_client: relay.rest_client(),
+        channel_info: channel_info_map,
+        context_message_limit: config.context_message_limit,
     });
 
     // ── Step 6: Heartbeat timer ───────────────────────────────────────────────
@@ -183,11 +187,35 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Track the newest membership notification timestamp per channel so that
-    // replayed events (returned in DESC order on reconnect) don't override the
-    // correct final state. The first event seen per channel is the newest; any
-    // older duplicate for the same channel is skipped.
+    // Track the newest membership notification timestamp per channel.
+    // On reconnect the relay replays events newest-first, so the first event
+    // per channel is authoritative. Any later event with ts < newest is stale.
+    // Exact duplicates (same event ID) are caught by seen_membership_ids.
+    //
+    // Uses strict `<` (not `<=`) so that legitimate live events at the same
+    // second are both processed. The seen_membership_ids set handles exact
+    // replays that share the same timestamp.
     let mut membership_newest_ts: HashMap<Uuid, u64> = HashMap::new();
+    // Dedup set for exact membership event replays (bounded, cleared at 2000).
+    let mut seen_membership_ids: HashSet<String> = HashSet::new();
+
+    // Channels the agent has been removed from. When a checked-out agent is
+    // returned to the pool, its sessions for these channels are stripped, and
+    // failed/panicked batches for these channels are dropped instead of requeued.
+    //
+    // Cleared on re-add (KIND_MEMBER_ADDED_NOTIFICATION) so re-joined channels
+    // regain session affinity.
+    //
+    // Known limitation: if a batch is in-flight when the channel is removed AND
+    // re-added before the batch returns, the stale batch may be requeued. This
+    // is acceptable because: (a) the agent is a member again and has access,
+    // (b) the events are from the agent's authorized history, (c) the window
+    // is extremely narrow (membership changes are rare, prompt turns are seconds),
+    // and (d) fixing this would require per-channel epoch tracking on TaskMeta
+    // and PromptResult — significant complexity for a benign edge case. If strict
+    // causal invalidation is needed, add a monotonic epoch counter per channel
+    // and capture it in TaskMeta at dispatch time.
+    let mut removed_channels: HashSet<Uuid> = HashSet::new();
 
     // ── Step 8: Main orchestration loop ──────────────────────────────────────
     //
@@ -225,29 +253,57 @@ async fn main() -> Result<()> {
                             {
                                 let ch = sprout_event.channel_id;
                                 let ts = sprout_event.event.created_at.as_u64();
+                                let eid = sprout_event.event.id.to_hex();
 
-                                // Skip stale membership events: on reconnect the relay
-                                // replays events newest-first, so the first event per
-                                // channel is authoritative. Any later (older) event for
-                                // the same channel is outdated and must be ignored.
-                                let dominated = membership_newest_ts
-                                    .get(&ch)
-                                    .is_some_and(|&newest| ts < newest);
-                                if dominated {
+                                // Two-layer membership dedup:
+                                //
+                                // 1. Exact duplicate rejection (seen_membership_ids):
+                                //    Catches the same event replayed on reconnect.
+                                //
+                                // 2. Timestamp watermark (membership_newest_ts):
+                                //    Uses strict `<` so that older events from reconnect
+                                //    replay are dropped, but legitimate live events at the
+                                //    same second are both processed. This is safe because
+                                //    exact duplicates are already caught by layer 1.
+                                //
+                                // Why not `<=`? That would suppress legitimate live
+                                // add→remove (or remove→add) sequences in the same second,
+                                // leaving the harness in the wrong membership state.
+                                if !seen_membership_ids.insert(eid.clone()) {
                                     tracing::debug!(
                                         channel_id = %ch,
                                         kind = kind_u32,
-                                        ts,
-                                        "skipping stale membership notification (newer already processed)"
+                                        "skipping duplicate membership notification (same event_id)"
                                     );
                                     continue;
                                 }
-                                membership_newest_ts
-                                    .entry(ch)
-                                    .and_modify(|v| *v = (*v).max(ts))
-                                    .or_insert(ts);
+                                // Bound the dedup set to prevent unbounded growth.
+                                // Re-insert the current ID after clearing so it stays
+                                // protected against immediate replay (same pattern as
+                                // relay.rs BgState::record_event).
+                                if seen_membership_ids.len() > 2000 {
+                                    seen_membership_ids.clear();
+                                    seen_membership_ids.insert(eid);
+                                }
+                                if let Some(&newest) = membership_newest_ts.get(&ch) {
+                                    if ts < newest {
+                                        tracing::debug!(
+                                            channel_id = %ch,
+                                            kind = kind_u32,
+                                            ts,
+                                            newest,
+                                            "skipping stale membership notification (older than newest)"
+                                        );
+                                        continue;
+                                    }
+                                }
+                                membership_newest_ts.insert(ch, ts);
 
                                 if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION {
+                                    // Clear removal tracking so sessions are not
+                                    // stripped for a legitimately re-added channel.
+                                    removed_channels.remove(&ch);
+
                                     if let Some(filter) = config::resolve_dynamic_channel_filter(&config, ch, &rules) {
                                         tracing::info!(channel_id = %ch, "membership notification: subscribing to new channel");
                                         if let Err(e) = relay.subscribe_channel(ch, filter).await {
@@ -260,6 +316,23 @@ async fn main() -> Result<()> {
                                     tracing::info!(channel_id = %ch, "membership notification: unsubscribing from channel");
                                     if let Err(e) = relay.unsubscribe_channel(ch).await {
                                         tracing::warn!("failed to unsubscribe from channel {ch}: {e}");
+                                    }
+                                    // Drain queued events and invalidate sessions for the
+                                    // removed channel. Events already in-flight will
+                                    // complete normally (the relay may reject actions if
+                                    // the agent lost access).
+                                    let drained = queue.drain_channel(ch);
+                                    let invalidated = pool.invalidate_channel_sessions(ch);
+                                    // Track removed channels so checked-out agents get
+                                    // their sessions stripped when they return to the pool.
+                                    removed_channels.insert(ch);
+                                    if drained > 0 || invalidated > 0 {
+                                        tracing::info!(
+                                            channel_id = %ch,
+                                            drained,
+                                            invalidated,
+                                            "cleaned up after membership removal"
+                                        );
                                     }
                                 }
                                 continue;
@@ -329,6 +402,7 @@ async fn main() -> Result<()> {
                     &config,
                     *result,
                     &mut heartbeat_in_flight,
+                    &removed_channels,
                 )
                 .await
                     == LoopAction::Exit
@@ -340,6 +414,7 @@ async fn main() -> Result<()> {
                     &mut queue,
                     &config,
                     &mut heartbeat_in_flight,
+                    &removed_channels,
                 )
                 .await
                     == LoopAction::Exit
@@ -356,6 +431,7 @@ async fn main() -> Result<()> {
                     &config,
                     join_error,
                     &mut heartbeat_in_flight,
+                    &removed_channels,
                 )
                 .await;
                 if pool.live_count() == 0 {
@@ -420,7 +496,6 @@ fn dispatch_pending(pool: &mut AgentPool, queue: &mut EventQueue, ctx: &Arc<Prom
         };
         tracing::debug!(agent = agent.index, channel = %channel_id, affinity_hit, "agent_claimed");
 
-        let prompt_text = queue::format_prompt(&batch, ctx.system_prompt.as_deref());
         let recoverable_batch = match ctx.dedup_mode {
             DedupMode::Queue => Some(batch.clone()),
             DedupMode::Drop => None,
@@ -430,8 +505,10 @@ fn dispatch_pending(pool: &mut AgentPool, queue: &mut EventQueue, ctx: &Arc<Prom
         let ctx_clone = Arc::clone(ctx);
         let agent_index = agent.index;
 
+        // Prompt text is now built inside run_prompt_task (needs async for
+        // context fetching). Pass None for prompt_text; batch carries the data.
         let abort_handle = pool.join_set.spawn(async move {
-            pool::run_prompt_task(agent, Some(batch), prompt_text, ctx_clone, result_tx).await;
+            pool::run_prompt_task(agent, Some(batch), None, ctx_clone, result_tx).await;
         });
 
         pool.task_map_mut().insert(
@@ -457,8 +534,9 @@ async fn handle_prompt_result(
     pool: &mut AgentPool,
     queue: &mut EventQueue,
     config: &Config,
-    result: PromptResult,
+    mut result: PromptResult,
     heartbeat_in_flight: &mut bool,
+    removed_channels: &HashSet<Uuid>,
 ) -> LoopAction {
     let before = pool.task_map().len();
     let agent_index = result.agent.index;
@@ -472,7 +550,27 @@ async fn handle_prompt_result(
     }
 
     if let Some(batch) = result.batch {
-        queue.requeue(batch);
+        // Don't requeue batches for channels the agent was removed from —
+        // those events are stale and should be silently dropped.
+        if !removed_channels.contains(&batch.channel_id) {
+            queue.requeue(batch);
+        } else {
+            tracing::debug!(
+                channel_id = %batch.channel_id,
+                events = batch.events.len(),
+                "dropping failed batch for removed channel"
+            );
+        }
+    }
+
+    // Strip sessions for channels the agent was removed from while this
+    // agent was checked out. This covers the gap where invalidate_channel_sessions
+    // only touches idle agents.
+    if !removed_channels.is_empty() {
+        result
+            .agent
+            .sessions
+            .retain(|ch, _| !removed_channels.contains(ch));
     }
 
     let outcome_label = match &result.outcome {
@@ -522,6 +620,7 @@ async fn recover_panicked_agent(
     config: &Config,
     join_error: tokio::task::JoinError,
     heartbeat_in_flight: &mut bool,
+    removed_channels: &HashSet<Uuid>,
 ) {
     let task_id = join_error.id();
     let Some(meta) = pool.task_map_mut().remove(&task_id) else {
@@ -539,8 +638,16 @@ async fn recover_panicked_agent(
     }
 
     if let Some(batch) = meta.recoverable_batch {
-        queue.requeue(batch);
-        tracing::warn!("requeued batch for panicked agent {i}");
+        // Don't requeue batches for removed channels.
+        if !removed_channels.contains(&batch.channel_id) {
+            queue.requeue(batch);
+            tracing::warn!("requeued batch for panicked agent {i}");
+        } else {
+            tracing::debug!(
+                channel_id = %batch.channel_id,
+                "dropping panicked batch for removed channel"
+            );
+        }
     }
 
     match spawn_and_init(config).await {
@@ -566,11 +673,20 @@ async fn drain_ready_join_results(
     queue: &mut EventQueue,
     config: &Config,
     heartbeat_in_flight: &mut bool,
+    removed_channels: &HashSet<Uuid>,
 ) -> LoopAction {
     while let Some(Some(join_result)) = pool.join_set.join_next().now_or_never() {
         if let Err(join_error) = join_result {
             tracing::error!("agent task panicked: {join_error}");
-            recover_panicked_agent(pool, queue, config, join_error, heartbeat_in_flight).await;
+            recover_panicked_agent(
+                pool,
+                queue,
+                config,
+                join_error,
+                heartbeat_in_flight,
+                removed_channels,
+            )
+            .await;
             if pool.live_count() == 0 {
                 return LoopAction::Exit;
             }
@@ -603,7 +719,7 @@ fn dispatch_heartbeat(
     let agent_index = agent.index;
 
     let abort_handle = pool.join_set.spawn(async move {
-        pool::run_prompt_task(agent, None, prompt_text, ctx_clone, result_tx).await;
+        pool::run_prompt_task(agent, None, Some(prompt_text), ctx_clone, result_tx).await;
     });
 
     pool.task_map_mut().insert(

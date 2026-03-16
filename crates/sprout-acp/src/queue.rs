@@ -241,6 +241,32 @@ impl EventQueue {
     pub fn pending_channels(&self) -> usize {
         self.queues.len()
     }
+
+    /// Drop all queued (non-in-flight) events for a channel.
+    ///
+    /// Used when the agent is removed from a channel — any pending events
+    /// for that channel are stale and should not be prompted. Does NOT
+    /// affect in-flight prompts (those will complete normally; the agent
+    /// may fail to act if it lost access, but that's handled by the relay).
+    ///
+    /// Also clears any `retry_after` throttle for the channel.
+    ///
+    /// Returns the number of events dropped.
+    pub fn drain_channel(&mut self, channel_id: Uuid) -> usize {
+        let dropped = self
+            .queues
+            .remove(&channel_id)
+            .map(|q| q.len())
+            .unwrap_or(0);
+        self.retry_after.remove(&channel_id);
+        dropped
+    }
+
+    /// Whether a prompt is currently in-flight for the given channel.
+    #[allow(dead_code)]
+    pub fn is_channel_in_flight(&self, channel_id: Uuid) -> bool {
+        self.in_flight_channels.contains(&channel_id)
+    }
 }
 
 impl Default for EventQueue {
@@ -249,76 +275,322 @@ impl Default for EventQueue {
     }
 }
 
+// ── NIP-10 tag parsing ────────────────────────────────────────────────────────
+
+/// Parsed thread relationship from NIP-10 `e` tags.
+#[derive(Debug, Clone, Default)]
+pub struct ThreadTags {
+    /// Root event ID (hex). Present for all thread replies.
+    pub root_event_id: Option<String>,
+    /// Parent event ID (hex). For direct replies to root, equals root.
+    pub parent_event_id: Option<String>,
+    /// Mentioned pubkeys from `p` tags (hex).
+    pub mentioned_pubkeys: Vec<String>,
+}
+
+/// Parse NIP-10 thread tags from a Nostr event.
+///
+/// Detection logic (per research doc §4c):
+/// - Find an `e` tag with `root` marker → its value is `root_event_id`
+/// - Find an `e` tag with `reply` marker → its value is `parent_event_id`
+/// - If only `reply` marker found (direct reply to root), root == parent
+/// - `p` tags → mentioned pubkeys
+///
+/// NOTE: Only handles NIP-10 marker-based format (preferred). The deprecated
+/// positional format (no markers, `["e", id, relay_url]`) is not supported —
+/// Sprout always generates marker-based tags (see relay messages.rs:762-783).
+pub fn parse_thread_tags(event: &Event) -> ThreadTags {
+    let mut root = None;
+    let mut reply = None;
+    let mut mentions = Vec::new();
+
+    for tag in event.tags.iter() {
+        let parts = tag.as_slice();
+        match parts.first().map(|s| s.as_str()) {
+            Some("e") if parts.len() >= 4 => {
+                let id = &parts[1];
+                let marker = &parts[3];
+                match marker.as_str() {
+                    "root" => root = Some(id.clone()),
+                    "reply" => reply = Some(id.clone()),
+                    _ => {}
+                }
+            }
+            Some("p") if parts.len() >= 2 => {
+                mentions.push(parts[1].clone());
+            }
+            _ => {}
+        }
+    }
+
+    // For direct replies to root: single "reply" tag, no "root" tag.
+    // In that case, root == parent.
+    let (root_event_id, parent_event_id) = match (root, reply) {
+        (Some(r), Some(p)) => (Some(r), Some(p)),
+        (Some(r), None) => (Some(r.clone()), Some(r)),
+        (None, Some(p)) => (Some(p.clone()), Some(p)),
+        (None, None) => (None, None),
+    };
+
+    ThreadTags {
+        root_event_id,
+        parent_event_id,
+        mentioned_pubkeys: mentions,
+    }
+}
+
 // ── Prompt formatting ─────────────────────────────────────────────────────────
 
-/// Stream-message kinds — these get the compact format (no raw Tags line).
-const STREAM_MESSAGE_KINDS: &[u32] = &[
-    sprout_core::kind::KIND_STREAM_MESSAGE,
-    sprout_core::kind::KIND_STREAM_MESSAGE_V2,
-];
+/// Conversation context fetched by the harness before prompting.
+#[derive(Debug, Clone)]
+pub enum ConversationContext {
+    /// Thread context for a reply event.
+    Thread {
+        messages: Vec<ContextMessage>,
+        total: usize,
+        truncated: bool,
+    },
+    /// DM conversation history.
+    Dm {
+        messages: Vec<ContextMessage>,
+        total: usize,
+        truncated: bool,
+    },
+}
 
-/// Format the per-event block lines for a single [`BatchEvent`].
+/// A single message in a conversation context section.
+#[derive(Debug, Clone)]
+pub struct ContextMessage {
+    pub pubkey: String,
+    pub timestamp: String,
+    pub content: String,
+}
+
+/// Channel metadata for prompt formatting.
+#[derive(Debug, Clone)]
+pub struct PromptChannelInfo {
+    pub name: String,
+    pub channel_type: String,
+}
+
+/// Format the per-event `[Event]` block for a single [`BatchEvent`].
 ///
-/// Non-stream-message kinds (anything not in `[9, 40002]`) include a
-/// `Tags:` line with the raw Nostr tags serialised as a JSON array-of-arrays.
-fn format_event_block(channel_id: Uuid, be: &BatchEvent) -> String {
-    let npub = be
-        .event
-        .pubkey
-        .to_bech32()
-        .unwrap_or_else(|_| be.event.pubkey.to_hex());
+/// Includes: event_id, channel (name + UUID), kind, sender (hex + npub),
+/// time, content, all tags (never stripped), and parsed structural fields.
+fn format_event_block(
+    channel_id: Uuid,
+    channel_info: Option<&PromptChannelInfo>,
+    be: &BatchEvent,
+) -> String {
+    let hex = be.event.pubkey.to_hex();
+    let npub = be.event.pubkey.to_bech32().unwrap_or_else(|_| hex.clone());
 
     let time = chrono::DateTime::from_timestamp(be.event.created_at.as_u64() as i64, 0)
         .map(|dt| dt.to_rfc3339())
         .unwrap_or_else(|| be.event.created_at.as_u64().to_string());
 
     let kind = be.event.kind.as_u16() as u32;
+    let event_id = be.event.id.to_hex();
+
+    let channel_display = match channel_info {
+        Some(ci) => format!("{} (#{channel_id})", ci.name),
+        None => channel_id.to_string(),
+    };
 
     let mut block = format!(
-        "Channel: {channel_id}\nKind: {kind}\nFrom: {npub}\nTime: {time}\nContent: {}",
+        "Event ID: {event_id}\n\
+         Channel: {channel_display}\n\
+         Kind: {kind}\n\
+         From: {npub} (hex: {hex})\n\
+         Time: {time}\n\
+         Content: {}",
         be.event.content,
     );
 
-    // Include raw tags for non-stream-message kinds.
-    if !STREAM_MESSAGE_KINDS.contains(&kind) {
-        let tags_json: Vec<&[String]> = be.event.tags.iter().map(|t| t.as_slice()).collect();
-        if let Ok(tags_str) = serde_json::to_string(&tags_json) {
-            block.push_str(&format!("\nTags: {tags_str}"));
-        }
+    // Always include tags — they carry structural information.
+    let tags_json: Vec<&[String]> = be.event.tags.iter().map(|t| t.as_slice()).collect();
+    if let Ok(tags_str) = serde_json::to_string(&tags_json) {
+        block.push_str(&format!("\nTags: {tags_str}"));
+    }
+
+    // Parsed structural fields.
+    let thread = parse_thread_tags(&be.event);
+    let mut parsed_parts = Vec::new();
+    if let Some(ref p) = thread.parent_event_id {
+        parsed_parts.push(format!("parent={p}"));
+    }
+    if let Some(ref r) = thread.root_event_id {
+        parsed_parts.push(format!("root={r}"));
+    }
+    if !thread.mentioned_pubkeys.is_empty() {
+        parsed_parts.push(format!(
+            "mentions=[{}]",
+            thread.mentioned_pubkeys.join(", ")
+        ));
+    }
+    if !parsed_parts.is_empty() {
+        block.push_str(&format!("\nParsed: {}", parsed_parts.join(", ")));
     }
 
     block
 }
 
+/// Format a `[Context]` hints section based on event scope.
+fn format_context_hints(
+    channel_id: Uuid,
+    channel_info: Option<&PromptChannelInfo>,
+    thread_tags: &ThreadTags,
+    is_dm: bool,
+    has_conversation_context: bool,
+) -> String {
+    let channel_display = match channel_info {
+        Some(ci) => format!("{} (#{channel_id})", ci.name),
+        None => channel_id.to_string(),
+    };
+
+    // DM check comes first — a DM reply has both thread tags AND is_dm=true,
+    // and the scope should be "dm" (not "thread") because the agent is in a DM.
+    if is_dm {
+        let is_reply = thread_tags.root_event_id.is_some();
+        // DM replies use get_thread() because /messages excludes thread replies.
+        // DM non-replies use get_channel_history() for recent conversation.
+        let ctx_hint = if has_conversation_context && is_reply {
+            "Thread context included below. Use get_thread() for full history if truncated."
+        } else if has_conversation_context {
+            "Conversation context included below. Use get_channel_history() for full history if truncated."
+        } else if is_reply {
+            "Use get_thread() to fetch the reply chain."
+        } else {
+            "Use get_channel_history() for conversation context."
+        };
+        let mut s = format!(
+            "[Context]\n\
+             Scope: dm\n\
+             Channel: {channel_display}\n\
+             {ctx_hint}"
+        );
+        // If this is a DM reply, include thread structural info as supplementary.
+        if let Some(ref root) = thread_tags.root_event_id {
+            s.push_str(&format!("\nThread root: {root}"));
+            if let Some(ref parent) = thread_tags.parent_event_id {
+                if parent != root {
+                    s.push_str(&format!("\nParent: {parent}"));
+                }
+            }
+        }
+        s
+    } else if let Some(ref root) = thread_tags.root_event_id {
+        let ctx_hint = if has_conversation_context {
+            "Thread context included below. Use get_thread() for full history if truncated."
+        } else {
+            "Use get_thread() to fetch thread context."
+        };
+        let mut s = format!(
+            "[Context]\n\
+             Scope: thread\n\
+             Channel: {channel_display}\n\
+             Thread root: {root}"
+        );
+        if let Some(ref parent) = thread_tags.parent_event_id {
+            if parent != root {
+                s.push_str(&format!("\nParent: {parent}"));
+            }
+        }
+        s.push_str(&format!("\n{ctx_hint}"));
+        s
+    } else {
+        format!(
+            "[Context]\n\
+             Scope: channel\n\
+             Channel: {channel_display}\n\
+             Hint: Use get_channel_history() for recent messages if needed."
+        )
+    }
+}
+
+/// Format a conversation context section (thread or DM).
+fn format_conversation_context(ctx: &ConversationContext) -> String {
+    let (label, messages, total, truncated) = match ctx {
+        ConversationContext::Thread {
+            messages,
+            total,
+            truncated,
+        } => ("Thread Context", messages, total, truncated),
+        ConversationContext::Dm {
+            messages,
+            total,
+            truncated,
+        } => ("Conversation Context", messages, total, truncated),
+    };
+
+    let trunc_label = if *truncated { ", truncated" } else { "" };
+    let mut s = format!(
+        "[{label} ({} of {total} messages{trunc_label})]",
+        messages.len()
+    );
+    for (i, msg) in messages.iter().enumerate() {
+        s.push_str(&format!(
+            "\n[{}] {} ({}): {}",
+            i + 1,
+            msg.pubkey,
+            msg.timestamp,
+            msg.content,
+        ));
+    }
+    s
+}
+
 /// Format a [`FlushBatch`] into a prompt string for the agent.
 ///
-/// If `system_prompt` is `Some`, it is prepended as a `[System]` block.
-///
-/// Single-event format:
-/// ```text
-/// [Sprout event: <prompt_tag>]
-/// Channel: ...
-/// Kind: ...
-/// From: ...
-/// Time: ...
-/// Content: ...
-/// ```
-///
-/// Batch format (N > 1):
-/// ```text
-/// [Sprout events — N events]
-///
-/// --- Event 1 (<prompt_tag>) ---
-/// Channel: ...
-/// ...
-/// ```
-pub fn format_prompt(batch: &FlushBatch, system_prompt: Option<&str>) -> String {
-    let body = if batch.events.len() == 1 {
+/// Produces a stable prompt with these sections (in order):
+/// 1. `[System]` — system prompt (if configured)
+/// 2. `[Context]` — scope, channel name, structural hints
+/// 3. `[Thread Context]` or `[Conversation Context]` — if fetched
+/// 4. `[Event]` / `[Sprout events]` — the triggering event(s)
+pub fn format_prompt(
+    batch: &FlushBatch,
+    system_prompt: Option<&str>,
+    channel_info: Option<&PromptChannelInfo>,
+    conversation_context: Option<&ConversationContext>,
+) -> String {
+    // Scope is always derived from the LAST event in the batch — that's the
+    // one the agent is responding to. Thread/DM context is supplementary info
+    // included alongside, not a scope override. This prevents mixed batches
+    // (thread reply + later plain message) from being mislabeled as "thread".
+    let last_event = batch.events.last().expect("batch must have ≥1 event");
+    let thread_tags = parse_thread_tags(&last_event.event);
+    let is_dm = channel_info
+        .map(|ci| ci.channel_type == "dm")
+        .unwrap_or(false);
+
+    let mut sections: Vec<String> = Vec::with_capacity(4);
+
+    // 1. System prompt.
+    if let Some(sp) = system_prompt {
+        sections.push(format!("[System]\n{sp}"));
+    }
+
+    // 2. Context hints.
+    sections.push(format_context_hints(
+        batch.channel_id,
+        channel_info,
+        &thread_tags,
+        is_dm,
+        conversation_context.is_some(),
+    ));
+
+    // 3. Conversation context (thread or DM).
+    if let Some(ctx) = conversation_context {
+        sections.push(format_conversation_context(ctx));
+    }
+
+    // 4. Event block(s).
+    let event_section = if batch.events.len() == 1 {
         let be = &batch.events[0];
         format!(
             "[Sprout event: {}]\n{}",
             be.prompt_tag,
-            format_event_block(batch.channel_id, be)
+            format_event_block(batch.channel_id, channel_info, be)
         )
     } else {
         let mut s = format!("[Sprout events — {} events]", batch.events.len());
@@ -327,16 +599,14 @@ pub fn format_prompt(batch: &FlushBatch, system_prompt: Option<&str>) -> String 
                 "\n\n--- Event {} ({}) ---\n{}",
                 i + 1,
                 be.prompt_tag,
-                format_event_block(batch.channel_id, be)
+                format_event_block(batch.channel_id, channel_info, be)
             ));
         }
         s
     };
+    sections.push(event_section);
 
-    match system_prompt {
-        Some(sp) => format!("[System]\n{sp}\n\n{body}"),
-        None => body,
-    }
+    sections.join("\n\n")
 }
 
 // ─── Unit Tests ──────────────────────────────────────────────────────────────
@@ -571,12 +841,17 @@ mod tests {
             }],
         };
 
-        let prompt = format_prompt(&batch, None);
+        let prompt = format_prompt(&batch, None, None, None);
 
-        assert!(prompt.starts_with("[Sprout event: @mention]\n"));
+        // Should contain [Context] section before the event.
+        assert!(prompt.contains("[Context]"));
+        assert!(prompt.contains("Scope: channel"));
+        assert!(prompt.contains("[Sprout event: @mention]\n"));
         assert!(prompt.contains(&format!("Channel: {}", ch)));
         assert!(prompt.contains(&format!("From: {}", npub)));
         assert!(prompt.contains("Content: Hello @agent"));
+        // Event ID should be present.
+        assert!(prompt.contains("Event ID:"));
         // Should NOT contain "--- Event 1 ---" (that's the multi-event format).
         assert!(!prompt.contains("--- Event 1 ---"));
     }
@@ -661,21 +936,16 @@ mod tests {
             ],
         };
 
-        let prompt = format_prompt(&batch, None);
+        let prompt = format_prompt(&batch, None, None, None);
 
-        assert!(prompt.starts_with("[Sprout events — 3 events]"));
+        assert!(prompt.contains("[Context]"));
+        assert!(prompt.contains("[Sprout events — 3 events]"));
         assert!(prompt.contains("--- Event 1 (tag-a) ---"));
         assert!(prompt.contains("--- Event 2 (tag-b) ---"));
         assert!(prompt.contains("--- Event 3 (tag-c) ---"));
         assert!(prompt.contains("Content: first message"));
         assert!(prompt.contains("Content: second message"));
         assert!(prompt.contains("Content: third message"));
-        // All events reference the same channel.
-        assert_eq!(
-            prompt.matches(&format!("Channel: {}", ch)).count(),
-            3,
-            "each event block should include the channel id"
-        );
     }
 
     // ── Test 11: system prompt prepended ─────────────────────────────────────
@@ -694,8 +964,8 @@ mod tests {
             }],
         };
 
-        let prompt = format_prompt(&batch, Some("You are a triage bot."));
-        assert!(prompt.starts_with("[System]\nYou are a triage bot.\n\n[Sprout event: test]\n"));
+        let prompt = format_prompt(&batch, Some("You are a triage bot."), None, None);
+        assert!(prompt.starts_with("[System]\nYou are a triage bot.\n\n[Context]"));
     }
 
     // ── Test 12: drop mode discards in-flight channel events ─────────────────
@@ -998,5 +1268,452 @@ mod tests {
             .flush_next()
             .expect("ch should be flushable after throttle expires");
         assert_eq!(batch3.channel_id, ch);
+    }
+
+    // ── NIP-10 tag parsing tests ─────────────────────────────────────────────
+
+    /// Build an event with specific tags for thread testing.
+    fn make_event_with_tags(content: &str, tags: Vec<Vec<String>>) -> Event {
+        let keys = Keys::generate();
+        let nostr_tags: Vec<nostr::Tag> = tags
+            .iter()
+            .map(|t| {
+                let strs: Vec<&str> = t.iter().map(|s| s.as_str()).collect();
+                nostr::Tag::parse(&strs).unwrap()
+            })
+            .collect();
+        EventBuilder::new(Kind::Custom(9), content, nostr_tags)
+            .sign_with_keys(&keys)
+            .unwrap()
+    }
+
+    #[test]
+    fn test_parse_thread_tags_no_tags() {
+        let event = make_event("plain message");
+        let tags = parse_thread_tags(&event);
+        assert!(tags.root_event_id.is_none());
+        assert!(tags.parent_event_id.is_none());
+        assert!(tags.mentioned_pubkeys.is_empty());
+    }
+
+    #[test]
+    fn test_parse_thread_tags_direct_reply() {
+        // Direct reply to root: single "reply" tag.
+        let event = make_event_with_tags(
+            "reply to root",
+            vec![vec!["e".into(), "abc123".into(), "".into(), "reply".into()]],
+        );
+        let tags = parse_thread_tags(&event);
+        assert_eq!(tags.root_event_id.as_deref(), Some("abc123"));
+        assert_eq!(tags.parent_event_id.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn test_parse_thread_tags_nested_reply() {
+        // Nested reply: root + reply tags.
+        let event = make_event_with_tags(
+            "nested reply",
+            vec![
+                vec!["e".into(), "root123".into(), "".into(), "root".into()],
+                vec!["e".into(), "parent456".into(), "".into(), "reply".into()],
+            ],
+        );
+        let tags = parse_thread_tags(&event);
+        assert_eq!(tags.root_event_id.as_deref(), Some("root123"));
+        assert_eq!(tags.parent_event_id.as_deref(), Some("parent456"));
+    }
+
+    #[test]
+    fn test_parse_thread_tags_with_mentions() {
+        let event = make_event_with_tags(
+            "hey @alice",
+            vec![
+                vec!["p".into(), "alice_pubkey".into()],
+                vec!["p".into(), "bob_pubkey".into()],
+            ],
+        );
+        let tags = parse_thread_tags(&event);
+        assert!(tags.root_event_id.is_none());
+        assert_eq!(tags.mentioned_pubkeys, vec!["alice_pubkey", "bob_pubkey"]);
+    }
+
+    #[test]
+    fn test_parse_thread_tags_root_only() {
+        // Only root marker, no reply marker — root == parent.
+        let event = make_event_with_tags(
+            "reply",
+            vec![vec!["e".into(), "root123".into(), "".into(), "root".into()]],
+        );
+        let tags = parse_thread_tags(&event);
+        assert_eq!(tags.root_event_id.as_deref(), Some("root123"));
+        assert_eq!(tags.parent_event_id.as_deref(), Some("root123"));
+    }
+
+    // ── Context formatting tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_format_prompt_with_channel_info() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hello");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+        };
+        let ci = PromptChannelInfo {
+            name: "engineering".into(),
+            channel_type: "stream".into(),
+        };
+
+        let prompt = format_prompt(&batch, None, Some(&ci), None);
+        assert!(prompt.contains("engineering (#"));
+        assert!(prompt.contains("Scope: channel"));
+    }
+
+    #[test]
+    fn test_format_prompt_dm_scope() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hey");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "dm".into(),
+                received_at: Instant::now(),
+            }],
+        };
+        let ci = PromptChannelInfo {
+            name: "DM".into(),
+            channel_type: "dm".into(),
+        };
+
+        let prompt = format_prompt(&batch, None, Some(&ci), None);
+        assert!(prompt.contains("Scope: dm"));
+    }
+
+    #[test]
+    fn test_format_prompt_thread_scope() {
+        let ch = Uuid::new_v4();
+        let event = make_event_with_tags(
+            "yes go ahead",
+            vec![vec![
+                "e".into(),
+                "root123".into(),
+                "".into(),
+                "reply".into(),
+            ]],
+        );
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "@mention".into(),
+                received_at: Instant::now(),
+            }],
+        };
+
+        let prompt = format_prompt(&batch, None, None, None);
+        assert!(prompt.contains("Scope: thread"));
+        assert!(prompt.contains("Thread root: root123"));
+    }
+
+    #[test]
+    fn test_format_prompt_with_thread_context() {
+        let ch = Uuid::new_v4();
+        let event = make_event_with_tags(
+            "yes go ahead",
+            vec![vec![
+                "e".into(),
+                "root123".into(),
+                "".into(),
+                "reply".into(),
+            ]],
+        );
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "@mention".into(),
+                received_at: Instant::now(),
+            }],
+        };
+        let ctx = ConversationContext::Thread {
+            messages: vec![
+                ContextMessage {
+                    pubkey: "npub1xyz".into(),
+                    timestamp: "2026-03-15T16:30:00Z".into(),
+                    content: "Let's refactor auth".into(),
+                },
+                ContextMessage {
+                    pubkey: "npub1def".into(),
+                    timestamp: "2026-03-15T16:35:00Z".into(),
+                    content: "yes go ahead".into(),
+                },
+            ],
+            total: 5,
+            truncated: true,
+        };
+
+        let prompt = format_prompt(&batch, None, None, Some(&ctx));
+        assert!(prompt.contains("[Thread Context (2 of 5 messages, truncated)]"));
+        assert!(prompt.contains("Let's refactor auth"));
+        assert!(prompt.contains("Thread context included below"));
+    }
+
+    #[test]
+    fn test_format_prompt_with_dm_context() {
+        let ch = Uuid::new_v4();
+        let event = make_event("ok do that");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "dm".into(),
+                received_at: Instant::now(),
+            }],
+        };
+        let ci = PromptChannelInfo {
+            name: "DM".into(),
+            channel_type: "dm".into(),
+        };
+        let ctx = ConversationContext::Dm {
+            messages: vec![ContextMessage {
+                pubkey: "npub1abc".into(),
+                timestamp: "2026-03-15T16:00:00Z".into(),
+                content: "Can you deploy?".into(),
+            }],
+            total: 1,
+            truncated: false,
+        };
+
+        let prompt = format_prompt(&batch, None, Some(&ci), Some(&ctx));
+        assert!(prompt.contains("Scope: dm"));
+        assert!(prompt.contains("[Conversation Context (1 of 1 messages)]"));
+        assert!(prompt.contains("Can you deploy?"));
+    }
+
+    #[test]
+    fn test_format_prompt_dm_reply_hints_get_thread() {
+        let ch = Uuid::new_v4();
+        // DM reply event — has thread e-tags.
+        let event = make_event_with_tags(
+            "sounds good, do it",
+            vec![vec![
+                "e".into(),
+                "root123".into(),
+                "".into(),
+                "reply".into(),
+            ]],
+        );
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "dm".into(),
+                received_at: Instant::now(),
+            }],
+        };
+        let ci = PromptChannelInfo {
+            name: "DM".into(),
+            channel_type: "dm".into(),
+        };
+        // Thread context fetched (as the fetch path does for DM replies).
+        let ctx = ConversationContext::Thread {
+            messages: vec![ContextMessage {
+                pubkey: "npub1xyz".into(),
+                timestamp: "2026-03-15T16:30:00Z".into(),
+                content: "Should I deploy?".into(),
+            }],
+            total: 1,
+            truncated: false,
+        };
+
+        let prompt = format_prompt(&batch, None, Some(&ci), Some(&ctx));
+        // Scope should be "dm", not "thread".
+        assert!(
+            prompt.contains("Scope: dm"),
+            "DM reply should have Scope: dm, got:\n{prompt}"
+        );
+        // Hint should point to get_thread(), not get_channel_history().
+        assert!(
+            prompt.contains("get_thread()"),
+            "DM reply hint should mention get_thread(), got:\n{prompt}"
+        );
+        // Thread structural info should be present.
+        assert!(
+            prompt.contains("Thread root: root123"),
+            "DM reply should include thread root"
+        );
+        // Thread context should be included.
+        assert!(prompt.contains("Should I deploy?"));
+    }
+
+    #[test]
+    fn test_format_prompt_dm_non_reply_hints_get_channel_history() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hey there");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "dm".into(),
+                received_at: Instant::now(),
+            }],
+        };
+        let ci = PromptChannelInfo {
+            name: "DM".into(),
+            channel_type: "dm".into(),
+        };
+
+        // No context fetched — hints only.
+        let prompt = format_prompt(&batch, None, Some(&ci), None);
+        assert!(prompt.contains("Scope: dm"));
+        assert!(
+            prompt.contains("get_channel_history()"),
+            "DM non-reply hint should mention get_channel_history()"
+        );
+        assert!(
+            !prompt.contains("get_thread()"),
+            "DM non-reply should NOT mention get_thread()"
+        );
+    }
+
+    #[test]
+    fn test_format_event_block_includes_event_id() {
+        let ch = Uuid::new_v4();
+        let event = make_event("test");
+        let event_id = event.id.to_hex();
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+        };
+
+        let prompt = format_prompt(&batch, None, None, None);
+        assert!(
+            prompt.contains(&format!("Event ID: {event_id}")),
+            "prompt should contain the event ID"
+        );
+    }
+
+    #[test]
+    fn test_format_event_block_includes_hex_and_npub() {
+        let ch = Uuid::new_v4();
+        let event = make_event("test");
+        let hex = event.pubkey.to_hex();
+        let npub = event.pubkey.to_bech32().unwrap();
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+        };
+
+        let prompt = format_prompt(&batch, None, None, None);
+        assert!(
+            prompt.contains(&format!("From: {npub} (hex: {hex})")),
+            "prompt should contain both npub and hex"
+        );
+    }
+
+    #[test]
+    fn test_format_event_block_always_includes_tags() {
+        let ch = Uuid::new_v4();
+        // Kind 9 (stream message) — tags were previously stripped.
+        let event = make_event_with_tags("hello", vec![vec!["h".into(), ch.to_string()]]);
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+        };
+
+        let prompt = format_prompt(&batch, None, None, None);
+        assert!(
+            prompt.contains("Tags:"),
+            "tags should always be included, even for stream messages"
+        );
+    }
+
+    // ── drain_channel tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_drain_channel_removes_pending_events() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        q.push(make_queued(ch, "msg1"));
+        q.push(make_queued(ch, "msg2"));
+        assert_eq!(q.pending_count(), 2);
+
+        let dropped = q.drain_channel(ch);
+        assert_eq!(dropped, 2);
+        assert_eq!(q.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_drain_channel_does_not_affect_other_channels() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+
+        q.push(make_queued(ch_a, "A"));
+        q.push(make_queued(ch_b, "B"));
+
+        let dropped = q.drain_channel(ch_a);
+        assert_eq!(dropped, 1);
+        assert_eq!(q.pending_count(), 1); // ch_b still has 1
+    }
+
+    #[test]
+    fn test_drain_channel_clears_retry_after() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        q.push(make_queued(ch, "msg"));
+        let batch = q.flush_next().unwrap();
+        q.requeue(batch); // sets retry_after
+        q.mark_complete(ch);
+
+        // Channel is throttled — verify drain clears it.
+        assert!(!q.has_flushable_work());
+        let dropped = q.drain_channel(ch);
+        assert_eq!(dropped, 1);
+        assert_eq!(q.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_drain_channel_empty_returns_zero() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        assert_eq!(q.drain_channel(ch), 0);
+    }
+
+    #[test]
+    fn test_drain_channel_does_not_affect_in_flight() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        q.push(make_queued(ch, "msg1"));
+        let _batch = q.flush_next().unwrap(); // now in-flight
+        assert!(q.is_in_flight());
+
+        // Push another event while in-flight.
+        q.push(make_queued(ch, "msg2"));
+
+        // drain_channel should only remove the queued event, not the in-flight one.
+        let dropped = q.drain_channel(ch);
+        assert_eq!(dropped, 1);
+        assert!(q.is_in_flight()); // in-flight unaffected
     }
 }
