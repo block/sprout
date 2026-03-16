@@ -80,10 +80,10 @@ export function SystemMessageRow({
 
   return (
     <div
-      className="flex items-center gap-3 px-2 py-1.5"
+      className="flex items-center gap-2.5 px-2 py-1"
       data-testid="system-message-row"
     >
-      <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted">
+      <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-muted">
         <ArrowRightLeft className="h-3 w-3 text-muted-foreground" />
       </div>
       <p className="text-xs text-muted-foreground">{description}</p>

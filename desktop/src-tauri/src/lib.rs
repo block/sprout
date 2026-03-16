@@ -27,6 +27,7 @@ pub fn run() {
             update_profile,
             get_user_profile,
             get_users_batch,
+            search_users,
             get_presence,
             set_presence,
             get_relay_ws_url,

@@ -5,11 +5,12 @@
 //!   PUT /api/users/me/profile      — update own profile (display_name, avatar_url, about, nip05_handle)
 //!   GET /api/users/{pubkey}/profile — get any user's profile by pubkey hex
 //!   POST /api/users/batch          — resolve display names for multiple pubkeys
+//!   GET /api/users/search          — search users by display name, NIP-05, or pubkey
 
 use std::sync::Arc;
 
 use axum::{
-    extract::{Json as ExtractJson, Path, State},
+    extract::{Json as ExtractJson, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::Json,
 };
@@ -173,6 +174,15 @@ pub struct BatchProfilesRequest {
     pub pubkeys: Vec<String>,
 }
 
+/// Query string for user search.
+#[derive(Debug, Deserialize)]
+pub struct SearchUsersQuery {
+    /// Case-insensitive search query.
+    pub q: String,
+    /// Maximum number of results to return.
+    pub limit: Option<u32>,
+}
+
 /// `POST /api/users/batch` — resolve profile summaries for multiple pubkeys.
 pub async fn get_users_batch(
     State(state): State<Arc<AppState>>,
@@ -253,6 +263,38 @@ pub async fn get_users_batch(
     Ok(Json(serde_json::json!({
         "profiles": profiles,
         "missing": missing,
+    })))
+}
+
+/// `GET /api/users/search` — search users by display name, NIP-05, or pubkey prefix.
+pub async fn search_users(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<SearchUsersQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersRead).map_err(scope_error)?;
+
+    let q = query.q.trim();
+    if q.is_empty() {
+        return Ok(Json(serde_json::json!({ "users": [] })));
+    }
+
+    let results = state
+        .db
+        .search_users(q, query.limit.unwrap_or(8))
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    Ok(Json(serde_json::json!({
+        "users": results.into_iter().map(|user| {
+            serde_json::json!({
+                "pubkey": nostr_hex::encode(&user.pubkey),
+                "display_name": user.display_name,
+                "avatar_url": user.avatar_url,
+                "nip05_handle": user.nip05_handle,
+            })
+        }).collect::<Vec<_>>(),
     })))
 }
 

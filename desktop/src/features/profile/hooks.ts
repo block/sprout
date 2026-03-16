@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   getProfile,
+  searchUsers,
   getUserProfile,
   getUsersBatch,
   updateProfile,
@@ -9,6 +10,7 @@ import {
 import type {
   Profile,
   UpdateProfileInput,
+  UserSearchResult,
   UsersBatchResponse,
 } from "@/shared/api/types";
 
@@ -50,6 +52,25 @@ export function useUsersBatchQuery(
     queryKey: ["users-batch", ...normalizedPubkeys],
     queryFn: () => getUsersBatch(normalizedPubkeys),
     staleTime: 60_000,
+    gcTime: 5 * 60 * 1_000,
+  });
+}
+
+export function useUserSearchQuery(
+  query: string,
+  options?: {
+    enabled?: boolean;
+    limit?: number;
+  },
+) {
+  const normalizedQuery = query.trim().toLowerCase();
+  const enabled = (options?.enabled ?? true) && normalizedQuery.length > 0;
+
+  return useQuery<UserSearchResult[]>({
+    enabled,
+    queryKey: ["user-search", normalizedQuery, options?.limit ?? 8],
+    queryFn: () => searchUsers(normalizedQuery, options?.limit ?? 8),
+    staleTime: 30_000,
     gcTime: 5 * 60 * 1_000,
   });
 }

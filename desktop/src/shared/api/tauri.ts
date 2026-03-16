@@ -33,6 +33,7 @@ import type {
   UpdateProfileInput,
   UpdateChannelInput,
   UserProfileSummary,
+  UserSearchResult,
   UsersBatchResponse,
   CreateManagedAgentInput,
   CreateManagedAgentResponse,
@@ -63,6 +64,17 @@ type RawUserProfileSummary = {
 type RawUsersBatchResponse = {
   profiles: Record<string, RawUserProfileSummary>;
   missing: string[];
+};
+
+type RawUserSearchResult = {
+  pubkey: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  nip05_handle: string | null;
+};
+
+type RawSearchUsersResponse = {
+  users: RawUserSearchResult[];
 };
 
 type RawPresenceLookup = Record<string, PresenceStatus>;
@@ -392,6 +404,15 @@ function fromRawUserProfileSummary(
   };
 }
 
+function fromRawUserSearchResult(user: RawUserSearchResult): UserSearchResult {
+  return {
+    pubkey: user.pubkey,
+    displayName: user.display_name,
+    avatarUrl: user.avatar_url,
+    nip05Handle: user.nip05_handle,
+  };
+}
+
 export async function getIdentity(): Promise<Identity> {
   const identity = await invokeTauri<RawIdentity>("get_identity");
 
@@ -434,6 +455,17 @@ export async function getUsersBatch(
     ),
     missing: response.missing,
   };
+}
+
+export async function searchUsers(
+  query: string,
+  limit = 8,
+): Promise<UserSearchResult[]> {
+  const response = await invokeTauri<RawSearchUsersResponse>("search_users", {
+    query,
+    limit,
+  });
+  return response.users.map(fromRawUserSearchResult);
 }
 
 export async function getPresence(pubkeys: string[]): Promise<PresenceLookup> {

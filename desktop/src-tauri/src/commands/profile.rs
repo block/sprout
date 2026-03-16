@@ -7,8 +7,8 @@ use tauri::State;
 use crate::{
     app_state::AppState,
     models::{
-        GetUsersBatchBody, ProfileInfo, SetPresenceBody, SetPresenceResponse, UpdateProfileBody,
-        UsersBatchResponse,
+        GetUsersBatchBody, ProfileInfo, SearchUsersResponse, SetPresenceBody, SetPresenceResponse,
+        UpdateProfileBody, UsersBatchResponse,
     },
     relay::{build_authed_request, send_empty_request, send_json_request},
 };
@@ -79,6 +79,25 @@ pub async fn get_users_batch(
                 pubkeys: pubkeys.as_slice(),
             },
         );
+    send_json_request(request).await
+}
+
+#[tauri::command]
+pub async fn search_users(
+    query: String,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<SearchUsersResponse, String> {
+    let limit = limit.unwrap_or(8);
+    let limit_param = limit.to_string();
+    let request = build_authed_request(
+        &state.http_client,
+        Method::GET,
+        "/api/users/search",
+        &state,
+    )?
+    .query(&[("q", query.as_str()), ("limit", limit_param.as_str())]);
+
     send_json_request(request).await
 }
 

@@ -52,6 +52,17 @@ type RawUsersBatchResponse = {
   missing: string[];
 };
 
+type RawUserSearchResult = {
+  pubkey: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  nip05_handle: string | null;
+};
+
+type RawSearchUsersResponse = {
+  users: RawUserSearchResult[];
+};
+
 type PresenceStatus = "online" | "away" | "offline";
 
 type RawPresenceLookup = Record<string, PresenceStatus>;
@@ -524,6 +535,18 @@ function getMockProfileByPubkey(pubkey: string): RawProfile | null {
     about: null,
     nip05_handle: null,
   };
+}
+
+function listMockProfiles(): RawProfile[] {
+  const pubkeys = new Set<string>([
+    ...mockProfiles.keys(),
+    ...mockDisplayNames.keys(),
+    DEFAULT_REAL_IDENTITY.pubkey,
+  ]);
+
+  return [...pubkeys]
+    .map((pubkey) => getMockProfileByPubkey(pubkey))
+    .filter((profile): profile is RawProfile => profile !== null);
 }
 
 function listMockChannels(): RawChannelWithMembership[] {
@@ -1309,6 +1332,59 @@ async function handleGetUsersBatch(
       pubkeys: args.pubkeys,
     }),
   });
+}
+
+async function handleSearchUsers(
+  args: {
+    query: string;
+    limit?: number;
+  },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const normalizedQuery = args.query.trim().toLowerCase();
+    if (normalizedQuery.length === 0) {
+      return { users: [] } satisfies RawSearchUsersResponse;
+    }
+
+    const results = listMockProfiles()
+      .filter((profile) => {
+        const displayName = profile.display_name?.toLowerCase() ?? "";
+        const nip05Handle = profile.nip05_handle?.toLowerCase() ?? "";
+        const pubkey = profile.pubkey.toLowerCase();
+        return (
+          displayName.includes(normalizedQuery) ||
+          nip05Handle.includes(normalizedQuery) ||
+          pubkey.includes(normalizedQuery)
+        );
+      })
+      .sort((left, right) => {
+        const leftName = left.display_name ?? left.nip05_handle ?? left.pubkey;
+        const rightName =
+          right.display_name ?? right.nip05_handle ?? right.pubkey;
+        return leftName.localeCompare(rightName);
+      })
+      .slice(0, args.limit ?? 8)
+      .map((profile) => ({
+        pubkey: profile.pubkey,
+        display_name: profile.display_name,
+        avatar_url: profile.avatar_url,
+        nip05_handle: profile.nip05_handle,
+      }));
+
+    return {
+      users: results,
+    } satisfies RawSearchUsersResponse;
+  }
+
+  const searchParams = new URLSearchParams();
+  searchParams.set("q", args.query);
+  searchParams.set("limit", String(args.limit ?? 8));
+  return relayJsonRequest<RawSearchUsersResponse>(
+    config,
+    `/api/users/search?${searchParams.toString()}`,
+  );
 }
 
 async function handleGetPresence(
@@ -2669,6 +2745,11 @@ export function maybeInstallE2eTauriMocks() {
       case "get_users_batch":
         return handleGetUsersBatch(
           payload as Parameters<typeof handleGetUsersBatch>[0],
+          activeConfig,
+        );
+      case "search_users":
+        return handleSearchUsers(
+          payload as Parameters<typeof handleSearchUsers>[0],
           activeConfig,
         );
       case "get_presence":

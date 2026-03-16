@@ -10,7 +10,6 @@ import {
   MessageSquare,
   Shield,
   User,
-  UserPlus,
   Users,
 } from "lucide-react";
 import * as React from "react";
@@ -43,6 +42,7 @@ import {
   SheetTitle,
 } from "@/shared/ui/sheet";
 import { Textarea } from "@/shared/ui/textarea";
+import { ChannelMemberInviteCard } from "./ChannelMemberInviteCard";
 
 type ChannelManagementSheetProps = {
   channel: Channel | null;
@@ -51,13 +51,6 @@ type ChannelManagementSheetProps = {
   onOpenChange: (open: boolean) => void;
   open: boolean;
 };
-
-const roleOptions: Array<Exclude<ChannelMember["role"], "owner">> = [
-  "member",
-  "admin",
-  "guest",
-  "bot",
-];
 
 const roleOrder: Record<ChannelMember["role"], number> = {
   owner: 0,
@@ -197,9 +190,6 @@ export function ChannelManagementSheet({
   const [descriptionDraft, setDescriptionDraft] = React.useState("");
   const [topicDraft, setTopicDraft] = React.useState("");
   const [purposeDraft, setPurposeDraft] = React.useState("");
-  const [invitePubkeys, setInvitePubkeys] = React.useState("");
-  const [inviteRole, setInviteRole] =
-    React.useState<Exclude<ChannelMember["role"], "owner">>("member");
 
   // Sync drafts from server only when the sheet opens or the channel changes —
   // not on every background refetch, which would clobber in-flight edits.
@@ -231,11 +221,6 @@ export function ChannelManagementSheet({
   }
 
   const resolvedChannel = detail ?? channel;
-
-  const parsedInvitePubkeys = invitePubkeys
-    .split(/[\s,]+/)
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
 
   return (
     <Sheet onOpenChange={onOpenChange} open={open}>
@@ -499,92 +484,17 @@ export function ChannelManagementSheet({
             title="Members"
           >
             {canManageChannel && resolvedChannel.channelType !== "dm" ? (
-              <form
-                className="space-y-3 rounded-2xl border border-border/80 bg-muted/20 p-4"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void addMembersMutation
-                    .mutateAsync({
-                      pubkeys: parsedInvitePubkeys,
-                      role: inviteRole,
-                    })
-                    .then((result) => {
-                      if (result.errors.length === 0) {
-                        setInvitePubkeys("");
-                      }
-                    });
-                }}
-              >
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <UserPlus className="h-4 w-4" />
-                  Invite members
-                </div>
-                <Textarea
-                  className="min-h-24"
-                  data-testid="channel-management-add-pubkeys"
-                  disabled={addMembersMutation.isPending}
-                  onChange={(event) => setInvitePubkeys(event.target.value)}
-                  placeholder="Paste one or more pubkeys, separated by spaces, commas, or new lines."
-                  value={invitePubkeys}
-                />
-                <div className="flex flex-wrap items-center gap-3">
-                  <label
-                    className="flex items-center gap-2 text-sm text-muted-foreground"
-                    htmlFor="channel-member-role"
-                  >
-                    Role
-                  </label>
-                  <select
-                    className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                    data-testid="channel-management-add-role"
-                    disabled={addMembersMutation.isPending}
-                    id="channel-member-role"
-                    onChange={(event) =>
-                      setInviteRole(
-                        event.target.value as Exclude<
-                          ChannelMember["role"],
-                          "owner"
-                        >,
-                      )
-                    }
-                    value={inviteRole}
-                  >
-                    {roleOptions.map((role) => (
-                      <option key={role} value={role}>
-                        {role}
-                      </option>
-                    ))}
-                  </select>
-                  <Button
-                    data-testid="channel-management-add-members"
-                    disabled={
-                      addMembersMutation.isPending ||
-                      parsedInvitePubkeys.length === 0
-                    }
-                    size="sm"
-                    type="submit"
-                  >
-                    {addMembersMutation.isPending
-                      ? "Inviting..."
-                      : "Add members"}
-                  </Button>
-                </div>
-                {addMembersMutation.error instanceof Error ? (
-                  <p className="text-sm text-destructive">
-                    {addMembersMutation.error.message}
-                  </p>
-                ) : null}
-                {addMembersMutation.data &&
-                addMembersMutation.data.errors.length > 0 ? (
-                  <div className="space-y-1 text-sm text-destructive">
-                    {addMembersMutation.data.errors.map((error) => (
-                      <p key={`${error.pubkey}-${error.error}`}>
-                        {formatPubkey(error.pubkey)}: {error.error}
-                      </p>
-                    ))}
-                  </div>
-                ) : null}
-              </form>
+              <ChannelMemberInviteCard
+                existingMembers={members}
+                isPending={addMembersMutation.isPending}
+                onSubmit={(input) => addMembersMutation.mutateAsync(input)}
+                open={open}
+                requestErrorMessage={
+                  addMembersMutation.error instanceof Error
+                    ? addMembersMutation.error.message
+                    : null
+                }
+              />
             ) : null}
 
             <div className="space-y-2" data-testid="channel-members-list">
