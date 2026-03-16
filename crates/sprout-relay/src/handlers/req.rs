@@ -89,47 +89,34 @@ pub async fn handle_req(
     // #h presence to prevent mixed-filter bypass: a client could send
     // [{#h:..., kinds:[44100]}, {authors:[...]}] which resolves to global scope
     // but would skip the #p check if we only looked at per-filter #h tags.
+    // Kinds that are globally stored and require #p = authed pubkey.
+    // Without this, a client could subscribe to another user's membership
+    // notifications or gift-wrapped DMs.
+    const P_GATED_KINDS: [u32; 3] = [
+        KIND_MEMBER_ADDED_NOTIFICATION,
+        KIND_MEMBER_REMOVED_NOTIFICATION,
+        KIND_GIFT_WRAP,
+    ];
+
     if channel_id.is_none() {
         let authed_pubkey_hex = hex::encode(&pubkey_bytes);
         let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
 
         for filter in &filters {
-            // Membership notifications (kind:44100/44101) require #p = authed pubkey.
-            let can_match_membership = filter.kinds.as_ref().is_none_or(|ks| {
-                ks.iter().any(|k| {
-                    let ku = k.as_u16() as u32;
-                    ku == KIND_MEMBER_ADDED_NOTIFICATION || ku == KIND_MEMBER_REMOVED_NOTIFICATION
-                })
+            let can_match_p_gated = filter.kinds.as_ref().is_none_or(|ks| {
+                ks.iter()
+                    .any(|k| P_GATED_KINDS.contains(&(k.as_u16() as u32)))
             });
-            if can_match_membership {
+            if can_match_p_gated {
                 // ALL #p values must match the authenticated pubkey — prevents
-                // a client from sneaking in a victim's pubkey alongside their own
-                // (e.g. #p:[my_key, victim_key]) to receive the victim's notifications.
+                // a client from sneaking in a victim's pubkey alongside their own.
                 let has_matching_p = filter.generic_tags.get(&p_tag).is_some_and(|values| {
                     !values.is_empty() && values.iter().all(|v| *v == authed_pubkey_hex)
                 });
                 if !has_matching_p {
                     conn.send(RelayMessage::closed(
                         &sub_id,
-                        "restricted: membership notifications require #p matching your pubkey",
-                    ));
-                    return;
-                }
-            }
-
-            // NIP-17 gift wraps (kind:1059) require #p = authed pubkey.
-            // Same pattern as membership notifications — prevents reading others' DMs.
-            let can_match_gift_wrap = filter.kinds.as_ref().is_none_or(|ks| {
-                ks.iter().any(|k| k.as_u16() as u32 == KIND_GIFT_WRAP)
-            });
-            if can_match_gift_wrap {
-                let has_matching_p = filter.generic_tags.get(&p_tag).is_some_and(|values| {
-                    !values.is_empty() && values.iter().all(|v| *v == authed_pubkey_hex)
-                });
-                if !has_matching_p {
-                    conn.send(RelayMessage::closed(
-                        &sub_id,
-                        "restricted: gift-wrap events require #p matching your pubkey",
+                        "restricted: p-gated events require #p matching your pubkey",
                     ));
                     return;
                 }
@@ -235,6 +222,9 @@ pub async fn handle_req(
 
 /// Handle a NIP-50 search REQ: query Typesense, fetch full events, deliver results, EOSE.
 /// Search subscriptions are one-shot — no persistent subscription is registered.
+/// Maximum Typesense pages to fetch per filter (prevents unbounded loops).
+const MAX_SEARCH_PAGES: u32 = 5;
+
 async fn handle_search_req(
     sub_id: &str,
     filters: &[Filter],
@@ -247,7 +237,6 @@ async fn handle_search_req(
         return;
     }
 
-    // Build channel scope filter for Typesense
     let channel_filter = {
         let ids: Vec<String> = accessible_channels.iter().map(|id| id.to_string()).collect();
         format!("channel_id:=[{}]", ids.join(","))
@@ -266,7 +255,8 @@ async fn handle_search_req(
             .map(|l| (l as u32).min(MAX_HISTORICAL_LIMIT as u32))
             .unwrap_or(MAX_HISTORICAL_LIMIT as u32);
 
-        // Build Typesense filter_by — channel scope + optional kind constraint
+        // Push as many NIP-01 constraints into Typesense as possible so
+        // post-filtering is a correction step, not the primary filter.
         let mut filter_parts = vec![channel_filter.clone()];
         if let Some(ref kinds) = filter.kinds {
             if !kinds.is_empty() {
@@ -275,85 +265,108 @@ async fn handle_search_req(
                 filter_parts.push(format!("kind:=[{}]", kind_vals.join(",")));
             }
         }
-
-        let search_query = sprout_search::SearchQuery {
-            q: search_text,
-            filter_by: Some(filter_parts.join(" && ")),
-            sort_by: None, // Typesense default = relevance (text_match score)
-            page: 1,
-            per_page: limit,
-        };
-
-        let search_result = match state.search.search(&search_query).await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(sub_id = %sub_id, "NIP-50 search failed: {e}");
-                continue;
+        if let Some(ref authors) = filter.authors {
+            if !authors.is_empty() {
+                let author_vals: Vec<String> = authors.iter().map(|a| a.to_hex()).collect();
+                filter_parts.push(format!("pubkey:=[{}]", author_vals.join(",")));
             }
-        };
-
-        // Collect event IDs from search hits (skip hits with no channel_id)
-        let hit_ids: Vec<Vec<u8>> = search_result
-            .hits
-            .iter()
-            .filter(|h| h.channel_id.is_some())
-            .filter_map(|h| hex::decode(&h.event_id).ok())
-            .filter(|bytes| bytes.len() == 32)
-            .collect();
-
-        if hit_ids.is_empty() {
-            continue;
+        }
+        if let Some(since) = filter.since {
+            filter_parts.push(format!("created_at:>={}", since.as_u64()));
+        }
+        if let Some(until) = filter.until {
+            filter_parts.push(format!("created_at:<={}", until.as_u64()));
         }
 
-        // Batch-fetch full events from DB
-        let id_refs: Vec<&[u8]> = hit_ids.iter().map(|b| b.as_slice()).collect();
-        let events = match state.db.get_events_by_ids(&id_refs).await {
-            Ok(evs) => evs,
-            Err(e) => {
-                warn!(sub_id = %sub_id, "NIP-50 batch fetch failed: {e}");
-                continue;
+        let filter_by = filter_parts.join(" && ");
+
+        // Paginate: keep fetching pages until we've emitted `limit` results
+        // or exhausted the search result set. This ensures post-filtering
+        // doesn't silently reduce the result count below the requested limit.
+        let mut emitted: u32 = 0;
+        let per_page = limit.min(100); // Typesense max per_page is typically 250
+
+        for page in 1..=MAX_SEARCH_PAGES {
+            if emitted >= limit {
+                break;
             }
-        };
 
-        // Build a lookup map for preserving Typesense relevance order
-        let event_map: std::collections::HashMap<[u8; 32], &sprout_core::StoredEvent> = events
-            .iter()
-            .map(|ev| (ev.event.id.to_bytes(), ev))
-            .collect();
-
-        // Deliver in Typesense relevance order
-        for hit_id in &hit_ids {
-            let id_array: [u8; 32] = match hit_id.as_slice().try_into() {
-                Ok(a) => a,
-                Err(_) => continue,
+            let search_query = sprout_search::SearchQuery {
+                q: search_text.clone(),
+                filter_by: Some(filter_by.clone()),
+                sort_by: None, // Typesense default = relevance (text_match score)
+                page,
+                per_page,
             };
 
-            let stored = match event_map.get(&id_array) {
-                Some(ev) => ev,
-                None => continue, // Deleted between search and fetch
+            let search_result = match state.search.search(&search_query).await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(sub_id = %sub_id, "NIP-50 search failed: {e}");
+                    break;
+                }
             };
 
-            if !seen_ids.insert(stored.event.id) {
-                continue; // Cross-filter dedup
-            }
+            let page_empty = search_result.hits.is_empty();
+            let exhausted = (page as u64) * (per_page as u64) >= search_result.found;
 
-            // NIP-01 post-filtering: check ids, since, until, generic tags against THIS filter.
-            // Use single-element slice so we match against only this filter's constraints,
-            // not the OR of all filters (which could let a hit from filter A pass filter B's
-            // non-search fields).
-            if !filters_match(&[filter.clone()], stored) {
-                continue;
-            }
+            let hit_ids: Vec<Vec<u8>> = search_result
+                .hits
+                .into_iter()
+                .filter(|h| h.channel_id.is_some())
+                .filter_map(|h| hex::decode(&h.event_id).ok())
+                .filter(|bytes| bytes.len() == 32)
+                .collect();
 
-            // Access check (belt and suspenders — Typesense already filtered by channel)
-            if let Some(ch_id) = stored.channel_id {
-                if !accessible_channels.contains(&ch_id) {
-                    continue;
+            if !hit_ids.is_empty() {
+                let id_refs: Vec<&[u8]> = hit_ids.iter().map(|b| b.as_slice()).collect();
+                let events = match state.db.get_events_by_ids(&id_refs).await {
+                    Ok(evs) => evs,
+                    Err(e) => {
+                        warn!(sub_id = %sub_id, "NIP-50 batch fetch failed: {e}");
+                        break;
+                    }
+                };
+
+                let event_map: std::collections::HashMap<[u8; 32], &sprout_core::StoredEvent> =
+                    events
+                        .iter()
+                        .map(|ev| (ev.event.id.to_bytes(), ev))
+                        .collect();
+
+                for hit_id in &hit_ids {
+                    if emitted >= limit {
+                        break;
+                    }
+                    let id_array: [u8; 32] = match hit_id.as_slice().try_into() {
+                        Ok(a) => a,
+                        Err(_) => continue,
+                    };
+                    let stored = match event_map.get(&id_array) {
+                        Some(ev) => ev,
+                        None => continue,
+                    };
+                    if !seen_ids.insert(stored.event.id) {
+                        continue;
+                    }
+                    // NIP-01 post-filtering against THIS filter only (not OR of all filters).
+                    if !filters_match(std::slice::from_ref(filter), stored) {
+                        continue;
+                    }
+                    if let Some(ch_id) = stored.channel_id {
+                        if !accessible_channels.contains(&ch_id) {
+                            continue;
+                        }
+                    }
+                    if !conn.send(RelayMessage::event(sub_id, &stored.event)) {
+                        return;
+                    }
+                    emitted += 1;
                 }
             }
 
-            if !conn.send(RelayMessage::event(sub_id, &stored.event)) {
-                return; // Connection closed
+            if page_empty || exhausted {
+                break;
             }
         }
     }

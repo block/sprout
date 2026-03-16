@@ -355,6 +355,7 @@ pub async fn get_events_by_ids(pool: &MySqlPool, ids: &[&[u8]]) -> Result<Vec<St
     if ids.is_empty() {
         return Ok(vec![]);
     }
+    debug_assert!(ids.len() <= 500, "batch fetch should be bounded by caller");
 
     let mut qb: QueryBuilder<sqlx::MySql> = QueryBuilder::new(
         "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
@@ -575,17 +576,4 @@ pub(crate) fn uuid_from_bytes(bytes: &[u8]) -> Result<Uuid> {
     Uuid::from_slice(bytes).map_err(|e| DbError::InvalidData(format!("invalid UUID: {e}")))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    /// get_events_by_ids with an empty slice must return Ok([]) without hitting the DB.
-    #[test]
-    fn test_get_events_by_ids_empty_input() {
-        // We can't call the async DB function without a pool, but we can verify
-        // the early-return branch is correct by inspecting the logic directly.
-        // The function returns Ok(vec![]) immediately when ids.is_empty().
-        let ids: Vec<&[u8]> = vec![];
-        assert!(ids.is_empty());
-    }
-}

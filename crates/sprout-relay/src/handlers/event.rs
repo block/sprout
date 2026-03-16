@@ -297,6 +297,11 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                 return;
             }
         }
+    } else if is_gift_wrap {
+        // NIP-17 gift wraps are always global (channel_id = None).
+        // A client-supplied h-tag is ignored — storing gift wraps channel-scoped
+        // would let any channel subscriber read them, bypassing #p gating.
+        None
     } else {
         extract_channel_id(&event)
     };
@@ -844,8 +849,8 @@ async fn resolve_nip10_thread_meta(
         chrono::DateTime::from_timestamp(parent_event.event.created_at.as_u64() as i64, 0)
             .unwrap_or_else(Utc::now);
 
-    // Validate root hex (effective root is resolved from parent metadata below).
-    hex::decode(&root_hex).map_err(|_| "invalid root event ID hex".to_string())?;
+    let client_root_bytes =
+        hex::decode(&root_hex).map_err(|_| "invalid root event ID hex".to_string())?;
 
     let parent_meta = state
         .db
@@ -856,6 +861,11 @@ async fn resolve_nip10_thread_meta(
     let (final_root_bytes, root_created, depth) = match parent_meta {
         Some(meta) => {
             let effective_root = meta.root_event_id.unwrap_or_else(|| parent_bytes.clone());
+            // Reject if client-supplied root diverges from server-resolved root.
+            // This prevents stored thread_metadata from contradicting wire-visible e-tags.
+            if client_root_bytes != effective_root {
+                return Err("root tag does not match thread ancestry".to_string());
+            }
             let root_ts = if let Ok(Some(root_ev)) =
                 state.db.get_event_by_id(&effective_root).await
             {
@@ -867,7 +877,11 @@ async fn resolve_nip10_thread_meta(
             (effective_root, root_ts, meta.depth + 1)
         }
         None => {
-            // Parent has no thread metadata — it is the root.
+            // Parent has no thread metadata — parent is the root.
+            // For direct replies, client_root == parent is expected.
+            if client_root_bytes != parent_bytes {
+                return Err("root tag does not match thread ancestry".to_string());
+            }
             (parent_bytes.clone(), parent_created, 1)
         }
     };
