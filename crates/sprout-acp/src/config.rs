@@ -147,6 +147,12 @@ pub struct CliArgs {
 
     #[arg(long, env = "SPROUT_ACP_NO_IGNORE_SELF")]
     pub no_ignore_self: bool,
+
+    /// Maximum number of context messages to include for thread replies and DMs.
+    /// Set to 0 to disable automatic context fetching. Max 100.
+    #[arg(long, env = "SPROUT_ACP_CONTEXT_MESSAGE_LIMIT", default_value_t = 12,
+          value_parser = clap::value_parser!(u32).range(0..=100))]
+    pub context_message_limit: u32,
 }
 
 // ── Merged NIP-01 filter ──────────────────────────────────────────────────────
@@ -183,6 +189,7 @@ pub struct Config {
     pub channels_override: Option<Vec<String>>,
     pub no_mention_filter: bool,
     pub config_path: PathBuf,
+    pub context_message_limit: u32,
 }
 
 impl Config {
@@ -261,13 +268,14 @@ impl Config {
             channels_override: args.channels,
             no_mention_filter: args.no_mention_filter,
             config_path: args.config,
+            context_message_limit: args.context_message_limit,
         })
     }
 
     /// Human-readable summary (no secrets).
     pub fn summary(&self) -> String {
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} timeout={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} timeout={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={} context_limit={}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -279,6 +287,7 @@ impl Config {
             self.subscribe_mode,
             self.dedup_mode,
             self.ignore_self,
+            self.context_message_limit,
         )
     }
 }
@@ -572,6 +581,7 @@ mod tests {
             channels_override: None,
             no_mention_filter: false,
             config_path: PathBuf::from("./sprout-acp.toml"),
+            context_message_limit: 12,
         }
     }
 
