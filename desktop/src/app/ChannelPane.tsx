@@ -1,0 +1,111 @@
+import * as React from "react";
+
+import { MessageComposer } from "@/features/messages/ui/MessageComposer";
+import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
+import type { TimelineMessage } from "@/features/messages/types";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import type { Channel } from "@/shared/api/types";
+
+type ChannelPaneProps = {
+  activeChannel: Channel | null;
+  currentPubkey?: string;
+  isSending: boolean;
+  isTimelineLoading: boolean;
+  messages: TimelineMessage[];
+  onCancelReply: () => void;
+  onReply: (message: TimelineMessage) => void;
+  onSend: (
+    content: string,
+    mentionPubkeys: string[],
+    mediaTags?: string[][],
+  ) => Promise<void>;
+  onTargetReached: (messageId: string) => void;
+  onToggleReaction?: (
+    message: TimelineMessage,
+    emoji: string,
+    remove: boolean,
+  ) => Promise<void>;
+  profiles?: UserProfileLookup;
+  replyTargetId: string | null;
+  replyTargetMessage: TimelineMessage | null;
+  targetMessageId: string | null;
+};
+
+export function ChannelPane({
+  activeChannel,
+  currentPubkey,
+  isSending,
+  isTimelineLoading,
+  messages,
+  onCancelReply,
+  onReply,
+  onSend,
+  onTargetReached,
+  onToggleReaction,
+  profiles,
+  replyTargetId,
+  replyTargetMessage,
+  targetMessageId,
+}: ChannelPaneProps) {
+  return (
+    <React.Fragment key={activeChannel?.id ?? "no-channel"}>
+      <MessageTimeline
+        activeReplyTargetId={replyTargetId}
+        currentPubkey={currentPubkey}
+        profiles={profiles}
+        emptyDescription={
+          activeChannel?.channelType === "forum"
+            ? "Select a stream or DM to load real message history in this first integration pass."
+            : "Messages and sub-replies will appear here once the relay has history for this channel."
+        }
+        emptyTitle={
+          activeChannel
+            ? activeChannel.channelType === "forum"
+              ? "Forum channels are next"
+              : "No messages yet"
+            : "No channel selected"
+        }
+        isLoading={isTimelineLoading}
+        messages={messages}
+        onReply={onReply}
+        onTargetReached={onTargetReached}
+        onToggleReaction={onToggleReaction}
+        targetMessageId={targetMessageId}
+      />
+      <MessageComposer
+        channelId={activeChannel?.id ?? null}
+        channelName={activeChannel?.name ?? "channel"}
+        disabled={
+          !activeChannel ||
+          !activeChannel.isMember ||
+          activeChannel.archivedAt !== null ||
+          activeChannel.channelType === "forum" ||
+          isSending
+        }
+        isSending={isSending}
+        onCancelReply={onCancelReply}
+        onSend={onSend}
+        placeholder={
+          activeChannel?.archivedAt
+            ? "Archived channels are read-only."
+            : activeChannel && !activeChannel.isMember
+              ? "Join this channel to message."
+              : activeChannel?.channelType === "forum"
+                ? "Forum posting is not wired in this pass."
+                : activeChannel
+                  ? `Message #${activeChannel.name}`
+                  : "Select a channel"
+        }
+        replyTarget={
+          replyTargetMessage
+            ? {
+                author: replyTargetMessage.author,
+                body: replyTargetMessage.body,
+                id: replyTargetMessage.id,
+              }
+            : null
+        }
+      />
+    </React.Fragment>
+  );
+}

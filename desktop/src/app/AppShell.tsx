@@ -2,6 +2,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Settings2 } from "lucide-react";
 
+import { ChannelPane } from "@/app/ChannelPane";
 import { AgentsView } from "@/features/agents/ui/AgentsView";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
@@ -35,11 +36,13 @@ import {
 } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
-import { MessageComposer } from "@/features/messages/ui/MessageComposer";
-import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
 import { ChannelBrowserDialog } from "@/features/channels/ui/ChannelBrowserDialog";
 import { SearchDialog } from "@/features/search/ui/SearchDialog";
-import { SettingsView } from "@/features/settings/ui/SettingsView";
+import {
+  DEFAULT_SETTINGS_SECTION,
+  SettingsView,
+  type SettingsSection,
+} from "@/features/settings/ui/SettingsView";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { relayClient } from "@/shared/api/relayClient";
 import { getEventById, joinChannel } from "@/shared/api/tauri";
@@ -53,6 +56,7 @@ import {
 } from "@/shared/ui/sidebar";
 
 type AppView = "home" | "channel" | "settings" | "agents";
+type MainView = Exclude<AppView, "settings">;
 
 function createSearchAnchorEvent(hit: SearchHit): RelayEvent {
   return {
@@ -68,6 +72,9 @@ function createSearchAnchorEvent(hit: SearchHit): RelayEvent {
 
 export function AppShell() {
   const [selectedView, setSelectedView] = React.useState<AppView>("home");
+  const [settingsSection, setSettingsSection] = React.useState<SettingsSection>(
+    DEFAULT_SETTINGS_SECTION,
+  );
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
   const [isSearchOpen, setIsSearchOpen] = React.useState(false);
@@ -81,6 +88,7 @@ export function AppShell() {
   const [searchAnchorEvent, setSearchAnchorEvent] =
     React.useState<RelayEvent | null>(null);
   const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
+  const lastNonSettingsViewRef = React.useRef<MainView>("home");
   const queryClient = useQueryClient();
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
@@ -268,14 +276,29 @@ export function AppShell() {
     [queryClient],
   );
 
-  const handleOpenSettings = React.useCallback(() => {
-    setIsSearchOpen(false);
-    setIsChannelManagementOpen(false);
+  const handleOpenSettings = React.useCallback(
+    (section: SettingsSection = DEFAULT_SETTINGS_SECTION) => {
+      setIsSearchOpen(false);
+      setIsChannelManagementOpen(false);
+      setSettingsSection(section);
+
+      React.startTransition(() => {
+        setSelectedView("settings");
+      });
+    },
+    [],
+  );
+
+  const handleCloseSettings = React.useCallback(() => {
+    const nextView: MainView =
+      lastNonSettingsViewRef.current === "channel" && !selectedChannel
+        ? "home"
+        : lastNonSettingsViewRef.current;
 
     React.startTransition(() => {
-      setSelectedView("settings");
+      setSelectedView(nextView);
     });
-  }, []);
+  }, [selectedChannel]);
 
   const handleOpenSearchResult = React.useCallback(
     (hit: SearchHit) => {
@@ -328,6 +351,14 @@ export function AppShell() {
     setReplyTargetId(null);
     requestedAncestorIdsRef.current.clear();
   }, [activeChannelId]);
+
+  React.useEffect(() => {
+    if (selectedView === "settings") {
+      return;
+    }
+
+    lastNonSettingsViewRef.current = selectedView;
+  }, [selectedView]);
 
   React.useEffect(() => {
     if (replyTargetId && !replyTargetMessage) {
@@ -411,6 +442,11 @@ export function AppShell() {
       }
 
       event.preventDefault();
+      if (selectedView === "settings") {
+        handleCloseSettings();
+        return;
+      }
+
       handleOpenSettings();
     }
 
@@ -418,273 +454,235 @@ export function AppShell() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [handleOpenSettings]);
+  }, [handleCloseSettings, handleOpenSettings, selectedView]);
 
   return (
     <SidebarProvider className="h-dvh overflow-hidden overscroll-none">
-      <SidebarTrigger className="fixed left-[80px] top-[9px] z-50 h-6 w-6 text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" />
-      <AppSidebar
-        channels={memberChannels}
-        currentPubkey={identityQuery.data?.pubkey}
-        errorMessage={
-          channelsQuery.error instanceof Error
-            ? channelsQuery.error.message
-            : undefined
-        }
-        fallbackDisplayName={identityQuery.data?.displayName}
-        isCreatingChannel={createChannelMutation.isPending}
-        isLoading={channelsQuery.isLoading}
-        selfPresenceStatus={presenceSession.currentStatus}
-        onCreateChannel={async ({ description, name }) => {
-          const createdChannel = await createChannelMutation.mutateAsync({
-            name,
-            description,
-            channelType: "stream",
-            visibility: "open",
-          });
+      {selectedView === "settings" ? (
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          <SettingsView
+            currentPubkey={identityQuery.data?.pubkey}
+            fallbackDisplayName={identityQuery.data?.displayName}
+            isPresenceLoading={presenceSession.isLoading}
+            isUpdatingPresence={presenceSession.isPending}
+            onClose={handleCloseSettings}
+            onSectionChange={setSettingsSection}
+            onSetPresence={presenceSession.setStatus}
+            presenceError={presenceSession.error}
+            presenceStatus={presenceSession.currentStatus}
+            section={settingsSection}
+          />
+        </div>
+      ) : (
+        <React.Fragment>
+          <SidebarTrigger className="fixed left-[80px] top-[9px] z-50 h-6 w-6 text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" />
+          <AppSidebar
+            channels={memberChannels}
+            currentPubkey={identityQuery.data?.pubkey}
+            errorMessage={
+              channelsQuery.error instanceof Error
+                ? channelsQuery.error.message
+                : undefined
+            }
+            fallbackDisplayName={identityQuery.data?.displayName}
+            isCreatingChannel={createChannelMutation.isPending}
+            isLoading={channelsQuery.isLoading}
+            selfPresenceStatus={presenceSession.currentStatus}
+            onCreateChannel={async ({ description, name }) => {
+              const createdChannel = await createChannelMutation.mutateAsync({
+                name,
+                description,
+                channelType: "stream",
+                visibility: "open",
+              });
 
-          React.startTransition(() => {
-            setSelectedChannelId(createdChannel.id);
-            setSelectedView("channel");
-          });
-        }}
-        onOpenBrowseChannels={() => {
-          setIsBrowseChannelsOpen(true);
-          void refetchChannels();
-        }}
-        onOpenSearch={() => {
-          setIsSearchOpen(true);
-          void refetchChannels();
-        }}
-        onSelectAgents={() => {
-          React.startTransition(() => {
-            setSelectedView("agents");
-          });
-        }}
-        onSelectHome={() => {
-          React.startTransition(() => {
-            setSelectedView("home");
-          });
+              React.startTransition(() => {
+                setSelectedChannelId(createdChannel.id);
+                setSelectedView("channel");
+              });
+            }}
+            onOpenBrowseChannels={() => {
+              setIsBrowseChannelsOpen(true);
+              void refetchChannels();
+            }}
+            onOpenSearch={() => {
+              setIsSearchOpen(true);
+              void refetchChannels();
+            }}
+            onSelectAgents={() => {
+              React.startTransition(() => {
+                setSelectedView("agents");
+              });
+            }}
+            onSelectHome={() => {
+              React.startTransition(() => {
+                setSelectedView("home");
+              });
 
-          void homeFeedQuery.refetch();
-        }}
+              void homeFeedQuery.refetch();
+            }}
+            onSelectChannel={handleOpenChannel}
+            onSelectSettings={handleOpenSettings}
+            profile={profileQuery.data}
+            selectedChannelId={selectedChannel?.id ?? null}
+            selectedView={selectedView}
+            unreadChannelIds={unreadChannelIds}
+          />
+
+          <SidebarInset
+            className="min-h-0 min-w-0 overflow-hidden"
+            key={contentPaneKey}
+          >
+            {selectedView === "home" ? (
+              <ChatHeader
+                description="Personalized feed for mentions, reminders, channel activity, and agent work."
+                mode="home"
+                title="Home"
+              />
+            ) : selectedView === "agents" ? (
+              <ChatHeader
+                description="Create local ACP workers, mint agent tokens, and monitor the relay-visible agent directory."
+                mode="agents"
+                title="Agents"
+              />
+            ) : (
+              <ChatHeader
+                actions={
+                  activeChannel ? (
+                    <Button
+                      aria-label="Manage channel"
+                      data-testid="channel-management-trigger"
+                      onClick={() => {
+                        setIsChannelManagementOpen(true);
+                      }}
+                      size="icon"
+                      type="button"
+                      variant="outline"
+                    >
+                      <Settings2 className="h-4 w-4" />
+                    </Button>
+                  ) : null
+                }
+                channelType={activeChannel?.channelType}
+                description={channelDescription}
+                statusBadge={
+                  activeChannel?.channelType === "dm" &&
+                  activeDmPresenceStatus ? (
+                    <PresenceBadge
+                      data-testid="chat-presence-badge"
+                      status={activeDmPresenceStatus}
+                    />
+                  ) : null
+                }
+                title={activeChannel?.name ?? "Channels"}
+              />
+            )}
+
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+              {selectedView === "home" ? (
+                <HomeView
+                  availableChannelIds={availableChannelIds}
+                  currentPubkey={identityQuery.data?.pubkey}
+                  errorMessage={
+                    homeFeedQuery.error instanceof Error
+                      ? homeFeedQuery.error.message
+                      : undefined
+                  }
+                  feed={homeFeedQuery.data}
+                  isLoading={homeFeedQuery.isLoading}
+                  onOpenChannel={handleOpenChannel}
+                  onRefresh={() => {
+                    void homeFeedQuery.refetch();
+                  }}
+                />
+              ) : selectedView === "agents" ? (
+                <AgentsView />
+              ) : (
+                <ChannelPane
+                  activeChannel={activeChannel}
+                  currentPubkey={identityQuery.data?.pubkey}
+                  isSending={sendMessageMutation.isPending}
+                  isTimelineLoading={isTimelineLoading}
+                  messages={timelineMessages}
+                  onCancelReply={() => {
+                    setReplyTargetId(null);
+                  }}
+                  onReply={(message) => {
+                    setReplyTargetId((current) =>
+                      current === message.id ? null : message.id,
+                    );
+                  }}
+                  onSend={async (content, mentionPubkeys, mediaTags) => {
+                    await sendMessageMutation.mutateAsync({
+                      content,
+                      mentionPubkeys,
+                      parentEventId: replyTargetId,
+                      mediaTags,
+                    });
+                    setReplyTargetId(null);
+                  }}
+                  onTargetReached={(messageId) => {
+                    setSearchAnchor((current) =>
+                      current?.eventId === messageId ? null : current,
+                    );
+                  }}
+                  onToggleReaction={
+                    activeChannel &&
+                    activeChannel.archivedAt === null &&
+                    activeChannel.channelType !== "forum"
+                      ? async (message, emoji, remove) => {
+                          await toggleReactionMutation.mutateAsync({
+                            emoji,
+                            eventId: message.id,
+                            remove,
+                          });
+                        }
+                      : undefined
+                  }
+                  profiles={messageProfilesQuery.data?.profiles}
+                  replyTargetId={replyTargetId}
+                  replyTargetMessage={replyTargetMessage}
+                  targetMessageId={
+                    activeChannel &&
+                    searchAnchor?.channelId === activeChannel.id
+                      ? searchAnchor.eventId
+                      : null
+                  }
+                />
+              )}
+            </div>
+          </SidebarInset>
+        </React.Fragment>
+      )}
+
+      <ChannelBrowserDialog
+        channels={channels}
+        onJoinChannel={handleBrowseChannelJoin}
+        onOpenChange={setIsBrowseChannelsOpen}
         onSelectChannel={handleOpenChannel}
-        onSelectSettings={handleOpenSettings}
-        profile={profileQuery.data}
-        selectedChannelId={selectedChannel?.id ?? null}
-        selectedView={selectedView}
-        unreadChannelIds={unreadChannelIds}
+        open={isBrowseChannelsOpen}
       />
 
-      <SidebarInset
-        className="min-h-0 min-w-0 overflow-hidden"
-        key={contentPaneKey}
-      >
-        {selectedView === "home" ? (
-          <ChatHeader
-            description="Personalized feed for mentions, reminders, channel activity, and agent work."
-            mode="home"
-            title="Home"
-          />
-        ) : selectedView === "agents" ? (
-          <ChatHeader
-            description="Create local ACP workers, mint agent tokens, and monitor the relay-visible agent directory."
-            mode="agents"
-            title="Agents"
-          />
-        ) : selectedView === "settings" ? (
-          <ChatHeader
-            description="Theme, appearance, and profile preferences for your current identity."
-            mode="settings"
-            title="Settings"
-          />
-        ) : (
-          <ChatHeader
-            actions={
-              activeChannel ? (
-                <Button
-                  aria-label="Manage channel"
-                  data-testid="channel-management-trigger"
-                  onClick={() => {
-                    setIsChannelManagementOpen(true);
-                  }}
-                  size="icon"
-                  type="button"
-                  variant="outline"
-                >
-                  <Settings2 className="h-4 w-4" />
-                </Button>
-              ) : null
-            }
-            channelType={activeChannel?.channelType}
-            description={channelDescription}
-            statusBadge={
-              activeChannel?.channelType === "dm" && activeDmPresenceStatus ? (
-                <PresenceBadge
-                  data-testid="chat-presence-badge"
-                  status={activeDmPresenceStatus}
-                />
-              ) : null
-            }
-            title={activeChannel?.name ?? "Channels"}
-          />
-        )}
+      <SearchDialog
+        channels={channels}
+        currentPubkey={identityQuery.data?.pubkey}
+        onOpenResult={handleOpenSearchResult}
+        onOpenChange={setIsSearchOpen}
+        open={isSearchOpen}
+      />
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          {selectedView === "home" ? (
-            <HomeView
-              availableChannelIds={availableChannelIds}
-              currentPubkey={identityQuery.data?.pubkey}
-              errorMessage={
-                homeFeedQuery.error instanceof Error
-                  ? homeFeedQuery.error.message
-                  : undefined
-              }
-              feed={homeFeedQuery.data}
-              isLoading={homeFeedQuery.isLoading}
-              onOpenChannel={handleOpenChannel}
-              onRefresh={() => {
-                void homeFeedQuery.refetch();
-              }}
-            />
-          ) : selectedView === "agents" ? (
-            <AgentsView />
-          ) : selectedView === "settings" ? (
-            <SettingsView
-              currentPubkey={identityQuery.data?.pubkey}
-              fallbackDisplayName={identityQuery.data?.displayName}
-              isPresenceLoading={presenceSession.isLoading}
-              isUpdatingPresence={presenceSession.isPending}
-              onSetPresence={presenceSession.setStatus}
-              presenceError={presenceSession.error}
-              presenceStatus={presenceSession.currentStatus}
-            />
-          ) : (
-            <React.Fragment key={activeChannel?.id ?? "no-channel"}>
-              <MessageTimeline
-                activeReplyTargetId={replyTargetId}
-                currentPubkey={identityQuery.data?.pubkey}
-                profiles={messageProfilesQuery.data?.profiles}
-                emptyDescription={
-                  activeChannel?.channelType === "forum"
-                    ? "Select a stream or DM to load real message history in this first integration pass."
-                    : "Messages and sub-replies will appear here once the relay has history for this channel."
-                }
-                emptyTitle={
-                  activeChannel
-                    ? activeChannel.channelType === "forum"
-                      ? "Forum channels are next"
-                      : "No messages yet"
-                    : "No channel selected"
-                }
-                isLoading={isTimelineLoading}
-                messages={timelineMessages}
-                onReply={(message) => {
-                  setReplyTargetId((current) =>
-                    current === message.id ? null : message.id,
-                  );
-                }}
-                onToggleReaction={
-                  activeChannel &&
-                  activeChannel.archivedAt === null &&
-                  activeChannel.channelType !== "forum"
-                    ? async (message, emoji, remove) => {
-                        await toggleReactionMutation.mutateAsync({
-                          emoji,
-                          eventId: message.id,
-                          remove,
-                        });
-                      }
-                    : undefined
-                }
-                onTargetReached={(messageId) => {
-                  setSearchAnchor((current) =>
-                    current?.eventId === messageId ? null : current,
-                  );
-                }}
-                targetMessageId={
-                  activeChannel && searchAnchor?.channelId === activeChannel.id
-                    ? searchAnchor.eventId
-                    : null
-                }
-              />
-              <MessageComposer
-                channelId={activeChannel?.id ?? null}
-                channelName={activeChannel?.name ?? "channel"}
-                disabled={
-                  !activeChannel ||
-                  !activeChannel.isMember ||
-                  activeChannel.archivedAt !== null ||
-                  activeChannel.channelType === "forum" ||
-                  sendMessageMutation.isPending
-                }
-                isSending={sendMessageMutation.isPending}
-                onCancelReply={() => {
-                  setReplyTargetId(null);
-                }}
-                onSend={async (content, mentionPubkeys, mediaTags) => {
-                  await sendMessageMutation.mutateAsync({
-                    content,
-                    mentionPubkeys,
-                    parentEventId: replyTargetId,
-                    mediaTags,
-                  });
-                  setReplyTargetId(null);
-                }}
-                placeholder={
-                  activeChannel?.archivedAt
-                    ? "Archived channels are read-only."
-                    : activeChannel && !activeChannel.isMember
-                      ? "Join this channel to message."
-                      : activeChannel?.channelType === "forum"
-                        ? "Forum posting is not wired in this pass."
-                        : activeChannel
-                          ? `Message #${activeChannel.name}`
-                          : "Select a channel"
-                }
-                replyTarget={
-                  replyTargetMessage
-                    ? {
-                        author: replyTargetMessage.author,
-                        body: replyTargetMessage.body,
-                        id: replyTargetMessage.id,
-                      }
-                    : null
-                }
-              />
-            </React.Fragment>
-          )}
-        </div>
-
-        <ChannelBrowserDialog
-          channels={channels}
-          onJoinChannel={handleBrowseChannelJoin}
-          onOpenChange={setIsBrowseChannelsOpen}
-          onSelectChannel={handleOpenChannel}
-          open={isBrowseChannelsOpen}
-        />
-
-        <SearchDialog
-          channels={channels}
-          currentPubkey={identityQuery.data?.pubkey}
-          onOpenResult={handleOpenSearchResult}
-          onOpenChange={setIsSearchOpen}
-          open={isSearchOpen}
-        />
-
-        <ChannelManagementSheet
-          channel={activeChannel}
-          currentPubkey={identityQuery.data?.pubkey}
-          onDeleted={() => {
-            React.startTransition(() => {
-              setIsChannelManagementOpen(false);
-              setSelectedView("home");
-            });
-          }}
-          onOpenChange={setIsChannelManagementOpen}
-          open={isChannelManagementOpen && activeChannel !== null}
-        />
-      </SidebarInset>
+      <ChannelManagementSheet
+        channel={activeChannel}
+        currentPubkey={identityQuery.data?.pubkey}
+        onDeleted={() => {
+          React.startTransition(() => {
+            setIsChannelManagementOpen(false);
+            setSelectedView("home");
+          });
+        }}
+        onOpenChange={setIsChannelManagementOpen}
+        open={isChannelManagementOpen && activeChannel !== null}
+      />
     </SidebarProvider>
   );
 }

@@ -566,7 +566,7 @@ export function AppSidebar({
               className="h-auto gap-3 rounded-xl px-2 py-2"
               data-testid="open-settings"
               isActive={selectedView === "settings"}
-              onClick={onSelectSettings}
+              onClick={() => onSelectSettings()}
               type="button"
             >
               <div
