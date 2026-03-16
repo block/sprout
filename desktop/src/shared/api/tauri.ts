@@ -214,6 +214,8 @@ type RawManagedAgent = {
   agent_args: string[];
   mcp_command: string;
   turn_timeout_seconds: number;
+  parallelism: number;
+  system_prompt: string | null;
   has_api_token: boolean;
   status: ManagedAgent["status"];
   pid: number | null;
@@ -711,6 +713,8 @@ function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     agentArgs: agent.agent_args,
     mcpCommand: agent.mcp_command,
     turnTimeoutSeconds: agent.turn_timeout_seconds,
+    parallelism: agent.parallelism,
+    systemPrompt: agent.system_prompt,
     hasApiToken: agent.has_api_token,
     status: agent.status,
     pid: agent.pid,
@@ -804,6 +808,8 @@ export async function createManagedAgent(
         agentArgs: input.agentArgs,
         mcpCommand: input.mcpCommand,
         turnTimeoutSeconds: input.turnTimeoutSeconds,
+        parallelism: input.parallelism,
+        systemPrompt: input.systemPrompt,
         mintToken: input.mintToken,
         tokenScopes: input.tokenScopes,
         tokenName: input.tokenName,

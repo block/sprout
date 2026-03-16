@@ -54,7 +54,10 @@ export function ManagedAgentLogPanel({
             <span>{selectedAgent.name}</span>
             <span>{selectedAgent.status}</span>
           </div>
-          <pre className="max-h-[22rem] overflow-auto whitespace-pre-wrap px-4 py-4">
+          <pre
+            className="max-h-[22rem] overflow-auto whitespace-pre-wrap px-4 py-4"
+            data-testid="managed-agent-log-content"
+          >
             {logContent?.trim() ? logContent : "No log output yet."}
           </pre>
         </div>

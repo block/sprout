@@ -13,7 +13,7 @@ use crate::{
         DiscoverManagedAgentPrereqsRequest, ManagedAgentLogResponse, ManagedAgentPrereqsInfo,
         ManagedAgentSummary, MintManagedAgentTokenRequest, MintManagedAgentTokenResponse,
         RelayAgentInfo, DEFAULT_ACP_COMMAND, DEFAULT_AGENT_ARG, DEFAULT_AGENT_COMMAND,
-        DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
+        DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
     },
     relay::{
         build_authed_request, managed_agent_owner_pubkey, relay_ws_url, send_json_request,
@@ -93,6 +93,11 @@ pub async fn create_managed_agent(
     let name = input.name.trim();
     if name.is_empty() {
         return Err("agent name is required".to_string());
+    }
+    if let Some(parallelism) = input.parallelism {
+        if !(1..=32).contains(&parallelism) {
+            return Err("parallelism must be between 1 and 32".to_string());
+        }
     }
 
     let owner_pubkey = if input.mint_token {
@@ -209,6 +214,16 @@ pub async fn create_managed_agent(
                     .turn_timeout_seconds
                     .filter(|seconds| *seconds > 0)
                     .unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_SECONDS),
+                parallelism: input
+                    .parallelism
+                    .filter(|count| (1..=32).contains(count))
+                    .unwrap_or(DEFAULT_AGENT_PARALLELISM),
+                system_prompt: input
+                    .system_prompt
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
                 created_at: now_iso(),
                 updated_at: now_iso(),
                 last_started_at: None,

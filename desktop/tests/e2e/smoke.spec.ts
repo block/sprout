@@ -68,6 +68,36 @@ test("creates a new mocked stream", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 });
 
+test("create agent supports parallelism and system prompt overrides", async ({
+  page,
+}) => {
+  const agentName = `Parallel agent ${Date.now()}`;
+
+  await page.goto("/");
+  await page.getByTestId("open-agents-view").click();
+  await page.getByRole("button", { name: "Create agent" }).click();
+
+  await page.getByTestId("agent-name-input").fill(agentName);
+  await page.getByRole("button", { name: "Advanced setup" }).click();
+  await page.getByTestId("agent-parallelism-input").fill("3");
+  await page
+    .getByTestId("agent-system-prompt-input")
+    .fill("You are concise and parallelize independent work.");
+  await page.getByTestId("create-agent-submit").click();
+
+  await expect(
+    page.getByRole("heading", { name: "Agent created" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Done" }).click();
+
+  await expect(page.getByTestId("managed-agent-log-content")).toContainText(
+    "parallelism=3",
+  );
+  await expect(page.getByTestId("managed-agent-log-content")).toContainText(
+    "system prompt override configured",
+  );
+});
+
 test("opens a mocked channel from the home feed", async ({ page }) => {
   const mentionsSection = page.locator("section").filter({
     has: page.getByRole("heading", { name: "@Mentions" }),

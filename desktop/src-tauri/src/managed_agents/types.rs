@@ -24,6 +24,9 @@ pub struct ManagedAgentRecord {
     pub agent_args: Vec<String>,
     pub mcp_command: String,
     pub turn_timeout_seconds: u64,
+    #[serde(default = "default_agent_parallelism")]
+    pub parallelism: u32,
+    pub system_prompt: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub last_started_at: Option<String>,
@@ -48,6 +51,8 @@ pub struct ManagedAgentSummary {
     pub agent_args: Vec<String>,
     pub mcp_command: String,
     pub turn_timeout_seconds: u64,
+    pub parallelism: u32,
+    pub system_prompt: Option<String>,
     pub has_api_token: bool,
     pub status: String,
     pub pid: Option<u32>,
@@ -71,6 +76,8 @@ pub struct CreateManagedAgentRequest {
     pub agent_args: Vec<String>,
     pub mcp_command: Option<String>,
     pub turn_timeout_seconds: Option<u64>,
+    pub parallelism: Option<u32>,
+    pub system_prompt: Option<String>,
     #[serde(default)]
     pub mint_token: bool,
     #[serde(default)]
@@ -155,3 +162,8 @@ pub const DEFAULT_AGENT_COMMAND: &str = "goose";
 pub const DEFAULT_MCP_COMMAND: &str = "sprout-mcp-server";
 pub const DEFAULT_AGENT_ARG: &str = "acp";
 pub const DEFAULT_AGENT_TURN_TIMEOUT_SECONDS: u64 = 300;
+pub const DEFAULT_AGENT_PARALLELISM: u32 = 1;
+
+fn default_agent_parallelism() -> u32 {
+    DEFAULT_AGENT_PARALLELISM
+}

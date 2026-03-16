@@ -6,6 +6,7 @@ import type {
 import { MANAGED_AGENT_SCOPE_OPTIONS } from "@/features/tokens/lib/scopeOptions";
 import { cn } from "@/shared/lib/cn";
 import { Input } from "@/shared/ui/input";
+import { Textarea } from "@/shared/ui/textarea";
 import { describeResolvedCommand } from "./agentUi";
 
 export function CreateAgentBasicsFields({
@@ -98,28 +99,36 @@ export function CreateAgentRuntimeFields({
   agentArgs,
   agentCommand,
   mcpCommand,
+  parallelism,
   relayUrl,
   selectedProviderId,
+  systemPrompt,
   turnTimeoutSeconds,
   onAcpCommandChange,
   onAgentArgsChange,
   onAgentCommandChange,
   onMcpCommandChange,
+  onParallelismChange,
   onRelayUrlChange,
+  onSystemPromptChange,
   onTurnTimeoutChange,
 }: {
   acpCommand: string;
   agentArgs: string;
   agentCommand: string;
   mcpCommand: string;
+  parallelism: string;
   relayUrl: string;
   selectedProviderId: string;
+  systemPrompt: string;
   turnTimeoutSeconds: string;
   onAcpCommandChange: (value: string) => void;
   onAgentArgsChange: (value: string) => void;
   onAgentCommandChange: (value: string) => void;
   onMcpCommandChange: (value: string) => void;
+  onParallelismChange: (value: string) => void;
   onRelayUrlChange: (value: string) => void;
+  onSystemPromptChange: (value: string) => void;
   onTurnTimeoutChange: (value: string) => void;
 }) {
   return (
@@ -165,7 +174,7 @@ export function CreateAgentRuntimeFields({
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-[1.5fr,1.2fr,0.8fr]">
+      <div className="grid gap-4 md:grid-cols-[1.5fr,1.2fr,0.8fr,0.8fr]">
         <div className="space-y-1.5">
           <label className="text-sm font-medium" htmlFor="agent-runtime-args">
             Agent runtime args
@@ -199,9 +208,48 @@ export function CreateAgentRuntimeFields({
           <Input
             id="agent-timeout"
             onChange={(event) => onTurnTimeoutChange(event.target.value)}
+            placeholder="300"
             value={turnTimeoutSeconds}
           />
         </div>
+
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium" htmlFor="agent-parallelism">
+            Parallelism
+          </label>
+          <Input
+            data-testid="agent-parallelism-input"
+            id="agent-parallelism"
+            inputMode="numeric"
+            max="32"
+            min="1"
+            onChange={(event) => onParallelismChange(event.target.value)}
+            placeholder="1"
+            step="1"
+            type="number"
+            value={parallelism}
+          />
+          <p className="text-xs text-muted-foreground">
+            Number of ACP worker subprocesses. `sprout-acp` allows 1-32.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-sm font-medium" htmlFor="agent-system-prompt">
+          System prompt override
+        </label>
+        <Textarea
+          data-testid="agent-system-prompt-input"
+          id="agent-system-prompt"
+          onChange={(event) => onSystemPromptChange(event.target.value)}
+          placeholder="Leave blank to send no ACP system prompt"
+          value={systemPrompt}
+        />
+        <p className="text-xs text-muted-foreground">
+          Blank means no override. `sprout-acp` will not add a `[System]`
+          prompt.
+        </p>
       </div>
     </>
   );

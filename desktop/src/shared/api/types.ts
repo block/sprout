@@ -253,6 +253,8 @@ export type ManagedAgent = {
   agentArgs: string[];
   mcpCommand: string;
   turnTimeoutSeconds: number;
+  parallelism: number;
+  systemPrompt: string | null;
   hasApiToken: boolean;
   status: "running" | "stopped";
   pid: number | null;
@@ -273,6 +275,8 @@ export type CreateManagedAgentInput = {
   agentArgs?: string[];
   mcpCommand?: string;
   turnTimeoutSeconds?: number;
+  parallelism?: number;
+  systemPrompt?: string;
   mintToken?: boolean;
   tokenScopes?: TokenScope[];
   tokenName?: string;

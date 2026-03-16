@@ -16,8 +16,6 @@ export type TimelineMessage = {
   parentId?: string | null;
   rootId?: string | null;
   depth: number;
-  replyToAuthor?: string | null;
-  replyToSnippet?: string | null;
   accent?: boolean;
   pending?: boolean;
   highlighted?: boolean;

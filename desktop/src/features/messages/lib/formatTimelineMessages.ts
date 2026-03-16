@@ -239,10 +239,6 @@ export function formatTimelineMessages(
     const authorPubkey =
       authorPubkeyByEventId.get(event.id) ?? getEffectiveAuthorPubkey(event);
     const thread = getThreadReference(event.tags);
-    const parentEvent = thread.parentId
-      ? eventsById.get(thread.parentId)
-      : undefined;
-
     return {
       id: event.id,
       createdAt: event.created_at,
@@ -262,8 +258,6 @@ export function formatTimelineMessages(
       parentId: thread.parentId,
       rootId: thread.rootId,
       depth: getDepth(event),
-      replyToAuthor: parentEvent ? getAuthorLabel(parentEvent) : null,
-      replyToSnippet: parentEvent?.content ?? null,
       accent: currentPubkey === authorPubkey,
       pending: event.pending,
       kind: event.kind,
