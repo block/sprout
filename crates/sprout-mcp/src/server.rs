@@ -69,9 +69,9 @@ fn default_kind() -> Option<u16> {
     Some(sprout_core::kind::KIND_STREAM_MESSAGE as u16)
 }
 
-/// Parameters for the `get_channel_history` tool.
+/// Parameters for the `get_messages` tool.
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetChannelHistoryParams {
+pub struct GetMessagesParams {
     /// UUID of the channel to fetch history from.
     pub channel_id: String,
     /// Maximum number of messages to return (default 50, max 200).
@@ -80,6 +80,9 @@ pub struct GetChannelHistoryParams {
     /// If true, fetch messages with thread metadata via REST instead of WebSocket.
     #[serde(default)]
     pub with_threads: Option<bool>,
+    /// Unix timestamp cursor for pagination. Returns messages before this time.
+    #[serde(default)]
+    pub before: Option<i64>,
 }
 
 /// Parameters for the `list_channels` tool.
@@ -186,9 +189,9 @@ pub struct GetWorkflowRunsParams {
     pub limit: Option<u32>,
 }
 
-/// Parameters for the `approve_workflow_step` tool.
+/// Parameters for the `approve_step` tool.
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ApproveWorkflowStepParams {
+pub struct ApproveStepParams {
     /// Opaque approval token from the kind:46010 event.
     pub approval_token: String,
     /// true = approve, false = deny.
@@ -379,19 +382,12 @@ pub struct SetProfileParams {
     pub nip05_handle: Option<String>,
 }
 
-/// Parameters for the `get_user_profile` tool.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetUserProfileParams {
-    /// Hex-encoded pubkey to look up. Omit to get your own profile.
-    #[serde(default)]
-    pub pubkey: Option<String>,
-}
-
-/// Parameters for the `get_users_batch` tool.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetUsersBatchParams {
-    /// List of hex-encoded pubkeys to look up (max 200).
-    pub pubkeys: Vec<String>,
+/// Parameters for the `get_users` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetUsersParams {
+    /// Pubkey(s) to look up. Omit for your own profile. Provide one hex pubkey
+    /// for a single user, or multiple for batch lookup (max 200).
+    pub pubkeys: Option<Vec<String>>,
 }
 
 /// Parameters for the `search` tool.
@@ -442,30 +438,6 @@ pub struct GetFeedParams {
     /// Omit to return all categories.
     #[serde(default)]
     pub types: Option<String>,
-}
-
-/// Parameters for the `get_feed_mentions` tool.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetFeedMentionsParams {
-    /// Only return mentions newer than this Unix timestamp.
-    /// Defaults to now - 7 days if omitted.
-    #[serde(default)]
-    pub since: Option<i64>,
-    /// Maximum items to return. Default 50, max 50.
-    #[serde(default)]
-    pub limit: Option<u32>,
-}
-
-/// Parameters for the `get_feed_actions` tool.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetFeedActionsParams {
-    /// Only return action items newer than this Unix timestamp.
-    /// Defaults to now - 7 days if omitted.
-    #[serde(default)]
-    pub since: Option<i64>,
-    /// Maximum items to return. Default 50, max 50.
-    #[serde(default)]
-    pub limit: Option<u32>,
 }
 
 /// Parameters for the `send_diff_message` tool.
@@ -780,13 +752,10 @@ impl SproutMcpServer {
 
     /// Get recent messages from a Sprout channel.
     #[tool(
-        name = "get_channel_history",
-        description = "Get recent messages from a Sprout channel. Set with_threads=true to include thread metadata via REST."
+        name = "get_messages",
+        description = "Get recent messages from a Sprout channel. Use `before` for pagination (Unix timestamp). Set `with_threads=true` to include thread metadata."
     )]
-    pub async fn get_channel_history(
-        &self,
-        Parameters(p): Parameters<GetChannelHistoryParams>,
-    ) -> String {
+    pub async fn get_messages(&self, Parameters(p): Parameters<GetMessagesParams>) -> String {
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
@@ -797,14 +766,19 @@ impl SproutMcpServer {
         // Use the REST endpoint so callers get the canonical history payload,
         // including thread metadata when requested.
         let with_threads = p.with_threads.unwrap_or(false);
-        let path = if with_threads {
-            format!(
-                "/api/channels/{}/messages?with_threads=true&limit={}",
-                p.channel_id, limit
-            )
-        } else {
-            format!("/api/channels/{}/messages?limit={}", p.channel_id, limit)
-        };
+        let mut query_parts: Vec<String> = Vec::new();
+        if with_threads {
+            query_parts.push("with_threads=true".to_string());
+        }
+        query_parts.push(format!("limit={limit}"));
+        if let Some(before) = p.before {
+            query_parts.push(format!("before={before}"));
+        }
+        let path = format!(
+            "/api/channels/{}/messages?{}",
+            p.channel_id,
+            query_parts.join("&")
+        );
         match self.client.get(&path).await {
             Ok(body) => body,
             Err(e) => format!("Error: {e}"),
@@ -1030,13 +1004,10 @@ impl SproutMcpServer {
 
     /// Approve or deny a pending workflow approval step.
     #[tool(
-        name = "approve_workflow_step",
+        name = "approve_step",
         description = "Approve or deny a pending workflow approval step"
     )]
-    pub async fn approve_workflow_step(
-        &self,
-        Parameters(p): Parameters<ApproveWorkflowStepParams>,
-    ) -> String {
+    pub async fn approve_step(&self, Parameters(p): Parameters<ApproveStepParams>) -> String {
         if uuid::Uuid::parse_str(&p.approval_token).is_err() {
             return format!(
                 "Error: approval_token '{}' is not a valid UUID",
@@ -1086,59 +1057,6 @@ impl SproutMcpServer {
         match self.client.get_api(&url).await {
             Ok(body) => body,
             Err(e) => format!("Error fetching feed: {e}"),
-        }
-    }
-
-    /// Get only @mentions for this agent from the Sprout relay.
-    #[tool(
-        name = "get_feed_mentions",
-        description = "Get only @mentions for this agent from the Sprout relay. \
-                       Returns events where the agent's pubkey appears in a p-tag. \
-                       Equivalent to the @Mentions tab on the Home feed."
-    )]
-    pub async fn get_feed_mentions(
-        &self,
-        Parameters(p): Parameters<GetFeedMentionsParams>,
-    ) -> String {
-        const MAX_FEED_LIMIT: u32 = 50;
-        let mut url = format!("{}/api/feed?types=mentions", self.client.relay_http_url());
-        if let Some(since) = p.since {
-            url = format!("{url}&since={since}");
-        }
-        if let Some(limit) = p.limit {
-            url = format!("{url}&limit={}", limit.min(MAX_FEED_LIMIT));
-        }
-        match self.client.get_api(&url).await {
-            Ok(body) => body,
-            Err(e) => format!("Error fetching mentions: {e}"),
-        }
-    }
-
-    /// Get items that require action from this agent.
-    #[tool(
-        name = "get_feed_actions",
-        description = "Get items that require action from this agent: approval requests (kind 46010) \
-                       and reminders (kind 40007) addressed to the agent's pubkey. \
-                       Equivalent to the 'Needs Action' section on the Home feed."
-    )]
-    pub async fn get_feed_actions(
-        &self,
-        Parameters(p): Parameters<GetFeedActionsParams>,
-    ) -> String {
-        const MAX_FEED_LIMIT: u32 = 50;
-        let mut url = format!(
-            "{}/api/feed?types=needs_action",
-            self.client.relay_http_url()
-        );
-        if let Some(since) = p.since {
-            url = format!("{url}&since={since}");
-        }
-        if let Some(limit) = p.limit {
-            url = format!("{url}&limit={}", limit.min(MAX_FEED_LIMIT));
-        }
-        match self.client.get_api(&url).await {
-            Ok(body) => body,
-            Err(e) => format!("Error fetching action items: {e}"),
         }
     }
 
@@ -1570,35 +1488,32 @@ impl SproutMcpServer {
         }
     }
 
-    /// Read a user's profile by pubkey.
+    /// Get user profile(s) by pubkey.
     #[tool(
-        name = "get_user_profile",
-        description = "Get a user's profile by pubkey. Omit pubkey to get your own profile. Returns display name, avatar URL, about text, and NIP-05 handle."
+        name = "get_users",
+        description = "Get user profile(s). Omit pubkeys for your own profile, provide one for a specific user, or provide multiple for batch lookup (max 200)."
     )]
-    pub async fn get_user_profile(
-        &self,
-        Parameters(p): Parameters<GetUserProfileParams>,
-    ) -> String {
-        let path = match p.pubkey {
-            None => "/api/users/me/profile".to_string(),
-            Some(pk) => format!("/api/users/{}/profile", pk),
-        };
-        match self.client.get(&path).await {
-            Ok(body) => body,
-            Err(e) => format!("Error fetching profile: {e}"),
-        }
-    }
-
-    /// Resolve display names for multiple pubkeys.
-    #[tool(
-        name = "get_users_batch",
-        description = "Resolve display names and NIP-05 handles for multiple pubkeys at once. Returns a map of pubkey to profile info, plus a list of unknown pubkeys. Useful for identifying message senders in bulk."
-    )]
-    pub async fn get_users_batch(&self, Parameters(p): Parameters<GetUsersBatchParams>) -> String {
-        let body = serde_json::json!({ "pubkeys": p.pubkeys });
-        match self.client.post("/api/users/batch", &body).await {
-            Ok(resp) => resp,
-            Err(e) => format!("Error fetching profiles: {e}"),
+    pub async fn get_users(&self, Parameters(p): Parameters<GetUsersParams>) -> String {
+        let pubkeys = p.pubkeys.unwrap_or_default();
+        match pubkeys.len() {
+            0 => match self.client.get("/api/users/me/profile").await {
+                Ok(body) => body,
+                Err(e) => format!("Error fetching profile: {e}"),
+            },
+            1 => {
+                let path = format!("/api/users/{}/profile", percent_encode(&pubkeys[0]));
+                match self.client.get(&path).await {
+                    Ok(body) => body,
+                    Err(e) => format!("Error fetching profile: {e}"),
+                }
+            }
+            _ => {
+                let body = serde_json::json!({ "pubkeys": pubkeys });
+                match self.client.post("/api/users/batch", &body).await {
+                    Ok(resp) => resp,
+                    Err(e) => format!("Error fetching profiles: {e}"),
+                }
+            }
         }
     }
 
