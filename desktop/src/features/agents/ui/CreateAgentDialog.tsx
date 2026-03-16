@@ -23,7 +23,6 @@ import {
 import {
   CreateAgentBasicsFields,
   CreateAgentOptionToggles,
-  CreateAgentPrerequisitesCard,
   CreateAgentRuntimeProviderField,
   CreateAgentRuntimeFields,
   CreateAgentTokenSection,
@@ -74,27 +73,6 @@ export function CreateAgentDialog({
   const spawnToggleDisabled =
     prereqsQuery.isLoading || (prereqs !== null && !isSpawnSupported);
   const isDiscoveryPending = providersQuery.isLoading || prereqsQuery.isLoading;
-  const prerequisiteCards = [
-    {
-      id: "admin",
-      label: "Token minting",
-      info: prereqs?.admin ?? null,
-      command: prereqs?.admin.command ?? "sprout-admin",
-    },
-    {
-      id: "acp",
-      label: "ACP harness",
-      info: prereqs?.acp ?? null,
-      command: prereqs?.acp.command ?? (acpCommand.trim() || "sprout-acp"),
-    },
-    {
-      id: "mcp",
-      label: "MCP server",
-      info: prereqs?.mcp ?? null,
-      command:
-        prereqs?.mcp.command ?? (mcpCommand.trim() || "sprout-mcp-server"),
-    },
-  ];
 
   React.useEffect(() => {
     if (hasSyncedProviderSelection || providersQuery.isLoading) {
@@ -302,8 +280,7 @@ export function CreateAgentDialog({
                     Advanced setup
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    Relay overrides, raw commands, timeout, and local binary
-                    checks.
+                    Relay overrides, raw commands, timeout, and doctor guidance.
                   </p>
                 </div>
                 <span className="shrink-0 self-center text-muted-foreground">
@@ -332,11 +309,10 @@ export function CreateAgentDialog({
                       turnTimeoutSeconds={turnTimeoutSeconds}
                     />
 
-                    <CreateAgentPrerequisitesCard
-                      isLoading={prereqsQuery.isLoading}
-                      prereqs={prereqs}
-                      prerequisiteCards={prerequisiteCards}
-                    />
+                    <p className="rounded-2xl border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
+                      Local Sprout binary checks and ACP runtime discovery now
+                      live in Settings &gt; Doctor.
+                    </p>
 
                     {providersQuery.error instanceof Error ? (
                       <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

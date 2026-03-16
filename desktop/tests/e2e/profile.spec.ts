@@ -17,11 +17,9 @@ test("updates the relay-backed profile from settings", async ({ page }) => {
 
   await page.getByTestId("open-settings").click();
   await expect(page.getByTestId("settings-view")).toBeVisible();
-  await expect(page.getByTestId("chat-title")).toHaveText("Settings");
-  await expect(page.getByTestId("open-settings")).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await page.getByTestId("settings-nav-profile").click();
+  await expect(page.getByTestId("settings-title")).toHaveText("Settings");
+  await expect(page.getByTestId("open-settings")).toHaveCount(0);
 
   await expect(page.getByTestId("profile-pubkey")).toContainText("deadbeef");
   await expect(page.getByTestId("profile-nip05")).toContainText("Not set");
@@ -42,15 +40,13 @@ test("updates the relay-backed profile from settings", async ({ page }) => {
   await expect(page.getByTestId("profile-avatar-url")).toHaveValue(avatarUrl);
   await expect(page.getByTestId("profile-about")).toHaveValue(about);
 
-  await page.getByRole("button", { name: "Home" }).click();
+  await page.getByTestId("settings-close").click();
   await expect(page.getByTestId("chat-title")).toHaveText("Home");
-  await expect(page.getByTestId("open-settings")).toHaveAttribute(
-    "aria-pressed",
-    "false",
-  );
+  await expect(page.getByTestId("open-settings")).toBeVisible();
 
   await page.getByTestId("open-settings").click();
   await expect(page.getByTestId("settings-view")).toBeVisible();
+  await page.getByTestId("settings-nav-profile").click();
   await expect(page.getByTestId("profile-display-name")).toHaveValue(
     displayName,
   );
@@ -67,6 +63,7 @@ test("updates presence from settings", async ({ page }) => {
 
   await page.getByTestId("open-settings").click();
   await expect(page.getByTestId("settings-view")).toBeVisible();
+  await page.getByTestId("settings-nav-presence").click();
   await expect(page.getByTestId("presence-current-status")).toContainText(
     "Offline",
   );
@@ -76,10 +73,11 @@ test("updates presence from settings", async ({ page }) => {
     "Away",
   );
 
-  await page.getByRole("button", { name: "Home" }).click();
+  await page.getByTestId("settings-close").click();
   await expect(page.getByTestId("chat-title")).toHaveText("Home");
 
   await page.getByTestId("open-settings").click();
+  await page.getByTestId("settings-nav-presence").click();
   await expect(page.getByTestId("presence-current-status")).toContainText(
     "Away",
   );
@@ -100,6 +98,7 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
   );
 
   await expect(page.getByTestId("settings-view")).toBeVisible();
+  await page.getByTestId("settings-nav-appearance").click();
   await page.getByTestId("theme-option-dark").click();
 
   await expect
@@ -107,4 +106,32 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
       page.evaluate(() => document.documentElement.classList.contains("dark")),
     )
     .toBe(true);
+
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+," : "Control+,",
+  );
+  await expect(page.getByTestId("settings-view")).toHaveCount(0);
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
+});
+
+test("shows doctor checks for local sprout tooling", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("settings-view")).toBeVisible();
+  await page.getByTestId("settings-nav-doctor").click();
+
+  await expect(page.getByTestId("settings-doctor")).toBeVisible();
+  await expect(page.getByTestId("doctor-check-admin")).toContainText(
+    "sprout-admin",
+  );
+  await expect(page.getByTestId("doctor-check-acp")).toContainText(
+    "sprout-acp",
+  );
+  await expect(page.getByTestId("doctor-check-mcp")).toContainText(
+    "sprout-mcp-server",
+  );
+  await expect(page.getByTestId("doctor-provider-goose")).toContainText(
+    "Goose",
+  );
 });

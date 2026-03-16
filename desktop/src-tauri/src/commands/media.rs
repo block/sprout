@@ -71,7 +71,12 @@ fn fd_real_path(file: &std::fs::File) -> Result<std::path::PathBuf, String> {
     let handle = file.as_raw_handle() as isize;
     let mut buf = vec![0u16; 1024];
     let len = unsafe {
-        GetFinalPathNameByHandleW(handle, buf.as_mut_ptr(), buf.len() as u32, FILE_NAME_NORMALIZED)
+        GetFinalPathNameByHandleW(
+            handle,
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+            FILE_NAME_NORMALIZED,
+        )
     };
     if len == 0 {
         return Err(format!(

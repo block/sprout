@@ -13,6 +13,7 @@ test("creates a channel-scoped token from settings and can revoke it", async ({
 
   await page.getByTestId("open-settings").click();
   await expect(page.getByTestId("settings-view")).toBeVisible();
+  await page.getByTestId("settings-nav-tokens").click();
 
   const tokenCard = page.getByTestId("settings-tokens");
   await tokenCard.getByRole("button", { name: "Create token" }).click();
@@ -63,6 +64,7 @@ test("surfaces token mint errors in the dialog", async ({ page }) => {
 
   await page.getByTestId("open-settings").click();
   await expect(page.getByTestId("settings-view")).toBeVisible();
+  await page.getByTestId("settings-nav-tokens").click();
 
   await page
     .getByTestId("settings-tokens")
