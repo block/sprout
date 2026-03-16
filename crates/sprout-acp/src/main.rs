@@ -743,11 +743,11 @@ fn default_heartbeat_prompt() -> String {
          You have been awakened for a routine heartbeat. You have NO incoming messages or\n\
          active channel context for this turn.\n\n\
          Your tasks:\n\
-         1. Call `get_feed_actions()` to check for pending workflow approvals or\n\
+         1. Call `get_feed(types='needs_action')` to check for pending workflow approvals or\n\
             high-priority requests addressed to you.\n\
-         2. Call `get_feed_mentions()` to check for unanswered @mentions.\n\
+         2. Call `get_feed(types='mentions')` to check for unanswered @mentions.\n\
          3. If you find actionable items, address them using the appropriate tools\n\
-            (e.g., `approve_workflow_step`, `send_message`, `send_reply`).\n\
+            (e.g., `approve_step`, `send_message`, `send_message(parent_event_id=...)`).\n\
          4. If there are no pending actions or mentions, end your turn immediately.\n\n\
          Do not call `list_channels()` or `search()` unless you have a specific reason.\n\
          Do not invent work — only act on items surfaced by the feed tools."

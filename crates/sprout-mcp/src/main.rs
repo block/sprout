@@ -5,6 +5,7 @@ use tracing_subscriber::EnvFilter;
 
 use sprout_mcp::relay_client::RelayClient;
 use sprout_mcp::server::SproutMcpServer;
+use sprout_mcp::toolsets::ToolsetConfig;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -33,11 +34,15 @@ async fn main() -> Result<()> {
         }
     };
 
+    let toolset_config = ToolsetConfig::from_env();
+    eprintln!("sprout-mcp: toolsets: {:?}", toolset_config);
+
     eprintln!("sprout-mcp: connecting to relay at {relay_url}...");
     let client = RelayClient::connect(&relay_url, &keys, api_token.as_deref()).await?;
     eprintln!("sprout-mcp: connected and authenticated.");
 
-    let server = SproutMcpServer::new(client);
+    let tools_to_remove = toolset_config.tools_to_remove();
+    let server = SproutMcpServer::new(client, Some(tools_to_remove));
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
 
