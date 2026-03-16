@@ -36,6 +36,7 @@ fn event_channel_capacity() -> usize {
     std::env::var("SPROUT_ACP_EVENT_BUFFER")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
+        .map(|v| v.max(1)) // mpsc::channel panics on capacity 0
         .unwrap_or(EVENT_CHANNEL_CAPACITY_DEFAULT)
 }
 /// Maximum number of seen event IDs before the dedup set is cleared.
@@ -60,6 +61,51 @@ use uuid::Uuid;
 use crate::config::ChannelFilter;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+/// Metadata about a channel, populated at discovery time.
+#[derive(Debug, Clone)]
+pub struct ChannelInfo {
+    pub name: String,
+    pub channel_type: String,
+}
+
+/// Lightweight REST client for pre-prompt context fetches.
+///
+/// Extracted from `HarnessRelay` fields so it can be shared (via `Arc`) with
+/// spawned prompt tasks without giving them access to the WebSocket.
+#[derive(Debug, Clone)]
+pub struct RestClient {
+    pub http: reqwest::Client,
+    pub base_url: String,
+    pub api_token: Option<String>,
+    pub keys: Keys,
+}
+
+impl RestClient {
+    /// GET a JSON endpoint, returning the parsed value on success.
+    pub async fn get_json(&self, path: &str) -> Result<Value, RelayError> {
+        let url = format!("{}{}", self.base_url, path);
+        let builder = self.http.get(&url);
+        let builder = apply_auth(builder, &self.api_token, &self.keys);
+
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| RelayError::Http(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(RelayError::Http(format!(
+                "GET {} returned HTTP {}",
+                path,
+                resp.status()
+            )));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| RelayError::Http(e.to_string()))
+    }
+}
 
 /// Events the harness cares about.
 #[derive(Debug, Clone)]
@@ -240,7 +286,7 @@ impl HarnessRelay {
     }
 
     /// Discover channels the agent is a member of via `GET /api/channels?member=true`.
-    pub async fn discover_channels(&self) -> Result<Vec<Uuid>, RelayError> {
+    pub async fn discover_channels(&self) -> Result<HashMap<Uuid, ChannelInfo>, RelayError> {
         let http_url = relay_ws_to_http(&self.relay_url);
         let url = format!("{http_url}/api/channels?member=true");
 
@@ -268,11 +314,23 @@ impl HarnessRelay {
             .as_array()
             .ok_or_else(|| RelayError::Http("expected JSON array from /api/channels".into()))?;
 
-        let mut ids = Vec::with_capacity(channels.len());
+        let mut map = HashMap::with_capacity(channels.len());
         for ch in channels {
             if let Some(id_str) = ch.get("id").and_then(|v| v.as_str()) {
                 match id_str.parse::<Uuid>() {
-                    Ok(uuid) => ids.push(uuid),
+                    Ok(uuid) => {
+                        let name = ch
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let channel_type = ch
+                            .get("channel_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("stream")
+                            .to_string();
+                        map.insert(uuid, ChannelInfo { name, channel_type });
+                    }
                     Err(e) => {
                         warn!("skipping channel with unparseable id {id_str:?}: {e}");
                     }
@@ -280,8 +338,21 @@ impl HarnessRelay {
             }
         }
 
-        debug!("discovered {} channel(s)", ids.len());
-        Ok(ids)
+        debug!("discovered {} channel(s)", map.len());
+        Ok(map)
+    }
+
+    /// Build a [`RestClient`] that shares this relay's HTTP credentials.
+    ///
+    /// The returned client is cheap to clone (wraps `reqwest::Client` which is
+    /// internally `Arc`-ed) and safe to share across spawned tasks via `Arc`.
+    pub fn rest_client(&self) -> RestClient {
+        RestClient {
+            http: self.http.clone(),
+            base_url: relay_ws_to_http(&self.relay_url),
+            api_token: self.api_token.clone(),
+            keys: self.keys.clone(),
+        }
     }
 
     /// Subscribe to events in a channel using the given filter.
