@@ -1,7 +1,7 @@
 import type { TimelineReaction } from "@/features/messages/types";
 
 const BOTTOM_THRESHOLD_PX = 72;
-const DEFAULT_REACTION_OPTIONS = [
+export const DEFAULT_EMOJI_OPTIONS = [
   "👍",
   "❤️",
   "🎉",
@@ -32,7 +32,7 @@ export function getReactionOptions(reactions: TimelineReaction[]) {
     options.push(reaction.emoji);
   }
 
-  for (const emoji of DEFAULT_REACTION_OPTIONS) {
+  for (const emoji of DEFAULT_EMOJI_OPTIONS) {
     if (seen.has(emoji)) {
       continue;
     }
