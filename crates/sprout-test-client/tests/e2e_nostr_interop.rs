@@ -813,10 +813,12 @@ async fn test_nip10_thread_reply_not_in_top_level() {
     );
 }
 
-/// Send a kind:1059 gift wrap with unique content, also send a normal kind:9 message
-/// with the SAME unique content to the same channel. Search for that content via NIP-50.
-/// Verify: the kind:9 message IS found but the kind:1059 is NOT — proving gift wraps
-/// are excluded from Typesense indexing (not just filtered by channel_id scoping).
+/// Send a kind:1059 gift wrap AND a kind:9 message with the same unique content.
+/// Query Typesense directly to prove the gift wrap was NOT indexed while the
+/// kind:9 message WAS. This bypasses all relay-level filtering (channel_id, #p)
+/// and tests the actual indexing skip in dispatch_persistent_event.
+///
+/// Requires TYPESENSE_URL and TYPESENSE_API_KEY env vars (defaults to dev values).
 #[tokio::test]
 #[ignore]
 async fn test_nip17_gift_wrap_not_searchable() {
@@ -829,10 +831,9 @@ async fn test_nip17_gift_wrap_not_searchable() {
         .await
         .expect("connect");
 
-    // Unique token shared by both the gift wrap and a normal message.
     let unique_token = format!("giftwrap-nosearch-{}", uuid::Uuid::new_v4().simple());
 
-    // 1. Send kind:1059 gift wrap with the unique token as content.
+    // 1. Send kind:1059 gift wrap.
     let ephemeral_keys = Keys::generate();
     let p_tag = Tag::parse(&["p", &keys_b.public_key().to_hex()]).expect("p tag");
     let gift_wrap = EventBuilder::new(Kind::Custom(1059), &unique_token, [p_tag])
@@ -841,7 +842,7 @@ async fn test_nip17_gift_wrap_not_searchable() {
     let ok = client.send_event(gift_wrap).await.expect("send gift wrap");
     assert!(ok.accepted, "relay rejected gift wrap: {}", ok.message);
 
-    // 2. Send a normal kind:9 message with the same unique token (as a control).
+    // 2. Send kind:9 control message with the same content.
     let ok2 = client
         .send_text_message(&keys_a, &channel, &unique_token, 9)
         .await
@@ -850,39 +851,57 @@ async fn test_nip17_gift_wrap_not_searchable() {
 
     client.disconnect().await.expect("disconnect");
 
-    // Wait for Typesense indexing.
+    // Wait for async Typesense indexing.
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // 3. Search via NIP-50 for the unique token (kind:9 only to avoid #p gating).
-    let mut search_client = SproutTestClient::connect(&url, &keys_a)
-        .await
-        .expect("reconnect");
-    let sid = sub_id("giftwrap-search");
-    let filter = Filter::new()
-        .search(&unique_token)
-        .kind(Kind::Custom(9))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
-    search_client
-        .subscribe(&sid, vec![filter])
-        .await
-        .expect("subscribe");
-    let events = search_client
-        .collect_until_eose(&sid, Duration::from_secs(5))
-        .await
-        .expect("collect");
+    // 3. Query Typesense DIRECTLY — bypasses all relay-level filtering.
+    let ts_url =
+        std::env::var("TYPESENSE_URL").unwrap_or_else(|_| "http://localhost:8108".to_string());
+    let ts_key =
+        std::env::var("TYPESENSE_API_KEY").unwrap_or_else(|_| "sprout_dev_key".to_string());
 
-    // The kind:9 message should be found (proves Typesense is working).
+    let http = reqwest::Client::new();
+    let resp = http
+        .post(format!("{ts_url}/multi_search"))
+        .header("X-TYPESENSE-API-KEY", &ts_key)
+        .json(&serde_json::json!({
+            "searches": [{
+                "collection": "events",
+                "q": unique_token,
+                "query_by": "content",
+                "per_page": 10
+            }]
+        }))
+        .send()
+        .await
+        .expect("Typesense multi_search request");
+
     assert!(
-        events.iter().any(|e| e.kind == Kind::Custom(9)),
-        "expected kind:9 control message in search results, got none"
+        resp.status().is_success(),
+        "Typesense returned {}",
+        resp.status()
     );
-    // No kind:1059 should appear (proves gift wraps are not indexed).
+    let body: serde_json::Value = resp.json().await.expect("parse Typesense response");
+
+    let hits = body["results"][0]["hits"].as_array().expect("hits array");
+
+    // Control: kind:9 IS indexed.
+    let has_kind9 = hits
+        .iter()
+        .any(|h| h["document"]["kind"].as_i64() == Some(9));
     assert!(
-        events.iter().all(|e| e.kind != Kind::Custom(1059)),
-        "kind:1059 should NOT appear in search results — gift wraps must not be indexed"
+        has_kind9,
+        "kind:9 control message not found in Typesense — indexing broken"
     );
 
-    search_client.disconnect().await.expect("disconnect");
+    // Assertion: kind:1059 is NOT indexed.
+    let has_kind1059 = hits
+        .iter()
+        .any(|h| h["document"]["kind"].as_i64() == Some(1059));
+    assert!(
+        !has_kind1059,
+        "kind:1059 found in Typesense — gift wraps must NOT be indexed. hits: {hits:?}"
+    );
 }
 
 /// Send 3 messages with varying relevance to a query, wait for indexing, then search.
