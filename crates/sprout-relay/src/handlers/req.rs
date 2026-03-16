@@ -8,7 +8,9 @@ use tracing::{debug, warn};
 use hex;
 use nostr::Filter;
 use sprout_core::filter::filters_match;
-use sprout_core::kind::{KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION};
+use sprout_core::kind::{
+    KIND_GIFT_WRAP, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+};
 use sprout_db::EventQuery;
 
 use sprout_auth::Scope;
@@ -77,37 +79,51 @@ pub async fn handle_req(
 
     let channel_id = extract_channel_id_from_filters(&filters);
 
-    // Enforce #p filter for membership notification subscriptions.
-    //
+    // ── NIP-50 search: intercept BEFORE #p gating ────────────────────────────
+    // Search filters are one-shot (not registered as persistent subscriptions).
+    // They never deliver gift wraps (not indexed) or membership notifications
+    // (global, no channel_id), so the #p gate below is irrelevant for them.
+    // Intercepting here lets clients send `{"search":"foo"}` without `kinds`.
+    let has_search = filters.iter().any(|f| f.search.is_some());
+    if has_search {
+        if filters.iter().any(|f| f.search.is_none()) {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "error: mixed search and non-search filters not supported",
+            ));
+            return;
+        }
+        handle_search_req(&sub_id, &filters, &accessible_channels, &conn, &state).await;
+        return;
+    }
+
+    // ── #p gating for globally-stored sensitive kinds ─────────────────────────
     // Only applies to GLOBAL subscriptions (channel_id = None). Channel-scoped
-    // subscriptions can never receive globally-stored membership events — the
-    // fan_out() invariant in subscription.rs prevents it.
-    //
-    // We use the resolved subscription scope (channel_id) rather than per-filter
-    // #h presence to prevent mixed-filter bypass: a client could send
-    // [{#h:..., kinds:[44100]}, {authors:[...]}] which resolves to global scope
-    // but would skip the #p check if we only looked at per-filter #h tags.
+    // subscriptions can never receive globally-stored events — the fan_out()
+    // invariant in subscription.rs prevents it.
+    const P_GATED_KINDS: [u32; 3] = [
+        KIND_MEMBER_ADDED_NOTIFICATION,
+        KIND_MEMBER_REMOVED_NOTIFICATION,
+        KIND_GIFT_WRAP,
+    ];
+
     if channel_id.is_none() {
         let authed_pubkey_hex = hex::encode(&pubkey_bytes);
+        let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
+
         for filter in &filters {
-            let can_match_membership = filter.kinds.as_ref().is_none_or(|ks| {
-                ks.iter().any(|k| {
-                    let ku = k.as_u16() as u32;
-                    ku == KIND_MEMBER_ADDED_NOTIFICATION || ku == KIND_MEMBER_REMOVED_NOTIFICATION
-                })
+            let can_match_p_gated = filter.kinds.as_ref().is_none_or(|ks| {
+                ks.iter()
+                    .any(|k| P_GATED_KINDS.contains(&(k.as_u16() as u32)))
             });
-            if can_match_membership {
-                let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
-                // ALL #p values must match the authenticated pubkey — prevents
-                // a client from sneaking in a victim's pubkey alongside their own
-                // (e.g. #p:[my_key, victim_key]) to receive the victim's notifications.
+            if can_match_p_gated {
                 let has_matching_p = filter.generic_tags.get(&p_tag).is_some_and(|values| {
                     !values.is_empty() && values.iter().all(|v| *v == authed_pubkey_hex)
                 });
                 if !has_matching_p {
                     conn.send(RelayMessage::closed(
                         &sub_id,
-                        "restricted: membership notifications require #p matching your pubkey",
+                        "restricted: p-gated events require #p matching your pubkey",
                     ));
                     return;
                 }
@@ -116,8 +132,6 @@ pub async fn handle_req(
     }
 
     // Check channel access BEFORE registering the subscription.
-    // Registering first would allow non-members to receive live fan-out events
-    // from private channels before the access check fires.
     if let Some(ch_id) = channel_id {
         if !accessible_channels.contains(&ch_id) {
             conn.send(RelayMessage::closed(
@@ -147,7 +161,25 @@ pub async fn handle_req(
     let mut total_sent: usize = 0;
 
     for filter in &filters {
-        let params = filter_to_query_params(filter, channel_id);
+        // Use per-filter #h channel scope when available, falling back to the
+        // subscription-level channel_id. This prevents unrelated accessible-channel
+        // rows from consuming the LIMIT when filters target specific channels but
+        // the subscription is global (multiple distinct #h values across filters).
+        let per_filter_channel = {
+            let h = nostr::SingleLetterTag::lowercase(nostr::Alphabet::H);
+            filter
+                .generic_tags
+                .get(&h)
+                .and_then(|vs| {
+                    if vs.len() == 1 {
+                        vs.iter().next()?.parse::<uuid::Uuid>().ok()
+                    } else {
+                        None
+                    }
+                })
+                .or(channel_id)
+        };
+        let params = filter_to_query_params(filter, per_filter_channel);
 
         let filter_events = state.db.query_events(&params).await;
 
@@ -161,12 +193,10 @@ pub async fn handle_req(
         };
 
         for stored in &events {
-            if !seen_ids.insert(stored.event.id) {
-                continue;
-            }
-
-            // Apply full NIP-01 filter matching (handles fields not in the DB query).
-            if !filters_match(&filters, stored) {
+            // Per-filter NIP-01 matching — use the current filter only, not the
+            // full filter set. OR semantics across filters are handled by the outer
+            // loop (each filter gets its own DB query).
+            if !filters_match(std::slice::from_ref(filter), stored) {
                 continue;
             }
 
@@ -174,6 +204,12 @@ pub async fn handle_req(
                 if !accessible_channels.contains(&ch_id) {
                     continue;
                 }
+            }
+
+            // Dedup AFTER acceptance — an event that fails filter A's constraints
+            // must remain eligible for filter B (NIP-01 OR semantics).
+            if !seen_ids.insert(stored.event.id) {
+                continue;
             }
 
             let msg = RelayMessage::event(&sub_id, &stored.event);
@@ -192,6 +228,193 @@ pub async fn handle_req(
         count = total_sent,
         "EOSE sent after historical delivery"
     );
+}
+
+/// Handle a NIP-50 search REQ: query Typesense, fetch full events, deliver results, EOSE.
+/// Search subscriptions are one-shot — no persistent subscription is registered.
+/// Maximum Typesense pages to fetch per filter (prevents unbounded loops).
+const MAX_SEARCH_PAGES: u32 = 10;
+
+async fn handle_search_req(
+    sub_id: &str,
+    filters: &[Filter],
+    accessible_channels: &[uuid::Uuid],
+    conn: &ConnectionState,
+    state: &AppState,
+) {
+    if accessible_channels.is_empty() {
+        conn.send(RelayMessage::eose(sub_id));
+        return;
+    }
+
+    let all_channels_filter = {
+        let ids: Vec<String> = accessible_channels
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+        format!("channel_id:=[{}]", ids.join(","))
+    };
+
+    let mut seen_ids: HashSet<nostr::EventId> = HashSet::new();
+
+    for filter in filters {
+        let search_text = match &filter.search {
+            Some(s) if !s.is_empty() => s.clone(),
+            _ => continue,
+        };
+
+        let limit = filter
+            .limit
+            .map(|l| (l as u32).min(MAX_HISTORICAL_LIMIT as u32))
+            .unwrap_or(MAX_HISTORICAL_LIMIT as u32);
+
+        if limit == 0 {
+            continue; // NIP-01: limit 0 means "no results from this filter"
+        }
+
+        // Push as many NIP-01 constraints into Typesense as possible so
+        // post-filtering is a correction step, not the primary filter.
+        //
+        // If the filter has a #h tag, push the specific channel(s) into Typesense
+        // instead of the full accessible set. This prevents cross-channel hits from
+        // consuming pagination budget and causing under-fetch.
+        // If the filter has #h, intersect with accessible channels. If all #h
+        // values are invalid/inaccessible, skip the filter entirely (match nothing)
+        // rather than broadening to all channels.
+        let h_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::H);
+        let channel_scope =
+            if let Some(vs) = filter.generic_tags.get(&h_tag).filter(|vs| !vs.is_empty()) {
+                let valid: Vec<String> = vs
+                    .iter()
+                    .filter_map(|v| v.parse::<uuid::Uuid>().ok())
+                    .filter(|id| accessible_channels.contains(id))
+                    .map(|id| id.to_string())
+                    .collect();
+                if valid.is_empty() {
+                    continue; // all #h values invalid/inaccessible — skip filter
+                }
+                format!("channel_id:=[{}]", valid.join(","))
+            } else {
+                all_channels_filter.clone()
+            };
+        let mut filter_parts = vec![channel_scope];
+        if let Some(ref kinds) = filter.kinds {
+            if !kinds.is_empty() {
+                let kind_vals: Vec<String> = kinds.iter().map(|k| k.as_u16().to_string()).collect();
+                filter_parts.push(format!("kind:=[{}]", kind_vals.join(",")));
+            }
+        }
+        if let Some(ref authors) = filter.authors {
+            if !authors.is_empty() {
+                let author_vals: Vec<String> = authors.iter().map(|a| a.to_hex()).collect();
+                filter_parts.push(format!("pubkey:=[{}]", author_vals.join(",")));
+            }
+        }
+        if let Some(since) = filter.since {
+            filter_parts.push(format!("created_at:>={}", since.as_u64()));
+        }
+        if let Some(until) = filter.until {
+            filter_parts.push(format!("created_at:<={}", until.as_u64()));
+        }
+
+        let filter_by = filter_parts.join(" && ");
+
+        // Paginate: keep fetching pages until we've emitted `limit` results
+        // or exhausted the search result set. This ensures post-filtering
+        // doesn't silently reduce the result count below the requested limit.
+        let mut emitted: u32 = 0;
+        // Always fetch full pages (100) regardless of limit — post-filtering
+        // may discard many hits, so we need headroom to fill the requested limit.
+        let per_page: u32 = 100;
+
+        for page in 1..=MAX_SEARCH_PAGES {
+            if emitted >= limit {
+                break;
+            }
+
+            let search_query = sprout_search::SearchQuery {
+                q: search_text.clone(),
+                filter_by: Some(filter_by.clone()),
+                sort_by: None, // Typesense default = relevance (text_match score)
+                page,
+                per_page,
+            };
+
+            let search_result = match state.search.search(&search_query).await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(sub_id = %sub_id, "NIP-50 search failed: {e}");
+                    break;
+                }
+            };
+
+            let page_empty = search_result.hits.is_empty();
+            let exhausted = (page as u64) * (per_page as u64) >= search_result.found;
+
+            let hit_ids: Vec<Vec<u8>> = search_result
+                .hits
+                .into_iter()
+                .filter(|h| h.channel_id.is_some())
+                .filter_map(|h| hex::decode(&h.event_id).ok())
+                .filter(|bytes| bytes.len() == 32)
+                .collect();
+
+            if !hit_ids.is_empty() {
+                let id_refs: Vec<&[u8]> = hit_ids.iter().map(|b| b.as_slice()).collect();
+                let events = match state.db.get_events_by_ids(&id_refs).await {
+                    Ok(evs) => evs,
+                    Err(e) => {
+                        warn!(sub_id = %sub_id, "NIP-50 batch fetch failed: {e}");
+                        break;
+                    }
+                };
+
+                let event_map: std::collections::HashMap<[u8; 32], &sprout_core::StoredEvent> =
+                    events
+                        .iter()
+                        .map(|ev| (ev.event.id.to_bytes(), ev))
+                        .collect();
+
+                for hit_id in &hit_ids {
+                    if emitted >= limit {
+                        break;
+                    }
+                    let id_array: [u8; 32] = match hit_id.as_slice().try_into() {
+                        Ok(a) => a,
+                        Err(_) => continue,
+                    };
+                    let stored = match event_map.get(&id_array) {
+                        Some(ev) => ev,
+                        None => continue,
+                    };
+                    // NIP-01 post-filtering against THIS filter only (not OR of all filters).
+                    if !filters_match(std::slice::from_ref(filter), stored) {
+                        continue;
+                    }
+                    if let Some(ch_id) = stored.channel_id {
+                        if !accessible_channels.contains(&ch_id) {
+                            continue;
+                        }
+                    }
+                    // Dedup AFTER acceptance — an event that fails filter A's constraints
+                    // must remain eligible for filter B (NIP-01 OR semantics).
+                    if !seen_ids.insert(stored.event.id) {
+                        continue;
+                    }
+                    if !conn.send(RelayMessage::event(sub_id, &stored.event)) {
+                        return;
+                    }
+                    emitted += 1;
+                }
+            }
+
+            if page_empty || exhausted {
+                break;
+            }
+        }
+    }
+
+    conn.send(RelayMessage::eose(sub_id));
 }
 
 /// Convert a single NIP-01 filter into an [`EventQuery`] for the database.
@@ -222,12 +445,37 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
         .map(|l| (l as i64).min(MAX_HISTORICAL_LIMIT))
         .unwrap_or(MAX_HISTORICAL_LIMIT);
 
+    // Push single-author filter into SQL (EventQuery.pubkey is Option<Vec<u8>>).
+    // Multi-author filters fall through to in-memory filters_match post-filtering.
+    let pubkey = filter.authors.as_ref().and_then(|authors| {
+        if authors.len() == 1 {
+            authors.iter().next().map(|pk| pk.serialize().to_vec())
+        } else {
+            None
+        }
+    });
+
+    // Push single-value #p tag into SQL via event_mentions join.
+    // This is critical for gift-wrap (kind:1059) and membership notification
+    // queries where >500 events for other recipients would otherwise push
+    // the caller's events past the LIMIT before post-filtering.
+    let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
+    let p_tag_hex = filter.generic_tags.get(&p_tag).and_then(|values| {
+        if values.len() == 1 {
+            values.iter().next().map(|v| v.to_string())
+        } else {
+            None
+        }
+    });
+
     EventQuery {
         channel_id,
         kinds,
+        pubkey,
         since,
         until,
         limit: Some(limit),
+        p_tag_hex,
         ..Default::default()
     }
 }
@@ -323,5 +571,33 @@ mod tests {
             filter_with_channel(channel_id),
         ];
         assert_eq!(extract_channel_id_from_filters(&filters), Some(channel_id));
+    }
+
+    #[test]
+    fn test_search_filter_detection() {
+        let search_filter = Filter::new().search("hello world");
+        let filters = [search_filter];
+        assert!(filters.iter().any(|f| f.search.is_some()));
+    }
+
+    #[test]
+    fn test_mixed_search_and_non_search_detection() {
+        let search_filter = Filter::new().search("hello");
+        let plain_filter = Filter::new();
+        let filters = [search_filter, plain_filter];
+        let has_search = filters.iter().any(|f| f.search.is_some());
+        let has_non_search = filters.iter().any(|f| f.search.is_none());
+        assert!(has_search && has_non_search, "should detect mixed filters");
+    }
+
+    #[test]
+    fn test_all_search_filters_not_mixed() {
+        let f1 = Filter::new().search("hello");
+        let f2 = Filter::new().search("world");
+        let filters = [f1, f2];
+        let has_search = filters.iter().any(|f| f.search.is_some());
+        let has_non_search = filters.iter().any(|f| f.search.is_none());
+        assert!(has_search);
+        assert!(!has_non_search, "all-search filters should not be mixed");
     }
 }

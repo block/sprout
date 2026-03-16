@@ -228,6 +228,13 @@ impl Db {
         event::get_event_by_id_including_deleted(&self.pool, id_bytes).await
     }
 
+    /// Batch-fetch non-deleted events by their raw ID bytes.
+    ///
+    /// Returns events in arbitrary order — callers reorder as needed.
+    pub async fn get_events_by_ids(&self, ids: &[&[u8]]) -> Result<Vec<StoredEvent>> {
+        event::get_events_by_ids(&self.pool, ids).await
+    }
+
     /// Atomically insert an event and its thread metadata in one transaction.
     ///
     /// Prevents the race where a concurrent delete between separate insert calls

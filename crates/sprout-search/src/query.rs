@@ -85,6 +85,11 @@ pub struct SearchResult {
 }
 
 #[derive(Debug, Deserialize)]
+struct TypesenseMultiSearchResponse {
+    results: Vec<TypesenseSearchResponse>,
+}
+
+#[derive(Debug, Deserialize)]
 struct TypesenseSearchResponse {
     found: u64,
     page: u32,
@@ -116,12 +121,6 @@ pub async fn search(
     collection_name: &str,
     query: &SearchQuery,
 ) -> Result<SearchResult, SearchError> {
-    let url = format!(
-        "{}/collections/{}/documents/search",
-        base_url, collection_name
-    );
-    let params = query.to_query_params();
-
     debug!(
         q = %query.q,
         page = query.page,
@@ -130,10 +129,29 @@ pub async fn search(
         "Executing search"
     );
 
+    // Typesense GET search has a 4000-char query string limit. When filter_by
+    // contains hundreds of channel UUIDs, the URL exceeds this. Use the
+    // /multi_search POST endpoint which accepts the same params in a JSON body.
+    let url = format!("{}/multi_search", base_url);
+    let mut search_params = serde_json::json!({
+        "collection": collection_name,
+        "q": query.q,
+        "query_by": "content",
+        "page": query.page,
+        "per_page": query.per_page,
+    });
+    if let Some(ref filter) = query.filter_by {
+        search_params["filter_by"] = serde_json::Value::String(filter.clone());
+    }
+    if let Some(ref sort) = query.sort_by {
+        search_params["sort_by"] = serde_json::Value::String(sort.clone());
+    }
+    let body = serde_json::json!({ "searches": [search_params] });
+
     let resp = client
-        .get(&url)
+        .post(&url)
         .header("X-TYPESENSE-API-KEY", api_key)
-        .query(&params)
+        .json(&body)
         .send()
         .await?;
 
@@ -143,7 +161,12 @@ pub async fn search(
         return Err(SearchError::Api { status, body });
     }
 
-    let ts_resp: TypesenseSearchResponse = resp.json().await?;
+    // multi_search wraps results: {"results": [<search_response>]}
+    let wrapper: TypesenseMultiSearchResponse = resp.json().await?;
+    let ts_resp = wrapper.results.into_iter().next().ok_or(SearchError::Api {
+        status: 200,
+        body: "empty multi_search results".into(),
+    })?;
     parse_response(ts_resp)
 }
 

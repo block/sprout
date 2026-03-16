@@ -452,6 +452,11 @@ pub async fn emit_group_discovery_events(
         if channel.visibility == "private" {
             tags.push(Tag::parse(&["private"])?);
         }
+        // NIP-29 hidden tag: hint to clients not to show DMs in public group lists.
+        // Not a security boundary — access control is handled by channel-scoped storage.
+        if channel.channel_type == "dm" {
+            tags.push(Tag::parse(&["hidden"])?);
+        }
         // Sprout channels always require explicit membership
         tags.push(Tag::parse(&["closed"])?);
         emit_addressable_discovery_event(

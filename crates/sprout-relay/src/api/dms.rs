@@ -16,7 +16,11 @@ use nostr::util::hex as nostr_hex;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::handlers::side_effects::emit_system_message;
+use sprout_core::kind::KIND_MEMBER_ADDED_NOTIFICATION;
+
+use crate::handlers::side_effects::{
+    emit_group_discovery_events, emit_membership_notification, emit_system_message,
+};
 use crate::state::AppState;
 
 use super::{api_error, extract_auth_context, internal_error};
@@ -125,6 +129,26 @@ pub async fn open_dm_handler(
         .await
         {
             tracing::warn!("Failed to emit system message: {e}");
+        }
+
+        // Emit NIP-29 group discovery events so Nostr clients can find this DM.
+        if let Err(e) = emit_group_discovery_events(&state, channel.id).await {
+            tracing::warn!(channel = %channel.id, "DM discovery emission failed: {e}");
+        }
+
+        // Notify each participant so their Nostr client learns about the new DM.
+        for participant in &all_bytes {
+            if let Err(e) = emit_membership_notification(
+                &state,
+                channel.id,
+                participant,
+                &self_bytes,
+                KIND_MEMBER_ADDED_NOTIFICATION,
+            )
+            .await
+            {
+                tracing::warn!("DM membership notification failed: {e}");
+            }
         }
     }
 
@@ -235,6 +259,28 @@ pub async fn add_dm_member_handler(
         .open_dm(&all_refs, &self_bytes)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    if was_created {
+        // Emit NIP-29 group discovery events for the new expanded DM.
+        if let Err(e) = emit_group_discovery_events(&state, new_channel.id).await {
+            tracing::warn!(channel = %new_channel.id, "DM discovery emission failed: {e}");
+        }
+
+        // Notify each participant about the new DM.
+        for participant_bytes in &all_bytes {
+            if let Err(e) = emit_membership_notification(
+                &state,
+                new_channel.id,
+                participant_bytes,
+                &self_bytes,
+                KIND_MEMBER_ADDED_NOTIFICATION,
+            )
+            .await
+            {
+                tracing::warn!("DM membership notification failed: {e}");
+            }
+        }
+    }
 
     let participants = resolve_participants(&state, new_channel.id).await;
 
