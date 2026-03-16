@@ -1021,3 +1021,45 @@ async fn test_historical_req_dedup_preserves_or_semantics() {
 
     client.disconnect().await.expect("disconnect");
 }
+
+/// REQ with `kinds:[]` must return zero historical events and EOSE.
+/// This proves the empty-kinds sentinel is honored end-to-end (DB returns
+/// zero rows instead of matching all kinds).
+#[tokio::test]
+#[ignore]
+async fn test_empty_kinds_returns_zero_events() {
+    let url = relay_url();
+    let keys = Keys::generate();
+    let channel = create_test_channel(&keys).await;
+
+    // Send a message so there IS data in the channel.
+    send_rest_message(&keys, &channel, "should not appear").await;
+
+    let mut client = SproutTestClient::connect(&url, &keys)
+        .await
+        .expect("connect");
+
+    let sid = sub_id("empty-kinds");
+    // kinds:[] = match nothing per NIP-01.
+    let filter = Filter::new()
+        .kinds(vec![] as Vec<Kind>)
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
+
+    client
+        .subscribe(&sid, vec![filter])
+        .await
+        .expect("subscribe");
+
+    let events = client
+        .collect_until_eose(&sid, Duration::from_secs(5))
+        .await
+        .expect("collect until EOSE");
+
+    assert!(
+        events.is_empty(),
+        "kinds:[] must return zero events, got {}",
+        events.len()
+    );
+
+    client.disconnect().await.expect("disconnect");
+}
