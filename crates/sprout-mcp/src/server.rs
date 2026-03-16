@@ -440,6 +440,24 @@ pub struct GetFeedParams {
     pub types: Option<String>,
 }
 
+/// Parameters for the `edit_message` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct EditMessageParams {
+    /// Channel ID (UUID) containing the message to edit.
+    pub channel_id: String,
+    /// Event ID (64-char hex) of the message to edit.
+    pub event_id: String,
+    /// New content for the message.
+    pub content: String,
+}
+
+/// Parameters for the `delete_message` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DeleteMessageParams {
+    /// Event ID (64-char hex) of the message to delete.
+    pub event_id: String,
+}
+
 /// Parameters for the `send_diff_message` tool.
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SendDiffMessageParams {
@@ -574,10 +592,21 @@ pub struct SproutMcpServer {
 #[tool_router]
 impl SproutMcpServer {
     /// Create a new [`SproutMcpServer`] backed by the given relay client.
-    pub fn new(client: RelayClient) -> Self {
+    ///
+    /// Pass `tools_to_remove` to filter out tools by name (e.g. from toolset config).
+    pub fn new(
+        client: RelayClient,
+        tools_to_remove: Option<std::collections::HashSet<&'static str>>,
+    ) -> Self {
+        let mut tool_router = Self::tool_router();
+        if let Some(ref remove) = tools_to_remove {
+            for name in remove {
+                tool_router.remove_route(name);
+            }
+        }
         Self {
             client,
-            tool_router: Self::tool_router(),
+            tool_router,
         }
     }
 
@@ -746,6 +775,78 @@ impl SproutMcpServer {
             .await
         {
             Ok(b) => b,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Edit a message you previously sent.
+    #[tool(
+        name = "edit_message",
+        description = "Edit a message you previously sent. Creates an edit event (kind 40003) referencing the original."
+    )]
+    pub async fn edit_message(&self, Parameters(p): Parameters<EditMessageParams>) -> String {
+        if let Err(e) = validate_uuid(&p.channel_id) {
+            return format!("Error: {e}");
+        }
+        if p.event_id.len() != 64 || !p.event_id.chars().all(|c| c.is_ascii_hexdigit()) {
+            return format!(
+                "Error: event_id must be a 64-character hex string (got {:?})",
+                p.event_id
+            );
+        }
+        if p.content.len() > MAX_CONTENT_BYTES {
+            return format!(
+                "Error: content exceeds maximum size of {} bytes (got {})",
+                MAX_CONTENT_BYTES,
+                p.content.len()
+            );
+        }
+
+        let kind = Kind::from(sprout_core::kind::KIND_STREAM_MESSAGE_EDIT as u16);
+        let tags = match (
+            Tag::parse(&["h", &p.channel_id]),
+            Tag::parse(&["e", &p.event_id]),
+        ) {
+            (Ok(h_tag), Ok(e_tag)) => vec![h_tag, e_tag],
+            (Err(e), _) | (_, Err(e)) => return format!("Error: failed to build tags: {e}"),
+        };
+
+        let event =
+            match EventBuilder::new(kind, p.content, tags).sign_with_keys(self.client.keys()) {
+                Ok(event) => event,
+                Err(e) => return format!("Error: failed to sign edit event: {e}"),
+            };
+
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Delete a message.
+    #[tool(
+        name = "delete_message",
+        description = "Delete a message. You must be the message author or a channel owner/admin."
+    )]
+    pub async fn delete_message(&self, Parameters(p): Parameters<DeleteMessageParams>) -> String {
+        if p.event_id.len() != 64 || !p.event_id.chars().all(|c| c.is_ascii_hexdigit()) {
+            return format!(
+                "Error: event_id must be a 64-character hex string (got {:?})",
+                p.event_id
+            );
+        }
+        let encoded = percent_encode(&p.event_id);
+        match self
+            .client
+            .delete(&format!("/api/messages/{}", encoded))
+            .await
+        {
+            Ok(_) => "Message deleted.".to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }

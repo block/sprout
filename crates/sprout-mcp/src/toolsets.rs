@@ -41,54 +41,54 @@ use std::collections::{HashMap, HashSet};
 /// a `:ro` (read-only) mode restriction.
 pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     // ── default ─────────────────────────────────────────────────────────────
-    ("send_message",       "default", false),
-    ("send_diff_message",  "default", false),
-    ("edit_message",       "default", false),
-    ("delete_message",     "default", false),
-    ("get_messages",       "default", true),
-    ("get_thread",         "default", true),
-    ("search",             "default", true),
-    ("get_feed",           "default", true),
-    ("add_reaction",       "default", false),
-    ("remove_reaction",    "default", false),
-    ("get_reactions",      "default", true),
-    ("list_channels",      "default", true),
-    ("get_channel",        "default", true),
-    ("join_channel",       "default", false),
-    ("leave_channel",      "default", false),
-    ("update_channel",     "default", false),
-    ("set_channel_topic",  "default", false),
-    ("set_channel_purpose","default", false),
-    ("open_dm",            "default", false),
-    ("get_users",          "default", true),
-    ("set_profile",        "default", false),
-    ("get_presence",       "default", true),
-    ("set_presence",       "default", false),
-    ("trigger_workflow",   "default", false),
-    ("approve_step",       "default", false),
+    ("send_message", "default", false),
+    ("send_diff_message", "default", false),
+    ("edit_message", "default", false),
+    ("delete_message", "default", false),
+    ("get_messages", "default", true),
+    ("get_thread", "default", true),
+    ("search", "default", true),
+    ("get_feed", "default", true),
+    ("add_reaction", "default", false),
+    ("remove_reaction", "default", false),
+    ("get_reactions", "default", true),
+    ("list_channels", "default", true),
+    ("get_channel", "default", true),
+    ("join_channel", "default", false),
+    ("leave_channel", "default", false),
+    ("update_channel", "default", false),
+    ("set_channel_topic", "default", false),
+    ("set_channel_purpose", "default", false),
+    ("open_dm", "default", false),
+    ("get_users", "default", true),
+    ("set_profile", "default", false),
+    ("get_presence", "default", true),
+    ("set_presence", "default", false),
+    ("trigger_workflow", "default", false),
+    ("approve_step", "default", false),
     // ── channel_admin ────────────────────────────────────────────────────────
-    ("create_channel",        "channel_admin", false),
-    ("archive_channel",       "channel_admin", false),
-    ("unarchive_channel",     "channel_admin", false),
-    ("add_channel_member",    "channel_admin", false),
+    ("create_channel", "channel_admin", false),
+    ("archive_channel", "channel_admin", false),
+    ("unarchive_channel", "channel_admin", false),
+    ("add_channel_member", "channel_admin", false),
     ("remove_channel_member", "channel_admin", false),
-    ("list_channel_members",  "channel_admin", true),
+    ("list_channel_members", "channel_admin", true),
     // ── dms ──────────────────────────────────────────────────────────────────
     ("add_dm_member", "dms", false),
-    ("list_dms",      "dms", true),
+    ("list_dms", "dms", true),
     // ── canvas ───────────────────────────────────────────────────────────────
     ("get_canvas", "canvas", true),
     ("set_canvas", "canvas", false),
     // ── workflow_admin ────────────────────────────────────────────────────────
-    ("list_workflows",   "workflow_admin", true),
-    ("create_workflow",  "workflow_admin", false),
-    ("update_workflow",  "workflow_admin", false),
-    ("delete_workflow",  "workflow_admin", false),
-    ("get_workflow_runs","workflow_admin", true),
+    ("list_workflows", "workflow_admin", true),
+    ("create_workflow", "workflow_admin", false),
+    ("update_workflow", "workflow_admin", false),
+    ("delete_workflow", "workflow_admin", false),
+    ("get_workflow_runs", "workflow_admin", true),
     // ── media ─────────────────────────────────────────────────────────────────
     ("upload_file", "media", false),
     // ── realtime ──────────────────────────────────────────────────────────────
-    ("subscribe",   "realtime", false),
+    ("subscribe", "realtime", false),
     ("unsubscribe", "realtime", false),
     // ── identity ──────────────────────────────────────────────────────────────
     ("set_channel_add_policy", "identity", false),
@@ -99,12 +99,12 @@ pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
 /// Aliases are registered separately in the router — they are **not** members
 /// of any toolset and are therefore not filtered by toolset logic.
 pub const ALIASES: &[(&str, &str)] = &[
-    ("send_reply",            "send_message"),
-    ("get_channel_history",   "get_messages"),
-    ("get_user_profile",      "get_users"),
-    ("get_users_batch",       "get_users"),
-    ("get_feed_mentions",     "get_feed"),
-    ("get_feed_actions",      "get_feed"),
+    ("send_reply", "send_message"),
+    ("get_channel_history", "get_messages"),
+    ("get_user_profile", "get_users"),
+    ("get_users_batch", "get_users"),
+    ("get_feed_mentions", "get_feed"),
+    ("get_feed_actions", "get_feed"),
     ("approve_workflow_step", "approve_step"),
 ];
 
@@ -155,8 +155,14 @@ pub struct ToolsetConfig {
 // ---------------------------------------------------------------------------
 
 const KNOWN_TOOLSETS: &[&str] = &[
-    "default", "channel_admin", "dms", "canvas",
-    "workflow_admin", "media", "realtime", "identity",
+    "default",
+    "channel_admin",
+    "dms",
+    "canvas",
+    "workflow_admin",
+    "media",
+    "realtime",
+    "identity",
 ];
 
 // ---------------------------------------------------------------------------
@@ -170,7 +176,10 @@ pub fn all_toolsets() -> Vec<ToolsetDef> {
     let mut map: std::collections::BTreeMap<&'static str, Vec<ToolDef>> =
         std::collections::BTreeMap::new();
     for &(tool, ts, is_read) in ALL_TOOLS {
-        map.entry(ts).or_default().push(ToolDef { name: tool, is_read });
+        map.entry(ts).or_default().push(ToolDef {
+            name: tool,
+            is_read,
+        });
     }
     map.into_iter()
         .map(|(name, tools)| ToolsetDef {
@@ -185,9 +194,16 @@ pub fn tools_in_toolset(name: &str) -> Option<Vec<ToolDef>> {
     let tools: Vec<ToolDef> = ALL_TOOLS
         .iter()
         .filter(|&&(_, ts, _)| ts == name)
-        .map(|&(tool, _, is_read)| ToolDef { name: tool, is_read })
+        .map(|&(tool, _, is_read)| ToolDef {
+            name: tool,
+            is_read,
+        })
         .collect();
-    if tools.is_empty() { None } else { Some(tools) }
+    if tools.is_empty() {
+        None
+    } else {
+        Some(tools)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -222,14 +238,20 @@ impl ToolsetConfig {
             };
 
             match name {
-                "none" => { enabled.clear(); }
-                "dynamic" => { dynamic = true; }
+                "none" => {
+                    enabled.clear();
+                }
+                "dynamic" => {
+                    dynamic = true;
+                }
                 "all" => {
                     for &ts in KNOWN_TOOLSETS {
                         enabled.insert(ts, mode);
                     }
                 }
-                "default" => { enabled.insert("default", mode); }
+                "default" => {
+                    enabled.insert("default", mode);
+                }
                 other => {
                     // Intern to &'static str if known; warn and skip if not.
                     if let Some(&known) = KNOWN_TOOLSETS.iter().find(|&&k| k == other) {
@@ -259,9 +281,9 @@ impl ToolsetConfig {
             .iter()
             .filter(|&&(_tool, ts, is_read)| {
                 match self.enabled.get(ts) {
-                    None => true,                          // toolset not enabled → remove
-                    Some(Mode::ReadWrite) => false,        // fully enabled → keep
-                    Some(Mode::ReadOnly) => !is_read,      // ro → remove write tools
+                    None => true,                     // toolset not enabled → remove
+                    Some(Mode::ReadWrite) => false,   // fully enabled → keep
+                    Some(Mode::ReadOnly) => !is_read, // ro → remove write tools
                 }
             })
             .map(|&(tool, _, _)| tool)
@@ -288,7 +310,11 @@ mod tests {
     fn enabled_tools(input: &str) -> HashSet<&'static str> {
         let cfg = ToolsetConfig::parse(input);
         let remove = cfg.tools_to_remove();
-        ALL_TOOLS.iter().map(|&(t, _, _)| t).filter(|t| !remove.contains(t)).collect()
+        ALL_TOOLS
+            .iter()
+            .map(|&(t, _, _)| t)
+            .filter(|t| !remove.contains(t))
+            .collect()
     }
 
     #[test]

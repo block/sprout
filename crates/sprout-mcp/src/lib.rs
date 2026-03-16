@@ -118,3 +118,5 @@
 pub mod relay_client;
 /// MCP tool implementations backed by the relay client.
 pub mod server;
+/// Toolset definitions and configuration for organizing MCP tools.
+pub mod toolsets;
