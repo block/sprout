@@ -179,8 +179,12 @@ pub async fn handle_req(
                 continue;
             }
 
-            // Apply full NIP-01 filter matching (handles fields not in the DB query).
-            if !filters_match(&filters, stored) {
+            // Per-filter NIP-01 matching — use the current filter only, not the
+            // full filter set. OR semantics across filters are handled by the outer
+            // loop (each filter gets its own DB query). Using the full set here would
+            // let a row from query A pass because it matches filter B, consuming B's
+            // slot in the dedup set and causing under-fetch.
+            if !filters_match(std::slice::from_ref(filter), stored) {
                 continue;
             }
 
@@ -434,6 +438,19 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
         }
     });
 
+    // Push single-value #p tag into SQL via event_mentions join.
+    // This is critical for gift-wrap (kind:1059) and membership notification
+    // queries where >500 events for other recipients would otherwise push
+    // the caller's events past the LIMIT before post-filtering.
+    let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
+    let p_tag_hex = filter.generic_tags.get(&p_tag).and_then(|values| {
+        if values.len() == 1 {
+            values.iter().next().map(|v| v.to_string())
+        } else {
+            None
+        }
+    });
+
     EventQuery {
         channel_id,
         kinds,
@@ -441,6 +458,7 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
         since,
         until,
         limit: Some(limit),
+        p_tag_hex,
         ..Default::default()
     }
 }
@@ -541,7 +559,7 @@ mod tests {
     #[test]
     fn test_search_filter_detection() {
         let search_filter = Filter::new().search("hello world");
-        let filters = vec![search_filter];
+        let filters = [search_filter];
         assert!(filters.iter().any(|f| f.search.is_some()));
     }
 

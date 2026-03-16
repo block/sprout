@@ -57,11 +57,8 @@ pub async fn get_canvas(
     let q = EventQuery {
         channel_id: Some(channel_id),
         kinds: Some(vec![KIND_CANVAS as i32]),
-        pubkey: None,
-        since: None,
-        until: None,
         limit: Some(1),
-        offset: None,
+        ..Default::default()
     };
 
     let events = state
