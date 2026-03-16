@@ -563,6 +563,8 @@ export function AppShell() {
             <React.Fragment key={activeChannel?.id ?? "no-channel"}>
               <MessageTimeline
                 activeReplyTargetId={replyTargetId}
+                currentPubkey={identityQuery.data?.pubkey}
+                profiles={messageProfilesQuery.data?.profiles}
                 emptyDescription={
                   activeChannel?.channelType === "forum"
                     ? "Select a stream or DM to load real message history in this first integration pass."

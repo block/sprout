@@ -203,6 +203,7 @@ export type TokenScope =
   | "channels:read"
   | "channels:write"
   | "users:read"
+  | "users:write"
   | "files:read"
   | "files:write";
 

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use chrono::Utc;
 use hex;
 use tracing::{debug, error, info, warn};
 
@@ -10,7 +11,7 @@ use sprout_audit::{AuditAction, NewAuditEntry};
 use sprout_core::event::StoredEvent;
 use sprout_core::kind::{
     event_kind_u32, is_ephemeral, is_workflow_execution_kind, KIND_AUTH, KIND_CANVAS,
-    KIND_DELETION, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
+    KIND_DELETION, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP,
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_PRESENCE_UPDATE,
     KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
     KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
@@ -69,13 +70,17 @@ pub(crate) async fn dispatch_persistent_event(
         );
     }
 
-    let search = Arc::clone(&state.search);
-    let stored_for_search = stored_event.clone();
-    tokio::spawn(async move {
-        if let Err(e) = search.index_event(&stored_for_search).await {
-            error!(event_id = %stored_for_search.event.id.to_hex(), "Search index failed: {e}");
-        }
-    });
+    // Skip search indexing for NIP-17 gift wraps — content is ciphertext,
+    // and indexing would leak #p tag metadata into the search index.
+    if kind_u32 != KIND_GIFT_WRAP {
+        let search = Arc::clone(&state.search);
+        let stored_for_search = stored_event.clone();
+        tokio::spawn(async move {
+            if let Err(e) = search.index_event(&stored_for_search).await {
+                error!(event_id = %stored_for_search.event.id.to_hex(), "Search index failed: {e}");
+            }
+        });
+    }
 
     let audit = Arc::clone(&state.audit);
     let audit_event_id = event_id_hex.clone();
@@ -106,7 +111,8 @@ pub(crate) async fn dispatch_persistent_event(
             .iter()
             .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("sprout:workflow"));
 
-    if !is_workflow_execution_kind(kind_u32) && !is_relay_workflow_msg {
+    if !is_workflow_execution_kind(kind_u32) && !is_relay_workflow_msg && kind_u32 != KIND_GIFT_WRAP
+    {
         let workflow_engine = Arc::clone(&state.workflow_engine);
         let workflow_event = stored_event.clone();
         tokio::spawn(async move {
@@ -161,8 +167,11 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
 
     // Enforce that the event's pubkey matches the authenticated identity.
     // Without this, a user authenticated as key A could submit events signed by key B.
-    // Exception: proxy:submit scope allows submitting events on behalf of shadow pubkeys.
-    if event.pubkey != auth_pubkey && !has_proxy_scope {
+    // Exceptions: proxy:submit scope, and NIP-17 gift wraps (kind:1059) which use
+    // ephemeral one-time signing keys by design. The relay still knows the submitter
+    // via NIP-42 auth for rate limiting and abuse prevention.
+    let is_gift_wrap = kind_u32 == KIND_GIFT_WRAP;
+    if event.pubkey != auth_pubkey && !has_proxy_scope && !is_gift_wrap {
         conn.send(RelayMessage::ok(
             &event_id_hex,
             false,
@@ -288,6 +297,11 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                 return;
             }
         }
+    } else if is_gift_wrap {
+        // NIP-17 gift wraps are always global (channel_id = None).
+        // A client-supplied h-tag is ignored — storing gift wraps channel-scoped
+        // would let any channel subscriber read them, bypassing #p gating.
+        None
     } else {
         extract_channel_id(&event)
     };
@@ -394,7 +408,35 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         }
     }
 
-    let (stored_event, was_inserted) = match state.db.insert_event(&event, channel_id).await {
+    // ── NIP-10 thread resolution for channel-scoped content kinds ─────────
+    // Resolve ancestry from e-tags before storage so thread_metadata is populated
+    // atomically with the event insert (prevents race with concurrent deletes).
+    let thread_meta = if requires_h_channel_scope(kind_u32) {
+        if let Some(ch_id) = channel_id {
+            match resolve_nip10_thread_meta(&event, ch_id, &state).await {
+                Ok(meta) => meta,
+                Err(msg) => {
+                    conn.send(RelayMessage::ok(
+                        &event_id_hex,
+                        false,
+                        &format!("invalid: {msg}"),
+                    ));
+                    return;
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let thread_params = thread_meta.as_ref().map(|m| m.as_params());
+    let (stored_event, was_inserted) = match state
+        .db
+        .insert_event_with_thread_metadata(&event, channel_id, thread_params)
+        .await
+    {
         Ok(result) => result,
         Err(sprout_db::DbError::AuthEventRejected) => {
             conn.send(RelayMessage::ok(
@@ -712,6 +754,209 @@ fn requires_h_channel_scope(kind: u32) -> bool {
             | KIND_FORUM_VOTE
             | KIND_FORUM_COMMENT
     )
+}
+
+/// Owned thread metadata — bridges the async resolve step and the borrowed
+/// [`sprout_db::event::ThreadMetadataParams`] expected by the DB layer.
+struct ThreadMetadataOwned {
+    event_id: Vec<u8>,
+    event_created_at: chrono::DateTime<Utc>,
+    channel_id: uuid::Uuid,
+    parent_event_id: Vec<u8>,
+    parent_event_created_at: chrono::DateTime<Utc>,
+    root_event_id: Vec<u8>,
+    root_event_created_at: chrono::DateTime<Utc>,
+    depth: i32,
+    broadcast: bool,
+}
+
+impl ThreadMetadataOwned {
+    fn as_params(&self) -> sprout_db::event::ThreadMetadataParams<'_> {
+        sprout_db::event::ThreadMetadataParams {
+            event_id: &self.event_id,
+            event_created_at: self.event_created_at,
+            channel_id: self.channel_id,
+            parent_event_id: Some(&self.parent_event_id),
+            parent_event_created_at: Some(self.parent_event_created_at),
+            root_event_id: Some(&self.root_event_id),
+            root_event_created_at: Some(self.root_event_created_at),
+            depth: self.depth,
+            broadcast: self.broadcast,
+        }
+    }
+}
+
+/// Resolve NIP-10 thread ancestry from e-tags on a WebSocket-submitted event.
+///
+/// Returns:
+///   `Ok(None)`        — not a reply (no NIP-10 markers), use plain insert
+///   `Ok(Some(meta))`  — reply with resolved ancestry, use insert_event_with_thread_metadata
+///   `Err(msg)`        — validation failure, reject event with OK false
+async fn resolve_nip10_thread_meta(
+    event: &nostr::Event,
+    channel_id: uuid::Uuid,
+    state: &AppState,
+) -> Result<Option<ThreadMetadataOwned>, String> {
+    // Scan e-tags for NIP-10 positional markers.
+    let mut root_hex: Option<String> = None;
+    let mut reply_hex: Option<String> = None;
+
+    for tag in event.tags.iter() {
+        let parts = tag.as_slice();
+        if parts.len() >= 4 && parts[0] == "e" {
+            let hex_val = &parts[1];
+            let marker = &parts[3];
+            if hex_val.len() == 64 && hex_val.chars().all(|c| c.is_ascii_hexdigit()) {
+                match marker.as_str() {
+                    "root" => root_hex = Some(hex_val.to_string()),
+                    "reply" => reply_hex = Some(hex_val.to_string()),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // No NIP-10 markers → not a reply, proceed with plain insert.
+    if root_hex.is_none() && reply_hex.is_none() {
+        return Ok(None);
+    }
+
+    // NIP-10: "reply" marker is required to indicate a reply. "root"-only
+    // is a thread-context reference, not a reply — skip thread metadata.
+    let (root_hex, parent_hex) = match (root_hex, reply_hex) {
+        (Some(r), Some(p)) => (r, p),      // nested reply: root + parent
+        (None, Some(p)) => (p.clone(), p), // direct reply: single "reply" = both
+        (Some(_), None) | (None, None) => return Ok(None), // not a reply
+    };
+
+    // Decode and look up parent event.
+    let parent_bytes =
+        hex::decode(&parent_hex).map_err(|_| "invalid parent event ID hex".to_string())?;
+
+    let parent_event = state
+        .db
+        .get_event_by_id(&parent_bytes)
+        .await
+        .map_err(|e| format!("db error looking up parent: {e}"))?
+        .ok_or_else(|| "reply parent not found".to_string())?;
+
+    // Verify parent belongs to the same channel.
+    match parent_event.channel_id {
+        Some(parent_ch) if parent_ch != channel_id => {
+            return Err("parent event belongs to a different channel".to_string());
+        }
+        None => return Err("parent event has no channel association".to_string()),
+        _ => {}
+    }
+
+    let parent_created =
+        chrono::DateTime::from_timestamp(parent_event.event.created_at.as_u64() as i64, 0)
+            .unwrap_or_else(Utc::now);
+
+    let client_root_bytes =
+        hex::decode(&root_hex).map_err(|_| "invalid root event ID hex".to_string())?;
+
+    let parent_meta = state
+        .db
+        .get_thread_metadata_by_event(&parent_bytes)
+        .await
+        .map_err(|e| format!("db error looking up thread metadata: {e}"))?;
+
+    let (final_root_bytes, root_created, depth) = match parent_meta {
+        Some(meta) => {
+            let effective_root = meta.root_event_id.unwrap_or_else(|| parent_bytes.clone());
+            // Reject if client-supplied root diverges from server-resolved root.
+            // This prevents stored thread_metadata from contradicting wire-visible e-tags.
+            if client_root_bytes != effective_root {
+                return Err("root tag does not match thread ancestry".to_string());
+            }
+            let root_ts = if let Ok(Some(root_ev)) = state.db.get_event_by_id(&effective_root).await
+            {
+                chrono::DateTime::from_timestamp(root_ev.event.created_at.as_u64() as i64, 0)
+                    .unwrap_or(parent_created)
+            } else {
+                parent_created
+            };
+            let depth = meta.depth + 1;
+            if depth > 100 {
+                return Err("thread depth limit exceeded".to_string());
+            }
+            (effective_root, root_ts, depth)
+        }
+        None => {
+            // Parent has no thread metadata — either it's a top-level message (the root)
+            // or a legacy WS reply created before NIP-10 thread resolution was added.
+            // Fall back to parsing the parent's own e-tags to find its root.
+            //
+            // Check "root" marker first, then "reply" — Sprout's REST emitter uses a
+            // single ["e", <root>, "", "reply"] tag for direct replies (no separate
+            // "root" tag), so we must handle both forms.
+            let parent_root = parent_event
+                .event
+                .tags
+                .iter()
+                .find_map(|t| {
+                    let parts = t.as_slice();
+                    if parts.len() >= 4 && parts[0] == "e" && parts[3] == "root" {
+                        hex::decode(&parts[1]).ok().filter(|b| b.len() == 32)
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    // Direct-reply form: single "reply" tag = root reference
+                    parent_event.event.tags.iter().find_map(|t| {
+                        let parts = t.as_slice();
+                        if parts.len() >= 4 && parts[0] == "e" && parts[3] == "reply" {
+                            hex::decode(&parts[1]).ok().filter(|b| b.len() == 32)
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .unwrap_or_else(|| parent_bytes.clone());
+
+            if client_root_bytes != parent_root {
+                return Err("root tag does not match thread ancestry".to_string());
+            }
+            // depth=1 if parent is root, depth=2 if parent is a legacy reply.
+            // depth=2 is an approximation for deeper legacy chains (no metadata to
+            // determine true depth), but correct for the common direct-reply case.
+            let depth = if parent_root == parent_bytes { 1 } else { 2 };
+            // Look up actual root event for its timestamp (don't use parent_created).
+            let root_created = if parent_root != parent_bytes {
+                if let Ok(Some(root_ev)) = state.db.get_event_by_id(&parent_root).await {
+                    chrono::DateTime::from_timestamp(root_ev.event.created_at.as_u64() as i64, 0)
+                        .unwrap_or(parent_created)
+                } else {
+                    parent_created
+                }
+            } else {
+                parent_created
+            };
+            (parent_root, root_created, depth)
+        }
+    };
+
+    let broadcast = event.tags.iter().any(|t| {
+        let parts = t.as_slice();
+        parts.len() >= 2 && parts[0] == "broadcast" && parts[1] == "1"
+    });
+
+    let event_created_at = chrono::DateTime::from_timestamp(event.created_at.as_u64() as i64, 0)
+        .unwrap_or_else(Utc::now);
+
+    Ok(Some(ThreadMetadataOwned {
+        event_id: event.id.as_bytes().to_vec(),
+        event_created_at,
+        channel_id,
+        parent_event_id: parent_bytes,
+        parent_event_created_at: parent_created,
+        root_event_id: final_root_bytes,
+        root_event_created_at: root_created,
+        depth,
+        broadcast,
+    }))
 }
 
 #[cfg(test)]

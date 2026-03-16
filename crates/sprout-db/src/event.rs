@@ -31,6 +31,9 @@ pub struct EventQuery {
     pub limit: Option<i64>,
     /// Number of events to skip (for pagination).
     pub offset: Option<i64>,
+    /// Restrict to events with a `p` tag mentioning this hex pubkey.
+    /// Joins against `event_mentions` table (indexed).
+    pub p_tag_hex: Option<String>,
 }
 
 /// Insert a Nostr event. Rejects AUTH and ephemeral kinds.
@@ -94,21 +97,42 @@ pub async fn insert_event(
 /// Uses `QueryBuilder` for dynamic filter composition — avoids string concatenation
 /// while keeping all user values in bind parameters.
 pub async fn query_events(pool: &MySqlPool, q: &EventQuery) -> Result<Vec<StoredEvent>> {
+    // kinds:[] means "match no kinds" — return empty immediately.
+    if q.kinds.as_deref().is_some_and(|k| k.is_empty()) {
+        return Ok(vec![]);
+    }
+
     let limit_val = q.limit.unwrap_or(100).min(1000);
     let offset_val = q.offset.unwrap_or(0);
 
-    let mut qb: QueryBuilder<sqlx::MySql> = QueryBuilder::new(
-        "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
-         FROM events WHERE deleted_at IS NULL",
-    );
+    let mut qb: QueryBuilder<sqlx::MySql> = if let Some(ref p_hex) = q.p_tag_hex {
+        // Join against event_mentions for #p-filtered queries (indexed).
+        let mut b = QueryBuilder::new(
+            "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, \
+             e.sig, e.received_at, e.channel_id \
+             FROM events e \
+             INNER JOIN event_mentions m ON e.id = m.event_id \
+             WHERE e.deleted_at IS NULL AND m.pubkey_hex = ",
+        );
+        b.push_bind(p_hex.to_ascii_lowercase());
+        b
+    } else {
+        QueryBuilder::new(
+            "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
+             FROM events WHERE deleted_at IS NULL",
+        )
+    };
+
+    // Use unqualified column names when no join, qualified when joined.
+    let col_prefix = if q.p_tag_hex.is_some() { "e." } else { "" };
 
     if let Some(ch) = q.channel_id {
-        qb.push(" AND channel_id = ")
+        qb.push(format!(" AND {col_prefix}channel_id = "))
             .push_bind(ch.as_bytes().to_vec());
     }
 
     if let Some(ks) = q.kinds.as_deref().filter(|k| !k.is_empty()) {
-        qb.push(" AND kind IN (");
+        qb.push(format!(" AND {col_prefix}kind IN ("));
         let mut sep = qb.separated(", ");
         for k in ks {
             sep.push_bind(*k);
@@ -117,16 +141,19 @@ pub async fn query_events(pool: &MySqlPool, q: &EventQuery) -> Result<Vec<Stored
     }
 
     if let Some(ref pk) = q.pubkey {
-        qb.push(" AND pubkey = ").push_bind(pk.clone());
+        qb.push(format!(" AND {col_prefix}pubkey = "))
+            .push_bind(pk.clone());
     }
     if let Some(s) = q.since {
-        qb.push(" AND created_at >= ").push_bind(s);
+        qb.push(format!(" AND {col_prefix}created_at >= "))
+            .push_bind(s);
     }
     if let Some(u) = q.until {
-        qb.push(" AND created_at <= ").push_bind(u);
+        qb.push(format!(" AND {col_prefix}created_at <= "))
+            .push_bind(u);
     }
 
-    qb.push(" ORDER BY created_at DESC LIMIT ")
+    qb.push(format!(" ORDER BY {col_prefix}created_at DESC LIMIT "))
         .push_bind(limit_val);
     qb.push(" OFFSET ").push_bind(offset_val);
 
@@ -345,6 +372,37 @@ pub async fn get_event_by_id_including_deleted(
         Some(r) => row_to_stored_event(r),
         None => Ok(None),
     }
+}
+
+/// Batch-fetch non-deleted events by their raw 32-byte IDs.
+///
+/// Returns events in arbitrary order — callers reorder as needed.
+/// Uses a single `WHERE id IN (...)` query regardless of input size.
+pub async fn get_events_by_ids(pool: &MySqlPool, ids: &[&[u8]]) -> Result<Vec<StoredEvent>> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    debug_assert!(ids.len() <= 500, "batch fetch should be bounded by caller");
+
+    let mut qb: QueryBuilder<sqlx::MySql> = QueryBuilder::new(
+        "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
+         FROM events WHERE deleted_at IS NULL AND id IN (",
+    );
+    let mut sep = qb.separated(", ");
+    for id in ids {
+        sep.push_bind(id.to_vec());
+    }
+    qb.push(")");
+
+    let rows = qb.build().fetch_all(pool).await?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        if let Some(ev) = row_to_stored_event(row)? {
+            out.push(ev);
+        }
+    }
+    Ok(out)
 }
 
 /// Parameters for [`insert_event_with_thread_metadata`].

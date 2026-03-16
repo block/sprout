@@ -1,0 +1,95 @@
+import { ArrowRightLeft } from "lucide-react";
+
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import { resolveUserLabel } from "@/features/profile/lib/identity";
+
+type SystemMessagePayload = {
+  type: string;
+  actor?: string;
+  target?: string;
+  topic?: string;
+  purpose?: string;
+};
+
+function resolveLabel(
+  pubkey: string | undefined,
+  currentPubkey: string | undefined,
+  profiles: UserProfileLookup | undefined,
+): string {
+  if (!pubkey) {
+    return "Someone";
+  }
+  return resolveUserLabel({ pubkey, currentPubkey, profiles });
+}
+
+function describeSystemEvent(
+  payload: SystemMessagePayload,
+  currentPubkey: string | undefined,
+  profiles: UserProfileLookup | undefined,
+): string | null {
+  const actor = resolveLabel(payload.actor, currentPubkey, profiles);
+
+  switch (payload.type) {
+    case "member_joined": {
+      const target = resolveLabel(payload.target, currentPubkey, profiles);
+      if (payload.actor === payload.target) {
+        return `${actor} joined the channel`;
+      }
+      return `${actor} added ${target} to the channel`;
+    }
+    case "member_left": {
+      return `${actor} left the channel`;
+    }
+    case "member_removed": {
+      const target = resolveLabel(payload.target, currentPubkey, profiles);
+      return `${actor} removed ${target} from the channel`;
+    }
+    case "topic_changed":
+      return `${actor} changed the topic to "${payload.topic}"`;
+    case "purpose_changed":
+      return `${actor} changed the purpose to "${payload.purpose}"`;
+    case "channel_created":
+      return `${actor} created this channel`;
+    default:
+      return null;
+  }
+}
+
+export function SystemMessageRow({
+  body,
+  time,
+  currentPubkey,
+  profiles,
+}: {
+  body: string;
+  time: string;
+  currentPubkey?: string;
+  profiles?: UserProfileLookup;
+}) {
+  let payload: SystemMessagePayload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return null;
+  }
+
+  const description = describeSystemEvent(payload, currentPubkey, profiles);
+  if (!description) {
+    return null;
+  }
+
+  return (
+    <div
+      className="flex items-center gap-3 px-2 py-1.5"
+      data-testid="system-message-row"
+    >
+      <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted">
+        <ArrowRightLeft className="h-3 w-3 text-muted-foreground" />
+      </div>
+      <p className="text-xs text-muted-foreground">{description}</p>
+      <span className="ml-auto whitespace-nowrap text-xs text-muted-foreground/60">
+        {time}
+      </span>
+    </div>
+  );
+}
