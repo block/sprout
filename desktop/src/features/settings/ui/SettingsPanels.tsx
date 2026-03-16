@@ -3,11 +3,11 @@ import {
   KeyRound,
   MonitorCog,
   Moon,
+  Stethoscope,
   Sun,
   UserRound,
   type LucideIcon,
 } from "lucide-react";
-import type * as React from "react";
 import {
   PresenceBadge,
   PresenceDot,
@@ -16,9 +16,15 @@ import { TokenSettingsCard } from "@/features/tokens/ui/TokenSettingsCard";
 import type { PresenceStatus } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { useTheme } from "@/shared/theme/ThemeProvider";
+import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
 
-export type SettingsSection = "profile" | "presence" | "appearance" | "tokens";
+export type SettingsSection =
+  | "profile"
+  | "presence"
+  | "appearance"
+  | "tokens"
+  | "doctor";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
 
@@ -64,6 +70,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "tokens",
     label: "Tokens",
     icon: KeyRound,
+  },
+  {
+    value: "doctor",
+    label: "Doctor",
+    icon: Stethoscope,
   },
 ];
 
@@ -269,6 +280,8 @@ export function renderSettingsSection(
       return <ThemeSettingsCard />;
     case "tokens":
       return <TokenSettingsCard currentPubkey={props.currentPubkey} />;
+    case "doctor":
+      return <DoctorSettingsPanel />;
     default: {
       const exhaustiveCheck: never = section;
       return exhaustiveCheck;

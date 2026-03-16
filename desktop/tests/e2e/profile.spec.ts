@@ -113,3 +113,25 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
   await expect(page.getByTestId("settings-view")).toHaveCount(0);
   await expect(page.getByTestId("chat-title")).toHaveText("Home");
 });
+
+test("shows doctor checks for local sprout tooling", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("settings-view")).toBeVisible();
+  await page.getByTestId("settings-nav-doctor").click();
+
+  await expect(page.getByTestId("settings-doctor")).toBeVisible();
+  await expect(page.getByTestId("doctor-check-admin")).toContainText(
+    "sprout-admin",
+  );
+  await expect(page.getByTestId("doctor-check-acp")).toContainText(
+    "sprout-acp",
+  );
+  await expect(page.getByTestId("doctor-check-mcp")).toContainText(
+    "sprout-mcp-server",
+  );
+  await expect(page.getByTestId("doctor-provider-goose")).toContainText(
+    "Goose",
+  );
+});

@@ -1,6 +1,5 @@
 import type {
   AcpProvider,
-  CommandAvailability,
   ManagedAgentPrereqs,
   TokenScope,
 } from "@/shared/api/types";
@@ -8,13 +7,6 @@ import { MANAGED_AGENT_SCOPE_OPTIONS } from "@/features/tokens/lib/scopeOptions"
 import { cn } from "@/shared/lib/cn";
 import { Input } from "@/shared/ui/input";
 import { describeResolvedCommand } from "./agentUi";
-
-export type PrerequisiteCard = {
-  id: string;
-  label: string;
-  info: CommandAvailability | null;
-  command: string;
-};
 
 export function CreateAgentBasicsFields({
   name,
@@ -212,74 +204,6 @@ export function CreateAgentRuntimeFields({
         </div>
       </div>
     </>
-  );
-}
-
-export function CreateAgentPrerequisitesCard({
-  isLoading,
-  prereqs,
-  prerequisiteCards,
-}: {
-  isLoading: boolean;
-  prereqs: ManagedAgentPrereqs | null;
-  prerequisiteCards: PrerequisiteCard[];
-}) {
-  return (
-    <div className="rounded-2xl border border-border/70 bg-muted/20 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold tracking-tight">
-            Local Sprout binaries
-          </p>
-          <p className="text-sm text-muted-foreground">
-            The desktop app uses these commands to mint tokens and spawn
-            harnesses.
-          </p>
-        </div>
-        {isLoading ? (
-          <span className="text-xs text-muted-foreground">Checking...</span>
-        ) : null}
-      </div>
-
-      <div className="mt-4 grid gap-3 md:grid-cols-3">
-        {prerequisiteCards.map((card) => (
-          <div
-            className="rounded-2xl border border-border/70 bg-background/80 px-3 py-3"
-            key={card.id}
-          >
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-              {card.label}
-            </p>
-            <p className="mt-2 text-sm font-medium">{card.command}</p>
-            <p
-              className={cn(
-                "mt-1 text-xs",
-                card.info?.available
-                  ? "text-muted-foreground"
-                  : "text-destructive",
-              )}
-            >
-              {card.info?.resolvedPath
-                ? `Available via ${describeResolvedCommand(card.command, card.info.resolvedPath)}`
-                : isLoading
-                  ? "Looking for a matching binary..."
-                  : "Not currently available."}
-            </p>
-          </div>
-        ))}
-      </div>
-
-      {prereqs &&
-      (!prereqs.admin.available ||
-        !prereqs.acp.available ||
-        !prereqs.mcp.available) ? (
-        <p className="mt-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
-          Build the workspace binaries with `cargo build --release --workspace`
-          or point the command fields at installed binaries before enabling
-          token minting or spawn.
-        </p>
-      ) : null}
-    </div>
   );
 }
 
