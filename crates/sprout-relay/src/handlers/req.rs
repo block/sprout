@@ -424,9 +424,20 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
         .map(|l| (l as i64).min(MAX_HISTORICAL_LIMIT))
         .unwrap_or(MAX_HISTORICAL_LIMIT);
 
+    // Push single-author filter into SQL (EventQuery.pubkey is Option<Vec<u8>>).
+    // Multi-author filters fall through to in-memory filters_match post-filtering.
+    let pubkey = filter.authors.as_ref().and_then(|authors| {
+        if authors.len() == 1 {
+            authors.iter().next().map(|pk| pk.serialize().to_vec())
+        } else {
+            None
+        }
+    });
+
     EventQuery {
         channel_id,
         kinds,
+        pubkey,
         since,
         until,
         limit: Some(limit),
