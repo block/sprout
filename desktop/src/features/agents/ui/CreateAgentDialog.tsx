@@ -1,3 +1,4 @@
+import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -5,6 +6,7 @@ import {
   useCreateManagedAgentMutation,
   useManagedAgentPrereqsQuery,
 } from "@/features/agents/hooks";
+import { DEFAULT_MANAGED_AGENT_SCOPES } from "@/features/tokens/lib/scopeOptions";
 import type {
   CreateManagedAgentInput,
   CreateManagedAgentResponse,
@@ -22,6 +24,7 @@ import {
   CreateAgentBasicsFields,
   CreateAgentOptionToggles,
   CreateAgentPrerequisitesCard,
+  CreateAgentRuntimeProviderField,
   CreateAgentRuntimeFields,
   CreateAgentTokenSection,
 } from "./CreateAgentDialogSections";
@@ -48,20 +51,14 @@ export function CreateAgentDialog({
   const [spawnAfterCreate, setSpawnAfterCreate] = React.useState(true);
   const [tokenName, setTokenName] = React.useState("");
   const [selectedScopes, setSelectedScopes] = React.useState<Set<TokenScope>>(
-    () =>
-      new Set<TokenScope>([
-        "messages:read",
-        "messages:write",
-        "channels:read",
-        "users:read",
-        "users:write",
-      ]),
+    () => new Set<TokenScope>(DEFAULT_MANAGED_AGENT_SCOPES),
   );
   const [turnTimeoutSeconds, setTurnTimeoutSeconds] = React.useState("300");
   const [selectedProviderId, setSelectedProviderId] =
     React.useState<string>("custom");
   const [hasSyncedProviderSelection, setHasSyncedProviderSelection] =
     React.useState(false);
+  const [showAdvanced, setShowAdvanced] = React.useState(false);
   const providers = providersQuery.data ?? [];
   const prereqs = prereqsQuery.data ?? null;
   const selectedProvider = React.useMemo(
@@ -137,21 +134,22 @@ export function CreateAgentDialog({
     setSpawnAfterCreate(false);
   }, [prereqs, spawnAfterCreate]);
 
+  React.useEffect(() => {
+    if (
+      providersQuery.error instanceof Error ||
+      prereqsQuery.error instanceof Error
+    ) {
+      setShowAdvanced(true);
+    }
+  }, [prereqsQuery.error, providersQuery.error]);
+
   function reset() {
     setName("");
     setRelayUrl("");
     setMintToken(true);
     setSpawnAfterCreate(true);
     setTokenName("");
-    setSelectedScopes(
-      new Set<TokenScope>([
-        "messages:read",
-        "messages:write",
-        "channels:read",
-        "users:read",
-        "users:write",
-      ]),
-    );
+    setSelectedScopes(new Set<TokenScope>(DEFAULT_MANAGED_AGENT_SCOPES));
     setAcpCommand("sprout-acp");
     setAgentCommand("goose");
     setAgentArgs("acp");
@@ -159,6 +157,7 @@ export function CreateAgentDialog({
     setTurnTimeoutSeconds("300");
     setSelectedProviderId("custom");
     setHasSyncedProviderSelection(false);
+    setShowAdvanced(false);
     createMutation.reset();
   }
 
@@ -186,6 +185,7 @@ export function CreateAgentDialog({
     setSelectedProviderId(nextProviderId);
 
     if (nextProviderId === "custom") {
+      setShowAdvanced(true);
       return;
     }
 
@@ -244,54 +244,22 @@ export function CreateAgentDialog({
           <DialogHeader className="border-b border-border/60 px-6 py-5 pr-14">
             <DialogTitle>Create agent</DialogTitle>
             <DialogDescription>
-              This creates a local agent identity, optionally mints a relay
-              token, and can spawn `sprout-acp` immediately.
+              This creates a local agent identity, syncs its display name when
+              possible, optionally mints a relay token, and can spawn
+              `sprout-acp` immediately.
             </DialogDescription>
           </DialogHeader>
 
           <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
-            <CreateAgentBasicsFields
-              name={name}
-              onNameChange={setName}
-              onRelayUrlChange={setRelayUrl}
-              relayUrl={relayUrl}
-            />
+            <CreateAgentBasicsFields name={name} onNameChange={setName} />
 
-            <CreateAgentRuntimeFields
-              acpCommand={acpCommand}
-              agentArgs={agentArgs}
-              agentCommand={agentCommand}
-              mcpCommand={mcpCommand}
-              onAcpCommandChange={setAcpCommand}
-              onAgentArgsChange={setAgentArgs}
-              onAgentCommandChange={setAgentCommand}
-              onMcpCommandChange={setMcpCommand}
+            <CreateAgentRuntimeProviderField
               onProviderChange={handleProviderChange}
-              onTurnTimeoutChange={setTurnTimeoutSeconds}
               providers={providers}
               providersLoading={providersQuery.isLoading}
               selectedProvider={selectedProvider}
               selectedProviderId={selectedProviderId}
-              turnTimeoutSeconds={turnTimeoutSeconds}
             />
-
-            <CreateAgentPrerequisitesCard
-              isLoading={prereqsQuery.isLoading}
-              prereqs={prereqs}
-              prerequisiteCards={prerequisiteCards}
-            />
-
-            {providersQuery.error instanceof Error ? (
-              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                {providersQuery.error.message}
-              </p>
-            ) : null}
-
-            {prereqsQuery.error instanceof Error ? (
-              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                {prereqsQuery.error.message}
-              </p>
-            ) : null}
 
             <CreateAgentOptionToggles
               isMintSupported={isMintSupported}
@@ -321,6 +289,70 @@ export function CreateAgentDialog({
                 tokenName={tokenName}
               />
             ) : null}
+
+            <div className="rounded-2xl border border-border/70 bg-muted/20">
+              <button
+                aria-expanded={showAdvanced}
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                onClick={() => setShowAdvanced((current) => !current)}
+                type="button"
+              >
+                <div>
+                  <p className="text-sm font-semibold tracking-tight">
+                    Advanced setup
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Relay overrides, raw commands, timeout, and local binary
+                    checks.
+                  </p>
+                </div>
+                <span className="shrink-0 self-center text-muted-foreground">
+                  <ChevronDown
+                    className={`h-4 w-4 transition-transform ${showAdvanced ? "rotate-180" : ""}`}
+                  />
+                </span>
+              </button>
+
+              {showAdvanced ? (
+                <div className="overflow-hidden">
+                  <div className="space-y-5 border-t border-border/60 px-4 py-4">
+                    <CreateAgentRuntimeFields
+                      acpCommand={acpCommand}
+                      agentArgs={agentArgs}
+                      agentCommand={agentCommand}
+                      mcpCommand={mcpCommand}
+                      onAcpCommandChange={setAcpCommand}
+                      onAgentArgsChange={setAgentArgs}
+                      onAgentCommandChange={setAgentCommand}
+                      onMcpCommandChange={setMcpCommand}
+                      onRelayUrlChange={setRelayUrl}
+                      onTurnTimeoutChange={setTurnTimeoutSeconds}
+                      relayUrl={relayUrl}
+                      selectedProviderId={selectedProviderId}
+                      turnTimeoutSeconds={turnTimeoutSeconds}
+                    />
+
+                    <CreateAgentPrerequisitesCard
+                      isLoading={prereqsQuery.isLoading}
+                      prereqs={prereqs}
+                      prerequisiteCards={prerequisiteCards}
+                    />
+
+                    {providersQuery.error instanceof Error ? (
+                      <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                        {providersQuery.error.message}
+                      </p>
+                    ) : null}
+
+                    {prereqsQuery.error instanceof Error ? (
+                      <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                        {prereqsQuery.error.message}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
 
             {createMutation.error instanceof Error ? (
               <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

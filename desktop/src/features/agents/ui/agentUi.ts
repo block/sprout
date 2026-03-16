@@ -1,17 +1,3 @@
-import type { TokenScope } from "@/shared/api/types";
-
-export const AGENT_SCOPE_OPTIONS: Array<{ value: TokenScope; label: string }> =
-  [
-    { value: "messages:read", label: "Messages read" },
-    { value: "messages:write", label: "Messages write" },
-    { value: "channels:read", label: "Channels read" },
-    { value: "channels:write", label: "Channels write" },
-    { value: "users:read", label: "Users read" },
-    { value: "users:write", label: "Users write" },
-    { value: "files:read", label: "Files read" },
-    { value: "files:write", label: "Files write" },
-  ];
-
 export function formatTimestamp(value: string | null) {
   if (!value) {
     return "Never";

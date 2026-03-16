@@ -16,6 +16,7 @@ import {
   useRevokeTokenMutation,
   useTokensQuery,
 } from "@/features/tokens/hooks";
+import { TOKEN_SCOPE_OPTIONS } from "@/features/tokens/lib/scopeOptions";
 import { getChannelMembers } from "@/shared/api/tauri";
 import type { Channel, Token, TokenScope } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
@@ -28,16 +29,6 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
-
-const ALL_SCOPES: { value: TokenScope; label: string }[] = [
-  { value: "messages:read", label: "Messages: Read" },
-  { value: "messages:write", label: "Messages: Write" },
-  { value: "channels:read", label: "Channels: Read" },
-  { value: "channels:write", label: "Channels: Write" },
-  { value: "users:read", label: "Users: Read" },
-  { value: "files:read", label: "Files: Read" },
-  { value: "files:write", label: "Files: Write" },
-];
 
 const EXPIRY_OPTIONS = [
   { value: 7, label: "7 days" },
@@ -375,7 +366,7 @@ function CreateTokenDialog({
               <div className="space-y-1.5">
                 <p className="text-sm font-medium">Scopes</p>
                 <div className="grid grid-cols-2 gap-2">
-                  {ALL_SCOPES.map(({ value, label }) => {
+                  {TOKEN_SCOPE_OPTIONS.map(({ value, label }) => {
                     const isSelected = selectedScopes.has(value);
                     return (
                       <button

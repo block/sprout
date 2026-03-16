@@ -230,6 +230,7 @@ type RawCreateManagedAgentResponse = {
   agent: RawManagedAgent;
   private_key_nsec: string;
   api_token: string | null;
+  profile_sync_error: string | null;
   spawn_error: string | null;
 };
 
@@ -815,6 +816,7 @@ export async function createManagedAgent(
     agent: fromRawManagedAgent(response.agent),
     privateKeyNsec: response.private_key_nsec,
     apiToken: response.api_token,
+    profileSyncError: response.profile_sync_error,
     spawnError: response.spawn_error,
   };
 }
