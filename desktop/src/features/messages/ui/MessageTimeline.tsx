@@ -1,9 +1,12 @@
 import { ArrowDown } from "lucide-react";
 
 import type { TimelineMessage } from "@/features/messages/types";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { Button } from "@/shared/ui/button";
 import { Separator } from "@/shared/ui/separator";
 import { MessageRow } from "./MessageRow";
+import { SystemMessageRow } from "./SystemMessageRow";
 import { TimelineSkeleton } from "./TimelineSkeleton";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
@@ -13,6 +16,8 @@ type MessageTimelineProps = {
   emptyTitle?: string;
   emptyDescription?: string;
   activeReplyTargetId?: string | null;
+  currentPubkey?: string;
+  profiles?: UserProfileLookup;
   onReply?: (message: TimelineMessage) => void;
   onToggleReaction?: (
     message: TimelineMessage,
@@ -29,6 +34,8 @@ export function MessageTimeline({
   emptyTitle = "No messages yet",
   emptyDescription = "Send the first message to start the thread.",
   activeReplyTargetId = null,
+  currentPubkey,
+  profiles,
   onReply,
   onToggleReaction,
   targetMessageId = null,
@@ -90,18 +97,28 @@ export function MessageTimeline({
           ) : null}
 
           {!isLoading
-            ? messages.map((message) => (
-                <MessageRow
-                  activeReplyTargetId={activeReplyTargetId}
-                  key={message.id}
-                  message={{
-                    ...message,
-                    highlighted: message.id === highlightedMessageId,
-                  }}
-                  onToggleReaction={onToggleReaction}
-                  onReply={onReply}
-                />
-              ))
+            ? messages.map((message) =>
+                message.kind === KIND_SYSTEM_MESSAGE ? (
+                  <SystemMessageRow
+                    body={message.body}
+                    currentPubkey={currentPubkey}
+                    key={message.id}
+                    profiles={profiles}
+                    time={message.time}
+                  />
+                ) : (
+                  <MessageRow
+                    activeReplyTargetId={activeReplyTargetId}
+                    key={message.id}
+                    message={{
+                      ...message,
+                      highlighted: message.id === highlightedMessageId,
+                    }}
+                    onToggleReaction={onToggleReaction}
+                    onReply={onReply}
+                  />
+                ),
+              )
             : null}
           <div aria-hidden className="h-px" ref={bottomAnchorRef} />
         </div>

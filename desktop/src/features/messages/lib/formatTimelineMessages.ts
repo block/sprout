@@ -14,12 +14,14 @@ import {
   KIND_REACTION,
   KIND_STREAM_MESSAGE,
   KIND_STREAM_MESSAGE_DIFF,
+  KIND_SYSTEM_MESSAGE,
 } from "@/shared/constants/kinds";
 
 function isTimelineContentEvent(event: RelayEvent) {
   return (
     event.kind === KIND_STREAM_MESSAGE ||
-    event.kind === KIND_STREAM_MESSAGE_DIFF
+    event.kind === KIND_STREAM_MESSAGE_DIFF ||
+    event.kind === KIND_SYSTEM_MESSAGE
   );
 }
 
@@ -274,12 +276,42 @@ export function formatTimelineMessages(
   });
 }
 
+function extractSystemMessagePubkeys(event: RelayEvent): string[] {
+  if (event.kind !== KIND_SYSTEM_MESSAGE) {
+    return [];
+  }
+
+  try {
+    const payload = JSON.parse(event.content);
+    const pubkeys: string[] = [];
+    if (typeof payload.actor === "string") {
+      pubkeys.push(payload.actor.toLowerCase());
+    }
+    if (typeof payload.target === "string") {
+      pubkeys.push(payload.target.toLowerCase());
+    }
+    return pubkeys;
+  } catch {
+    return [];
+  }
+}
+
 export function collectMessageAuthorPubkeys(events: RelayEvent[]) {
-  return [
-    ...new Set(
-      events
-        .filter(isTimelineContentEvent)
-        .map((event) => getEffectiveAuthorPubkey(event).toLowerCase()),
-    ),
-  ];
+  const pubkeys = new Set<string>();
+
+  for (const event of events) {
+    if (!isTimelineContentEvent(event)) {
+      continue;
+    }
+
+    if (event.kind === KIND_SYSTEM_MESSAGE) {
+      for (const pk of extractSystemMessagePubkeys(event)) {
+        pubkeys.add(pk);
+      }
+    } else {
+      pubkeys.add(getEffectiveAuthorPubkey(event).toLowerCase());
+    }
+  }
+
+  return [...pubkeys];
 }
