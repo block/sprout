@@ -97,6 +97,11 @@ pub async fn insert_event(
 /// Uses `QueryBuilder` for dynamic filter composition — avoids string concatenation
 /// while keeping all user values in bind parameters.
 pub async fn query_events(pool: &MySqlPool, q: &EventQuery) -> Result<Vec<StoredEvent>> {
+    // kinds:[] means "match no kinds" — return empty immediately.
+    if q.kinds.as_deref().is_some_and(|k| k.is_empty()) {
+        return Ok(vec![]);
+    }
+
     let limit_val = q.limit.unwrap_or(100).min(1000);
     let offset_val = q.offset.unwrap_or(0);
 
