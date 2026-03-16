@@ -70,7 +70,8 @@ pub use presence::{presence_handler, set_presence_handler};
 pub use reactions::{add_reaction_handler, list_reactions_handler, remove_reaction_handler};
 pub use search::search_handler;
 pub use users::{
-    get_profile, get_user_profile, get_users_batch, put_channel_add_policy, update_profile,
+    get_profile, get_user_profile, get_users_batch, put_channel_add_policy, search_users,
+    update_profile,
 };
 pub use workflows::{
     create_workflow, delete_workflow, get_workflow, list_channel_workflows, list_workflow_runs,

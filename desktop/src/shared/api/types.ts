@@ -99,6 +99,13 @@ export type UsersBatchResponse = {
   missing: string[];
 };
 
+export type UserSearchResult = {
+  pubkey: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  nip05Handle: string | null;
+};
+
 export type UpdateProfileInput = {
   displayName?: string;
   avatarUrl?: string;

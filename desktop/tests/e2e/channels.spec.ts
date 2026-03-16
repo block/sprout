@@ -253,13 +253,26 @@ test("manage channel can invite and remove members", async ({ page }) => {
   await page.goto("/");
   await openChannelManagement(page, "general");
 
+  await page.getByTestId("channel-management-search-users").fill("char");
+  await expect(
+    page.getByTestId(
+      `channel-user-search-result-${TEST_IDENTITIES.charlie.pubkey}`,
+    ),
+  ).toBeVisible();
   await page
-    .getByTestId("channel-management-add-pubkeys")
-    .fill(TEST_IDENTITIES.charlie.pubkey);
+    .getByTestId(`channel-user-search-result-${TEST_IDENTITIES.charlie.pubkey}`)
+    .click();
+  await expect(
+    page.getByTestId(`selected-invitee-${TEST_IDENTITIES.charlie.pubkey}`),
+  ).toContainText("charlie");
+
   await page.getByTestId("channel-management-add-role").selectOption("admin");
   await page.getByTestId("channel-management-add-members").click();
 
-  await expect(page.getByTestId("channel-management-add-pubkeys")).toHaveValue(
+  await expect(
+    page.getByTestId(`selected-invitee-${TEST_IDENTITIES.charlie.pubkey}`),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("channel-management-search-users")).toHaveValue(
     "",
   );
   await expect(

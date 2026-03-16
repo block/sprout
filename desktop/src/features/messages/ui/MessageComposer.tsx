@@ -1,4 +1,3 @@
-import { Paperclip, SendHorizontal } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
@@ -10,11 +9,11 @@ import {
 } from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
-import { ComposerEmojiPicker } from "./ComposerEmojiPicker";
 import {
   MentionAutocomplete,
   type MentionSuggestion,
 } from "./MentionAutocomplete";
+import { MessageComposerToolbar } from "./MessageComposerToolbar";
 
 type MessageComposerProps = {
   channelId?: string | null;
@@ -222,6 +221,47 @@ export function MessageComposer({
     },
     [content],
   );
+
+  const openMentionPicker = React.useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    const cursorPosition = textarea.selectionStart ?? content.length;
+    const existingMention = detectMentionQuery(content, cursorPosition);
+    if (existingMention) {
+      pendingSelectionRef.current = cursorPosition;
+      setMentionStartIndex(existingMention.startIndex);
+      setMentionQuery(existingMention.query);
+      setMentionSelectedIndex(0);
+      textarea.focus();
+      return;
+    }
+
+    const { end, start } = draftSelectionRef.current;
+    const nextStart = Math.min(start, content.length);
+    const nextEnd = Math.min(end, content.length);
+    const previousCharacter = content.slice(0, nextStart).slice(-1);
+    const prefix =
+      nextStart > 0 && previousCharacter && !/\s/.test(previousCharacter)
+        ? " @"
+        : "@";
+    const nextContent = `${content.slice(0, nextStart)}${prefix}${content.slice(nextEnd)}`;
+    const mentionIndex = nextStart + (prefix.startsWith(" ") ? 1 : 0);
+    const nextCursor = mentionIndex + 1;
+
+    draftSelectionRef.current = {
+      end: nextCursor,
+      start: nextCursor,
+    };
+    pendingSelectionRef.current = nextCursor;
+    setContent(nextContent);
+    setIsEmojiPickerOpen(false);
+    setMentionStartIndex(mentionIndex);
+    setMentionQuery("");
+    setMentionSelectedIndex(0);
+  }, [content]);
 
   const onUploaded = React.useCallback((descriptor: BlobDescriptor) => {
     const markdown = `\n![image](${descriptor.url})\n`;
@@ -582,50 +622,25 @@ export function MessageComposer({
             value={content}
           />
 
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Button
-                disabled={disabled || isUploading}
-                onClick={() => {
-                  void handlePaperclip();
-                }}
-                size="icon"
-                title="Attach image"
-                type="button"
-                variant="ghost"
-              >
-                {isUploading ? (
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                ) : (
-                  <Paperclip className="h-4 w-4" />
-                )}
-              </Button>
-              <ComposerEmojiPicker
-                disabled={disabled}
-                onEmojiSelect={insertEmoji}
-                onOpenChange={setIsEmojiPickerOpen}
-                onTriggerMouseDown={() => {
-                  updateDraftSelection(textareaRef.current);
-                }}
-                open={isEmojiPickerOpen}
-              />
-            </div>
-
-            <Button
-              className="gap-2"
-              data-testid="send-message"
-              disabled={
-                disabled ||
-                isSending ||
-                (content.trim().length === 0 && pendingImeta.length === 0)
-              }
-              title="Send (Enter)"
-              type="submit"
-            >
-              <SendHorizontal className="h-4 w-4" />
-              {isSending ? "Sending" : "Send"}
-            </Button>
-          </div>
+          <MessageComposerToolbar
+            composerDisabled={disabled}
+            isEmojiPickerOpen={isEmojiPickerOpen}
+            isSending={isSending}
+            isUploading={isUploading}
+            onCaptureSelection={() => {
+              updateDraftSelection(textareaRef.current);
+            }}
+            onEmojiPickerOpenChange={setIsEmojiPickerOpen}
+            onEmojiSelect={insertEmoji}
+            onOpenMentionPicker={openMentionPicker}
+            onPaperclip={() => {
+              void handlePaperclip();
+            }}
+            sendDisabled={
+              disabled ||
+              (content.trim().length === 0 && pendingImeta.length === 0)
+            }
+          />
         </form>
       </div>
     </footer>

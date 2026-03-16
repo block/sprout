@@ -19,6 +19,19 @@ pub struct UserProfile {
     pub nip05_handle: Option<String>,
 }
 
+/// Lightweight user record returned from search.
+#[derive(Debug, Clone)]
+pub struct UserSearchProfile {
+    /// Raw 32-byte compressed public key.
+    pub pubkey: Vec<u8>,
+    /// Human-readable display name chosen by the user.
+    pub display_name: Option<String>,
+    /// URL of the user's avatar image.
+    pub avatar_url: Option<String>,
+    /// NIP-05 identifier (user@domain).
+    pub nip05_handle: Option<String>,
+}
+
 /// Ensure a user record exists for the given pubkey (upsert).
 /// Creates with minimal fields if not present; no-op if already exists.
 pub async fn ensure_user(pool: &MySqlPool, pubkey: &[u8]) -> Result<()> {
@@ -165,6 +178,70 @@ pub async fn get_user_by_nip05(
             nip05_handle,
         },
     ))
+}
+
+/// Search users by display name, NIP-05 handle, or pubkey prefix.
+///
+/// Empty queries return an empty vec and do not hit the database.
+pub async fn search_users(
+    pool: &MySqlPool,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<UserSearchProfile>> {
+    let normalized = query.trim().to_lowercase();
+    if normalized.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let contains_pattern = format!("%{normalized}%");
+    let prefix_pattern = format!("{normalized}%");
+    let limit = limit.clamp(1, 50) as i64;
+
+    let rows = sqlx::query_as::<_, (Vec<u8>, Option<String>, Option<String>, Option<String>)>(
+        r#"
+        SELECT pubkey, display_name, avatar_url, nip05_handle
+        FROM users
+        WHERE LOWER(COALESCE(display_name, '')) LIKE ?
+           OR LOWER(COALESCE(nip05_handle, '')) LIKE ?
+           OR LOWER(HEX(pubkey)) LIKE ?
+        ORDER BY
+            CASE
+                WHEN LOWER(COALESCE(display_name, '')) = ? THEN 0
+                WHEN LOWER(COALESCE(nip05_handle, '')) = ? THEN 1
+                WHEN LOWER(HEX(pubkey)) = ? THEN 2
+                WHEN LOWER(COALESCE(display_name, '')) LIKE ? THEN 3
+                WHEN LOWER(COALESCE(nip05_handle, '')) LIKE ? THEN 4
+                WHEN LOWER(HEX(pubkey)) LIKE ? THEN 5
+                ELSE 6
+            END,
+            COALESCE(NULLIF(display_name, ''), NULLIF(nip05_handle, ''), LOWER(HEX(pubkey)))
+        LIMIT ?
+        "#,
+    )
+    .bind(&contains_pattern)
+    .bind(&contains_pattern)
+    .bind(&contains_pattern)
+    .bind(&normalized)
+    .bind(&normalized)
+    .bind(&normalized)
+    .bind(&prefix_pattern)
+    .bind(&prefix_pattern)
+    .bind(&prefix_pattern)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(pubkey, display_name, avatar_url, nip05_handle)| UserSearchProfile {
+                pubkey,
+                display_name,
+                avatar_url,
+                nip05_handle,
+            },
+        )
+        .collect())
 }
 
 /// Set the owner pubkey for an agent user.

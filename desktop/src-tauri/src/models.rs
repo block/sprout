@@ -33,6 +33,19 @@ pub struct UsersBatchResponse {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct UserSearchResultInfo {
+    pub pubkey: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub nip05_handle: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SearchUsersResponse {
+    pub users: Vec<UserSearchResultInfo>,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct SetPresenceResponse {
     pub status: PresenceStatus,
     pub ttl_seconds: u64,

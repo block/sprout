@@ -115,14 +115,14 @@ export function MessageRow({
       {message.depth > 0 ? (
         <div
           aria-hidden
-          className="absolute bottom-2 left-3 top-2 rounded-full border-l border-border/70"
+          className="absolute bottom-1.5 left-3 top-1.5 rounded-full border-l border-border/70"
           style={{ left: `${Math.max(indentPx - 14, 12)}px` }}
         />
       ) : null}
 
       <article
         className={cn(
-          "group/message flex gap-3 rounded-2xl px-2 py-1.5 transition-colors",
+          "group/message flex gap-2.5 rounded-2xl px-2 py-1 transition-colors",
           message.highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
           activeReplyTargetId === message.id
             ? "bg-muted/60 ring-1 ring-border"
@@ -140,7 +140,7 @@ export function MessageRow({
               {message.avatarUrl && !hasAvatarError ? (
                 <img
                   alt={`${message.author} avatar`}
-                  className="h-9 w-9 rounded-xl object-cover shadow-sm"
+                  className="h-8 w-8 rounded-lg object-cover shadow-sm"
                   data-testid="message-avatar-image"
                   onError={() => {
                     setHasAvatarError(true);
@@ -151,7 +151,7 @@ export function MessageRow({
               ) : (
                 <div
                   className={cn(
-                    "flex h-9 w-9 items-center justify-center rounded-xl text-xs font-semibold shadow-sm",
+                    "flex h-8 w-8 items-center justify-center rounded-lg text-[11px] font-semibold shadow-sm",
                     message.accent
                       ? "bg-primary text-primary-foreground"
                       : "bg-secondary text-secondary-foreground",
@@ -166,7 +166,7 @@ export function MessageRow({
         ) : message.avatarUrl && !hasAvatarError ? (
           <img
             alt={`${message.author} avatar`}
-            className="h-9 w-9 shrink-0 rounded-xl object-cover shadow-sm"
+            className="h-8 w-8 shrink-0 rounded-lg object-cover shadow-sm"
             data-testid="message-avatar-image"
             onError={() => {
               setHasAvatarError(true);
@@ -177,7 +177,7 @@ export function MessageRow({
         ) : (
           <div
             className={cn(
-              "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-semibold shadow-sm",
+              "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold shadow-sm",
               message.accent
                 ? "bg-primary text-primary-foreground"
                 : "bg-secondary text-secondary-foreground",
@@ -188,8 +188,8 @@ export function MessageRow({
           </div>
         )}
 
-        <div className="min-w-0 flex-1 space-y-0">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             {message.pubkey ? (
               <UserProfilePopover pubkey={message.pubkey}>
                 <button
@@ -231,13 +231,13 @@ export function MessageRow({
           </div>
           {renderBody()}
           {reactions.length > 0 ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               {reactions.map((reaction: TimelineReaction) => (
                 <button
                   aria-label={`Toggle ${reaction.emoji} reaction`}
                   aria-pressed={reaction.reactedByCurrentUser}
                   className={cn(
-                    "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium transition-colors",
                     reaction.reactedByCurrentUser
                       ? "border-primary/40 bg-primary/10 text-primary"
                       : "border-border/70 bg-muted/70 text-foreground/90",
@@ -267,14 +267,14 @@ export function MessageRow({
             </div>
           ) : null}
           {reactionErrorMessage ? (
-            <p className="mt-2 text-xs text-destructive">
+            <p className="mt-1.5 text-xs text-destructive">
               {reactionErrorMessage}
             </p>
           ) : null}
           {expandedDiffId === message.id ? (
             <React.Suspense
               fallback={
-                <div className="p-4 text-sm text-muted-foreground">
+                <div className="p-3 text-sm text-muted-foreground">
                   Loading diff viewer…
                 </div>
               }

@@ -697,6 +697,15 @@ impl Db {
         user::get_user(&self.pool, pubkey).await
     }
 
+    /// Search users by display name, NIP-05 handle, or pubkey prefix.
+    pub async fn search_users(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<user::UserSearchProfile>> {
+        user::search_users(&self.pool, query, limit).await
+    }
+
     /// Update a user's display_name, avatar_url, about, and/or nip05_handle.
     pub async fn update_user_profile(
         &self,

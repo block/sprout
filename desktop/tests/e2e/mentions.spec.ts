@@ -56,6 +56,24 @@ test("selecting a mention inserts @Name into input", async ({ page }) => {
   await expect(input).toHaveValue("Hey @alice ");
 });
 
+test("mention button opens autocomplete and inserts a selected member", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill("Hey ");
+  await page.getByTestId("message-insert-mention").click();
+
+  const dropdown = autocomplete(page);
+  await expect(dropdown).toBeVisible();
+  await dropdown.getByText("alice").click();
+
+  await expect(input).toHaveValue("Hey @alice ");
+});
+
 test("keyboard navigation selects mention with Enter", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("channel-general").click();

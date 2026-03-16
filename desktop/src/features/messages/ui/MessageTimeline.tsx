@@ -60,17 +60,17 @@ export function MessageTimeline({
   return (
     <div className="relative min-h-0 flex-1">
       <div
-        className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-4 [overflow-anchor:none] sm:px-6"
+        className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 [overflow-anchor:none] sm:px-6"
         data-testid="message-timeline"
         onScroll={syncScrollState}
         ref={timelineRef}
       >
         <div
-          className="mx-auto flex w-full max-w-4xl flex-col gap-3"
+          className="mx-auto flex w-full max-w-4xl flex-col gap-2"
           ref={contentRef}
         >
           <div
-            className="flex items-center gap-4"
+            className="flex items-center gap-3"
             data-testid="message-timeline-day-divider"
           >
             <Separator className="flex-1" />
