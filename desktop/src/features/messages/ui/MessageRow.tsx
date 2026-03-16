@@ -37,7 +37,6 @@ export function MessageRow({
   >(null);
   const [reactionPending, setReactionPending] = React.useState(false);
   const visibleDepth = Math.min(message.depth, 6);
-  const compressedDepth = Math.max(message.depth - visibleDepth, 0);
   const indentPx = visibleDepth * 28;
   const initials = message.author
     .split(" ")
@@ -190,25 +189,6 @@ export function MessageRow({
         )}
 
         <div className="min-w-0 flex-1 space-y-0">
-          {message.parentId ? (
-            <div className="mb-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px]">
-                Reply
-              </span>
-              <span className="truncate normal-case tracking-normal">
-                {message.replyToAuthor
-                  ? `to ${message.replyToAuthor}`
-                  : "to an earlier message"}
-              </span>
-              {compressedDepth > 0 ? (
-                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px]">
-                  +{compressedDepth} more level
-                  {compressedDepth === 1 ? "" : "s"}
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             {message.pubkey ? (
               <UserProfilePopover pubkey={message.pubkey}>
@@ -291,13 +271,6 @@ export function MessageRow({
               {reactionErrorMessage}
             </p>
           ) : null}
-          <div className="mt-2 flex items-center gap-2">
-            {message.replyToSnippet ? (
-              <p className="truncate text-xs text-muted-foreground">
-                {message.replyToSnippet}
-              </p>
-            ) : null}
-          </div>
           {expandedDiffId === message.id ? (
             <React.Suspense
               fallback={

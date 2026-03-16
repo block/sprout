@@ -88,6 +88,8 @@ pub fn build_managed_agent_summary(
         agent_args: record.agent_args.clone(),
         mcp_command: record.mcp_command.clone(),
         turn_timeout_seconds: record.turn_timeout_seconds,
+        parallelism: record.parallelism,
+        system_prompt: record.system_prompt.clone(),
         has_api_token: record.api_token.is_some(),
         status,
         pid,
@@ -167,10 +169,16 @@ pub fn start_managed_agent_process(
         "SPROUT_ACP_TURN_TIMEOUT",
         record.turn_timeout_seconds.to_string(),
     );
+    command.env("SPROUT_ACP_AGENTS", record.parallelism.to_string());
     command.env(
         "GOOSE_MODE",
         std::env::var("GOOSE_MODE").unwrap_or_else(|_| "auto".to_string()),
     );
+    if let Some(system_prompt) = &record.system_prompt {
+        command.env("SPROUT_ACP_SYSTEM_PROMPT", system_prompt);
+    } else {
+        command.env_remove("SPROUT_ACP_SYSTEM_PROMPT");
+    }
     command.env_remove("SPROUT_ACP_PRIVATE_KEY");
     command.env_remove("SPROUT_ACP_API_TOKEN");
 

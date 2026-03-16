@@ -443,6 +443,7 @@ export function AppSidebar({
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
+              data-testid="open-agents-view"
               isActive={selectedView === "agents"}
               onClick={onSelectAgents}
               tooltip="Agents"

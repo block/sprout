@@ -214,6 +214,7 @@ test("supports nested replies with visible indentation", async ({ page }) => {
   await page.getByTestId("message-input").fill(firstReply);
   await page.getByTestId("send-message").click();
   await expect(rows.last()).toContainText(firstReply);
+  await expect(rows.last()).not.toContainText("Welcome to #general");
 
   await rows.last().hover();
   await replyButtons.last().click();
@@ -221,6 +222,7 @@ test("supports nested replies with visible indentation", async ({ page }) => {
   await page.getByTestId("message-input").fill(nestedReply);
   await page.getByTestId("send-message").click();
   await expect(rows.last()).toContainText(nestedReply);
+  await expect(rows.last()).not.toContainText(firstReply);
 
   const rootBox = await rows.nth(0).boundingBox();
   const firstReplyBox = await rows.nth(1).boundingBox();

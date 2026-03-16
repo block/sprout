@@ -208,6 +208,8 @@ type RawManagedAgent = {
   agent_args: string[];
   mcp_command: string;
   turn_timeout_seconds: number;
+  parallelism: number;
+  system_prompt: string | null;
   has_api_token: boolean;
   status: "running" | "stopped";
   pid: number | null;
@@ -224,6 +226,7 @@ type RawCreateManagedAgentResponse = {
   agent: RawManagedAgent;
   private_key_nsec: string;
   api_token: string | null;
+  profile_sync_error: string | null;
   spawn_error: string | null;
 };
 
@@ -469,6 +472,8 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     agent_args: [...agent.agent_args],
     mcp_command: agent.mcp_command,
     turn_timeout_seconds: agent.turn_timeout_seconds,
+    parallelism: agent.parallelism,
+    system_prompt: agent.system_prompt,
     has_api_token: agent.has_api_token,
     status: agent.status,
     pid: agent.pid,
@@ -2030,6 +2035,8 @@ async function handleCreateManagedAgent(args: {
     agentArgs?: string[];
     mcpCommand?: string;
     turnTimeoutSeconds?: number;
+    parallelism?: number;
+    systemPrompt?: string;
     mintToken?: boolean;
     tokenScopes?: string[];
     tokenName?: string;
@@ -2059,6 +2066,8 @@ async function handleCreateManagedAgent(args: {
         : ["acp"],
     mcp_command: args.input.mcpCommand ?? "sprout-mcp-server",
     turn_timeout_seconds: args.input.turnTimeoutSeconds ?? 300,
+    parallelism: args.input.parallelism ?? 1,
+    system_prompt: args.input.systemPrompt?.trim() || null,
     has_api_token: token !== null,
     status: args.input.spawnAfterCreate ? "running" : "stopped",
     pid: args.input.spawnAfterCreate ? 42000 + mockManagedAgents.length : null,
@@ -2072,7 +2081,10 @@ async function handleCreateManagedAgent(args: {
     private_key_nsec: `nsec1mock${pubkey.slice(0, 20)}`,
     api_token: token,
     log_lines: [
-      `sprout-acp starting: relay=${args.input.relayUrl ?? DEFAULT_RELAY_WS_URL} agent_pubkey=${pubkey}`,
+      `sprout-acp starting: relay=${args.input.relayUrl ?? DEFAULT_RELAY_WS_URL} agent_pubkey=${pubkey} parallelism=${args.input.parallelism ?? 1}`,
+      args.input.systemPrompt?.trim()
+        ? `system prompt override configured (${args.input.systemPrompt.trim().length} chars)`
+        : "system prompt override not set",
       args.input.spawnAfterCreate
         ? "connected to relay at ws://localhost:3000"
         : "profile created; harness not started",
@@ -2086,6 +2098,7 @@ async function handleCreateManagedAgent(args: {
     agent: cloneManagedAgent(managedAgent),
     private_key_nsec: managedAgent.private_key_nsec,
     api_token: managedAgent.api_token,
+    profile_sync_error: null,
     spawn_error: null,
   };
 }

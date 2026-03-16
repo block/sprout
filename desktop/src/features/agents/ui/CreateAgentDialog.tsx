@@ -53,6 +53,8 @@ export function CreateAgentDialog({
     () => new Set<TokenScope>(DEFAULT_MANAGED_AGENT_SCOPES),
   );
   const [turnTimeoutSeconds, setTurnTimeoutSeconds] = React.useState("300");
+  const [parallelism, setParallelism] = React.useState("1");
+  const [systemPrompt, setSystemPrompt] = React.useState("");
   const [selectedProviderId, setSelectedProviderId] =
     React.useState<string>("custom");
   const [hasSyncedProviderSelection, setHasSyncedProviderSelection] =
@@ -133,6 +135,8 @@ export function CreateAgentDialog({
     setAgentArgs("acp");
     setMcpCommand("sprout-mcp-server");
     setTurnTimeoutSeconds("300");
+    setParallelism("1");
+    setSystemPrompt("");
     setSelectedProviderId("custom");
     setHasSyncedProviderSelection(false);
     setShowAdvanced(false);
@@ -202,6 +206,11 @@ export function CreateAgentDialog({
           Number.parseInt(turnTimeoutSeconds, 10) > 0
             ? Number.parseInt(turnTimeoutSeconds, 10)
             : undefined,
+        parallelism:
+          Number.parseInt(parallelism, 10) > 0
+            ? Number.parseInt(parallelism, 10)
+            : undefined,
+        systemPrompt: systemPrompt.trim() || undefined,
         mintToken,
         tokenName: tokenName.trim() || undefined,
         tokenScopes: [...selectedScopes],
@@ -280,7 +289,8 @@ export function CreateAgentDialog({
                     Advanced setup
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    Relay overrides, raw commands, timeout, and doctor guidance.
+                    Relay overrides, raw commands, timeout, parallelism, prompt
+                    override, and doctor guidance.
                   </p>
                 </div>
                 <span className="shrink-0 self-center text-muted-foreground">
@@ -298,14 +308,18 @@ export function CreateAgentDialog({
                       agentArgs={agentArgs}
                       agentCommand={agentCommand}
                       mcpCommand={mcpCommand}
+                      onParallelismChange={setParallelism}
                       onAcpCommandChange={setAcpCommand}
                       onAgentArgsChange={setAgentArgs}
                       onAgentCommandChange={setAgentCommand}
                       onMcpCommandChange={setMcpCommand}
                       onRelayUrlChange={setRelayUrl}
+                      onSystemPromptChange={setSystemPrompt}
                       onTurnTimeoutChange={setTurnTimeoutSeconds}
+                      parallelism={parallelism}
                       relayUrl={relayUrl}
                       selectedProviderId={selectedProviderId}
+                      systemPrompt={systemPrompt}
                       turnTimeoutSeconds={turnTimeoutSeconds}
                     />
 
