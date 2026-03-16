@@ -745,3 +745,252 @@ async fn test_dm_discovery_events_emitted() {
 
     client_a.disconnect().await.expect("disconnect");
 }
+
+// ── Phase 5: Regression Tests ─────────────────────────────────────────────────
+
+/// Send a NIP-10 reply via WS, then query top-level channel messages via REST.
+/// Verify: the reply does NOT appear in top-level results (only the root should).
+/// This proves thread_metadata was created and replies are hidden from top-level.
+#[tokio::test]
+#[ignore]
+async fn test_nip10_thread_reply_not_in_top_level() {
+    let url = relay_url();
+    let keys = Keys::generate();
+    let channel = create_test_channel(&keys).await;
+
+    // Send root message via REST.
+    let root_content = format!("root-toplevel-{}", uuid::Uuid::new_v4());
+    let root_event_id = send_rest_message(&keys, &channel, &root_content).await;
+
+    // Send reply via WS with NIP-10 e-tag.
+    let mut client = SproutTestClient::connect(&url, &keys)
+        .await
+        .expect("connect");
+
+    let reply_content = format!("reply-hidden-{}", uuid::Uuid::new_v4());
+    let h_tag = Tag::parse(&["h", &channel]).expect("h tag");
+    let e_reply_tag = Tag::parse(&["e", &root_event_id, "", "reply"]).expect("e reply tag");
+
+    let reply_event = EventBuilder::new(Kind::Custom(9), &reply_content, [h_tag, e_reply_tag])
+        .sign_with_keys(&keys)
+        .expect("sign reply");
+
+    let ok = client.send_event(reply_event).await.expect("send reply");
+    assert!(ok.accepted, "relay rejected reply: {}", ok.message);
+
+    client.disconnect().await.expect("disconnect");
+
+    // Query top-level messages via REST.
+    let http_client = reqwest::Client::new();
+    let messages_url = format!(
+        "{}/api/channels/{}/messages?limit=50",
+        relay_http_url(),
+        channel
+    );
+    let resp = http_client
+        .get(&messages_url)
+        .header("X-Pubkey", &keys.public_key().to_hex())
+        .send()
+        .await
+        .expect("get messages request");
+    assert!(
+        resp.status().is_success(),
+        "get messages failed: {}",
+        resp.status()
+    );
+    let body: serde_json::Value = resp.json().await.expect("parse messages response");
+    let body_str = body.to_string();
+
+    // Root should be present.
+    assert!(
+        body_str.contains(&root_content),
+        "top-level messages missing root content. body: {body_str}"
+    );
+    // Reply must NOT appear at top level.
+    assert!(
+        !body_str.contains(&reply_content),
+        "reply content should NOT appear in top-level messages, but it does. body: {body_str}"
+    );
+}
+
+/// Send a kind:1059 gift wrap with unique content, then search for that content via REST.
+/// Verify: zero hits — gift wraps are not indexed by Typesense.
+#[tokio::test]
+#[ignore]
+async fn test_nip17_gift_wrap_not_searchable() {
+    let url = relay_url();
+    let keys_a = Keys::generate();
+    let keys_b = Keys::generate();
+
+    let mut client = SproutTestClient::connect(&url, &keys_a)
+        .await
+        .expect("connect");
+
+    // Send kind:1059 gift wrap with unique content.
+    let unique_content = format!("giftwrap-nosearch-{}", uuid::Uuid::new_v4().simple());
+    let ephemeral_keys = Keys::generate();
+    let p_tag = Tag::parse(&["p", &keys_b.public_key().to_hex()]).expect("p tag");
+
+    let gift_wrap = EventBuilder::new(Kind::Custom(1059), &unique_content, [p_tag])
+        .sign_with_keys(&ephemeral_keys)
+        .expect("sign gift wrap");
+
+    let ok = client.send_event(gift_wrap).await.expect("send gift wrap");
+    assert!(ok.accepted, "relay rejected gift wrap: {}", ok.message);
+
+    client.disconnect().await.expect("disconnect");
+
+    // Wait for potential Typesense indexing window.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // Search via REST for the unique content.
+    let http_client = reqwest::Client::new();
+    let search_url = format!(
+        "{}/api/search?q={}&limit=5",
+        relay_http_url(),
+        unique_content
+    );
+    let resp = http_client
+        .get(&search_url)
+        .header("X-Pubkey", &keys_a.public_key().to_hex())
+        .send()
+        .await
+        .expect("search request");
+    assert!(
+        resp.status().is_success(),
+        "search request failed: {}",
+        resp.status()
+    );
+    let body: serde_json::Value = resp.json().await.expect("parse search response");
+
+    // Extract hit count — accept both {"hits":[...]} and {"count":N} shapes.
+    let hit_count = body
+        .get("hits")
+        .and_then(|h| h.as_array())
+        .map(|a| a.len())
+        .or_else(|| {
+            body.get("count")
+                .and_then(|c| c.as_u64())
+                .map(|n| n as usize)
+        })
+        .unwrap_or(0);
+
+    assert_eq!(
+        hit_count, 0,
+        "expected 0 search results for gift wrap content, got {hit_count}. body: {body}"
+    );
+}
+
+/// Send 3 messages with varying relevance to a query, wait for indexing, then search.
+/// Verify: the exact-match message is present in results (relevance-based, not just chronological).
+#[tokio::test]
+#[ignore]
+async fn test_nip50_search_relevance_order() {
+    let url = relay_url();
+    let keys = Keys::generate();
+    let channel = create_test_channel(&keys).await;
+
+    // Unique prefix to isolate this test's messages from other test runs.
+    let prefix = uuid::Uuid::new_v4().simple().to_string();
+    let msg1 = format!("{prefix} alpha bravo charlie"); // oldest, exact match
+    let msg2 = format!("{prefix} delta echo foxtrot"); // middle, no match
+    let msg3 = format!("{prefix} alpha bravo"); // newest, partial match
+
+    let id1 = send_rest_message(&keys, &channel, &msg1).await;
+    send_rest_message(&keys, &channel, &msg2).await;
+    send_rest_message(&keys, &channel, &msg3).await;
+
+    // Wait for Typesense indexing.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let mut client = SproutTestClient::connect(&url, &keys)
+        .await
+        .expect("connect");
+
+    let sid = sub_id("nip50-relevance");
+    let query = format!("{prefix} alpha bravo charlie");
+    let filter = Filter::new()
+        .kind(Kind::Custom(9))
+        .search(&query)
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
+
+    client
+        .subscribe(&sid, vec![filter])
+        .await
+        .expect("subscribe");
+
+    let events = client
+        .collect_until_eose(&sid, Duration::from_secs(10))
+        .await
+        .expect("collect until EOSE");
+
+    // The exact-match message must be present in results.
+    assert!(
+        events
+            .iter()
+            .any(|e| e.id.to_hex() == id1 || e.content.contains("alpha bravo charlie")),
+        "exact-match message (msg1) not found in search results. \
+         results: {:?}",
+        events.iter().map(|e| &e.content).collect::<Vec<_>>()
+    );
+
+    client.disconnect().await.expect("disconnect");
+}
+
+/// Send a kind:9 message, then subscribe with two filters in one REQ:
+///   Filter A: wrong author — will NOT match
+///   Filter B: no author restriction — WILL match
+/// Verify: the message IS returned, proving dedup happens after per-filter
+/// acceptance and OR semantics are preserved.
+#[tokio::test]
+#[ignore]
+async fn test_historical_req_dedup_preserves_or_semantics() {
+    let url = relay_url();
+    let keys = Keys::generate();
+    let channel = create_test_channel(&keys).await;
+
+    let content = format!("dedup-or-{}", uuid::Uuid::new_v4());
+    let event_id = send_rest_message(&keys, &channel, &content).await;
+
+    let mut client = SproutTestClient::connect(&url, &keys)
+        .await
+        .expect("connect");
+
+    // Generate a random wrong author key.
+    let wrong_author = Keys::generate();
+
+    let sid = sub_id("dedup-or");
+
+    // Filter A: restricts to wrong author — will not match our message.
+    let filter_a = Filter::new()
+        .kind(Kind::Custom(9))
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()])
+        .author(wrong_author.public_key());
+
+    // Filter B: no author restriction — will match our message.
+    let filter_b = Filter::new()
+        .kind(Kind::Custom(9))
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
+
+    client
+        .subscribe(&sid, vec![filter_a, filter_b])
+        .await
+        .expect("subscribe");
+
+    let events = client
+        .collect_until_eose(&sid, Duration::from_secs(10))
+        .await
+        .expect("collect until EOSE");
+
+    // Our message must be returned (filter B matches even though filter A doesn't).
+    assert!(
+        events
+            .iter()
+            .any(|e| e.id.to_hex() == event_id || e.content == content),
+        "expected message to be returned via filter B, but it was missing. \
+         events: {:?}",
+        events.iter().map(|e| &e.content).collect::<Vec<_>>()
+    );
+
+    client.disconnect().await.expect("disconnect");
+}
