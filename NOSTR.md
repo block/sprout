@@ -55,7 +55,7 @@ mysql -u sprout -psprout_dev sprout -e \
 | **Admin delete event (kind:9005)** | ✅ | Event author can always delete own. Otherwise owner/admin required. Target must be in same channel. |
 | **Group deletion (kind:9008)** | ✅ | Owner only. |
 | **Leave group (kind:9022)** | ✅ | Any member. Last-owner guard prevents orphaned groups. |
-| **Group metadata (kind:39000)** | ✅ | Relay-signed; always `d`, `name`, `closed` tags; `about` only if description non-empty; `private` if applicable |
+| **Group metadata (kind:39000)** | ✅ | Relay-signed; always `d`, `name`, `closed` tags; `about` only if description non-empty; `private` if applicable; `hidden` for DM channels |
 | **Group admins (kind:39001)** | ✅ | Relay-signed; `d` tag + `p` tags with roles (`owner`, `admin`) |
 | **Group members (kind:39002)** | ✅ | Relay-signed; `d` tag + `p` tags for all members |
 | **Membership notifications** | ✅ | kind:44100 (added) / kind:44101 (removed); relay-signed, global scope |
@@ -104,7 +104,7 @@ All discovery events include a `d` tag set to the channel UUID (NIP-29 addressab
 
 | Kind | Tags | Content |
 |------|------|---------|
-| **39000** | `d=<uuid>`, `name`, `closed` (always); `about` (if description non-empty); `private` (if applicable) | Group metadata. **Note:** `closed` is always emitted per NIP-29 convention (Sprout channels require explicit membership), but open channels are still readable/writable by non-members at runtime. The tag reflects the membership model, not access enforcement. |
+| **39000** | `d=<uuid>`, `name`, `closed` (always); `about` (if description non-empty); `private` (if applicable); `hidden` (DM channels only) | Group metadata. **Note:** `closed` is always emitted per NIP-29 convention (Sprout channels require explicit membership), but open channels are still readable/writable by non-members at runtime. The tag reflects the membership model, not access enforcement. |
 | **39001** | `d=<uuid>`, `p` tags with role label (`owner`, `admin`) | Admin list |
 | **39002** | `d=<uuid>`, `p` tags for all members | Member list |
 

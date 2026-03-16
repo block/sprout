@@ -884,12 +884,29 @@ async fn resolve_nip10_thread_meta(
             (effective_root, root_ts, depth)
         }
         None => {
-            // Parent has no thread metadata — parent is the root.
-            // For direct replies, client_root == parent is expected.
-            if client_root_bytes != parent_bytes {
+            // Parent has no thread metadata — either it's a top-level message (the root)
+            // or a legacy WS reply created before NIP-10 thread resolution was added.
+            // Fall back to parsing the parent's own e-tags to find its root.
+            let parent_root = parent_event
+                .event
+                .tags
+                .iter()
+                .find_map(|t| {
+                    let parts = t.as_slice();
+                    if parts.len() >= 4 && parts[0] == "e" && parts[3] == "root" {
+                        hex::decode(&parts[1]).ok().filter(|b| b.len() == 32)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| parent_bytes.clone());
+
+            if client_root_bytes != parent_root {
                 return Err("root tag does not match thread ancestry".to_string());
             }
-            (parent_bytes.clone(), parent_created, 1)
+            // depth=1 if parent is root, depth=2 if parent is itself a reply (legacy)
+            let depth = if parent_root == parent_bytes { 1 } else { 2 };
+            (parent_root, parent_created, depth)
         }
     };
 

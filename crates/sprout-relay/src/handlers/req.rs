@@ -79,19 +79,28 @@ pub async fn handle_req(
 
     let channel_id = extract_channel_id_from_filters(&filters);
 
-    // Enforce #p filter for membership notification subscriptions.
-    //
+    // ── NIP-50 search: intercept BEFORE #p gating ────────────────────────────
+    // Search filters are one-shot (not registered as persistent subscriptions).
+    // They never deliver gift wraps (not indexed) or membership notifications
+    // (global, no channel_id), so the #p gate below is irrelevant for them.
+    // Intercepting here lets clients send `{"search":"foo"}` without `kinds`.
+    let has_search = filters.iter().any(|f| f.search.is_some());
+    if has_search {
+        if filters.iter().any(|f| f.search.is_none()) {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "error: mixed search and non-search filters not supported",
+            ));
+            return;
+        }
+        handle_search_req(&sub_id, &filters, &accessible_channels, &conn, &state).await;
+        return;
+    }
+
+    // ── #p gating for globally-stored sensitive kinds ─────────────────────────
     // Only applies to GLOBAL subscriptions (channel_id = None). Channel-scoped
-    // subscriptions can never receive globally-stored membership events — the
-    // fan_out() invariant in subscription.rs prevents it.
-    //
-    // We use the resolved subscription scope (channel_id) rather than per-filter
-    // #h presence to prevent mixed-filter bypass: a client could send
-    // [{#h:..., kinds:[44100]}, {authors:[...]}] which resolves to global scope
-    // but would skip the #p check if we only looked at per-filter #h tags.
-    // Kinds that are globally stored and require #p = authed pubkey.
-    // Without this, a client could subscribe to another user's membership
-    // notifications or gift-wrapped DMs.
+    // subscriptions can never receive globally-stored events — the fan_out()
+    // invariant in subscription.rs prevents it.
     const P_GATED_KINDS: [u32; 3] = [
         KIND_MEMBER_ADDED_NOTIFICATION,
         KIND_MEMBER_REMOVED_NOTIFICATION,
@@ -108,8 +117,6 @@ pub async fn handle_req(
                     .any(|k| P_GATED_KINDS.contains(&(k.as_u16() as u32)))
             });
             if can_match_p_gated {
-                // ALL #p values must match the authenticated pubkey — prevents
-                // a client from sneaking in a victim's pubkey alongside their own.
                 let has_matching_p = filter.generic_tags.get(&p_tag).is_some_and(|values| {
                     !values.is_empty() && values.iter().all(|v| *v == authed_pubkey_hex)
                 });
@@ -125,8 +132,6 @@ pub async fn handle_req(
     }
 
     // Check channel access BEFORE registering the subscription.
-    // Registering first would allow non-members to receive live fan-out events
-    // from private channels before the access check fires.
     if let Some(ch_id) = channel_id {
         if !accessible_channels.contains(&ch_id) {
             conn.send(RelayMessage::closed(
@@ -135,23 +140,6 @@ pub async fn handle_req(
             ));
             return;
         }
-    }
-
-    // Detect search filters — handle separately as one-shot (not persistent subscriptions).
-    // filters_match() has no search check, so a persistent search subscription would match
-    // all future events regardless of content.
-    let has_search = filters.iter().any(|f| f.search.is_some());
-    if has_search {
-        // Reject mixed search + non-search filters (simplicity)
-        if filters.iter().any(|f| f.search.is_none()) {
-            conn.send(RelayMessage::closed(
-                &sub_id,
-                "error: mixed search and non-search filters not supported",
-            ));
-            return;
-        }
-        handle_search_req(&sub_id, &filters, &accessible_channels, &conn, &state).await;
-        return;
     }
 
     {
@@ -223,7 +211,7 @@ pub async fn handle_req(
 /// Handle a NIP-50 search REQ: query Typesense, fetch full events, deliver results, EOSE.
 /// Search subscriptions are one-shot — no persistent subscription is registered.
 /// Maximum Typesense pages to fetch per filter (prevents unbounded loops).
-const MAX_SEARCH_PAGES: u32 = 5;
+const MAX_SEARCH_PAGES: u32 = 10;
 
 async fn handle_search_req(
     sub_id: &str,
@@ -304,7 +292,9 @@ async fn handle_search_req(
         // or exhausted the search result set. This ensures post-filtering
         // doesn't silently reduce the result count below the requested limit.
         let mut emitted: u32 = 0;
-        let per_page = limit.min(100); // Typesense max per_page is typically 250
+        // Always fetch full pages (100) regardless of limit — post-filtering
+        // may discard many hits, so we need headroom to fill the requested limit.
+        let per_page: u32 = 100;
 
         for page in 1..=MAX_SEARCH_PAGES {
             if emitted >= limit {
