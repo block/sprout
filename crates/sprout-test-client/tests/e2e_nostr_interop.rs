@@ -311,8 +311,7 @@ async fn test_nip10_thread_reply_creates_metadata() {
 
     // Build reply event with NIP-10 e-tag.
     let h_tag = Tag::parse(&["h", &channel]).expect("h tag");
-    let e_reply_tag =
-        Tag::parse(&["e", &root_event_id, "", "reply"]).expect("e reply tag");
+    let e_reply_tag = Tag::parse(&["e", &root_event_id, "", "reply"]).expect("e reply tag");
 
     let reply_content = format!("reply to root {}", uuid::Uuid::new_v4());
     let reply_event = EventBuilder::new(Kind::Custom(9), &reply_content, [h_tag, e_reply_tag])
@@ -370,8 +369,7 @@ async fn test_nip10_unknown_parent_rejected() {
     let fake_parent_id = hex::encode([0xdeu8; 32]);
 
     let h_tag = Tag::parse(&["h", &channel]).expect("h tag");
-    let e_reply_tag =
-        Tag::parse(&["e", &fake_parent_id, "", "reply"]).expect("e reply tag");
+    let e_reply_tag = Tag::parse(&["e", &fake_parent_id, "", "reply"]).expect("e reply tag");
 
     let event = EventBuilder::new(Kind::Custom(9), "orphan reply", [h_tag, e_reply_tag])
         .sign_with_keys(&keys)
@@ -415,8 +413,7 @@ async fn test_nip10_root_mismatch_rejected() {
     let h_tag = Tag::parse(&["h", &channel]).expect("h tag");
     // wrong_root as "root" marker, real_parent as "reply" marker — mismatch.
     let e_root_tag = Tag::parse(&["e", &wrong_root_id, "", "root"]).expect("e root tag");
-    let e_reply_tag =
-        Tag::parse(&["e", &real_parent_id, "", "reply"]).expect("e reply tag");
+    let e_reply_tag = Tag::parse(&["e", &real_parent_id, "", "reply"]).expect("e reply tag");
 
     let event = EventBuilder::new(
         Kind::Custom(9),
@@ -433,7 +430,9 @@ async fn test_nip10_root_mismatch_rejected() {
         "relay should have rejected root mismatch, but accepted it"
     );
     assert!(
-        ok.message.to_lowercase().contains("root tag does not match")
+        ok.message
+            .to_lowercase()
+            .contains("root tag does not match")
             || ok.message.to_lowercase().contains("root"),
         "expected root mismatch in rejection message, got: {}",
         ok.message
@@ -520,7 +519,9 @@ async fn test_nip17_gift_wrap_requires_p_filter() {
             );
             let msg_lower = message.to_lowercase();
             assert!(
-                msg_lower.contains("p-gated") || msg_lower.contains("#p") || msg_lower.contains("restricted"),
+                msg_lower.contains("p-gated")
+                    || msg_lower.contains("#p")
+                    || msg_lower.contains("restricted"),
                 "expected p-gated rejection in CLOSED message, got: {message}"
             );
         }
@@ -547,12 +548,10 @@ async fn test_nip17_gift_wrap_recipient_receives() {
         .expect("client B connect");
 
     let sid_b = sub_id("nip17-recv-b");
-    let filter_b = Filter::new()
-        .kind(Kind::Custom(1059))
-        .custom_tag(
-            SingleLetterTag::lowercase(Alphabet::P),
-            [b_pubkey_hex.as_str()],
-        );
+    let filter_b = Filter::new().kind(Kind::Custom(1059)).custom_tag(
+        SingleLetterTag::lowercase(Alphabet::P),
+        [b_pubkey_hex.as_str()],
+    );
 
     client_b
         .subscribe(&sid_b, vec![filter_b])
@@ -605,10 +604,7 @@ async fn test_nip17_gift_wrap_recipient_receives() {
                 "expected kind:1059, got {}",
                 event.kind.as_u16()
             );
-            assert_eq!(
-                event.content, unique_content,
-                "gift wrap content mismatch"
-            );
+            assert_eq!(event.content, unique_content, "gift wrap content mismatch");
         }
         other => panic!("expected EVENT kind:1059, got {other:?}"),
     }
@@ -640,12 +636,10 @@ async fn test_dm_discovery_events_emitted() {
     let sid_membership = sub_id("dm-discovery-44100");
 
     // We'll subscribe with #p = A's pubkey for membership notifications.
-    let membership_filter = Filter::new()
-        .kind(Kind::Custom(44100))
-        .custom_tag(
-            SingleLetterTag::lowercase(Alphabet::P),
-            [a_pubkey_hex.as_str()],
-        );
+    let membership_filter = Filter::new().kind(Kind::Custom(44100)).custom_tag(
+        SingleLetterTag::lowercase(Alphabet::P),
+        [a_pubkey_hex.as_str()],
+    );
 
     client_a
         .subscribe(&sid_membership, vec![membership_filter])
@@ -661,12 +655,10 @@ async fn test_dm_discovery_events_emitted() {
     let channel_id = create_dm(&keys_a, &b_pubkey_hex).await;
 
     // Subscribe to 39000 discovery events for this specific DM channel.
-    let discovery_filter = Filter::new()
-        .kind(Kind::Custom(39000))
-        .custom_tag(
-            SingleLetterTag::lowercase(Alphabet::D),
-            [channel_id.as_str()],
-        );
+    let discovery_filter = Filter::new().kind(Kind::Custom(39000)).custom_tag(
+        SingleLetterTag::lowercase(Alphabet::D),
+        [channel_id.as_str()],
+    );
 
     client_a
         .subscribe(&sid_discovery, vec![discovery_filter])

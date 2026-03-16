@@ -160,14 +160,10 @@ pub async fn search(
 
     // multi_search wraps results: {"results": [<search_response>]}
     let wrapper: TypesenseMultiSearchResponse = resp.json().await?;
-    let ts_resp = wrapper
-        .results
-        .into_iter()
-        .next()
-        .ok_or(SearchError::Api {
-            status: 200,
-            body: "empty multi_search results".into(),
-        })?;
+    let ts_resp = wrapper.results.into_iter().next().ok_or(SearchError::Api {
+        status: 200,
+        body: "empty multi_search results".into(),
+    })?;
     parse_response(ts_resp)
 }
 
