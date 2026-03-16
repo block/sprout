@@ -161,7 +161,25 @@ pub async fn handle_req(
     let mut total_sent: usize = 0;
 
     for filter in &filters {
-        let params = filter_to_query_params(filter, channel_id);
+        // Use per-filter #h channel scope when available, falling back to the
+        // subscription-level channel_id. This prevents unrelated accessible-channel
+        // rows from consuming the LIMIT when filters target specific channels but
+        // the subscription is global (multiple distinct #h values across filters).
+        let per_filter_channel = {
+            let h = nostr::SingleLetterTag::lowercase(nostr::Alphabet::H);
+            filter
+                .generic_tags
+                .get(&h)
+                .and_then(|vs| {
+                    if vs.len() == 1 {
+                        vs.iter().next()?.parse::<uuid::Uuid>().ok()
+                    } else {
+                        None
+                    }
+                })
+                .or(channel_id)
+        };
+        let params = filter_to_query_params(filter, per_filter_channel);
 
         let filter_events = state.db.query_events(&params).await;
 
