@@ -1,12 +1,9 @@
 //! Harness-side Sprout relay client.
 //!
 //! Connects to the Sprout relay via NIP-01 WebSocket, authenticates via NIP-42,
-//! discovers channels via REST API, and streams matching events back to the
-//! harness main loop.
-//!
-//! This is a simplified receive-only client adapted from `sprout-mcp`'s
-//! `relay_client.rs`. It does not publish events or perform queries — it only
-//! subscribes and receives.
+//! discovers channels via REST API, and streams events back to the harness main
+//! loop. Also publishes ephemeral events (typing indicators) via the same
+//! WebSocket connection.
 //!
 //! ## Architecture
 //!
@@ -15,6 +12,7 @@
 //! - Forwards `SproutEvent`s through an `mpsc` channel
 //! - Handles reconnection with `since` filters to avoid event loss
 //! - Responds to mid-session AUTH challenges
+//! - Publishes ephemeral events (typing indicators) via `PublishEvent` commands
 //!
 //! `HarnessRelay` communicates with the background task via a `RelayCommand`
 //! channel. `next_event()` reads from the event receiver.
@@ -51,7 +49,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 use futures_util::{SinkExt, StreamExt};
 use nostr::{Event, EventBuilder, Keys, Kind, Tag, Url as NostrUrl};
 use serde_json::{json, Value};
-use sprout_core::kind::{KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION};
+use sprout_core::kind::{
+    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_TYPING_INDICATOR,
+};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
@@ -104,6 +104,37 @@ impl RestClient {
         resp.json()
             .await
             .map_err(|e| RelayError::Http(e.to_string()))
+    }
+
+    /// PUT a JSON body to an endpoint, returning the parsed response.
+    ///
+    /// Returns `Value::Null` for empty response bodies (e.g. 204 No Content).
+    pub async fn put_json(&self, path: &str, body: &Value) -> Result<Value, RelayError> {
+        let url = format!("{}{}", self.base_url, path);
+        let builder = self.http.put(&url).json(body);
+        let builder = apply_auth(builder, &self.api_token, &self.keys);
+
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| RelayError::Http(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(RelayError::Http(format!(
+                "PUT {} returned HTTP {}",
+                path,
+                resp.status()
+            )));
+        }
+
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| RelayError::Http(e.to_string()))?;
+        if text.is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text).map_err(|e| RelayError::Http(e.to_string()))
     }
 }
 
@@ -200,6 +231,8 @@ enum RelayCommand {
     Shutdown,
     /// Subscribe to global membership notifications.
     SubscribeMembership,
+    /// Publish a signed event to the relay (for typing indicators, etc.).
+    PublishEvent { event: Box<Event> },
 }
 
 // ── WebSocket stream type alias ───────────────────────────────────────────────
@@ -401,6 +434,25 @@ impl HarnessRelay {
         self.event_rx.recv().await.flatten()
     }
 
+    /// Publish a signed event to the relay via the background WebSocket task.
+    pub async fn publish_event(&self, event: Event) -> Result<(), RelayError> {
+        self.cmd_tx
+            .send(RelayCommand::PublishEvent {
+                event: Box::new(event),
+            })
+            .await
+            .map_err(|_| RelayError::ConnectionClosed)
+    }
+
+    /// Build a typing indicator event (kind:20002) for a channel.
+    pub fn build_typing_event(&self, channel_id: Uuid) -> Result<Event, RelayError> {
+        let h_tag = Tag::parse(&["h", &channel_id.to_string()])
+            .map_err(|e| RelayError::AuthFailed(e.to_string()))?;
+        let event = EventBuilder::new(Kind::Custom(KIND_TYPING_INDICATOR as u16), "", [h_tag])
+            .sign_with_keys(&self.keys)?;
+        Ok(event)
+    }
+
     /// Reconnect after connection loss. Instructs the background task to
     /// re-authenticate and resubscribe to all previously active channels.
     pub async fn reconnect(&mut self) -> Result<(), RelayError> {
@@ -578,6 +630,12 @@ async fn run_background_task(
                                     let _ = send_membership_subscribe(&mut ws, &agent_pubkey_hex, None).await;
                                     state.membership_sub_active = true;
                                 }
+                                RelayCommand::PublishEvent { event } => {
+                                    let msg = json!(["EVENT", event]);
+                                    if let Ok(text) = serde_json::to_string(&msg) {
+                                        let _ = ws.send(Message::Text(text.into())).await;
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -627,6 +685,14 @@ async fn run_background_task(
                                     .unwrap_or_default()
                                     .as_secs(),
                             );
+                        }
+                    }
+                    Some(RelayCommand::PublishEvent { event }) => {
+                        let msg = json!(["EVENT", event]);
+                        if let Ok(text) = serde_json::to_string(&msg) {
+                            if let Err(e) = ws.send(Message::Text(text.into())).await {
+                                warn!("failed to publish event: {e}");
+                            }
                         }
                     }
                     Some(RelayCommand::Reconnect) => {
@@ -949,6 +1015,8 @@ async fn wait_for_reconnect(
                 Some(RelayCommand::SubscribeMembership) => {
                     state.membership_sub_active = true;
                 }
+                // Ephemeral events are meaningless while disconnected — drop silently.
+                Some(RelayCommand::PublishEvent { .. }) => {}
             }
         }
     }
