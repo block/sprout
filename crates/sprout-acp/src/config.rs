@@ -202,6 +202,53 @@ pub struct Config {
     pub typing_enabled: bool,
 }
 
+fn normalize_agent_command_identity(command: &str) -> String {
+    let normalized = command.trim().replace('\\', "/");
+    let basename = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    basename
+        .chars()
+        .map(|character| match character {
+            ' ' | '_' => '-',
+            _ => character.to_ascii_lowercase(),
+        })
+        .collect()
+}
+
+fn default_agent_args(command: &str) -> Option<Vec<String>> {
+    match normalize_agent_command_identity(command).as_str() {
+        "goose" => Some(vec!["acp".to_string()]),
+        "codex" | "codex-acp" | "claude-agent-acp" | "claude-code" | "claudecode" => {
+            Some(Vec::new())
+        }
+        _ => None,
+    }
+}
+
+fn normalize_agent_args(command: &str, agent_args: Vec<String>) -> Vec<String> {
+    let normalized = agent_args
+        .into_iter()
+        .map(|arg| arg.trim().to_string())
+        .filter(|arg| !arg.is_empty())
+        .collect::<Vec<_>>();
+
+    let Some(default_args) = default_agent_args(command) else {
+        return normalized;
+    };
+
+    if normalized.is_empty() {
+        return default_args;
+    }
+
+    // Older callers relied on the Goose-specific default even for runtimes like
+    // Codex and Claude. Treat that legacy fallback as "no args" for zero-arg
+    // providers so desktop- and env-based launches behave the same way.
+    if normalized.len() == 1 && normalized[0] == "acp" && default_args.is_empty() {
+        return default_args;
+    }
+
+    normalized
+}
+
 impl Config {
     pub fn from_cli() -> Result<Self, ConfigError> {
         // Propagate legacy env vars so clap sees them under the canonical names.
@@ -258,12 +305,15 @@ impl Config {
             }
         }
 
+        let agent_command = args.agent_command;
+        let agent_args = normalize_agent_args(&agent_command, args.agent_args);
+
         Ok(Config {
             keys,
             api_token: args.api_token,
             relay_url: args.relay_url,
-            agent_command: args.agent_command,
-            agent_args: args.agent_args,
+            agent_command,
+            agent_args,
             mcp_command: args.mcp_command,
             turn_timeout_secs: args.turn_timeout,
             agents: args.agents,
@@ -656,6 +706,44 @@ mod tests {
 
         let f = result.get(&channels[0]).unwrap();
         assert!(!f.require_mention);
+    }
+
+    #[test]
+    fn normalizes_goose_args_to_acp() {
+        assert_eq!(normalize_agent_args("goose", Vec::new()), vec!["acp"]);
+        assert_eq!(normalize_agent_args("goose", vec!["".into()]), vec!["acp"]);
+    }
+
+    #[test]
+    fn normalizes_codex_and_claude_args_to_empty() {
+        assert_eq!(
+            normalize_agent_args("codex-acp", Vec::new()),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            normalize_agent_args("codex-acp", vec!["".into()]),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            normalize_agent_args("codex-acp", vec!["acp".into()]),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            normalize_agent_args("claude-code", vec!["acp".into()]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn preserves_explicit_nonempty_agent_args() {
+        assert_eq!(
+            normalize_agent_args("codex-acp", vec!["-c".into(), "model=\"gpt-5\"".into()]),
+            vec!["-c", "model=\"gpt-5\""]
+        );
+        assert_eq!(
+            normalize_agent_args("custom-agent", vec!["".into(), "serve".into()]),
+            vec!["serve"]
+        );
     }
 
     // ── resolve_channel_filters: All mode ────────────────────────────────────

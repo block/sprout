@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use nostr::{EventBuilder, Kind, Tag};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -40,6 +42,46 @@ fn percent_encode(s: &str) -> String {
 fn validate_uuid(s: &str) -> Result<(), String> {
     uuid::Uuid::parse_str(s).map_err(|_| format!("invalid UUID: {s}"))?;
     Ok(())
+}
+
+fn normalize_mention_pubkeys(mention_pubkeys: &[String], sender_pubkey: &str) -> Vec<String> {
+    let sender_pubkey = sender_pubkey.to_ascii_lowercase();
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+
+    for pubkey in mention_pubkeys {
+        let lower = pubkey.to_ascii_lowercase();
+        if lower == sender_pubkey || !seen.insert(lower.clone()) {
+            continue;
+        }
+        normalized.push(lower);
+    }
+
+    normalized
+}
+
+fn build_top_level_message_tags(
+    channel_id: &str,
+    sender_pubkey: &str,
+    mention_pubkeys: Option<&[String]>,
+) -> Result<Vec<Tag>, String> {
+    let mut tags = vec![
+        Tag::parse(&["h", channel_id]).map_err(|e| format!("failed to build channel tag: {e}"))?,
+        Tag::parse(&["p", sender_pubkey])
+            .map_err(|e| format!("failed to build sender tag: {e}"))?,
+    ];
+
+    for mention in mention_pubkeys
+        .map(|mentions| normalize_mention_pubkeys(mentions, sender_pubkey))
+        .unwrap_or_default()
+    {
+        tags.push(
+            Tag::parse(&["p", &mention])
+                .map_err(|e| format!("failed to build mention tag: {e}"))?,
+        );
+    }
+
+    Ok(tags)
 }
 
 /// Maximum allowed content size for a single message (64 KiB).
@@ -658,10 +700,15 @@ impl SproutMcpServer {
                 p.kind
                     .unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE as u16),
             );
-            let tags = vec![match Tag::parse(&["h", &p.channel_id]) {
-                Ok(tag) => tag,
-                Err(e) => return format!("Error: failed to build channel tag: {e}"),
-            }];
+            let sender_pubkey = self.client.keys().public_key().to_hex();
+            let tags = match build_top_level_message_tags(
+                &p.channel_id,
+                &sender_pubkey,
+                p.mention_pubkeys.as_deref(),
+            ) {
+                Ok(tags) => tags,
+                Err(error) => return format!("Error: {error}"),
+            };
 
             let event =
                 match EventBuilder::new(kind, p.content, tags).sign_with_keys(self.client.keys()) {
@@ -1814,6 +1861,57 @@ mod tests {
     #[test]
     fn max_content_bytes_value() {
         assert_eq!(MAX_CONTENT_BYTES, 65_536);
+    }
+
+    #[test]
+    fn normalize_mention_pubkeys_dedupes_and_skips_sender() {
+        let sender = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let mentions = vec![
+            sender.to_string(),
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC".to_string(),
+        ];
+
+        assert_eq!(
+            normalize_mention_pubkeys(&mentions, sender),
+            vec![
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_top_level_message_tags_includes_mention_p_tags() {
+        let sender = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let mention =
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string();
+        let tags = build_top_level_message_tags(
+            "550e8400-e29b-41d4-a716-446655440000",
+            sender,
+            Some(&[mention]),
+        )
+        .expect("tags should build");
+        let tag_strings = tags
+            .iter()
+            .map(|tag| tag.clone().to_vec())
+            .collect::<Vec<Vec<String>>>();
+
+        assert_eq!(
+            tag_strings,
+            vec![
+                vec![
+                    "h".to_string(),
+                    "550e8400-e29b-41d4-a716-446655440000".to_string()
+                ],
+                vec!["p".to_string(), sender.to_string()],
+                vec![
+                    "p".to_string(),
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()
+                ],
+            ]
+        );
     }
 }
 
