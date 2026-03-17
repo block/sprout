@@ -136,6 +136,58 @@ impl RestClient {
         }
         serde_json::from_str(&text).map_err(|e| RelayError::Http(e.to_string()))
     }
+
+    /// POST a JSON body to an endpoint, returning the parsed response.
+    ///
+    /// Returns `Value::Null` for empty response bodies (e.g. 204 No Content).
+    pub async fn post_json(&self, path: &str, body: &Value) -> Result<Value, RelayError> {
+        let url = format!("{}{}", self.base_url, path);
+        let builder = self.http.post(&url).json(body);
+        let builder = apply_auth(builder, &self.api_token, &self.keys);
+
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| RelayError::Http(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(RelayError::Http(format!(
+                "POST {} returned HTTP {}",
+                path,
+                resp.status()
+            )));
+        }
+
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| RelayError::Http(e.to_string()))?;
+        if text.is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text).map_err(|e| RelayError::Http(e.to_string()))
+    }
+
+    /// DELETE an endpoint. Returns `Ok(())` on 2xx.
+    pub async fn delete(&self, path: &str) -> Result<(), RelayError> {
+        let url = format!("{}{}", self.base_url, path);
+        let builder = self.http.delete(&url);
+        let builder = apply_auth(builder, &self.api_token, &self.keys);
+
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| RelayError::Http(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(RelayError::Http(format!(
+                "DELETE {} returned HTTP {}",
+                path,
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Events the harness cares about.

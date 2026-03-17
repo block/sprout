@@ -103,7 +103,9 @@ impl EventQueue {
     ///
     /// In [`DedupMode::Drop`], events for any currently in-flight channel are
     /// silently discarded (debug-logged).
-    pub fn push(&mut self, event: QueuedEvent) {
+    ///
+    /// Returns `true` if the event was accepted, `false` if dropped.
+    pub fn push(&mut self, event: QueuedEvent) -> bool {
         if matches!(self.dedup_mode, DedupMode::Drop)
             && self.in_flight_channels.contains(&event.channel_id)
         {
@@ -111,12 +113,13 @@ impl EventQueue {
                 channel_id = %event.channel_id,
                 "dropping event for in-flight channel (drop mode)"
             );
-            return;
+            return false;
         }
         self.queues
             .entry(event.channel_id)
             .or_default()
             .push_back(event);
+        true
     }
 
     /// Try to flush the next batch.
@@ -252,14 +255,18 @@ impl EventQueue {
     /// Also clears any `retry_after` throttle for the channel.
     ///
     /// Returns the number of events dropped.
-    pub fn drain_channel(&mut self, channel_id: Uuid) -> usize {
-        let dropped = self
+    /// Drop all queued (non-in-flight) events for a channel.
+    ///
+    /// Returns the event IDs of dropped events so the caller can clean up
+    /// any reactions (👀) that were added at queue-push time.
+    pub fn drain_channel(&mut self, channel_id: Uuid) -> Vec<String> {
+        let ids = self
             .queues
             .remove(&channel_id)
-            .map(|q| q.len())
-            .unwrap_or(0);
+            .map(|q| q.into_iter().map(|e| e.event.id.to_hex()).collect())
+            .unwrap_or_default();
         self.retry_after.remove(&channel_id);
-        dropped
+        ids
     }
 
     /// Whether a prompt is currently in-flight for the given channel.
@@ -1656,8 +1663,8 @@ mod tests {
         q.push(make_queued(ch, "msg2"));
         assert_eq!(q.pending_count(), 2);
 
-        let dropped = q.drain_channel(ch);
-        assert_eq!(dropped, 2);
+        let drained = q.drain_channel(ch);
+        assert_eq!(drained.len(), 2);
         assert_eq!(q.pending_count(), 0);
     }
 
@@ -1670,8 +1677,8 @@ mod tests {
         q.push(make_queued(ch_a, "A"));
         q.push(make_queued(ch_b, "B"));
 
-        let dropped = q.drain_channel(ch_a);
-        assert_eq!(dropped, 1);
+        let drained = q.drain_channel(ch_a);
+        assert_eq!(drained.len(), 1);
         assert_eq!(q.pending_count(), 1); // ch_b still has 1
     }
 
@@ -1687,16 +1694,16 @@ mod tests {
 
         // Channel is throttled — verify drain clears it.
         assert!(!q.has_flushable_work());
-        let dropped = q.drain_channel(ch);
-        assert_eq!(dropped, 1);
+        let drained = q.drain_channel(ch);
+        assert_eq!(drained.len(), 1);
         assert_eq!(q.pending_count(), 0);
     }
 
     #[test]
-    fn test_drain_channel_empty_returns_zero() {
+    fn test_drain_channel_empty_returns_empty() {
         let mut q = EventQueue::new(DedupMode::Queue);
         let ch = Uuid::new_v4();
-        assert_eq!(q.drain_channel(ch), 0);
+        assert!(q.drain_channel(ch).is_empty());
     }
 
     #[test]
@@ -1712,8 +1719,8 @@ mod tests {
         q.push(make_queued(ch, "msg2"));
 
         // drain_channel should only remove the queued event, not the in-flight one.
-        let dropped = q.drain_channel(ch);
-        assert_eq!(dropped, 1);
+        let drained = q.drain_channel(ch);
+        assert_eq!(drained.len(), 1);
         assert!(q.is_in_flight()); // in-flight unaffected
     }
 }

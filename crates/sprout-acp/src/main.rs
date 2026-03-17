@@ -357,16 +357,31 @@ async fn main() -> Result<()> {
                                     // removed channel. Events already in-flight will
                                     // complete normally (the relay may reject actions if
                                     // the agent lost access).
-                                    let drained = queue.drain_channel(ch);
+                                    let drained_ids = queue.drain_channel(ch);
                                     let invalidated = pool.invalidate_channel_sessions(ch);
                                     // Track removed channels so checked-out agents get
                                     // their sessions stripped when they return to the pool.
                                     removed_channels.insert(ch);
                                     typing_channels.remove(&ch);
-                                    if drained > 0 || invalidated > 0 {
+                                    // Best-effort: clean up 👀 on drained events.
+                                    // Note: the relay revokes membership before
+                                    // emitting the notification, so this DELETE may
+                                    // 403 on non-open channels. Stale 👀 in that
+                                    // case is a known limitation — fix belongs in
+                                    // the relay (clean up bot reactions on removal).
+                                    if !drained_ids.is_empty() {
+                                        let rc = ctx.rest_client.clone();
+                                        let ids = drained_ids.clone();
+                                        tokio::spawn(async move {
+                                            for eid in &ids {
+                                                pool::reaction_remove(&rc, eid, "👀").await;
+                                            }
+                                        });
+                                    }
+                                    if !drained_ids.is_empty() || invalidated > 0 {
                                         tracing::info!(
                                             channel_id = %ch,
-                                            drained,
+                                            drained = drained_ids.len(),
                                             invalidated,
                                             "cleaned up after membership removal"
                                         );
@@ -388,12 +403,24 @@ async fn main() -> Result<()> {
                                     continue;
                                 }
                             };
-                            queue.push(QueuedEvent {
+                            let event_id_hex = sprout_event.event.id.to_hex();
+                            let accepted = queue.push(QueuedEvent {
                                 channel_id: sprout_event.channel_id,
                                 event: sprout_event.event,
                                 received_at: std::time::Instant::now(),
                                 prompt_tag,
                             });
+                            // 👀 — immediate "seen" reaction, only if the event
+                            // was actually queued (not dropped by DedupMode::Drop).
+                            // Fire-and-forget: on rare fast-failure paths the
+                            // guard's cleanup may race with this add, leaving a
+                            // cosmetic stale 👀. Acceptable — see ReactionGuard docs.
+                            if accepted {
+                                let rc = ctx.rest_client.clone();
+                                tokio::spawn(async move {
+                                    pool::reaction_add(&rc, &event_id_hex, "👀").await;
+                                });
+                            }
                             typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
                         }
                         None => {
