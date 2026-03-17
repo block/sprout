@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
+import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
@@ -29,6 +30,7 @@ type ChannelPaneProps = {
   replyTargetId: string | null;
   replyTargetMessage: TimelineMessage | null;
   targetMessageId: string | null;
+  typingPubkeys: string[];
 };
 
 export function ChannelPane({
@@ -46,6 +48,7 @@ export function ChannelPane({
   replyTargetId,
   replyTargetMessage,
   targetMessageId,
+  typingPubkeys,
 }: ChannelPaneProps) {
   return (
     <React.Fragment key={activeChannel?.id ?? "no-channel"}>
@@ -71,6 +74,12 @@ export function ChannelPane({
         onTargetReached={onTargetReached}
         onToggleReaction={onToggleReaction}
         targetMessageId={targetMessageId}
+      />
+      <TypingIndicatorRow
+        channel={activeChannel}
+        currentPubkey={currentPubkey}
+        profiles={profiles}
+        typingPubkeys={typingPubkeys}
       />
       <MessageComposer
         channelId={activeChannel?.id ?? null}

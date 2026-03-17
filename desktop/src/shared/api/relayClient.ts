@@ -9,6 +9,7 @@ import type { PresenceStatus, RelayEvent } from "@/shared/api/types";
 import {
   CHANNEL_EVENT_KINDS,
   KIND_STREAM_MESSAGE,
+  KIND_TYPING_INDICATOR,
 } from "@/shared/constants/kinds";
 import {
   getTextPayload,
@@ -116,6 +117,20 @@ class RelayClient {
     onEvent: (event: RelayEvent) => void,
   ) {
     return this.subscribe(this.buildChannelFilter(channelId, 50), onEvent);
+  }
+
+  async subscribeToTypingIndicators(
+    channelId: string,
+    onEvent: (event: RelayEvent) => void,
+  ) {
+    return this.subscribe(
+      {
+        kinds: [KIND_TYPING_INDICATOR],
+        "#h": [channelId],
+        limit: 10,
+      },
+      onEvent,
+    );
   }
 
   async subscribeToAllStreamMessages(onEvent: (event: RelayEvent) => void) {

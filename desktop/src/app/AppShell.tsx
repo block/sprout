@@ -26,6 +26,7 @@ import {
   collectMessageAuthorPubkeys,
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
+import { useChannelTyping } from "@/features/messages/useChannelTyping";
 import {
   getChannelIdFromTags,
   getThreadReference,
@@ -151,8 +152,21 @@ export function AppShell() {
     () => collectMessageAuthorPubkeys(resolvedMessages),
     [resolvedMessages],
   );
-  const messageProfilesQuery = useUsersBatchQuery(messageAuthorPubkeys, {
-    enabled: resolvedMessages.length > 0,
+  const latestMessageEvent = React.useMemo(
+    () => resolvedMessages[resolvedMessages.length - 1] ?? null,
+    [resolvedMessages],
+  );
+  const typingPubkeys = useChannelTyping(
+    activeChannel,
+    identityQuery.data?.pubkey,
+    latestMessageEvent,
+  );
+  const messageProfilePubkeys = React.useMemo(
+    () => [...new Set([...messageAuthorPubkeys, ...typingPubkeys])],
+    [messageAuthorPubkeys, typingPubkeys],
+  );
+  const messageProfilesQuery = useUsersBatchQuery(messageProfilePubkeys, {
+    enabled: messageProfilePubkeys.length > 0,
   });
 
   const timelineMessages = React.useMemo(
@@ -638,6 +652,7 @@ export function AppShell() {
                       ? searchAnchor.eventId
                       : null
                   }
+                  typingPubkeys={typingPubkeys}
                 />
               )}
             </div>

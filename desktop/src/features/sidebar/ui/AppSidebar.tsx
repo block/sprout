@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
@@ -29,6 +30,7 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSkeleton,
@@ -357,6 +359,10 @@ export function AppSidebar({
       ) satisfies Record<string, PresenceStatus>,
     [currentPubkey, directMessages, dmPresenceQuery.data],
   );
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const totalAgentCount = managedAgentsQuery.data?.length ?? 0;
+  const shouldShowAgentCount =
+    totalAgentCount > 0 || !managedAgentsQuery.isLoading;
   const resolvedDisplayName =
     profile?.displayName?.trim() ||
     fallbackDisplayName?.trim() ||
@@ -458,6 +464,14 @@ export function AppSidebar({
               <Bot className="h-4 w-4" />
               <span>Agents</span>
             </SidebarMenuButton>
+            {shouldShowAgentCount ? (
+              <SidebarMenuBadge
+                className="right-2 rounded-full bg-sidebar-accent/70 px-1.5 text-[11px] text-sidebar-foreground/75 peer-data-[active=true]/menu-button:bg-sidebar-primary-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-primary-foreground"
+                data-testid="sidebar-agents-count"
+              >
+                {totalAgentCount}
+              </SidebarMenuBadge>
+            ) : null}
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>

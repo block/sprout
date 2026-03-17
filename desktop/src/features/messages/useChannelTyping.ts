@@ -1,0 +1,196 @@
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+
+import { getChannelIdFromTags } from "@/features/messages/lib/threading";
+import { relayClient } from "@/shared/api/relayClient";
+import type { Channel, RelayEvent } from "@/shared/api/types";
+import {
+  KIND_STREAM_MESSAGE,
+  KIND_STREAM_MESSAGE_DIFF,
+  KIND_STREAM_MESSAGE_EDIT,
+  KIND_STREAM_MESSAGE_V2,
+  KIND_TYPING_INDICATOR,
+} from "@/shared/constants/kinds";
+
+type TypingState = Record<string, number>;
+
+const TYPING_INDICATOR_TTL_MS = 5_500;
+const TYPING_PRUNE_INTERVAL_MS = 1_000;
+const TYPING_POST_MESSAGE_SUPPRESS_MS = 4_000;
+
+function pruneTypingState(state: TypingState, now = Date.now()) {
+  let changed = false;
+  const next: TypingState = {};
+
+  for (const [pubkey, expiresAt] of Object.entries(state)) {
+    if (expiresAt > now) {
+      next[pubkey] = expiresAt;
+      continue;
+    }
+
+    changed = true;
+  }
+
+  return changed ? next : state;
+}
+
+function isTypingCompletionEvent(event: RelayEvent | null | undefined) {
+  if (!event) {
+    return false;
+  }
+
+  return (
+    event.kind === KIND_STREAM_MESSAGE ||
+    event.kind === KIND_STREAM_MESSAGE_V2 ||
+    event.kind === KIND_STREAM_MESSAGE_EDIT ||
+    event.kind === KIND_STREAM_MESSAGE_DIFF
+  );
+}
+
+export function useChannelTyping(
+  channel: Channel | null,
+  currentPubkey?: string,
+  latestMessageEvent?: RelayEvent | null,
+) {
+  const channelId = channel?.id ?? null;
+  const channelType = channel?.channelType ?? null;
+  const [typingByPubkey, setTypingByPubkey] = useState<TypingState>({});
+  const normalizedCurrentPubkey = currentPubkey?.toLowerCase();
+  const typingSuppressUntilByPubkeyRef = useRef<Record<string, number>>({});
+  const latestMessageCreatedAtByPubkeyRef = useRef<Record<string, number>>({});
+
+  const registerTyping = useEffectEvent((event: RelayEvent) => {
+    if (!channelId || event.kind !== KIND_TYPING_INDICATOR) {
+      return;
+    }
+
+    if (getChannelIdFromTags(event.tags) !== channelId) {
+      return;
+    }
+
+    const typingPubkey = event.pubkey.toLowerCase();
+    if (normalizedCurrentPubkey && typingPubkey === normalizedCurrentPubkey) {
+      return;
+    }
+
+    const suppressUntil =
+      typingSuppressUntilByPubkeyRef.current[typingPubkey] ?? 0;
+    if (suppressUntil > Date.now()) {
+      return;
+    }
+    if (suppressUntil > 0) {
+      delete typingSuppressUntilByPubkeyRef.current[typingPubkey];
+    }
+
+    const latestMessageCreatedAt =
+      latestMessageCreatedAtByPubkeyRef.current[typingPubkey] ?? 0;
+    if (event.created_at <= latestMessageCreatedAt) {
+      return;
+    }
+
+    setTypingByPubkey((current) => ({
+      ...pruneTypingState(current),
+      [typingPubkey]: Date.now() + TYPING_INDICATOR_TTL_MS,
+    }));
+  });
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: channel changes should clear local typing state
+  useEffect(() => {
+    setTypingByPubkey({});
+    typingSuppressUntilByPubkeyRef.current = {};
+    latestMessageCreatedAtByPubkeyRef.current = {};
+  }, [channelId]);
+
+  useEffect(() => {
+    if (
+      !channelId ||
+      !latestMessageEvent ||
+      !isTypingCompletionEvent(latestMessageEvent)
+    ) {
+      return;
+    }
+
+    if (getChannelIdFromTags(latestMessageEvent.tags) !== channelId) {
+      return;
+    }
+
+    const authorPubkey = latestMessageEvent.pubkey.toLowerCase();
+    latestMessageCreatedAtByPubkeyRef.current[authorPubkey] = Math.max(
+      latestMessageCreatedAtByPubkeyRef.current[authorPubkey] ?? 0,
+      latestMessageEvent.created_at,
+    );
+    typingSuppressUntilByPubkeyRef.current[authorPubkey] =
+      Date.now() + TYPING_POST_MESSAGE_SUPPRESS_MS;
+    setTypingByPubkey((current) => {
+      const next = pruneTypingState(current);
+      if (!(authorPubkey in next)) {
+        return next;
+      }
+
+      const updated = { ...next };
+      delete updated[authorPubkey];
+      return updated;
+    });
+  }, [channelId, latestMessageEvent]);
+
+  useEffect(() => {
+    if (!channelId || channelType === "forum") {
+      return;
+    }
+
+    let isDisposed = false;
+    let cleanup: (() => Promise<void>) | undefined;
+
+    relayClient
+      .subscribeToTypingIndicators(channelId, (event) => {
+        if (!isDisposed) {
+          registerTyping(event);
+        }
+      })
+      .then((dispose) => {
+        if (isDisposed) {
+          void dispose();
+          return;
+        }
+
+        cleanup = dispose;
+      })
+      .catch((error) => {
+        console.error(
+          "Failed to subscribe to typing indicators",
+          channelId,
+          error,
+        );
+      });
+
+    return () => {
+      isDisposed = true;
+      if (cleanup) {
+        void cleanup();
+      }
+    };
+  }, [channelId, channelType]);
+
+  const hasActiveTypers = Object.keys(typingByPubkey).length > 0;
+
+  useEffect(() => {
+    if (!hasActiveTypers) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setTypingByPubkey((current) => pruneTypingState(current));
+    }, TYPING_PRUNE_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [hasActiveTypers]);
+
+  return useMemo(
+    () =>
+      Object.entries(typingByPubkey)
+        .sort((left, right) => right[1] - left[1])
+        .map(([pubkey]) => pubkey),
+    [typingByPubkey],
+  );
+}
