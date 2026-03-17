@@ -204,12 +204,17 @@ pub struct Config {
 
 fn normalize_agent_command_identity(command: &str) -> String {
     let normalized = command.trim().replace('\\', "/");
-    let basename = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
-    basename
-        .chars()
+    let trimmed = normalized.trim_end_matches('/');
+    let basename = trimmed
+        .rsplit('/')
+        .next()
+        .expect("rsplit always yields at least one element");
+    let lower = basename.to_ascii_lowercase();
+    let stem = lower.strip_suffix(".exe").unwrap_or(&lower);
+    stem.chars()
         .map(|character| match character {
             ' ' | '_' => '-',
-            _ => character.to_ascii_lowercase(),
+            _ => character,
         })
         .collect()
 }
@@ -242,7 +247,8 @@ fn normalize_agent_args(command: &str, agent_args: Vec<String>) -> Vec<String> {
     // Older callers relied on the Goose-specific default even for runtimes like
     // Codex and Claude. Treat that legacy fallback as "no args" for zero-arg
     // providers so desktop- and env-based launches behave the same way.
-    if normalized.len() == 1 && normalized[0] == "acp" && default_args.is_empty() {
+    if normalized.len() == 1 && normalized[0].eq_ignore_ascii_case("acp") && default_args.is_empty()
+    {
         return default_args;
     }
 
@@ -743,6 +749,44 @@ mod tests {
         assert_eq!(
             normalize_agent_args("custom-agent", vec!["".into(), "serve".into()]),
             vec!["serve"]
+        );
+    }
+
+    #[test]
+    fn normalize_agent_command_identity_variants() {
+        assert_eq!(normalize_agent_command_identity("goose"), "goose");
+        assert_eq!(
+            normalize_agent_command_identity("C:\\Program Files\\Goose\\goose.exe"),
+            "goose"
+        );
+        assert_eq!(
+            normalize_agent_command_identity("/usr/local/bin/codex-acp"),
+            "codex-acp"
+        );
+        assert_eq!(normalize_agent_command_identity("/usr/local/bin/"), "bin");
+        assert_eq!(
+            normalize_agent_command_identity("Claude_Code"),
+            "claude-code"
+        );
+        assert_eq!(
+            normalize_agent_command_identity("Claude Code"),
+            "claude-code"
+        );
+        assert_eq!(normalize_agent_command_identity("Goose.EXE"), "goose");
+        // Non-ASCII must not panic.
+        assert_eq!(normalize_agent_command_identity("my-agënt"), "my-agënt");
+        // Edge cases: empty, whitespace-only, bare separators.
+        assert_eq!(normalize_agent_command_identity(""), "");
+        assert_eq!(normalize_agent_command_identity("   "), "");
+        assert_eq!(normalize_agent_command_identity("/"), "");
+        assert_eq!(normalize_agent_command_identity("///"), "");
+    }
+
+    #[test]
+    fn strips_legacy_acp_arg_case_insensitively() {
+        assert_eq!(
+            normalize_agent_args("codex-acp", vec!["ACP".into()]),
+            Vec::<String>::new()
         );
     }
 

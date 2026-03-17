@@ -65,14 +65,15 @@ fn build_top_level_message_tags(
     sender_pubkey: &str,
     mention_pubkeys: Option<&[String]>,
 ) -> Result<Vec<Tag>, String> {
+    let sender_pubkey = sender_pubkey.to_ascii_lowercase();
     let mut tags = vec![
         Tag::parse(&["h", channel_id]).map_err(|e| format!("failed to build channel tag: {e}"))?,
-        Tag::parse(&["p", sender_pubkey])
+        Tag::parse(&["p", &sender_pubkey])
             .map_err(|e| format!("failed to build sender tag: {e}"))?,
     ];
 
     for mention in mention_pubkeys
-        .map(|mentions| normalize_mention_pubkeys(mentions, sender_pubkey))
+        .map(|mentions| normalize_mention_pubkeys(mentions, &sender_pubkey))
         .unwrap_or_default()
     {
         tags.push(
@@ -1883,6 +1884,52 @@ mod tests {
     }
 
     #[test]
+    fn normalize_mention_pubkeys_skips_mixed_case_sender() {
+        let sender = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let mentions = vec![
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string(),
+        ];
+
+        assert_eq!(
+            normalize_mention_pubkeys(&mentions, sender),
+            vec!["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),]
+        );
+    }
+
+    #[test]
+    fn normalize_mention_pubkeys_empty_input() {
+        let sender = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        assert_eq!(normalize_mention_pubkeys(&[], sender), Vec::<String>::new());
+    }
+
+    #[test]
+    fn build_top_level_message_tags_lowercases_sender() {
+        let sender = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let tags =
+            build_top_level_message_tags("550e8400-e29b-41d4-a716-446655440000", sender, None)
+                .expect("tags should build");
+        let tag_strings = tags
+            .iter()
+            .map(|tag| tag.clone().to_vec())
+            .collect::<Vec<Vec<String>>>();
+
+        assert_eq!(
+            tag_strings,
+            vec![
+                vec![
+                    "h".to_string(),
+                    "550e8400-e29b-41d4-a716-446655440000".to_string()
+                ],
+                vec![
+                    "p".to_string(),
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()
+                ],
+            ]
+        );
+    }
+
+    #[test]
     fn build_top_level_message_tags_includes_mention_p_tags() {
         let sender = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let mention =
@@ -1910,6 +1957,52 @@ mod tests {
                     "p".to_string(),
                     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()
                 ],
+            ]
+        );
+    }
+
+    #[test]
+    fn build_top_level_message_tags_no_mentions_when_none() {
+        let sender = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let tags =
+            build_top_level_message_tags("550e8400-e29b-41d4-a716-446655440000", sender, None)
+                .expect("tags should build");
+        let tag_strings = tags
+            .iter()
+            .map(|tag| tag.clone().to_vec())
+            .collect::<Vec<Vec<String>>>();
+
+        assert_eq!(
+            tag_strings,
+            vec![
+                vec![
+                    "h".to_string(),
+                    "550e8400-e29b-41d4-a716-446655440000".to_string()
+                ],
+                vec!["p".to_string(), sender.to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn build_top_level_message_tags_no_mentions_when_empty_slice() {
+        let sender = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let tags =
+            build_top_level_message_tags("550e8400-e29b-41d4-a716-446655440000", sender, Some(&[]))
+                .expect("tags should build");
+        let tag_strings = tags
+            .iter()
+            .map(|tag| tag.clone().to_vec())
+            .collect::<Vec<Vec<String>>>();
+
+        assert_eq!(
+            tag_strings,
+            vec![
+                vec![
+                    "h".to_string(),
+                    "550e8400-e29b-41d4-a716-446655440000".to_string()
+                ],
+                vec!["p".to_string(), sender.to_string()],
             ]
         );
     }
