@@ -4,6 +4,7 @@ export type RelaySubscriptionFilter = {
   kinds: number[];
   "#h"?: string[];
   limit: number;
+  since?: number;
 };
 
 type HistorySubscription = {
@@ -16,8 +17,10 @@ type HistorySubscription = {
 
 type LiveSubscription = {
   mode: "live";
+  filter: RelaySubscriptionFilter;
   onEvent: (event: RelayEvent) => void;
   resolveReady?: () => void;
+  lastSeenCreatedAt?: number;
 };
 
 export type PendingEvent = {

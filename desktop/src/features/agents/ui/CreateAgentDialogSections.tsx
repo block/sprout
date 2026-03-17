@@ -261,9 +261,11 @@ export function CreateAgentOptionToggles({
   mintToken,
   mintToggleDisabled,
   prereqs,
+  startOnAppLaunch,
   spawnAfterCreate,
   spawnToggleDisabled,
   onToggleMintToken,
+  onToggleStartOnAppLaunch,
   onToggleSpawnAfterCreate,
 }: {
   isMintSupported: boolean;
@@ -271,13 +273,15 @@ export function CreateAgentOptionToggles({
   mintToken: boolean;
   mintToggleDisabled: boolean;
   prereqs: ManagedAgentPrereqs | null;
+  startOnAppLaunch: boolean;
   spawnAfterCreate: boolean;
   spawnToggleDisabled: boolean;
   onToggleMintToken: () => void;
+  onToggleStartOnAppLaunch: () => void;
   onToggleSpawnAfterCreate: () => void;
 }) {
   return (
-    <div className="grid gap-3 md:grid-cols-2">
+    <div className="grid gap-3 md:grid-cols-3">
       <button
         aria-pressed={mintToken}
         className={cn(
@@ -296,6 +300,26 @@ export function CreateAgentOptionToggles({
           {prereqs !== null && !isMintSupported
             ? `Unavailable until ${prereqs.admin.command} is installed.`
             : "Use `sprout-admin` to create a bearer token for this agent."}
+        </p>
+      </button>
+
+      <button
+        aria-pressed={startOnAppLaunch}
+        className={cn(
+          "rounded-2xl border px-4 py-3 text-left transition-colors",
+          startOnAppLaunch
+            ? "border-primary bg-primary/10"
+            : "border-border/70 bg-background/70",
+        )}
+        onClick={onToggleStartOnAppLaunch}
+        type="button"
+      >
+        <p className="text-sm font-semibold tracking-tight">
+          Start on app launch
+        </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Reopen this local ACP harness automatically when the desktop app
+          starts.
         </p>
       </button>
 

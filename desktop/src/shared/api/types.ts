@@ -272,6 +272,7 @@ export type ManagedAgent = {
   lastExitCode: number | null;
   lastError: string | null;
   logPath: string;
+  startOnAppLaunch: boolean;
 };
 
 export type CreateManagedAgentInput = {
@@ -288,6 +289,7 @@ export type CreateManagedAgentInput = {
   tokenScopes?: TokenScope[];
   tokenName?: string;
   spawnAfterCreate?: boolean;
+  startOnAppLaunch?: boolean;
 };
 
 export type CreateManagedAgentResponse = {

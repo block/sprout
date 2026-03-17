@@ -217,7 +217,7 @@ type RawRelayAgent = {
   status: RelayAgent["status"];
 };
 
-type RawManagedAgent = {
+export type RawManagedAgent = {
   pubkey: string;
   name: string;
   relay_url: string;
@@ -238,6 +238,7 @@ type RawManagedAgent = {
   last_exit_code: number | null;
   last_error: string | null;
   log_path: string;
+  start_on_app_launch: boolean;
 };
 
 type RawCreateManagedAgentResponse = {
@@ -303,7 +304,7 @@ function toTauriError(error: unknown): Error {
   }
 }
 
-async function invokeTauri<T>(
+export async function invokeTauri<T>(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
@@ -735,7 +736,7 @@ function fromRawRelayAgent(agent: RawRelayAgent): RelayAgent {
   };
 }
 
-function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
+export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
   return {
     pubkey: agent.pubkey,
     name: agent.name,
@@ -757,6 +758,7 @@ function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     lastExitCode: agent.last_exit_code,
     lastError: agent.last_error,
     logPath: agent.log_path,
+    startOnAppLaunch: agent.start_on_app_launch,
   };
 }
 
@@ -846,6 +848,7 @@ export async function createManagedAgent(
         tokenScopes: input.tokenScopes,
         tokenName: input.tokenName,
         spawnAfterCreate: input.spawnAfterCreate,
+        startOnAppLaunch: input.startOnAppLaunch,
       },
     },
   );

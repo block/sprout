@@ -36,6 +36,7 @@ const overrides = new Map([
   ["src/features/settings/ui/SettingsView.tsx", 600],
   ["src/features/sidebar/ui/AppSidebar.tsx", 650],
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
+  ["src/shared/api/relayClientSession.ts", 650], // durable websocket session manager with reconnect/replay state
   ["src/shared/api/tauri.ts", 950],
 ]);
 

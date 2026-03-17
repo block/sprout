@@ -5,13 +5,86 @@ mod models;
 mod relay;
 mod util;
 
-use app_state::build_app_state;
+use app_state::{build_app_state, AppState};
 use commands::*;
+use managed_agents::{
+    find_managed_agent_mut, load_managed_agents, save_managed_agents, start_managed_agent_process,
+    stop_managed_agent_process, sync_managed_agent_processes,
+};
+use tauri::{Manager, RunEvent};
 use tauri_plugin_window_state::StateFlags;
+
+fn restore_managed_agents_on_launch(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let _store_guard = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let mut records = load_managed_agents(app)?;
+    let mut runtimes = state
+        .managed_agent_processes
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let mut changed = sync_managed_agent_processes(&mut records, &mut runtimes);
+    let pubkeys_to_restore = records
+        .iter()
+        .filter(|record| record.start_on_app_launch)
+        .map(|record| record.pubkey.clone())
+        .collect::<Vec<_>>();
+
+    for pubkey in pubkeys_to_restore {
+        let record = find_managed_agent_mut(&mut records, &pubkey)?;
+        match start_managed_agent_process(app, record, &mut runtimes) {
+            Ok(()) => {
+                changed = true;
+            }
+            Err(error) => {
+                record.updated_at = util::now_iso();
+                record.last_error = Some(error);
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        save_managed_agents(app, &records)?;
+    }
+
+    Ok(())
+}
+
+fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let _store_guard = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let mut records = load_managed_agents(app)?;
+    let mut runtimes = state
+        .managed_agent_processes
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let mut changed = sync_managed_agent_processes(&mut records, &mut runtimes);
+
+    for record in records.iter_mut() {
+        if record.runtime_pid.is_none() && !runtimes.contains_key(&record.pubkey) {
+            continue;
+        }
+
+        stop_managed_agent_process(record, &mut runtimes)?;
+        changed = true;
+    }
+
+    if changed {
+        save_managed_agents(app, &records)?;
+    }
+
+    Ok(())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
@@ -21,6 +94,14 @@ pub fn run() {
         .plugin(tauri_plugin_websocket::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(build_app_state())
+        .setup(|app| {
+            let app_handle = app.handle().clone();
+            if let Err(error) = restore_managed_agents_on_launch(&app_handle) {
+                eprintln!("sprout-desktop: failed to restore managed agents: {error}");
+            }
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_identity,
             get_profile,
@@ -67,12 +148,21 @@ pub fn run() {
             create_managed_agent,
             start_managed_agent,
             stop_managed_agent,
+            set_managed_agent_start_on_app_launch,
             delete_managed_agent,
             mint_managed_agent_token,
             get_managed_agent_log,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if matches!(event, RunEvent::ExitRequested { .. }) {
+            if let Err(error) = shutdown_managed_agents(app_handle) {
+                eprintln!("sprout-desktop: failed to stop managed agents: {error}");
+            }
+        }
+    });
 }
 
 #[cfg(test)]
