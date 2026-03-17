@@ -81,13 +81,14 @@ fn token_supports_scope(scopes: &[String], required_scope: &str) -> bool {
     scopes.iter().any(|scope| scope == required_scope)
 }
 
-pub async fn sync_managed_agent_profile_display_name(
+pub async fn sync_managed_agent_profile(
     state: &AppState,
     relay_url: &str,
     pubkey: &str,
     api_token: Option<&str>,
     token_scopes: &[String],
     display_name: &str,
+    avatar_url: Option<&str>,
 ) -> Result<(), String> {
     let url = format!(
         "{}{}",
@@ -105,7 +106,7 @@ pub async fn sync_managed_agent_profile_display_name(
 
     let request = request.json(&UpdateProfileBody {
         display_name: Some(display_name),
-        avatar_url: None,
+        avatar_url,
         about: None,
         nip05_handle: None,
     });
@@ -113,13 +114,13 @@ pub async fn sync_managed_agent_profile_display_name(
     send_empty_request(request).await.map_err(|error| {
         if api_token.is_some() && !use_bearer_token {
             format!(
-                "Created the agent, but could not sync its profile display name. The minted token does not include `users:write`, and the relay rejected dev-mode pubkey auth: {error}"
+                "Created the agent, but could not sync its profile metadata. The minted token does not include `users:write`, and the relay rejected dev-mode pubkey auth: {error}"
             )
         } else if api_token.is_some() {
-            format!("Created the agent, but could not sync its profile display name: {error}")
+            format!("Created the agent, but could not sync its profile metadata: {error}")
         } else {
             format!(
-                "Created the agent, but could not sync its profile display name without a token: {error}"
+                "Created the agent, but could not sync its profile metadata without a token: {error}"
             )
         }
     })
