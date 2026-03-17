@@ -7,17 +7,18 @@ use crate::{
     managed_agents::{
         admin_command, build_managed_agent_summary, command_availability, default_token_scopes,
         discover_local_acp_providers, find_managed_agent_mut, load_managed_agents,
-        managed_agent_log_path, read_log_tail, run_sprout_admin_mint_token, save_managed_agents,
-        start_managed_agent_process, stop_managed_agent_process, sync_managed_agent_processes,
-        AcpProviderInfo, CreateManagedAgentRequest, CreateManagedAgentResponse,
-        DiscoverManagedAgentPrereqsRequest, ManagedAgentLogResponse, ManagedAgentPrereqsInfo,
-        ManagedAgentSummary, MintManagedAgentTokenRequest, MintManagedAgentTokenResponse,
-        RelayAgentInfo, DEFAULT_ACP_COMMAND, DEFAULT_AGENT_ARG, DEFAULT_AGENT_COMMAND,
-        DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
+        managed_agent_avatar_url, managed_agent_log_path, read_log_tail,
+        run_sprout_admin_mint_token, save_managed_agents, start_managed_agent_process,
+        stop_managed_agent_process, sync_managed_agent_processes, AcpProviderInfo,
+        CreateManagedAgentRequest, CreateManagedAgentResponse, DiscoverManagedAgentPrereqsRequest,
+        ManagedAgentLogResponse, ManagedAgentPrereqsInfo, ManagedAgentSummary,
+        MintManagedAgentTokenRequest, MintManagedAgentTokenResponse, RelayAgentInfo,
+        DEFAULT_ACP_COMMAND, DEFAULT_AGENT_ARG, DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM,
+        DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
     },
     relay::{
         build_authed_request, managed_agent_owner_pubkey, relay_ws_url, send_json_request,
-        sync_managed_agent_profile_display_name,
+        sync_managed_agent_profile,
     },
     util::now_iso,
 };
@@ -269,13 +270,15 @@ pub async fn create_managed_agent(
             ))
         }?;
 
-    let profile_sync_error = match sync_managed_agent_profile_display_name(
+    let avatar_url = managed_agent_avatar_url(agent.agent_command.as_str());
+    let profile_sync_error = match sync_managed_agent_profile(
         &state,
         &resolved_relay_url,
         &pubkey,
         api_token.as_deref(),
         &token_scopes,
         name,
+        avatar_url.as_deref(),
     )
     .await
     {

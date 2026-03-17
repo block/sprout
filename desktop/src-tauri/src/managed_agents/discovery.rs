@@ -13,8 +13,14 @@ struct KnownAcpProvider {
     id: &'static str,
     label: &'static str,
     command: &'static str,
+    aliases: &'static [&'static str],
     default_args: &'static [&'static str],
+    avatar_url: &'static str,
 }
+
+const GOOSE_AVATAR_URL: &str = "https://block.github.io/goose/img/logo_dark.png";
+const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
+const CODEX_AVATAR_URL: &str = "https://openai.gallerycdn.vsassets.io/extensions/openai/chatgpt/26.5313.41514/1773706730621/Microsoft.VisualStudio.Services.Icons.Default";
 
 const COMMON_BINARY_PATHS: &[&str] = &[
     "/opt/homebrew/bin",
@@ -28,19 +34,25 @@ const KNOWN_ACP_PROVIDERS: &[KnownAcpProvider] = &[
         id: "goose",
         label: "Goose",
         command: "goose",
+        aliases: &[],
         default_args: &[DEFAULT_AGENT_ARG],
+        avatar_url: GOOSE_AVATAR_URL,
     },
     KnownAcpProvider {
         id: "claude",
         label: "Claude Code",
         command: "claude-agent-acp",
+        aliases: &["claude-code", "claudecode"],
         default_args: &[],
+        avatar_url: CLAUDE_CODE_AVATAR_URL,
     },
     KnownAcpProvider {
         id: "codex",
         label: "Codex",
         command: "codex-acp",
+        aliases: &[],
         default_args: &[],
+        avatar_url: CODEX_AVATAR_URL,
     },
 ];
 
@@ -60,6 +72,42 @@ fn executable_basename(command: &str) -> String {
     } else {
         format!("{command}{suffix}")
     }
+}
+
+fn normalize_command_identity(command: &str) -> String {
+    let normalized = command.trim().replace('\\', "/");
+    let basename = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    let lower = basename
+        .chars()
+        .map(|character| match character {
+            ' ' | '_' => '-',
+            _ => character.to_ascii_lowercase(),
+        })
+        .collect::<String>();
+    let lower = lower.strip_suffix(".exe").unwrap_or(&lower).to_string();
+
+    if let Some(suffix) = std::env::consts::EXE_SUFFIX.strip_prefix('.') {
+        return lower.strip_suffix(&format!(".{suffix}")).unwrap_or(&lower).to_string();
+    }
+
+    if !std::env::consts::EXE_SUFFIX.is_empty() {
+        return lower
+            .strip_suffix(std::env::consts::EXE_SUFFIX)
+            .unwrap_or(&lower)
+            .to_string();
+    }
+
+    lower
+}
+
+fn known_acp_provider(command: &str) -> Option<&'static KnownAcpProvider> {
+    let normalized = normalize_command_identity(command);
+
+    KNOWN_ACP_PROVIDERS.iter().find(|provider| {
+        normalized == provider.id
+            || normalized == normalize_command_identity(provider.command)
+            || provider.aliases.iter().any(|alias| normalized == *alias)
+    })
 }
 
 fn command_search_dirs(app: Option<&AppHandle>) -> Vec<PathBuf> {
@@ -212,6 +260,11 @@ pub fn discover_local_acp_providers() -> Vec<AcpProviderInfo> {
         .collect()
 }
 
+pub fn managed_agent_avatar_url(command: &str) -> Option<String> {
+    let provider = known_acp_provider(command)?;
+    Some(provider.avatar_url.to_string())
+}
+
 pub fn admin_command() -> String {
     std::env::var("SPROUT_ADMIN_COMMAND").unwrap_or_else(|_| "sprout-admin".to_string())
 }
@@ -222,6 +275,42 @@ pub fn default_token_scopes() -> Vec<String> {
         "messages:write".to_string(),
         "channels:read".to_string(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        managed_agent_avatar_url, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL, GOOSE_AVATAR_URL,
+    };
+
+    #[test]
+    fn resolves_known_avatar_for_bare_command() {
+        let avatar_url =
+            managed_agent_avatar_url("goose").expect("goose avatar should resolve");
+
+        assert_eq!(avatar_url, GOOSE_AVATAR_URL);
+    }
+
+    #[test]
+    fn resolves_known_avatar_for_command_paths_and_aliases() {
+        assert_eq!(
+            managed_agent_avatar_url("/usr/local/bin/codex-acp"),
+            Some(CODEX_AVATAR_URL.to_string())
+        );
+        assert_eq!(
+            managed_agent_avatar_url("Claude Code"),
+            Some(CLAUDE_CODE_AVATAR_URL.to_string())
+        );
+        assert_eq!(
+            managed_agent_avatar_url(r"C:\Tools\claude-agent-acp.exe"),
+            Some(CLAUDE_CODE_AVATAR_URL.to_string())
+        );
+    }
+
+    #[test]
+    fn returns_none_for_unknown_commands() {
+        assert!(managed_agent_avatar_url("custom-agent").is_none());
+    }
 }
 
 fn run_sprout_admin_command(
