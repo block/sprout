@@ -31,6 +31,17 @@ import {
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import type { Channel, ChannelMember } from "@/shared/api/types";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Separator } from "@/shared/ui/separator";
@@ -190,6 +201,7 @@ export function ChannelManagementSheet({
   const [descriptionDraft, setDescriptionDraft] = React.useState("");
   const [topicDraft, setTopicDraft] = React.useState("");
   const [purposeDraft, setPurposeDraft] = React.useState("");
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = React.useState(false);
 
   // Sync drafts from server only when the sheet opens or the channel changes —
   // not on every background refetch, which would clobber in-flight edits.
@@ -198,6 +210,7 @@ export function ChannelManagementSheet({
     if (!open) {
       // Reset on close so the next open re-syncs from server.
       syncedForRef.current = null;
+      setIsDeleteDialogOpen(false);
       return;
     }
     if (!detail) {
@@ -220,10 +233,34 @@ export function ChannelManagementSheet({
     return null;
   }
 
+  function handleDeleteDialogOpenChange(next: boolean) {
+    deleteChannelMutation.reset();
+    setIsDeleteDialogOpen(next);
+  }
+
+  async function handleDeleteChannel() {
+    try {
+      await deleteChannelMutation.mutateAsync();
+      handleDeleteDialogOpenChange(false);
+      onOpenChange(false);
+      onDeleted?.();
+    } catch {
+      // The mutation error is rendered inline in the confirmation dialog.
+    }
+  }
+
+  function handleSheetOpenChange(next: boolean) {
+    if (!next) {
+      handleDeleteDialogOpenChange(false);
+    }
+
+    onOpenChange(next);
+  }
+
   const resolvedChannel = detail ?? channel;
 
   return (
-    <Sheet onOpenChange={onOpenChange} open={open}>
+    <Sheet onOpenChange={handleSheetOpenChange} open={open}>
       <SheetContent
         className="flex w-full flex-col gap-0 overflow-hidden border-l border-border/80 bg-background p-0 sm:max-w-xl"
         data-testid="channel-management-sheet"
@@ -643,32 +680,64 @@ export function ChannelManagementSheet({
                 description="Deleting removes the channel from the workspace list."
                 title="Danger zone"
               >
-                <Button
-                  data-testid="channel-management-delete"
-                  disabled={deleteChannelMutation.isPending}
-                  onClick={() => {
-                    if (!window.confirm(`Delete ${resolvedChannel.name}?`)) {
-                      return;
-                    }
-
-                    void deleteChannelMutation.mutateAsync().then(() => {
-                      onOpenChange(false);
-                      onDeleted?.();
-                    });
-                  }}
-                  size="sm"
-                  type="button"
-                  variant="destructive"
+                <AlertDialog
+                  onOpenChange={handleDeleteDialogOpenChange}
+                  open={isDeleteDialogOpen}
                 >
-                  {deleteChannelMutation.isPending
-                    ? "Deleting..."
-                    : "Delete channel"}
-                </Button>
-                {deleteChannelMutation.error instanceof Error ? (
-                  <p className="text-sm text-destructive">
-                    {deleteChannelMutation.error.message}
-                  </p>
-                ) : null}
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      data-testid="channel-management-delete"
+                      disabled={deleteChannelMutation.isPending}
+                      size="sm"
+                      type="button"
+                      variant="destructive"
+                    >
+                      Delete channel
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent data-testid="channel-delete-confirmation-dialog">
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete channel?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Delete {resolvedChannel.name} from the workspace list.
+                        This action cannot be undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    {deleteChannelMutation.error instanceof Error ? (
+                      <p className="text-sm text-destructive">
+                        {deleteChannelMutation.error.message}
+                      </p>
+                    ) : null}
+                    <AlertDialogFooter>
+                      <AlertDialogCancel asChild>
+                        <Button
+                          data-testid="channel-delete-cancel"
+                          disabled={deleteChannelMutation.isPending}
+                          type="button"
+                          variant="outline"
+                        >
+                          Cancel
+                        </Button>
+                      </AlertDialogCancel>
+                      <AlertDialogAction asChild>
+                        <Button
+                          data-testid="channel-delete-confirm"
+                          disabled={deleteChannelMutation.isPending}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            void handleDeleteChannel();
+                          }}
+                          type="button"
+                          variant="destructive"
+                        >
+                          {deleteChannelMutation.isPending
+                            ? "Deleting..."
+                            : "Delete channel"}
+                        </Button>
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </Section>
             </>
           ) : null}

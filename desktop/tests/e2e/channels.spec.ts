@@ -401,12 +401,38 @@ test("manage channel can delete an owned stream", async ({ page }) => {
   await page.getByRole("button", { name: "Create" }).click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 
-  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByTestId("channel-management-trigger").click();
+  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await page.getByTestId("channel-management-delete").click();
+  await expect(
+    page.getByTestId("channel-delete-confirmation-dialog"),
+  ).toBeVisible();
+  await page.getByTestId("channel-delete-confirm").click();
+
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
+  await expect(page.getByTestId("stream-list")).not.toContainText(channelName);
+});
+
+test("canceling channel deletion keeps the owned stream", async ({ page }) => {
+  const channelName = `keep-me-${Date.now()}`;
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Create a stream" }).click();
+  await page.getByTestId("create-stream-name").fill(channelName);
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 
   await page.getByTestId("channel-management-trigger").click();
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
   await page.getByTestId("channel-management-delete").click();
+  await expect(
+    page.getByTestId("channel-delete-confirmation-dialog"),
+  ).toBeVisible();
+  await page.getByTestId("channel-delete-cancel").click();
 
-  await expect(page.getByTestId("chat-title")).toHaveText("Home");
-  await expect(page.getByTestId("stream-list")).not.toContainText(channelName);
+  await expect(
+    page.getByTestId("channel-delete-confirmation-dialog"),
+  ).not.toBeVisible();
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await expect(page.getByTestId("stream-list")).toContainText(channelName);
 });
