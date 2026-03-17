@@ -57,6 +57,8 @@ cron        = "0.12"
 # Observability
 tracing             = "0.1"
 tracing-subscriber  = { version = "0.3", features = ["env-filter", "json"] }
+metrics             = "0.24"
+metrics-exporter-prometheus = "0.18"
 
 # Error handling
 thiserror = "2"

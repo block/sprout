@@ -1,6 +1,6 @@
 //! Shared application state — Arc-wrapped, shared across all connections.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -87,6 +87,7 @@ impl ConnectionManager {
                     let count = conn.backpressure_count.fetch_add(1, Ordering::Relaxed) + 1;
                     if count >= SLOW_CLIENT_GRACE_LIMIT {
                         tracing::warn!(conn_id = %conn_id, count, "fan-out: sustained backpressure — cancelling slow client");
+                        metrics::counter!("sprout_ws_backpressure_disconnects_total").increment(1);
                         conn.cancel.cancel();
                     } else {
                         tracing::warn!(conn_id = %conn_id, count, grace = SLOW_CLIENT_GRACE_LIMIT, "fan-out: send buffer full — grace {count}/{SLOW_CLIENT_GRACE_LIMIT}");
@@ -152,6 +153,10 @@ pub struct AppState {
     pub local_event_ids: Arc<moka::sync::Cache<[u8; 32], ()>>,
     /// Media storage client (S3/MinIO).
     pub media_storage: Arc<MediaStorage>,
+    /// Set to `true` on SIGTERM — readiness probe returns 503.
+    pub shutting_down: Arc<AtomicBool>,
+    /// Process start time — used by `/_status` endpoint.
+    pub started_at: Instant,
 }
 
 impl AppState {
@@ -194,6 +199,8 @@ impl AppState {
                     .build(),
             ),
             media_storage: Arc::new(media_storage),
+            shutting_down: Arc::new(AtomicBool::new(false)),
+            started_at: Instant::now(),
         }
     }
 

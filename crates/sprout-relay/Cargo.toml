@@ -47,6 +47,8 @@ sha2            = { workspace = true }
 hex             = { workspace = true }
 url             = { workspace = true }
 moka            = { workspace = true }
+metrics         = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 
 [features]
 dev = ["sprout-auth/dev"]
