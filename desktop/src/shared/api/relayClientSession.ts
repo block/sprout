@@ -38,6 +38,9 @@ export class RelayClient {
   } | null = null;
   private subscriptions = new Map<string, RelaySubscription>();
   private pendingEvents = new Map<string, PendingEvent>();
+  private reconnectListeners = new Set<() => void>();
+  private hasConnectedOnce = false;
+  private notifyReconnectListeners = false;
 
   async fetchChannelHistory(channelId: string, limit = 50) {
     await this.ensureConnected();
@@ -149,6 +152,14 @@ export class RelayClient {
     await this.ensureConnected();
   }
 
+  subscribeToReconnects(listener: () => void) {
+    this.reconnectListeners.add(listener);
+
+    return () => {
+      this.reconnectListeners.delete(listener);
+    };
+  }
+
   private async ensureConnected() {
     if (this.connectPromise) {
       return this.connectPromise;
@@ -209,6 +220,7 @@ export class RelayClient {
 
     this.reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
     await this.replayLiveSubscriptions();
+    this.emitReconnectIfNeeded();
   }
 
   private buildChannelFilter(
@@ -257,7 +269,10 @@ export class RelayClient {
     });
 
     try {
-      await this.sendRaw(["REQ", subId, filter]);
+      await this.sendRawWithReconnectRetry(
+        ["REQ", subId, filter],
+        "Failed to restore relay subscription.",
+      );
     } catch (error) {
       window.clearTimeout(fallbackTimeout);
       this.subscriptions.delete(subId);
@@ -290,6 +305,43 @@ export class RelayClient {
     });
   }
 
+  private normalizeRelayError(error: unknown, fallbackMessage: string) {
+    return error instanceof Error ? error : new Error(fallbackMessage);
+  }
+
+  private recoverFromSocketFailure(
+    error: unknown,
+    fallbackMessage: string,
+  ): Error {
+    const normalizedError = this.normalizeRelayError(error, fallbackMessage);
+    this.resetConnection(normalizedError);
+    return normalizedError;
+  }
+
+  private async sendRawWithReconnectRetry(
+    payload: unknown[],
+    fallbackMessage: string,
+  ) {
+    try {
+      await this.sendRaw(payload);
+    } catch (error) {
+      const normalizedError = this.recoverFromSocketFailure(
+        error,
+        fallbackMessage,
+      );
+
+      try {
+        await this.ensureConnected();
+        await this.sendRaw(payload);
+      } catch (retryError) {
+        throw this.recoverFromSocketFailure(
+          retryError,
+          normalizedError.message,
+        );
+      }
+    }
+  }
+
   private async closeSubscription(subId: string) {
     if (this.wsId === null) {
       return;
@@ -316,10 +368,29 @@ export class RelayClient {
         timeout,
       });
 
-      void this.sendRaw(["EVENT", event]).catch((error) => {
-        window.clearTimeout(timeout);
+      void this.sendRaw(["EVENT", event]).catch(async (error) => {
+        const pendingEvent = this.pendingEvents.get(event.id);
         this.pendingEvents.delete(event.id);
-        reject(error instanceof Error ? error : new Error(sendErrorMessage));
+        const normalizedError = this.recoverFromSocketFailure(
+          error,
+          sendErrorMessage,
+        );
+
+        try {
+          await this.ensureConnected();
+          if (!pendingEvent) {
+            throw normalizedError;
+          }
+
+          this.pendingEvents.set(event.id, pendingEvent);
+          await this.sendRaw(["EVENT", event]);
+        } catch (retryError) {
+          window.clearTimeout(timeout);
+          this.pendingEvents.delete(event.id);
+          reject(
+            this.recoverFromSocketFailure(retryError, normalizedError.message),
+          );
+        }
       });
     });
   }
@@ -551,12 +622,36 @@ export class RelayClient {
     }, delay);
   }
 
+  private emitReconnectIfNeeded() {
+    const shouldNotifyReconnectListeners =
+      this.hasConnectedOnce && this.notifyReconnectListeners;
+
+    this.hasConnectedOnce = true;
+    this.notifyReconnectListeners = false;
+
+    if (!shouldNotifyReconnectListeners) {
+      return;
+    }
+
+    for (const listener of this.reconnectListeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("Failed to handle relay reconnect", error);
+      }
+    }
+  }
+
   private resetConnection(
     error: Error,
     options?: {
       reconnect?: boolean;
     },
   ) {
+    if (options?.reconnect !== false && this.hasConnectedOnce) {
+      this.notifyReconnectListeners = true;
+    }
+
     if (options?.reconnect === false && this.reconnectTimeout) {
       window.clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
