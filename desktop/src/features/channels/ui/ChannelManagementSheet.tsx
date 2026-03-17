@@ -190,6 +190,7 @@ export function ChannelManagementSheet({
   const [descriptionDraft, setDescriptionDraft] = React.useState("");
   const [topicDraft, setTopicDraft] = React.useState("");
   const [purposeDraft, setPurposeDraft] = React.useState("");
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = React.useState(false);
 
   // Sync drafts from server only when the sheet opens or the channel changes —
   // not on every background refetch, which would clobber in-flight edits.
@@ -198,6 +199,7 @@ export function ChannelManagementSheet({
     if (!open) {
       // Reset on close so the next open re-syncs from server.
       syncedForRef.current = null;
+      setIsDeleteDialogOpen(false);
       return;
     }
     if (!detail) {
@@ -220,10 +222,34 @@ export function ChannelManagementSheet({
     return null;
   }
 
+  function handleDeleteDialogOpenChange(next: boolean) {
+    deleteChannelMutation.reset();
+    setIsDeleteDialogOpen(next);
+  }
+
+  async function handleDeleteChannel() {
+    try {
+      await deleteChannelMutation.mutateAsync();
+      handleDeleteDialogOpenChange(false);
+      onOpenChange(false);
+      onDeleted?.();
+    } catch {
+      // The mutation error is rendered inline in the confirmation dialog.
+    }
+  }
+
+  function handleSheetOpenChange(next: boolean) {
+    if (!next) {
+      handleDeleteDialogOpenChange(false);
+    }
+
+    onOpenChange(next);
+  }
+
   const resolvedChannel = detail ?? channel;
 
   return (
-    <Sheet onOpenChange={onOpenChange} open={open}>
+    <Sheet onOpenChange={handleSheetOpenChange} open={open}>
       <SheetContent
         className="flex w-full flex-col gap-0 overflow-hidden border-l border-border/80 bg-background p-0 sm:max-w-xl"
         data-testid="channel-management-sheet"
@@ -643,32 +669,66 @@ export function ChannelManagementSheet({
                 description="Deleting removes the channel from the workspace list."
                 title="Danger zone"
               >
-                <Button
-                  data-testid="channel-management-delete"
-                  disabled={deleteChannelMutation.isPending}
-                  onClick={() => {
-                    if (!window.confirm(`Delete ${resolvedChannel.name}?`)) {
-                      return;
-                    }
-
-                    void deleteChannelMutation.mutateAsync().then(() => {
-                      onOpenChange(false);
-                      onDeleted?.();
-                    });
-                  }}
-                  size="sm"
-                  type="button"
-                  variant="destructive"
-                >
-                  {deleteChannelMutation.isPending
-                    ? "Deleting..."
-                    : "Delete channel"}
-                </Button>
-                {deleteChannelMutation.error instanceof Error ? (
-                  <p className="text-sm text-destructive">
-                    {deleteChannelMutation.error.message}
-                  </p>
-                ) : null}
+                <div className="space-y-3">
+                  <Button
+                    data-testid="channel-management-delete"
+                    disabled={deleteChannelMutation.isPending}
+                    onClick={() => {
+                      handleDeleteDialogOpenChange(true);
+                    }}
+                    size="sm"
+                    type="button"
+                    variant="destructive"
+                  >
+                    Delete channel
+                  </Button>
+                  {isDeleteDialogOpen ? (
+                    <div
+                      className="space-y-3 rounded-xl border border-destructive/20 bg-destructive/5 p-4"
+                      data-testid="channel-delete-confirmation-dialog"
+                      role="alertdialog"
+                    >
+                      <div className="space-y-1">
+                        <p className="text-sm font-semibold">Delete channel?</p>
+                        <p className="text-sm text-muted-foreground">
+                          Delete {resolvedChannel.name} from the workspace list.
+                          This action cannot be undone.
+                        </p>
+                      </div>
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          data-testid="channel-delete-cancel"
+                          disabled={deleteChannelMutation.isPending}
+                          onClick={() => {
+                            handleDeleteDialogOpenChange(false);
+                          }}
+                          type="button"
+                          variant="outline"
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          data-testid="channel-delete-confirm"
+                          disabled={deleteChannelMutation.isPending}
+                          onClick={() => {
+                            void handleDeleteChannel();
+                          }}
+                          type="button"
+                          variant="destructive"
+                        >
+                          {deleteChannelMutation.isPending
+                            ? "Deleting..."
+                            : "Delete channel"}
+                        </Button>
+                      </div>
+                      {deleteChannelMutation.error instanceof Error ? (
+                        <p className="text-sm text-destructive">
+                          {deleteChannelMutation.error.message}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               </Section>
             </>
           ) : null}
