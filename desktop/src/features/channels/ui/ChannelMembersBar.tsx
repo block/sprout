@@ -139,7 +139,7 @@ export function ChannelMembersBar({
         />
 
         <Button
-          aria-label="Add bot"
+          aria-label="Add agent"
           className="h-9 w-9 rounded-full"
           data-testid="channel-add-bot-trigger"
           disabled={!canAddAgents}

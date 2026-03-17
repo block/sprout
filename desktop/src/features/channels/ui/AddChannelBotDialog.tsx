@@ -138,10 +138,10 @@ export function AddChannelBotDialog({
     <Dialog onOpenChange={handleOpenChange} open={open}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Add bot</DialogTitle>
+          <DialogTitle>Add agent</DialogTitle>
           <DialogDescription>
             Pick a runtime, adjust the default name if needed, and describe what
-            this bot should do in the channel.
+            this agent should do in the channel.
           </DialogDescription>
         </DialogHeader>
 
@@ -149,7 +149,7 @@ export function AddChannelBotDialog({
           <div className="grid gap-3 sm:grid-cols-[max-content,minmax(0,1fr)] sm:items-end">
             <div className="space-y-1.5">
               <div className="text-sm font-medium">Agent</div>
-              <DropdownMenu>
+              <DropdownMenu modal={false}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     className="h-9 max-w-full justify-start gap-1.5 rounded-full border border-border/50 bg-muted/45 px-3 text-sm font-medium text-foreground shadow-none hover:bg-muted/70"
@@ -162,7 +162,11 @@ export function AddChannelBotDialog({
                     <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="min-w-40">
+                <DropdownMenuContent
+                  align="start"
+                  className="min-w-40"
+                  onCloseAutoFocus={(event) => event.preventDefault()}
+                >
                   <DropdownMenuRadioGroup
                     onValueChange={(value) => {
                       setSelectedProviderId(value);
@@ -204,7 +208,7 @@ export function AddChannelBotDialog({
 
           <p className="text-xs text-muted-foreground">
             The name defaults to the runtime, but you can edit it before adding
-            the bot.
+            the agent.
           </p>
 
           <div className="space-y-1.5">
@@ -216,11 +220,11 @@ export function AddChannelBotDialog({
               disabled={createBotMutation.isPending}
               id="channel-bot-prompt"
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="What should this bot help with in the channel?"
+              placeholder="What should this agent help with in the channel?"
               value={prompt}
             />
             <p className="text-xs text-muted-foreground">
-              Saved as the bot&apos;s system prompt override.
+              Saved as the agent&apos;s system prompt override.
             </p>
           </div>
 
@@ -252,7 +256,7 @@ export function AddChannelBotDialog({
             size="sm"
             type="button"
           >
-            {createBotMutation.isPending ? "Adding..." : "Add"}
+            {createBotMutation.isPending ? "Adding..." : "Add agent"}
           </Button>
         </div>
       </DialogContent>
