@@ -55,6 +55,7 @@ impl SubscriptionRegistry {
             .entry(conn_id)
             .or_default()
             .insert(sub_id.clone(), (filters.clone(), channel_id));
+        metrics::gauge!("sprout_subscriptions_active").increment(1.0);
 
         if let Some(ch_id) = channel_id {
             match extract_kinds_from_filters(&filters) {
@@ -93,6 +94,7 @@ impl SubscriptionRegistry {
         if let Some(mut conn_subs) = self.subs.get_mut(&conn_id) {
             if let Some((filters, channel_id)) = conn_subs.remove(sub_id) {
                 self.remove_from_index(conn_id, sub_id, &filters, channel_id);
+                metrics::gauge!("sprout_subscriptions_active").decrement(1.0);
             }
         }
     }
@@ -100,9 +102,11 @@ impl SubscriptionRegistry {
     /// Remove all subscriptions for a connection and clean up index entries.
     pub fn remove_connection(&self, conn_id: ConnId) {
         if let Some((_, conn_subs)) = self.subs.remove(&conn_id) {
+            let count = conn_subs.len();
             for (sub_id, (filters, channel_id)) in &conn_subs {
                 self.remove_from_index(conn_id, sub_id, filters, *channel_id);
             }
+            metrics::gauge!("sprout_subscriptions_active").decrement(count as f64);
         }
     }
 

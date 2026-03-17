@@ -48,6 +48,12 @@ pub struct Config {
     /// Optional Unix Domain Socket path. When set, the relay also listens on this
     /// UDS for traffic (e.g. service mesh sidecar). Health probes still use TCP.
     pub uds_path: Option<String>,
+    /// TCP port for the health-only router (`/_liveness`, `/_readiness`, `/_status`).
+    /// Separate from the app router so K8s probes bypass Istio and auth middleware.
+    pub health_port: u16,
+    /// TCP port for the Prometheus metrics exporter (`GET /metrics`).
+    pub metrics_port: u16,
+
     /// When true, NIP-42 pubkey-only authentication (no JWT or API token) is
     /// restricted to pubkeys in the `pubkey_allowlist` table. Users with valid
     /// API tokens or Okta JWTs bypass the allowlist entirely.
@@ -137,6 +143,16 @@ impl Config {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
+        let health_port = std::env::var("SPROUT_HEALTH_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8080);
+
+        let metrics_port = std::env::var("SPROUT_METRICS_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(9102);
+
         let media = sprout_media::MediaConfig {
             s3_endpoint: std::env::var("SPROUT_S3_ENDPOINT")
                 .unwrap_or_else(|_| "http://localhost:9000".to_string()),
@@ -193,6 +209,8 @@ impl Config {
             cors_origins,
             relay_private_key,
             uds_path,
+            health_port,
+            metrics_port,
             pubkey_allowlist_enabled,
             media,
         })

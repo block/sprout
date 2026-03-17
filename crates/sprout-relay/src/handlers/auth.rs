@@ -52,6 +52,8 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         }
     });
 
+    metrics::counter!("sprout_auth_attempts_total", "method" => if auth_token.as_ref().is_some_and(|t| t.starts_with("sprout_")) { "api_token" } else { "nip42" }).increment(1);
+
     if let Some(ref token) = auth_token {
         if token.starts_with("sprout_") {
             // ── API token path ──────────────────────────────────────────────
@@ -119,6 +121,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 }
                 Err(e) => {
                     warn!(conn_id = %conn_id, error = %e, "API token verification failed");
+                    metrics::counter!("sprout_auth_failures_total", "reason" => "api_token_invalid").increment(1);
                     *conn.auth_state.write().await = AuthState::Failed;
                     conn.send(RelayMessage::ok(
                         &event_id_hex,
@@ -154,6 +157,8 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 };
                 if !allowed {
                     warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "pubkey not in allowlist");
+                    metrics::counter!("sprout_auth_failures_total", "reason" => "allowlist_denied")
+                        .increment(1);
                     *conn.auth_state.write().await = AuthState::Failed;
                     conn.send(RelayMessage::ok(
                         &event_id_hex,
@@ -169,6 +174,8 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         }
         Err(e) => {
             warn!(conn_id = %conn_id, error = %e, "NIP-42 auth failed");
+            metrics::counter!("sprout_auth_failures_total", "reason" => "nip42_invalid")
+                .increment(1);
             *conn.auth_state.write().await = AuthState::Failed;
             conn.send(RelayMessage::ok(
                 &event_id_hex,
