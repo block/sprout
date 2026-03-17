@@ -7,6 +7,7 @@ import {
   useManagedAgentsQuery,
   useMintManagedAgentTokenMutation,
   useRelayAgentsQuery,
+  useSetManagedAgentStartOnAppLaunchMutation,
   useStartManagedAgentMutation,
   useStopManagedAgentMutation,
 } from "@/features/agents/hooks";
@@ -28,6 +29,7 @@ export function AgentsView() {
   const managedAgentsQuery = useManagedAgentsQuery();
   const startMutation = useStartManagedAgentMutation();
   const stopMutation = useStopManagedAgentMutation();
+  const startOnLaunchMutation = useSetManagedAgentStartOnAppLaunchMutation();
   const deleteMutation = useDeleteManagedAgentMutation();
   const mintTokenMutation = useMintManagedAgentTokenMutation();
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
@@ -124,6 +126,32 @@ export function AgentsView() {
     }
   }
 
+  async function handleToggleStartOnAppLaunch(
+    pubkey: string,
+    startOnAppLaunch: boolean,
+  ) {
+    setActionNoticeMessage(null);
+    setActionErrorMessage(null);
+
+    try {
+      const updated = await startOnLaunchMutation.mutateAsync({
+        pubkey,
+        startOnAppLaunch,
+      });
+      setActionNoticeMessage(
+        updated.startOnAppLaunch
+          ? `Will start ${updated.name} automatically when the desktop app opens.`
+          : `${updated.name} will stay manual-start only.`,
+      );
+    } catch (error) {
+      setActionErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Failed to update startup preference.",
+      );
+    }
+  }
+
   async function handleMintToken(pubkey: string, name: string) {
     setActionNoticeMessage(null);
     setActionErrorMessage(null);
@@ -177,6 +205,7 @@ export function AgentsView() {
   const isActionPending =
     startMutation.isPending ||
     stopMutation.isPending ||
+    startOnLaunchMutation.isPending ||
     deleteMutation.isPending ||
     mintTokenMutation.isPending;
 
@@ -217,6 +246,9 @@ export function AgentsView() {
               }}
               onStop={(pubkey) => {
                 void handleStop(pubkey);
+              }}
+              onToggleStartOnAppLaunch={(pubkey, startOnAppLaunch) => {
+                void handleToggleStartOnAppLaunch(pubkey, startOnAppLaunch);
               }}
               selectedAgentPubkey={selectedAgent?.pubkey ?? null}
             />

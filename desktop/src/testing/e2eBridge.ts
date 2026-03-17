@@ -231,6 +231,7 @@ type RawManagedAgent = {
   last_exit_code: number | null;
   last_error: string | null;
   log_path: string;
+  start_on_app_launch: boolean;
 };
 
 type RawCreateManagedAgentResponse = {
@@ -500,6 +501,7 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     last_exit_code: agent.last_exit_code,
     last_error: agent.last_error,
     log_path: agent.log_path,
+    start_on_app_launch: agent.start_on_app_launch,
   };
 }
 
@@ -2142,6 +2144,7 @@ async function handleCreateManagedAgent(args: {
     tokenScopes?: string[];
     tokenName?: string;
     spawnAfterCreate?: boolean;
+    startOnAppLaunch?: boolean;
   };
 }): Promise<RawCreateManagedAgentResponse> {
   const name = args.input.name.trim();
@@ -2179,6 +2182,7 @@ async function handleCreateManagedAgent(args: {
     last_exit_code: null,
     last_error: null,
     log_path: `/tmp/mock-agent-${pubkey}.log`,
+    start_on_app_launch: args.input.startOnAppLaunch ?? true,
     private_key_nsec: `nsec1mock${pubkey.slice(0, 20)}`,
     api_token: token,
     log_lines: [
@@ -2251,6 +2255,16 @@ async function handleDeleteManagedAgent(args: {
     (candidate) => candidate.pubkey !== args.pubkey,
   );
   syncMockRelayAgentsFromManagedAgents();
+}
+
+async function handleSetManagedAgentStartOnAppLaunch(args: {
+  pubkey: string;
+  startOnAppLaunch: boolean;
+}): Promise<RawManagedAgent> {
+  const agent = getMockManagedAgent(args.pubkey);
+  agent.start_on_app_launch = args.startOnAppLaunch;
+  agent.updated_at = new Date().toISOString();
+  return cloneManagedAgent(agent);
 }
 
 async function handleMintManagedAgentToken(args: {
@@ -2847,6 +2861,12 @@ export function maybeInstallE2eTauriMocks() {
       case "stop_managed_agent":
         return handleStopManagedAgent(
           payload as Parameters<typeof handleStopManagedAgent>[0],
+        );
+      case "set_managed_agent_start_on_app_launch":
+        return handleSetManagedAgentStartOnAppLaunch(
+          payload as Parameters<
+            typeof handleSetManagedAgentStartOnAppLaunch
+          >[0],
         );
       case "delete_managed_agent":
         return handleDeleteManagedAgent(

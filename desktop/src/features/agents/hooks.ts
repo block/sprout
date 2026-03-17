@@ -18,6 +18,7 @@ import {
   startManagedAgent,
   stopManagedAgent,
 } from "@/shared/api/tauri";
+import { setManagedAgentStartOnAppLaunch } from "@/shared/api/tauriManagedAgents";
 import type {
   CreateManagedAgentInput,
   ManagedAgent,
@@ -148,6 +149,24 @@ export function useStopManagedAgentMutation() {
 
   return useMutation({
     mutationFn: (pubkey: string) => stopManagedAgent(pubkey),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
+      await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });
+    },
+  });
+}
+
+export function useSetManagedAgentStartOnAppLaunchMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      pubkey,
+      startOnAppLaunch,
+    }: {
+      pubkey: string;
+      startOnAppLaunch: boolean;
+    }) => setManagedAgentStartOnAppLaunch(pubkey, startOnAppLaunch),
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
       await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });

@@ -178,6 +178,17 @@ export function useChannelSubscription(channel: Channel | null) {
 
     let isDisposed = false;
     let cleanup: (() => Promise<void>) | undefined;
+    const disposeReconnectListener = relayClient.subscribeToReconnects(() => {
+      void syncLatestHistory().catch((error) => {
+        if (!isDisposed) {
+          console.error(
+            "Failed to refresh channel history after reconnecting",
+            channelId,
+            error,
+          );
+        }
+      });
+    });
 
     relayClient
       .subscribeToChannel(channelId, (event) => {
@@ -209,6 +220,7 @@ export function useChannelSubscription(channel: Channel | null) {
 
     return () => {
       isDisposed = true;
+      disposeReconnectListener();
       if (cleanup) {
         void cleanup();
       }

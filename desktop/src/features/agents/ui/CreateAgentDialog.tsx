@@ -48,6 +48,7 @@ export function CreateAgentDialog({
   const [relayUrl, setRelayUrl] = React.useState("");
   const [mintToken, setMintToken] = React.useState(true);
   const [spawnAfterCreate, setSpawnAfterCreate] = React.useState(true);
+  const [startOnAppLaunch, setStartOnAppLaunch] = React.useState(true);
   const [tokenName, setTokenName] = React.useState("");
   const [selectedScopes, setSelectedScopes] = React.useState<Set<TokenScope>>(
     () => new Set<TokenScope>(DEFAULT_MANAGED_AGENT_SCOPES),
@@ -128,6 +129,7 @@ export function CreateAgentDialog({
     setRelayUrl("");
     setMintToken(true);
     setSpawnAfterCreate(true);
+    setStartOnAppLaunch(true);
     setTokenName("");
     setSelectedScopes(new Set<TokenScope>(DEFAULT_MANAGED_AGENT_SCOPES));
     setAcpCommand("sprout-acp");
@@ -215,6 +217,7 @@ export function CreateAgentDialog({
         tokenName: tokenName.trim() || undefined,
         tokenScopes: [...selectedScopes],
         spawnAfterCreate,
+        startOnAppLaunch,
       };
       const created = await createMutation.mutateAsync(input);
       handleOpenChange(false);
@@ -258,12 +261,16 @@ export function CreateAgentDialog({
                   setMintToken((current) => !current);
                 }
               }}
+              onToggleStartOnAppLaunch={() => {
+                setStartOnAppLaunch((current) => !current);
+              }}
               onToggleSpawnAfterCreate={() => {
                 if (!spawnToggleDisabled) {
                   setSpawnAfterCreate((current) => !current);
                 }
               }}
               prereqs={prereqs}
+              startOnAppLaunch={startOnAppLaunch}
               spawnAfterCreate={spawnAfterCreate}
               spawnToggleDisabled={spawnToggleDisabled}
             />

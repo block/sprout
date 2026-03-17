@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, process::Command};
 
 use tauri::AppHandle;
 
@@ -10,6 +10,58 @@ use crate::{
     },
     util::now_iso,
 };
+
+#[cfg(unix)]
+fn process_is_running(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn process_is_running(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn terminate_process(pid: u32) -> Result<(), String> {
+    let pid_arg = pid.to_string();
+    let status = Command::new("kill")
+        .arg("-TERM")
+        .arg(&pid_arg)
+        .status()
+        .map_err(|error| format!("failed to terminate process {pid}: {error}"))?;
+    if !status.success() && process_is_running(pid) {
+        return Err(format!("failed to terminate process {pid}: signal was rejected"));
+    }
+
+    for _ in 0..10 {
+        if !process_is_running(pid) {
+            return Ok(());
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    let kill_status = Command::new("kill")
+        .arg("-KILL")
+        .arg(&pid_arg)
+        .status()
+        .map_err(|error| format!("failed to kill process {pid}: {error}"))?;
+    if !kill_status.success() && process_is_running(pid) {
+        return Err(format!("failed to kill process {pid}: signal was rejected"));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn terminate_process(_pid: u32) -> Result<(), String> {
+    Err("managed agent shutdown after app restart is only supported on Unix".to_string())
+}
 
 pub fn sync_managed_agent_processes(
     records: &mut [ManagedAgentRecord],
@@ -38,6 +90,7 @@ pub fn sync_managed_agent_processes(
 
         if let Some(record) = records.iter_mut().find(|record| record.pubkey == *pubkey) {
             record.updated_at = now_iso();
+            record.runtime_pid = None;
             record.last_stopped_at = Some(now_iso());
             record.last_exit_code = status.code();
             record.last_error = if status.success() {
@@ -55,6 +108,27 @@ pub fn sync_managed_agent_processes(
         runtimes.remove(&pubkey);
     }
 
+    for record in records.iter_mut() {
+        if runtimes.contains_key(&record.pubkey) {
+            continue;
+        }
+
+        let Some(pid) = record.runtime_pid else {
+            continue;
+        };
+
+        if process_is_running(pid) {
+            continue;
+        }
+
+        record.runtime_pid = None;
+        record.updated_at = now_iso();
+        if record.last_stopped_at.is_none() {
+            record.last_stopped_at = Some(now_iso());
+        }
+        changed = true;
+    }
+
     changed
 }
 
@@ -63,11 +137,20 @@ pub fn build_managed_agent_summary(
     record: &ManagedAgentRecord,
     runtimes: &HashMap<String, ManagedAgentProcess>,
 ) -> Result<ManagedAgentSummary, String> {
+    let persisted_pid = record.runtime_pid.filter(|pid| process_is_running(*pid));
     let (status, pid, log_path) = if let Some(runtime) = runtimes.get(&record.pubkey) {
         (
             "running".to_string(),
             Some(runtime.child.id()),
             runtime.log_path.display().to_string(),
+        )
+    } else if let Some(pid) = persisted_pid {
+        (
+            "running".to_string(),
+            Some(pid),
+            managed_agent_log_path(app, &record.pubkey)?
+                .display()
+                .to_string(),
         )
     } else {
         (
@@ -99,6 +182,7 @@ pub fn build_managed_agent_summary(
         last_stopped_at: record.last_stopped_at.clone(),
         last_exit_code: record.last_exit_code,
         last_error: record.last_error.clone(),
+        start_on_app_launch: record.start_on_app_launch,
         log_path,
     })
 }
@@ -129,6 +213,16 @@ pub fn start_managed_agent_process(
         }
 
         runtimes.remove(&record.pubkey);
+    }
+
+    if let Some(pid) = record.runtime_pid {
+        if process_is_running(pid) {
+            record.updated_at = now_iso();
+            record.last_error = None;
+            return Ok(());
+        }
+
+        record.runtime_pid = None;
     }
 
     let log_path = managed_agent_log_path(app, &record.pubkey)?;
@@ -198,6 +292,7 @@ pub fn start_managed_agent_process(
 
     let now = now_iso();
     record.updated_at = now.clone();
+    record.runtime_pid = Some(child.id());
     record.last_started_at = Some(now);
     record.last_stopped_at = None;
     record.last_exit_code = None;
@@ -215,6 +310,18 @@ pub fn stop_managed_agent_process(
     runtimes: &mut HashMap<String, ManagedAgentProcess>,
 ) -> Result<(), String> {
     let Some(mut runtime) = runtimes.remove(&record.pubkey) else {
+        if let Some(pid) = record.runtime_pid {
+            if process_is_running(pid) {
+                terminate_process(pid)?;
+            }
+
+            let now = now_iso();
+            record.runtime_pid = None;
+            record.updated_at = now.clone();
+            record.last_stopped_at = Some(now);
+            record.last_exit_code = None;
+            record.last_error = None;
+        }
         return Ok(());
     };
 
@@ -224,6 +331,7 @@ pub fn stop_managed_agent_process(
         .wait()
         .map_err(|error| format!("failed to wait for agent shutdown: {error}"))?;
     let now = now_iso();
+    record.runtime_pid = None;
     record.updated_at = now.clone();
     record.last_stopped_at = Some(now);
     record.last_exit_code = status.code();

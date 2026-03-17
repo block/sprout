@@ -15,6 +15,7 @@ import { formatTimestamp, truncatePubkey } from "./agentUi";
 
 export function ManagedAgentCard({
   agent,
+  onToggleStartOnAppLaunch,
   onAddToChannel,
   isSelected,
   onDelete,
@@ -24,6 +25,7 @@ export function ManagedAgentCard({
   onStop,
 }: {
   agent: ManagedAgent;
+  onToggleStartOnAppLaunch: (pubkey: string, startOnAppLaunch: boolean) => void;
   onAddToChannel: (agent: ManagedAgent) => void;
   isSelected: boolean;
   onDelete: (pubkey: string) => void;
@@ -135,6 +137,19 @@ export function ManagedAgentCard({
         >
           <KeyRound className="h-3.5 w-3.5" />
           Mint token
+        </Button>
+
+        <Button
+          onClick={() =>
+            onToggleStartOnAppLaunch(agent.pubkey, !agent.startOnAppLaunch)
+          }
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          {agent.startOnAppLaunch
+            ? "Launch on open: on"
+            : "Launch on open: off"}
         </Button>
 
         <Button

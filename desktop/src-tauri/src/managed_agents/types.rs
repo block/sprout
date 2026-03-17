@@ -27,6 +27,10 @@ pub struct ManagedAgentRecord {
     #[serde(default = "default_agent_parallelism")]
     pub parallelism: u32,
     pub system_prompt: Option<String>,
+    #[serde(default = "default_start_on_app_launch")]
+    pub start_on_app_launch: bool,
+    #[serde(default)]
+    pub runtime_pid: Option<u32>,
     pub created_at: String,
     pub updated_at: String,
     pub last_started_at: Option<String>,
@@ -62,6 +66,7 @@ pub struct ManagedAgentSummary {
     pub last_stopped_at: Option<String>,
     pub last_exit_code: Option<i32>,
     pub last_error: Option<String>,
+    pub start_on_app_launch: bool,
     pub log_path: String,
 }
 
@@ -85,6 +90,8 @@ pub struct CreateManagedAgentRequest {
     pub token_name: Option<String>,
     #[serde(default)]
     pub spawn_after_create: bool,
+    #[serde(default = "default_start_on_app_launch")]
+    pub start_on_app_launch: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -166,4 +173,8 @@ pub const DEFAULT_AGENT_PARALLELISM: u32 = 1;
 
 fn default_agent_parallelism() -> u32 {
     DEFAULT_AGENT_PARALLELISM
+}
+
+fn default_start_on_app_launch() -> bool {
+    true
 }

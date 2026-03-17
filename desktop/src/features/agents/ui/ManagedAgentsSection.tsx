@@ -21,6 +21,7 @@ export function ManagedAgentsSection({
   onSelect,
   onStart,
   onStop,
+  onToggleStartOnAppLaunch,
 }: {
   actionErrorMessage: string | null;
   actionNoticeMessage: string | null;
@@ -37,6 +38,7 @@ export function ManagedAgentsSection({
   onSelect: (pubkey: string) => void;
   onStart: (pubkey: string) => void;
   onStop: (pubkey: string) => void;
+  onToggleStartOnAppLaunch: (pubkey: string, startOnAppLaunch: boolean) => void;
 }) {
   return (
     <section className="space-y-4">
@@ -117,6 +119,11 @@ export function ManagedAgentsSection({
           onStop={(pubkey) => {
             if (!isActionPending) {
               onStop(pubkey);
+            }
+          }}
+          onToggleStartOnAppLaunch={(pubkey, startOnAppLaunch) => {
+            if (!isActionPending) {
+              onToggleStartOnAppLaunch(pubkey, startOnAppLaunch);
             }
           }}
         />
