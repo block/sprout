@@ -25,6 +25,34 @@ use crate::connection::{AuthState, ConnectionState};
 use crate::protocol::RelayMessage;
 use crate::state::AppState;
 
+/// Increment the rejection counter with a bounded reason label.
+fn reject(reason: &'static str) {
+    metrics::counter!("sprout_events_rejected_total", "reason" => reason).increment(1);
+}
+
+/// Bound the `kind` label to prevent cardinality explosion from arbitrary Nostr kinds.
+/// Known Sprout kind ranges pass through; everything else becomes "other".
+/// See `sprout_core::kind` for the authoritative registry.
+fn bounded_kind_label(kind: u32) -> String {
+    match kind {
+        0..=9 | 1059 | 1063 => kind.to_string(), // NIP-01 core + gift-wrap + file-meta + stream msg
+        9000..=9022 | 9100 | 9110 | 9900 => kind.to_string(), // NIP-29 admin + system
+        20000..=29999 => kind.to_string(),       // Ephemeral (presence, typing) + AUTH (22242)
+        30023 | 39000..=39003 => kind.to_string(), // NIP-23 + NIP-29 addressable state
+        40002..=40100 => kind.to_string(),       // Stream messaging + canvas + system msg
+        41001..=41003 => kind.to_string(),       // DMs
+        42001..=42003 => kind.to_string(),       // Topics
+        43001..=43006 => kind.to_string(),       // Agent jobs
+        44001..=44004 | 44100..=44101 => kind.to_string(), // Subscriptions + notifications
+        45001..=45003 => kind.to_string(),       // Forum
+        46001..=46012 => kind.to_string(),       // Workflow engine
+        47001..=47003 => kind.to_string(),       // User groups
+        48001..=48005 | 48100..=48105 => kind.to_string(), // Admin + huddle
+        49001 => kind.to_string(),               // Media upload
+        _ => "other".to_string(),
+    }
+}
+
 /// Publish a stored event to subscribers and kick off async side effects.
 pub(crate) async fn dispatch_persistent_event(
     state: &Arc<AppState>,
@@ -76,8 +104,16 @@ pub(crate) async fn dispatch_persistent_event(
         let search = Arc::clone(&state.search);
         let stored_for_search = stored_event.clone();
         tokio::spawn(async move {
-            if let Err(e) = search.index_event(&stored_for_search).await {
-                error!(event_id = %stored_for_search.event.id.to_hex(), "Search index failed: {e}");
+            let t = std::time::Instant::now();
+            match search.index_event(&stored_for_search).await {
+                Ok(()) => {
+                    metrics::histogram!("sprout_search_index_seconds")
+                        .record(t.elapsed().as_secs_f64());
+                }
+                Err(e) => {
+                    metrics::counter!("sprout_search_index_errors_total").increment(1);
+                    error!(event_id = %stored_for_search.event.id.to_hex(), "Search index failed: {e}");
+                }
             }
         });
     }
@@ -95,8 +131,11 @@ pub(crate) async fn dispatch_persistent_event(
             channel_id: audit_channel_id,
             metadata: serde_json::Value::Null,
         };
+        let t = std::time::Instant::now();
         if let Err(e) = audit.log(entry).await {
             error!(event_id = %audit_event_id, "Audit log failed: {e}");
+        } else {
+            metrics::histogram!("sprout_audit_log_seconds").record(t.elapsed().as_secs_f64());
         }
     });
 
@@ -115,9 +154,13 @@ pub(crate) async fn dispatch_persistent_event(
     {
         let workflow_engine = Arc::clone(&state.workflow_engine);
         let workflow_event = stored_event.clone();
+        let trigger_kind = kind_u32.to_string();
         tokio::spawn(async move {
             if let Err(e) = workflow_engine.on_event(&workflow_event).await {
                 tracing::error!(event_id = ?workflow_event.event.id, "Workflow trigger failed: {e}");
+            } else {
+                metrics::counter!("sprout_workflow_runs_total", "trigger" => trigger_kind)
+                    .increment(1);
             }
         });
     }
@@ -127,9 +170,12 @@ pub(crate) async fn dispatch_persistent_event(
 
 /// Handle an EVENT message: authenticate, verify, store, fan-out, index, and audit the event.
 pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<AppState>) {
+    let start = std::time::Instant::now();
     let event_id_hex = event.id.to_hex();
     let kind_u32 = event_kind_u32(&event);
+    let kind_str = bounded_kind_label(kind_u32);
     debug!(event_id = %event_id_hex, kind = kind_u32, "EVENT");
+    metrics::counter!("sprout_events_received_total", "kind" => kind_str.clone()).increment(1);
 
     let (conn_id, pubkey_hex, pubkey_bytes, auth_pubkey, has_proxy_scope) = {
         let auth = conn.auth_state.read().await;
@@ -155,6 +201,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                 )
             }
             _ => {
+                reject("auth");
                 conn.send(RelayMessage::ok(
                     &event_id_hex,
                     false,
@@ -172,6 +219,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     // via NIP-42 auth for rate limiting and abuse prevention.
     let is_gift_wrap = kind_u32 == KIND_GIFT_WRAP;
     if event.pubkey != auth_pubkey && !has_proxy_scope && !is_gift_wrap {
+        reject("invalid");
         conn.send(RelayMessage::ok(
             &event_id_hex,
             false,
@@ -189,6 +237,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     }
 
     if kind_u32 == KIND_AUTH {
+        reject("invalid");
         conn.send(RelayMessage::ok(
             &event_id_hex,
             false,
@@ -199,6 +248,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
 
     // Membership notification events are relay-signed only — reject client submissions.
     if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION || kind_u32 == KIND_MEMBER_REMOVED_NOTIFICATION {
+        reject("invalid");
         conn.send(RelayMessage::ok(
             &event_id_hex,
             false,
@@ -227,6 +277,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     match verify_result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
+            reject("invalid");
             warn!(conn_id = %conn_id, event_id = %event_id_hex, "Verification failed: {e}");
             conn.send(RelayMessage::ok(
                 &event_id_hex,
@@ -307,6 +358,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     };
 
     if requires_h_channel_scope(kind_u32) && channel_id.is_none() {
+        reject("invalid");
         conn.send(RelayMessage::ok(
             &event_id_hex,
             false,
@@ -447,6 +499,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
             return;
         }
         Err(e) => {
+            reject("error");
             error!(conn_id = %conn_id, event_id = %event_id_hex, "DB insert failed: {e}");
             conn.send(RelayMessage::ok(
                 &event_id_hex,
@@ -472,6 +525,10 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     }
 
     let fan_out = dispatch_persistent_event(&state, &stored_event, kind_u32, &pubkey_hex).await;
+
+    metrics::counter!("sprout_events_stored_total", "kind" => kind_str).increment(1);
+    metrics::histogram!("sprout_event_processing_seconds").record(start.elapsed().as_secs_f64());
+    metrics::histogram!("sprout_fanout_recipients").record(fan_out as f64);
 
     conn.send(RelayMessage::ok(&event_id_hex, true, ""));
 

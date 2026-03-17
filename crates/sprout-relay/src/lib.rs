@@ -12,6 +12,8 @@ pub mod connection;
 pub mod error;
 /// WebSocket message handlers for NIP-01 client commands.
 pub mod handlers;
+/// Prometheus metrics: recorder, upkeep, HTTP middleware.
+pub mod metrics;
 /// NIP-11 relay information document.
 pub mod nip11;
 /// NIP-01 client/relay message parsing.

@@ -117,6 +117,13 @@ pub async fn upload_blob(
     )
     .await?;
 
+    // Normalize MIME to a known set to bound label cardinality.
+    let mime_label = match descriptor.mime_type.as_str() {
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp" => &descriptor.mime_type,
+        _ => "other",
+    };
+    metrics::counter!("sprout_media_uploads_total", "mime" => mime_label.to_owned()).increment(1);
+
     // Fire-and-forget audit — never block the response on audit I/O.
     let audit = state.audit.clone();
     let desc = descriptor.clone();

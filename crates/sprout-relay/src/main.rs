@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use tracing::{error, info};
@@ -9,13 +10,17 @@ use sprout_db::{Db, DbConfig};
 use sprout_pubsub::PubSubManager;
 use sprout_search::{SearchConfig, SearchService};
 
-use sprout_relay::{config::Config, router::build_router, state::AppState};
+use sprout_relay::config::Config;
+use sprout_relay::metrics as relay_metrics;
+use sprout_relay::router::{build_health_router, build_router};
+use sprout_relay::state::AppState;
 use sprout_workflow::WorkflowEngine;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // JSON-only structured logs — simple, machine-parseable, CAKE-compatible.
     tracing_subscriber::registry()
-        .with(fmt::layer())
+        .with(fmt::layer().json().flatten_event(true))
         .with(EnvFilter::from_default_env().add_directive("sprout_relay=info".parse()?))
         .init();
 
@@ -25,7 +30,20 @@ async fn main() -> anyhow::Result<()> {
         error!("Invalid configuration: {e}");
         anyhow::anyhow!("Configuration error: {e}")
     })?;
-    info!(bind_addr = %config.bind_addr, relay_url = %config.relay_url, "Config loaded");
+    info!(
+        bind_addr = %config.bind_addr,
+        relay_url = %config.relay_url,
+        health_port = config.health_port,
+        metrics_port = config.metrics_port,
+        "Config loaded"
+    );
+
+    // ── Metrics recorder (Prometheus exporter on :9102) ──────────────────────
+    relay_metrics::install(config.metrics_port);
+    info!(
+        port = config.metrics_port,
+        "Prometheus metrics exporter started"
+    );
 
     let db_config = DbConfig {
         database_url: config.database_url.clone(),
@@ -153,6 +171,7 @@ async fn main() -> anyhow::Result<()> {
                         }
 
                         let matches = state_for_sub.sub_registry.fan_out(&stored);
+                        metrics::counter!("sprout_multinode_fanout_total").increment(1);
                         if matches.is_empty() {
                             continue;
                         }
@@ -182,6 +201,7 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        metrics::counter!("sprout_multinode_fanout_lag_total").increment(n);
                         tracing::warn!("Multi-node fan-out lagged by {n} messages");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -194,21 +214,68 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let router = build_router(Arc::clone(&state));
+    let health_router = build_health_router(Arc::clone(&state));
 
-    serve_dual(router, &config).await
+    serve(router, health_router, Arc::clone(&state)).await
 }
 
-/// Bind TCP (always) and optionally UDS, then run both concurrently.
-/// If either listener exits, the function returns and the process exits.
-async fn serve_dual(router: axum::Router, config: &Config) -> anyhow::Result<()> {
+/// Bind all listeners and run with graceful shutdown.
+///
+/// ```text
+/// ┌─────────────────────────────────────────────────────────┐
+/// │  Listener 1: TCP SPROUT_BIND_ADDR:3000  (app router)   │
+/// │  Listener 2: UDS SPROUT_UDS_PATH        (app, optional)│
+/// │  Listener 3: TCP 0.0.0.0:8080           (health only)  │
+/// │  Listener 4: TCP 0.0.0.0:9102           (metrics, via  │
+/// │              PrometheusBuilder — already bound)         │
+/// │                                                         │
+/// │  SIGTERM → shutting_down=true → readiness 503           │
+/// │         → graceful drain (30s) → exit                   │
+/// └─────────────────────────────────────────────────────────┘
+/// ```
+async fn serve(
+    router: axum::Router,
+    health_router: axum::Router,
+    state: Arc<AppState>,
+) -> anyhow::Result<()> {
+    let config = &state.config;
+
+    // ── Health listener (port 8080) ──────────────────────────────────────────
+    let health_listener = tokio::net::TcpListener::bind(("0.0.0.0", config.health_port))
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to bind health port {}: {e}", config.health_port))?;
+    info!(port = config.health_port, "Health probe listener started");
+    tokio::spawn(async move {
+        axum::serve(health_listener, health_router).await.ok();
+    });
+
+    // ── Shutdown coordination ────────────────────────────────────────────────
+    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+    let shutdown_flag = Arc::clone(&state.shutting_down);
+    let tx = shutdown_tx.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        shutdown_flag.store(true, Ordering::Relaxed);
+        info!("Shutdown signal received — readiness now returns 503");
+        // 5s grace: let K8s stop routing new traffic before we close listeners.
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        info!("Starting graceful drain (30s timeout)");
+        let _ = tx.send(true);
+        // Hard timeout: force exit if connections don't drain within 30s.
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        tracing::error!("Drain timeout exceeded — forcing exit");
+        std::process::exit(1);
+    });
+
+    // ── App listener (TCP) ───────────────────────────────────────────────────
     let tcp_listener = tokio::net::TcpListener::bind(&config.bind_addr)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to bind {}: {e}", config.bind_addr))?;
     info!(addr = %config.bind_addr, "sprout-relay TCP listening");
 
+    // ── App listener (UDS, optional) ─────────────────────────────────────────
     #[cfg(unix)]
     if let Some(ref uds_path) = config.uds_path {
-        // Only remove stale socket files — refuse to delete non-socket paths.
         use std::os::unix::fs::FileTypeExt as _;
         match std::fs::symlink_metadata(uds_path) {
             Ok(meta) if meta.file_type().is_socket() => {
@@ -216,42 +283,74 @@ async fn serve_dual(router: axum::Router, config: &Config) -> anyhow::Result<()>
             }
             Ok(_) => {
                 return Err(anyhow::anyhow!(
-                    "SPROUT_UDS_PATH {uds_path} exists but is not a socket — refusing to delete"
+                    "SPROUT_UDS_PATH {uds_path} exists but is not a socket"
                 ));
             }
-            Err(_) => {} // Path doesn't exist — fine, we'll create it
+            Err(_) => {}
         }
         let uds_listener = tokio::net::UnixListener::bind(uds_path)
             .map_err(|e| anyhow::anyhow!("Failed to bind UDS {uds_path}: {e}"))?;
         info!(path = %uds_path, "sprout-relay UDS listening");
 
         let router_uds = router.clone();
-        tokio::select! {
-            r = axum::serve(
-                tcp_listener,
-                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-            ) => r.map_err(|e| anyhow::anyhow!("TCP server error: {e}")),
-            r = axum::serve(uds_listener, router_uds.into_make_service()) =>
-                r.map_err(|e| anyhow::anyhow!("UDS server error: {e}")),
-        }?;
+        let mut uds_rx = shutdown_tx.subscribe();
+        let uds_handle = tokio::spawn(async move {
+            axum::serve(uds_listener, router_uds.into_make_service())
+                .with_graceful_shutdown(async move {
+                    uds_rx.changed().await.ok();
+                })
+                .await
+                .ok();
+        });
+
+        let mut tcp_rx = shutdown_tx.subscribe();
+        axum::serve(
+            tcp_listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            tcp_rx.changed().await.ok();
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("TCP server error: {e}"))?;
+
+        uds_handle.abort();
         return Ok(());
     }
 
     #[cfg(not(unix))]
     if config.uds_path.is_some() {
-        tracing::warn!(
-            "SPROUT_UDS_PATH is set but UDS is not supported on this platform — \
-             falling back to TCP only"
-        );
+        tracing::warn!("SPROUT_UDS_PATH set but UDS not supported on this platform");
     }
 
-    // TCP-only path (non-unix, or unix without uds_path set).
+    // TCP-only path.
+    let mut tcp_rx = shutdown_tx.subscribe();
     axum::serve(
         tcp_listener,
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
+    .with_graceful_shutdown(async move {
+        tcp_rx.changed().await.ok();
+    })
     .await
     .map_err(|e| anyhow::anyhow!("Server error: {e}"))?;
 
     Ok(())
+}
+
+/// Wait for SIGTERM (Unix) or Ctrl+C.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = sigterm.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.ok();
+    }
 }

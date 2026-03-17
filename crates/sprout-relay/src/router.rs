@@ -1,10 +1,12 @@
-//! axum router — WebSocket, NIP-11, NIP-05, health.
+//! axum routers — app (WebSocket + REST), health (K8s probes), metrics (Prometheus).
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::{
     extract::{ConnectInfo, FromRequest, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode},
+    middleware,
     response::{IntoResponse, Json},
     routing::{delete, get, post, put},
     Router,
@@ -17,6 +19,7 @@ use tower_http::trace::TraceLayer;
 use crate::api;
 use crate::api::tokens;
 use crate::connection::handle_connection;
+use crate::metrics::track_metrics;
 use crate::nip11::{relay_info_handler, RelayInfo};
 use crate::state::AppState;
 
@@ -46,6 +49,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/", get(nip11_or_ws_handler))
         .route("/info", get(relay_info_handler))
         .route("/.well-known/nostr.json", get(api::nip05::nostr_nip05))
+        // Health endpoints remain on the app router for backward compat (local dev).
+        // In CAKE, probes hit the dedicated health port (8080) instead.
         .route("/health", get(health_handler))
         .route("/_liveness", get(liveness_handler))
         .route("/_readiness", get(readiness_handler))
@@ -171,11 +176,24 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .with_state(state.clone());
 
     // Merge — each sub-router carries its own body limit.
-    // TraceLayer and CORS are applied once over the combined router.
+    // Metrics → Trace → CORS applied once over the combined router.
     api_router
         .merge(media_router)
+        .layer(middleware::from_fn(track_metrics))
         .layer(TraceLayer::new_for_http())
         .layer(build_cors_layer(&state.config.cors_origins))
+}
+
+/// Build the health-only router for K8s probes (port 8080 in CAKE).
+///
+/// No metrics middleware, no auth, no CORS, no body limit.
+/// Separate from the app router so probes bypass Istio and don't pollute metrics.
+pub fn build_health_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/_liveness", get(liveness_handler))
+        .route("/_readiness", get(readiness_handler))
+        .route("/_status", get(status_handler))
+        .with_state(state)
 }
 
 /// Content-negotiated: NIP-11 JSON for plain HTTP, WebSocket upgrade otherwise.
@@ -229,16 +247,21 @@ async fn liveness_handler() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
-/// Readiness probe — checks MySQL and Redis connectivity.
+/// Readiness probe — checks shutdown flag, MySQL, and Redis connectivity.
 ///
-/// Returns 200 `{"status":"ready"}` when both are reachable, or
-/// 503 `{"status":"not_ready","mysql":bool,"redis":bool}` otherwise.
-///
-/// Note: Redis pool exhaustion (all connections in use) also returns 503.
-/// This is intentionally conservative — if we can't acquire a connection,
-/// the pod shouldn't receive traffic.
+/// Returns 503 immediately during graceful shutdown (SIGTERM received).
+/// Otherwise returns 200 when both backends are reachable, or 503 with details.
 async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     use std::time::Duration;
+
+    // CAKE: readiness must return 503 after graceful shutdown begins.
+    if state.shutting_down.load(Ordering::Relaxed) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"status": "shutting_down"})),
+        )
+            .into_response();
+    }
 
     let check = async {
         let (mysql_ok, redis_ok) = tokio::join!(state.db.ping(), async {
@@ -260,6 +283,16 @@ async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
         )
             .into_response()
     }
+}
+
+/// Status endpoint — service name, version, uptime. Optional per CAKE contract.
+async fn status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let uptime_secs = state.started_at.elapsed().as_secs();
+    Json(json!({
+        "service": "sprout-relay",
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_seconds": uptime_secs,
+    }))
 }
 
 /// Build a CORS layer from the configured origins list.

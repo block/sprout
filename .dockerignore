@@ -1,0 +1,7 @@
+target/
+desktop/
+.git/
+.scratch/
+*.md
+!README.md
+.env*
