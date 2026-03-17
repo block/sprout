@@ -270,6 +270,16 @@ pub async fn run_prompt_task(
         None => PromptSource::Heartbeat,
     };
 
+    // ── Reaction cleanup guard ────────────────────────────────────────────
+    // Collects event IDs up front. On drop (any exit path — normal, early
+    // return, or panic), spawns best-effort cleanup of both 👀 and 💬.
+    // See `ReactionGuard` docs for ordering guarantees and known edge cases.
+    let reaction_ids: Vec<String> = batch
+        .as_ref()
+        .map(|b| b.events.iter().map(|be| be.event.id.to_hex()).collect())
+        .unwrap_or_default();
+    let _reaction_guard = ReactionGuard::new(ctx.rest_client.clone(), reaction_ids.clone());
+
     let (session_id, is_new_session) = match &source {
         PromptSource::Channel(cid) => {
             if let Some(sid) = agent.sessions.get(cid) {
@@ -483,6 +493,14 @@ pub async fn run_prompt_task(
         return;
     };
 
+    // 💬 — awaited inline so it completes before the prompt fires.
+    // This guarantees add-before-remove ordering for 💬: the guard's
+    // cleanup (spawned on drop) always runs after this returns.
+    // 👀 is fire-and-forget from main.rs (see race note in guard docs).
+    if !reaction_ids.is_empty() {
+        react_working(&ctx.rest_client, &reaction_ids).await;
+    }
+
     // ── Send the actual prompt ────────────────────────────────────────────
 
     let prompt_result = timeout(
@@ -585,6 +603,7 @@ pub async fn run_prompt_task(
             }
         }
     }
+    // _reaction_guard drops here → spawns clear_reactions for all exit paths.
 }
 
 // ── Context fetching ──────────────────────────────────────────────────────────
@@ -883,6 +902,136 @@ fn log_stop_reason(source: &PromptSource, stop_reason: &StopReason) {
     }
 }
 
+// ── Reaction indicators ───────────────────────────────────────────────────────
+//
+// Two-phase lifecycle visible to users:
+//   👀  "seen"    — event was queued and an agent will handle it
+//   💬  "working" — agent is actively prompting
+//
+// 💬 is awaited inline in `run_prompt_task` before the prompt fires, so
+// add-before-remove ordering is structural. 👀 is fire-and-forget from
+// `main.rs` at queue-push time for immediate responsiveness; on rare
+// fast-failure paths the guard's cleanup may race with the 👀 add,
+// leaving a cosmetic stale 👀 (see `ReactionGuard` docs).
+//
+// Cleanup is fire-and-forget via `ReactionGuard` (spawned on drop).
+// Failures are debug-logged and ignored — reactions are cosmetic.
+
+/// Drop guard that spawns reaction cleanup on any exit path.
+///
+/// Created at the top of `run_prompt_task`. On drop — normal return, early
+/// return, or panic — spawns fire-and-forget removal of both 👀 and 💬.
+///
+/// ## Ordering
+///
+/// 💬 (`react_working`) is awaited inline before the prompt fires, so it is
+/// guaranteed to precede cleanup. No race possible.
+///
+/// 👀 (`react_seen`) is fire-and-forget from `main.rs` at queue-push time.
+/// On rare fast-failure paths (e.g., `session_new` error on an idle agent),
+/// the cleanup spawn may race with the 👀 add, leaving a stale 👀. This is
+/// accepted as a cosmetic edge case — the message will be retried and the
+/// stale 👀 is harmless.
+struct ReactionGuard {
+    rest: Option<crate::relay::RestClient>,
+    ids: Vec<String>,
+}
+
+impl ReactionGuard {
+    fn new(rest: crate::relay::RestClient, ids: Vec<String>) -> Self {
+        Self {
+            rest: if ids.is_empty() { None } else { Some(rest) },
+            ids,
+        }
+    }
+}
+
+impl Drop for ReactionGuard {
+    fn drop(&mut self) {
+        // Safety: always called from within a tokio task (run_prompt_task is
+        // spawned via JoinSet::spawn), so a runtime context is guaranteed.
+        // During shutdown the spawned cleanup may be dropped before completing
+        // — acceptable for a cosmetic indicator.
+        if let Some(rest) = self.rest.take() {
+            let ids = std::mem::take(&mut self.ids);
+            tokio::spawn(clear_reactions(rest, ids));
+        }
+    }
+}
+
+const REACTION_SEEN: &str = "👀";
+const REACTION_WORKING: &str = "💬";
+
+/// Best-effort timeout for a single reaction REST call.
+const REACTION_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Percent-encode a string for use in a URL path segment.
+/// Emoji bytes are not URL-safe; event IDs (hex) pass through unchanged.
+fn pct_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(out, "%{byte:02X}");
+            }
+        }
+    }
+    out
+}
+
+/// Best-effort: add a reaction. Returns immediately on timeout or error.
+pub(crate) async fn reaction_add(rest: &crate::relay::RestClient, event_id: &str, emoji: &str) {
+    let path = format!("/api/messages/{}/reactions", pct_encode(event_id));
+    let body = serde_json::json!({ "emoji": emoji });
+    match tokio::time::timeout(REACTION_TIMEOUT, rest.post_json(&path, &body)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => tracing::debug!(event_id, emoji, "reaction add failed: {e}"),
+        Err(_) => tracing::debug!(event_id, emoji, "reaction add timed out"),
+    }
+}
+
+/// Best-effort: remove a reaction. Returns immediately on timeout or error.
+pub(crate) async fn reaction_remove(rest: &crate::relay::RestClient, event_id: &str, emoji: &str) {
+    let path = format!(
+        "/api/messages/{}/reactions/{}",
+        pct_encode(event_id),
+        pct_encode(emoji),
+    );
+    match tokio::time::timeout(REACTION_TIMEOUT, rest.delete(&path)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => tracing::debug!(event_id, emoji, "reaction remove failed: {e}"),
+        Err(_) => tracing::debug!(event_id, emoji, "reaction remove timed out"),
+    }
+}
+
+/// Add 💬 to all events concurrently. Awaited inline before the prompt fires.
+/// Bounded by `REACTION_TIMEOUT` per call — worst case is a single 500ms wait
+/// regardless of batch size.
+async fn react_working(rest: &crate::relay::RestClient, event_ids: &[String]) {
+    futures_util::future::join_all(
+        event_ids
+            .iter()
+            .map(|eid| reaction_add(rest, eid, REACTION_WORKING)),
+    )
+    .await;
+}
+
+/// Fire-and-forget: remove both 👀 and 💬 from all events. Spawned on turn complete.
+/// All removals run concurrently — bounded by `REACTION_TIMEOUT` per call.
+async fn clear_reactions(rest: crate::relay::RestClient, event_ids: Vec<String>) {
+    futures_util::future::join_all(event_ids.iter().flat_map(|eid| {
+        [
+            reaction_remove(&rest, eid, REACTION_SEEN),
+            reaction_remove(&rest, eid, REACTION_WORKING),
+        ]
+    }))
+    .await;
+}
+
 // ─── Unit Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1130,5 +1279,42 @@ mod tests {
         let obj = json!({ "content": "hello" });
         let msg = json_to_context_message(&obj).expect("should parse");
         assert_eq!(msg.pubkey, "unknown");
+    }
+
+    // ── pct_encode tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_pct_encode_hex_passthrough() {
+        let hex = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+        assert_eq!(pct_encode(hex), hex);
+    }
+
+    #[test]
+    fn test_pct_encode_emoji() {
+        // 👀 = U+1F440 = F0 9F 91 80 in UTF-8
+        assert_eq!(pct_encode("👀"), "%F0%9F%91%80");
+    }
+
+    #[test]
+    fn test_pct_encode_emoji_speech_balloon() {
+        // 💬 = U+1F4AC = F0 9F 92 AC in UTF-8
+        assert_eq!(pct_encode("💬"), "%F0%9F%92%AC");
+    }
+
+    #[test]
+    fn test_pct_encode_empty() {
+        assert_eq!(pct_encode(""), "");
+    }
+
+    #[test]
+    fn test_pct_encode_unreserved_passthrough() {
+        assert_eq!(pct_encode("AZaz09-_.~"), "AZaz09-_.~");
+    }
+
+    #[test]
+    fn test_pct_encode_reserved_chars() {
+        assert_eq!(pct_encode("/"), "%2F");
+        assert_eq!(pct_encode("+"), "%2B");
+        assert_eq!(pct_encode(" "), "%20");
     }
 }
