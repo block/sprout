@@ -31,6 +31,17 @@ import {
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import type { Channel, ChannelMember } from "@/shared/api/types";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Separator } from "@/shared/ui/separator";
@@ -669,48 +680,51 @@ export function ChannelManagementSheet({
                 description="Deleting removes the channel from the workspace list."
                 title="Danger zone"
               >
-                <div className="space-y-3">
-                  <Button
-                    data-testid="channel-management-delete"
-                    disabled={deleteChannelMutation.isPending}
-                    onClick={() => {
-                      handleDeleteDialogOpenChange(true);
-                    }}
-                    size="sm"
-                    type="button"
-                    variant="destructive"
-                  >
-                    Delete channel
-                  </Button>
-                  {isDeleteDialogOpen ? (
-                    <div
-                      className="space-y-3 rounded-xl border border-destructive/20 bg-destructive/5 p-4"
-                      data-testid="channel-delete-confirmation-dialog"
-                      role="alertdialog"
+                <AlertDialog
+                  onOpenChange={handleDeleteDialogOpenChange}
+                  open={isDeleteDialogOpen}
+                >
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      data-testid="channel-management-delete"
+                      disabled={deleteChannelMutation.isPending}
+                      size="sm"
+                      type="button"
+                      variant="destructive"
                     >
-                      <div className="space-y-1">
-                        <p className="text-sm font-semibold">Delete channel?</p>
-                        <p className="text-sm text-muted-foreground">
-                          Delete {resolvedChannel.name} from the workspace list.
-                          This action cannot be undone.
-                        </p>
-                      </div>
-                      <div className="flex justify-end gap-2">
+                      Delete channel
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent data-testid="channel-delete-confirmation-dialog">
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete channel?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Delete {resolvedChannel.name} from the workspace list.
+                        This action cannot be undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    {deleteChannelMutation.error instanceof Error ? (
+                      <p className="text-sm text-destructive">
+                        {deleteChannelMutation.error.message}
+                      </p>
+                    ) : null}
+                    <AlertDialogFooter>
+                      <AlertDialogCancel asChild>
                         <Button
                           data-testid="channel-delete-cancel"
                           disabled={deleteChannelMutation.isPending}
-                          onClick={() => {
-                            handleDeleteDialogOpenChange(false);
-                          }}
                           type="button"
                           variant="outline"
                         >
                           Cancel
                         </Button>
+                      </AlertDialogCancel>
+                      <AlertDialogAction asChild>
                         <Button
                           data-testid="channel-delete-confirm"
                           disabled={deleteChannelMutation.isPending}
-                          onClick={() => {
+                          onClick={(event) => {
+                            event.preventDefault();
                             void handleDeleteChannel();
                           }}
                           type="button"
@@ -720,15 +734,10 @@ export function ChannelManagementSheet({
                             ? "Deleting..."
                             : "Delete channel"}
                         </Button>
-                      </div>
-                      {deleteChannelMutation.error instanceof Error ? (
-                        <p className="text-sm text-destructive">
-                          {deleteChannelMutation.error.message}
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </Section>
             </>
           ) : null}
