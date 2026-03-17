@@ -1,8 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
-  createManagedAgent,
+  attachManagedAgentToChannel,
+  createChannelManagedAgent,
+  ensureChannelAgentPresetInChannel,
+} from "@/features/agents/channelAgents";
+import { channelsQueryKey } from "@/features/channels/hooks";
+import {
   deleteManagedAgent,
+  createManagedAgent,
   discoverAcpProviders,
   discoverManagedAgentPrereqs,
   getManagedAgentLog,
@@ -17,11 +23,49 @@ import type {
   ManagedAgent,
   MintManagedAgentTokenInput,
 } from "@/shared/api/types";
+import type {
+  AttachManagedAgentToChannelInput,
+  AttachManagedAgentToChannelResult,
+  CreateChannelManagedAgentInput,
+  CreateChannelManagedAgentResult,
+  EnsureChannelAgentPresetInput,
+  EnsureChannelAgentPresetResult,
+} from "@/features/agents/channelAgents";
+export type {
+  AttachManagedAgentToChannelInput,
+  AttachManagedAgentToChannelResult,
+  CreateChannelManagedAgentInput,
+  CreateChannelManagedAgentResult,
+  EnsureChannelAgentPresetInput,
+  EnsureChannelAgentPresetResult,
+} from "@/features/agents/channelAgents";
 
 export const relayAgentsQueryKey = ["relay-agents"] as const;
 export const managedAgentsQueryKey = ["managed-agents"] as const;
 export const acpProvidersQueryKey = ["acp-providers"] as const;
 export const managedAgentPrereqsQueryKey = ["managed-agent-prereqs"] as const;
+
+export type EnsureGooseInChannelResult = AttachManagedAgentToChannelResult & {
+  created: boolean;
+};
+
+async function invalidateAgentQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  channelId: string | null,
+) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
+    queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey }),
+    queryClient.invalidateQueries({ queryKey: channelsQueryKey }),
+    ...(channelId
+      ? [
+          queryClient.invalidateQueries({
+            queryKey: ["channels", channelId, "members"],
+          }),
+        ]
+      : []),
+  ]);
+}
 
 export function useAcpProvidersQuery() {
   return useQuery({
@@ -132,6 +176,96 @@ export function useMintManagedAgentTokenMutation() {
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
       await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });
+    },
+  });
+}
+
+export function useAttachManagedAgentToChannelMutation(
+  channelId: string | null,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: AttachManagedAgentToChannelInput) => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      return attachManagedAgentToChannel(channelId, input);
+    },
+    onSettled: async () => {
+      await invalidateAgentQueries(queryClient, channelId);
+    },
+  });
+}
+
+export function useEnsureChannelAgentPresetMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (
+      input: EnsureChannelAgentPresetInput,
+    ): Promise<EnsureChannelAgentPresetResult> => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      return ensureChannelAgentPresetInChannel(channelId, input);
+    },
+    onSettled: async () => {
+      await invalidateAgentQueries(queryClient, channelId);
+    },
+  });
+}
+
+export function useCreateChannelManagedAgentMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (
+      input: CreateChannelManagedAgentInput,
+    ): Promise<CreateChannelManagedAgentResult> => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      return createChannelManagedAgent(channelId, input);
+    },
+    onSettled: async () => {
+      await invalidateAgentQueries(queryClient, channelId);
+    },
+  });
+}
+
+export function useEnsureGooseInChannelMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (): Promise<EnsureGooseInChannelResult> => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      const attached = await ensureChannelAgentPresetInChannel(channelId, {
+        provider: {
+          id: "goose",
+          label: "Goose",
+          command: "goose",
+          defaultArgs: ["acp"],
+        },
+        role: "bot",
+      });
+
+      return {
+        agent: attached.agent,
+        membershipAdded: attached.membershipAdded,
+        restarted: attached.restarted,
+        started: attached.started,
+        created: attached.created,
+      };
+    },
+    onSettled: async () => {
+      await invalidateAgentQueries(queryClient, channelId);
     },
   });
 }

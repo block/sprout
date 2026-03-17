@@ -1,0 +1,273 @@
+import { DEFAULT_MANAGED_AGENT_SCOPES } from "@/features/tokens/lib/scopeOptions";
+import {
+  addChannelMembers,
+  createManagedAgent,
+  getChannelMembers,
+  listManagedAgents,
+  startManagedAgent,
+  stopManagedAgent,
+} from "@/shared/api/tauri";
+import type {
+  AcpProvider,
+  ChannelRole,
+  ManagedAgent,
+} from "@/shared/api/types";
+
+type ChannelAgentProvider = Pick<
+  AcpProvider,
+  "id" | "label" | "command" | "defaultArgs"
+>;
+
+export type AttachManagedAgentToChannelInput = {
+  agent: ManagedAgent;
+  role?: Exclude<ChannelRole, "owner">;
+  ensureRunning?: boolean;
+};
+
+export type AttachManagedAgentToChannelResult = {
+  agent: ManagedAgent;
+  membershipAdded: boolean;
+  restarted: boolean;
+  started: boolean;
+};
+
+export type EnsureChannelAgentPresetInput = {
+  provider: ChannelAgentProvider;
+  role?: Exclude<ChannelRole, "owner">;
+  ensureRunning?: boolean;
+};
+
+export type EnsureChannelAgentPresetResult =
+  AttachManagedAgentToChannelResult & {
+    created: boolean;
+    providerId: string;
+  };
+
+export type CreateChannelManagedAgentInput = {
+  provider: ChannelAgentProvider;
+  name: string;
+  systemPrompt?: string;
+  role?: Exclude<ChannelRole, "owner">;
+  ensureRunning?: boolean;
+};
+
+export type CreateChannelManagedAgentResult =
+  AttachManagedAgentToChannelResult & {
+    created: true;
+    providerId: string;
+  };
+
+function normalizePubkey(pubkey: string) {
+  return pubkey.trim().toLowerCase();
+}
+
+function commandBasename(command: string) {
+  const normalized = command.trim().replace(/\\/g, "/");
+  const parts = normalized.split("/");
+  return parts[parts.length - 1] ?? normalized;
+}
+
+function commandsMatch(left: string, right: string) {
+  return (
+    commandBasename(left).toLowerCase() === commandBasename(right).toLowerCase()
+  );
+}
+
+function parseTimestamp(value: string | null | undefined) {
+  if (!value) {
+    return 0;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+export async function attachManagedAgentToChannel(
+  channelId: string,
+  input: AttachManagedAgentToChannelInput,
+) {
+  const role = input.role ?? "bot";
+  const ensureRunning = input.ensureRunning ?? true;
+  const members = await getChannelMembers(channelId);
+  const membershipAdded = !members.some(
+    (member) =>
+      normalizePubkey(member.pubkey) === normalizePubkey(input.agent.pubkey),
+  );
+
+  await addChannelMembers({
+    channelId,
+    pubkeys: [input.agent.pubkey],
+    role,
+  });
+
+  let agent = input.agent;
+  let started = false;
+  let restarted = false;
+
+  if (ensureRunning) {
+    if (membershipAdded && input.agent.status === "running") {
+      await stopManagedAgent(input.agent.pubkey);
+      agent = await startManagedAgent(input.agent.pubkey);
+      restarted = true;
+    } else if (input.agent.status !== "running") {
+      agent = await startManagedAgent(input.agent.pubkey);
+      started = true;
+    }
+  }
+
+  return {
+    agent,
+    membershipAdded,
+    restarted,
+    started,
+  } satisfies AttachManagedAgentToChannelResult;
+}
+
+function pickPreferredManagedAgent(agents: ManagedAgent[]) {
+  return [...agents].sort((left, right) => {
+    const leftRunningScore = left.status === "running" ? 1 : 0;
+    const rightRunningScore = right.status === "running" ? 1 : 0;
+    if (leftRunningScore !== rightRunningScore) {
+      return rightRunningScore - leftRunningScore;
+    }
+
+    const leftTokenScore = left.hasApiToken ? 1 : 0;
+    const rightTokenScore = right.hasApiToken ? 1 : 0;
+    if (leftTokenScore !== rightTokenScore) {
+      return rightTokenScore - leftTokenScore;
+    }
+
+    return parseTimestamp(right.updatedAt) - parseTimestamp(left.updatedAt);
+  })[0];
+}
+
+function buildChannelAgentName(providerId: string, providerLabel: string) {
+  const normalizedProviderId = providerId.trim().toLowerCase();
+  if (normalizedProviderId.length > 0) {
+    return normalizedProviderId;
+  }
+
+  return providerLabel.trim().toLowerCase() || "agent";
+}
+
+function pickPreferredChannelPresetAgent(
+  agents: ManagedAgent[],
+  memberPubkeys: ReadonlySet<string>,
+  providerCommand: string,
+  expectedName: string,
+) {
+  const inChannelAgent = pickPreferredManagedAgent(
+    agents.filter(
+      (agent) =>
+        commandsMatch(agent.agentCommand, providerCommand) &&
+        memberPubkeys.has(normalizePubkey(agent.pubkey)),
+    ),
+  );
+  if (inChannelAgent) {
+    return inChannelAgent;
+  }
+
+  return pickPreferredManagedAgent(
+    agents.filter(
+      (agent) =>
+        commandsMatch(agent.agentCommand, providerCommand) &&
+        agent.name.trim().toLowerCase() === expectedName.trim().toLowerCase(),
+    ),
+  );
+}
+
+export async function ensureChannelAgentPresetInChannel(
+  channelId: string,
+  input: EnsureChannelAgentPresetInput,
+): Promise<EnsureChannelAgentPresetResult> {
+  const role = input.role ?? "bot";
+  const ensureRunning = input.ensureRunning ?? true;
+  const members = await getChannelMembers(channelId);
+  const memberPubkeys = new Set(
+    members.map((member) => normalizePubkey(member.pubkey)),
+  );
+  const managedAgents = await listManagedAgents();
+  const expectedName = buildChannelAgentName(
+    input.provider.id,
+    input.provider.label,
+  );
+  const existingAgent = pickPreferredChannelPresetAgent(
+    managedAgents,
+    memberPubkeys,
+    input.provider.command,
+    expectedName,
+  );
+
+  if (existingAgent) {
+    const attached = await attachManagedAgentToChannel(channelId, {
+      agent: existingAgent,
+      role,
+      ensureRunning,
+    });
+    return {
+      ...attached,
+      created: false,
+      providerId: input.provider.id,
+    };
+  }
+
+  const created = await createManagedAgent({
+    name: expectedName,
+    acpCommand: "sprout-acp",
+    agentCommand: input.provider.command,
+    agentArgs: input.provider.defaultArgs,
+    mcpCommand: "sprout-mcp-server",
+    mintToken: true,
+    tokenName: `${expectedName} agent`,
+    tokenScopes: DEFAULT_MANAGED_AGENT_SCOPES,
+    spawnAfterCreate: false,
+  });
+  const attached = await attachManagedAgentToChannel(channelId, {
+    agent: created.agent,
+    role,
+    ensureRunning,
+  });
+
+  return {
+    ...attached,
+    created: true,
+    providerId: input.provider.id,
+  };
+}
+
+export async function createChannelManagedAgent(
+  channelId: string,
+  input: CreateChannelManagedAgentInput,
+): Promise<CreateChannelManagedAgentResult> {
+  const role = input.role ?? "bot";
+  const ensureRunning = input.ensureRunning ?? true;
+  const trimmedName = input.name.trim();
+
+  if (trimmedName.length === 0) {
+    throw new Error("Agent name is required.");
+  }
+
+  const created = await createManagedAgent({
+    name: trimmedName,
+    acpCommand: "sprout-acp",
+    agentCommand: input.provider.command,
+    agentArgs: input.provider.defaultArgs,
+    mcpCommand: "sprout-mcp-server",
+    mintToken: true,
+    tokenName: `${trimmedName} agent`,
+    tokenScopes: DEFAULT_MANAGED_AGENT_SCOPES,
+    systemPrompt: input.systemPrompt?.trim() || undefined,
+    spawnAfterCreate: false,
+  });
+  const attached = await attachManagedAgentToChannel(channelId, {
+    agent: created.agent,
+    role,
+    ensureRunning,
+  });
+
+  return {
+    ...attached,
+    created: true,
+    providerId: input.provider.id,
+  };
+}

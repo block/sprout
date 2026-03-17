@@ -1,9 +1,10 @@
 import * as React from "react";
 
 import {
-  useAddChannelMembersMutation,
-  useChannelsQuery,
-} from "@/features/channels/hooks";
+  type AttachManagedAgentToChannelResult,
+  useAttachManagedAgentToChannelMutation,
+} from "@/features/agents/hooks";
+import { useChannelsQuery } from "@/features/channels/hooks";
 import type { Channel, ChannelRole, ManagedAgent } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import {
@@ -23,13 +24,18 @@ export function AddAgentToChannelDialog({
 }: {
   agent: ManagedAgent | null;
   open: boolean;
-  onAdded: (channel: Channel, agent: ManagedAgent) => void;
+  onAdded: (
+    channel: Channel,
+    result: AttachManagedAgentToChannelResult,
+  ) => void;
   onOpenChange: (open: boolean) => void;
 }) {
   const channelsQuery = useChannelsQuery();
   const [channelId, setChannelId] = React.useState("");
   const [role, setRole] = React.useState<Exclude<ChannelRole, "owner">>("bot");
-  const addMembersMutation = useAddChannelMembersMutation(channelId || null);
+  const attachAgentMutation = useAttachManagedAgentToChannelMutation(
+    channelId || null,
+  );
   const channels = React.useMemo(
     () =>
       (channelsQuery.data ?? []).filter(
@@ -41,7 +47,7 @@ export function AddAgentToChannelDialog({
   function reset() {
     setChannelId("");
     setRole("bot");
-    addMembersMutation.reset();
+    attachAgentMutation.reset();
   }
 
   function handleOpenChange(next: boolean) {
@@ -71,19 +77,12 @@ export function AddAgentToChannelDialog({
     }
 
     try {
-      const result = await addMembersMutation.mutateAsync({
-        pubkeys: [agent.pubkey],
+      const result = await attachAgentMutation.mutateAsync({
+        agent,
         role,
       });
-      const membershipError = result.errors.find(
-        (error) => error.pubkey === agent.pubkey,
-      );
 
-      if (membershipError) {
-        throw new Error(membershipError.error);
-      }
-
-      onAdded(selectedChannel, agent);
+      onAdded(selectedChannel, result);
       handleOpenChange(false);
     } catch {
       // React Query stores the error; keep the dialog open and render it inline.
@@ -98,8 +97,9 @@ export function AddAgentToChannelDialog({
             <DialogTitle>Add agent to channel</DialogTitle>
             <DialogDescription>
               Add {agent?.name ?? "this agent"} to a channel so desktop chat can
-              `@mention` it. If the harness is already running, restart it after
-              adding membership so it subscribes to the new channel.
+              `@mention` it. Running agents are restarted automatically when
+              they join a new channel so the harness picks up the new
+              subscription immediately.
             </DialogDescription>
           </DialogHeader>
 
@@ -110,7 +110,9 @@ export function AddAgentToChannelDialog({
               </label>
               <select
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
-                disabled={channels.length === 0 || addMembersMutation.isPending}
+                disabled={
+                  channels.length === 0 || attachAgentMutation.isPending
+                }
                 id="agent-channel-id"
                 onChange={(event) => setChannelId(event.target.value)}
                 value={channelId}
@@ -139,7 +141,7 @@ export function AddAgentToChannelDialog({
               </label>
               <select
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
-                disabled={addMembersMutation.isPending}
+                disabled={attachAgentMutation.isPending}
                 id="agent-channel-role"
                 onChange={(event) =>
                   setRole(event.target.value as Exclude<ChannelRole, "owner">)
@@ -173,9 +175,9 @@ export function AddAgentToChannelDialog({
               </p>
             ) : null}
 
-            {addMembersMutation.error instanceof Error ? (
+            {attachAgentMutation.error instanceof Error ? (
               <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                {addMembersMutation.error.message}
+                {attachAgentMutation.error.message}
               </p>
             ) : null}
           </div>
@@ -194,13 +196,13 @@ export function AddAgentToChannelDialog({
                 !agent ||
                 !selectedChannel ||
                 channelsQuery.isLoading ||
-                addMembersMutation.isPending
+                attachAgentMutation.isPending
               }
               onClick={() => void handleSubmit()}
               size="sm"
               type="button"
             >
-              {addMembersMutation.isPending ? "Adding..." : "Add to channel"}
+              {attachAgentMutation.isPending ? "Adding..." : "Add to channel"}
             </Button>
           </div>
         </div>
