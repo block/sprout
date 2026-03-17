@@ -296,6 +296,11 @@ declare global {
     __SPROUT_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
+      pubkey?: string;
+    }) => RelayEvent;
+    __SPROUT_E2E_EMIT_MOCK_TYPING__?: (input: {
+      channelName: string;
+      pubkey?: string;
     }) => RelayEvent;
   }
 }
@@ -1098,9 +1103,28 @@ function recordMockMessage(channelId: string, event: RelayEvent) {
   touchMockChannel(channel);
 }
 
-function emitMockChannelMessage(channelId: string, content: string) {
-  const event = createMockEvent(9, content, [["h", channelId]]);
+function emitMockChannelMessage(
+  channelId: string,
+  content: string,
+  pubkey?: string,
+) {
+  const event = createMockEvent(9, content, [["h", channelId]], pubkey);
   recordMockMessage(channelId, event);
+  emitMockLiveEvent(channelId, event);
+  return event;
+}
+
+function emitMockTypingIndicator(channelId: string, pubkey: string) {
+  const event: RelayEvent = {
+    id: crypto.randomUUID().replace(/-/g, ""),
+    pubkey,
+    created_at: Math.floor(Date.now() / 1000),
+    kind: 20002,
+    tags: [["h", channelId]],
+    content: "",
+    sig: "mocksig".repeat(20).slice(0, 128),
+  };
+
   emitMockLiveEvent(channelId, event);
   return event;
 }
@@ -1109,10 +1133,11 @@ function createMockEvent(
   kind: number,
   content: string,
   tags: string[][],
+  pubkey = DEFAULT_MOCK_IDENTITY.pubkey,
 ): RelayEvent {
   return {
     id: crypto.randomUUID().replace(/-/g, ""),
-    pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
+    pubkey,
     created_at: Math.floor(Date.now() / 1000),
     kind,
     tags,
@@ -2705,7 +2730,11 @@ export function maybeInstallE2eTauriMocks() {
   resetMockManagedAgents();
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
-  window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({ channelName, content }) => {
+  window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({
+    channelName,
+    content,
+    pubkey,
+  }) => {
     const channel = mockChannels.find(
       (candidate) => candidate.name === channelName,
     );
@@ -2713,7 +2742,17 @@ export function maybeInstallE2eTauriMocks() {
       throw new Error(`Mock channel ${channelName} not found.`);
     }
 
-    return emitMockChannelMessage(channel.id, content);
+    return emitMockChannelMessage(channel.id, content, pubkey);
+  };
+  window.__SPROUT_E2E_EMIT_MOCK_TYPING__ = ({ channelName, pubkey }) => {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === channelName,
+    );
+    if (!channel) {
+      throw new Error(`Mock channel ${channelName} not found.`);
+    }
+
+    return emitMockTypingIndicator(channel.id, pubkey ?? CHARLIE_PUBKEY);
   };
   mockIPC(async (command, payload) => {
     const activeConfig = getConfig();

@@ -27,6 +27,7 @@ test("sidebar shows all channel types", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
+  await expect(page.getByTestId("sidebar-agents-count")).toHaveText("0");
 
   // Streams
   const streamList = page.getByTestId("stream-list");
@@ -147,6 +148,49 @@ test("channel with messages shows content", async ({ page }) => {
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Welcome to #general",
   );
+});
+
+test("shows and clears typing indicators for active channel bots", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await page.getByTestId("channel-agents").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("agents");
+  await page.waitForTimeout(300);
+
+  await page.evaluate((pubkey) => {
+    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+      channelName: "agents",
+      pubkey,
+    });
+  }, TEST_IDENTITIES.charlie.pubkey);
+
+  await expect(page.getByTestId("message-typing-indicator")).toBeVisible();
+  await expect(
+    page.getByTestId("message-typing-indicator-label"),
+  ).toContainText("charlie is typing");
+
+  await page.evaluate((pubkey) => {
+    window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "agents",
+      content: "Done.",
+      pubkey,
+    });
+  }, TEST_IDENTITIES.charlie.pubkey);
+
+  await expect(page.getByTestId("message-timeline")).toContainText("Done.");
+  await expect(page.getByTestId("message-typing-indicator")).toHaveCount(0);
+
+  await page.waitForTimeout(1_200);
+  await page.evaluate((pubkey) => {
+    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+      channelName: "agents",
+      pubkey,
+    });
+  }, TEST_IDENTITIES.charlie.pubkey);
+
+  await expect(page.getByTestId("message-typing-indicator")).toHaveCount(0);
 });
 
 test("sidebar shows unread indicator for newly active channels", async ({

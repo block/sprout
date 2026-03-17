@@ -5,6 +5,7 @@ export const KIND_STREAM_MESSAGE_V2 = 40002;
 export const KIND_STREAM_MESSAGE_EDIT = 40003;
 export const KIND_STREAM_MESSAGE_DIFF = 40008;
 export const KIND_SYSTEM_MESSAGE = 40099;
+export const KIND_TYPING_INDICATOR = 20002;
 
 export const CHANNEL_EVENT_KINDS = [
   KIND_DELETION, // 5 — NIP-09 event deletions

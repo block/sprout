@@ -231,7 +231,7 @@ export function MessageRow({
           </div>
           {renderBody()}
           {reactions.length > 0 ? (
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pt-1">
               {reactions.map((reaction: TimelineReaction) => (
                 <button
                   aria-label={`Toggle ${reaction.emoji} reaction`}
