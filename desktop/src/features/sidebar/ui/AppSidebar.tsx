@@ -400,7 +400,13 @@ export function AppSidebar({
   function handleDragPointerDown(e: React.PointerEvent) {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
-    if (target.closest('button, a, input, [role="button"]')) return;
+    if (
+      target.closest(
+        'button, a, input, textarea, select, [role="button"], [role="textbox"], [contenteditable="true"]',
+      )
+    ) {
+      return;
+    }
     e.preventDefault();
     getCurrentWindow().startDragging();
   }

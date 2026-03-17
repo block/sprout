@@ -1,6 +1,5 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Settings2 } from "lucide-react";
 
 import { ChannelPane } from "@/app/ChannelPane";
 import { AgentsView } from "@/features/agents/ui/AgentsView";
@@ -12,6 +11,7 @@ import {
   useSelectedChannel,
 } from "@/features/channels/hooks";
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
+import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
 import { ChannelManagementSheet } from "@/features/channels/ui/ChannelManagementSheet";
 import { useHomeFeedQuery } from "@/features/home/hooks";
 import { HomeView } from "@/features/home/ui/HomeView";
@@ -48,7 +48,6 @@ import { relayClient } from "@/shared/api/relayClient";
 import { getEventById, joinChannel } from "@/shared/api/tauri";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { Channel, RelayEvent, SearchHit } from "@/shared/api/types";
-import { Button } from "@/shared/ui/button";
 import {
   SidebarInset,
   SidebarProvider,
@@ -57,18 +56,6 @@ import {
 
 type AppView = "home" | "channel" | "settings" | "agents";
 type MainView = Exclude<AppView, "settings">;
-
-function createSearchAnchorEvent(hit: SearchHit): RelayEvent {
-  return {
-    id: hit.eventId,
-    pubkey: hit.pubkey,
-    created_at: hit.createdAt,
-    kind: hit.kind,
-    tags: [["h", hit.channelId]],
-    content: hit.content,
-    sig: "",
-  };
-}
 
 export function AppShell() {
   const [selectedView, setSelectedView] = React.useState<AppView>("home");
@@ -304,7 +291,15 @@ export function AppShell() {
     (hit: SearchHit) => {
       setSearchAnchor(hit);
       setSearchAnchorChannelId(hit.channelId);
-      setSearchAnchorEvent(createSearchAnchorEvent(hit));
+      setSearchAnchorEvent({
+        id: hit.eventId,
+        pubkey: hit.pubkey,
+        created_at: hit.createdAt,
+        kind: hit.kind,
+        tags: [["h", hit.channelId]],
+        content: hit.content,
+        sig: "",
+      });
       void handleOpenChannel(hit.channelId);
 
       void getEventById(hit.eventId)
@@ -549,18 +544,13 @@ export function AppShell() {
               <ChatHeader
                 actions={
                   activeChannel ? (
-                    <Button
-                      aria-label="Manage channel"
-                      data-testid="channel-management-trigger"
-                      onClick={() => {
+                    <ChannelMembersBar
+                      channel={activeChannel}
+                      currentPubkey={identityQuery.data?.pubkey}
+                      onManageChannel={() => {
                         setIsChannelManagementOpen(true);
                       }}
-                      size="icon"
-                      type="button"
-                      variant="outline"
-                    >
-                      <Settings2 className="h-4 w-4" />
-                    </Button>
+                    />
                   ) : null
                 }
                 channelType={activeChannel?.channelType}
