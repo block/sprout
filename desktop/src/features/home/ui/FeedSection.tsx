@@ -155,49 +155,51 @@ export function FeedSection({
 
             return (
               <div
-                className={`group relative transition-colors hover:bg-muted/40 ${isDone ? "opacity-50" : ""}`}
+                className={`group relative px-3 py-2.5 transition-colors hover:bg-muted/40 ${isDone ? "opacity-50" : ""} ${canOpenChannel ? "cursor-pointer" : ""}`}
                 key={item.id}
               >
-                <button
-                  className={`w-full px-3 py-2.5 text-left ${canOpenChannel ? "cursor-pointer" : "cursor-default"}`}
-                  disabled={!canOpenChannel}
-                  onClick={() => {
-                    if (canOpenChannel && channelId) {
-                      onOpenChannel(channelId);
-                    }
-                  }}
-                  type="button"
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span
-                      className={`text-[13px] font-medium ${isDone ? "line-through text-muted-foreground" : ""}`}
-                    >
-                      {feedHeadline(item)}
-                    </span>
-                    <span className="text-[11px] text-muted-foreground">
-                      {resolveUserLabel({
-                        pubkey: item.pubkey,
-                        currentPubkey,
-                        profiles,
-                        preferResolvedSelfLabel: true,
-                      })}
-                    </span>
-                    {item.channelName ? (
-                      <span className="text-[11px] text-primary/80">
-                        #{item.channelName}
-                      </span>
-                    ) : null}
-                    <span className="ml-auto shrink-0 text-[11px] text-muted-foreground/60">
-                      {formatRelativeTime(item.createdAt)}
-                    </span>
-                  </div>
-
-                  <Markdown
-                    className="mt-0.5 max-w-none text-[13px] leading-snug text-muted-foreground"
-                    compact
-                    content={feedContent(item)}
+                {canOpenChannel ? (
+                  <button
+                    aria-label={`Open ${item.channelName || "channel"}`}
+                    className="absolute inset-0"
+                    onClick={() => {
+                      if (channelId) {
+                        onOpenChannel(channelId);
+                      }
+                    }}
+                    type="button"
                   />
-                </button>
+                ) : null}
+
+                <div className="pointer-events-none relative flex min-w-0 items-center gap-2">
+                  <span
+                    className={`text-[13px] font-medium ${isDone ? "line-through text-muted-foreground" : ""}`}
+                  >
+                    {feedHeadline(item)}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {resolveUserLabel({
+                      pubkey: item.pubkey,
+                      currentPubkey,
+                      profiles,
+                      preferResolvedSelfLabel: true,
+                    })}
+                  </span>
+                  {item.channelName ? (
+                    <span className="text-[11px] text-primary/80">
+                      #{item.channelName}
+                    </span>
+                  ) : null}
+                  <span className="ml-auto shrink-0 text-[11px] text-muted-foreground/60">
+                    {formatRelativeTime(item.createdAt)}
+                  </span>
+                </div>
+
+                <Markdown
+                  className="pointer-events-none relative mt-0.5 max-w-none text-[13px] leading-snug text-muted-foreground"
+                  compact
+                  content={feedContent(item)}
+                />
 
                 {showDoneAction ? (
                   <Button
@@ -212,7 +214,7 @@ export function FeedSection({
                     size="icon"
                     type="button"
                     variant="ghost"
-                    className={`absolute right-1.5 top-1.5 h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 ${isDone ? "text-green-500 opacity-100" : "text-muted-foreground"}`}
+                    className={`pointer-events-auto absolute right-1.5 top-1.5 h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 ${isDone ? "text-green-500 opacity-100" : "text-muted-foreground"}`}
                   >
                     <Check className="h-3.5 w-3.5" />
                   </Button>

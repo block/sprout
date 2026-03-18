@@ -111,9 +111,7 @@ test("opens a mocked channel from the home feed", async ({ page }) => {
     page.getByText("Please review the release checklist."),
   ).toBeVisible();
 
-  await mentionsSection
-    .getByText("Please review the release checklist.")
-    .click();
+  await mentionsSection.getByRole("button", { name: "Open general" }).click();
 
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await expect(page.getByTestId("message-timeline")).toContainText(
