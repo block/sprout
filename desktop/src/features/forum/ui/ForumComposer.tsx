@@ -12,6 +12,7 @@ type ForumComposerProps = {
   submitLabel: string;
   disabled?: boolean;
   isSending?: boolean;
+  onCancel?: () => void;
   onSubmit: (content: string, mentionPubkeys: string[]) => void;
 };
 
@@ -21,6 +22,7 @@ export function ForumComposer({
   submitLabel,
   disabled,
   isSending,
+  onCancel,
   onSubmit,
 }: ForumComposerProps) {
   const [value, setValue] = React.useState("");
@@ -106,7 +108,18 @@ export function ForumComposer({
         ref={textareaRef}
         value={value}
       />
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {onCancel ? (
+          <Button
+            disabled={isSending}
+            onClick={onCancel}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            Cancel
+          </Button>
+        ) : null}
         <Button
           disabled={disabled || isSending || value.trim().length === 0}
           size="sm"

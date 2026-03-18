@@ -124,31 +124,23 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
       {/* New post area */}
       <div className="border-b border-border/60 p-4">
         {isComposerOpen ? (
-          <div className="space-y-3">
-            <ForumComposer
-              channelId={channel.id}
-              isSending={createPostMutation.isPending}
-              onSubmit={(content, mentionPubkeys) => {
-                createPostMutation.mutate(
-                  { content, mentionPubkeys },
-                  {
-                    onSuccess: () => {
-                      setIsComposerOpen(false);
-                    },
+          <ForumComposer
+            channelId={channel.id}
+            isSending={createPostMutation.isPending}
+            onCancel={() => setIsComposerOpen(false)}
+            onSubmit={(content, mentionPubkeys) => {
+              createPostMutation.mutate(
+                { content, mentionPubkeys },
+                {
+                  onSuccess: () => {
+                    setIsComposerOpen(false);
                   },
-                );
-              }}
-              placeholder="Write your post..."
-              submitLabel="Post"
-            />
-            <button
-              className="text-sm text-muted-foreground hover:text-foreground"
-              onClick={() => setIsComposerOpen(false)}
-              type="button"
-            >
-              Cancel
-            </button>
-          </div>
+                },
+              );
+            }}
+            placeholder="Write your post..."
+            submitLabel="Post"
+          />
         ) : (
           <button
             className="w-full rounded-xl border border-dashed border-border/80 px-4 py-3 text-left text-sm text-muted-foreground transition-colors hover:border-border hover:bg-accent/30 hover:text-foreground"
