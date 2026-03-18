@@ -8,9 +8,9 @@ import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
 import { Markdown } from "@/shared/ui/markdown";
-import { DiffMessage } from "./DiffMessage";
 import { MessageActionBar } from "./MessageActionBar";
 
+const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
 
 export const MessageRow = React.memo(
@@ -55,17 +55,25 @@ export const MessageRow = React.memo(
       switch (message.kind) {
         case KIND_STREAM_MESSAGE_DIFF:
           return (
-            <DiffMessage
-              commitSha={getTag("commit")}
-              content={message.body}
-              description={getTag("description")}
-              filePath={getTag("file")}
-              onExpand={() => {
-                setExpandedDiffId(message.id);
-              }}
-              repoUrl={getTag("repo")}
-              truncated={getTag("truncated") === "true"}
-            />
+            <React.Suspense
+              fallback={
+                <div className="p-3 text-sm text-muted-foreground">
+                  Loading diff…
+                </div>
+              }
+            >
+              <DiffMessage
+                commitSha={getTag("commit")}
+                content={message.body}
+                description={getTag("description")}
+                filePath={getTag("file")}
+                onExpand={() => {
+                  setExpandedDiffId(message.id);
+                }}
+                repoUrl={getTag("repo")}
+                truncated={getTag("truncated") === "true"}
+              />
+            </React.Suspense>
           );
         default:
           return (

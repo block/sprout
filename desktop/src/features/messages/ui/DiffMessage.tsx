@@ -31,7 +31,7 @@ function getHostname(url: string): string {
   }
 }
 
-export function DiffMessage({
+export default function DiffMessage({
   content,
   repoUrl,
   filePath,
