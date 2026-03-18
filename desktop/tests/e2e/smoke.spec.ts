@@ -100,18 +100,20 @@ test("create agent supports parallelism and system prompt overrides", async ({
 
 test("opens a mocked channel from the home feed", async ({ page }) => {
   const mentionsSection = page.locator("section").filter({
-    has: page.getByRole("heading", { name: "@Mentions" }),
+    has: page.getByRole("heading", { name: "Mentions" }),
   });
 
   await page.goto("/");
 
   await expect(page.getByTestId("chat-title")).toHaveText("Home");
-  await expect(page.getByRole("heading", { name: "@Mentions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Mentions" })).toBeVisible();
   await expect(
     page.getByText("Please review the release checklist."),
   ).toBeVisible();
 
-  await mentionsSection.getByRole("button", { name: "Open" }).click();
+  await mentionsSection
+    .getByText("Please review the release checklist.")
+    .click();
 
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await expect(page.getByTestId("message-timeline")).toContainText(
@@ -121,7 +123,7 @@ test("opens a mocked channel from the home feed", async ({ page }) => {
 
 test("home feed renders resolved author labels", async ({ page }) => {
   const mentionsSection = page.locator("section").filter({
-    has: page.getByRole("heading", { name: "@Mentions" }),
+    has: page.getByRole("heading", { name: "Mentions" }),
   });
 
   await page.goto("/");
