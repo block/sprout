@@ -14,7 +14,6 @@ import {
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
 import { ChannelManagementSheet } from "@/features/channels/ui/ChannelManagementSheet";
-import { useHomeFeedQuery } from "@/features/home/hooks";
 import { HomeView } from "@/features/home/ui/HomeView";
 import {
   useChannelMessagesQuery,
@@ -37,6 +36,7 @@ import {
   usePresenceSession,
 } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
+import { useHomeFeedNotifications } from "@/features/notifications/hooks";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
 import { ChannelBrowserDialog } from "@/features/channels/ui/ChannelBrowserDialog";
 import { SearchDialog } from "@/features/search/ui/SearchDialog";
@@ -45,6 +45,7 @@ import {
   SettingsView,
   type SettingsSection,
 } from "@/features/settings/ui/SettingsView";
+import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { relayClient } from "@/shared/api/relayClient";
 import { getEventById, joinChannel } from "@/shared/api/tauri";
@@ -82,7 +83,11 @@ export function AppShell() {
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
   const presenceSession = usePresenceSession(identityQuery.data?.pubkey);
-  const homeFeedQuery = useHomeFeedQuery();
+  const { homeBadgeCount, homeFeedQuery, notificationSettings } =
+    useHomeFeedNotifications(
+      identityQuery.data?.pubkey,
+      selectedView === "home",
+    );
   const channelsQuery = useChannelsQuery();
   const { refetch: refetchChannels } = channelsQuery;
   const channels = channelsQuery.data ?? [];
@@ -98,19 +103,31 @@ export function AppShell() {
   const createForumMutation = useCreateChannelMutation();
   const activeChannel = selectedView === "channel" ? selectedChannel : null;
   const activeChannelId = activeChannel?.id ?? null;
-  const { unreadChannelIds } = useUnreadChannels(channels, activeChannel);
+  const messagesQuery = useChannelMessagesQuery(activeChannel);
+  useChannelSubscription(activeChannel);
+  const latestActiveMessage =
+    messagesQuery.data?.[messagesQuery.data.length - 1];
+  const activeReadAt = latestActiveMessage
+    ? new Date(latestActiveMessage.created_at * 1_000).toISOString()
+    : (activeChannel?.lastMessageAt ?? null);
+  const { unreadChannelIds } = useUnreadChannels(
+    channels,
+    activeChannel,
+    activeReadAt,
+  );
   const activeDmParticipantPubkeys = React.useMemo(() => {
     if (!activeChannel || activeChannel.channelType !== "dm") {
       return [];
     }
-
     const currentPubkey = identityQuery.data?.pubkey?.toLowerCase();
-
     return activeChannel.participantPubkeys.filter(
       (pubkey) => pubkey.toLowerCase() !== currentPubkey,
     );
   }, [activeChannel, identityQuery.data?.pubkey]);
   const activeDmPresenceQuery = usePresenceQuery(activeDmParticipantPubkeys, {
+    enabled: activeDmParticipantPubkeys.length > 0,
+  });
+  const activeDmProfilesQuery = useUsersBatchQuery(activeDmParticipantPubkeys, {
     enabled: activeDmParticipantPubkeys.length > 0,
   });
   const activeDmPresenceStatus =
@@ -119,10 +136,13 @@ export function AppShell() {
           activeDmParticipantPubkeys[0]?.toLowerCase()
         ]
       : null;
-
-  const messagesQuery = useChannelMessagesQuery(activeChannel);
-  useChannelSubscription(activeChannel);
-
+  const activeChannelTitle = activeChannel
+    ? resolveChannelDisplayLabel(
+        activeChannel,
+        identityQuery.data?.pubkey,
+        activeDmProfilesQuery.data?.profiles,
+      )
+    : "Channels";
   const sendMessageMutation = useSendMessageMutation(
     activeChannel,
     identityQuery.data,
@@ -472,10 +492,26 @@ export function AppShell() {
           <SettingsView
             currentPubkey={identityQuery.data?.pubkey}
             fallbackDisplayName={identityQuery.data?.displayName}
+            isUpdatingDesktopNotifications={
+              notificationSettings.isUpdatingDesktopEnabled
+            }
             isPresenceLoading={presenceSession.isLoading}
             isUpdatingPresence={presenceSession.isPending}
+            notificationErrorMessage={notificationSettings.errorMessage}
+            notificationPermission={notificationSettings.permission}
+            notificationSettings={notificationSettings.settings}
             onClose={handleCloseSettings}
             onSectionChange={setSettingsSection}
+            onSetDesktopNotificationsEnabled={
+              notificationSettings.setDesktopEnabled
+            }
+            onSetHomeBadgeEnabled={notificationSettings.setHomeBadgeEnabled}
+            onSetMentionNotificationsEnabled={
+              notificationSettings.setMentionsEnabled
+            }
+            onSetNeedsActionNotificationsEnabled={
+              notificationSettings.setNeedsActionEnabled
+            }
             onSetPresence={presenceSession.setStatus}
             presenceError={presenceSession.error}
             presenceStatus={presenceSession.currentStatus}
@@ -494,6 +530,7 @@ export function AppShell() {
                 : undefined
             }
             fallbackDisplayName={identityQuery.data?.displayName}
+            homeBadgeCount={homeBadgeCount}
             isCreatingChannel={createChannelMutation.isPending}
             isCreatingForum={createForumMutation.isPending}
             isLoading={channelsQuery.isLoading}
@@ -592,7 +629,7 @@ export function AppShell() {
                     />
                   ) : null
                 }
-                title={activeChannel?.name ?? "Channels"}
+                title={activeChannelTitle}
               />
             )}
 

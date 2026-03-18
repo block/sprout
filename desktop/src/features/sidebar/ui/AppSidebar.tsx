@@ -1,23 +1,19 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  Bot,
-  CircleDot,
-  Compass,
-  FileText,
-  Hash,
-  Home,
-  Plus,
-  Search,
-} from "lucide-react";
+import { Bot, Compass, Home, Plus, Search } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
+import {
+  ChannelMenuButton,
+  SidebarSection,
+} from "@/features/sidebar/ui/SidebarSection";
 import type { Channel, PresenceStatus, Profile } from "@/shared/api/types";
-import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import {
@@ -41,6 +37,7 @@ type AppSidebarProps = {
   channels: Channel[];
   currentPubkey?: string;
   fallbackDisplayName?: string;
+  homeBadgeCount: number;
   isLoading: boolean;
   isCreatingChannel: boolean;
   isCreatingForum: boolean;
@@ -65,111 +62,6 @@ type AppSidebarProps = {
   onSelectChannel: (channelId: string) => void;
   onSelectSettings: () => void;
 };
-
-function SidebarChannelIcon({ channel }: { channel: Channel }) {
-  if (channel.channelType === "dm") {
-    return <CircleDot className="h-4 w-4" />;
-  }
-
-  if (channel.channelType === "forum") {
-    return <FileText className="h-4 w-4" />;
-  }
-
-  return <Hash className="h-4 w-4" />;
-}
-
-function ChannelMenuButton({
-  channel,
-  isActive,
-  hasUnread,
-  presenceStatus,
-  onSelectChannel,
-}: {
-  channel: Channel;
-  isActive: boolean;
-  hasUnread: boolean;
-  presenceStatus?: PresenceStatus;
-  onSelectChannel: (channelId: string) => void;
-}) {
-  return (
-    <SidebarMenuButton
-      className={cn(
-        !isActive &&
-          hasUnread &&
-          "font-semibold text-sidebar-foreground hover:text-sidebar-foreground",
-      )}
-      data-testid={`channel-${channel.name}`}
-      isActive={isActive}
-      onClick={() => onSelectChannel(channel.id)}
-      tooltip={channel.name}
-      type="button"
-    >
-      <SidebarChannelIcon channel={channel} />
-      <span className="min-w-0 flex-1 truncate">{channel.name}</span>
-      <div className="ml-auto flex items-center gap-2">
-        {presenceStatus ? (
-          <PresenceDot
-            className="h-2 w-2"
-            data-testid={`channel-presence-${channel.name}`}
-            status={presenceStatus}
-          />
-        ) : null}
-        {hasUnread && !isActive ? (
-          <span
-            aria-hidden="true"
-            className="h-2.5 w-2.5 shrink-0 rounded-full bg-primary"
-            data-testid={`channel-unread-${channel.name}`}
-          />
-        ) : null}
-      </div>
-    </SidebarMenuButton>
-  );
-}
-
-function SidebarSection({
-  items,
-  isActiveChannel,
-  presenceByChannelId,
-  selectedChannelId,
-  title,
-  testId,
-  unreadChannelIds,
-  onSelectChannel,
-}: {
-  items: Channel[];
-  isActiveChannel: boolean;
-  presenceByChannelId?: Record<string, PresenceStatus>;
-  selectedChannelId: string | null;
-  title: string;
-  testId: string;
-  unreadChannelIds: Set<string>;
-  onSelectChannel: (channelId: string) => void;
-}) {
-  if (items.length === 0) {
-    return null;
-  }
-
-  return (
-    <SidebarGroup>
-      <SidebarGroupLabel>{title}</SidebarGroupLabel>
-      <SidebarGroupContent>
-        <SidebarMenu data-testid={testId}>
-          {items.map((channel) => (
-            <SidebarMenuItem key={channel.id}>
-              <ChannelMenuButton
-                channel={channel}
-                hasUnread={unreadChannelIds.has(channel.id)}
-                isActive={isActiveChannel && selectedChannelId === channel.id}
-                presenceStatus={presenceByChannelId?.[channel.id]}
-                onSelectChannel={onSelectChannel}
-              />
-            </SidebarMenuItem>
-          ))}
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
-  );
-}
 
 function StreamsSection({
   items,
@@ -425,6 +317,7 @@ export function AppSidebar({
   channels,
   currentPubkey,
   fallbackDisplayName,
+  homeBadgeCount,
   isLoading,
   isCreatingChannel,
   isCreatingForum,
@@ -479,6 +372,9 @@ export function AppSidebar({
   const dmPresenceQuery = usePresenceQuery(dmParticipantPubkeys, {
     enabled: directMessages.length > 0,
   });
+  const dmProfilesQuery = useUsersBatchQuery(dmParticipantPubkeys, {
+    enabled: directMessages.length > 0,
+  });
   const dmPresenceByChannelId = React.useMemo(
     () =>
       Object.fromEntries(
@@ -497,6 +393,20 @@ export function AppSidebar({
         }),
       ) satisfies Record<string, PresenceStatus>,
     [currentPubkey, directMessages, dmPresenceQuery.data],
+  );
+  const dmChannelLabels = React.useMemo(
+    () =>
+      Object.fromEntries(
+        directMessages.map((channel) => [
+          channel.id,
+          resolveChannelDisplayLabel(
+            channel,
+            currentPubkey,
+            dmProfilesQuery.data?.profiles,
+          ),
+        ]),
+      ),
+    [currentPubkey, directMessages, dmProfilesQuery.data],
   );
   const managedAgentsQuery = useManagedAgentsQuery();
   const totalAgentCount = managedAgentsQuery.data?.length ?? 0;
@@ -626,6 +536,14 @@ export function AppSidebar({
               <Home className="h-4 w-4" />
               <span>Home</span>
             </SidebarMenuButton>
+            {homeBadgeCount > 0 ? (
+              <SidebarMenuBadge
+                className="right-2 rounded-full bg-primary/15 px-1.5 text-[11px] text-primary peer-data-[active=true]/menu-button:bg-sidebar-primary-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-primary-foreground"
+                data-testid="sidebar-home-count"
+              >
+                {Math.min(homeBadgeCount, 99)}
+              </SidebarMenuBadge>
+            ) : null}
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -753,6 +671,7 @@ export function AppSidebar({
             <SidebarSection
               isActiveChannel={selectedView === "channel"}
               items={directMessages}
+              channelLabels={dmChannelLabels}
               onSelectChannel={onSelectChannel}
               presenceByChannelId={dmPresenceByChannelId}
               selectedChannelId={selectedChannelId}

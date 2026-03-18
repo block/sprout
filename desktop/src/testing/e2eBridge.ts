@@ -304,6 +304,7 @@ declare global {
       channelName: string;
       pubkey?: string;
     }) => RelayEvent;
+    __SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?: (item: RawFeedItem) => RawFeedItem;
   }
 }
 
@@ -895,6 +896,12 @@ const mockPresence = new Map<string, PresenceStatus>([
   [CHARLIE_PUBKEY, "online"],
   [OUTSIDER_PUBKEY, "offline"],
 ]);
+const mockFeedOverrides: RawHomeFeedResponse["feed"] = {
+  mentions: [],
+  needs_action: [],
+  activity: [],
+  agent_activity: [],
+};
 
 let installed = false;
 let nextSocketId = 1;
@@ -1846,90 +1853,95 @@ async function handleGetFeed(
     const includeType = (type: string) =>
       wantedTypes.length === 0 || wantedTypes.includes(type);
 
-    const mentions = includeType("mentions")
-      ? [
-          {
-            id: "mock-feed-mention",
-            kind: 9,
-            pubkey:
-              "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
-            content: "Please review the release checklist.",
-            created_at: now - 90,
-            channel_id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
-            channel_name: "general",
-            tags: [
-              ["e", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
-              ["p", DEFAULT_MOCK_IDENTITY.pubkey],
-            ],
-            category: "mention" as const,
-          },
-        ].slice(0, limit)
-      : [];
+    const defaultFeed: RawHomeFeedResponse["feed"] = {
+      mentions: [
+        {
+          id: "mock-feed-mention",
+          kind: 9,
+          pubkey:
+            "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+          content: "Please review the release checklist.",
+          created_at: now - 90,
+          channel_id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+          channel_name: "general",
+          tags: [
+            ["e", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
+            ["p", DEFAULT_MOCK_IDENTITY.pubkey],
+          ],
+          category: "mention" as const,
+        },
+      ],
+      needs_action: [
+        {
+          id: "mock-feed-reminder",
+          kind: 40007,
+          pubkey:
+            "0000000000000000000000000000000000000000000000000000000000000000",
+          content: "Reminder: update the launch plan before lunch.",
+          created_at: now - 15 * 60,
+          channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301",
+          channel_name: "agents",
+          tags: [
+            ["e", "94a444a4-c0a3-5966-ab05-530c6ddc2301"],
+            ["p", DEFAULT_MOCK_IDENTITY.pubkey],
+          ],
+          category: "needs_action" as const,
+        },
+      ],
+      activity: [
+        {
+          id: "mock-feed-self-activity",
+          kind: 9,
+          pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
+          content: "I posted a note about the launch checklist.",
+          created_at: now - 25 * 60,
+          channel_id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+          channel_name: "general",
+          tags: [["e", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"]],
+          category: "activity" as const,
+        },
+        {
+          id: "mock-feed-activity",
+          kind: 9,
+          pubkey:
+            "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
+          content: "Engineering shipped the desktop build.",
+          created_at: now - 42 * 60,
+          channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
+          channel_name: "engineering",
+          tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
+          category: "activity" as const,
+        },
+      ],
+      agent_activity: [
+        {
+          id: "mock-feed-agent",
+          kind: 43003,
+          pubkey:
+            "db0b028cd36f4d3e36c8300cce87252c1f7fc9495ffecc53f393fcac341ffd36",
+          content: "Agent progress: channel index complete.",
+          created_at: now - 2 * 60 * 60,
+          channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301",
+          channel_name: "agents",
+          tags: [["e", "94a444a4-c0a3-5966-ab05-530c6ddc2301"]],
+          category: "agent_activity" as const,
+        },
+      ],
+    };
 
-    const needsAction = includeType("needs_action")
-      ? [
-          {
-            id: "mock-feed-reminder",
-            kind: 40007,
-            pubkey:
-              "0000000000000000000000000000000000000000000000000000000000000000",
-            content: "Reminder: update the launch plan before lunch.",
-            created_at: now - 15 * 60,
-            channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301",
-            channel_name: "agents",
-            tags: [
-              ["e", "94a444a4-c0a3-5966-ab05-530c6ddc2301"],
-              ["p", DEFAULT_MOCK_IDENTITY.pubkey],
-            ],
-            category: "needs_action" as const,
-          },
-        ].slice(0, limit)
-      : [];
+    const mergeFeedCategory = (
+      category: keyof RawHomeFeedResponse["feed"],
+    ): RawFeedItem[] =>
+      includeType(category)
+        ? [...mockFeedOverrides[category], ...defaultFeed[category]]
+            .sort((left, right) => right.created_at - left.created_at)
+            .slice(0, limit)
+        : [];
 
-    const activity = includeType("activity")
-      ? [
-          {
-            id: "mock-feed-self-activity",
-            kind: 9,
-            pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
-            content: "I posted a note about the launch checklist.",
-            created_at: now - 25 * 60,
-            channel_id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
-            channel_name: "general",
-            tags: [["e", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"]],
-            category: "activity" as const,
-          },
-          {
-            id: "mock-feed-activity",
-            kind: 9,
-            pubkey:
-              "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
-            content: "Engineering shipped the desktop build.",
-            created_at: now - 42 * 60,
-            channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
-            channel_name: "engineering",
-            tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
-            category: "activity" as const,
-          },
-        ].slice(0, limit)
-      : [];
-
-    const agentActivity = includeType("agent_activity")
-      ? [
-          {
-            id: "mock-feed-agent",
-            kind: 43003,
-            pubkey:
-              "db0b028cd36f4d3e36c8300cce87252c1f7fc9495ffecc53f393fcac341ffd36",
-            content: "Agent progress: channel index complete.",
-            created_at: now - 2 * 60 * 60,
-            channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301",
-            channel_name: "agents",
-            tags: [["e", "94a444a4-c0a3-5966-ab05-530c6ddc2301"]],
-            category: "agent_activity" as const,
-          },
-        ].slice(0, limit)
-      : [];
+    const mentions = mergeFeedCategory("mentions");
+    const needsAction = mergeFeedCategory("needs_action");
+    const activity = mergeFeedCategory("activity");
+    const agentActivity = mergeFeedCategory("agent_activity");
 
     return {
       feed: {
@@ -2789,6 +2801,12 @@ export function maybeInstallE2eTauriMocks() {
     }
 
     return emitMockTypingIndicator(channel.id, pubkey ?? CHARLIE_PUBKEY);
+  };
+  window.__SPROUT_E2E_PUSH_MOCK_FEED_ITEM__ = (item) => {
+    const category = item.category === "mention" ? "mentions" : item.category;
+    mockFeedOverrides[category].unshift(item);
+    window.dispatchEvent(new CustomEvent("sprout:e2e-home-feed-updated"));
+    return item;
   };
   mockIPC(async (command, payload) => {
     const activeConfig = getConfig();
