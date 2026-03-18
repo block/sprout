@@ -336,7 +336,7 @@ function ForumsSection({
       <SidebarGroupLabel>Forums</SidebarGroupLabel>
       <SidebarGroupAction
         aria-expanded={isCreateOpen}
-        aria-label={isCreateOpen ? "Close new forum form" : "Create a forum"}
+        aria-label={isCreateOpen ? "Close new forum form" : "New forum"}
         className="top-3 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
         onClick={onToggleCreate}
         type="button"
