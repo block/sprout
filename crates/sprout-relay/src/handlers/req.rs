@@ -68,23 +68,12 @@ pub async fn handle_req(
         }
     };
 
-    let cache_key = pubkey_bytes.to_vec();
-    let accessible_channels = if let Some(cached) = state.accessible_channels_cache.get(&cache_key)
-    {
-        cached
-    } else {
-        match state.db.get_accessible_channel_ids(&pubkey_bytes).await {
-            Ok(ids) => {
-                state
-                    .accessible_channels_cache
-                    .insert(cache_key, ids.clone());
-                ids
-            }
-            Err(e) => {
-                warn!(conn_id = %conn_id, "Failed to get accessible channels: {e}");
-                conn.send(RelayMessage::closed(&sub_id, "error: database error"));
-                return;
-            }
+    let accessible_channels = match state.db.get_accessible_channel_ids(&pubkey_bytes).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            warn!(conn_id = %conn_id, "Failed to get accessible channels: {e}");
+            conn.send(RelayMessage::closed(&sub_id, "error: database error"));
+            return;
         }
     };
 
