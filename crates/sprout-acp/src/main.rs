@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use acp::{AcpClient, EnvVar, McpServer};
 use anyhow::Result;
-use config::{Config, DedupMode, SubscribeMode};
+use clap::Parser;
+use config::{Config, DedupMode, ModelsArgs, SubscribeMode};
 use filter::SubscriptionRule;
 use futures_util::FutureExt;
 use nostr::ToBech32;
@@ -28,8 +29,32 @@ use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+// ── Subcommand dispatch ───────────────────────────────────────────────────────
+
+/// Check if argv[1] matches a subcommand name, before any clap parsing.
+///
+/// This avoids clap rejecting harness flags (like `--private-key`) that aren't
+/// declared on the subcommand's `Parser`. The `models` path has its own
+/// `ModelsArgs` parser; the default path uses the existing `CliArgs`.
+fn is_subcommand(name: &str) -> bool {
+    std::env::args().nth(1).map(|a| a == name).unwrap_or(false)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // ── Subcommand dispatch — before Config::from_cli() or any harness setup ──
+    if is_subcommand("models") {
+        // Strip the "models" token so clap doesn't reject it as a positional.
+        // Keeps argv[0] (binary name) and passes everything after "models".
+        let filtered: Vec<String> = std::env::args()
+            .enumerate()
+            .filter(|(i, _)| *i != 1)
+            .map(|(_, a)| a)
+            .collect();
+        let args = ModelsArgs::parse_from(&filtered);
+        return run_models(args).await;
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("sprout_acp=info")),
@@ -920,6 +945,138 @@ async fn spawn_and_init(config: &Config) -> Result<AcpClient> {
 }
 
 // ── build_mcp_servers ─────────────────────────────────────────────────────────
+
+// ── run_models ─────────────────────────────────────────────────────────────────
+
+/// `sprout-acp models` — spawn an agent, query its available models, exit.
+///
+/// Flow: spawn → initialize → session/new → print models → kill + reap.
+/// No relay connection, no MCP servers, no subscriptions. ~2-5s total.
+async fn run_models(args: ModelsArgs) -> Result<()> {
+    use acp::{extract_model_config_options, extract_model_state};
+
+    let agent_args = config::normalize_agent_args(&args.agent_command, args.agent_args);
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("/"))
+        .to_string_lossy()
+        .to_string();
+
+    // Spawn + initialize + session/new, all under a 10s timeout.
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut client = AcpClient::spawn(&args.agent_command, &agent_args).await?;
+        let init = client.initialize().await?;
+        let session = client.session_new_full(&cwd, vec![]).await?;
+        Ok::<_, acp::AcpError>((client, init, session))
+    })
+    .await;
+
+    let (mut client, init_result, session_resp) = match result {
+        Ok(Ok(tuple)) => tuple,
+        Ok(Err(e)) => {
+            eprintln!("error: agent communication failed: {e}");
+            std::process::exit(1);
+        }
+        Err(_) => {
+            eprintln!("error: agent timed out (10s)");
+            std::process::exit(1);
+        }
+    };
+
+    // Extract agent info from initialize response.
+    // ACP spec uses "serverInfo" (MCP heritage); some agents may use "agentInfo".
+    let info_obj = init_result
+        .get("serverInfo")
+        .or_else(|| init_result.get("agentInfo"));
+    let agent_name = info_obj
+        .and_then(|ai| ai.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let agent_version = info_obj
+        .and_then(|ai| ai.get("version"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    // Extract model info from session/new response.
+    let config_options = extract_model_config_options(&session_resp.raw);
+    let model_state = extract_model_state(&session_resp.raw);
+
+    if args.json {
+        // Structured JSON output — consumed by Phase 3 `get_agent_models`.
+        let output = serde_json::json!({
+            "agent": {
+                "name": agent_name,
+                "version": agent_version,
+            },
+            "stable": {
+                "configOptions": config_options,
+            },
+            "unstable": model_state.as_ref().map(|ms| serde_json::json!({
+                "currentModelId": ms.get("currentModelId"),
+                "availableModels": ms.get("availableModels"),
+            })),
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        // Human-readable output.
+        println!("Agent: {} v{}", agent_name, agent_version);
+        println!();
+
+        let mut has_models = false;
+
+        if !config_options.is_empty() {
+            println!("Models (stable configOptions):");
+            for opt in &config_options {
+                let config_id = opt.get("configId").and_then(|v| v.as_str()).unwrap_or("?");
+                let display = opt
+                    .get("displayName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(config_id);
+                println!("  {display} (configId: {config_id})");
+                if let Some(options) = opt.get("options").and_then(|v| v.as_array()) {
+                    for o in options {
+                        let val = o.get("value").and_then(|v| v.as_str()).unwrap_or("?");
+                        let name = o.get("displayName").and_then(|v| v.as_str()).unwrap_or(val);
+                        println!("    - {name} (value: {val})");
+                    }
+                }
+            }
+            has_models = true;
+        }
+
+        if let Some(ref ms) = model_state {
+            let current = ms
+                .get("currentModelId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(none)");
+            println!("Models (unstable SessionModelState):");
+            println!("  Current: {current}");
+            if let Some(available) = ms.get("availableModels").and_then(|v| v.as_array()) {
+                println!("  Available:");
+                for m in available {
+                    let id = m.get("modelId").and_then(|v| v.as_str()).unwrap_or("?");
+                    let name = m.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+                    let desc = m.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                    if desc.is_empty() {
+                        println!("    - {name} (id: {id})");
+                    } else {
+                        println!("    - {name} (id: {id}) — {desc}");
+                    }
+                }
+            }
+            has_models = true;
+        }
+
+        if !has_models {
+            println!("No model information available from this agent.");
+        }
+    }
+
+    // Kill + reap the agent subprocess. Drop only calls start_kill() (no reap).
+    let _ = client.child_mut().start_kill();
+    let _ = client.child_mut().wait().await;
+
+    Ok(())
+}
 
 fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
     vec![McpServer {
