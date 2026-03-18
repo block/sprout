@@ -73,6 +73,26 @@ test("shows presence in sidebar, DM header, and member list", async ({
   await closeChannelManagement(page);
 });
 
+test("start a new direct message from the sidebar", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByTestId("new-dm-trigger").click();
+  await expect(page.getByTestId("new-dm-dialog")).toBeVisible();
+
+  await page.getByTestId("new-dm-search").fill("charlie");
+  await page
+    .getByTestId(`new-dm-result-${TEST_IDENTITIES.charlie.pubkey}`)
+    .click();
+  await expect(
+    page.getByTestId(`new-dm-selected-${TEST_IDENTITIES.charlie.pubkey}`),
+  ).toBeVisible();
+
+  await page.getByTestId("new-dm-submit").click();
+
+  await expect(page.getByTestId("dm-list")).toContainText("charlie");
+  await expect(page.getByTestId("chat-title")).toHaveText("charlie");
+});
+
 test("create stream with name and description", async ({ page }) => {
   const channelName = `my-new-stream-${Date.now()}`;
 
@@ -215,6 +235,29 @@ test("sidebar shows unread indicator for newly active channels", async ({
     "Unread update for #random",
   );
   await expect(page.getByTestId("channel-unread-random")).toHaveCount(0);
+});
+
+test("sidebar clears unread indicator after opening a DM", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(page.getByTestId("channel-unread-alice-tyler")).toHaveCount(0);
+
+  await page.evaluate((pubkey) => {
+    window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "alice-tyler",
+      content: "Unread update for the DM",
+      pubkey,
+    });
+  }, TEST_IDENTITIES.alice.pubkey);
+
+  await expect(page.getByTestId("channel-unread-alice-tyler")).toBeVisible();
+
+  await page.getByTestId("channel-alice-tyler").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("alice-tyler");
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Unread update for the DM",
+  );
+  await expect(page.getByTestId("channel-unread-alice-tyler")).toHaveCount(0);
 });
 
 test("sidebar persists after channel switch", async ({ page }) => {

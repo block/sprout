@@ -74,6 +74,7 @@ function getMessageTimestamp(event: RelayEvent) {
 export function useUnreadChannels(
   channels: Channel[],
   activeChannel: Channel | null,
+  activeReadAt?: string | null,
 ) {
   const queryClient = useQueryClient();
   const [lastReadByChannel, setLastReadByChannel] =
@@ -81,6 +82,7 @@ export function useUnreadChannels(
   const hasInitializedChannelsRef = React.useRef(false);
   const activeChannelId = activeChannel?.id ?? null;
   const activeChannelLastMessageAt = activeChannel?.lastMessageAt ?? null;
+  const effectiveActiveReadAt = activeReadAt ?? activeChannelLastMessageAt;
 
   const markChannelRead = React.useCallback(
     (channelId: string, readAt: string | null | undefined) => {
@@ -163,8 +165,8 @@ export function useUnreadChannels(
       return;
     }
 
-    markChannelRead(activeChannelId, activeChannelLastMessageAt);
-  }, [activeChannelId, activeChannelLastMessageAt, markChannelRead]);
+    markChannelRead(activeChannelId, effectiveActiveReadAt);
+  }, [activeChannelId, effectiveActiveReadAt, markChannelRead]);
 
   const liveChannelIds = React.useMemo(
     () =>

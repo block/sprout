@@ -4,7 +4,8 @@ use tauri::State;
 use crate::{
     app_state::AppState,
     models::{
-        AddReactionBody, FeedResponse, GetFeedQuery, SearchQueryParams, SearchResponse,
+        AddReactionBody, FeedResponse, ForumPostsResponse, ForumThreadResponse, GetFeedQuery,
+        GetForumPostsQuery, GetForumThreadQuery, SearchQueryParams, SearchResponse,
         SendChannelMessageBody, SendChannelMessageResponse,
     },
     relay::{build_authed_request, relay_error_message, send_empty_request, send_json_request},
@@ -47,6 +48,7 @@ pub async fn send_channel_message(
     parent_event_id: Option<String>,
     media_tags: Option<Vec<Vec<String>>>,
     mention_pubkeys: Option<Vec<String>>,
+    kind: Option<u32>,
     state: State<'_, AppState>,
 ) -> Result<SendChannelMessageResponse, String> {
     let path = format!("/api/channels/{channel_id}/messages");
@@ -59,6 +61,7 @@ pub async fn send_channel_message(
             broadcast_to_channel: false,
             media_tags,
             mention_pubkeys: mention_refs,
+            kind,
         },
     );
 
@@ -91,6 +94,49 @@ pub async fn remove_reaction(
         "/api/messages/{event_id}/reactions/{}",
         percent_encode(emoji.trim())
     );
+    let request = build_authed_request(&state.http_client, Method::DELETE, &path, &state)?;
+
+    send_empty_request(request).await
+}
+
+#[tauri::command]
+pub async fn get_forum_posts(
+    channel_id: String,
+    limit: Option<u32>,
+    before: Option<i64>,
+    state: State<'_, AppState>,
+) -> Result<ForumPostsResponse, String> {
+    let path = format!("/api/channels/{channel_id}/messages");
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?.query(
+        &GetForumPostsQuery {
+            limit,
+            before,
+            with_threads: true,
+        },
+    );
+
+    send_json_request(request).await
+}
+
+#[tauri::command]
+pub async fn get_forum_thread(
+    channel_id: String,
+    event_id: String,
+    limit: Option<u32>,
+    cursor: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<ForumThreadResponse, String> {
+    let path = format!("/api/channels/{channel_id}/threads/{event_id}");
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?.query(
+        &GetForumThreadQuery { limit, cursor },
+    );
+
+    send_json_request(request).await
+}
+
+#[tauri::command]
+pub async fn delete_message(event_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let path = format!("/api/messages/{event_id}");
     let request = build_authed_request(&state.http_client, Method::DELETE, &path, &state)?;
 
     send_empty_request(request).await

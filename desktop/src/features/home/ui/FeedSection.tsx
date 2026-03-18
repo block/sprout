@@ -1,0 +1,229 @@
+import { Check, type LucideIcon } from "lucide-react";
+
+import {
+  resolveUserLabel,
+  type UserProfileLookup,
+} from "@/features/profile/lib/identity";
+import type { FeedItem } from "@/shared/api/types";
+import { Button } from "@/shared/ui/button";
+import { Markdown } from "@/shared/ui/markdown";
+
+const relativeTimeFormatter = new Intl.RelativeTimeFormat("en-US", {
+  numeric: "auto",
+});
+
+function formatRelativeTime(unixSeconds: number) {
+  const diff = unixSeconds - Math.floor(Date.now() / 1_000);
+  const absoluteDiff = Math.abs(diff);
+
+  if (absoluteDiff < 60) {
+    return relativeTimeFormatter.format(diff, "second");
+  }
+
+  if (absoluteDiff < 60 * 60) {
+    return relativeTimeFormatter.format(Math.round(diff / 60), "minute");
+  }
+
+  if (absoluteDiff < 60 * 60 * 24) {
+    return relativeTimeFormatter.format(Math.round(diff / (60 * 60)), "hour");
+  }
+
+  if (absoluteDiff < 60 * 60 * 24 * 7) {
+    return relativeTimeFormatter.format(
+      Math.round(diff / (60 * 60 * 24)),
+      "day",
+    );
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(unixSeconds * 1_000));
+}
+
+function feedHeadline(item: FeedItem) {
+  switch (item.kind) {
+    case 40007:
+      return "Reminder";
+    case 43001:
+      return "Job requested";
+    case 43002:
+      return "Job accepted";
+    case 43003:
+      return "Progress update";
+    case 43004:
+      return "Job result";
+    case 43005:
+      return "Job cancelled";
+    case 43006:
+      return "Job failed";
+    case 45001:
+      return "Forum post";
+    case 45003:
+      return "Forum reply";
+    case 46010:
+      return "Approval requested";
+    default:
+      if (item.category === "mention") {
+        return "Mention";
+      }
+
+      if (item.category === "agent_activity") {
+        return "Agent update";
+      }
+
+      return "Channel update";
+  }
+}
+
+function feedContent(item: FeedItem) {
+  const content = item.content.trim();
+  if (content.length > 0) {
+    return content;
+  }
+
+  if (item.kind === 46010) {
+    return "A workflow is waiting for approval.";
+  }
+
+  if (item.kind === 40007) {
+    return "A reminder is waiting for you.";
+  }
+
+  return "No additional details were attached to this event.";
+}
+
+type FeedSectionProps = {
+  title: string;
+  emptyTitle: string;
+  emptyDescription: string;
+  icon: LucideIcon;
+  items: FeedItem[];
+  currentPubkey?: string;
+  profiles?: UserProfileLookup;
+  availableChannelIds: ReadonlySet<string>;
+  doneSet: ReadonlySet<string>;
+  showDoneAction: boolean;
+  onOpenChannel: (channelId: string) => void;
+  onMarkDone: (id: string) => void;
+  onUndoDone: (id: string) => void;
+};
+
+export function FeedSection({
+  title,
+  emptyTitle,
+  emptyDescription,
+  icon: Icon,
+  items,
+  currentPubkey,
+  profiles,
+  availableChannelIds,
+  doneSet,
+  showDoneAction,
+  onOpenChannel,
+  onMarkDone,
+  onUndoDone,
+}: FeedSectionProps) {
+  return (
+    <section>
+      <div className="flex items-center gap-2 pb-2">
+        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {title}
+        </h2>
+        <span className="text-xs text-muted-foreground/70">{items.length}</span>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="rounded-md border border-dashed border-border/60 px-4 py-5 text-center">
+          <p className="text-sm font-medium text-muted-foreground">
+            {emptyTitle}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground/70">
+            {emptyDescription}
+          </p>
+        </div>
+      ) : (
+        <div className="divide-y divide-border/60 rounded-md border border-border/60">
+          {items.map((item) => {
+            const channelId = item.channelId;
+            const canOpenChannel =
+              channelId !== null && availableChannelIds.has(channelId);
+            const isDone = doneSet.has(item.id);
+
+            return (
+              <div
+                className={`group relative px-3 py-2.5 transition-colors hover:bg-muted/40 ${isDone ? "opacity-50" : ""} ${canOpenChannel ? "cursor-pointer" : ""}`}
+                key={item.id}
+              >
+                {canOpenChannel ? (
+                  <button
+                    aria-label={`Open ${item.channelName || "channel"}`}
+                    className="absolute inset-0"
+                    onClick={() => {
+                      if (channelId) {
+                        onOpenChannel(channelId);
+                      }
+                    }}
+                    type="button"
+                  />
+                ) : null}
+
+                <div className="pointer-events-none relative flex min-w-0 items-center gap-2">
+                  <span
+                    className={`text-[13px] font-medium ${isDone ? "line-through text-muted-foreground" : ""}`}
+                  >
+                    {feedHeadline(item)}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {resolveUserLabel({
+                      pubkey: item.pubkey,
+                      currentPubkey,
+                      profiles,
+                      preferResolvedSelfLabel: true,
+                    })}
+                  </span>
+                  {item.channelName ? (
+                    <span className="text-[11px] text-primary/80">
+                      #{item.channelName}
+                    </span>
+                  ) : null}
+                  <span className="ml-auto shrink-0 text-[11px] text-muted-foreground/60">
+                    {formatRelativeTime(item.createdAt)}
+                  </span>
+                </div>
+
+                <Markdown
+                  className="pointer-events-none relative mt-0.5 max-w-none text-[13px] leading-snug text-muted-foreground"
+                  compact
+                  content={feedContent(item)}
+                />
+
+                {showDoneAction ? (
+                  <Button
+                    aria-label={isDone ? "Undo done" : "Mark done"}
+                    onClick={() => {
+                      if (isDone) {
+                        onUndoDone(item.id);
+                      } else {
+                        onMarkDone(item.id);
+                      }
+                    }}
+                    size="icon"
+                    type="button"
+                    variant="ghost"
+                    className={`pointer-events-auto absolute right-1.5 top-1.5 h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 ${isDone ? "text-green-500 opacity-100" : "text-muted-foreground"}`}
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                  </Button>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}

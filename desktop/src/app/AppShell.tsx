@@ -2,18 +2,20 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { ChannelPane } from "@/app/ChannelPane";
+import { useActiveChannelHeader } from "@/app/useActiveChannelHeader";
 import { AgentsView } from "@/features/agents/ui/AgentsView";
+import { ForumView } from "@/features/forum/ui/ForumView";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
   channelsQueryKey,
   useCreateChannelMutation,
+  useOpenDmMutation,
   useChannelsQuery,
   useSelectedChannel,
 } from "@/features/channels/hooks";
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
 import { ChannelManagementSheet } from "@/features/channels/ui/ChannelManagementSheet";
-import { useHomeFeedQuery } from "@/features/home/hooks";
 import { HomeView } from "@/features/home/ui/HomeView";
 import {
   useChannelMessagesQuery,
@@ -31,11 +33,9 @@ import {
   getChannelIdFromTags,
   getThreadReference,
 } from "@/features/messages/lib/threading";
-import {
-  usePresenceQuery,
-  usePresenceSession,
-} from "@/features/presence/hooks";
+import { usePresenceSession } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
+import { useHomeFeedNotifications } from "@/features/notifications/hooks";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
 import { ChannelBrowserDialog } from "@/features/channels/ui/ChannelBrowserDialog";
 import { SearchDialog } from "@/features/search/ui/SearchDialog";
@@ -81,7 +81,11 @@ export function AppShell() {
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
   const presenceSession = usePresenceSession(identityQuery.data?.pubkey);
-  const homeFeedQuery = useHomeFeedQuery();
+  const { homeBadgeCount, homeFeedQuery, notificationSettings } =
+    useHomeFeedNotifications(
+      identityQuery.data?.pubkey,
+      selectedView === "home",
+    );
   const channelsQuery = useChannelsQuery();
   const { refetch: refetchChannels } = channelsQuery;
   const channels = channelsQuery.data ?? [];
@@ -94,33 +98,26 @@ export function AppShell() {
     null,
   );
   const createChannelMutation = useCreateChannelMutation();
+  const createForumMutation = useCreateChannelMutation();
+  const openDmMutation = useOpenDmMutation();
   const activeChannel = selectedView === "channel" ? selectedChannel : null;
   const activeChannelId = activeChannel?.id ?? null;
-  const { unreadChannelIds } = useUnreadChannels(channels, activeChannel);
-  const activeDmParticipantPubkeys = React.useMemo(() => {
-    if (!activeChannel || activeChannel.channelType !== "dm") {
-      return [];
-    }
-
-    const currentPubkey = identityQuery.data?.pubkey?.toLowerCase();
-
-    return activeChannel.participantPubkeys.filter(
-      (pubkey) => pubkey.toLowerCase() !== currentPubkey,
-    );
-  }, [activeChannel, identityQuery.data?.pubkey]);
-  const activeDmPresenceQuery = usePresenceQuery(activeDmParticipantPubkeys, {
-    enabled: activeDmParticipantPubkeys.length > 0,
-  });
-  const activeDmPresenceStatus =
-    activeDmParticipantPubkeys.length > 0
-      ? activeDmPresenceQuery.data?.[
-          activeDmParticipantPubkeys[0]?.toLowerCase()
-        ]
-      : null;
-
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
-
+  const latestActiveMessage =
+    messagesQuery.data?.[messagesQuery.data.length - 1];
+  const activeReadAt = latestActiveMessage
+    ? new Date(latestActiveMessage.created_at * 1_000).toISOString()
+    : (activeChannel?.lastMessageAt ?? null);
+  const { unreadChannelIds } = useUnreadChannels(
+    channels,
+    activeChannel,
+    activeReadAt,
+  );
+  const { activeChannelTitle, activeDmPresenceStatus } = useActiveChannelHeader(
+    activeChannel,
+    identityQuery.data?.pubkey,
+  );
   const sendMessageMutation = useSendMessageMutation(
     activeChannel,
     identityQuery.data,
@@ -201,9 +198,7 @@ export function AppShell() {
         activeChannel.topic,
         activeChannel.description,
         activeChannel.purpose,
-        activeChannel.channelType === "forum"
-          ? "Forum channels are listed, but this first pass only wires message streams and DMs."
-          : null,
+        null,
       ]
         .filter((value) => value && value.trim().length > 0)
         .join(" ") || "Channel details and activity."
@@ -248,6 +243,15 @@ export function AppShell() {
     },
     [channels, queryClient, refetchChannels],
   );
+  const openChannelView = React.useCallback(
+    (channelId: string) => {
+      React.startTransition(() => {
+        setSelectedChannelId(channelId);
+        setSelectedView("channel");
+      });
+    },
+    [setSelectedChannelId],
+  );
 
   const handleOpenChannel = React.useCallback(
     async (channelId: string) => {
@@ -258,15 +262,12 @@ export function AppShell() {
           return;
         }
 
-        React.startTransition(() => {
-          setSelectedChannelId(channel.id);
-          setSelectedView("channel");
-        });
+        openChannelView(channel.id);
       } catch (error) {
         console.error("Failed to open channel", channelId, error);
       }
     },
-    [resolveChannel, setSelectedChannelId],
+    [openChannelView, resolveChannel],
   );
 
   const handleBrowseChannelJoin = React.useCallback(
@@ -472,10 +473,26 @@ export function AppShell() {
           <SettingsView
             currentPubkey={identityQuery.data?.pubkey}
             fallbackDisplayName={identityQuery.data?.displayName}
+            isUpdatingDesktopNotifications={
+              notificationSettings.isUpdatingDesktopEnabled
+            }
             isPresenceLoading={presenceSession.isLoading}
             isUpdatingPresence={presenceSession.isPending}
+            notificationErrorMessage={notificationSettings.errorMessage}
+            notificationPermission={notificationSettings.permission}
+            notificationSettings={notificationSettings.settings}
             onClose={handleCloseSettings}
             onSectionChange={setSettingsSection}
+            onSetDesktopNotificationsEnabled={
+              notificationSettings.setDesktopEnabled
+            }
+            onSetHomeBadgeEnabled={notificationSettings.setHomeBadgeEnabled}
+            onSetMentionNotificationsEnabled={
+              notificationSettings.setMentionsEnabled
+            }
+            onSetNeedsActionNotificationsEnabled={
+              notificationSettings.setNeedsActionEnabled
+            }
             onSetPresence={presenceSession.setStatus}
             presenceError={presenceSession.error}
             presenceStatus={presenceSession.currentStatus}
@@ -494,8 +511,11 @@ export function AppShell() {
                 : undefined
             }
             fallbackDisplayName={identityQuery.data?.displayName}
+            homeBadgeCount={homeBadgeCount}
             isCreatingChannel={createChannelMutation.isPending}
+            isCreatingForum={createForumMutation.isPending}
             isLoading={channelsQuery.isLoading}
+            isOpeningDm={openDmMutation.isPending}
             selfPresenceStatus={presenceSession.currentStatus}
             onCreateChannel={async ({ description, name }) => {
               const createdChannel = await createChannelMutation.mutateAsync({
@@ -505,10 +525,17 @@ export function AppShell() {
                 visibility: "open",
               });
 
-              React.startTransition(() => {
-                setSelectedChannelId(createdChannel.id);
-                setSelectedView("channel");
+              openChannelView(createdChannel.id);
+            }}
+            onCreateForum={async ({ description, name }) => {
+              const createdForum = await createForumMutation.mutateAsync({
+                name,
+                description,
+                channelType: "forum",
+                visibility: "open",
               });
+
+              openChannelView(createdForum.id);
             }}
             onOpenBrowseChannels={() => {
               setIsBrowseChannelsOpen(true);
@@ -517,6 +544,12 @@ export function AppShell() {
             onOpenSearch={() => {
               setIsSearchOpen(true);
               void refetchChannels();
+            }}
+            onOpenDm={async ({ pubkeys }) => {
+              const directMessage = await openDmMutation.mutateAsync({
+                pubkeys,
+              });
+              openChannelView(directMessage.id);
             }}
             onSelectAgents={() => {
               React.startTransition(() => {
@@ -578,7 +611,7 @@ export function AppShell() {
                     />
                   ) : null
                 }
-                title={activeChannel?.name ?? "Channels"}
+                title={activeChannelTitle}
               />
             )}
 
@@ -601,6 +634,11 @@ export function AppShell() {
                 />
               ) : selectedView === "agents" ? (
                 <AgentsView />
+              ) : activeChannel?.channelType === "forum" ? (
+                <ForumView
+                  channel={activeChannel}
+                  currentPubkey={identityQuery.data?.pubkey}
+                />
               ) : (
                 <ChannelPane
                   activeChannel={activeChannel}
@@ -631,9 +669,7 @@ export function AppShell() {
                     );
                   }}
                   onToggleReaction={
-                    activeChannel &&
-                    activeChannel.archivedAt === null &&
-                    activeChannel.channelType !== "forum"
+                    activeChannel && activeChannel.archivedAt === null
                       ? async (message, emoji, remove) => {
                           await toggleReactionMutation.mutateAsync({
                             emoji,

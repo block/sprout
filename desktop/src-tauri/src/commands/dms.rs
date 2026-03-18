@@ -1,0 +1,22 @@
+use reqwest::Method;
+use tauri::State;
+
+use crate::{
+    app_state::AppState,
+    models::{ChannelInfo, OpenDmBody, OpenDmResponse},
+    relay::{build_authed_request, send_json_request},
+};
+
+#[tauri::command]
+pub async fn open_dm(
+    pubkeys: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<ChannelInfo, String> {
+    let request = build_authed_request(&state.http_client, Method::POST, "/api/dms", &state)?
+        .json(&OpenDmBody { pubkeys: &pubkeys });
+    let response: OpenDmResponse = send_json_request(request).await?;
+
+    let path = format!("/api/channels/{}", response.channel_id);
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
+    send_json_request(request).await
+}

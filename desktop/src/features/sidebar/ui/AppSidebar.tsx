@@ -1,23 +1,18 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  Bot,
-  CircleDot,
-  Compass,
-  FileText,
-  Hash,
-  Home,
-  Plus,
-  Search,
-} from "lucide-react";
+import { Bot, Compass, Home, PenSquare, Plus, Search } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { getPresenceLabel } from "@/features/presence/lib/presence";
-import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import { useDmSidebarMetadata } from "@/features/sidebar/useDmSidebarMetadata";
+import {
+  ChannelMenuButton,
+  SidebarSection,
+} from "@/features/sidebar/ui/SidebarSection";
+import { NewDirectMessageDialog } from "@/features/sidebar/ui/NewDirectMessageDialog";
 import type { Channel, PresenceStatus, Profile } from "@/shared/api/types";
-import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import {
@@ -41,8 +36,11 @@ type AppSidebarProps = {
   channels: Channel[];
   currentPubkey?: string;
   fallbackDisplayName?: string;
+  homeBadgeCount: number;
   isLoading: boolean;
   isCreatingChannel: boolean;
+  isCreatingForum: boolean;
+  isOpeningDm: boolean;
   profile?: Profile;
   selfPresenceStatus: PresenceStatus;
   errorMessage?: string;
@@ -53,118 +51,18 @@ type AppSidebarProps = {
     name: string;
     description?: string;
   }) => Promise<void>;
+  onCreateForum: (input: {
+    name: string;
+    description?: string;
+  }) => Promise<void>;
   onOpenBrowseChannels: () => void;
   onOpenSearch: () => void;
+  onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
   onSelectAgents: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
   onSelectSettings: () => void;
 };
-
-function SidebarChannelIcon({ channel }: { channel: Channel }) {
-  if (channel.channelType === "dm") {
-    return <CircleDot className="h-4 w-4" />;
-  }
-
-  if (channel.channelType === "forum") {
-    return <FileText className="h-4 w-4" />;
-  }
-
-  return <Hash className="h-4 w-4" />;
-}
-
-function ChannelMenuButton({
-  channel,
-  isActive,
-  hasUnread,
-  presenceStatus,
-  onSelectChannel,
-}: {
-  channel: Channel;
-  isActive: boolean;
-  hasUnread: boolean;
-  presenceStatus?: PresenceStatus;
-  onSelectChannel: (channelId: string) => void;
-}) {
-  return (
-    <SidebarMenuButton
-      className={cn(
-        !isActive &&
-          hasUnread &&
-          "font-semibold text-sidebar-foreground hover:text-sidebar-foreground",
-      )}
-      data-testid={`channel-${channel.name}`}
-      isActive={isActive}
-      onClick={() => onSelectChannel(channel.id)}
-      tooltip={channel.name}
-      type="button"
-    >
-      <SidebarChannelIcon channel={channel} />
-      <span className="min-w-0 flex-1 truncate">{channel.name}</span>
-      <div className="ml-auto flex items-center gap-2">
-        {presenceStatus ? (
-          <PresenceDot
-            className="h-2 w-2"
-            data-testid={`channel-presence-${channel.name}`}
-            status={presenceStatus}
-          />
-        ) : null}
-        {hasUnread && !isActive ? (
-          <span
-            aria-hidden="true"
-            className="h-2.5 w-2.5 shrink-0 rounded-full bg-primary"
-            data-testid={`channel-unread-${channel.name}`}
-          />
-        ) : null}
-      </div>
-    </SidebarMenuButton>
-  );
-}
-
-function SidebarSection({
-  items,
-  isActiveChannel,
-  presenceByChannelId,
-  selectedChannelId,
-  title,
-  testId,
-  unreadChannelIds,
-  onSelectChannel,
-}: {
-  items: Channel[];
-  isActiveChannel: boolean;
-  presenceByChannelId?: Record<string, PresenceStatus>;
-  selectedChannelId: string | null;
-  title: string;
-  testId: string;
-  unreadChannelIds: Set<string>;
-  onSelectChannel: (channelId: string) => void;
-}) {
-  if (items.length === 0) {
-    return null;
-  }
-
-  return (
-    <SidebarGroup>
-      <SidebarGroupLabel>{title}</SidebarGroupLabel>
-      <SidebarGroupContent>
-        <SidebarMenu data-testid={testId}>
-          {items.map((channel) => (
-            <SidebarMenuItem key={channel.id}>
-              <ChannelMenuButton
-                channel={channel}
-                hasUnread={unreadChannelIds.has(channel.id)}
-                isActive={isActiveChannel && selectedChannelId === channel.id}
-                presenceStatus={presenceByChannelId?.[channel.id]}
-                onSelectChannel={onSelectChannel}
-              />
-            </SidebarMenuItem>
-          ))}
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
-  );
-}
 
 function StreamsSection({
   items,
@@ -291,12 +189,140 @@ function StreamsSection({
   );
 }
 
+function ForumsSection({
+  items,
+  isCreateOpen,
+  isCreatingForum,
+  draftName,
+  draftDescription,
+  createInputRef,
+  createErrorMessage,
+  onToggleCreate,
+  onChangeName,
+  onChangeDescription,
+  onCreateForum,
+  onCancelCreate,
+  onSelectChannel,
+  isActiveChannel,
+  selectedChannelId,
+  unreadChannelIds,
+}: {
+  items: Channel[];
+  isCreateOpen: boolean;
+  isCreatingForum: boolean;
+  draftName: string;
+  draftDescription: string;
+  createInputRef: React.RefObject<HTMLInputElement | null>;
+  createErrorMessage?: string;
+  onToggleCreate: () => void;
+  onChangeName: (value: string) => void;
+  onChangeDescription: (value: string) => void;
+  onCreateForum: (event: React.FormEvent<HTMLFormElement>) => void;
+  onCancelCreate: () => void;
+  onSelectChannel: (channelId: string) => void;
+  isActiveChannel: boolean;
+  selectedChannelId: string | null;
+  unreadChannelIds: Set<string>;
+}) {
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>Forums</SidebarGroupLabel>
+      <SidebarGroupAction
+        aria-expanded={isCreateOpen}
+        aria-label={isCreateOpen ? "Close new forum form" : "New forum"}
+        className="top-3 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+        onClick={onToggleCreate}
+        type="button"
+      >
+        <Plus
+          className={
+            isCreateOpen
+              ? "rotate-45 transition-transform"
+              : "transition-transform"
+          }
+        />
+      </SidebarGroupAction>
+      <SidebarGroupContent>
+        {isCreateOpen ? (
+          <form
+            className="mb-2 space-y-2 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/60 p-2"
+            data-testid="create-forum-form"
+            onSubmit={onCreateForum}
+          >
+            <Input
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              className="h-8 bg-background/80"
+              data-testid="create-forum-name"
+              disabled={isCreatingForum}
+              onChange={(event) => onChangeName(event.target.value)}
+              placeholder="design-discussions"
+              ref={createInputRef}
+              spellCheck={false}
+              value={draftName}
+            />
+            <Input
+              autoComplete="off"
+              className="h-8 bg-background/80"
+              data-testid="create-forum-description"
+              disabled={isCreatingForum}
+              onChange={(event) => onChangeDescription(event.target.value)}
+              placeholder="What this forum is for"
+              value={draftDescription}
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                disabled={isCreatingForum || draftName.trim().length === 0}
+                size="sm"
+                type="submit"
+              >
+                {isCreatingForum ? "Creating..." : "Create"}
+              </Button>
+              <Button
+                disabled={isCreatingForum}
+                onClick={onCancelCreate}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                Cancel
+              </Button>
+            </div>
+            {createErrorMessage ? (
+              <p className="text-sm text-destructive">{createErrorMessage}</p>
+            ) : null}
+          </form>
+        ) : null}
+
+        {items.length > 0 ? (
+          <SidebarMenu data-testid="forum-list">
+            {items.map((channel) => (
+              <SidebarMenuItem key={channel.id}>
+                <ChannelMenuButton
+                  channel={channel}
+                  hasUnread={unreadChannelIds.has(channel.id)}
+                  isActive={isActiveChannel && selectedChannelId === channel.id}
+                  onSelectChannel={onSelectChannel}
+                />
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        ) : null}
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
+}
+
 export function AppSidebar({
   channels,
   currentPubkey,
   fallbackDisplayName,
+  homeBadgeCount,
   isLoading,
   isCreatingChannel,
+  isCreatingForum,
+  isOpeningDm,
   profile,
   selfPresenceStatus,
   errorMessage,
@@ -304,8 +330,10 @@ export function AppSidebar({
   selectedView,
   unreadChannelIds,
   onCreateChannel,
+  onCreateForum,
   onOpenBrowseChannels,
   onOpenSearch,
+  onOpenDm,
   onSelectAgents,
   onSelectHome,
   onSelectChannel,
@@ -313,12 +341,20 @@ export function AppSidebar({
 }: AppSidebarProps) {
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
+  const [isForumCreateOpen, setIsForumCreateOpen] = React.useState(false);
+  const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
   const [draftName, setDraftName] = React.useState("");
   const [draftDescription, setDraftDescription] = React.useState("");
+  const [forumDraftName, setForumDraftName] = React.useState("");
+  const [forumDraftDescription, setForumDraftDescription] = React.useState("");
   const [createErrorMessage, setCreateErrorMessage] = React.useState<
     string | undefined
   >();
+  const [forumCreateErrorMessage, setForumCreateErrorMessage] = React.useState<
+    string | undefined
+  >();
   const createInputRef = React.useRef<HTMLInputElement>(null);
+  const forumCreateInputRef = React.useRef<HTMLInputElement>(null);
   const streamChannels = channels.filter(
     (channel) => channel.channelType === "stream",
   );
@@ -328,37 +364,13 @@ export function AppSidebar({
   const directMessages = channels.filter(
     (channel) => channel.channelType === "dm",
   );
-  const dmParticipantPubkeys = React.useMemo(
-    () =>
-      directMessages
-        .flatMap((channel) => channel.participantPubkeys)
-        .filter(
-          (pubkey) => pubkey.toLowerCase() !== currentPubkey?.toLowerCase(),
-        ),
-    [currentPubkey, directMessages],
-  );
-  const dmPresenceQuery = usePresenceQuery(dmParticipantPubkeys, {
-    enabled: directMessages.length > 0,
-  });
-  const dmPresenceByChannelId = React.useMemo(
-    () =>
-      Object.fromEntries(
-        directMessages.map((channel) => {
-          const otherParticipantPubkey = channel.participantPubkeys.find(
-            (pubkey) => pubkey.toLowerCase() !== currentPubkey?.toLowerCase(),
-          );
-
-          return [
-            channel.id,
-            otherParticipantPubkey
-              ? (dmPresenceQuery.data?.[otherParticipantPubkey.toLowerCase()] ??
-                "offline")
-              : "offline",
-          ];
-        }),
-      ) satisfies Record<string, PresenceStatus>,
-    [currentPubkey, directMessages, dmPresenceQuery.data],
-  );
+  const { dmChannelLabels, dmParticipantsByChannelId, dmPresenceByChannelId } =
+    useDmSidebarMetadata({
+      currentPubkey,
+      directMessages,
+      fallbackDisplayName,
+      profileDisplayName: profile?.displayName,
+    });
   const managedAgentsQuery = useManagedAgentsQuery();
   const totalAgentCount = managedAgentsQuery.data?.length ?? 0;
   const shouldShowAgentCount =
@@ -402,6 +414,41 @@ export function AppSidebar({
       );
     }
   }
+
+  async function handleCreateForum(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const name = forumDraftName.trim();
+    const description = forumDraftDescription.trim();
+    if (!name) {
+      return;
+    }
+
+    setForumCreateErrorMessage(undefined);
+
+    try {
+      await onCreateForum({
+        name,
+        description: description || undefined,
+      });
+
+      setForumDraftName("");
+      setForumDraftDescription("");
+      setIsForumCreateOpen(false);
+    } catch (error) {
+      setForumCreateErrorMessage(
+        error instanceof Error ? error.message : "Failed to create forum.",
+      );
+    }
+  }
+
+  React.useEffect(() => {
+    if (!isForumCreateOpen) {
+      return;
+    }
+
+    forumCreateInputRef.current?.focus();
+  }, [isForumCreateOpen]);
 
   function handleDragPointerDown(e: React.PointerEvent) {
     if (e.button !== 0) return;
@@ -452,6 +499,14 @@ export function AppSidebar({
               <Home className="h-4 w-4" />
               <span>Home</span>
             </SidebarMenuButton>
+            {homeBadgeCount > 0 ? (
+              <SidebarMenuBadge
+                className="right-2 rounded-full bg-primary/15 px-1.5 text-[11px] text-primary peer-data-[active=true]/menu-button:bg-sidebar-primary-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-primary-foreground"
+                data-testid="sidebar-home-count"
+              >
+                {Math.min(homeBadgeCount, 99)}
+              </SidebarMenuBadge>
+            ) : null}
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -542,18 +597,60 @@ export function AppSidebar({
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
-            <SidebarSection
+            <ForumsSection
+              createErrorMessage={forumCreateErrorMessage}
+              createInputRef={forumCreateInputRef}
+              draftDescription={forumDraftDescription}
+              draftName={forumDraftName}
               isActiveChannel={selectedView === "channel"}
+              isCreateOpen={isForumCreateOpen}
+              isCreatingForum={isCreatingForum}
               items={forumChannels}
+              onCancelCreate={() => {
+                setForumCreateErrorMessage(undefined);
+                setForumDraftName("");
+                setForumDraftDescription("");
+                setIsForumCreateOpen(false);
+              }}
+              onChangeDescription={(value) => {
+                setForumCreateErrorMessage(undefined);
+                setForumDraftDescription(value);
+              }}
+              onChangeName={(value) => {
+                setForumCreateErrorMessage(undefined);
+                setForumDraftName(value);
+              }}
+              onCreateForum={(event) => {
+                void handleCreateForum(event);
+              }}
               onSelectChannel={onSelectChannel}
+              onToggleCreate={() => {
+                setForumCreateErrorMessage(undefined);
+                setIsForumCreateOpen((current) => !current);
+              }}
               selectedChannelId={selectedChannelId}
-              testId="forum-list"
-              title="Forums"
               unreadChannelIds={unreadChannelIds}
             />
             <SidebarSection
+              action={
+                <SidebarGroupAction
+                  aria-expanded={isNewDmOpen}
+                  aria-label="Start a direct message"
+                  className="top-3 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                  data-testid="new-dm-trigger"
+                  onClick={() => {
+                    setIsNewDmOpen(true);
+                  }}
+                  type="button"
+                >
+                  <PenSquare className="transition-transform" />
+                </SidebarGroupAction>
+              }
+              dmParticipantsByChannelId={dmParticipantsByChannelId}
+              emptyState="No direct messages yet."
               isActiveChannel={selectedView === "channel"}
               items={directMessages}
+              channelLabels={dmChannelLabels}
               onSelectChannel={onSelectChannel}
               presenceByChannelId={dmPresenceByChannelId}
               selectedChannelId={selectedChannelId}
@@ -627,6 +724,14 @@ export function AppSidebar({
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+
+      <NewDirectMessageDialog
+        currentPubkey={currentPubkey}
+        isPending={isOpeningDm}
+        onOpenChange={setIsNewDmOpen}
+        onSubmit={onOpenDm}
+        open={isNewDmOpen}
+      />
     </Sidebar>
   );
 }

@@ -85,6 +85,7 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
@@ -118,6 +119,7 @@ pub fn run() {
             create_auth_event,
             get_channels,
             create_channel,
+            open_dm,
             get_channel_details,
             get_channel_members,
             update_channel,
@@ -133,6 +135,9 @@ pub fn run() {
             get_feed,
             search_messages,
             send_channel_message,
+            get_forum_posts,
+            get_forum_thread,
+            delete_message,
             add_reaction,
             remove_reaction,
             get_event,

@@ -41,3 +41,4 @@ sprout-core = { path = "../../crates/sprout-core" }
 base64 = "0.22"
 sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
+tauri-plugin-notification = "2.3.3"

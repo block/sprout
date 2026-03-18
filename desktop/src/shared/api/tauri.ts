@@ -42,6 +42,7 @@ import type {
   AcpProvider,
   CommandAvailability,
   ManagedAgentPrereqs,
+  OpenDmInput,
 } from "@/shared/api/types";
 
 type RawIdentity = {
@@ -510,8 +511,11 @@ export async function getChannels(): Promise<Channel[]> {
 export async function createChannel(
   input: CreateChannelInput,
 ): Promise<Channel> {
-  const channel = await invokeTauri<RawChannel>("create_channel", input);
-  return fromRawChannel(channel);
+  return fromRawChannel(await invokeTauri<RawChannel>("create_channel", input));
+}
+
+export async function openDm(input: OpenDmInput): Promise<Channel> {
+  return fromRawChannel(await invokeTauri<RawChannel>("open_dm", input));
 }
 
 export async function getChannelDetails(
@@ -632,6 +636,7 @@ export async function sendChannelMessage(
   parentEventId?: string | null,
   mediaTags?: string[][],
   mentionPubkeys?: string[],
+  kind?: number,
 ): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
     "send_channel_message",
@@ -641,6 +646,7 @@ export async function sendChannelMessage(
       parentEventId,
       mediaTags: mediaTags ?? null,
       mentionPubkeys: mentionPubkeys ?? null,
+      kind: kind ?? null,
     },
   );
 

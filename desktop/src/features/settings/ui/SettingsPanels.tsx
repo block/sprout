@@ -1,4 +1,5 @@
 import {
+  BellRing,
   CircleDot,
   KeyRound,
   MonitorCog,
@@ -8,6 +9,10 @@ import {
   UserRound,
   type LucideIcon,
 } from "lucide-react";
+import type {
+  DesktopNotificationPermissionState,
+  NotificationSettings,
+} from "@/features/notifications/hooks";
 import {
   PresenceBadge,
   PresenceDot,
@@ -17,11 +22,13 @@ import type { PresenceStatus } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { useTheme } from "@/shared/theme/ThemeProvider";
 import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
+import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
 
 export type SettingsSection =
   | "profile"
   | "presence"
+  | "notifications"
   | "appearance"
   | "tokens"
   | "doctor";
@@ -37,8 +44,16 @@ export type SettingsSectionDescriptor = {
 export type SettingsPanelProps = {
   currentPubkey?: string;
   fallbackDisplayName?: string;
+  isUpdatingDesktopNotifications: boolean;
   isPresenceLoading: boolean;
   isUpdatingPresence: boolean;
+  notificationErrorMessage: string | null;
+  notificationPermission: DesktopNotificationPermissionState;
+  notificationSettings: NotificationSettings;
+  onSetDesktopNotificationsEnabled: (enabled: boolean) => Promise<boolean>;
+  onSetHomeBadgeEnabled: (enabled: boolean) => void;
+  onSetMentionNotificationsEnabled: (enabled: boolean) => void;
+  onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
   onSetPresence: (status: PresenceStatus) => Promise<void>;
   presenceError: Error | null;
   presenceStatus: PresenceStatus;
@@ -60,6 +75,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "presence",
     label: "Presence",
     icon: CircleDot,
+  },
+  {
+    value: "notifications",
+    label: "Notifications",
+    icon: BellRing,
   },
   {
     value: "appearance",
@@ -274,6 +294,25 @@ export function renderSettingsSection(
           onSetPresence={props.onSetPresence}
           presenceError={props.presenceError}
           presenceStatus={props.presenceStatus}
+        />
+      );
+    case "notifications":
+      return (
+        <NotificationSettingsCard
+          isUpdatingDesktopNotifications={props.isUpdatingDesktopNotifications}
+          notificationErrorMessage={props.notificationErrorMessage}
+          notificationPermission={props.notificationPermission}
+          notificationSettings={props.notificationSettings}
+          onSetDesktopNotificationsEnabled={
+            props.onSetDesktopNotificationsEnabled
+          }
+          onSetHomeBadgeEnabled={props.onSetHomeBadgeEnabled}
+          onSetMentionNotificationsEnabled={
+            props.onSetMentionNotificationsEnabled
+          }
+          onSetNeedsActionNotificationsEnabled={
+            props.onSetNeedsActionNotificationsEnabled
+          }
         />
       );
     case "appearance":
