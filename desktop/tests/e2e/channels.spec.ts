@@ -73,6 +73,26 @@ test("shows presence in sidebar, DM header, and member list", async ({
   await closeChannelManagement(page);
 });
 
+test("start a new direct message from the sidebar", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByTestId("new-dm-trigger").click();
+  await expect(page.getByTestId("new-dm-dialog")).toBeVisible();
+
+  await page.getByTestId("new-dm-search").fill("charlie");
+  await page
+    .getByTestId(`new-dm-result-${TEST_IDENTITIES.charlie.pubkey}`)
+    .click();
+  await expect(
+    page.getByTestId(`new-dm-selected-${TEST_IDENTITIES.charlie.pubkey}`),
+  ).toBeVisible();
+
+  await page.getByTestId("new-dm-submit").click();
+
+  await expect(page.getByTestId("dm-list")).toContainText("charlie");
+  await expect(page.getByTestId("chat-title")).toHaveText("charlie");
+});
+
 test("create stream with name and description", async ({ page }) => {
   const channelName = `my-new-stream-${Date.now()}`;
 

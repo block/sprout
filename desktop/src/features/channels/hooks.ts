@@ -16,6 +16,7 @@ import {
   getChannels,
   joinChannel,
   leaveChannel,
+  openDm,
   removeChannelMember,
   setChannelPurpose,
   setChannelTopic,
@@ -27,6 +28,7 @@ import type {
   Channel,
   ChannelDetail,
   CreateChannelInput,
+  OpenDmInput,
   SetChannelPurposeInput,
   SetChannelTopicInput,
   UpdateChannelInput,
@@ -163,6 +165,25 @@ export function useCreateChannelMutation() {
         sortChannels([
           ...current.filter((channel) => channel.id !== createdChannel.id),
           createdChannel,
+        ]),
+      );
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+    },
+  });
+}
+
+export function useOpenDmMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: OpenDmInput) => openDm(input),
+    onSuccess: (openedChannel) => {
+      queryClient.setQueryData<Channel[]>(channelsQueryKey, (current = []) =>
+        sortChannels([
+          ...current.filter((channel) => channel.id !== openedChannel.id),
+          openedChannel,
         ]),
       );
     },

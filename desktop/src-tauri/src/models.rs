@@ -123,6 +123,18 @@ pub struct CreateChannelBody<'a> {
 }
 
 #[derive(Serialize)]
+pub struct OpenDmBody<'a> {
+    pub pubkeys: &'a [String],
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct OpenDmResponse {
+    pub channel_id: String,
+    pub created: bool,
+    pub participants: Vec<String>,
+}
+
+#[derive(Serialize)]
 pub struct UpdateChannelBody<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<&'a str>,

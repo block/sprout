@@ -1,18 +1,17 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Bot, Compass, Home, Plus, Search } from "lucide-react";
+import { Bot, Compass, Home, PenSquare, Plus, Search } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { getPresenceLabel } from "@/features/presence/lib/presence";
-import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
-import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
-import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
+import { useDmSidebarMetadata } from "@/features/sidebar/useDmSidebarMetadata";
 import {
   ChannelMenuButton,
   SidebarSection,
 } from "@/features/sidebar/ui/SidebarSection";
+import { NewDirectMessageDialog } from "@/features/sidebar/ui/NewDirectMessageDialog";
 import type { Channel, PresenceStatus, Profile } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
@@ -41,6 +40,7 @@ type AppSidebarProps = {
   isLoading: boolean;
   isCreatingChannel: boolean;
   isCreatingForum: boolean;
+  isOpeningDm: boolean;
   profile?: Profile;
   selfPresenceStatus: PresenceStatus;
   errorMessage?: string;
@@ -57,6 +57,7 @@ type AppSidebarProps = {
   }) => Promise<void>;
   onOpenBrowseChannels: () => void;
   onOpenSearch: () => void;
+  onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
   onSelectAgents: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
@@ -321,6 +322,7 @@ export function AppSidebar({
   isLoading,
   isCreatingChannel,
   isCreatingForum,
+  isOpeningDm,
   profile,
   selfPresenceStatus,
   errorMessage,
@@ -331,6 +333,7 @@ export function AppSidebar({
   onCreateForum,
   onOpenBrowseChannels,
   onOpenSearch,
+  onOpenDm,
   onSelectAgents,
   onSelectHome,
   onSelectChannel,
@@ -339,6 +342,7 @@ export function AppSidebar({
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
   const [isForumCreateOpen, setIsForumCreateOpen] = React.useState(false);
+  const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
   const [draftName, setDraftName] = React.useState("");
   const [draftDescription, setDraftDescription] = React.useState("");
   const [forumDraftName, setForumDraftName] = React.useState("");
@@ -360,54 +364,13 @@ export function AppSidebar({
   const directMessages = channels.filter(
     (channel) => channel.channelType === "dm",
   );
-  const dmParticipantPubkeys = React.useMemo(
-    () =>
-      directMessages
-        .flatMap((channel) => channel.participantPubkeys)
-        .filter(
-          (pubkey) => pubkey.toLowerCase() !== currentPubkey?.toLowerCase(),
-        ),
-    [currentPubkey, directMessages],
-  );
-  const dmPresenceQuery = usePresenceQuery(dmParticipantPubkeys, {
-    enabled: directMessages.length > 0,
-  });
-  const dmProfilesQuery = useUsersBatchQuery(dmParticipantPubkeys, {
-    enabled: directMessages.length > 0,
-  });
-  const dmPresenceByChannelId = React.useMemo(
-    () =>
-      Object.fromEntries(
-        directMessages.map((channel) => {
-          const otherParticipantPubkey = channel.participantPubkeys.find(
-            (pubkey) => pubkey.toLowerCase() !== currentPubkey?.toLowerCase(),
-          );
-
-          return [
-            channel.id,
-            otherParticipantPubkey
-              ? (dmPresenceQuery.data?.[otherParticipantPubkey.toLowerCase()] ??
-                "offline")
-              : "offline",
-          ];
-        }),
-      ) satisfies Record<string, PresenceStatus>,
-    [currentPubkey, directMessages, dmPresenceQuery.data],
-  );
-  const dmChannelLabels = React.useMemo(
-    () =>
-      Object.fromEntries(
-        directMessages.map((channel) => [
-          channel.id,
-          resolveChannelDisplayLabel(
-            channel,
-            currentPubkey,
-            dmProfilesQuery.data?.profiles,
-          ),
-        ]),
-      ),
-    [currentPubkey, directMessages, dmProfilesQuery.data],
-  );
+  const { dmChannelLabels, dmParticipantsByChannelId, dmPresenceByChannelId } =
+    useDmSidebarMetadata({
+      currentPubkey,
+      directMessages,
+      fallbackDisplayName,
+      profileDisplayName: profile?.displayName,
+    });
   const managedAgentsQuery = useManagedAgentsQuery();
   const totalAgentCount = managedAgentsQuery.data?.length ?? 0;
   const shouldShowAgentCount =
@@ -669,6 +632,22 @@ export function AppSidebar({
               unreadChannelIds={unreadChannelIds}
             />
             <SidebarSection
+              action={
+                <SidebarGroupAction
+                  aria-expanded={isNewDmOpen}
+                  aria-label="Start a direct message"
+                  className="top-3 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                  data-testid="new-dm-trigger"
+                  onClick={() => {
+                    setIsNewDmOpen(true);
+                  }}
+                  type="button"
+                >
+                  <PenSquare className="transition-transform" />
+                </SidebarGroupAction>
+              }
+              dmParticipantsByChannelId={dmParticipantsByChannelId}
+              emptyState="No direct messages yet."
               isActiveChannel={selectedView === "channel"}
               items={directMessages}
               channelLabels={dmChannelLabels}
@@ -745,6 +724,14 @@ export function AppSidebar({
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+
+      <NewDirectMessageDialog
+        currentPubkey={currentPubkey}
+        isPending={isOpeningDm}
+        onOpenChange={setIsNewDmOpen}
+        onSubmit={onOpenDm}
+        open={isNewDmOpen}
+      />
     </Sidebar>
   );
 }
