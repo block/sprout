@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { ChannelPane } from "@/app/ChannelPane";
 import { AgentsView } from "@/features/agents/ui/AgentsView";
+import { ForumView } from "@/features/forum/ui/ForumView";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
   channelsQueryKey,
@@ -94,6 +95,7 @@ export function AppShell() {
     null,
   );
   const createChannelMutation = useCreateChannelMutation();
+  const createForumMutation = useCreateChannelMutation();
   const activeChannel = selectedView === "channel" ? selectedChannel : null;
   const activeChannelId = activeChannel?.id ?? null;
   const { unreadChannelIds } = useUnreadChannels(channels, activeChannel);
@@ -201,9 +203,7 @@ export function AppShell() {
         activeChannel.topic,
         activeChannel.description,
         activeChannel.purpose,
-        activeChannel.channelType === "forum"
-          ? "Forum channels are listed, but this first pass only wires message streams and DMs."
-          : null,
+        null,
       ]
         .filter((value) => value && value.trim().length > 0)
         .join(" ") || "Channel details and activity."
@@ -495,6 +495,7 @@ export function AppShell() {
             }
             fallbackDisplayName={identityQuery.data?.displayName}
             isCreatingChannel={createChannelMutation.isPending}
+            isCreatingForum={createForumMutation.isPending}
             isLoading={channelsQuery.isLoading}
             selfPresenceStatus={presenceSession.currentStatus}
             onCreateChannel={async ({ description, name }) => {
@@ -507,6 +508,19 @@ export function AppShell() {
 
               React.startTransition(() => {
                 setSelectedChannelId(createdChannel.id);
+                setSelectedView("channel");
+              });
+            }}
+            onCreateForum={async ({ description, name }) => {
+              const createdForum = await createForumMutation.mutateAsync({
+                name,
+                description,
+                channelType: "forum",
+                visibility: "open",
+              });
+
+              React.startTransition(() => {
+                setSelectedChannelId(createdForum.id);
                 setSelectedView("channel");
               });
             }}
@@ -601,6 +615,11 @@ export function AppShell() {
                 />
               ) : selectedView === "agents" ? (
                 <AgentsView />
+              ) : activeChannel?.channelType === "forum" ? (
+                <ForumView
+                  channel={activeChannel}
+                  currentPubkey={identityQuery.data?.pubkey}
+                />
               ) : (
                 <ChannelPane
                   activeChannel={activeChannel}
@@ -631,9 +650,7 @@ export function AppShell() {
                     );
                   }}
                   onToggleReaction={
-                    activeChannel &&
-                    activeChannel.archivedAt === null &&
-                    activeChannel.channelType !== "forum"
+                    activeChannel && activeChannel.archivedAt === null
                       ? async (message, emoji, remove) => {
                           await toggleReactionMutation.mutateAsync({
                             emoji,

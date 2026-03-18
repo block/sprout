@@ -360,3 +360,48 @@ export type UpdateManagedAgentInput = {
   model?: string | null;
   systemPrompt?: string | null;
 };
+
+// ── Forum types ───────────────────────────────────────────────────────────────
+
+export type ThreadSummary = {
+  replyCount: number;
+  descendantCount: number;
+  lastReplyAt: number | null;
+  participants: string[];
+};
+
+export type ForumPost = {
+  eventId: string;
+  pubkey: string;
+  content: string;
+  kind: number;
+  createdAt: number;
+  channelId: string;
+  tags: string[][];
+  threadSummary: ThreadSummary | null;
+};
+
+export type ForumPostsResponse = {
+  posts: ForumPost[];
+  nextCursor: number | null;
+};
+
+export type ThreadReply = {
+  eventId: string;
+  pubkey: string;
+  content: string;
+  kind: number;
+  createdAt: number;
+  channelId: string;
+  tags: string[][];
+  parentEventId: string | null;
+  rootEventId: string | null;
+  depth: number;
+};
+
+export type ForumThreadResponse = {
+  post: ForumPost;
+  replies: ThreadReply[];
+  totalReplies: number;
+  nextCursor: string | null;
+};

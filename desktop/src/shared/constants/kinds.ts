@@ -5,6 +5,8 @@ export const KIND_STREAM_MESSAGE_V2 = 40002;
 export const KIND_STREAM_MESSAGE_EDIT = 40003;
 export const KIND_STREAM_MESSAGE_DIFF = 40008;
 export const KIND_SYSTEM_MESSAGE = 40099;
+export const KIND_FORUM_POST = 45001;
+export const KIND_FORUM_COMMENT = 45003;
 export const KIND_TYPING_INDICATOR = 20002;
 
 export const CHANNEL_EVENT_KINDS = [
