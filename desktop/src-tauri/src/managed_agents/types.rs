@@ -27,6 +27,11 @@ pub struct ManagedAgentRecord {
     #[serde(default = "default_agent_parallelism")]
     pub parallelism: u32,
     pub system_prompt: Option<String>,
+    /// Desired LLM model ID. Matches AgentModelInfo.id from discovery.
+    /// The harness re-discovers the correct ACP switching metadata at session
+    /// creation by matching this ID against the fresh session/new response.
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default = "default_start_on_app_launch")]
     pub start_on_app_launch: bool,
     #[serde(default)]
@@ -57,6 +62,7 @@ pub struct ManagedAgentSummary {
     pub turn_timeout_seconds: u64,
     pub parallelism: u32,
     pub system_prompt: Option<String>,
+    pub model: Option<String>,
     pub has_api_token: bool,
     pub status: String,
     pub pid: Option<u32>,
@@ -83,6 +89,7 @@ pub struct CreateManagedAgentRequest {
     pub turn_timeout_seconds: Option<u64>,
     pub parallelism: Option<u32>,
     pub system_prompt: Option<String>,
+    pub model: Option<String>,
     #[serde(default)]
     pub mint_token: bool,
     #[serde(default)]
@@ -162,6 +169,49 @@ pub struct SproutAdminMintTokenJsonOutput {
     pub pubkey: String,
     pub private_key_nsec: Option<String>,
     pub api_token: String,
+}
+
+/// Patch request for updating a managed agent's mutable fields.
+///
+/// Tri-state nullable semantics via `Option<Option<T>>`:
+/// - Field absent in JSON → `None` (don't touch)
+/// - `"field": null` → `Some(None)` (clear to default)
+/// - `"field": "value"` → `Some(Some("value"))` (set)
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateManagedAgentRequest {
+    pub pubkey: String,
+    /// Absent = don't touch. null = clear to agent default. "id" = set.
+    #[serde(default)]
+    pub model: Option<Option<String>>,
+    #[serde(default)]
+    pub system_prompt: Option<Option<String>>,
+}
+
+/// Response from `get_agent_models` — normalized model info for the frontend.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelsResponse {
+    pub agent_name: String,
+    pub agent_version: String,
+    /// Unified model list (merged from both ACP paths, deduplicated by ID).
+    pub models: Vec<AgentModelInfo>,
+    /// The agent's default model for a fresh session.
+    pub agent_default_model: Option<String>,
+    /// The user's persisted model selection (from ManagedAgentRecord.model).
+    pub selected_model: Option<String>,
+    /// Whether this agent supports model switching.
+    pub supports_switching: bool,
+}
+
+/// A single model available from an agent.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelInfo {
+    /// Canonical ID used for persistence and round-tripping.
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
 }
 
 pub const DEFAULT_ACP_COMMAND: &str = "sprout-acp";

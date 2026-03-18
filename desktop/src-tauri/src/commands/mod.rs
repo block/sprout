@@ -1,3 +1,4 @@
+mod agent_models;
 mod agent_settings;
 mod agents;
 mod channels;
@@ -7,6 +8,7 @@ mod messages;
 mod profile;
 mod tokens;
 
+pub use agent_models::*;
 pub use agent_settings::*;
 pub use agents::*;
 pub use channels::*;

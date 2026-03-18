@@ -42,6 +42,37 @@ pub enum DedupMode {
     Queue,
 }
 
+// ── Models subcommand ─────────────────────────────────────────────────────────
+
+/// CLI args for `sprout-acp models` — query available models from an agent.
+///
+/// This is a standalone `Parser` (not a subcommand variant) because the
+/// `models` path must bypass `Config::from_cli()` entirely — no relay,
+/// no private key, no harness setup.
+#[derive(Debug, Parser)]
+#[command(
+    name = "sprout-acp models",
+    about = "Query available models from the configured agent"
+)]
+pub struct ModelsArgs {
+    /// Agent binary to spawn (e.g. "goose", "claude-agent-acp", "codex-acp").
+    #[arg(long, env = "SPROUT_ACP_AGENT_COMMAND", default_value = "goose")]
+    pub agent_command: String,
+
+    /// Arguments passed to the agent binary.
+    #[arg(
+        long,
+        env = "SPROUT_ACP_AGENT_ARGS",
+        default_value = "acp",
+        value_delimiter = ','
+    )]
+    pub agent_args: Vec<String>,
+
+    /// Output structured JSON instead of human-readable text.
+    #[arg(long)]
+    pub json: bool,
+}
+
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Parser)]
@@ -161,6 +192,11 @@ pub struct CliArgs {
     /// Disable typing indicators while agent is processing.
     #[arg(long, env = "SPROUT_ACP_NO_TYPING")]
     pub no_typing: bool,
+
+    /// Desired LLM model ID. Applied to every new ACP session after creation.
+    /// Use `sprout-acp models` to discover available model IDs.
+    #[arg(long, env = "SPROUT_ACP_MODEL")]
+    pub model: Option<String>,
 }
 
 // ── Merged NIP-01 filter ──────────────────────────────────────────────────────
@@ -200,6 +236,8 @@ pub struct Config {
     pub context_message_limit: u32,
     pub presence_enabled: bool,
     pub typing_enabled: bool,
+    /// Desired LLM model ID. Applied after every `session_new_full()`.
+    pub model: Option<String>,
 }
 
 fn normalize_agent_command_identity(command: &str) -> String {
@@ -229,7 +267,7 @@ fn default_agent_args(command: &str) -> Option<Vec<String>> {
     }
 }
 
-fn normalize_agent_args(command: &str, agent_args: Vec<String>) -> Vec<String> {
+pub fn normalize_agent_args(command: &str, agent_args: Vec<String>) -> Vec<String> {
     let normalized = agent_args
         .into_iter()
         .map(|arg| arg.trim().to_string())
@@ -337,13 +375,14 @@ impl Config {
             context_message_limit: args.context_message_limit,
             presence_enabled: !args.no_presence,
             typing_enabled: !args.no_typing,
+            model: args.model,
         })
     }
 
     /// Human-readable summary (no secrets).
     pub fn summary(&self) -> String {
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} timeout={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={} context_limit={} presence={} typing={}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} timeout={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={} context_limit={} presence={} typing={} model={}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -358,6 +397,7 @@ impl Config {
             self.context_message_limit,
             self.presence_enabled,
             self.typing_enabled,
+            self.model.as_deref().unwrap_or("(agent default)"),
         )
     }
 }
@@ -654,6 +694,7 @@ mod tests {
             context_message_limit: 12,
             presence_enabled: true,
             typing_enabled: true,
+            model: None,
         }
     }
 

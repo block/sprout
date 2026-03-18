@@ -152,6 +152,8 @@ pub fn run() {
             delete_managed_agent,
             mint_managed_agent_token,
             get_managed_agent_log,
+            get_agent_models,
+            update_managed_agent,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

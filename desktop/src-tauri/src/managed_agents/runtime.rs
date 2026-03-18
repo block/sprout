@@ -173,6 +173,7 @@ pub fn build_managed_agent_summary(
         turn_timeout_seconds: record.turn_timeout_seconds,
         parallelism: record.parallelism,
         system_prompt: record.system_prompt.clone(),
+        model: record.model.clone(),
         has_api_token: record.api_token.is_some(),
         status,
         pid,
@@ -272,6 +273,11 @@ pub fn start_managed_agent_process(
         command.env("SPROUT_ACP_SYSTEM_PROMPT", system_prompt);
     } else {
         command.env_remove("SPROUT_ACP_SYSTEM_PROMPT");
+    }
+    if let Some(model) = &record.model {
+        command.env("SPROUT_ACP_MODEL", model);
+    } else {
+        command.env_remove("SPROUT_ACP_MODEL");
     }
     command.env_remove("SPROUT_ACP_PRIVATE_KEY");
     command.env_remove("SPROUT_ACP_API_TOKEN");

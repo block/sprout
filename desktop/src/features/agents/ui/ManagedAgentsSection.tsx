@@ -110,6 +110,7 @@ export function ManagedAgentsSection({
               onMintToken(pubkey, name);
             }
           }}
+          onModelChanged={onRefresh}
           onSelect={onSelect}
           onStart={(pubkey) => {
             if (!isActionPending) {

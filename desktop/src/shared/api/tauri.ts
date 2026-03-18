@@ -37,6 +37,8 @@ import type {
   UsersBatchResponse,
   CreateManagedAgentInput,
   CreateManagedAgentResponse,
+  AgentModelsResponse,
+  UpdateManagedAgentInput,
   AcpProvider,
   CommandAvailability,
   ManagedAgentPrereqs,
@@ -228,6 +230,7 @@ export type RawManagedAgent = {
   turn_timeout_seconds: number;
   parallelism: number;
   system_prompt: string | null;
+  model: string | null;
   has_api_token: boolean;
   status: ManagedAgent["status"];
   pid: number | null;
@@ -748,6 +751,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     turnTimeoutSeconds: agent.turn_timeout_seconds,
     parallelism: agent.parallelism,
     systemPrompt: agent.system_prompt,
+    model: agent.model,
     hasApiToken: agent.has_api_token,
     status: agent.status,
     pid: agent.pid,
@@ -944,4 +948,21 @@ export async function discoverManagedAgentPrereqs(input: {
     acp: fromRawCommandAvailability(response.acp),
     mcp: fromRawCommandAvailability(response.mcp),
   };
+}
+
+// ── Model discovery ───────────────────────────────────────────────────────────
+
+export async function getAgentModels(
+  pubkey: string,
+): Promise<AgentModelsResponse> {
+  return invokeTauri<AgentModelsResponse>("get_agent_models", { pubkey });
+}
+
+export async function updateManagedAgent(
+  input: UpdateManagedAgentInput,
+): Promise<ManagedAgent> {
+  const response = await invokeTauri<RawManagedAgent>("update_managed_agent", {
+    input,
+  });
+  return fromRawManagedAgent(response);
 }

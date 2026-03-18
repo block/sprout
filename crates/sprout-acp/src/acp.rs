@@ -119,6 +119,16 @@ pub struct AcpClient {
 impl AcpClient {
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
+    /// Kill the agent subprocess and wait for it to exit (no zombies).
+    ///
+    /// `Drop` only calls `start_kill()` (sends SIGKILL but doesn't reap).
+    /// Call this when you need guaranteed cleanup — e.g., in `run_models`
+    /// before process exit.
+    pub async fn shutdown(&mut self) {
+        let _ = self.child.start_kill();
+        let _ = self.child.wait().await;
+    }
+
     /// Spawn the agent binary as a subprocess and connect to its stdio pipes.
     ///
     /// After spawning, call [`initialize`](Self::initialize) before any other method.
@@ -172,14 +182,16 @@ impl AcpClient {
         Ok(result)
     }
 
-    /// Send `session/new` and return the `sessionId` string.
+    /// Send `session/new` and return the full response alongside the session ID.
     ///
     /// `cwd` must be an absolute path. `mcp_servers` may be empty.
-    pub async fn session_new(
+    /// Callers use [`extract_model_config_options`] and [`extract_model_state`]
+    /// to pull model info from the raw result.
+    pub async fn session_new_full(
         &mut self,
         cwd: &str,
         mcp_servers: Vec<McpServer>,
-    ) -> Result<String, AcpError> {
+    ) -> Result<SessionNewResponse, AcpError> {
         let params = serde_json::json!({
             "cwd": cwd,
             "mcpServers": mcp_servers,
@@ -190,7 +202,50 @@ impl AcpClient {
             .ok_or_else(|| AcpError::Protocol("session/new response missing sessionId".into()))?
             .to_owned();
         tracing::info!(target: "acp::session", "session created: {session_id}");
-        Ok(session_id)
+        Ok(SessionNewResponse {
+            session_id,
+            raw: result,
+        })
+    }
+
+    /// Send `session/new` and return only the `sessionId` string.
+    ///
+    /// Convenience wrapper around [`session_new_full`].
+    #[allow(dead_code)] // Public API — callers outside the harness may use this.
+    pub async fn session_new(
+        &mut self,
+        cwd: &str,
+        mcp_servers: Vec<McpServer>,
+    ) -> Result<String, AcpError> {
+        Ok(self.session_new_full(cwd, mcp_servers).await?.session_id)
+    }
+
+    /// Send `session/set_config_option` (stable ACP path).
+    pub async fn session_set_config_option(
+        &mut self,
+        session_id: &str,
+        config_id: &str,
+        value: &str,
+    ) -> Result<serde_json::Value, AcpError> {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "configId": config_id,
+            "value": value,
+        });
+        self.send_request("session/set_config_option", params).await
+    }
+
+    /// Send `session/set_model` (unstable ACP path).
+    pub async fn session_set_model(
+        &mut self,
+        session_id: &str,
+        model_id: &str,
+    ) -> Result<serde_json::Value, AcpError> {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "modelId": model_id,
+        });
+        self.send_request("session/set_model", params).await
     }
 
     /// Send `session/prompt` and block until the agent returns a stop reason.
@@ -549,6 +604,99 @@ fn permission_response_cancelled(id: &serde_json::Value) -> serde_json::Value {
     })
 }
 
+// ─── Session response types ───────────────────────────────────────────────────
+
+/// Full `session/new` response — session ID plus the raw JSON result.
+///
+/// Callers use the extractor helpers to pull model info from `raw`.
+pub struct SessionNewResponse {
+    pub session_id: String,
+    /// The full `result` value from the JSON-RPC response.
+    pub raw: serde_json::Value,
+}
+
+/// How to switch to a particular model on a session.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "type")]
+pub enum ModelSwitchMethod {
+    /// Stable: use `session/set_config_option` with these exact values.
+    ConfigOption {
+        config_id: String,
+        option_value: String,
+    },
+    /// Unstable: use `session/set_model` with this model_id.
+    SetModel { model_id: String },
+}
+
+/// Extract `configOptions` entries with `category == "model"` from a `session/new` result.
+///
+/// Returns the raw JSON array entries. Each entry has `configId`, `displayName`,
+/// `options: [{ value, displayName }]`, etc.
+pub fn extract_model_config_options(result: &serde_json::Value) -> Vec<serde_json::Value> {
+    result["configOptions"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter(|opt| opt.get("category").and_then(|c| c.as_str()) == Some("model"))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Extract `SessionModelState` (unstable path) from a `session/new` result.
+///
+/// Returns the `models` object if present: `{ currentModelId, availableModels: [...] }`.
+pub fn extract_model_state(result: &serde_json::Value) -> Option<serde_json::Value> {
+    result.get("models").cloned()
+}
+
+/// Match a desired model ID against a fresh `session/new` response.
+///
+/// Returns the correct ACP method to call, or `None` if no match.
+///
+/// **Precedence**: stable `configOptions` first (spec-blessed), then unstable
+/// `availableModels`. The fresh `session/new` response is always authoritative.
+pub fn resolve_model_switch_method(
+    session_new_result: &serde_json::Value,
+    desired_model: &str,
+) -> Option<ModelSwitchMethod> {
+    // 1. Search stable configOptions for a "model"-category entry whose
+    //    options contain a value matching desired_model.
+    for config_opt in extract_model_config_options(session_new_result) {
+        let config_id = match config_opt.get("configId").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => continue,
+        };
+        if let Some(options) = config_opt.get("options").and_then(|v| v.as_array()) {
+            for opt in options {
+                if opt.get("value").and_then(|v| v.as_str()) == Some(desired_model) {
+                    return Some(ModelSwitchMethod::ConfigOption {
+                        config_id: config_id.to_string(),
+                        option_value: desired_model.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    // 2. Search unstable availableModels for a matching modelId.
+    if let Some(models) = extract_model_state(session_new_result) {
+        if let Some(available) = models.get("availableModels").and_then(|v| v.as_array()) {
+            for model in available {
+                if model.get("modelId").and_then(|v| v.as_str()) == Some(desired_model) {
+                    return Some(ModelSwitchMethod::SetModel {
+                        model_id: desired_model.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    // 3. No match.
+    None
+}
+
 // ─── Drop: kill child process ─────────────────────────────────────────────────
 
 impl Drop for AcpClient {
@@ -879,5 +1027,171 @@ mod tests {
         });
         assert_eq!(cancelled_numeric["id"], numeric_id);
         assert!(cancelled_numeric["id"].is_number());
+    }
+
+    // ── Model extractor tests ─────────────────────────────────────────────
+
+    #[test]
+    fn extract_model_config_options_finds_model_category() {
+        let result = serde_json::json!({
+            "sessionId": "sess-1",
+            "configOptions": [
+                {
+                    "configId": "model",
+                    "category": "model",
+                    "displayName": "Model",
+                    "options": [
+                        { "value": "claude-sonnet-4-20250514", "displayName": "Claude Sonnet 4" },
+                        { "value": "claude-opus-4-20250514", "displayName": "Claude Opus 4" }
+                    ]
+                },
+                {
+                    "configId": "theme",
+                    "category": "appearance",
+                    "displayName": "Theme",
+                    "options": [{ "value": "dark", "displayName": "Dark" }]
+                }
+            ]
+        });
+        let opts = super::extract_model_config_options(&result);
+        assert_eq!(opts.len(), 1);
+        assert_eq!(opts[0]["configId"].as_str(), Some("model"));
+    }
+
+    #[test]
+    fn extract_model_config_options_empty_when_no_config_options() {
+        let result = serde_json::json!({ "sessionId": "sess-1" });
+        assert!(super::extract_model_config_options(&result).is_empty());
+    }
+
+    #[test]
+    fn extract_model_config_options_empty_when_no_model_category() {
+        let result = serde_json::json!({
+            "configOptions": [
+                { "configId": "theme", "category": "appearance" }
+            ]
+        });
+        assert!(super::extract_model_config_options(&result).is_empty());
+    }
+
+    #[test]
+    fn extract_model_state_returns_models_object() {
+        let result = serde_json::json!({
+            "sessionId": "sess-1",
+            "models": {
+                "currentModelId": "gpt-5",
+                "availableModels": [
+                    { "modelId": "gpt-5", "name": "GPT-5" },
+                    { "modelId": "o3-pro", "name": "o3 Pro" }
+                ]
+            }
+        });
+        let ms = super::extract_model_state(&result).expect("should have models");
+        assert_eq!(ms["currentModelId"].as_str(), Some("gpt-5"));
+        assert_eq!(ms["availableModels"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn extract_model_state_none_when_absent() {
+        let result = serde_json::json!({ "sessionId": "sess-1" });
+        assert!(super::extract_model_state(&result).is_none());
+    }
+
+    // ── resolve_model_switch_method tests ─────────────────────────────────
+
+    #[test]
+    fn resolve_prefers_stable_over_unstable() {
+        let result = serde_json::json!({
+            "configOptions": [{
+                "configId": "model",
+                "category": "model",
+                "options": [
+                    { "value": "claude-sonnet-4-20250514", "displayName": "Sonnet 4" }
+                ]
+            }],
+            "models": {
+                "currentModelId": "claude-sonnet-4-20250514",
+                "availableModels": [
+                    { "modelId": "claude-sonnet-4-20250514", "name": "Sonnet 4" }
+                ]
+            }
+        });
+        let method = super::resolve_model_switch_method(&result, "claude-sonnet-4-20250514");
+        assert_eq!(
+            method,
+            Some(super::ModelSwitchMethod::ConfigOption {
+                config_id: "model".to_string(),
+                option_value: "claude-sonnet-4-20250514".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_falls_back_to_unstable() {
+        let result = serde_json::json!({
+            "models": {
+                "currentModelId": "gpt-5",
+                "availableModels": [
+                    { "modelId": "gpt-5", "name": "GPT-5" },
+                    { "modelId": "o3-pro", "name": "o3 Pro" }
+                ]
+            }
+        });
+        let method = super::resolve_model_switch_method(&result, "o3-pro");
+        assert_eq!(
+            method,
+            Some(super::ModelSwitchMethod::SetModel {
+                model_id: "o3-pro".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_returns_none_when_no_match() {
+        let result = serde_json::json!({
+            "configOptions": [{
+                "configId": "model",
+                "category": "model",
+                "options": [{ "value": "claude-sonnet-4-20250514" }]
+            }],
+            "models": {
+                "availableModels": [{ "modelId": "gpt-5" }]
+            }
+        });
+        assert!(super::resolve_model_switch_method(&result, "nonexistent-model").is_none());
+    }
+
+    #[test]
+    fn resolve_returns_none_when_no_model_info() {
+        let result = serde_json::json!({ "sessionId": "sess-1" });
+        assert!(super::resolve_model_switch_method(&result, "anything").is_none());
+    }
+
+    #[test]
+    fn resolve_handles_multiple_config_options() {
+        // Agent could have multiple configOptions with category "model"
+        // (unlikely but defensive).
+        let result = serde_json::json!({
+            "configOptions": [
+                {
+                    "configId": "primary-model",
+                    "category": "model",
+                    "options": [{ "value": "model-a" }]
+                },
+                {
+                    "configId": "fallback-model",
+                    "category": "model",
+                    "options": [{ "value": "model-b" }]
+                }
+            ]
+        });
+        let method = super::resolve_model_switch_method(&result, "model-b");
+        assert_eq!(
+            method,
+            Some(super::ModelSwitchMethod::ConfigOption {
+                config_id: "fallback-model".to_string(),
+                option_value: "model-b".to_string(),
+            })
+        );
     }
 }
