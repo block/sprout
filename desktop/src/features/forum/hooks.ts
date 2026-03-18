@@ -28,7 +28,8 @@ export function useForumPostsQuery(channel: Channel | null) {
     enabled: channel !== null && channel.channelType === "forum",
     queryKey: forumPostsQueryKey(channelId),
     queryFn: () => getForumPosts(channelId, 50),
-    staleTime: 30_000,
+    staleTime: 15_000,
+    refetchInterval: 15_000,
   });
 }
 
@@ -40,7 +41,8 @@ export function useForumThreadQuery(
     enabled: channelId !== null && eventId !== null,
     queryKey: forumThreadQueryKey(channelId ?? "", eventId ?? ""),
     queryFn: () => getForumThread(channelId ?? "", eventId ?? ""),
-    staleTime: 30_000,
+    staleTime: 10_000,
+    refetchInterval: 10_000,
   });
 }
 
