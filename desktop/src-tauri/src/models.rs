@@ -191,6 +191,8 @@ pub struct SendChannelMessageBody<'a> {
     pub media_tags: Option<Vec<Vec<String>>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mention_pubkeys: Vec<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -305,6 +307,77 @@ pub struct SendChannelMessageResponse {
 #[derive(Serialize)]
 pub struct GetUsersBatchBody<'a> {
     pub pubkeys: &'a [String],
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ThreadSummary {
+    pub reply_count: u32,
+    pub descendant_count: u32,
+    pub last_reply_at: Option<i64>,
+    pub participants: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ForumMessageInfo {
+    pub event_id: String,
+    pub pubkey: String,
+    pub content: String,
+    pub kind: u32,
+    pub created_at: i64,
+    pub channel_id: String,
+    pub tags: Vec<Vec<String>>,
+    #[serde(default)]
+    pub thread_summary: Option<ThreadSummary>,
+    #[serde(default)]
+    pub reactions: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ForumPostsResponse {
+    pub messages: Vec<ForumMessageInfo>,
+    pub next_cursor: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ForumThreadReplyInfo {
+    pub event_id: String,
+    pub pubkey: String,
+    pub content: String,
+    pub kind: u32,
+    pub created_at: i64,
+    pub channel_id: String,
+    pub tags: Vec<Vec<String>>,
+    pub parent_event_id: Option<String>,
+    pub root_event_id: Option<String>,
+    pub depth: u32,
+    pub broadcast: bool,
+    #[serde(default)]
+    pub reactions: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ForumThreadResponse {
+    pub root: ForumMessageInfo,
+    pub replies: Vec<ForumThreadReplyInfo>,
+    pub total_replies: u32,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct GetForumPostsQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<i64>,
+    pub with_threads: bool,
+}
+
+#[derive(Serialize)]
+pub struct GetForumThreadQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
 }
 
 fn deserialize_null_string_as_empty<'de, D>(deserializer: D) -> Result<String, D::Error>
