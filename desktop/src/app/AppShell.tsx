@@ -2,12 +2,14 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { ChannelPane } from "@/app/ChannelPane";
+import { useActiveChannelHeader } from "@/app/useActiveChannelHeader";
 import { AgentsView } from "@/features/agents/ui/AgentsView";
 import { ForumView } from "@/features/forum/ui/ForumView";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
   channelsQueryKey,
   useCreateChannelMutation,
+  useOpenDmMutation,
   useChannelsQuery,
   useSelectedChannel,
 } from "@/features/channels/hooks";
@@ -31,10 +33,7 @@ import {
   getChannelIdFromTags,
   getThreadReference,
 } from "@/features/messages/lib/threading";
-import {
-  usePresenceQuery,
-  usePresenceSession,
-} from "@/features/presence/hooks";
+import { usePresenceSession } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useHomeFeedNotifications } from "@/features/notifications/hooks";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
@@ -45,7 +44,6 @@ import {
   SettingsView,
   type SettingsSection,
 } from "@/features/settings/ui/SettingsView";
-import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { relayClient } from "@/shared/api/relayClient";
 import { getEventById, joinChannel } from "@/shared/api/tauri";
@@ -101,6 +99,7 @@ export function AppShell() {
   );
   const createChannelMutation = useCreateChannelMutation();
   const createForumMutation = useCreateChannelMutation();
+  const openDmMutation = useOpenDmMutation();
   const activeChannel = selectedView === "channel" ? selectedChannel : null;
   const activeChannelId = activeChannel?.id ?? null;
   const messagesQuery = useChannelMessagesQuery(activeChannel);
@@ -115,34 +114,10 @@ export function AppShell() {
     activeChannel,
     activeReadAt,
   );
-  const activeDmParticipantPubkeys = React.useMemo(() => {
-    if (!activeChannel || activeChannel.channelType !== "dm") {
-      return [];
-    }
-    const currentPubkey = identityQuery.data?.pubkey?.toLowerCase();
-    return activeChannel.participantPubkeys.filter(
-      (pubkey) => pubkey.toLowerCase() !== currentPubkey,
-    );
-  }, [activeChannel, identityQuery.data?.pubkey]);
-  const activeDmPresenceQuery = usePresenceQuery(activeDmParticipantPubkeys, {
-    enabled: activeDmParticipantPubkeys.length > 0,
-  });
-  const activeDmProfilesQuery = useUsersBatchQuery(activeDmParticipantPubkeys, {
-    enabled: activeDmParticipantPubkeys.length > 0,
-  });
-  const activeDmPresenceStatus =
-    activeDmParticipantPubkeys.length > 0
-      ? activeDmPresenceQuery.data?.[
-          activeDmParticipantPubkeys[0]?.toLowerCase()
-        ]
-      : null;
-  const activeChannelTitle = activeChannel
-    ? resolveChannelDisplayLabel(
-        activeChannel,
-        identityQuery.data?.pubkey,
-        activeDmProfilesQuery.data?.profiles,
-      )
-    : "Channels";
+  const { activeChannelTitle, activeDmPresenceStatus } = useActiveChannelHeader(
+    activeChannel,
+    identityQuery.data?.pubkey,
+  );
   const sendMessageMutation = useSendMessageMutation(
     activeChannel,
     identityQuery.data,
@@ -268,6 +243,15 @@ export function AppShell() {
     },
     [channels, queryClient, refetchChannels],
   );
+  const openChannelView = React.useCallback(
+    (channelId: string) => {
+      React.startTransition(() => {
+        setSelectedChannelId(channelId);
+        setSelectedView("channel");
+      });
+    },
+    [setSelectedChannelId],
+  );
 
   const handleOpenChannel = React.useCallback(
     async (channelId: string) => {
@@ -278,15 +262,12 @@ export function AppShell() {
           return;
         }
 
-        React.startTransition(() => {
-          setSelectedChannelId(channel.id);
-          setSelectedView("channel");
-        });
+        openChannelView(channel.id);
       } catch (error) {
         console.error("Failed to open channel", channelId, error);
       }
     },
-    [resolveChannel, setSelectedChannelId],
+    [openChannelView, resolveChannel],
   );
 
   const handleBrowseChannelJoin = React.useCallback(
@@ -534,6 +515,7 @@ export function AppShell() {
             isCreatingChannel={createChannelMutation.isPending}
             isCreatingForum={createForumMutation.isPending}
             isLoading={channelsQuery.isLoading}
+            isOpeningDm={openDmMutation.isPending}
             selfPresenceStatus={presenceSession.currentStatus}
             onCreateChannel={async ({ description, name }) => {
               const createdChannel = await createChannelMutation.mutateAsync({
@@ -543,10 +525,7 @@ export function AppShell() {
                 visibility: "open",
               });
 
-              React.startTransition(() => {
-                setSelectedChannelId(createdChannel.id);
-                setSelectedView("channel");
-              });
+              openChannelView(createdChannel.id);
             }}
             onCreateForum={async ({ description, name }) => {
               const createdForum = await createForumMutation.mutateAsync({
@@ -556,10 +535,7 @@ export function AppShell() {
                 visibility: "open",
               });
 
-              React.startTransition(() => {
-                setSelectedChannelId(createdForum.id);
-                setSelectedView("channel");
-              });
+              openChannelView(createdForum.id);
             }}
             onOpenBrowseChannels={() => {
               setIsBrowseChannelsOpen(true);
@@ -568,6 +544,12 @@ export function AppShell() {
             onOpenSearch={() => {
               setIsSearchOpen(true);
               void refetchChannels();
+            }}
+            onOpenDm={async ({ pubkeys }) => {
+              const directMessage = await openDmMutation.mutateAsync({
+                pubkeys,
+              });
+              openChannelView(directMessage.id);
             }}
             onSelectAgents={() => {
               React.startTransition(() => {

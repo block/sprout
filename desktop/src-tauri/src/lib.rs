@@ -119,6 +119,7 @@ pub fn run() {
             create_auth_event,
             get_channels,
             create_channel,
+            open_dm,
             get_channel_details,
             get_channel_members,
             update_channel,

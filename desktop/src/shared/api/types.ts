@@ -45,6 +45,10 @@ export type CreateChannelInput = {
   description?: string;
 };
 
+export type OpenDmInput = {
+  pubkeys: string[];
+};
+
 export type UpdateChannelInput = {
   channelId: string;
   name?: string;

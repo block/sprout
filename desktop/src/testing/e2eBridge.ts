@@ -72,6 +72,12 @@ type RawSetPresenceResponse = {
   ttl_seconds: number;
 };
 
+type RawOpenDmResponse = {
+  channel_id: string;
+  created: boolean;
+  participants: string[];
+};
+
 type RawChannel = {
   id: string;
   name: string;
@@ -445,6 +451,33 @@ function syncMockChannel(channel: MockChannel) {
 
 function touchMockChannel(channel: MockChannel) {
   channel.updated_at = new Date().toISOString();
+}
+
+function normalizeParticipantPubkeys(pubkeys: string[]) {
+  return [...new Set(pubkeys.map((pubkey) => pubkey.toLowerCase()))].sort();
+}
+
+function findMockDmByParticipantPubkeys(pubkeys: string[]) {
+  const normalizedPubkeys = normalizeParticipantPubkeys(pubkeys);
+
+  return (
+    mockChannels.find((channel) => {
+      if (channel.channel_type !== "dm") {
+        return false;
+      }
+
+      const channelPubkeys = normalizeParticipantPubkeys(
+        channel.participant_pubkeys,
+      );
+
+      return (
+        channelPubkeys.length === normalizedPubkeys.length &&
+        channelPubkeys.every(
+          (pubkey, index) => pubkey === normalizedPubkeys[index],
+        )
+      );
+    }) ?? null
+  );
 }
 
 function getMockIdentity() {
@@ -1522,6 +1555,79 @@ async function handleCreateChannel(
       description: args.description,
     }),
   });
+}
+
+async function handleOpenDm(
+  args: {
+    pubkeys: string[];
+  },
+  config: E2eConfig | undefined,
+) {
+  const normalizedPubkeys = normalizeParticipantPubkeys(args.pubkeys);
+  if (normalizedPubkeys.length === 0) {
+    throw new Error("Select at least one person to start a DM.");
+  }
+
+  const currentPubkey = getMockMemberPubkey(config).toLowerCase();
+  const participantPubkeys = normalizeParticipantPubkeys([
+    currentPubkey,
+    ...normalizedPubkeys.filter((pubkey) => pubkey !== currentPubkey),
+  ]);
+  const existingChannel = findMockDmByParticipantPubkeys(participantPubkeys);
+  if (existingChannel) {
+    return toRawChannel(existingChannel);
+  }
+
+  const identity = getIdentity(config);
+  if (!identity) {
+    const members = participantPubkeys.map((pubkey) =>
+      createMockMember(pubkey, "member", 0),
+    );
+    const channel = createMockChannel({
+      id: crypto.randomUUID(),
+      name:
+        participantPubkeys.length === 2
+          ? "DM"
+          : `Group DM (${participantPubkeys.length})`,
+      channel_type: "dm",
+      visibility: "private",
+      description: "Direct message conversation",
+      topic: null,
+      purpose: null,
+      last_message_at: null,
+      archived_at: null,
+      created_by: getMockMemberPubkey(config),
+      topic_set_by: null,
+      topic_set_at: null,
+      purpose_set_by: null,
+      purpose_set_at: null,
+      topic_required: false,
+      max_members: participantPubkeys.length,
+      nip29_group_id: null,
+      created_minutes_ago: 0,
+      updated_minutes_ago: 0,
+      members,
+    });
+    syncMockChannel(channel);
+    mockChannels.push(channel);
+    return toRawChannel(channel);
+  }
+
+  const response = await relayJsonRequest<RawOpenDmResponse>(
+    config,
+    "/api/dms",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        pubkeys: normalizedPubkeys,
+      }),
+    },
+  );
+
+  return relayJsonRequest<RawChannel>(
+    config,
+    `/api/channels/${response.channel_id}`,
+  );
 }
 
 async function handleGetChannelDetails(
@@ -2936,6 +3042,11 @@ export function maybeInstallE2eTauriMocks() {
       case "create_channel":
         return handleCreateChannel(
           payload as Parameters<typeof handleCreateChannel>[0],
+          activeConfig,
+        );
+      case "open_dm":
+        return handleOpenDm(
+          payload as Parameters<typeof handleOpenDm>[0],
           activeConfig,
         );
       case "get_channel_details":
