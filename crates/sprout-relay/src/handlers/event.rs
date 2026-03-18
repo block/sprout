@@ -101,15 +101,14 @@ pub(crate) async fn dispatch_persistent_event(
     // Skip search indexing for NIP-17 gift wraps — content is ciphertext,
     // and indexing would leak #p tag metadata into the search index.
     // Use the bounded mpsc channel to prevent OOM if Typesense is slow/down.
-    if kind_u32 != KIND_GIFT_WRAP {
-        if state
+    if kind_u32 != KIND_GIFT_WRAP
+        && state
             .search_index_tx
             .try_send(stored_event.clone())
             .is_err()
-        {
-            metrics::counter!("sprout_search_index_errors_total").increment(1);
-            warn!(event_id = %event_id_hex, "Search index channel full — dropping event");
-        }
+    {
+        metrics::counter!("sprout_search_index_errors_total").increment(1);
+        warn!(event_id = %event_id_hex, "Search index channel full — dropping event");
     }
 
     let audit = Arc::clone(&state.audit);
