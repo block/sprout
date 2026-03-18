@@ -156,7 +156,7 @@ pub struct AppState {
     /// Short TTL (10s) — membership changes are rare but must propagate.
     pub membership_cache: Arc<moka::sync::Cache<(Uuid, Vec<u8>), bool>>,
     /// Accessible channel IDs cache: pubkey_bytes → Vec<Uuid>.
-    /// 15s TTL — short enough to bound stale-access windows.
+    /// 5s TTL — must be short because E2E tests create and join channels rapidly.
     pub accessible_channels_cache: Arc<moka::sync::Cache<Vec<u8>, Vec<Uuid>>>,
     /// Bounded channel for search indexing — prevents OOM if Typesense is slow/down.
     /// Capacity 1000: at ~1KB/event that's ~1MB of backlog before we start dropping.
@@ -241,7 +241,7 @@ impl AppState {
             accessible_channels_cache: Arc::new(
                 moka::sync::Cache::builder()
                     .max_capacity(5_000)
-                    .time_to_live(std::time::Duration::from_secs(15))
+                    .time_to_live(std::time::Duration::from_secs(5))
                     .build(),
             ),
             search_index_tx,
