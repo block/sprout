@@ -22,6 +22,7 @@ import {
 const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 30_000;
 const RECONNECT_REPLAY_SKEW_SECS = 5;
+const EVENT_BATCH_MS = 16;
 
 export class RelayClient {
   private wsId: number | null = null;
@@ -38,6 +39,8 @@ export class RelayClient {
   } | null = null;
   private subscriptions = new Map<string, RelaySubscription>();
   private pendingEvents = new Map<string, PendingEvent>();
+  private eventBuffer: Array<{ subId: string; event: RelayEvent }> = [];
+  private flushTimeout: ReturnType<typeof setTimeout> | null = null;
   private reconnectListeners = new Set<() => void>();
   private hasConnectedOnce = false;
   private notifyReconnectListeners = false;
@@ -494,7 +497,26 @@ export class RelayClient {
       subscription.lastSeenCreatedAt ?? 0,
       event.created_at,
     );
-    subscription.onEvent(event);
+
+    this.eventBuffer.push({ subId, event });
+    this.flushTimeout ??= window.setTimeout(
+      () => this.flushEventBuffer(),
+      EVENT_BATCH_MS,
+    );
+  }
+
+  private flushEventBuffer() {
+    this.flushTimeout = null;
+    const buffer = this.eventBuffer;
+    this.eventBuffer = [];
+
+    // Re-lookup: subscriptions removed during batch window are intentionally skipped.
+    for (const { subId, event } of buffer) {
+      const subscription = this.subscriptions.get(subId);
+      if (subscription?.mode === "live") {
+        subscription.onEvent(event);
+      }
+    }
   }
 
   private handleEose(subId: string) {
@@ -648,6 +670,10 @@ export class RelayClient {
       reconnect?: boolean;
     },
   ) {
+    if (this.flushTimeout !== null) window.clearTimeout(this.flushTimeout);
+    this.flushTimeout = null;
+    this.eventBuffer = [];
+
     if (options?.reconnect !== false && this.hasConnectedOnce) {
       this.notifyReconnectListeners = true;
     }
