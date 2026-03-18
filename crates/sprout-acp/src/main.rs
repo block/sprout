@@ -36,9 +36,15 @@ use uuid::Uuid;
 /// This avoids clap rejecting harness flags (like `--private-key`) that aren't
 /// declared on the subcommand's `Parser`. The `models` path has its own
 /// `ModelsArgs` parser; the default path uses the existing `CliArgs`.
+///
+/// **Constraint**: subcommand must be argv[1] — flags before the subcommand
+/// name (e.g., `sprout-acp --verbose models`) are not supported.
 fn is_subcommand(name: &str) -> bool {
     std::env::args().nth(1).map(|a| a == name).unwrap_or(false)
 }
+
+/// Timeout for the `sprout-acp models` subcommand (spawn + init + session/new).
+const MODELS_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -74,6 +80,8 @@ async fn main() -> Result<()> {
             acp,
             sessions: HashMap::new(),
             heartbeat_session: None,
+            model_capabilities: None,
+            desired_model: config.model.clone(),
         });
     }
     tracing::info!("agent_pool_ready agents={}", agents.len());
@@ -815,6 +823,8 @@ async fn recover_panicked_agent(
                 acp,
                 sessions: HashMap::new(),
                 heartbeat_session: None,
+                model_capabilities: None,
+                desired_model: config.model.clone(),
             });
             tracing::info!("respawned agent {i} after panic");
         }
@@ -925,6 +935,8 @@ async fn respawn_agent_into(old_agent: OwnedAgent, config: &Config) -> Result<Ow
         acp,
         sessions: HashMap::new(),
         heartbeat_session: None,
+        model_capabilities: None,
+        desired_model: config.model.clone(),
     })
 }
 
@@ -950,7 +962,7 @@ async fn spawn_and_init(config: &Config) -> Result<AcpClient> {
 
 /// `sprout-acp models` — spawn an agent, query its available models, exit.
 ///
-/// Flow: spawn → initialize → session/new → print models → kill + reap.
+/// Flow: spawn → initialize → session/new → print models → shutdown.
 /// No relay connection, no MCP servers, no subscriptions. ~2-5s total.
 async fn run_models(args: ModelsArgs) -> Result<()> {
     use acp::{extract_model_config_options, extract_model_state};
@@ -961,23 +973,34 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
         .to_string_lossy()
         .to_string();
 
-    // Spawn + initialize + session/new, all under a 10s timeout.
-    let result = tokio::time::timeout(Duration::from_secs(10), async {
-        let mut client = AcpClient::spawn(&args.agent_command, &agent_args).await?;
+    // Spawn outside the timeout so we always own the child for cleanup.
+    let mut client = match AcpClient::spawn(&args.agent_command, &agent_args).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: failed to spawn agent: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Initialize + session/new under a timeout. Client is owned above,
+    // so shutdown() runs on all paths (success, error, timeout).
+    let protocol_result = tokio::time::timeout(MODELS_TIMEOUT, async {
         let init = client.initialize().await?;
         let session = client.session_new_full(&cwd, vec![]).await?;
-        Ok::<_, acp::AcpError>((client, init, session))
+        Ok::<_, acp::AcpError>((init, session))
     })
     .await;
 
-    let (mut client, init_result, session_resp) = match result {
+    let (init_result, session_resp) = match protocol_result {
         Ok(Ok(tuple)) => tuple,
         Ok(Err(e)) => {
+            client.shutdown().await;
             eprintln!("error: agent communication failed: {e}");
             std::process::exit(1);
         }
         Err(_) => {
-            eprintln!("error: agent timed out (10s)");
+            client.shutdown().await;
+            eprintln!("error: agent timed out ({MODELS_TIMEOUT:?})");
             std::process::exit(1);
         }
     };
@@ -1071,10 +1094,7 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
         }
     }
 
-    // Kill + reap the agent subprocess. Drop only calls start_kill() (no reap).
-    let _ = client.child_mut().start_kill();
-    let _ = client.child_mut().wait().await;
-
+    client.shutdown().await;
     Ok(())
 }
 

@@ -28,7 +28,10 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use crate::acp::{AcpClient, AcpError, McpServer, StopReason};
+use crate::acp::{
+    extract_model_config_options, extract_model_state, resolve_model_switch_method, AcpClient,
+    AcpError, McpServer, ModelSwitchMethod, StopReason,
+};
 use crate::config::DedupMode;
 use crate::queue::{ContextMessage, ConversationContext, FlushBatch, PromptChannelInfo};
 use crate::relay::{ChannelInfo, RestClient};
@@ -47,6 +50,15 @@ pub struct TaskMeta {
     pub recoverable_batch: Option<FlushBatch>,
 }
 
+/// Agent-level model capabilities. Populated on first session creation.
+/// The catalog is the same across all sessions for a given agent process.
+pub struct AgentModelCapabilities {
+    /// Stable: configOptions with category "model" from session/new.
+    pub config_options_raw: Vec<serde_json::Value>,
+    /// Unstable: SessionModelState from session/new.
+    pub available_models_raw: Option<serde_json::Value>,
+}
+
 /// An agent with its session state, owned by the pool or a running task.
 pub struct OwnedAgent {
     pub index: usize,
@@ -54,6 +66,10 @@ pub struct OwnedAgent {
     /// channel_id → session_id
     pub sessions: HashMap<Uuid, String>,
     pub heartbeat_session: Option<String>,
+    /// Model catalog from first session/new. None until first session created.
+    pub model_capabilities: Option<AgentModelCapabilities>,
+    /// Desired model ID (from `Config.model`). Applied after every `session_new_full()`.
+    pub desired_model: Option<String>,
 }
 
 /// Pool of agents with take-and-return ownership semantics.
@@ -243,6 +259,107 @@ impl AgentPool {
 /// Timeout for pre-prompt context fetches (thread/DM history).
 const CONTEXT_FETCH_TIMEOUT: Duration = Duration::from_millis(500);
 
+/// Timeout for model-switch requests (`session/set_config_option`, `session/set_model`).
+const MODEL_SWITCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Create a new ACP session via `session_new_full()`, populate model capabilities
+/// on the agent (first session only), and apply `desired_model` if set.
+///
+/// On error from `session_new_full()`, returns the `AcpError` — caller handles
+/// error reporting. Model-switch failures are logged and gracefully ignored
+/// (the agent proceeds with its default model).
+async fn create_session_and_apply_model(
+    agent: &mut OwnedAgent,
+    ctx: &PromptContext,
+) -> Result<String, AcpError> {
+    let resp = agent
+        .acp
+        .session_new_full(&ctx.cwd, ctx.mcp_servers.clone())
+        .await?;
+
+    // Populate model capabilities on first session creation.
+    if agent.model_capabilities.is_none() {
+        agent.model_capabilities = Some(AgentModelCapabilities {
+            config_options_raw: extract_model_config_options(&resp.raw),
+            available_models_raw: extract_model_state(&resp.raw),
+        });
+    }
+
+    // Apply desired_model if set, matching against the fresh session/new response.
+    if let Some(ref desired) = agent.desired_model {
+        match resolve_model_switch_method(&resp.raw, desired) {
+            Some(method) => {
+                apply_model_switch(&mut agent.acp, &resp.session_id, desired, &method).await;
+            }
+            None => {
+                tracing::warn!(
+                    target: "pool::model",
+                    "desired model {desired} not found in agent's available models — proceeding with agent default"
+                );
+            }
+        }
+    }
+
+    Ok(resp.session_id)
+}
+
+/// Send the appropriate ACP model-switch request with a timeout.
+///
+/// On timeout or error, logs a warning and returns — the caller proceeds
+/// with the agent's default model. This is intentionally non-fatal: a stale
+/// response from a timed-out request is safely ignored by `read_until_response`
+/// (non-matching JSON-RPC IDs are skipped).
+async fn apply_model_switch(
+    acp: &mut AcpClient,
+    session_id: &str,
+    desired: &str,
+    method: &ModelSwitchMethod,
+) {
+    let method_label = match method {
+        ModelSwitchMethod::ConfigOption { config_id, .. } => {
+            format!("configOption (configId={config_id})")
+        }
+        ModelSwitchMethod::SetModel { .. } => "set_model".to_string(),
+    };
+
+    let result = tokio::time::timeout(MODEL_SWITCH_TIMEOUT, async {
+        match method {
+            ModelSwitchMethod::ConfigOption {
+                config_id,
+                option_value,
+            } => {
+                acp.session_set_config_option(session_id, config_id, option_value)
+                    .await
+            }
+            ModelSwitchMethod::SetModel { model_id } => {
+                acp.session_set_model(session_id, model_id).await
+            }
+        }
+    })
+    .await;
+
+    match result {
+        Ok(Ok(_)) => {
+            tracing::info!(
+                target: "pool::model",
+                "applied model {desired} via {method_label} on session {session_id}"
+            );
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(
+                target: "pool::model",
+                "failed to set model {desired} via {method_label}: {e} — proceeding with agent default"
+            );
+        }
+        Err(_) => {
+            tracing::warn!(
+                target: "pool::model",
+                "model set via {method_label} timed out ({MODEL_SWITCH_TIMEOUT:?}) — proceeding with agent default"
+            );
+        }
+    }
+}
+
 /// Core async function spawned for each prompt.
 ///
 /// Lifecycle:
@@ -285,12 +402,8 @@ pub async fn run_prompt_task(
             if let Some(sid) = agent.sessions.get(cid) {
                 (sid.clone(), false)
             } else {
-                // Create new session.
-                match agent
-                    .acp
-                    .session_new(&ctx.cwd, ctx.mcp_servers.clone())
-                    .await
-                {
+                // Create new session with model application.
+                match create_session_and_apply_model(&mut agent, &ctx).await {
                     Ok(sid) => {
                         tracing::info!(
                             target: "pool::session",
@@ -326,11 +439,7 @@ pub async fn run_prompt_task(
             if let Some(sid) = &agent.heartbeat_session {
                 (sid.clone(), false)
             } else {
-                match agent
-                    .acp
-                    .session_new(&ctx.cwd, ctx.mcp_servers.clone())
-                    .await
-                {
+                match create_session_and_apply_model(&mut agent, &ctx).await {
                     Ok(sid) => {
                         tracing::info!(
                             target: "pool::session",

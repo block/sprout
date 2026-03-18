@@ -119,12 +119,14 @@ pub struct AcpClient {
 impl AcpClient {
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
-    /// Access the child process for explicit reaping (e.g., in `run_models`).
+    /// Kill the agent subprocess and wait for it to exit (no zombies).
     ///
     /// `Drop` only calls `start_kill()` (sends SIGKILL but doesn't reap).
-    /// Callers that need no-zombie guarantees must `child.wait()` explicitly.
-    pub fn child_mut(&mut self) -> &mut Child {
-        &mut self.child
+    /// Call this when you need guaranteed cleanup — e.g., in `run_models`
+    /// before process exit.
+    pub async fn shutdown(&mut self) {
+        let _ = self.child.start_kill();
+        let _ = self.child.wait().await;
     }
 
     /// Spawn the agent binary as a subprocess and connect to its stdio pipes.
