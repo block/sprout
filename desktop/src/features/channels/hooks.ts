@@ -148,8 +148,9 @@ export function useChannelsQuery() {
   return useQuery({
     queryKey: channelsQueryKey,
     queryFn: async () => sortChannels(await getChannels()),
-    staleTime: 30_000,
-    refetchInterval: 15_000,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   });
 }
 

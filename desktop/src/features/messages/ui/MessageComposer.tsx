@@ -231,7 +231,6 @@ export function MessageComposer({
     const cursorPosition = textarea.selectionStart ?? content.length;
     const existingMention = detectMentionQuery(content, cursorPosition);
     if (existingMention) {
-      pendingSelectionRef.current = cursorPosition;
       setMentionStartIndex(existingMention.startIndex);
       setMentionQuery(existingMention.query);
       setMentionSelectedIndex(0);
@@ -503,6 +502,7 @@ export function MessageComposer({
     ],
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: content triggers height recalc and pending selection restore
   React.useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) {
@@ -528,7 +528,7 @@ export function MessageComposer({
       textarea.setSelectionRange(pendingSelection, pendingSelection);
       pendingSelectionRef.current = null;
     }
-  });
+  }, [content]);
 
   React.useEffect(() => {
     if (!replyTarget || disabled) {
