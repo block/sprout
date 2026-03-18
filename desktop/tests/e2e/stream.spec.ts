@@ -102,7 +102,7 @@ test("loads the home feed from the relay", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByTestId("chat-title")).toHaveText("Home");
-  await expect(page.getByRole("heading", { name: "@Mentions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Mentions" })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Needs Action" }),
   ).toBeVisible();
