@@ -4,7 +4,11 @@
   "version": "0.1.0",
   "identifier": "com.wesb.sprout",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": {
+      "script": "exec ./node_modules/.bin/vite",
+      "cwd": "..",
+      "wait": false
+    },
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
