@@ -102,7 +102,7 @@ pub async fn insert_mentions(
     // Single multi-row INSERT IGNORE — one round-trip regardless of mention count.
     let mut qb: QueryBuilder<'_, sqlx::MySql> = QueryBuilder::new(
         "INSERT IGNORE INTO event_mentions \
-         (pubkey_hex, event_id, event_created_at, channel_id, event_kind) VALUES ",
+         (pubkey_hex, event_id, event_created_at, channel_id, event_kind) ",
     );
 
     qb.push_values(&valid_pubkeys, |mut b, pubkey| {
