@@ -37,7 +37,7 @@ const overrides = new Map([
   ["src/features/sidebar/ui/AppSidebar.tsx", 650],
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
   ["src/shared/api/relayClientSession.ts", 725], // durable websocket session manager with reconnect/replay/recovery state
-  ["src/shared/api/tauri.ts", 950],
+  ["src/shared/api/tauri.ts", 975],
 ]);
 
 async function walkFiles(directory) {

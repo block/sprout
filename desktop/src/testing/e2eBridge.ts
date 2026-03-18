@@ -221,6 +221,7 @@ type RawManagedAgent = {
   turn_timeout_seconds: number;
   parallelism: number;
   system_prompt: string | null;
+  model: string | null;
   has_api_token: boolean;
   status: "running" | "stopped";
   pid: number | null;
@@ -491,6 +492,7 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     turn_timeout_seconds: agent.turn_timeout_seconds,
     parallelism: agent.parallelism,
     system_prompt: agent.system_prompt,
+    model: agent.model,
     has_api_token: agent.has_api_token,
     status: agent.status,
     pid: agent.pid,
@@ -2140,6 +2142,7 @@ async function handleCreateManagedAgent(args: {
     turnTimeoutSeconds?: number;
     parallelism?: number;
     systemPrompt?: string;
+    model?: string;
     mintToken?: boolean;
     tokenScopes?: string[];
     tokenName?: string;
@@ -2172,6 +2175,7 @@ async function handleCreateManagedAgent(args: {
     turn_timeout_seconds: args.input.turnTimeoutSeconds ?? 300,
     parallelism: args.input.parallelism ?? 1,
     system_prompt: args.input.systemPrompt?.trim() || null,
+    model: args.input.model?.trim() || null,
     has_api_token: token !== null,
     status: args.input.spawnAfterCreate ? "running" : "stopped",
     pid: args.input.spawnAfterCreate ? 42000 + mockManagedAgents.length : null,
@@ -2299,6 +2303,24 @@ async function handleGetManagedAgentLog(args: {
     content: agent.log_lines.slice(-count).join("\n"),
     log_path: agent.log_path,
   };
+}
+
+async function handleUpdateManagedAgent(args: {
+  input: {
+    pubkey: string;
+    model?: string | null;
+    systemPrompt?: string | null;
+  };
+}): Promise<RawManagedAgent> {
+  const agent = getMockManagedAgent(args.input.pubkey);
+  if (args.input.model !== undefined) {
+    agent.model = args.input.model;
+  }
+  if (args.input.systemPrompt !== undefined) {
+    agent.system_prompt = args.input.systemPrompt;
+  }
+  agent.updated_at = new Date().toISOString();
+  return cloneManagedAgent(agent);
 }
 
 async function handleSearchMessages(
@@ -2879,6 +2901,19 @@ export function maybeInstallE2eTauriMocks() {
       case "get_managed_agent_log":
         return handleGetManagedAgentLog(
           payload as Parameters<typeof handleGetManagedAgentLog>[0],
+        );
+      case "get_agent_models":
+        return {
+          agentName: "mock-agent",
+          agentVersion: "0.0.0",
+          models: [],
+          agentDefaultModel: null,
+          selectedModel: null,
+          supportsSwitching: false,
+        };
+      case "update_managed_agent":
+        return handleUpdateManagedAgent(
+          payload as Parameters<typeof handleUpdateManagedAgent>[0],
         );
       case "create_channel":
         return handleCreateChannel(

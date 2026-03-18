@@ -211,6 +211,7 @@ impl AcpClient {
     /// Send `session/new` and return only the `sessionId` string.
     ///
     /// Convenience wrapper around [`session_new_full`].
+    #[allow(dead_code)] // Public API — callers outside the harness may use this.
     pub async fn session_new(
         &mut self,
         cwd: &str,

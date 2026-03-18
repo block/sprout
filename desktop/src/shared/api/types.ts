@@ -262,6 +262,7 @@ export type ManagedAgent = {
   turnTimeoutSeconds: number;
   parallelism: number;
   systemPrompt: string | null;
+  model: string | null;
   hasApiToken: boolean;
   status: "running" | "stopped";
   pid: number | null;
@@ -285,6 +286,7 @@ export type CreateManagedAgentInput = {
   turnTimeoutSeconds?: number;
   parallelism?: number;
   systemPrompt?: string;
+  model?: string;
   mintToken?: boolean;
   tokenScopes?: TokenScope[];
   tokenName?: string;
@@ -334,4 +336,27 @@ export type ManagedAgentPrereqs = {
   admin: CommandAvailability;
   acp: CommandAvailability;
   mcp: CommandAvailability;
+};
+
+// ── Model discovery types ─────────────────────────────────────────────────────
+
+export type AgentModelsResponse = {
+  agentName: string;
+  agentVersion: string;
+  models: AgentModelInfo[];
+  agentDefaultModel: string | null;
+  selectedModel: string | null;
+  supportsSwitching: boolean;
+};
+
+export type AgentModelInfo = {
+  id: string;
+  name: string | null;
+  description: string | null;
+};
+
+export type UpdateManagedAgentInput = {
+  pubkey: string;
+  model?: string | null;
+  systemPrompt?: string | null;
 };

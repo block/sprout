@@ -11,6 +11,7 @@ import type { ManagedAgent } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { CopyButton } from "./CopyButton";
+import { ModelPicker } from "./ModelPicker";
 import { formatTimestamp, truncatePubkey } from "./agentUi";
 
 export function ManagedAgentCard({
@@ -20,6 +21,7 @@ export function ManagedAgentCard({
   isSelected,
   onDelete,
   onMintToken,
+  onModelChanged,
   onSelect,
   onStart,
   onStop,
@@ -30,6 +32,7 @@ export function ManagedAgentCard({
   isSelected: boolean;
   onDelete: (pubkey: string) => void;
   onMintToken: (pubkey: string, name: string) => void;
+  onModelChanged?: () => void;
   onSelect: (pubkey: string) => void;
   onStart: (pubkey: string) => void;
   onStop: (pubkey: string) => void;
@@ -97,6 +100,7 @@ export function ManagedAgentCard({
             {agent.hasApiToken ? "Bearer token saved" : "Key-only dev mode"}
           </p>
         </div>
+        <ModelPicker agent={agent} onModelChanged={onModelChanged} />
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">

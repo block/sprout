@@ -225,6 +225,12 @@ pub async fn create_managed_agent(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(str::to_string),
+                model: input
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
                 start_on_app_launch: input.start_on_app_launch,
                 runtime_pid: None,
                 created_at: now_iso(),

@@ -1,0 +1,219 @@
+use std::collections::HashSet;
+
+use tauri::{AppHandle, State};
+
+use crate::{
+    app_state::AppState,
+    managed_agents::{
+        build_managed_agent_summary, find_managed_agent_mut, load_managed_agents,
+        missing_command_message, resolve_command, save_managed_agents,
+        sync_managed_agent_processes, AgentModelInfo, AgentModelsResponse, ManagedAgentSummary,
+        UpdateManagedAgentRequest, DEFAULT_AGENT_ARG,
+    },
+    util::now_iso,
+};
+
+/// Query available models from an agent via `sprout-acp models --json`.
+///
+/// Spawns a short-lived subprocess (no relay connection needed). The subprocess
+/// starts the agent, queries its model catalog, and exits. ~2-5s total.
+#[tauri::command]
+pub async fn get_agent_models(
+    pubkey: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AgentModelsResponse, String> {
+    let (resolved_acp, agent_command, agent_args, persisted_model) = {
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let mut records = load_managed_agents(&app)?;
+        let mut runtimes = state
+            .managed_agent_processes
+            .lock()
+            .map_err(|e| e.to_string())?;
+        if sync_managed_agent_processes(&mut records, &mut runtimes) {
+            save_managed_agents(&app, &records)?;
+        }
+
+        let record = records
+            .iter()
+            .find(|r| r.pubkey == pubkey)
+            .ok_or_else(|| format!("agent {pubkey} not found"))?;
+
+        let resolved = resolve_command(&record.acp_command, Some(&app))
+            .ok_or_else(|| missing_command_message(&record.acp_command, "ACP harness command"))?;
+
+        let args = if record.agent_args.is_empty() {
+            vec![DEFAULT_AGENT_ARG.to_string()]
+        } else {
+            record.agent_args.clone()
+        };
+
+        (
+            resolved,
+            record.agent_command.clone(),
+            args,
+            record.model.clone(),
+        )
+    }; // store lock released — subprocess runs without holding the lock
+
+    // Use spawn_blocking because the desktop Tauri crate doesn't enable
+    // tokio's `process` feature. std::process::Command is synchronous
+    // but fine for a short-lived subprocess (~2-5s).
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&resolved_acp)
+            .arg("models")
+            .arg("--json")
+            .env("SPROUT_ACP_AGENT_COMMAND", &agent_command)
+            .env("SPROUT_ACP_AGENT_ARGS", agent_args.join(","))
+            .env(
+                "GOOSE_MODE",
+                std::env::var("GOOSE_MODE").unwrap_or_else(|_| "auto".into()),
+            )
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .map_err(|e| format!("failed to spawn sprout-acp models: {e}"))
+    })
+    .await
+    .map_err(|e| format!("model discovery task failed: {e}"))?
+    .map_err(|e: String| e)?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "sprout-acp models failed (exit {}): {stderr}",
+            output.status.code().unwrap_or(-1)
+        ));
+    }
+
+    let raw: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("failed to parse model JSON: {e}"))?;
+
+    Ok(normalize_agent_models(&raw, persisted_model))
+}
+
+/// Update mutable fields on an existing managed agent record.
+///
+/// Does NOT auto-restart the agent. The frontend should prompt the user
+/// to restart for model changes to take effect.
+#[tauri::command]
+pub fn update_managed_agent(
+    input: UpdateManagedAgentRequest,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ManagedAgentSummary, String> {
+    let _store_guard = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let mut records = load_managed_agents(&app)?;
+    let mut runtimes = state
+        .managed_agent_processes
+        .lock()
+        .map_err(|e| e.to_string())?;
+    sync_managed_agent_processes(&mut records, &mut runtimes);
+
+    let record = find_managed_agent_mut(&mut records, &input.pubkey)?;
+
+    // Tri-state: None = don't touch, Some(None) = clear, Some(Some(v)) = set
+    if let Some(model_update) = input.model {
+        record.model = model_update;
+    }
+    if let Some(prompt_update) = input.system_prompt {
+        record.system_prompt = prompt_update;
+    }
+    record.updated_at = now_iso();
+
+    save_managed_agents(&app, &records)?;
+
+    let record = records
+        .iter()
+        .find(|r| r.pubkey == input.pubkey)
+        .ok_or_else(|| format!("agent {} not found", input.pubkey))?;
+    build_managed_agent_summary(&app, record, &runtimes)
+}
+
+// ── Model normalization ───────────────────────────────────────────────────────
+
+/// Normalize raw `sprout-acp models --json` output into a typed DTO for the frontend.
+///
+/// Merges models from both ACP paths (stable configOptions + unstable SessionModelState),
+/// deduplicates by ID (stable takes precedence), and returns a unified list.
+fn normalize_agent_models(
+    raw: &serde_json::Value,
+    persisted_model: Option<String>,
+) -> AgentModelsResponse {
+    let agent_name = raw["agent"]["name"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+    let agent_version = raw["agent"]["version"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+
+    let mut models: Vec<AgentModelInfo> = Vec::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
+
+    // 1. Stable configOptions (preferred). Only entries with category "model"
+    //    are model options — the CLI pre-filters, but we're defensive here.
+    if let Some(config_options) = raw["stable"]["configOptions"].as_array() {
+        for opt in config_options {
+            if opt.get("category").and_then(|c| c.as_str()) != Some("model") {
+                continue;
+            }
+            if let Some(options) = opt.get("options").and_then(|v| v.as_array()) {
+                for o in options {
+                    if let Some(value) = o.get("value").and_then(|v| v.as_str()) {
+                        if seen_ids.insert(value.to_string()) {
+                            models.push(AgentModelInfo {
+                                id: value.to_string(),
+                                name: o
+                                    .get("displayName")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_string),
+                                description: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Unstable availableModels (fallback — skip duplicates from stable).
+    let mut agent_default_model: Option<String> = None;
+    if let Some(unstable) = raw.get("unstable") {
+        agent_default_model = unstable["currentModelId"].as_str().map(str::to_string);
+        if let Some(available) = unstable["availableModels"].as_array() {
+            for m in available {
+                if let Some(id) = m.get("modelId").and_then(|v| v.as_str()) {
+                    if seen_ids.insert(id.to_string()) {
+                        models.push(AgentModelInfo {
+                            id: id.to_string(),
+                            name: m.get("name").and_then(|v| v.as_str()).map(str::to_string),
+                            description: m
+                                .get("description")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    let supports_switching = !models.is_empty();
+
+    AgentModelsResponse {
+        agent_name,
+        agent_version,
+        models,
+        agent_default_model,
+        selected_model: persisted_model,
+        supports_switching,
+    }
+}
