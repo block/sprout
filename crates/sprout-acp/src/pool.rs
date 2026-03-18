@@ -604,12 +604,15 @@ pub async fn run_prompt_task(
         return;
     };
 
-    // 💬 — awaited inline so it completes before the prompt fires.
-    // This guarantees add-before-remove ordering for 💬: the guard's
-    // cleanup (spawned on drop) always runs after this returns.
-    // 👀 is fire-and-forget from main.rs (see race note in guard docs).
+    // 💬 — fire-and-forget so the prompt fires immediately.
+    // The guard's cleanup (spawned on drop) removes 💬 after the turn completes.
+    // A brief race where 💬 appears slightly after the agent starts is acceptable.
     if !reaction_ids.is_empty() {
-        react_working(&ctx.rest_client, &reaction_ids).await;
+        let rest = ctx.rest_client.clone();
+        let ids = reaction_ids.clone();
+        tokio::spawn(async move {
+            react_working(&rest, &ids).await;
+        });
     }
 
     // ── Send the actual prompt ────────────────────────────────────────────
@@ -1035,8 +1038,8 @@ fn log_stop_reason(source: &PromptSource, stop_reason: &StopReason) {
 ///
 /// ## Ordering
 ///
-/// 💬 (`react_working`) is awaited inline before the prompt fires, so it is
-/// guaranteed to precede cleanup. No race possible.
+/// 💬 (`react_working`) is fire-and-forget (spawned before the prompt fires).
+/// A brief race where 💬 appears slightly after the agent starts is acceptable.
 ///
 /// 👀 (`react_seen`) is fire-and-forget from `main.rs` at queue-push time.
 /// On rare fast-failure paths (e.g., `session_new` error on an idle agent),
