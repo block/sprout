@@ -8,6 +8,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-show",
     "core:window:allow-close",
+    "notification:default",
     "opener:default",
     "websocket:default",
     "window-state:default",

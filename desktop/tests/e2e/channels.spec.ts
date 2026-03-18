@@ -217,6 +217,29 @@ test("sidebar shows unread indicator for newly active channels", async ({
   await expect(page.getByTestId("channel-unread-random")).toHaveCount(0);
 });
 
+test("sidebar clears unread indicator after opening a DM", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(page.getByTestId("channel-unread-alice-tyler")).toHaveCount(0);
+
+  await page.evaluate((pubkey) => {
+    window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "alice-tyler",
+      content: "Unread update for the DM",
+      pubkey,
+    });
+  }, TEST_IDENTITIES.alice.pubkey);
+
+  await expect(page.getByTestId("channel-unread-alice-tyler")).toBeVisible();
+
+  await page.getByTestId("channel-alice-tyler").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("alice-tyler");
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Unread update for the DM",
+  );
+  await expect(page.getByTestId("channel-unread-alice-tyler")).toHaveCount(0);
+});
+
 test("sidebar persists after channel switch", async ({ page }) => {
   await page.goto("/");
 

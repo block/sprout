@@ -88,6 +88,116 @@ test("updates presence from settings", async ({ page }) => {
   );
 });
 
+test("notification settings drive the Home badge and desktop alerts", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("sidebar-home-count")).toHaveCount(0);
+
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("settings-view")).toBeVisible();
+  await page.getByTestId("settings-nav-notifications").click();
+  await expect(page.getByTestId("settings-notifications")).toBeVisible();
+  await expect(page.getByTestId("notifications-desktop-state")).toContainText(
+    "Off",
+  );
+
+  await page.getByTestId("notifications-desktop-toggle").click();
+  await expect(page.getByTestId("notifications-desktop-state")).toContainText(
+    "On",
+  );
+  await page.getByTestId("settings-close").click();
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  await page.evaluate(() => {
+    const win = window as Window & {
+      __SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
+        category: "mention" | "needs_action" | "activity" | "agent_activity";
+        channel_id: string | null;
+        channel_name: string;
+        content: string;
+        created_at: number;
+        id: string;
+        kind: number;
+        pubkey: string;
+        tags: string[][];
+      }) => unknown;
+    };
+
+    win.__SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?.({
+      category: "mention",
+      channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
+      channel_name: "engineering",
+      content: "Please review the rollout checklist.",
+      created_at: Math.floor(Date.now() / 1000) + 5,
+      id: `mock-feed-notification-${Date.now()}`,
+      kind: 9,
+      pubkey:
+        "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
+      tags: [
+        ["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"],
+        [
+          "p",
+          "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        ],
+      ],
+    });
+  });
+
+  await expect(page.getByTestId("sidebar-home-count")).toHaveText("1");
+
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const win = window as Window & {
+          __SPROUT_E2E_NOTIFICATIONS__?: Array<{
+            body: string | null;
+            title: string;
+          }>;
+        };
+
+        return win.__SPROUT_E2E_NOTIFICATIONS__?.length ?? 0;
+      }),
+    )
+    .toBe(1);
+
+  const notifications = await page.evaluate(() => {
+    const win = window as Window & {
+      __SPROUT_E2E_NOTIFICATIONS__?: Array<{
+        body: string | null;
+        title: string;
+      }>;
+    };
+
+    return win.__SPROUT_E2E_NOTIFICATIONS__ ?? [];
+  });
+
+  expect(notifications).toEqual([
+    {
+      body: "Please review the rollout checklist.",
+      title: "@Mention in #engineering",
+    },
+  ]);
+
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("settings-nav-notifications").click();
+  await page.getByTestId("notifications-home-badge-toggle").click();
+  await page.getByTestId("settings-close").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("sidebar-home-count")).toHaveCount(0);
+
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("settings-nav-notifications").click();
+  await page.getByTestId("notifications-home-badge-toggle").click();
+  await page.getByTestId("settings-close").click();
+  await expect(page.getByTestId("sidebar-home-count")).toHaveText("1");
+
+  await page.getByRole("button", { name: "Home" }).click();
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
+  await expect(page.getByTestId("sidebar-home-count")).toHaveCount(0);
+});
+
 test("opens settings with the keyboard shortcut and updates theme", async ({
   page,
 }) => {

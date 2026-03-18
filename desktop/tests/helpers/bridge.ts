@@ -66,17 +66,58 @@ export async function installBridge(page: Page, options: BridgeOptions) {
 
   await page.addInitScript(
     ({ identity: bridgeIdentity, mock, mode, relayHttpUrl, relayWsUrl }) => {
-      (
-        window as Window & {
-          __SPROUT_E2E__?: Record<string, unknown>;
+      const notificationLog: Array<{
+        body: string | null;
+        title: string;
+      }> = [];
+
+      class MockNotification extends EventTarget {
+        static permission: NotificationPermission = "granted";
+
+        static async requestPermission(): Promise<NotificationPermission> {
+          return MockNotification.permission;
         }
-      ).__SPROUT_E2E__ = {
-        identity: bridgeIdentity,
+
+        body: string | null;
+        title: string;
+
+        constructor(title: string, options?: NotificationOptions) {
+          super();
+          this.title = title;
+          this.body = options?.body ?? null;
+          notificationLog.push({
+            body: this.body,
+            title: this.title,
+          });
+        }
+
+        close() {}
+      }
+
+      Object.defineProperty(window, "Notification", {
+        configurable: true,
+        value: MockNotification,
+        writable: true,
+      });
+
+      const testWindow = window as Window & {
+        __SPROUT_E2E__?: Record<string, unknown>;
+        __SPROUT_E2E_NOTIFICATIONS__?: Array<{
+          body: string | null;
+          title: string;
+        }>;
+      };
+      const currentConfig = testWindow.__SPROUT_E2E__ ?? {};
+
+      testWindow.__SPROUT_E2E__ = {
+        ...currentConfig,
+        identity: bridgeIdentity ?? currentConfig.identity,
         mock,
         mode,
-        relayHttpUrl,
-        relayWsUrl,
+        relayHttpUrl: relayHttpUrl ?? currentConfig.relayHttpUrl,
+        relayWsUrl: relayWsUrl ?? currentConfig.relayWsUrl,
       };
+      testWindow.__SPROUT_E2E_NOTIFICATIONS__ = notificationLog;
     },
     {
       identity,
