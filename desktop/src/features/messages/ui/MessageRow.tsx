@@ -140,7 +140,7 @@ export function MessageRow({
               {message.avatarUrl && !hasAvatarError ? (
                 <img
                   alt={`${message.author} avatar`}
-                  className="h-8 w-8 rounded-lg object-cover shadow-sm"
+                  className="h-8 w-8 rounded-lg bg-secondary object-cover shadow-sm"
                   data-testid="message-avatar-image"
                   onError={() => {
                     setHasAvatarError(true);
@@ -166,7 +166,7 @@ export function MessageRow({
         ) : message.avatarUrl && !hasAvatarError ? (
           <img
             alt={`${message.author} avatar`}
-            className="h-8 w-8 shrink-0 rounded-lg object-cover shadow-sm"
+            className="h-8 w-8 shrink-0 rounded-lg bg-secondary object-cover shadow-sm"
             data-testid="message-avatar-image"
             onError={() => {
               setHasAvatarError(true);

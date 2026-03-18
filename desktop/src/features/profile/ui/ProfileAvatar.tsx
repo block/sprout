@@ -30,7 +30,7 @@ export function ProfileAvatar({
     .slice(0, 2)
     .toUpperCase();
   const baseClassName = cn(
-    "flex shrink-0 items-center justify-center overflow-hidden bg-primary/10 text-primary shadow-sm",
+    "flex shrink-0 items-center justify-center overflow-hidden bg-primary/20 text-primary shadow-sm",
     className,
   );
 
