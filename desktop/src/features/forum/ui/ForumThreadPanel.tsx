@@ -35,10 +35,11 @@ type ForumThreadPanelProps = {
   thread: ForumThreadResponse | undefined;
   isLoading: boolean;
   isSendingReply: boolean;
+  channelId: string;
   currentPubkey?: string;
   profiles?: UserProfileLookup;
   onBack: () => void;
-  onReply: (content: string) => void;
+  onReply: (content: string, mentionPubkeys: string[]) => void;
   onDeletePost?: (eventId: string) => void;
   onDeleteReply?: (eventId: string) => void;
   canDeletePost?: boolean;
@@ -169,6 +170,7 @@ export function ForumThreadPanel({
   thread,
   isLoading,
   isSendingReply,
+  channelId,
   currentPubkey,
   profiles,
   onBack,
@@ -316,6 +318,7 @@ export function ForumThreadPanel({
       {/* Reply composer */}
       <div className="border-t border-border/60 p-4">
         <ForumComposer
+          channelId={channelId}
           isSending={isSendingReply}
           onSubmit={onReply}
           placeholder="Reply to this post..."

@@ -105,10 +105,12 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
         onDeleteReply={(eventId) => {
           deleteReplyMutation.mutate({ eventId });
         }}
-        onReply={(content) => {
+        channelId={channel.id}
+        onReply={(content, mentionPubkeys) => {
           createReplyMutation.mutate({
             content,
             parentEventId: expandedPostId,
+            mentionPubkeys,
           });
         }}
         profiles={profilesQuery.data?.profiles}
@@ -124,10 +126,11 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
         {isComposerOpen ? (
           <div className="space-y-3">
             <ForumComposer
+              channelId={channel.id}
               isSending={createPostMutation.isPending}
-              onSubmit={(content) => {
+              onSubmit={(content, mentionPubkeys) => {
                 createPostMutation.mutate(
-                  { content },
+                  { content, mentionPubkeys },
                   {
                     onSuccess: () => {
                       setIsComposerOpen(false);

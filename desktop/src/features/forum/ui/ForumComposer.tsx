@@ -1,18 +1,22 @@
 import { Send } from "lucide-react";
 import * as React from "react";
 
+import { useMentions } from "@/features/messages/lib/useMentions";
+import { MentionAutocomplete } from "@/features/messages/ui/MentionAutocomplete";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
 
 type ForumComposerProps = {
+  channelId?: string | null;
   placeholder: string;
   submitLabel: string;
   disabled?: boolean;
   isSending?: boolean;
-  onSubmit: (content: string) => void;
+  onSubmit: (content: string, mentionPubkeys: string[]) => void;
 };
 
 export function ForumComposer({
+  channelId = null,
   placeholder,
   submitLabel,
   disabled,
@@ -22,31 +26,81 @@ export function ForumComposer({
   const [value, setValue] = React.useState("");
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
+  const mentions = useMentions(channelId);
+
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     const trimmed = value.trim();
     if (!trimmed) return;
-    onSubmit(trimmed);
+    const pubkeys = mentions.extractMentionPubkeys(trimmed);
+    onSubmit(trimmed, pubkeys);
     setValue("");
+    mentions.clearMentions();
   }
 
-  function handleKeyDown(event: React.KeyboardEvent) {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+  function handleChange(event: React.ChangeEvent<HTMLTextAreaElement>) {
+    const next = event.target.value;
+    setValue(next);
+    mentions.updateMentionQuery(next, event.target.selectionStart);
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    const { handled, suggestion } = mentions.handleMentionKeyDown(event);
+    if (handled) {
+      if (suggestion) {
+        const textarea = textareaRef.current;
+        const result = mentions.insertMention(
+          suggestion,
+          value,
+          textarea?.selectionEnd ?? value.length,
+        );
+        setValue(result.nextContent);
+        requestAnimationFrame(() => {
+          textarea?.setSelectionRange(result.nextCursor, result.nextCursor);
+        });
+      }
+      return;
+    }
+
+    if (
+      event.key === "Enter" &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.nativeEvent.isComposing
+    ) {
       event.preventDefault();
       const trimmed = value.trim();
       if (trimmed) {
-        onSubmit(trimmed);
+        const pubkeys = mentions.extractMentionPubkeys(trimmed);
+        onSubmit(trimmed, pubkeys);
         setValue("");
+        mentions.clearMentions();
       }
     }
   }
 
   return (
-    <form className="flex flex-col gap-2" onSubmit={handleSubmit}>
+    <form className="relative flex flex-col gap-2" onSubmit={handleSubmit}>
+      <MentionAutocomplete
+        onSelect={(suggestion) => {
+          const textarea = textareaRef.current;
+          const result = mentions.insertMention(
+            suggestion,
+            value,
+            textarea?.selectionEnd ?? value.length,
+          );
+          setValue(result.nextContent);
+          requestAnimationFrame(() => {
+            textarea?.setSelectionRange(result.nextCursor, result.nextCursor);
+            textarea?.focus();
+          });
+        }}
+        selectedIndex={mentions.mentionSelectedIndex}
+        suggestions={mentions.isMentionOpen ? mentions.suggestions : []}
+      />
       <Textarea
         className="min-h-[100px] resize-none bg-background/80"
         disabled={disabled || isSending}
-        onChange={(event) => setValue(event.target.value)}
+        onChange={handleChange}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         ref={textareaRef}
