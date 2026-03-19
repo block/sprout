@@ -508,9 +508,8 @@ async fn test_mcp_send_and_read_message() {
         "get_messages returned an error: {history_text}"
     );
 
-    let history_json: Value = serde_json::from_str(&history_text).unwrap_or_else(|e| {
-        panic!("get_messages response is not valid JSON: {e}\n{history_text}")
-    });
+    let history_json: Value = serde_json::from_str(&history_text)
+        .unwrap_or_else(|e| panic!("get_messages response is not valid JSON: {e}\n{history_text}"));
     let events = history_json
         .get("messages")
         .and_then(|m| m.as_array())
@@ -605,9 +604,8 @@ async fn test_mcp_search() {
         "get_messages returned an error: {history_text}"
     );
 
-    let history_json: Value = serde_json::from_str(&history_text).unwrap_or_else(|e| {
-        panic!("get_messages response is not valid JSON: {e}\n{history_text}")
-    });
+    let history_json: Value = serde_json::from_str(&history_text)
+        .unwrap_or_else(|e| panic!("get_messages response is not valid JSON: {e}\n{history_text}"));
     let events = history_json
         .get("messages")
         .and_then(|m| m.as_array())

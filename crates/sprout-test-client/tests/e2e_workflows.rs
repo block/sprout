@@ -652,7 +652,8 @@ steps:
     text: "After approval"
 "#
     );
-    let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, &workflow_yaml).await;
+    let created =
+        create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, &workflow_yaml).await;
     let workflow_id = created["id"]
         .as_str()
         .expect("created workflow must have 'id'")
