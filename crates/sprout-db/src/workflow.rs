@@ -410,7 +410,7 @@ pub async fn update_workflow_status(pool: &PgPool, id: Uuid, status: WorkflowSta
     let affected = sqlx::query(
         r#"
         UPDATE workflows
-        SET status = $1
+        SET status = $1::workflow_status
         WHERE id = $2
         "#,
     )
@@ -554,7 +554,7 @@ pub async fn update_workflow_run(
     let affected = sqlx::query(
         r#"
         UPDATE workflow_runs
-        SET status        = $1,
+        SET status        = $1::run_status,
             current_step  = $2,
             execution_trace = $3,
             error_message = $4,
@@ -684,7 +684,7 @@ pub async fn update_approval(
     let affected = sqlx::query(
         r#"
         UPDATE workflow_approvals
-        SET status          = $1,
+        SET status          = $1::approval_status,
             approver_pubkey = $2,
             note            = $3,
             granted_at      = CASE WHEN $4 = 'granted' THEN NOW() ELSE granted_at END,

@@ -219,7 +219,7 @@ pub async fn create_channel(
     sqlx::query(
         r#"
         INSERT INTO channels (id, name, channel_type, visibility, description, created_by)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3::channel_type, $4::channel_visibility, $5, $6)
         "#,
     )
     .bind(id)
@@ -398,7 +398,7 @@ pub async fn add_member(
     sqlx::query(
         r#"
         INSERT INTO channel_members (channel_id, pubkey, role, invited_by)
-        VALUES ($1, $2, $3, $4)
+        VALUES ($1, $2, $3::member_role, $4)
         ON CONFLICT (channel_id, pubkey) DO UPDATE SET
             removed_at = NULL,
             removed_by = NULL,
