@@ -686,8 +686,8 @@ pub struct AccessibleChannel {
 /// Returns full channel records for all channels a user can access:
 /// open channels (visible to everyone) plus channels where the user is an active member.
 ///
-/// Uses DISTINCT + LEFT JOIN so a user who is a member of an open channel does not
-/// see it twice. Results are ordered stream -> forum -> dm, then alphabetically by name.
+/// Uses a LEFT JOIN on channel_members (PK: channel_id + pubkey) which produces at
+/// most one row per channel. Results are ordered stream -> forum -> dm, then by name.
 ///
 /// If `visibility_filter` is `Some("open")` or `Some("private")`, only channels with
 /// that visibility value are returned. `None` returns all accessible channels.

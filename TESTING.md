@@ -1487,8 +1487,8 @@ Verify schema applied:
 ```bash
 docker exec sprout-postgres psql -U sprout -d sprout -c "\d users" | grep -E "agent_owner|channel_add"
 # Expected output:
-# agent_owner_pubkey  | bytea         |           |          |
-# channel_add_policy  | text          |           | not null |
+# agent_owner_pubkey  | bytea                    |           |          |
+# channel_add_policy  | channel_add_policy       |           | not null | 'anyone'::channel_add_policy
 ```
 
 ### 2.3 Create a Test Channel
