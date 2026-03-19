@@ -63,9 +63,7 @@ export function AgentsView() {
   );
   const logAgent =
     managedAgents.find((agent) => agent.pubkey === logAgentPubkey) ?? null;
-  const managedAgentLogQuery = useManagedAgentLogQuery(
-    logAgent?.pubkey ?? null,
-  );
+  const managedAgentLogQuery = useManagedAgentLogQuery(logAgentPubkey);
   const managedPubkeys = React.useMemo(
     () => new Set(managedAgents.map((agent) => agent.pubkey)),
     [managedAgents],
@@ -276,6 +274,7 @@ export function AgentsView() {
 
       <CreateAgentDialog
         onCreated={(result) => {
+          setLogAgentPubkey(result.agent.pubkey);
           setCreatedAgent(result);
         }}
         onOpenChange={setIsCreateOpen}
