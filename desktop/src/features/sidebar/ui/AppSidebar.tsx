@@ -32,6 +32,17 @@ import {
   SidebarSeparator,
 } from "@/shared/ui/sidebar";
 
+// ---------------------------------------------------------------------------
+// Shared styles
+// ---------------------------------------------------------------------------
+
+const SECTION_ICON_BUTTON_CLASS =
+  "flex h-5 w-5 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
 type AppSidebarProps = {
   channels: Channel[];
   currentPubkey?: string;
@@ -64,250 +75,243 @@ type AppSidebarProps = {
   onSelectSettings: () => void;
 };
 
-function StreamsSection({
-  items,
+// ---------------------------------------------------------------------------
+// useCreateForm — shared state + handler for channel/forum creation
+// ---------------------------------------------------------------------------
+
+function useCreateForm(
+  onCreate: (input: { name: string; description?: string }) => Promise<void>,
+  entityLabel: string,
+) {
+  const [isOpen, setIsOpen] = React.useState(false);
+  const [draftName, setDraftName] = React.useState("");
+  const [draftDescription, setDraftDescription] = React.useState("");
+  const [errorMessage, setErrorMessage] = React.useState<string | undefined>();
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    if (isOpen) {
+      inputRef.current?.focus();
+    }
+  }, [isOpen]);
+
+  function toggle() {
+    setErrorMessage(undefined);
+    setIsOpen((current) => !current);
+  }
+
+  function cancel() {
+    setErrorMessage(undefined);
+    setDraftName("");
+    setDraftDescription("");
+    setIsOpen(false);
+  }
+
+  function changeName(value: string) {
+    setErrorMessage(undefined);
+    setDraftName(value);
+  }
+
+  function changeDescription(value: string) {
+    setErrorMessage(undefined);
+    setDraftDescription(value);
+  }
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const name = draftName.trim();
+    const description = draftDescription.trim();
+    if (!name) {
+      return;
+    }
+
+    setErrorMessage(undefined);
+
+    try {
+      await onCreate({
+        name,
+        description: description || undefined,
+      });
+
+      setDraftName("");
+      setDraftDescription("");
+      setIsOpen(false);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : `Failed to create ${entityLabel}.`,
+      );
+    }
+  }
+
+  return {
+    isOpen,
+    draftName,
+    draftDescription,
+    errorMessage,
+    inputRef,
+    toggle,
+    cancel,
+    changeName,
+    changeDescription,
+    handleSubmit,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// SectionHeaderActions — search + create icon buttons for section headers
+// ---------------------------------------------------------------------------
+
+function SectionHeaderActions({
+  browseAriaLabel,
+  browseTestId,
+  createAriaLabel,
+  closeAriaLabel,
   isCreateOpen,
-  isCreatingChannel,
-  draftName,
-  draftDescription,
-  createInputRef,
-  createErrorMessage,
+  onBrowse,
   onToggleCreate,
-  onChangeName,
-  onChangeDescription,
-  onCreateChannel,
-  onCancelCreate,
-  onSelectChannel,
-  isActiveChannel,
-  selectedChannelId,
-  unreadChannelIds,
-  onOpenBrowseChannels,
 }: {
-  items: Channel[];
+  browseAriaLabel: string;
+  browseTestId?: string;
+  createAriaLabel: string;
+  closeAriaLabel: string;
   isCreateOpen: boolean;
-  isCreatingChannel: boolean;
-  draftName: string;
-  draftDescription: string;
-  createInputRef: React.RefObject<HTMLInputElement | null>;
-  createErrorMessage?: string;
+  onBrowse: () => void;
   onToggleCreate: () => void;
-  onChangeName: (value: string) => void;
-  onChangeDescription: (value: string) => void;
-  onCreateChannel: (event: React.FormEvent<HTMLFormElement>) => void;
-  onCancelCreate: () => void;
-  onSelectChannel: (channelId: string) => void;
-  isActiveChannel: boolean;
-  selectedChannelId: string | null;
-  unreadChannelIds: Set<string>;
-  onOpenBrowseChannels: () => void;
 }) {
   return (
-    <SidebarGroup className="pt-1">
-      <SidebarGroupLabel>Channels</SidebarGroupLabel>
-      <div className="absolute right-1 top-3 flex items-center gap-0.5">
-        <button
-          aria-label="Browse channels"
-          className="flex h-5 w-5 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-          onClick={onOpenBrowseChannels}
-          type="button"
-        >
-          <Search className="h-3.5 w-3.5" />
-        </button>
-        <button
-          aria-expanded={isCreateOpen}
-          aria-label={
-            isCreateOpen ? "Close new stream form" : "Create a stream"
+    <div className="absolute right-1 top-3 flex items-center gap-0.5">
+      <button
+        aria-label={browseAriaLabel}
+        className={SECTION_ICON_BUTTON_CLASS}
+        data-testid={browseTestId}
+        onClick={onBrowse}
+        type="button"
+      >
+        <Search className="h-3.5 w-3.5" />
+      </button>
+      <button
+        aria-expanded={isCreateOpen}
+        aria-label={isCreateOpen ? closeAriaLabel : createAriaLabel}
+        className={SECTION_ICON_BUTTON_CLASS}
+        onClick={onToggleCreate}
+        type="button"
+      >
+        <Plus
+          className={
+            isCreateOpen
+              ? "h-4 w-4 rotate-45 transition-transform"
+              : "h-4 w-4 transition-transform"
           }
-          className="flex h-5 w-5 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-          onClick={onToggleCreate}
-          type="button"
-        >
-          <Plus
-            className={
-              isCreateOpen
-                ? "h-4 w-4 rotate-45 transition-transform"
-                : "h-4 w-4 transition-transform"
-            }
-          />
-        </button>
-      </div>
-      <SidebarGroupContent>
-        {isCreateOpen ? (
-          <form
-            className="mb-2 space-y-2 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/60 p-2"
-            data-testid="create-stream-form"
-            onSubmit={onCreateChannel}
-          >
-            <Input
-              autoComplete="off"
-              autoCapitalize="none"
-              autoCorrect="off"
-              className="h-8 bg-background/80"
-              data-testid="create-stream-name"
-              disabled={isCreatingChannel}
-              onChange={(event) => onChangeName(event.target.value)}
-              placeholder="release-notes"
-              ref={createInputRef}
-              spellCheck={false}
-              value={draftName}
-            />
-            <Input
-              autoComplete="off"
-              className="h-8 bg-background/80"
-              data-testid="create-stream-description"
-              disabled={isCreatingChannel}
-              onChange={(event) => onChangeDescription(event.target.value)}
-              placeholder="What this stream is for"
-              value={draftDescription}
-            />
-            <div className="flex items-center gap-2">
-              <Button
-                disabled={isCreatingChannel || draftName.trim().length === 0}
-                size="sm"
-                type="submit"
-              >
-                {isCreatingChannel ? "Creating..." : "Create"}
-              </Button>
-              <Button
-                disabled={isCreatingChannel}
-                onClick={onCancelCreate}
-                size="sm"
-                type="button"
-                variant="ghost"
-              >
-                Cancel
-              </Button>
-            </div>
-            {createErrorMessage ? (
-              <p className="text-sm text-destructive">{createErrorMessage}</p>
-            ) : null}
-          </form>
-        ) : null}
-
-        {items.length > 0 ? (
-          <SidebarMenu data-testid="stream-list">
-            {items.map((channel) => (
-              <SidebarMenuItem key={channel.id}>
-                <ChannelMenuButton
-                  channel={channel}
-                  hasUnread={unreadChannelIds.has(channel.id)}
-                  isActive={isActiveChannel && selectedChannelId === channel.id}
-                  onSelectChannel={onSelectChannel}
-                />
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-        ) : null}
-      </SidebarGroupContent>
-    </SidebarGroup>
+        />
+      </button>
+    </div>
   );
 }
 
-function ForumsSection({
-  items,
-  isCreateOpen,
-  isCreatingForum,
-  draftName,
-  draftDescription,
-  createInputRef,
-  createErrorMessage,
-  onToggleCreate,
-  onChangeName,
-  onChangeDescription,
-  onCreateForum,
-  onCancelCreate,
-  onSelectChannel,
+// ---------------------------------------------------------------------------
+// ChannelGroupSection — unified Channels / Forums section
+// ---------------------------------------------------------------------------
+
+function ChannelGroupSection({
+  browseAriaLabel,
+  browseTestId,
+  closeAriaLabel,
+  createAriaLabel,
+  createFormTestId,
+  createNameTestId,
+  createDescriptionTestId,
+  groupClassName,
   isActiveChannel,
+  isCreating,
+  items,
+  listTestId,
+  namePlaceholder,
+  descriptionPlaceholder,
+  onBrowse,
+  onSelectChannel,
   selectedChannelId,
+  title,
   unreadChannelIds,
-  onOpenBrowseChannels,
+  form,
 }: {
-  items: Channel[];
-  isCreateOpen: boolean;
-  isCreatingForum: boolean;
-  draftName: string;
-  draftDescription: string;
-  createInputRef: React.RefObject<HTMLInputElement | null>;
-  createErrorMessage?: string;
-  onToggleCreate: () => void;
-  onChangeName: (value: string) => void;
-  onChangeDescription: (value: string) => void;
-  onCreateForum: (event: React.FormEvent<HTMLFormElement>) => void;
-  onCancelCreate: () => void;
-  onSelectChannel: (channelId: string) => void;
+  browseAriaLabel: string;
+  browseTestId?: string;
+  closeAriaLabel: string;
+  createAriaLabel: string;
+  createFormTestId: string;
+  createNameTestId: string;
+  createDescriptionTestId: string;
+  groupClassName?: string;
   isActiveChannel: boolean;
+  isCreating: boolean;
+  items: Channel[];
+  listTestId: string;
+  namePlaceholder: string;
+  descriptionPlaceholder: string;
+  onBrowse: () => void;
+  onSelectChannel: (channelId: string) => void;
   selectedChannelId: string | null;
+  title: string;
   unreadChannelIds: Set<string>;
-  onOpenBrowseChannels: () => void;
+  form: ReturnType<typeof useCreateForm>;
 }) {
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel>Forums</SidebarGroupLabel>
-      <div className="absolute right-1 top-3 flex items-center gap-0.5">
-        <button
-          aria-label="Browse forums"
-          className="flex h-5 w-5 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-          onClick={onOpenBrowseChannels}
-          type="button"
-        >
-          <Search className="h-3.5 w-3.5" />
-        </button>
-        <button
-          aria-expanded={isCreateOpen}
-          aria-label={isCreateOpen ? "Close new forum form" : "New forum"}
-          className="flex h-5 w-5 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-          onClick={onToggleCreate}
-          type="button"
-        >
-          <Plus
-            className={
-              isCreateOpen
-                ? "h-4 w-4 rotate-45 transition-transform"
-                : "h-4 w-4 transition-transform"
-            }
-          />
-        </button>
-      </div>
+    <SidebarGroup className={groupClassName}>
+      <SidebarGroupLabel>{title}</SidebarGroupLabel>
+      <SectionHeaderActions
+        browseAriaLabel={browseAriaLabel}
+        browseTestId={browseTestId}
+        closeAriaLabel={closeAriaLabel}
+        createAriaLabel={createAriaLabel}
+        isCreateOpen={form.isOpen}
+        onBrowse={onBrowse}
+        onToggleCreate={form.toggle}
+      />
       <SidebarGroupContent>
-        {isCreateOpen ? (
+        {form.isOpen ? (
           <form
             className="mb-2 space-y-2 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/60 p-2"
-            data-testid="create-forum-form"
-            onSubmit={onCreateForum}
+            data-testid={createFormTestId}
+            onSubmit={(event) => {
+              void form.handleSubmit(event);
+            }}
           >
             <Input
               autoComplete="off"
               autoCapitalize="none"
               autoCorrect="off"
               className="h-8 bg-background/80"
-              data-testid="create-forum-name"
-              disabled={isCreatingForum}
-              onChange={(event) => onChangeName(event.target.value)}
-              placeholder="design-discussions"
-              ref={createInputRef}
+              data-testid={createNameTestId}
+              disabled={isCreating}
+              onChange={(event) => form.changeName(event.target.value)}
+              placeholder={namePlaceholder}
+              ref={form.inputRef}
               spellCheck={false}
-              value={draftName}
+              value={form.draftName}
             />
             <Input
               autoComplete="off"
               className="h-8 bg-background/80"
-              data-testid="create-forum-description"
-              disabled={isCreatingForum}
-              onChange={(event) => onChangeDescription(event.target.value)}
-              placeholder="What this forum is for"
-              value={draftDescription}
+              data-testid={createDescriptionTestId}
+              disabled={isCreating}
+              onChange={(event) => form.changeDescription(event.target.value)}
+              placeholder={descriptionPlaceholder}
+              value={form.draftDescription}
             />
             <div className="flex items-center gap-2">
               <Button
-                disabled={isCreatingForum || draftName.trim().length === 0}
+                disabled={isCreating || form.draftName.trim().length === 0}
                 size="sm"
                 type="submit"
               >
-                {isCreatingForum ? "Creating..." : "Create"}
+                {isCreating ? "Creating..." : "Create"}
               </Button>
               <Button
-                disabled={isCreatingForum}
-                onClick={onCancelCreate}
+                disabled={isCreating}
+                onClick={form.cancel}
                 size="sm"
                 type="button"
                 variant="ghost"
@@ -315,14 +319,14 @@ function ForumsSection({
                 Cancel
               </Button>
             </div>
-            {createErrorMessage ? (
-              <p className="text-sm text-destructive">{createErrorMessage}</p>
+            {form.errorMessage ? (
+              <p className="text-sm text-destructive">{form.errorMessage}</p>
             ) : null}
           </form>
         ) : null}
 
         {items.length > 0 ? (
-          <SidebarMenu data-testid="forum-list">
+          <SidebarMenu data-testid={listTestId}>
             {items.map((channel) => (
               <SidebarMenuItem key={channel.id}>
                 <ChannelMenuButton
@@ -339,6 +343,10 @@ function ForumsSection({
     </SidebarGroup>
   );
 }
+
+// ---------------------------------------------------------------------------
+// AppSidebar
+// ---------------------------------------------------------------------------
 
 export function AppSidebar({
   channels,
@@ -366,21 +374,11 @@ export function AppSidebar({
   onSelectSettings,
 }: AppSidebarProps) {
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
-  const [isCreateOpen, setIsCreateOpen] = React.useState(false);
-  const [isForumCreateOpen, setIsForumCreateOpen] = React.useState(false);
   const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
-  const [draftName, setDraftName] = React.useState("");
-  const [draftDescription, setDraftDescription] = React.useState("");
-  const [forumDraftName, setForumDraftName] = React.useState("");
-  const [forumDraftDescription, setForumDraftDescription] = React.useState("");
-  const [createErrorMessage, setCreateErrorMessage] = React.useState<
-    string | undefined
-  >();
-  const [forumCreateErrorMessage, setForumCreateErrorMessage] = React.useState<
-    string | undefined
-  >();
-  const createInputRef = React.useRef<HTMLInputElement>(null);
-  const forumCreateInputRef = React.useRef<HTMLInputElement>(null);
+
+  const streamForm = useCreateForm(onCreateChannel, "stream");
+  const forumForm = useCreateForm(onCreateForum, "forum");
+
   const streamChannels = channels.filter(
     (channel) => channel.channelType === "stream",
   );
@@ -405,76 +403,6 @@ export function AppSidebar({
     profile?.displayName?.trim() ||
     fallbackDisplayName?.trim() ||
     "Current identity";
-
-  React.useEffect(() => {
-    if (!isCreateOpen) {
-      return;
-    }
-
-    createInputRef.current?.focus();
-  }, [isCreateOpen]);
-
-  async function handleCreateChannel(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const name = draftName.trim();
-    const description = draftDescription.trim();
-    if (!name) {
-      return;
-    }
-
-    setCreateErrorMessage(undefined);
-
-    try {
-      await onCreateChannel({
-        name,
-        description: description || undefined,
-      });
-
-      setDraftName("");
-      setDraftDescription("");
-      setIsCreateOpen(false);
-    } catch (error) {
-      setCreateErrorMessage(
-        error instanceof Error ? error.message : "Failed to create stream.",
-      );
-    }
-  }
-
-  async function handleCreateForum(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const name = forumDraftName.trim();
-    const description = forumDraftDescription.trim();
-    if (!name) {
-      return;
-    }
-
-    setForumCreateErrorMessage(undefined);
-
-    try {
-      await onCreateForum({
-        name,
-        description: description || undefined,
-      });
-
-      setForumDraftName("");
-      setForumDraftDescription("");
-      setIsForumCreateOpen(false);
-    } catch (error) {
-      setForumCreateErrorMessage(
-        error instanceof Error ? error.message : "Failed to create forum.",
-      );
-    }
-  }
-
-  React.useEffect(() => {
-    if (!isForumCreateOpen) {
-      return;
-    }
-
-    forumCreateInputRef.current?.focus();
-  }, [isForumCreateOpen]);
 
   function handleDragPointerDown(e: React.PointerEvent) {
     if (e.button !== 0) return;
@@ -575,74 +503,46 @@ export function AppSidebar({
 
         {!isLoading ? (
           <>
-            <StreamsSection
-              createErrorMessage={createErrorMessage}
-              createInputRef={createInputRef}
-              draftDescription={draftDescription}
-              draftName={draftName}
-              isCreateOpen={isCreateOpen}
-              isCreatingChannel={isCreatingChannel}
+            <ChannelGroupSection
+              browseAriaLabel="Browse channels"
+              browseTestId="browse-channels"
+              closeAriaLabel="Close new stream form"
+              createAriaLabel="Create a stream"
+              createFormTestId="create-stream-form"
+              createNameTestId="create-stream-name"
+              createDescriptionTestId="create-stream-description"
+              descriptionPlaceholder="What this stream is for"
+              form={streamForm}
+              groupClassName="pt-1"
               isActiveChannel={selectedView === "channel"}
+              isCreating={isCreatingChannel}
               items={streamChannels}
-              onOpenBrowseChannels={onOpenBrowseChannels}
-              onCancelCreate={() => {
-                setCreateErrorMessage(undefined);
-                setDraftName("");
-                setDraftDescription("");
-                setIsCreateOpen(false);
-              }}
-              onChangeDescription={(value) => {
-                setCreateErrorMessage(undefined);
-                setDraftDescription(value);
-              }}
-              onChangeName={(value) => {
-                setCreateErrorMessage(undefined);
-                setDraftName(value);
-              }}
-              onCreateChannel={(event) => {
-                void handleCreateChannel(event);
-              }}
+              listTestId="stream-list"
+              namePlaceholder="release-notes"
+              onBrowse={onOpenBrowseChannels}
               onSelectChannel={onSelectChannel}
-              onToggleCreate={() => {
-                setCreateErrorMessage(undefined);
-                setIsCreateOpen((current) => !current);
-              }}
               selectedChannelId={selectedChannelId}
+              title="Channels"
               unreadChannelIds={unreadChannelIds}
             />
-            <ForumsSection
-              createErrorMessage={forumCreateErrorMessage}
-              createInputRef={forumCreateInputRef}
-              draftDescription={forumDraftDescription}
-              draftName={forumDraftName}
+            <ChannelGroupSection
+              browseAriaLabel="Browse forums"
+              closeAriaLabel="Close new forum form"
+              createAriaLabel="New forum"
+              createFormTestId="create-forum-form"
+              createNameTestId="create-forum-name"
+              createDescriptionTestId="create-forum-description"
+              descriptionPlaceholder="What this forum is for"
+              form={forumForm}
               isActiveChannel={selectedView === "channel"}
-              isCreateOpen={isForumCreateOpen}
-              isCreatingForum={isCreatingForum}
+              isCreating={isCreatingForum}
               items={forumChannels}
-              onOpenBrowseChannels={onOpenBrowseChannels}
-              onCancelCreate={() => {
-                setForumCreateErrorMessage(undefined);
-                setForumDraftName("");
-                setForumDraftDescription("");
-                setIsForumCreateOpen(false);
-              }}
-              onChangeDescription={(value) => {
-                setForumCreateErrorMessage(undefined);
-                setForumDraftDescription(value);
-              }}
-              onChangeName={(value) => {
-                setForumCreateErrorMessage(undefined);
-                setForumDraftName(value);
-              }}
-              onCreateForum={(event) => {
-                void handleCreateForum(event);
-              }}
+              listTestId="forum-list"
+              namePlaceholder="design-discussions"
+              onBrowse={onOpenBrowseChannels}
               onSelectChannel={onSelectChannel}
-              onToggleCreate={() => {
-                setForumCreateErrorMessage(undefined);
-                setIsForumCreateOpen((current) => !current);
-              }}
               selectedChannelId={selectedChannelId}
+              title="Forums"
               unreadChannelIds={unreadChannelIds}
             />
             <SidebarSection
