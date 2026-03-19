@@ -72,6 +72,7 @@ function BrowseState({
 
 type ChannelBrowserDialogProps = {
   channels: Channel[];
+  channelTypeFilter?: "stream" | "forum";
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onJoinChannel: (channelId: string) => Promise<void>;
@@ -80,6 +81,7 @@ type ChannelBrowserDialogProps = {
 
 export function ChannelBrowserDialog({
   channels,
+  channelTypeFilter,
   open,
   onOpenChange,
   onJoinChannel,
@@ -93,12 +95,23 @@ export function ChannelBrowserDialog({
   const inputRef = React.useRef<HTMLInputElement>(null);
   const deferredQuery = React.useDeferredValue(query.trim().toLowerCase());
 
+  const isForumMode = channelTypeFilter === "forum";
+  const browseTitle = isForumMode ? "Browse Forums" : "Browse Channels";
+  const browseDescription = isForumMode
+    ? "Discover and join open forums."
+    : "Discover and join open channels.";
+  const searchPlaceholder = isForumMode
+    ? "Search forums by name or description"
+    : "Search channels by name or description";
+  const entityLabel = isForumMode ? "forum" : "channel";
+
   const browsableChannels = React.useMemo(() => {
     const filtered = channels.filter(
       (channel) =>
         channel.channelType !== "dm" &&
         channel.visibility === "open" &&
-        !channel.archivedAt,
+        !channel.archivedAt &&
+        (channelTypeFilter ? channel.channelType === channelTypeFilter : true),
     );
 
     if (deferredQuery.length === 0) {
@@ -110,7 +123,7 @@ export function ChannelBrowserDialog({
         channel.name.toLowerCase().includes(deferredQuery) ||
         channel.description.toLowerCase().includes(deferredQuery),
     );
-  }, [channels, deferredQuery]);
+  }, [channels, channelTypeFilter, deferredQuery]);
 
   const notJoined = React.useMemo(
     () => browsableChannels.filter((channel) => !channel.isMember),
@@ -129,6 +142,10 @@ export function ChannelBrowserDialog({
   );
 
   React.useEffect(() => {
+    if (isForumMode) {
+      return;
+    }
+
     function handleKeyDown(event: KeyboardEvent) {
       if (
         event.key.toLowerCase() !== BROWSE_CHANNELS_SHORTCUT_KEY ||
@@ -147,7 +164,7 @@ export function ChannelBrowserDialog({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onOpenChange]);
+  }, [isForumMode, onOpenChange]);
 
   React.useEffect(() => {
     if (!open) {
@@ -204,18 +221,18 @@ export function ChannelBrowserDialog({
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent
         className="gap-0 overflow-hidden p-0"
-        data-testid="channel-browser-dialog"
+        data-testid={
+          isForumMode ? "forum-browser-dialog" : "channel-browser-dialog"
+        }
       >
         <DialogHeader className="border-b border-border/80 px-6 py-5">
           <DialogTitle className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
               <Compass className="h-4 w-4" />
             </span>
-            Browse Channels
+            {browseTitle}
           </DialogTitle>
-          <DialogDescription>
-            Discover and join open channels.
-          </DialogDescription>
+          <DialogDescription>{browseDescription}</DialogDescription>
           <div className="mt-4 flex items-center gap-3 rounded-2xl border border-input bg-card px-3 py-3 shadow-sm">
             <Search className="h-4 w-4 text-muted-foreground" />
             <Input
@@ -249,7 +266,7 @@ export function ChannelBrowserDialog({
                   handleSelect(selectedItem);
                 }
               }}
-              placeholder="Search channels by name or description"
+              placeholder={searchPlaceholder}
               ref={inputRef}
               value={query}
             />
@@ -265,13 +282,13 @@ export function ChannelBrowserDialog({
               <BrowseState
                 description="Try a different name or keyword."
                 icon={Search}
-                title="No channels match your search"
+                title={`No ${entityLabel}s match your search`}
               />
             ) : (
               <BrowseState
-                description="All open channels are available in the sidebar. Create a new channel to get started."
+                description={`All open ${entityLabel}s are available in the sidebar. Create a new ${entityLabel} to get started.`}
                 icon={Compass}
-                title="No channels to browse"
+                title={`No ${entityLabel}s to browse`}
               />
             )
           ) : (
@@ -280,7 +297,7 @@ export function ChannelBrowserDialog({
                 <>
                   <div className="mb-3 flex items-center justify-between px-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                     <span>
-                      {notJoined.length} channel
+                      {notJoined.length} {entityLabel}
                       {notJoined.length !== 1 ? "s" : ""} to join
                     </span>
                     <span>Enter to join</span>
@@ -333,7 +350,7 @@ export function ChannelBrowserDialog({
         </div>
 
         <div className="border-t border-border/80 bg-card/50 px-6 py-3 text-xs text-muted-foreground">
-          Showing open channels. Private channels require an invite.
+          Showing open {entityLabel}s. Private {entityLabel}s require an invite.
         </div>
       </DialogContent>
     </Dialog>
