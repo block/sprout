@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let db_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "mysql://sprout:sprout_dev@localhost:3306/sprout".to_string());
+        .unwrap_or_else(|_| "postgres://sprout:sprout_dev@localhost:5432/sprout".to_string());
 
     let db = Db::new(&DbConfig {
         database_url: db_url,

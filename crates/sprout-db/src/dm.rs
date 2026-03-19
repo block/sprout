@@ -1,18 +1,17 @@
 //! Direct message channel persistence.
 //!
 //! DMs are channels with channel_type='dm' and visibility='private'.
-//! Participant sets are immutable — adding a member creates a NEW DM.
+//! Participant sets are immutable -- adding a member creates a NEW DM.
 
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
-use sqlx::{MySqlPool, Row};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::channel::ChannelRecord;
 use crate::error::{DbError, Result};
-use crate::event::uuid_from_bytes;
 
-// ── Public structs ────────────────────────────────────────────────────────────
+// -- Public structs -----------------------------------------------------------
 
 /// A DM conversation with its participant list.
 #[derive(Debug, Clone)]
@@ -38,7 +37,7 @@ pub struct DmParticipant {
     pub role: String,
 }
 
-// ── Pure helpers ──────────────────────────────────────────────────────────────
+// -- Pure helpers -------------------------------------------------------------
 
 /// Compute a stable SHA-256 fingerprint for a set of participant pubkeys.
 ///
@@ -57,24 +56,25 @@ pub fn compute_participant_hash(pubkeys: &[&[u8]]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-// ── DB functions ──────────────────────────────────────────────────────────────
+// -- DB functions -------------------------------------------------------------
 
 /// Find an existing DM by its participant hash.
 ///
 /// Returns `None` if no matching DM exists or if it has been deleted.
 pub async fn find_dm_by_participants(
-    pool: &MySqlPool,
+    pool: &PgPool,
     participant_hash: &[u8],
 ) -> Result<Option<ChannelRecord>> {
     let row = sqlx::query(
         r#"
-        SELECT id, name, channel_type, visibility, description, canvas,
+        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+               description, canvas,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
                purpose, purpose_set_by, purpose_set_at
         FROM channels
-        WHERE participant_hash = ?
+        WHERE participant_hash = $1
           AND channel_type = 'dm'
           AND deleted_at IS NULL
         LIMIT 1
@@ -91,11 +91,11 @@ pub async fn find_dm_by_participants(
 /// existing one if a DM with the same participant set already exists.
 ///
 /// Rules:
-/// - `participants` must contain 2–9 entries (enforced here).
+/// - `participants` must contain 2-9 entries (enforced here).
 /// - `created_by` must be one of the participants.
-/// - The operation is idempotent: same participant set → same channel returned.
+/// - The operation is idempotent: same participant set -> same channel returned.
 pub async fn create_dm(
-    pool: &MySqlPool,
+    pool: &PgPool,
     participants: &[&[u8]],
     created_by: &[u8],
 ) -> Result<ChannelRecord> {
@@ -125,13 +125,14 @@ pub async fn create_dm(
     // Idempotency check inside the transaction.
     let existing = sqlx::query(
         r#"
-        SELECT id, name, channel_type, visibility, description, canvas,
+        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+               description, canvas,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
                purpose, purpose_set_by, purpose_set_at
         FROM channels
-        WHERE participant_hash = ?
+        WHERE participant_hash = $1
           AND channel_type = 'dm'
           AND deleted_at IS NULL
         LIMIT 1
@@ -154,16 +155,15 @@ pub async fn create_dm(
     };
 
     let id = Uuid::new_v4();
-    let id_bytes = id.as_bytes().as_slice().to_vec();
 
     sqlx::query(
         r#"
         INSERT INTO channels
             (id, name, channel_type, visibility, created_by, participant_hash)
-        VALUES (?, ?, 'dm', 'private', ?, ?)
+        VALUES ($1, $2, 'dm', 'private', $3, $4)
         "#,
     )
-    .bind(&id_bytes)
+    .bind(id)
     .bind(&name)
     .bind(created_by)
     .bind(hash.as_slice())
@@ -175,14 +175,14 @@ pub async fn create_dm(
         sqlx::query(
             r#"
             INSERT INTO channel_members (channel_id, pubkey, role, invited_by)
-            VALUES (?, ?, 'member', ?)
-            ON DUPLICATE KEY UPDATE
+            VALUES ($1, $2, 'member', $3)
+            ON CONFLICT (channel_id, pubkey) DO UPDATE SET
                 removed_at = NULL,
                 removed_by = NULL,
-                role = VALUES(role)
+                role = EXCLUDED.role
             "#,
         )
-        .bind(&id_bytes)
+        .bind(id)
         .bind(*pk)
         .bind(created_by)
         .execute(&mut *tx)
@@ -191,15 +191,16 @@ pub async fn create_dm(
 
     let row = sqlx::query(
         r#"
-        SELECT id, name, channel_type, visibility, description, canvas,
+        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+               description, canvas,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
                purpose, purpose_set_by, purpose_set_at
-        FROM channels WHERE id = ?
+        FROM channels WHERE id = $1
         "#,
     )
-    .bind(&id_bytes)
+    .bind(id)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -213,7 +214,7 @@ pub async fn create_dm(
 /// Includes participant details for each DM. Supports cursor-based pagination
 /// using `updated_at` ordering.
 pub async fn list_dms_for_user(
-    pool: &MySqlPool,
+    pool: &PgPool,
     pubkey: &[u8],
     limit: u32,
     cursor: Option<Uuid>,
@@ -222,9 +223,8 @@ pub async fn list_dms_for_user(
 
     // Resolve cursor to a timestamp for keyset pagination.
     let cursor_ts: Option<DateTime<Utc>> = if let Some(cid) = cursor {
-        let cid_bytes = cid.as_bytes().as_slice().to_vec();
-        let row = sqlx::query("SELECT updated_at FROM channels WHERE id = ?")
-            .bind(&cid_bytes)
+        let row = sqlx::query("SELECT updated_at FROM channels WHERE id = $1")
+            .bind(cid)
             .fetch_optional(pool)
             .await?;
         row.map(|r| r.try_get::<DateTime<Utc>, _>("updated_at"))
@@ -241,13 +241,13 @@ pub async fn list_dms_for_user(
             FROM channels c
             JOIN channel_members cm
                 ON c.id = cm.channel_id
-               AND cm.pubkey = ?
+               AND cm.pubkey = $1
                AND cm.removed_at IS NULL
             WHERE c.channel_type = 'dm'
               AND c.deleted_at IS NULL
-              AND c.updated_at < ?
+              AND c.updated_at < $2
             ORDER BY c.updated_at DESC
-            LIMIT ?
+            LIMIT $3
             "#,
         )
         .bind(pubkey)
@@ -262,12 +262,12 @@ pub async fn list_dms_for_user(
             FROM channels c
             JOIN channel_members cm
                 ON c.id = cm.channel_id
-               AND cm.pubkey = ?
+               AND cm.pubkey = $1
                AND cm.removed_at IS NULL
             WHERE c.channel_type = 'dm'
               AND c.deleted_at IS NULL
             ORDER BY c.updated_at DESC
-            LIMIT ?
+            LIMIT $2
             "#,
         )
         .bind(pubkey)
@@ -279,23 +279,22 @@ pub async fn list_dms_for_user(
     let mut results = Vec::with_capacity(channel_rows.len());
 
     for row in channel_rows {
-        let id_bytes: Vec<u8> = row.try_get("id")?;
-        let channel_id = uuid_from_bytes(&id_bytes)?;
+        let channel_id: Uuid = row.try_get("id")?;
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
         let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
 
         // Fetch participants for this DM.
         let member_rows = sqlx::query(
             r#"
-            SELECT cm.pubkey, cm.role, u.display_name
+            SELECT cm.pubkey, cm.role::text AS role, u.display_name
             FROM channel_members cm
             LEFT JOIN users u ON cm.pubkey = u.pubkey
-            WHERE cm.channel_id = ?
+            WHERE cm.channel_id = $1
               AND cm.removed_at IS NULL
             ORDER BY cm.joined_at ASC
             "#,
         )
-        .bind(&id_bytes)
+        .bind(channel_id)
         .fetch_all(pool)
         .await?;
 
@@ -327,10 +326,10 @@ pub async fn list_dms_for_user(
 /// ensuring the caller is always a participant in their own DM.
 ///
 /// Returns `(channel, was_created)`:
-/// - `was_created = true`  — a new DM was created.
-/// - `was_created = false` — an existing DM was returned.
+/// - `was_created = true`  -- a new DM was created.
+/// - `was_created = false` -- an existing DM was returned.
 pub async fn open_dm(
-    pool: &MySqlPool,
+    pool: &PgPool,
     pubkeys: &[&[u8]],
     created_by: &[u8],
 ) -> Result<(ChannelRecord, bool)> {
@@ -357,23 +356,13 @@ pub async fn open_dm(
     // Create new DM.
     let channel = create_dm(pool, &all, created_by).await?;
 
-    // Determine if we actually created it by checking the created_at/updated_at delta.
-    // A simpler approach: re-check the hash. If created_at == updated_at it's brand new.
-    // But the most reliable signal is whether find_dm returned None above.
-    // Since create_dm is idempotent (returns existing if race occurred), we check
-    // whether the channel was just created by comparing created_at ≈ now.
-    // For simplicity, we return true here — the caller treats it as "just created".
-    // In the race case (two concurrent open_dm calls), one will get true and one false
-    // (the second call's create_dm returns the existing record, but we already checked
-    // above and got None). This is an acceptable edge case for idempotent DM creation.
     Ok((channel, true))
 }
 
-// ── Row mapping ───────────────────────────────────────────────────────────────
+// -- Row mapping --------------------------------------------------------------
 
-fn row_to_channel_record(row: sqlx::mysql::MySqlRow) -> Result<ChannelRecord> {
-    let id_bytes: Vec<u8> = row.try_get("id")?;
-    let id = uuid_from_bytes(&id_bytes)?;
+fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
+    let id: Uuid = row.try_get("id")?;
     let topic_required: bool = row.try_get("topic_required")?;
 
     Ok(ChannelRecord {
@@ -400,7 +389,7 @@ fn row_to_channel_record(row: sqlx::mysql::MySqlRow) -> Result<ChannelRecord> {
     })
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// -- Tests --------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

@@ -3,11 +3,11 @@
 //! One reaction per user per emoji per event. Soft-delete via removed_at.
 
 use chrono::{DateTime, Utc};
-use sqlx::{MySqlPool, Row};
+use sqlx::{PgPool, Row};
 
 use crate::error::Result;
 
-// ── Public structs ────────────────────────────────────────────────────────────
+// -- Public structs -----------------------------------------------------------
 
 /// A grouped set of reactions for a single emoji on an event.
 #[derive(Debug, Clone)]
@@ -56,21 +56,17 @@ pub struct ActiveReactionRecord {
     pub reaction_event_id: Option<Vec<u8>>,
 }
 
-// ── Write operations ──────────────────────────────────────────────────────────
+// -- Write operations ---------------------------------------------------------
 
 /// Add (or re-activate) a reaction.
 ///
 /// Returns `Ok(true)` if the reaction was added or re-activated, `Ok(false)` if
 /// the reaction is already active (duplicate, no change made).
 ///
-/// Uses `INSERT ... ON DUPLICATE KEY UPDATE` to eliminate the TOCTOU race where
+/// Uses `INSERT ... ON CONFLICT DO UPDATE` to eliminate the TOCTOU race where
 /// two concurrent adds both see no existing row and then race to INSERT.
-/// MySQL rows_affected semantics (CLIENT_FOUND_ROWS off):
-///   1 = new row inserted → added
-///   2 = existing row updated (reactivated from soft-delete) → re-added
-///   0 = duplicate key matched but no values changed (already active) → no-op
 pub async fn add_reaction(
-    pool: &MySqlPool,
+    pool: &PgPool,
     event_id: &[u8],
     event_created_at: DateTime<Utc>,
     pubkey: &[u8],
@@ -80,15 +76,11 @@ pub async fn add_reaction(
     let result = sqlx::query(
         r#"
         INSERT INTO reactions (event_created_at, event_id, pubkey, emoji, reaction_event_id)
-        VALUES (?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-            created_at = IF(removed_at IS NOT NULL, NOW(6), created_at),
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (event_created_at, event_id, pubkey, emoji) DO UPDATE SET
+            created_at = CASE WHEN reactions.removed_at IS NOT NULL THEN NOW() ELSE reactions.created_at END,
             removed_at = NULL,
-            -- Keep existing non-NULL event ID if the new value is NULL.
-            -- REST calls add_reaction(None) first, then backfills via
-            -- set_reaction_event_id. Without COALESCE, a re-add would
-            -- clobber the existing event ID with NULL.
-            reaction_event_id = COALESCE(VALUES(reaction_event_id), reaction_event_id)
+            reaction_event_id = COALESCE(EXCLUDED.reaction_event_id, reactions.reaction_event_id)
         "#,
     )
     .bind(event_created_at)
@@ -108,7 +100,7 @@ pub async fn add_reaction(
 ///
 /// Returns `true` if a row was updated, `false` if not found or already removed.
 pub async fn remove_reaction(
-    pool: &MySqlPool,
+    pool: &PgPool,
     event_id: &[u8],
     event_created_at: DateTime<Utc>,
     pubkey: &[u8],
@@ -117,11 +109,11 @@ pub async fn remove_reaction(
     let result = sqlx::query(
         r#"
         UPDATE reactions
-        SET removed_at = NOW(6)
-        WHERE event_created_at = ?
-          AND event_id = ?
-          AND pubkey = ?
-          AND emoji = ?
+        SET removed_at = NOW()
+        WHERE event_created_at = $1
+          AND event_id = $2
+          AND pubkey = $3
+          AND emoji = $4
           AND removed_at IS NULL
         "#,
     )
@@ -139,14 +131,14 @@ pub async fn remove_reaction(
 ///
 /// Returns `true` if a row was updated, `false` if not found or already removed.
 pub async fn remove_reaction_by_source_event_id(
-    pool: &MySqlPool,
+    pool: &PgPool,
     reaction_event_id: &[u8],
 ) -> Result<bool> {
     let result = sqlx::query(
         r#"
         UPDATE reactions
-        SET removed_at = NOW(6)
-        WHERE reaction_event_id = ?
+        SET removed_at = NOW()
+        WHERE reaction_event_id = $1
           AND removed_at IS NULL
         "#,
     )
@@ -159,7 +151,7 @@ pub async fn remove_reaction_by_source_event_id(
 
 /// Look up the active reaction row for one actor + emoji + target tuple.
 pub async fn get_active_reaction_record(
-    pool: &MySqlPool,
+    pool: &PgPool,
     event_id: &[u8],
     event_created_at: DateTime<Utc>,
     pubkey: &[u8],
@@ -169,10 +161,10 @@ pub async fn get_active_reaction_record(
         r#"
         SELECT reaction_event_id
         FROM reactions
-        WHERE event_id = ?
-          AND event_created_at = ?
-          AND pubkey = ?
-          AND emoji = ?
+        WHERE event_id = $1
+          AND event_created_at = $2
+          AND pubkey = $3
+          AND emoji = $4
           AND removed_at IS NULL
         LIMIT 1
         "#,
@@ -197,7 +189,7 @@ pub async fn get_active_reaction_record(
 /// Called after the kind:7 event is created and stored, to link the
 /// reaction row to its source event. Returns `true` if the row was updated.
 pub async fn set_reaction_event_id(
-    pool: &MySqlPool,
+    pool: &PgPool,
     event_id: &[u8],
     event_created_at: DateTime<Utc>,
     pubkey: &[u8],
@@ -207,11 +199,11 @@ pub async fn set_reaction_event_id(
     let result = sqlx::query(
         r#"
         UPDATE reactions
-        SET reaction_event_id = ?
-        WHERE event_created_at = ?
-          AND event_id = ?
-          AND pubkey = ?
-          AND emoji = ?
+        SET reaction_event_id = $1
+        WHERE event_created_at = $2
+          AND event_id = $3
+          AND pubkey = $4
+          AND emoji = $5
           AND removed_at IS NULL
         "#,
     )
@@ -226,45 +218,39 @@ pub async fn set_reaction_event_id(
     Ok(result.rows_affected() > 0)
 }
 
-// ── Read operations ───────────────────────────────────────────────────────────
+// -- Read operations ----------------------------------------------------------
 
 /// Get all active reactions for an event, grouped by emoji.
 ///
 /// Returns one [`ReactionGroup`] per emoji, each containing the list of reacting
-/// user pubkeys. Display names are NOT resolved here — callers should enrich via
+/// user pubkeys. Display names are NOT resolved here -- callers should enrich via
 /// `get_users_bulk` if needed.
 ///
 /// `cursor` is reserved for future keyset pagination (currently unused).
 pub async fn get_reactions(
-    pool: &MySqlPool,
+    pool: &PgPool,
     event_id: &[u8],
     event_created_at: DateTime<Utc>,
     limit: u32,
     _cursor: Option<&str>,
 ) -> Result<Vec<ReactionGroup>> {
-    // Raise the GROUP_CONCAT length limit for this session. The default (1024 bytes)
-    // truncates at ~15 users with 64-char hex pubkeys. 1 MiB handles any realistic load.
-    sqlx::query("SET SESSION group_concat_max_len = 1048576")
-        .execute(pool)
-        .await?;
-
     let rows = sqlx::query(
         r#"
         SELECT emoji,
                COUNT(*) AS count,
-               GROUP_CONCAT(HEX(pubkey) ORDER BY created_at SEPARATOR ',') AS pubkeys_hex
+               string_agg(encode(pubkey, 'hex'), ',' ORDER BY created_at) AS pubkeys_hex
         FROM reactions
-        WHERE event_id = ?
-          AND event_created_at = ?
+        WHERE event_id = $1
+          AND event_created_at = $2
           AND removed_at IS NULL
         GROUP BY emoji
         ORDER BY emoji
-        LIMIT ?
+        LIMIT $3
         "#,
     )
     .bind(event_id)
     .bind(event_created_at)
-    .bind(limit)
+    .bind(limit as i64)
     .fetch_all(pool)
     .await?;
 
@@ -273,8 +259,6 @@ pub async fn get_reactions(
     for row in rows {
         let emoji: String = row.try_get("emoji")?;
         let count: i64 = row.try_get("count")?;
-        // GROUP_CONCAT(HEX(pubkey)) returns comma-separated hex strings.
-        // Using HEX avoids corruption from 0x2C bytes inside binary pubkeys.
         let pubkeys_hex: Option<String> = row.try_get("pubkeys_hex")?;
 
         let users = parse_pubkeys_hex(pubkeys_hex.as_deref().unwrap_or(""));
@@ -294,16 +278,16 @@ pub async fn get_reactions(
 /// Returns one [`BulkReactionEntry`] per input pair that has at least one
 /// active reaction. Pairs with no reactions are omitted.
 pub async fn get_reactions_bulk(
-    pool: &MySqlPool,
+    pool: &PgPool,
     event_ids: &[(&[u8], DateTime<Utc>)],
 ) -> Result<Vec<BulkReactionEntry>> {
     if event_ids.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Run one query per event. For typical message-list sizes (≤100 events)
+    // Run one query per event. For typical message-list sizes (<=100 events)
     // this is acceptable; a single-query approach with dynamic IN clauses over
-    // composite keys is complex in MySQL and can be added later if needed.
+    // composite keys can be added later if needed.
     let mut entries = Vec::new();
 
     for (event_id, event_created_at) in event_ids {
@@ -311,8 +295,8 @@ pub async fn get_reactions_bulk(
             r#"
             SELECT emoji, COUNT(*) AS count
             FROM reactions
-            WHERE event_id = ?
-              AND event_created_at = ?
+            WHERE event_id = $1
+              AND event_created_at = $2
               AND removed_at IS NULL
             GROUP BY emoji
             ORDER BY emoji
@@ -344,13 +328,12 @@ pub async fn get_reactions_bulk(
     Ok(entries)
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers ------------------------------------------------------------------
 
-/// Parse a `GROUP_CONCAT(HEX(pubkey))` string into individual pubkeys.
+/// Parse a `string_agg(encode(pubkey, 'hex'))` string into individual pubkeys.
 ///
-/// MySQL's `HEX()` encodes each byte as two uppercase hex characters, so a
-/// 32-byte pubkey becomes a 64-character hex string. The comma separator is
-/// safe because hex output never contains 0x2C bytes.
+/// Postgres `encode(bytea, 'hex')` produces lowercase hex characters, so a
+/// 32-byte pubkey becomes a 64-character hex string.
 fn parse_pubkeys_hex(hex_str: &str) -> Vec<ReactionUser> {
     if hex_str.is_empty() {
         return Vec::new();

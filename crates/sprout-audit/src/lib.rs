@@ -1,7 +1,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 //! Tamper-evident hash-chain audit log. Each entry chains to the previous via
-//! SHA-256. Single-writer via MySQL `GET_LOCK`. AUTH events (kind 22242)
+//! SHA-256. Single-writer via Postgres `pg_advisory_lock`. AUTH events (kind 22242)
 //! are rejected — they carry bearer tokens.
 
 /// Audit action types recorded in the log.

@@ -415,7 +415,7 @@ async fn emit_addressable_discovery_event(
 
     let (stored, _) = state
         .db
-        .replace_addressable_event(&event, channel_id)
+        .replace_addressable_event(&event, Some(channel_id))
         .await?;
     let kind_u32 = event_kind_u32(&stored.event);
     dispatch_persistent_event(state, &stored, kind_u32, relay_pubkey_hex).await;
@@ -563,7 +563,7 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
 
     if let Err(ref e) = result {
         let msg = format!("{e}");
-        if msg.contains("Duplicate entry") || msg.contains("1062") {
+        if msg.contains("duplicate key value") || msg.contains("23505") {
             warn!(pubkey = %nostr::util::hex::encode(&pubkey_bytes),
                 "kind:0 NIP-05 handle contested, syncing profile without it");
             state

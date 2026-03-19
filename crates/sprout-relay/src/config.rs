@@ -18,7 +18,7 @@ pub enum ConfigError {
 pub struct Config {
     /// Address the relay HTTP/WebSocket server binds to.
     pub bind_addr: SocketAddr,
-    /// MySQL database connection URL.
+    /// Postgres database connection URL.
     pub database_url: String,
     /// Redis connection URL used by the pub/sub manager.
     pub redis_url: String,
@@ -72,7 +72,7 @@ impl Config {
             .map_err(|e| ConfigError::InvalidBindAddr(e.to_string()))?;
 
         let database_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "mysql://sprout:sprout_dev@localhost:3306/sprout".to_string());
+            .unwrap_or_else(|_| "postgres://sprout:sprout_dev@localhost:5432/sprout".to_string());
 
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());

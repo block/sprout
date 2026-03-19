@@ -10,13 +10,13 @@
 //! `query_mentions` and `query_needs_action` join against the `event_mentions` table,
 //! which carries composite indexes on `(pubkey_hex, event_created_at DESC)` and
 //! `(pubkey_hex, event_kind, event_created_at DESC)`.  This replaces the Phase 1
-//! `JSON_CONTAINS` full-table scan with an indexed lookup, keeping feed queries
+//! full-table scan with an indexed lookup, keeping feed queries
 //! sub-millisecond at scale (>100k events).
 //!
 //! **Phase 2 implemented**: the `event_mentions` table is populated by
 //! [`crate::insert_mentions`] on every event insert.  `query_mentions` and
 //! `query_needs_action` now use `INNER JOIN event_mentions` instead of
-//! `JSON_CONTAINS`.
+//! scanning tags JSON.
 //!
 //! All feed queries enforce a hard `LIMIT` cap of `FEED_MAX_LIMIT` rows to bound
 //! the result-set size and prevent runaway memory usage.
@@ -28,7 +28,7 @@
 pub const FEED_MAX_LIMIT: i64 = 100;
 
 use chrono::{DateTime, Utc};
-use sqlx::{MySqlPool, QueryBuilder};
+use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
 
 use sprout_core::kind::{
@@ -43,13 +43,13 @@ use crate::event::row_to_stored_event;
 
 /// Find events that @mention the given pubkey (have `["p", pubkey_hex]` in tags).
 ///
-/// Joins against the `event_mentions` table — Phase 2 implementation.
+/// Joins against the `event_mentions` table -- Phase 2 implementation.
 /// **Performance**: indexed lookup on `(pubkey_hex, event_created_at DESC)`.
 ///
 /// Only returns events from `accessible_channel_ids` for access control.
 /// `limit` is capped at [`FEED_MAX_LIMIT`] regardless of the value passed by the caller.
 pub async fn query_mentions(
-    pool: &MySqlPool,
+    pool: &PgPool,
     pubkey_bytes: &[u8],
     accessible_channel_ids: &[Uuid],
     since: Option<DateTime<Utc>>,
@@ -58,7 +58,7 @@ pub async fn query_mentions(
     let limit = limit.min(FEED_MAX_LIMIT);
     let pubkey_hex = hex::encode(pubkey_bytes);
 
-    let mut qb: QueryBuilder<sqlx::MySql> = QueryBuilder::new(
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
         "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, \
          e.received_at, e.channel_id \
          FROM events e \
@@ -76,7 +76,7 @@ pub async fn query_mentions(
         qb.push(" AND e.channel_id IN (");
         let mut sep = qb.separated(", ");
         for id in accessible_channel_ids {
-            sep.push_bind(id.as_bytes().to_vec());
+            sep.push_bind(*id);
         }
         qb.push(")");
     }
@@ -108,7 +108,7 @@ pub async fn query_mentions(
 /// `(pubkey_hex, event_kind, event_created_at DESC)`.
 /// `limit` is capped at [`FEED_MAX_LIMIT`] regardless of the value passed by the caller.
 pub async fn query_needs_action(
-    pool: &MySqlPool,
+    pool: &PgPool,
     pubkey_bytes: &[u8],
     accessible_channel_ids: &[Uuid],
     since: Option<DateTime<Utc>>,
@@ -117,7 +117,7 @@ pub async fn query_needs_action(
     let limit = limit.min(FEED_MAX_LIMIT);
     let pubkey_hex = hex::encode(pubkey_bytes);
 
-    let mut qb: QueryBuilder<sqlx::MySql> = QueryBuilder::new(
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
         "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, \
          e.received_at, e.channel_id \
          FROM events e \
@@ -135,7 +135,7 @@ pub async fn query_needs_action(
         qb.push(" AND e.channel_id IN (");
         let mut sep = qb.separated(", ");
         for id in accessible_channel_ids {
-            sep.push_bind(id.as_bytes().to_vec());
+            sep.push_bind(*id);
         }
         qb.push(")");
     }
@@ -161,16 +161,16 @@ pub async fn query_needs_action(
 ///
 /// Returns stream messages, forum posts, and agent job events.
 /// Workflow execution kinds (46001-46012) are intentionally excluded to avoid noise.
-/// **Performance**: uses indexed `kind` + `channel_id` columns — no JSON scan.
+/// **Performance**: uses indexed `kind` + `channel_id` columns -- no JSON scan.
 /// `limit` is capped at [`FEED_MAX_LIMIT`] regardless of the value passed by the caller.
 pub async fn query_activity(
-    pool: &MySqlPool,
+    pool: &PgPool,
     accessible_channel_ids: &[Uuid],
     since: Option<DateTime<Utc>>,
     limit: i64,
 ) -> Result<Vec<StoredEvent>> {
     let limit = limit.min(FEED_MAX_LIMIT);
-    let mut qb: QueryBuilder<sqlx::MySql> = QueryBuilder::new(
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
         "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
          FROM events WHERE 1=1",
     );
@@ -185,7 +185,7 @@ pub async fn query_activity(
         qb.push(" AND channel_id IN (");
         let mut sep = qb.separated(", ");
         for id in accessible_channel_ids {
-            sep.push_bind(id.as_bytes().to_vec());
+            sep.push_bind(*id);
         }
         qb.push(")");
     }
@@ -206,20 +206,19 @@ pub async fn query_activity(
     Ok(out)
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// -- Tests --------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use uuid::Uuid;
 
-    // ── Hex encoding of pubkey ────────────────────────────────────────────────
+    // -- Hex encoding of pubkey -----------------------------------------------
 
     #[test]
     fn pubkey_hex_encoding_is_lowercase() {
         let pubkey_bytes = vec![0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45];
         let hex = hex::encode(&pubkey_bytes);
         assert_eq!(hex, "abcdef012345");
-        // Must be lowercase — MySQL JSON_CONTAINS is case-sensitive.
         assert_eq!(hex, hex.to_lowercase());
     }
 
@@ -246,13 +245,10 @@ mod tests {
         assert_eq!(hex, "f".repeat(64));
     }
 
-    // ── JSON tag format for JSON_CONTAINS ────────────────────────────────────
+    // -- JSON tag format for tag matching -------------------------------------
 
     #[test]
     fn json_tag_format_for_p_tag_mention() {
-        // The JSON_CONTAINS query uses serde_json::json!([["p", pubkey_hex]]).to_string()
-        // The outer array wraps the sub-array so MySQL checks for exact element membership,
-        // not element-wise containment across the whole tags array.
         let pubkey_hex = "abc123def456".to_owned();
         let tag_json = serde_json::json!([["p", pubkey_hex]]).to_string();
         assert_eq!(tag_json, r#"[["p","abc123def456"]]"#);
@@ -260,7 +256,6 @@ mod tests {
 
     #[test]
     fn json_tag_format_is_compact_not_pretty() {
-        // Must be compact JSON — no spaces — for MySQL JSON_CONTAINS.
         let pubkey_hex = "deadbeef".to_owned();
         let tag_json = serde_json::json!([["p", pubkey_hex]]).to_string();
         assert!(
@@ -273,8 +268,6 @@ mod tests {
     fn json_tag_format_p_tag_is_first_element() {
         let pubkey_hex = "aabbccdd".to_owned();
         let tag_json = serde_json::json!([["p", pubkey_hex]]).to_string();
-        // The outer array wraps the inner ["p", ...] sub-array.
-        // Must start with [["p" — outer array containing p-tag sub-array.
         assert!(tag_json.starts_with(r#"[["p","#), "got: {tag_json}");
     }
 
@@ -282,7 +275,6 @@ mod tests {
     fn json_tag_format_round_trips_through_serde() {
         let pubkey_hex = "cafebabe00112233".to_owned();
         let tag_json = serde_json::json!([["p", pubkey_hex.clone()]]).to_string();
-        // Parse back and verify structure: outer array with one inner array element.
         let parsed: serde_json::Value = serde_json::from_str(&tag_json).unwrap();
         let outer = parsed.as_array().unwrap();
         assert_eq!(outer.len(), 1, "outer array must have exactly one element");
@@ -292,7 +284,7 @@ mod tests {
         assert_eq!(inner[1].as_str().unwrap(), pubkey_hex);
     }
 
-    // ── Kind number sets ──────────────────────────────────────────────────────
+    // -- Kind number sets -----------------------------------------------------
 
     #[test]
     fn mentions_query_includes_stream_message_kind() {
@@ -382,8 +374,6 @@ mod tests {
             KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
             KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
         };
-        // Workflow execution events (46001–46012) must NOT appear in activity feed
-        // to prevent loops. Verify they are absent from the activity kind set.
         let activity_kinds: &[u32] = &[
             KIND_STREAM_MESSAGE,
             KIND_STREAM_MESSAGE_V2,
@@ -422,21 +412,19 @@ mod tests {
         for kind in needs_action_kinds {
             assert!(
                 !activity_kinds.contains(kind),
-                "kind {kind} appears in both needs_action and activity — check intent"
+                "kind {kind} appears in both needs_action and activity -- check intent"
             );
         }
     }
 
-    // ── Channel ID filtering logic ────────────────────────────────────────────
+    // -- Channel ID filtering logic -------------------------------------------
 
     #[test]
     fn channel_id_bytes_encoding_is_correct() {
-        // Channel IDs are stored as BINARY(16) — UUID bytes, not hex strings.
         let channel_id = Uuid::parse_str("9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50").unwrap();
         let bytes = channel_id.as_bytes().to_vec();
         assert_eq!(bytes.len(), 16);
 
-        // Round-trip: bytes → UUID → bytes must be identical.
         let recovered = Uuid::from_slice(&bytes).unwrap();
         assert_eq!(channel_id, recovered);
     }
@@ -449,7 +437,6 @@ mod tests {
         let bytes1 = id1.as_bytes().to_vec();
         let bytes2 = id2.as_bytes().to_vec();
 
-        // Different UUIDs must produce different byte sequences.
         assert_ne!(bytes1, bytes2);
     }
 
@@ -462,8 +449,6 @@ mod tests {
 
     #[test]
     fn empty_channel_list_skips_channel_filter() {
-        // When accessible_channel_ids is empty, the IN clause is omitted.
-        // The query builder only adds "AND channel_id IN (...)" when !accessible.is_empty().
         let accessible: Vec<Uuid> = vec![];
         assert!(
             accessible.is_empty(),
@@ -485,7 +470,6 @@ mod tests {
         let ids: Vec<Uuid> = (0..5).map(|_| Uuid::new_v4()).collect();
         assert_eq!(ids.len(), 5);
 
-        // Each must produce a unique 16-byte sequence.
         let byte_seqs: Vec<Vec<u8>> = ids.iter().map(|id| id.as_bytes().to_vec()).collect();
         let unique: std::collections::HashSet<Vec<u8>> = byte_seqs.into_iter().collect();
         assert_eq!(unique.len(), 5, "all channel IDs must be distinct");

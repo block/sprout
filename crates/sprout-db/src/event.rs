@@ -2,11 +2,11 @@
 //!
 //! AUTH events (kind 22242) are never stored — they carry bearer tokens.
 //! Ephemeral events (kinds 20000–29999) are never stored — Redis pub/sub only.
-//! Deduplication is application-layer: INSERT IGNORE.
+//! Deduplication is application-layer: ON CONFLICT DO NOTHING.
 
 use chrono::{DateTime, Utc};
 use nostr::Event;
-use sqlx::{MySqlPool, QueryBuilder, Row};
+use sqlx::{PgPool, QueryBuilder, Row};
 use uuid::Uuid;
 
 use sprout_core::kind::{event_kind_i32, is_ephemeral, KIND_AUTH};
@@ -19,7 +19,7 @@ use crate::error::{DbError, Result};
 pub struct EventQuery {
     /// Restrict results to this channel.
     pub channel_id: Option<Uuid>,
-    /// Restrict results to these kind values (stored as `i32` in MySQL).
+    /// Restrict results to these kind values (stored as `i32` in Postgres).
     pub kinds: Option<Vec<i32>>,
     /// Restrict results to events from this pubkey.
     pub pubkey: Option<Vec<u8>>,
@@ -40,7 +40,7 @@ pub struct EventQuery {
 ///
 /// Returns `(StoredEvent, was_inserted)` — `was_inserted` is `false` on duplicate.
 pub async fn insert_event(
-    pool: &MySqlPool,
+    pool: &PgPool,
     event: &Event,
     channel_id: Option<Uuid>,
 ) -> Result<(StoredEvent, bool)> {
@@ -58,18 +58,17 @@ pub async fn insert_event(
     let pubkey_bytes = event.pubkey.to_bytes();
     let sig_bytes = event.sig.serialize();
     let tags_json = serde_json::to_value(&event.tags)?;
-    // Cast chain: nostr Kind (u16) → i32 (MySQL INT column). Safe: all Sprout kinds fit in i32.
+    // Cast chain: nostr Kind (u16) → i32 (Postgres INT column). Safe: all Sprout kinds fit in i32.
     let kind_i32 = event_kind_i32(event);
     let created_at_secs = event.created_at.as_u64() as i64;
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
     let received_at = Utc::now();
-    let channel_id_bytes: Option<[u8; 16]> = channel_id.map(|u| *u.as_bytes());
-
     let result = sqlx::query(
         r#"
-        INSERT IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT DO NOTHING
         "#,
     )
     .bind(id_bytes.as_slice())
@@ -80,7 +79,7 @@ pub async fn insert_event(
     .bind(&event.content)
     .bind(sig_bytes.as_slice())
     .bind(received_at)
-    .bind(channel_id_bytes.as_ref().map(|b| b.as_slice()))
+    .bind(channel_id)
     .execute(pool)
     .await?;
 
@@ -96,7 +95,7 @@ pub async fn insert_event(
 ///
 /// Uses `QueryBuilder` for dynamic filter composition — avoids string concatenation
 /// while keeping all user values in bind parameters.
-pub async fn query_events(pool: &MySqlPool, q: &EventQuery) -> Result<Vec<StoredEvent>> {
+pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEvent>> {
     // kinds:[] means "match no kinds" — return empty immediately.
     if q.kinds.as_deref().is_some_and(|k| k.is_empty()) {
         return Ok(vec![]);
@@ -105,7 +104,7 @@ pub async fn query_events(pool: &MySqlPool, q: &EventQuery) -> Result<Vec<Stored
     let limit_val = q.limit.unwrap_or(100).min(1000);
     let offset_val = q.offset.unwrap_or(0);
 
-    let mut qb: QueryBuilder<sqlx::MySql> = if let Some(ref p_hex) = q.p_tag_hex {
+    let mut qb: QueryBuilder<sqlx::Postgres> = if let Some(ref p_hex) = q.p_tag_hex {
         // Join against event_mentions for #p-filtered queries (indexed).
         let mut b = QueryBuilder::new(
             "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, \
@@ -128,7 +127,7 @@ pub async fn query_events(pool: &MySqlPool, q: &EventQuery) -> Result<Vec<Stored
 
     if let Some(ch) = q.channel_id {
         qb.push(format!(" AND {col_prefix}channel_id = "))
-            .push_bind(ch.as_bytes().to_vec());
+            .push_bind(ch);
     }
 
     if let Some(ks) = q.kinds.as_deref().filter(|k| !k.is_empty()) {
@@ -168,7 +167,7 @@ pub async fn query_events(pool: &MySqlPool, q: &EventQuery) -> Result<Vec<Stored
     Ok(out)
 }
 
-pub(crate) fn row_to_stored_event(row: sqlx::mysql::MySqlRow) -> Result<Option<StoredEvent>> {
+pub(crate) fn row_to_stored_event(row: sqlx::postgres::PgRow) -> Result<Option<StoredEvent>> {
     let id_bytes: Vec<u8> = row.try_get("id")?;
     let pubkey_bytes: Vec<u8> = row.try_get("pubkey")?;
     let created_at: DateTime<Utc> = row.try_get("created_at")?;
@@ -178,10 +177,9 @@ pub(crate) fn row_to_stored_event(row: sqlx::mysql::MySqlRow) -> Result<Option<S
     let sig_bytes: Vec<u8> = row.try_get("sig")?;
     let received_at: DateTime<Utc> = row.try_get("received_at")?;
 
-    let channel_id_bytes: Option<Vec<u8>> = row.try_get("channel_id")?;
-    let channel_id: Option<Uuid> = channel_id_bytes.map(|b| uuid_from_bytes(&b)).transpose()?;
+    let channel_id: Option<Uuid> = row.try_get("channel_id")?;
 
-    // kind is stored as i32 (MySQL INT) but Nostr uses u16. Values > 65535 are corrupt.
+    // kind is stored as i32 (Postgres INT) but Nostr uses u16. Values > 65535 are corrupt.
     let kind_u16 = u16::try_from(kind_i32)
         .map_err(|_| DbError::InvalidData(format!("kind out of u16 range: {kind_i32}")))?;
 
@@ -212,14 +210,14 @@ pub(crate) fn row_to_stored_event(row: sqlx::mysql::MySqlRow) -> Result<Option<S
     )))
 }
 
-/// Soft-delete an event by setting `deleted_at = NOW(6)`.
+/// Soft-delete an event by setting `deleted_at = NOW()`.
 ///
 /// Returns `Ok(true)` if the event was deleted, `Ok(false)` if already deleted
 /// or not found. Callers are responsible for decrementing thread reply counts
 /// when the deleted event is a thread reply.
-pub async fn soft_delete_event(pool: &MySqlPool, event_id: &[u8]) -> Result<bool> {
+pub async fn soft_delete_event(pool: &PgPool, event_id: &[u8]) -> Result<bool> {
     let result =
-        sqlx::query("UPDATE events SET deleted_at = NOW(6) WHERE id = ? AND deleted_at IS NULL")
+        sqlx::query("UPDATE events SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL")
             .bind(event_id)
             .execute(pool)
             .await?;
@@ -233,7 +231,7 @@ pub async fn soft_delete_event(pool: &MySqlPool, event_id: &[u8]) -> Result<bool
 /// them cannot leave counters permanently inflated. Returns `Ok(true)` if the
 /// event was deleted this call.
 pub async fn soft_delete_event_and_update_thread(
-    pool: &MySqlPool,
+    pool: &PgPool,
     event_id: &[u8],
     parent_event_id: Option<&[u8]>,
     root_event_id: Option<&[u8]>,
@@ -241,7 +239,7 @@ pub async fn soft_delete_event_and_update_thread(
     let mut tx = pool.begin().await?;
 
     let result =
-        sqlx::query("UPDATE events SET deleted_at = NOW(6) WHERE id = ? AND deleted_at IS NULL")
+        sqlx::query("UPDATE events SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL")
             .bind(event_id)
             .execute(&mut *tx)
             .await?;
@@ -253,7 +251,7 @@ pub async fn soft_delete_event_and_update_thread(
             sqlx::query(
                 "UPDATE thread_metadata \
                  SET reply_count = GREATEST(reply_count - 1, 0) \
-                 WHERE event_id = ?",
+                 WHERE event_id = $1",
             )
             .bind(pid)
             .execute(&mut *tx)
@@ -263,7 +261,7 @@ pub async fn soft_delete_event_and_update_thread(
                 sqlx::query(
                     "UPDATE thread_metadata \
                      SET descendant_count = GREATEST(descendant_count - 1, 0) \
-                     WHERE event_id = ?",
+                     WHERE event_id = $1",
                 )
                 .bind(root_id)
                 .execute(&mut *tx)
@@ -278,16 +276,15 @@ pub async fn soft_delete_event_and_update_thread(
 
 /// Returns the `created_at` timestamp of the most recent non-deleted event in a channel.
 pub async fn get_last_message_at(
-    pool: &MySqlPool,
+    pool: &PgPool,
     channel_id: uuid::Uuid,
 ) -> Result<Option<DateTime<Utc>>> {
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
     let row = sqlx::query(
         "SELECT created_at FROM events \
-         WHERE channel_id = ? AND deleted_at IS NULL \
+         WHERE channel_id = $1 AND deleted_at IS NULL \
          ORDER BY created_at DESC LIMIT 1",
     )
-    .bind(&id_bytes)
+    .bind(channel_id)
     .fetch_optional(pool)
     .await?;
 
@@ -302,20 +299,20 @@ pub async fn get_last_message_at(
 /// Returns a map of `channel_id → last_message_at`. Channels with no events are omitted.
 /// Single query regardless of input size.
 pub async fn get_last_message_at_bulk(
-    pool: &MySqlPool,
+    pool: &PgPool,
     channel_ids: &[uuid::Uuid],
 ) -> Result<std::collections::HashMap<uuid::Uuid, DateTime<Utc>>> {
     if channel_ids.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
 
-    let mut qb: QueryBuilder<sqlx::MySql> = QueryBuilder::new(
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
         "SELECT channel_id, MAX(created_at) as last_at FROM events \
          WHERE deleted_at IS NULL AND channel_id IN (",
     );
     let mut sep = qb.separated(", ");
     for id in channel_ids {
-        sep.push_bind(id.as_bytes().to_vec());
+        sep.push_bind(*id);
     }
     qb.push(") GROUP BY channel_id");
 
@@ -323,8 +320,7 @@ pub async fn get_last_message_at_bulk(
 
     let mut map = std::collections::HashMap::with_capacity(rows.len());
     for row in rows {
-        let id_bytes: Vec<u8> = row.try_get("channel_id")?;
-        let id = uuid_from_bytes(&id_bytes)?;
+        let id: Uuid = row.try_get("channel_id")?;
         let last_at: DateTime<Utc> = row.try_get("last_at")?;
         map.insert(id, last_at);
     }
@@ -336,10 +332,10 @@ pub async fn get_last_message_at_bulk(
 /// Returns `None` if the event does not exist or has been soft-deleted.
 /// Use [`get_event_by_id_including_deleted`] when you need to inspect
 /// tombstoned rows (e.g. audit, undelete).
-pub async fn get_event_by_id(pool: &MySqlPool, id_bytes: &[u8]) -> Result<Option<StoredEvent>> {
+pub async fn get_event_by_id(pool: &PgPool, id_bytes: &[u8]) -> Result<Option<StoredEvent>> {
     let row = sqlx::query(
         "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
-         FROM events WHERE id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
+         FROM events WHERE id = $1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
     )
     .bind(id_bytes)
     .fetch_optional(pool)
@@ -357,12 +353,12 @@ pub async fn get_event_by_id(pool: &MySqlPool, id_bytes: &[u8]) -> Result<Option
 /// when the caller must distinguish "never existed" from "was deleted" (e.g.
 /// audit trails, compliance queries).
 pub async fn get_event_by_id_including_deleted(
-    pool: &MySqlPool,
+    pool: &PgPool,
     id_bytes: &[u8],
 ) -> Result<Option<StoredEvent>> {
     let row = sqlx::query(
         "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
-         FROM events WHERE id = ? ORDER BY created_at DESC LIMIT 1",
+         FROM events WHERE id = $1 ORDER BY created_at DESC LIMIT 1",
     )
     .bind(id_bytes)
     .fetch_optional(pool)
@@ -378,13 +374,13 @@ pub async fn get_event_by_id_including_deleted(
 ///
 /// Returns events in arbitrary order — callers reorder as needed.
 /// Uses a single `WHERE id IN (...)` query regardless of input size.
-pub async fn get_events_by_ids(pool: &MySqlPool, ids: &[&[u8]]) -> Result<Vec<StoredEvent>> {
+pub async fn get_events_by_ids(pool: &PgPool, ids: &[&[u8]]) -> Result<Vec<StoredEvent>> {
     if ids.is_empty() {
         return Ok(vec![]);
     }
     debug_assert!(ids.len() <= 500, "batch fetch should be bounded by caller");
 
-    let mut qb: QueryBuilder<sqlx::MySql> = QueryBuilder::new(
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
         "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
          FROM events WHERE deleted_at IS NULL AND id IN (",
     );
@@ -437,7 +433,7 @@ pub struct ThreadMetadataParams<'a> {
 ///
 /// Returns `(StoredEvent, was_inserted)`.
 pub async fn insert_event_with_thread_metadata(
-    pool: &MySqlPool,
+    pool: &PgPool,
     event: &Event,
     channel_id: Option<Uuid>,
     thread_meta: Option<ThreadMetadataParams<'_>>,
@@ -461,15 +457,14 @@ pub async fn insert_event_with_thread_metadata(
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
     let received_at = Utc::now();
-    let channel_id_bytes: Option<[u8; 16]> = channel_id.map(|u| *u.as_bytes());
-
     let mut tx = pool.begin().await?;
 
     // ── Insert event ──────────────────────────────────────────────────────────
     let result = sqlx::query(
         r#"
-        INSERT IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT DO NOTHING
         "#,
     )
     .bind(id_bytes.as_slice())
@@ -480,7 +475,7 @@ pub async fn insert_event_with_thread_metadata(
     .bind(&event.content)
     .bind(sig_bytes.as_slice())
     .bind(received_at)
-    .bind(channel_id_bytes.as_ref().map(|b| b.as_slice()))
+    .bind(channel_id)
     .execute(&mut *tx)
     .await?;
 
@@ -489,22 +484,22 @@ pub async fn insert_event_with_thread_metadata(
     // ── Insert thread metadata (if provided and event was actually inserted) ──
     if was_inserted {
         if let Some(ref meta) = thread_meta {
-            let ch_bytes = meta.channel_id.as_bytes().as_slice().to_vec();
-            let broadcast_val: i8 = if meta.broadcast { 1 } else { 0 };
+            let broadcast_val: bool = meta.broadcast;
 
             let tm_result = sqlx::query(
                 r#"
-                INSERT IGNORE INTO thread_metadata
+                INSERT INTO thread_metadata
                     (event_created_at, event_id, channel_id,
                      parent_event_id, parent_event_created_at,
                      root_event_id, root_event_created_at,
                      depth, broadcast)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT DO NOTHING
                 "#,
             )
             .bind(meta.event_created_at)
             .bind(meta.event_id)
-            .bind(ch_bytes.as_slice())
+            .bind(meta.channel_id)
             .bind(meta.parent_event_id)
             .bind(meta.parent_event_created_at)
             .bind(meta.root_event_id)
@@ -525,17 +520,18 @@ pub async fn insert_event_with_thread_metadata(
                         .unwrap_or(meta.event_created_at);
                     sqlx::query(
                         r#"
-                        INSERT IGNORE INTO thread_metadata
+                        INSERT INTO thread_metadata
                             (event_created_at, event_id, channel_id,
                              parent_event_id, parent_event_created_at,
                              root_event_id, root_event_created_at,
                              depth, broadcast)
-                        VALUES (?, ?, ?, NULL, NULL, NULL, NULL, 0, 0)
+                        VALUES ($1, $2, $3, NULL, NULL, NULL, NULL, 0, false)
+                        ON CONFLICT DO NOTHING
                         "#,
                     )
                     .bind(parent_ts)
                     .bind(pid)
-                    .bind(ch_bytes.as_slice())
+                    .bind(meta.channel_id)
                     .execute(&mut *tx)
                     .await?;
 
@@ -546,17 +542,18 @@ pub async fn insert_event_with_thread_metadata(
                                 meta.root_event_created_at.unwrap_or(meta.event_created_at);
                             sqlx::query(
                                 r#"
-                                INSERT IGNORE INTO thread_metadata
+                                INSERT INTO thread_metadata
                                     (event_created_at, event_id, channel_id,
                                      parent_event_id, parent_event_created_at,
                                      root_event_id, root_event_created_at,
                                      depth, broadcast)
-                                VALUES (?, ?, ?, NULL, NULL, NULL, NULL, 0, 0)
+                                VALUES ($1, $2, $3, NULL, NULL, NULL, NULL, 0, false)
+                                ON CONFLICT DO NOTHING
                                 "#,
                             )
                             .bind(root_ts)
                             .bind(root_id)
-                            .bind(ch_bytes.as_slice())
+                            .bind(meta.channel_id)
                             .execute(&mut *tx)
                             .await?;
                         }
@@ -565,8 +562,8 @@ pub async fn insert_event_with_thread_metadata(
                     sqlx::query(
                         r#"
                         UPDATE thread_metadata
-                        SET reply_count = reply_count + 1, last_reply_at = NOW(6)
-                        WHERE event_id = ?
+                        SET reply_count = reply_count + 1, last_reply_at = NOW()
+                        WHERE event_id = $1
                         "#,
                     )
                     .bind(pid)
@@ -578,7 +575,7 @@ pub async fn insert_event_with_thread_metadata(
                             r#"
                             UPDATE thread_metadata
                             SET descendant_count = descendant_count + 1
-                            WHERE event_id = ?
+                            WHERE event_id = $1
                             "#,
                         )
                         .bind(root_id)
@@ -596,9 +593,4 @@ pub async fn insert_event_with_thread_metadata(
         StoredEvent::with_received_at(event.clone(), received_at, channel_id, true),
         was_inserted,
     ))
-}
-
-/// Convert raw BINARY(16) bytes to a [`Uuid`].
-pub(crate) fn uuid_from_bytes(bytes: &[u8]) -> Result<Uuid> {
-    Uuid::from_slice(bytes).map_err(|e| DbError::InvalidData(format!("invalid UUID: {e}")))
 }

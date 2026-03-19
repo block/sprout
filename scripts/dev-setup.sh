@@ -21,9 +21,9 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 log()    { echo -e "${BLUE}[dev-setup]${NC} $*"; }
-success(){ echo -e "${GREEN}[dev-setup]${NC} ✅ $*"; }
-warn()   { echo -e "${YELLOW}[dev-setup]${NC} ⚠️  $*"; }
-error()  { echo -e "${RED}[dev-setup]${NC} ❌ $*" >&2; }
+success(){ echo -e "${GREEN}[dev-setup]${NC} $*"; }
+warn()   { echo -e "${YELLOW}[dev-setup]${NC} $*"; }
+error()  { echo -e "${RED}[dev-setup]${NC} $*" >&2; }
 
 # ---- Preflight checks -------------------------------------------------------
 
@@ -84,7 +84,7 @@ wait_healthy() {
 }
 
 echo ""
-wait_healthy "MySQL"      "sprout-mysql"
+wait_healthy "Postgres"   "sprout-postgres"
 wait_healthy "Redis"      "sprout-redis"
 wait_healthy "Typesense"  "sprout-typesense"
 echo ""
@@ -93,31 +93,28 @@ echo ""
 
 log "Running database migrations..."
 
-MIGRATION_DIR="${REPO_ROOT}/migrations"
+PGSCHEMA="${REPO_ROOT}/bin/pgschema"
+SCHEMA_FILE="${REPO_ROOT}/schema/schema.sql"
 
-if [[ ! -d "${MIGRATION_DIR}" ]]; then
-  warn "No migrations directory found at ${MIGRATION_DIR}. Skipping."
+if [[ ! -f "${SCHEMA_FILE}" ]]; then
+  warn "No schema.sql found at ${SCHEMA_FILE}. Skipping."
 else
-  # Check if sqlx CLI is available (preferred)
-  if command -v sqlx &>/dev/null; then
-    log "Using sqlx CLI for migrations..."
-    # MySQL may need a moment after healthcheck before accepting connections
+  if [[ -x "${PGSCHEMA}" ]]; then
+    log "Using pgschema for migrations..."
     attempts=0
     max_attempts=10
-    until DATABASE_URL="mysql://sprout:sprout_dev@localhost:3306/sprout" \
-      sqlx migrate run --source "${MIGRATION_DIR}" 2>/dev/null; do
+    until "${PGSCHEMA}" apply --file "${SCHEMA_FILE}" --auto-approve 2>/dev/null; do
       attempts=$((attempts + 1))
       if [[ ${attempts} -ge ${max_attempts} ]]; then
         error "Failed to run migrations after ${max_attempts} attempts"
         exit 1
       fi
-      log "MySQL not ready for connections yet, retrying in 2s... (${attempts}/${max_attempts})"
+      log "Postgres not ready for connections yet, retrying in 2s... (${attempts}/${max_attempts})"
       sleep 2
     done
-    success "Migrations applied via sqlx"
+    success "Migrations applied via pgschema"
   else
-    error "sqlx CLI not found. Install it with: cargo install sqlx-cli --no-default-features --features mysql"
-    error "Running migrations directly via mysql bypasses migration tracking and causes errors."
+    error "pgschema not found at ${PGSCHEMA}. Run: ./bin/hermit install pgschema"
     exit 1
   fi
 fi
@@ -125,11 +122,11 @@ fi
 # ---- Print connection info --------------------------------------------------
 
 echo ""
-echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}  Sprout dev environment is ready! 🌱${NC}"
-echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}=======================================================${NC}"
+echo -e "${GREEN}  Sprout dev environment is ready!${NC}"
+echo -e "${GREEN}=======================================================${NC}"
 echo ""
-echo -e "  ${BLUE}MySQL${NC}       mysql://sprout:sprout_dev@localhost:3306/sprout"
+echo -e "  ${BLUE}Postgres${NC}    postgres://sprout:sprout_dev@localhost:5432/sprout"
 echo -e "  ${BLUE}Redis${NC}       redis://localhost:6379"
 echo -e "  ${BLUE}Typesense${NC}   http://localhost:8108  (key: sprout_dev_key)"
 echo -e "  ${BLUE}Adminer${NC}     http://localhost:8082  (DB browser)"

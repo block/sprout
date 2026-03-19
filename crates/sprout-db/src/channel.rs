@@ -5,11 +5,10 @@
 //! - `private`: hidden, invite-only
 
 use chrono::{DateTime, Utc};
-use sqlx::{MySql, MySqlPool, Row, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use crate::error::{DbError, Result};
-use crate::event::uuid_from_bytes;
 
 /// Whether a channel is publicly visible or invite-only.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,7 +198,7 @@ pub struct MemberRecord {
 
 /// Creates a new channel, bootstraps the creator as owner, and returns the record.
 pub async fn create_channel(
-    pool: &MySqlPool,
+    pool: &PgPool,
     name: &str,
     channel_type: ChannelType,
     visibility: ChannelVisibility,
@@ -214,17 +213,16 @@ pub async fn create_channel(
     }
 
     let id = Uuid::new_v4();
-    let id_bytes = id.as_bytes().as_slice().to_vec();
 
     let mut tx = pool.begin().await?;
 
     sqlx::query(
         r#"
         INSERT INTO channels (id, name, channel_type, visibility, description, created_by)
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3::channel_type, $4::channel_visibility, $5, $6)
         "#,
     )
-    .bind(&id_bytes)
+    .bind(id)
     .bind(name)
     .bind(channel_type.as_str())
     .bind(visibility.as_str())
@@ -236,14 +234,14 @@ pub async fn create_channel(
     sqlx::query(
         r#"
         INSERT INTO channel_members (channel_id, pubkey, role, invited_by)
-        VALUES (?, ?, 'owner', ?)
-        ON DUPLICATE KEY UPDATE
+        VALUES ($1, $2, 'owner', $3)
+        ON CONFLICT (channel_id, pubkey) DO UPDATE SET
             removed_at = NULL,
             removed_by = NULL,
-            role = VALUES(role)
+            role = EXCLUDED.role
         "#,
     )
-    .bind(&id_bytes)
+    .bind(id)
     .bind(created_by)
     .bind(created_by)
     .execute(&mut *tx)
@@ -251,15 +249,16 @@ pub async fn create_channel(
 
     let row = sqlx::query(
         r#"
-        SELECT id, name, channel_type, visibility, description, canvas,
+        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+               description, canvas,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
                purpose, purpose_set_by, purpose_set_at
-        FROM channels WHERE id = ?
+        FROM channels WHERE id = $1
         "#,
     )
-    .bind(&id_bytes)
+    .bind(id)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -269,20 +268,19 @@ pub async fn create_channel(
 }
 
 /// Fetches a channel record by ID. Returns `ChannelNotFound` if missing or deleted.
-pub async fn get_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<ChannelRecord> {
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
-
+pub async fn get_channel(pool: &PgPool, channel_id: Uuid) -> Result<ChannelRecord> {
     let row = sqlx::query(
         r#"
-        SELECT id, name, channel_type, visibility, description, canvas,
+        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+               description, canvas,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
                purpose, purpose_set_by, purpose_set_at
-        FROM channels WHERE id = ? AND deleted_at IS NULL
+        FROM channels WHERE id = $1 AND deleted_at IS NULL
         "#,
     )
-    .bind(&id_bytes)
+    .bind(channel_id)
     .fetch_optional(pool)
     .await?
     .ok_or(DbError::ChannelNotFound(channel_id))?;
@@ -291,10 +289,9 @@ pub async fn get_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<ChannelRe
 }
 
 /// Returns the canvas content for a channel, if any.
-pub async fn get_canvas(pool: &MySqlPool, channel_id: Uuid) -> Result<Option<String>> {
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
-    let row = sqlx::query("SELECT canvas FROM channels WHERE id = ? AND deleted_at IS NULL")
-        .bind(&id_bytes)
+pub async fn get_canvas(pool: &PgPool, channel_id: Uuid) -> Result<Option<String>> {
+    let row = sqlx::query("SELECT canvas FROM channels WHERE id = $1 AND deleted_at IS NULL")
+        .bind(channel_id)
         .fetch_optional(pool)
         .await?
         .ok_or(DbError::ChannelNotFound(channel_id))?;
@@ -302,11 +299,10 @@ pub async fn get_canvas(pool: &MySqlPool, channel_id: Uuid) -> Result<Option<Str
 }
 
 /// Sets or clears the canvas content for a channel.
-pub async fn set_canvas(pool: &MySqlPool, channel_id: Uuid, canvas: Option<&str>) -> Result<()> {
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
-    let rows = sqlx::query("UPDATE channels SET canvas = ? WHERE id = ? AND deleted_at IS NULL")
+pub async fn set_canvas(pool: &PgPool, channel_id: Uuid, canvas: Option<&str>) -> Result<()> {
+    let rows = sqlx::query("UPDATE channels SET canvas = $1 WHERE id = $2 AND deleted_at IS NULL")
         .bind(canvas)
-        .bind(&id_bytes)
+        .bind(channel_id)
         .execute(pool)
         .await?;
     if rows.rows_affected() == 0 {
@@ -327,7 +323,7 @@ pub async fn set_canvas(pool: &MySqlPool, channel_id: Uuid, canvas: Option<&str>
 /// The entire check-then-insert sequence runs inside a transaction to prevent TOCTOU
 /// races (e.g. the inviter being removed between the role check and the INSERT).
 pub async fn add_member(
-    pool: &MySqlPool,
+    pool: &PgPool,
     channel_id: Uuid,
     pubkey: &[u8],
     role: MemberRole,
@@ -339,8 +335,6 @@ pub async fn add_member(
             pubkey.len()
         )));
     }
-
-    let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
 
     let mut tx = pool.begin().await?;
 
@@ -404,14 +398,14 @@ pub async fn add_member(
     sqlx::query(
         r#"
         INSERT INTO channel_members (channel_id, pubkey, role, invited_by)
-        VALUES (?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
+        VALUES ($1, $2, $3::member_role, $4)
+        ON CONFLICT (channel_id, pubkey) DO UPDATE SET
             removed_at = NULL,
             removed_by = NULL,
-            role = VALUES(role)
+            role = EXCLUDED.role
         "#,
     )
-    .bind(&channel_id_bytes)
+    .bind(channel_id)
     .bind(pubkey)
     .bind(effective_role.as_str())
     .bind(invited_by)
@@ -420,11 +414,11 @@ pub async fn add_member(
 
     let row = sqlx::query(
         r#"
-        SELECT channel_id, pubkey, role, joined_at, invited_by, removed_at
-        FROM channel_members WHERE channel_id = ? AND pubkey = ?
+        SELECT channel_id, pubkey, role::text AS role, joined_at, invited_by, removed_at
+        FROM channel_members WHERE channel_id = $1 AND pubkey = $2
         "#,
     )
-    .bind(&channel_id_bytes)
+    .bind(channel_id)
     .bind(pubkey)
     .fetch_one(&mut *tx)
     .await?;
@@ -442,13 +436,11 @@ pub async fn add_member(
 /// The authorization check and the UPDATE run inside a transaction to prevent a
 /// TOCTOU race where the actor's role changes between the check and the update.
 pub async fn remove_member(
-    pool: &MySqlPool,
+    pool: &PgPool,
     channel_id: Uuid,
     pubkey: &[u8],
     actor_pubkey: &[u8],
 ) -> Result<()> {
-    let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
-
     let mut tx = pool.begin().await?;
 
     let is_self_remove = pubkey == actor_pubkey;
@@ -473,9 +465,9 @@ pub async fn remove_member(
     if target_role.as_deref() == Some("owner") {
         let row = sqlx::query(
             "SELECT COUNT(*) as cnt FROM channel_members \
-             WHERE channel_id = ? AND role = 'owner' AND removed_at IS NULL",
+             WHERE channel_id = $1 AND role = 'owner' AND removed_at IS NULL",
         )
-        .bind(&channel_id_bytes)
+        .bind(channel_id)
         .fetch_one(&mut *tx)
         .await?;
         let owner_count: i64 = row.try_get("cnt")?;
@@ -489,12 +481,12 @@ pub async fn remove_member(
     let result = sqlx::query(
         r#"
         UPDATE channel_members
-        SET removed_at = NOW(), removed_by = ?
-        WHERE channel_id = ? AND pubkey = ? AND removed_at IS NULL
+        SET removed_at = NOW(), removed_by = $1
+        WHERE channel_id = $2 AND pubkey = $3 AND removed_at IS NULL
         "#,
     )
     .bind(actor_pubkey)
-    .bind(&channel_id_bytes)
+    .bind(channel_id)
     .bind(pubkey)
     .execute(&mut *tx)
     .await?;
@@ -508,14 +500,13 @@ pub async fn remove_member(
 }
 
 /// Returns `true` if the given pubkey is an active member of the channel.
-pub async fn is_member(pool: &MySqlPool, channel_id: Uuid, pubkey: &[u8]) -> Result<bool> {
-    let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
+pub async fn is_member(pool: &PgPool, channel_id: Uuid, pubkey: &[u8]) -> Result<bool> {
     let row = sqlx::query(
         "SELECT COUNT(*) as cnt FROM channel_members cm \
          JOIN channels c ON cm.channel_id = c.id AND c.deleted_at IS NULL \
-         WHERE cm.channel_id = ? AND cm.pubkey = ? AND cm.removed_at IS NULL",
+         WHERE cm.channel_id = $1 AND cm.pubkey = $2 AND cm.removed_at IS NULL",
     )
-    .bind(&channel_id_bytes)
+    .bind(channel_id)
     .bind(pubkey)
     .fetch_one(pool)
     .await?;
@@ -526,19 +517,18 @@ pub async fn is_member(pool: &MySqlPool, channel_id: Uuid, pubkey: &[u8]) -> Res
 /// Returns all active members of the given channel.
 ///
 /// Returns an empty list if the channel has been soft-deleted.
-pub async fn get_members(pool: &MySqlPool, channel_id: Uuid) -> Result<Vec<MemberRecord>> {
-    let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
+pub async fn get_members(pool: &PgPool, channel_id: Uuid) -> Result<Vec<MemberRecord>> {
     let rows = sqlx::query(
         r#"
-        SELECT cm.channel_id, cm.pubkey, cm.role, cm.joined_at, cm.invited_by, cm.removed_at
+        SELECT cm.channel_id, cm.pubkey, cm.role::text AS role, cm.joined_at, cm.invited_by, cm.removed_at
         FROM channel_members cm
         JOIN channels c ON cm.channel_id = c.id AND c.deleted_at IS NULL
-        WHERE cm.channel_id = ? AND cm.removed_at IS NULL
+        WHERE cm.channel_id = $1 AND cm.removed_at IS NULL
         ORDER BY cm.joined_at ASC
         LIMIT 1000
         "#,
     )
-    .bind(&channel_id_bytes)
+    .bind(channel_id)
     .fetch_all(pool)
     .await?;
     rows.into_iter().map(row_to_member_record).collect()
@@ -548,13 +538,13 @@ pub async fn get_members(pool: &MySqlPool, channel_id: Uuid) -> Result<Vec<Membe
 ///
 /// Includes channels where the pubkey is an active member AND all open channels.
 /// Open channels must be included in REQ filter resolution.
-pub async fn get_accessible_channel_ids(pool: &MySqlPool, pubkey: &[u8]) -> Result<Vec<Uuid>> {
+pub async fn get_accessible_channel_ids(pool: &PgPool, pubkey: &[u8]) -> Result<Vec<Uuid>> {
     let rows = sqlx::query(
         r#"
         SELECT cm.channel_id
         FROM channel_members cm
         JOIN channels c ON cm.channel_id = c.id AND c.deleted_at IS NULL
-        WHERE cm.pubkey = ? AND cm.removed_at IS NULL
+        WHERE cm.pubkey = $1 AND cm.removed_at IS NULL
         UNION
         SELECT id AS channel_id
         FROM channels
@@ -568,27 +558,25 @@ pub async fn get_accessible_channel_ids(pool: &MySqlPool, pubkey: &[u8]) -> Resu
 
     rows.into_iter()
         .map(|r| {
-            let bytes: Vec<u8> = r.try_get("channel_id")?;
-            uuid_from_bytes(&bytes)
+            let id: Uuid = r.try_get("channel_id")?;
+            Ok(id)
         })
         .collect()
 }
 
 /// Lists channels, optionally filtered by visibility string.
-pub async fn list_channels(
-    pool: &MySqlPool,
-    visibility: Option<&str>,
-) -> Result<Vec<ChannelRecord>> {
+pub async fn list_channels(pool: &PgPool, visibility: Option<&str>) -> Result<Vec<ChannelRecord>> {
     let rows = if let Some(vis) = visibility {
         sqlx::query(
             r#"
-            SELECT id, name, channel_type, visibility, description, canvas,
+            SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+                   description, canvas,
                    created_by, created_at, updated_at, archived_at, deleted_at,
                    nip29_group_id, topic_required, max_members,
                    topic, topic_set_by, topic_set_at,
                    purpose, purpose_set_by, purpose_set_at
             FROM channels
-            WHERE deleted_at IS NULL AND visibility = ?
+            WHERE deleted_at IS NULL AND visibility::text = $1
             ORDER BY created_at DESC
             LIMIT 1000
             "#,
@@ -599,7 +587,8 @@ pub async fn list_channels(
     } else {
         sqlx::query(
             r#"
-            SELECT id, name, channel_type, visibility, description, canvas,
+            SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+                   description, canvas,
                    created_by, created_at, updated_at, archived_at, deleted_at,
                    nip29_group_id, topic_required, max_members,
                    topic, topic_set_by, topic_set_at,
@@ -619,16 +608,15 @@ pub async fn list_channels(
 
 /// Transaction-aware variant of [`get_active_role_tx`].
 async fn get_active_role_tx(
-    tx: &mut Transaction<'_, MySql>,
+    tx: &mut Transaction<'_, Postgres>,
     channel_id: Uuid,
     pubkey: &[u8],
 ) -> Result<Option<String>> {
-    let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
     let row = sqlx::query(
-        "SELECT role FROM channel_members \
-         WHERE channel_id = ? AND pubkey = ? AND removed_at IS NULL",
+        "SELECT role::text AS role FROM channel_members \
+         WHERE channel_id = $1 AND pubkey = $2 AND removed_at IS NULL",
     )
-    .bind(&channel_id_bytes)
+    .bind(channel_id)
     .bind(pubkey)
     .fetch_optional(&mut **tx)
     .await?;
@@ -637,21 +625,21 @@ async fn get_active_role_tx(
 
 /// Transaction-aware variant of [`get_channel`].
 async fn get_channel_tx(
-    tx: &mut Transaction<'_, MySql>,
+    tx: &mut Transaction<'_, Postgres>,
     channel_id: Uuid,
 ) -> Result<ChannelRecord> {
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
     let row = sqlx::query(
         r#"
-        SELECT id, name, channel_type, visibility, description, canvas,
+        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+               description, canvas,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
                purpose, purpose_set_by, purpose_set_at
-        FROM channels WHERE id = ? AND deleted_at IS NULL
+        FROM channels WHERE id = $1 AND deleted_at IS NULL
         "#,
     )
-    .bind(&id_bytes)
+    .bind(channel_id)
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(DbError::ChannelNotFound(channel_id))?;
@@ -669,7 +657,7 @@ pub struct BotMemberRecord {
     pub agent_type: Option<String>,
     /// Optional JSON capabilities descriptor.
     pub capabilities: Option<serde_json::Value>,
-    /// Comma-separated channel names (from GROUP_CONCAT).
+    /// Comma-separated channel names (from string_agg).
     pub channel_names: String,
 }
 
@@ -698,13 +686,13 @@ pub struct AccessibleChannel {
 /// Returns full channel records for all channels a user can access:
 /// open channels (visible to everyone) plus channels where the user is an active member.
 ///
-/// Uses DISTINCT + LEFT JOIN so a user who is a member of an open channel does not
-/// see it twice. Results are ordered stream → forum → dm, then alphabetically by name.
+/// Uses a LEFT JOIN on channel_members (PK: channel_id + pubkey) which produces at
+/// most one row per channel. Results are ordered stream -> forum -> dm, then by name.
 ///
 /// If `visibility_filter` is `Some("open")` or `Some("private")`, only channels with
 /// that visibility value are returned. `None` returns all accessible channels.
 pub async fn get_accessible_channels(
-    pool: &MySqlPool,
+    pool: &PgPool,
     pubkey: &[u8],
     visibility_filter: Option<&str>,
     member_only: Option<bool>,
@@ -721,7 +709,8 @@ pub async fn get_accessible_channels(
 
     let base = format!(
         r#"
-        SELECT DISTINCT c.id, c.name, c.channel_type, c.visibility, c.description, c.canvas,
+        SELECT c.id, c.name, c.channel_type::text AS channel_type,
+               c.visibility::text AS visibility, c.description, c.canvas,
                c.created_by, c.created_at, c.updated_at, c.archived_at, c.deleted_at,
                c.nip29_group_id, c.topic_required, c.max_members,
                c.topic, c.topic_set_by, c.topic_set_at,
@@ -729,16 +718,16 @@ pub async fn get_accessible_channels(
                (cm.channel_id IS NOT NULL) AS is_member
         FROM channels c
         LEFT JOIN channel_members cm
-            ON c.id = cm.channel_id AND cm.pubkey = ? AND cm.removed_at IS NULL
+            ON c.id = cm.channel_id AND cm.pubkey = $1 AND cm.removed_at IS NULL
         WHERE c.deleted_at IS NULL
           {membership_clause}
     "#
     );
 
     let sql = if visibility_filter.is_some() {
-        format!("{base}  AND c.visibility = ?\n        ORDER BY FIELD(c.channel_type, 'stream', 'forum', 'dm'), c.name\n        LIMIT 1000")
+        format!("{base}  AND c.visibility::text = $2\n        ORDER BY array_position(ARRAY['stream','forum','dm']::text[], c.channel_type::text), c.name\n        LIMIT 1000")
     } else {
-        format!("{base}        ORDER BY FIELD(c.channel_type, 'stream', 'forum', 'dm'), c.name\n        LIMIT 1000")
+        format!("{base}        ORDER BY array_position(ARRAY['stream','forum','dm']::text[], c.channel_type::text), c.name\n        LIMIT 1000")
     };
 
     let query = sqlx::query(&sql).bind(pubkey);
@@ -751,7 +740,7 @@ pub async fn get_accessible_channels(
     let rows = query.fetch_all(pool).await?;
     rows.into_iter()
         .map(|row| {
-            let is_member: bool = row.try_get::<i8, _>("is_member").unwrap_or(0) != 0;
+            let is_member: bool = row.try_get("is_member").unwrap_or(false);
             let channel = row_to_channel_record(row)?;
             Ok(AccessibleChannel { channel, is_member })
         })
@@ -760,13 +749,13 @@ pub async fn get_accessible_channels(
 
 /// Returns all bot-role members with their aggregated channel names.
 ///
-/// Channel names are returned as a comma-separated string from GROUP_CONCAT.
+/// Channel names are returned as a comma-separated string from string_agg.
 /// Members with no active channel memberships are excluded (INNER JOIN on channels).
-pub async fn get_bot_members(pool: &MySqlPool) -> Result<Vec<BotMemberRecord>> {
+pub async fn get_bot_members(pool: &PgPool) -> Result<Vec<BotMemberRecord>> {
     let rows = sqlx::query(
         r#"
         SELECT cm.pubkey, u.display_name, u.agent_type, u.capabilities,
-               GROUP_CONCAT(DISTINCT c.name ORDER BY c.name SEPARATOR ',') AS channel_names
+               string_agg(DISTINCT c.name, ',' ORDER BY c.name) AS channel_names
         FROM channel_members cm
         LEFT JOIN users u ON cm.pubkey = u.pubkey
         JOIN channels c ON cm.channel_id = c.id AND c.deleted_at IS NULL
@@ -799,18 +788,18 @@ pub async fn get_bot_members(pool: &MySqlPool) -> Result<Vec<BotMemberRecord>> {
 /// Returns only users that exist in the `users` table. Ordering matches input order
 /// is NOT guaranteed — callers should index by pubkey if order matters.
 /// Returns an empty vec immediately when `pubkeys` is empty (no query issued).
-pub async fn get_users_bulk(pool: &MySqlPool, pubkeys: &[Vec<u8>]) -> Result<Vec<UserRecord>> {
+pub async fn get_users_bulk(pool: &PgPool, pubkeys: &[Vec<u8>]) -> Result<Vec<UserRecord>> {
     if pubkeys.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Build a parameterised IN clause: (?, ?, ...)
-    // Safety: placeholders are "?" markers only — all values are bound via
-    // `.bind()` below. No user input is interpolated into the SQL string.
-    let placeholders = pubkeys.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-    let sql = format!(
-        "SELECT pubkey, display_name, avatar_url, nip05_handle FROM users WHERE pubkey IN ({placeholders})"
-    );
+    // Build a parameterised IN clause: ($1, $2, ...)
+    let placeholders = (1..=pubkeys.len())
+        .map(|i| format!("${i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql =
+        format!("SELECT pubkey, display_name, avatar_url, nip05_handle FROM users WHERE pubkey IN ({placeholders})");
 
     let mut q = sqlx::query(&sql);
     for pk in pubkeys {
@@ -831,9 +820,8 @@ pub async fn get_users_bulk(pool: &MySqlPool, pubkeys: &[Vec<u8>]) -> Result<Vec
     Ok(out)
 }
 
-fn row_to_channel_record(row: sqlx::mysql::MySqlRow) -> Result<ChannelRecord> {
-    let id_bytes: Vec<u8> = row.try_get("id")?;
-    let id = uuid_from_bytes(&id_bytes)?;
+fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
+    let id: Uuid = row.try_get("id")?;
     let topic_required: bool = row.try_get("topic_required")?;
 
     // topic/purpose fields are new — use try_get and fall back to None if the
@@ -869,9 +857,8 @@ fn row_to_channel_record(row: sqlx::mysql::MySqlRow) -> Result<ChannelRecord> {
     })
 }
 
-fn row_to_member_record(row: sqlx::mysql::MySqlRow) -> Result<MemberRecord> {
-    let channel_id_bytes: Vec<u8> = row.try_get("channel_id")?;
-    let channel_id = uuid_from_bytes(&channel_id_bytes)?;
+fn row_to_member_record(row: sqlx::postgres::PgRow) -> Result<MemberRecord> {
+    let channel_id: Uuid = row.try_get("channel_id")?;
 
     Ok(MemberRecord {
         channel_id,
@@ -898,7 +885,7 @@ pub struct ChannelUpdate {
 /// At least one field must be `Some`; returns `InvalidData` otherwise.
 /// Returns the updated `ChannelRecord` on success.
 pub async fn update_channel(
-    pool: &MySqlPool,
+    pool: &PgPool,
     channel_id: Uuid,
     updates: ChannelUpdate,
 ) -> Result<ChannelRecord> {
@@ -908,18 +895,20 @@ pub async fn update_channel(
         ));
     }
 
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
-
     // Build SET clause dynamically — only include fields that are Some.
-    let mut set_parts: Vec<&str> = Vec::new();
+    // Track parameter index for positional placeholders.
+    let mut set_parts: Vec<String> = Vec::new();
+    let mut param_idx: usize = 1;
     if updates.name.is_some() {
-        set_parts.push("name = ?");
+        set_parts.push(format!("name = ${param_idx}"));
+        param_idx += 1;
     }
     if updates.description.is_some() {
-        set_parts.push("description = ?");
+        set_parts.push(format!("description = ${param_idx}"));
+        param_idx += 1;
     }
     let sql = format!(
-        "UPDATE channels SET {}, updated_at = NOW(6) WHERE id = ? AND deleted_at IS NULL",
+        "UPDATE channels SET {}, updated_at = NOW() WHERE id = ${param_idx} AND deleted_at IS NULL",
         set_parts.join(", ")
     );
 
@@ -930,7 +919,7 @@ pub async fn update_channel(
     if let Some(ref desc) = updates.description {
         q = q.bind(desc);
     }
-    q = q.bind(&id_bytes);
+    q = q.bind(channel_id);
 
     let result = q.execute(pool).await?;
     if result.rows_affected() == 0 {
@@ -941,20 +930,14 @@ pub async fn update_channel(
 }
 
 /// Sets the topic for a channel, recording who set it and when.
-pub async fn set_topic(
-    pool: &MySqlPool,
-    channel_id: Uuid,
-    topic: &str,
-    set_by: &[u8],
-) -> Result<()> {
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
+pub async fn set_topic(pool: &PgPool, channel_id: Uuid, topic: &str, set_by: &[u8]) -> Result<()> {
     let result = sqlx::query(
-        "UPDATE channels SET topic = ?, topic_set_by = ?, topic_set_at = NOW(6) \
-         WHERE id = ? AND deleted_at IS NULL",
+        "UPDATE channels SET topic = $1, topic_set_by = $2, topic_set_at = NOW() \
+         WHERE id = $3 AND deleted_at IS NULL",
     )
     .bind(topic)
     .bind(set_by)
-    .bind(&id_bytes)
+    .bind(channel_id)
     .execute(pool)
     .await?;
     if result.rows_affected() == 0 {
@@ -965,19 +948,18 @@ pub async fn set_topic(
 
 /// Sets the purpose for a channel, recording who set it and when.
 pub async fn set_purpose(
-    pool: &MySqlPool,
+    pool: &PgPool,
     channel_id: Uuid,
     purpose: &str,
     set_by: &[u8],
 ) -> Result<()> {
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
     let result = sqlx::query(
-        "UPDATE channels SET purpose = ?, purpose_set_by = ?, purpose_set_at = NOW(6) \
-         WHERE id = ? AND deleted_at IS NULL",
+        "UPDATE channels SET purpose = $1, purpose_set_by = $2, purpose_set_at = NOW() \
+         WHERE id = $3 AND deleted_at IS NULL",
     )
     .bind(purpose)
     .bind(set_by)
-    .bind(&id_bytes)
+    .bind(channel_id)
     .execute(pool)
     .await?;
     if result.rows_affected() == 0 {
@@ -990,12 +972,10 @@ pub async fn set_purpose(
 ///
 /// Returns `AccessDenied` if the channel is already archived.
 /// Returns `ChannelNotFound` if the channel does not exist or is deleted.
-pub async fn archive_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<()> {
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
-
+pub async fn archive_channel(pool: &PgPool, channel_id: Uuid) -> Result<()> {
     // First check: does the channel exist and what is its state?
-    let row = sqlx::query("SELECT archived_at FROM channels WHERE id = ? AND deleted_at IS NULL")
-        .bind(&id_bytes)
+    let row = sqlx::query("SELECT archived_at FROM channels WHERE id = $1 AND deleted_at IS NULL")
+        .bind(channel_id)
         .fetch_optional(pool)
         .await?;
 
@@ -1012,10 +992,10 @@ pub async fn archive_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<()> {
     }
 
     sqlx::query(
-        "UPDATE channels SET archived_at = NOW(6) \
-         WHERE id = ? AND deleted_at IS NULL AND archived_at IS NULL",
+        "UPDATE channels SET archived_at = NOW() \
+         WHERE id = $1 AND deleted_at IS NULL AND archived_at IS NULL",
     )
-    .bind(&id_bytes)
+    .bind(channel_id)
     .execute(pool)
     .await?;
 
@@ -1026,12 +1006,10 @@ pub async fn archive_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<()> {
 ///
 /// Returns `AccessDenied` if the channel is not currently archived.
 /// Returns `ChannelNotFound` if the channel does not exist or is deleted.
-pub async fn unarchive_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<()> {
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
-
+pub async fn unarchive_channel(pool: &PgPool, channel_id: Uuid) -> Result<()> {
     // First check: does the channel exist and what is its state?
-    let row = sqlx::query("SELECT archived_at FROM channels WHERE id = ? AND deleted_at IS NULL")
-        .bind(&id_bytes)
+    let row = sqlx::query("SELECT archived_at FROM channels WHERE id = $1 AND deleted_at IS NULL")
+        .bind(channel_id)
         .fetch_optional(pool)
         .await?;
 
@@ -1047,24 +1025,23 @@ pub async fn unarchive_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<()>
 
     sqlx::query(
         "UPDATE channels SET archived_at = NULL \
-         WHERE id = ? AND deleted_at IS NULL AND archived_at IS NOT NULL",
+         WHERE id = $1 AND deleted_at IS NULL AND archived_at IS NOT NULL",
     )
-    .bind(&id_bytes)
+    .bind(channel_id)
     .execute(pool)
     .await?;
 
     Ok(())
 }
 
-/// Soft-delete a channel by setting `deleted_at = NOW(6)`.
+/// Soft-delete a channel by setting `deleted_at = NOW()`.
 ///
 /// Returns `Ok(true)` if the channel was deleted, `Ok(false)` if already
 /// deleted or not found.
-pub async fn soft_delete_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<bool> {
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
+pub async fn soft_delete_channel(pool: &PgPool, channel_id: Uuid) -> Result<bool> {
     let result =
-        sqlx::query("UPDATE channels SET deleted_at = NOW(6) WHERE id = ? AND deleted_at IS NULL")
-            .bind(&id_bytes)
+        sqlx::query("UPDATE channels SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL")
+            .bind(channel_id)
             .execute(pool)
             .await?;
 
@@ -1072,12 +1049,11 @@ pub async fn soft_delete_channel(pool: &MySqlPool, channel_id: Uuid) -> Result<b
 }
 
 /// Returns the count of active (non-removed) members in a channel.
-pub async fn get_member_count(pool: &MySqlPool, channel_id: Uuid) -> Result<i64> {
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
+pub async fn get_member_count(pool: &PgPool, channel_id: Uuid) -> Result<i64> {
     let row = sqlx::query(
-        "SELECT COUNT(*) as cnt FROM channel_members WHERE channel_id = ? AND removed_at IS NULL",
+        "SELECT COUNT(*) as cnt FROM channel_members WHERE channel_id = $1 AND removed_at IS NULL",
     )
-    .bind(&id_bytes)
+    .bind(channel_id)
     .fetch_one(pool)
     .await?;
     Ok(row.try_get("cnt")?)
@@ -1085,25 +1061,23 @@ pub async fn get_member_count(pool: &MySqlPool, channel_id: Uuid) -> Result<i64>
 
 /// Bulk-fetch member counts for a set of channel IDs.
 ///
-/// Returns a map of `channel_id → count`. Channels with zero members are omitted.
+/// Returns a map of `channel_id -> count`. Channels with zero members are omitted.
 /// Single query regardless of input size.
 pub async fn get_member_counts_bulk(
-    pool: &MySqlPool,
+    pool: &PgPool,
     channel_ids: &[Uuid],
 ) -> Result<std::collections::HashMap<Uuid, i64>> {
-    use crate::event::uuid_from_bytes;
-
     if channel_ids.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
 
-    let mut qb: sqlx::QueryBuilder<sqlx::MySql> = sqlx::QueryBuilder::new(
+    let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
         "SELECT channel_id, COUNT(*) as cnt FROM channel_members \
          WHERE removed_at IS NULL AND channel_id IN (",
     );
     let mut sep = qb.separated(", ");
     for id in channel_ids {
-        sep.push_bind(id.as_bytes().to_vec());
+        sep.push_bind(*id);
     }
     qb.push(") GROUP BY channel_id");
 
@@ -1111,8 +1085,7 @@ pub async fn get_member_counts_bulk(
 
     let mut map = std::collections::HashMap::with_capacity(rows.len());
     for row in rows {
-        let id_bytes: Vec<u8> = row.try_get("channel_id")?;
-        let id = uuid_from_bytes(&id_bytes)?;
+        let id: Uuid = row.try_get("channel_id")?;
         let cnt: i64 = row.try_get("cnt")?;
         map.insert(id, cnt);
     }
@@ -1123,17 +1096,16 @@ pub async fn get_member_counts_bulk(
 ///
 /// Returns `None` if the pubkey is not an active member.
 pub async fn get_member_role(
-    pool: &MySqlPool,
+    pool: &PgPool,
     channel_id: Uuid,
     pubkey: &[u8],
 ) -> Result<Option<String>> {
-    let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
     let row = sqlx::query(
-        "SELECT cm.role FROM channel_members cm \
+        "SELECT cm.role::text AS role FROM channel_members cm \
          JOIN channels c ON cm.channel_id = c.id AND c.deleted_at IS NULL \
-         WHERE cm.channel_id = ? AND cm.pubkey = ? AND cm.removed_at IS NULL",
+         WHERE cm.channel_id = $1 AND cm.pubkey = $2 AND cm.removed_at IS NULL",
     )
-    .bind(&channel_id_bytes)
+    .bind(channel_id)
     .bind(pubkey)
     .fetch_optional(pool)
     .await?;

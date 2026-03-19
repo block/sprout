@@ -411,7 +411,8 @@ mod tests {
 
     #[test]
     fn validate_rejects_empty_name() {
-        let yaml = "name: ''\ntrigger:\n  on: message_posted\nsteps:\n  - id: s1\n    action: send_message\n    text: hi\n";
+        let yaml =
+            "name: ''\ntrigger:\n  on: message_posted\nsteps:\n  - id: s1\n    action: send_message\n    text: hi\n";
         let err = parse_yaml(yaml).unwrap_err();
         assert!(
             matches!(err, WorkflowError::InvalidDefinition(_)),
@@ -693,7 +694,8 @@ mod tests {
 
     #[test]
     fn validate_rejects_whitespace_only_name() {
-        let yaml = "name: '   '\ntrigger:\n  on: message_posted\nsteps:\n  - id: s1\n    action: send_message\n    text: hi\n";
+        let yaml =
+            "name: '   '\ntrigger:\n  on: message_posted\nsteps:\n  - id: s1\n    action: send_message\n    text: hi\n";
         let err = parse_yaml(yaml).unwrap_err();
         assert!(
             matches!(err, WorkflowError::InvalidDefinition(_)),

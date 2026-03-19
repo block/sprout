@@ -14,12 +14,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MODE="${1:-all}"
 TIMEOUT=60  # seconds to wait for services if starting them
-DB_USER="${SPROUT_DB_USER:-sprout}"
-DB_PASS="${SPROUT_DB_PASS:-sprout_dev}"
-DB_NAME="${SPROUT_DB_NAME:-sprout}"
-DOCKER_DB_HOST="${SPROUT_DOCKER_DB_HOST:-mysql}"
-DOCKER_NETWORK="${SPROUT_DOCKER_NETWORK:-sprout-net}"
-MYSQL_CLIENT_IMAGE="${SPROUT_DB_CLIENT_IMAGE:-mysql:8.0}"
 
 # Colors
 RED='\033[0;31m'
@@ -30,19 +24,12 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 log()    { echo -e "${BLUE}[run-tests]${NC} $*"; }
-success(){ echo -e "${GREEN}[run-tests]${NC} ✅ $*"; }
-warn()   { echo -e "${YELLOW}[run-tests]${NC} ⚠️  $*"; }
-error()  { echo -e "${RED}[run-tests]${NC} ❌ $*" >&2; }
+success(){ echo -e "${GREEN}[run-tests]${NC} $*"; }
+warn()   { echo -e "${YELLOW}[run-tests]${NC} $*"; }
+error()  { echo -e "${RED}[run-tests]${NC} $*" >&2; }
 section(){ echo -e "\n${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; echo -e "${CYAN}  $*${NC}"; echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; }
 
 cd "${REPO_ROOT}"
-
-run_mysql_in_container() {
-  docker run --rm -i --network "${DOCKER_NETWORK}" \
-    -e MYSQL_PWD="${DB_PASS}" \
-    "${MYSQL_CLIENT_IMAGE}" \
-    mysql -h"${DOCKER_DB_HOST}" -u"${DB_USER}" "${DB_NAME}" "$@"
-}
 
 # ---- Load .env if present ---------------------------------------------------
 
@@ -54,7 +41,12 @@ if [[ -f ".env" ]]; then
   set +o allexport
 else
   # Use defaults matching docker-compose.yml
-  export DATABASE_URL="mysql://sprout:sprout_dev@localhost:3306/sprout"
+  export DATABASE_URL="postgres://sprout:sprout_dev@localhost:5432/sprout"
+  export PGHOST=localhost
+  export PGPORT=5432
+  export PGUSER=sprout
+  export PGPASSWORD=sprout_dev
+  export PGDATABASE=sprout
   export REDIS_URL="redis://localhost:6379"
   export TYPESENSE_API_KEY="sprout_dev_key"
   export TYPESENSE_URL="http://localhost:8108"
@@ -81,10 +73,10 @@ run_test_step() {
 # ---- Check / start infra (for integration tests) ----------------------------
 
 services_healthy() {
-  local mysql_ok redis_ok
-  mysql_ok=$(docker inspect --format='{{.State.Health.Status}}' sprout-mysql 2>/dev/null || echo "not_found")
+  local pg_ok redis_ok
+  pg_ok=$(docker inspect --format='{{.State.Health.Status}}' sprout-postgres 2>/dev/null || echo "not_found")
   redis_ok=$(docker inspect --format='{{.State.Health.Status}}' sprout-redis 2>/dev/null || echo "not_found")
-  [[ "${mysql_ok}" == "healthy" && "${redis_ok}" == "healthy" ]]
+  [[ "${pg_ok}" == "healthy" && "${redis_ok}" == "healthy" ]]
 }
 
 ensure_services() {
@@ -116,26 +108,20 @@ ensure_services() {
 
 ensure_migrations() {
   log "Ensuring migrations are current..."
-  local migration_dir="${REPO_ROOT}/migrations"
+  local pgschema="${REPO_ROOT}/bin/pgschema"
+  local schema_file="${REPO_ROOT}/schema/schema.sql"
 
-  if [[ ! -d "${migration_dir}" ]]; then
-    warn "No migrations directory. Skipping."
+  if [[ ! -f "${schema_file}" ]]; then
+    warn "No schema.sql. Skipping."
     return 0
   fi
 
-  if command -v sqlx &>/dev/null; then
-    DATABASE_URL="${DATABASE_URL}" sqlx migrate run --source "${migration_dir}" 2>/dev/null \
+  if [[ -x "${pgschema}" ]]; then
+    "${pgschema}" apply --file "${schema_file}" --auto-approve 2>/dev/null \
       && success "Migrations current" \
-      || warn "sqlx migrate run failed — DB may be out of date"
+      || warn "pgschema apply failed — DB may be out of date"
   else
-    # Fallback: apply all SQL files (idempotent if schema uses IF NOT EXISTS)
-    shopt -s nullglob
-    local sql_files=("${migration_dir}"/*.sql)
-    shopt -u nullglob
-    for sql_file in "${sql_files[@]}"; do
-      run_mysql_in_container < "${sql_file}" &>/dev/null || true
-    done
-    success "Migrations applied (mysql fallback)"
+    warn "pgschema not found at ${pgschema}. Schema may be out of date."
   fi
 }
 
@@ -200,7 +186,7 @@ echo ""
 if [[ ${#PASSED[@]} -gt 0 ]]; then
   echo -e "  ${GREEN}Passed (${#PASSED[@]}):${NC}"
   for t in "${PASSED[@]}"; do
-    echo -e "    ${GREEN}✅${NC} ${t}"
+    echo -e "    ${GREEN}pass${NC} ${t}"
   done
 fi
 
@@ -208,12 +194,12 @@ if [[ ${#FAILED[@]} -gt 0 ]]; then
   echo ""
   echo -e "  ${RED}Failed (${#FAILED[@]}):${NC}"
   for t in "${FAILED[@]}"; do
-    echo -e "    ${RED}❌${NC} ${t}"
+    echo -e "    ${RED}fail${NC} ${t}"
   done
   echo ""
   exit 1
 fi
 
 echo ""
-success "All tests passed! 🎉"
+success "All tests passed!"
 exit 0

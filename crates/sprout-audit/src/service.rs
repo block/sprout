@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use futures_util::FutureExt as _;
-use sqlx::{Acquire, MySqlPool, Row};
+use sqlx::{Acquire, PgPool, Row};
 use tracing::{debug, instrument, warn};
 
 use sprout_core::kind::KIND_AUTH;
@@ -13,20 +13,20 @@ use crate::{
     schema::AUDIT_SCHEMA_SQL,
 };
 
-const AUDIT_LOCK_NAME: &str = "sprout_audit";
-const AUDIT_LOCK_TIMEOUT_SECS: i64 = 10;
+/// Advisory lock key derived from a stable hash of "sprout_audit".
+const AUDIT_LOCK_KEY: i64 = 0x5370_7275_7441_7564; // "SprutAud" as hex
 
-/// Append-only audit log service backed by MySQL.
+/// Append-only audit log service backed by Postgres.
 ///
-/// Serialises writes via `GET_LOCK` so the hash chain remains consistent
+/// Serialises writes via `pg_advisory_lock` so the hash chain remains consistent
 /// even when multiple relay processes share the same database.
 pub struct AuditService {
-    pool: MySqlPool,
+    pool: PgPool,
 }
 
 impl AuditService {
     /// Creates a new `AuditService` using the given connection pool.
-    pub fn new(pool: MySqlPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
@@ -36,13 +36,10 @@ impl AuditService {
         Ok(())
     }
 
-    /// Append a new entry to the audit log. Single-writer via `GET_LOCK`.
+    /// Append a new entry to the audit log. Single-writer via `pg_advisory_lock`.
     ///
-    /// MySQL's GET_LOCK is session-scoped (not transaction-scoped), so we
-    /// acquire it before beginning the transaction and release it explicitly
-    /// after commit (or on any error path). `DO RELEASE_LOCK` is called in
-    /// all branches — success, error, and via `tokio::task::spawn` on panic —
-    /// so the lock is never left held on a pooled connection.
+    /// Postgres advisory locks are session-scoped, so we acquire before the
+    /// transaction and release after commit (or on any error path).
     #[instrument(skip(self, entry), fields(action = %entry.action))]
     pub async fn log(&self, entry: NewAuditEntry) -> Result<AuditEntry, AuditError> {
         if entry.event_kind == KIND_AUTH {
@@ -52,31 +49,21 @@ impl AuditService {
 
         let mut conn = self.pool.acquire().await?;
 
-        let lock_acquired: i32 = sqlx::query_scalar("SELECT GET_LOCK(?, ?)")
-            .bind(AUDIT_LOCK_NAME)
-            .bind(AUDIT_LOCK_TIMEOUT_SECS)
-            .fetch_one(&mut *conn)
+        // Acquire session-level advisory lock (blocks until available).
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(AUDIT_LOCK_KEY)
+            .execute(&mut *conn)
             .await?;
-
-        if lock_acquired != 1 {
-            return Err(AuditError::Database(sqlx::Error::Protocol(
-                "failed to acquire advisory lock for audit log".into(),
-            )));
-        }
 
         // Run log_inner and release the lock regardless of outcome.
         // We use catch_unwind to handle panics so the lock is always released
         // before the connection is returned to the pool.
-        //
-        // ⚠️ SAFETY: log_inner is not UnwindSafe by default (it holds &mut conn),
-        // but we use AssertUnwindSafe because we own the connection and will not
-        // observe partial state after a panic — the connection is dropped.
         let result = std::panic::AssertUnwindSafe(self.log_inner(&mut conn, entry))
             .catch_unwind()
             .await;
 
-        let _ = sqlx::query("DO RELEASE_LOCK(?)")
-            .bind(AUDIT_LOCK_NAME)
+        let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(AUDIT_LOCK_KEY)
             .execute(&mut *conn)
             .await;
 
@@ -88,7 +75,7 @@ impl AuditService {
 
     async fn log_inner(
         &self,
-        conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+        conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
         entry: NewAuditEntry,
     ) -> Result<AuditEntry, AuditError> {
         let mut tx = conn.begin().await?;
@@ -130,7 +117,7 @@ impl AuditService {
             INSERT INTO audit_log
                 (seq, timestamp, event_id, event_kind, actor_pubkey, action,
                  channel_id, metadata, prev_hash, hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(audit_entry.seq)
@@ -160,7 +147,7 @@ impl AuditService {
             SELECT seq, timestamp, event_id, event_kind, actor_pubkey,
                    action, channel_id, metadata, prev_hash, hash
             FROM audit_log
-            WHERE seq BETWEEN ? AND ?
+            WHERE seq BETWEEN $1 AND $2
             ORDER BY seq ASC
             "#,
         )
@@ -217,9 +204,9 @@ impl AuditService {
             SELECT seq, timestamp, event_id, event_kind, actor_pubkey,
                    action, channel_id, metadata, prev_hash, hash
             FROM audit_log
-            WHERE seq >= ?
+            WHERE seq >= $1
             ORDER BY seq ASC
-            LIMIT ?
+            LIMIT $2
             "#,
         )
         .bind(from_seq)
@@ -231,7 +218,7 @@ impl AuditService {
     }
 }
 
-fn row_to_audit_entry(row: &sqlx::mysql::MySqlRow) -> Result<AuditEntry, AuditError> {
+fn row_to_audit_entry(row: &sqlx::postgres::PgRow) -> Result<AuditEntry, AuditError> {
     let seq: i64 = row.get("seq");
     let action_str: String = row.get("action");
     let action: AuditAction = action_str.parse().map_err(|_| {
@@ -277,10 +264,10 @@ mod tests {
         DB_LOCK.get_or_init(|| Mutex::new(()))
     }
 
-    async fn test_pool() -> Option<MySqlPool> {
+    async fn test_pool() -> Option<PgPool> {
         let url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "mysql://sprout:sprout_dev@localhost:3306/sprout".into());
-        MySqlPool::connect(&url).await.ok()
+            .unwrap_or_else(|_| "postgres://sprout:sprout_dev@localhost:5432/sprout".into());
+        PgPool::connect(&url).await.ok()
     }
 
     fn sample_new_entry(kind: u32, action: AuditAction) -> NewAuditEntry {
@@ -294,7 +281,7 @@ mod tests {
         }
     }
 
-    async fn reset_audit_table(pool: &MySqlPool) {
+    async fn reset_audit_table(pool: &PgPool) {
         sqlx::query("TRUNCATE TABLE audit_log")
             .execute(pool)
             .await
@@ -302,7 +289,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires MySQL"]
+    #[ignore = "requires Postgres"]
     async fn genesis_entry() {
         let _guard = db_lock().lock().await;
         let Some(pool) = test_pool().await else {
@@ -323,7 +310,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires MySQL"]
+    #[ignore = "requires Postgres"]
     async fn chain_integrity() {
         let _guard = db_lock().lock().await;
         let Some(pool) = test_pool().await else {
@@ -354,7 +341,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires MySQL"]
+    #[ignore = "requires Postgres"]
     async fn verify_chain_detects_tampering() {
         let _guard = db_lock().lock().await;
         let Some(pool) = test_pool().await else {
@@ -377,7 +364,7 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::query("UPDATE audit_log SET actor_pubkey = 'tampered' WHERE seq = ?")
+        sqlx::query("UPDATE audit_log SET actor_pubkey = 'tampered' WHERE seq = $1")
             .bind(e2.seq)
             .execute(&pool)
             .await
@@ -388,7 +375,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires MySQL"]
+    #[ignore = "requires Postgres"]
     async fn auth_events_rejected() {
         let Some(pool) = test_pool().await else {
             return;

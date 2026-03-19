@@ -3,7 +3,7 @@
 //! Call `ensure_future_partitions` on startup and monthly via cron.
 
 use chrono::{Datelike, TimeZone, Utc};
-use sqlx::{MySqlPool, Row};
+use sqlx::{PgPool, Row};
 use tracing::info;
 
 use crate::error::{DbError, Result};
@@ -12,7 +12,7 @@ use crate::error::{DbError, Result};
 const PARTITIONED_TABLES: &[&str] = &["events", "delivery_log"];
 
 /// Ensures monthly partition tables exist for the next `months_ahead` months.
-pub async fn ensure_future_partitions(pool: &MySqlPool, months_ahead: u32) -> Result<()> {
+pub async fn ensure_future_partitions(pool: &PgPool, months_ahead: u32) -> Result<()> {
     let now = Utc::now();
 
     for i in 0..=(months_ahead as i32) {
@@ -29,6 +29,13 @@ pub async fn ensure_future_partitions(pool: &MySqlPool, months_ahead: u32) -> Re
         } else {
             (target_year, target_month + 1)
         };
+
+        let start = Utc
+            .with_ymd_and_hms(target_year, target_month, 1, 0, 0, 0)
+            .single()
+            .ok_or_else(|| {
+                DbError::InvalidData(format!("invalid date: {target_year}-{target_month:02}-01"))
+            })?;
         let end = Utc
             .with_ymd_and_hms(end_year, end_month, 1, 0, 0, 0)
             .single()
@@ -37,11 +44,11 @@ pub async fn ensure_future_partitions(pool: &MySqlPool, months_ahead: u32) -> Re
             })?;
 
         let suffix = format!("{:04}_{:02}", target_year, target_month);
+        let start_str = start.format("%Y-%m-%d").to_string();
         let end_str = end.format("%Y-%m-%d").to_string();
-        let partition_name = format!("p{}", suffix);
 
         for table in PARTITIONED_TABLES {
-            ensure_partition(pool, table, &partition_name, &end_str, &suffix).await?;
+            ensure_partition(pool, table, &start_str, &end_str, &suffix).await?;
         }
     }
 
@@ -65,13 +72,13 @@ fn validate_date_str(s: &str) -> bool {
 }
 
 async fn ensure_partition(
-    pool: &MySqlPool,
+    pool: &PgPool,
     table_name: &str,
-    partition_name: &str,
+    start_date_str: &str,
     end_date_str: &str,
     suffix: &str,
 ) -> Result<()> {
-    // Allowlist check — parameterized queries cannot be used for DDL identifiers.
+    // Allowlist check -- parameterized queries cannot be used for DDL identifiers.
     if !PARTITIONED_TABLES.contains(&table_name) {
         return Err(DbError::InvalidData(format!(
             "table not in partition allowlist: {table_name:?}"
@@ -82,23 +89,30 @@ async fn ensure_partition(
             "partition suffix contains invalid characters: {suffix:?}"
         )));
     }
+    if !validate_date_str(start_date_str) {
+        return Err(DbError::InvalidData(format!(
+            "start_date_str is not YYYY-MM-DD: {start_date_str:?}"
+        )));
+    }
     if !validate_date_str(end_date_str) {
         return Err(DbError::InvalidData(format!(
             "end_date_str is not YYYY-MM-DD: {end_date_str:?}"
         )));
     }
 
+    let partition_name = format!("{table_name}_{suffix}");
+
     let row = sqlx::query(
         r#"
         SELECT COUNT(*) as cnt
-        FROM information_schema.PARTITIONS
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = ?
-          AND PARTITION_NAME = ?
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema()
+          AND c.relname = $1
+          AND c.relispartition = true
         "#,
     )
-    .bind(table_name)
-    .bind(partition_name)
+    .bind(&partition_name)
     .fetch_one(pool)
     .await?;
 
@@ -107,14 +121,14 @@ async fn ensure_partition(
         return Ok(());
     }
 
-    // DDL identifiers cannot be parameterized in MySQL — all inputs are validated above.
+    // DDL identifiers cannot be parameterized -- all inputs are validated above.
     let sql = format!(
-        "ALTER TABLE {table_name} ADD PARTITION \
-         (PARTITION {partition_name} VALUES LESS THAN (TO_DAYS('{end_date_str}')))"
+        "CREATE TABLE IF NOT EXISTS {partition_name} PARTITION OF {table_name} \
+         FOR VALUES FROM ('{start_date_str}') TO ('{end_date_str}')"
     );
 
     sqlx::query(&sql).execute(pool).await?;
-    info!("added partition {table_name}_{suffix}");
+    info!("added partition {partition_name}");
 
     Ok(())
 }

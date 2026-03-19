@@ -1,16 +1,15 @@
 //! API token CRUD operations.
 
 use chrono::{DateTime, Utc};
-use sqlx::{MySqlPool, Row};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::error::{DbError, Result};
-use crate::event::uuid_from_bytes;
 
 /// Create a new API token record. The caller is responsible for generating
 /// the raw token and computing its SHA-256 hash.
 pub async fn create_api_token(
-    pool: &MySqlPool,
+    pool: &PgPool,
     token_hash: &[u8],
     owner_pubkey: &[u8],
     name: &str,
@@ -19,7 +18,6 @@ pub async fn create_api_token(
     expires_at: Option<DateTime<Utc>>,
 ) -> Result<Uuid> {
     let id = Uuid::new_v4();
-    let id_bytes = id.as_bytes().as_slice();
 
     let scopes_json =
         serde_json::to_value(scopes).map_err(|e| DbError::InvalidData(e.to_string()))?;
@@ -35,10 +33,10 @@ pub async fn create_api_token(
     sqlx::query(
         r#"
         INSERT INTO api_tokens (id, token_hash, owner_pubkey, name, scopes, channel_ids, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         "#,
     )
-    .bind(id_bytes)
+    .bind(id)
     .bind(token_hash)
     .bind(owner_pubkey)
     .bind(name)
@@ -53,12 +51,12 @@ pub async fn create_api_token(
 
 /// Atomic conditional INSERT: create a token only if the owner has fewer than 10 active tokens.
 ///
-/// Uses a `SELECT ... WHERE COUNT < 10` subquery so the check and insert are atomic —
+/// Uses a subquery so the check and insert are atomic --
 /// no TOCTOU race between a separate count query and the insert.
 ///
 /// Returns `Ok(Some(uuid))` on success, `Ok(None)` if the 10-token limit is exceeded.
 pub async fn create_api_token_if_under_limit(
-    pool: &MySqlPool,
+    pool: &PgPool,
     token_hash: &[u8],
     owner_pubkey: &[u8],
     name: &str,
@@ -67,7 +65,6 @@ pub async fn create_api_token_if_under_limit(
     expires_at: Option<DateTime<Utc>>,
 ) -> Result<Option<Uuid>> {
     let id = Uuid::new_v4();
-    let id_bytes = id.as_bytes().as_slice();
 
     let scopes_json =
         serde_json::to_value(scopes).map_err(|e| DbError::InvalidData(e.to_string()))?;
@@ -80,23 +77,22 @@ pub async fn create_api_token_if_under_limit(
         .transpose()?;
 
     // Conditional INSERT: only inserts if active (non-revoked, non-expired) token count < 10.
-    // The subquery and insert execute atomically — no separate count + insert race.
+    // The subquery and insert execute atomically -- no separate count + insert race.
     let result = sqlx::query(
         r#"
         INSERT INTO api_tokens
             (id, token_hash, owner_pubkey, name, scopes, channel_ids, expires_at, created_by_self_mint)
-        SELECT ?, ?, ?, ?, ?, ?, ?, TRUE
-        FROM DUAL
+        SELECT $1, $2, $3, $4, $5, $6, $7, TRUE
         WHERE (
             SELECT COUNT(*)
             FROM api_tokens
-            WHERE owner_pubkey = ?
+            WHERE owner_pubkey = $8
               AND revoked_at IS NULL
               AND (expires_at IS NULL OR expires_at > NOW())
         ) < 10
         "#,
     )
-    .bind(id_bytes)
+    .bind(id)
     .bind(token_hash)
     .bind(owner_pubkey)
     .bind(name)
@@ -108,7 +104,7 @@ pub async fn create_api_token_if_under_limit(
     .await?;
 
     if result.rows_affected() == 0 {
-        // Limit exceeded — the WHERE clause prevented the INSERT.
+        // Limit exceeded -- the WHERE clause prevented the INSERT.
         return Ok(None);
     }
 
@@ -122,7 +118,7 @@ pub async fn create_api_token_if_under_limit(
 /// The relay layer uses this to return distinct `token_revoked` vs `invalid_token`
 /// error responses rather than treating both as "not found".
 pub async fn get_api_token_by_hash_including_revoked(
-    pool: &MySqlPool,
+    pool: &PgPool,
     hash: &[u8],
 ) -> Result<Option<crate::ApiTokenRecord>> {
     let row = sqlx::query(
@@ -130,7 +126,7 @@ pub async fn get_api_token_by_hash_including_revoked(
         SELECT id, token_hash, owner_pubkey, name, scopes, channel_ids,
                created_at, expires_at, last_used_at, revoked_at
         FROM api_tokens
-        WHERE token_hash = ?
+        WHERE token_hash = $1
         "#,
     )
     .bind(hash)
@@ -142,8 +138,7 @@ pub async fn get_api_token_by_hash_including_revoked(
         Some(r) => r,
     };
 
-    let id_bytes: Vec<u8> = row.try_get("id")?;
-    let id = uuid_from_bytes(&id_bytes)?;
+    let id: Uuid = row.try_get("id")?;
 
     let scopes_json: serde_json::Value = row.try_get("scopes")?;
     let scopes: Vec<String> = serde_json::from_value(scopes_json)
@@ -180,11 +175,11 @@ pub async fn get_api_token_by_hash_including_revoked(
 /// List all tokens (including revoked) for a pubkey, ordered by creation time descending.
 ///
 /// Returns the full [`crate::ApiTokenRecord`] including `token_hash`. Callers are
-/// responsible for stripping `token_hash` before returning data to clients — the
+/// responsible for stripping `token_hash` before returning data to clients -- the
 /// raw token value is never exposed after the initial mint response.
 /// Used by `GET /api/tokens` to show a user their full token history.
 pub async fn list_tokens_by_owner(
-    pool: &MySqlPool,
+    pool: &PgPool,
     pubkey: &[u8],
 ) -> Result<Vec<crate::ApiTokenRecord>> {
     let rows = sqlx::query(
@@ -192,7 +187,7 @@ pub async fn list_tokens_by_owner(
         SELECT id, token_hash, owner_pubkey, name, scopes, channel_ids,
                created_at, expires_at, last_used_at, revoked_at
         FROM api_tokens
-        WHERE owner_pubkey = ?
+        WHERE owner_pubkey = $1
         ORDER BY created_at DESC
         "#,
     )
@@ -202,8 +197,7 @@ pub async fn list_tokens_by_owner(
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let id_bytes: Vec<u8> = row.try_get("id")?;
-        let id = uuid_from_bytes(&id_bytes)?;
+        let id: Uuid = row.try_get("id")?;
 
         let scopes_json: serde_json::Value = row.try_get("scopes")?;
         let scopes: Vec<String> = serde_json::from_value(scopes_json)
@@ -247,23 +241,22 @@ pub async fn list_tokens_by_owner(
 /// Only revokes if the token is owned by `owner_pubkey` and not already revoked.
 /// Returns `true` if the token was revoked, `false` if not found, not owned, or already revoked.
 pub async fn revoke_token(
-    pool: &MySqlPool,
+    pool: &PgPool,
     id: Uuid,
     owner_pubkey: &[u8],
     revoked_by: &[u8],
 ) -> Result<bool> {
-    let id_bytes = id.as_bytes().as_slice();
     let result = sqlx::query(
         r#"
         UPDATE api_tokens
-        SET revoked_at = NOW(6), revoked_by = ?
-        WHERE id = ?
-          AND owner_pubkey = ?
+        SET revoked_at = NOW(), revoked_by = $1
+        WHERE id = $2
+          AND owner_pubkey = $3
           AND revoked_at IS NULL
         "#,
     )
     .bind(revoked_by)
-    .bind(id_bytes)
+    .bind(id)
     .bind(owner_pubkey)
     .execute(pool)
     .await?;
@@ -276,15 +269,15 @@ pub async fn revoke_token(
 /// Skips already-revoked tokens (idempotent). Returns the count of newly revoked tokens.
 /// If all tokens are already revoked, returns 0 with no error.
 pub async fn revoke_all_tokens(
-    pool: &MySqlPool,
+    pool: &PgPool,
     owner_pubkey: &[u8],
     revoked_by: &[u8],
 ) -> Result<u64> {
     let result = sqlx::query(
         r#"
         UPDATE api_tokens
-        SET revoked_at = NOW(6), revoked_by = ?
-        WHERE owner_pubkey = ?
+        SET revoked_at = NOW(), revoked_by = $1
+        WHERE owner_pubkey = $2
           AND revoked_at IS NULL
         "#,
     )

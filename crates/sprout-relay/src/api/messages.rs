@@ -995,7 +995,10 @@ pub async fn list_messages(
         })
         .transpose()
         .map_err(|_| {
-            api_error(StatusCode::BAD_REQUEST, "Invalid 'kinds' parameter — expected comma-separated integers (e.g. '45001' or '9,45001')")
+            api_error(
+                StatusCode::BAD_REQUEST,
+                "Invalid 'kinds' parameter — expected comma-separated integers (e.g. '45001' or '9,45001')",
+            )
         })?;
 
     let mut messages = state

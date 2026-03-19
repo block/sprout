@@ -51,7 +51,7 @@ pub async fn list_channel_workflows(
 
     let workflows = state
         .db
-        .list_channel_workflows(channel_id)
+        .list_channel_workflows(channel_id, None, None)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 

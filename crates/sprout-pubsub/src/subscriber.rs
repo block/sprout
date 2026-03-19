@@ -27,9 +27,7 @@ pub async fn run_subscriber(redis_url: String, broadcast_tx: broadcast::Sender<C
                 // established and ran successfully, so reset backoff to the initial
                 // value — a brief Redis restart should reconnect quickly.
                 backoff_secs = BACKOFF_INITIAL_SECS;
-                tracing::warn!(
-                    "Redis pub/sub stream ended (clean disconnect) — reconnecting in {backoff_secs}s"
-                );
+                tracing::warn!("Redis pub/sub stream ended (clean disconnect) — reconnecting in {backoff_secs}s");
             }
             Err(e) => {
                 tracing::error!("Redis pub/sub error: {e} — reconnecting in {backoff_secs}s");

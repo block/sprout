@@ -1,7 +1,7 @@
 //! User CRUD operations.
 
 use crate::error::Result;
-use sqlx::MySqlPool;
+use sqlx::PgPool;
 use sqlx::Row;
 
 /// A user's profile fields.
@@ -34,11 +34,12 @@ pub struct UserSearchProfile {
 
 /// Ensure a user record exists for the given pubkey (upsert).
 /// Creates with minimal fields if not present; no-op if already exists.
-pub async fn ensure_user(pool: &MySqlPool, pubkey: &[u8]) -> Result<()> {
+pub async fn ensure_user(pool: &PgPool, pubkey: &[u8]) -> Result<()> {
     sqlx::query(
         r#"
-        INSERT IGNORE INTO users (pubkey)
-        VALUES (?)
+        INSERT INTO users (pubkey)
+        VALUES ($1)
+        ON CONFLICT DO NOTHING
         "#,
     )
     .bind(pubkey)
@@ -48,7 +49,7 @@ pub async fn ensure_user(pool: &MySqlPool, pubkey: &[u8]) -> Result<()> {
 }
 
 /// Get a single user record by pubkey.
-pub async fn get_user(pool: &MySqlPool, pubkey: &[u8]) -> Result<Option<UserProfile>> {
+pub async fn get_user(pool: &PgPool, pubkey: &[u8]) -> Result<Option<UserProfile>> {
     let row = sqlx::query_as::<
         _,
         (
@@ -62,7 +63,7 @@ pub async fn get_user(pool: &MySqlPool, pubkey: &[u8]) -> Result<Option<UserProf
         r#"
         SELECT pubkey, display_name, avatar_url, about, nip05_handle
         FROM users
-        WHERE pubkey = ?
+        WHERE pubkey = $1
         "#,
     )
     .bind(pubkey)
@@ -81,33 +82,39 @@ pub async fn get_user(pool: &MySqlPool, pubkey: &[u8]) -> Result<Option<UserProf
 }
 
 /// Update a user's profile fields (display_name, avatar_url, about, nip05_handle).
-/// Only updates fields that are Some — None fields are left unchanged.
+/// Only updates fields that are Some -- None fields are left unchanged.
 /// At least one field must be Some, otherwise returns Ok(()) without touching the DB.
 ///
-/// Empty strings are treated as "clear to NULL" — this is important for kind:0
+/// Empty strings are treated as "clear to NULL" -- this is important for kind:0
 /// absolute-state semantics where absent fields must be cleared, and for the
 /// `nip05_handle` column which has a UNIQUE constraint (multiple NULLs are allowed,
 /// but multiple empty strings would violate uniqueness).
 pub async fn update_user_profile(
-    pool: &MySqlPool,
+    pool: &PgPool,
     pubkey: &[u8],
     display_name: Option<&str>,
     avatar_url: Option<&str>,
     about: Option<&str>,
     nip05_handle: Option<&str>,
 ) -> Result<()> {
-    let mut set_parts: Vec<&str> = Vec::new();
+    let mut set_parts: Vec<String> = Vec::new();
+    let mut param_idx = 1u32;
+
     if display_name.is_some() {
-        set_parts.push("display_name = ?");
+        set_parts.push(format!("display_name = ${param_idx}"));
+        param_idx += 1;
     }
     if avatar_url.is_some() {
-        set_parts.push("avatar_url = ?");
+        set_parts.push(format!("avatar_url = ${param_idx}"));
+        param_idx += 1;
     }
     if about.is_some() {
-        set_parts.push("about = ?");
+        set_parts.push(format!("about = ${param_idx}"));
+        param_idx += 1;
     }
     if nip05_handle.is_some() {
-        set_parts.push("nip05_handle = ?");
+        set_parts.push(format!("nip05_handle = ${param_idx}"));
+        param_idx += 1;
     }
 
     if set_parts.is_empty() {
@@ -121,7 +128,10 @@ pub async fn update_user_profile(
         val.filter(|s| !s.is_empty())
     }
 
-    let sql = format!("UPDATE users SET {} WHERE pubkey = ?", set_parts.join(", "));
+    let sql = format!(
+        "UPDATE users SET {} WHERE pubkey = ${param_idx}",
+        set_parts.join(", ")
+    );
     let mut query = sqlx::query(&sql);
     if display_name.is_some() {
         query = query.bind(empty_to_none(display_name));
@@ -143,7 +153,7 @@ pub async fn update_user_profile(
 /// Look up a user by their full NIP-05 handle (exact match, case-insensitive).
 /// Both `local_part` and `domain` must already be lowercased by the caller.
 pub async fn get_user_by_nip05(
-    pool: &MySqlPool,
+    pool: &PgPool,
     local_part: &str,
     domain: &str,
 ) -> Result<Option<UserProfile>> {
@@ -161,7 +171,7 @@ pub async fn get_user_by_nip05(
         r#"
         SELECT pubkey, display_name, avatar_url, about, nip05_handle
         FROM users
-        WHERE LOWER(nip05_handle) = LOWER(?)
+        WHERE LOWER(nip05_handle) = LOWER($1)
         LIMIT 1
         "#,
     )
@@ -184,7 +194,7 @@ pub async fn get_user_by_nip05(
 ///
 /// Empty queries return an empty vec and do not hit the database.
 pub async fn search_users(
-    pool: &MySqlPool,
+    pool: &PgPool,
     query: &str,
     limit: u32,
 ) -> Result<Vec<UserSearchProfile>> {
@@ -201,31 +211,25 @@ pub async fn search_users(
         r#"
         SELECT pubkey, display_name, avatar_url, nip05_handle
         FROM users
-        WHERE LOWER(COALESCE(display_name, '')) LIKE ?
-           OR LOWER(COALESCE(nip05_handle, '')) LIKE ?
-           OR LOWER(HEX(pubkey)) LIKE ?
+        WHERE LOWER(COALESCE(display_name, '')) LIKE $1
+           OR LOWER(COALESCE(nip05_handle, '')) LIKE $1
+           OR LOWER(encode(pubkey, 'hex')) LIKE $1
         ORDER BY
             CASE
-                WHEN LOWER(COALESCE(display_name, '')) = ? THEN 0
-                WHEN LOWER(COALESCE(nip05_handle, '')) = ? THEN 1
-                WHEN LOWER(HEX(pubkey)) = ? THEN 2
-                WHEN LOWER(COALESCE(display_name, '')) LIKE ? THEN 3
-                WHEN LOWER(COALESCE(nip05_handle, '')) LIKE ? THEN 4
-                WHEN LOWER(HEX(pubkey)) LIKE ? THEN 5
+                WHEN LOWER(COALESCE(display_name, '')) = $2 THEN 0
+                WHEN LOWER(COALESCE(nip05_handle, '')) = $2 THEN 1
+                WHEN LOWER(encode(pubkey, 'hex')) = $2 THEN 2
+                WHEN LOWER(COALESCE(display_name, '')) LIKE $3 THEN 3
+                WHEN LOWER(COALESCE(nip05_handle, '')) LIKE $3 THEN 4
+                WHEN LOWER(encode(pubkey, 'hex')) LIKE $3 THEN 5
                 ELSE 6
             END,
-            COALESCE(NULLIF(display_name, ''), NULLIF(nip05_handle, ''), LOWER(HEX(pubkey)))
-        LIMIT ?
+            COALESCE(NULLIF(display_name, ''), NULLIF(nip05_handle, ''), LOWER(encode(pubkey, 'hex')))
+        LIMIT $4
         "#,
     )
     .bind(&contains_pattern)
-    .bind(&contains_pattern)
-    .bind(&contains_pattern)
     .bind(&normalized)
-    .bind(&normalized)
-    .bind(&normalized)
-    .bind(&prefix_pattern)
-    .bind(&prefix_pattern)
     .bind(&prefix_pattern)
     .bind(limit)
     .fetch_all(pool)
@@ -248,11 +252,11 @@ pub async fn search_users(
 /// The owner pubkey must already exist in the users table (FK constraint).
 /// Returns an error if the agent pubkey is not found (rows_affected == 0).
 pub async fn set_agent_owner(
-    pool: &MySqlPool,
+    pool: &PgPool,
     agent_pubkey: &[u8],
     owner_pubkey: &[u8],
 ) -> Result<()> {
-    let result = sqlx::query(r#"UPDATE users SET agent_owner_pubkey = ? WHERE pubkey = ?"#)
+    let result = sqlx::query(r#"UPDATE users SET agent_owner_pubkey = $1 WHERE pubkey = $2"#)
         .bind(owner_pubkey)
         .bind(agent_pubkey)
         .execute(pool)
@@ -269,14 +273,15 @@ pub async fn set_agent_owner(
 /// Returns None if the pubkey is not in the users table.
 /// Returns Some((policy_str, owner_bytes_or_none)) if found.
 pub async fn get_agent_channel_policy(
-    pool: &MySqlPool,
+    pool: &PgPool,
     pubkey: &[u8],
 ) -> Result<Option<(String, Option<Vec<u8>>)>> {
-    let row =
-        sqlx::query(r#"SELECT channel_add_policy, agent_owner_pubkey FROM users WHERE pubkey = ?"#)
-            .bind(pubkey)
-            .fetch_optional(pool)
-            .await?;
+    let row = sqlx::query(
+        r#"SELECT channel_add_policy::text AS channel_add_policy, agent_owner_pubkey FROM users WHERE pubkey = $1"#,
+    )
+    .bind(pubkey)
+    .fetch_optional(pool)
+    .await?;
 
     row.map(|r| -> Result<(String, Option<Vec<u8>>)> {
         let policy: String = r.try_get("channel_add_policy")?;
@@ -289,17 +294,19 @@ pub async fn get_agent_channel_policy(
 /// Set the channel_add_policy for a user.
 /// Returns an error if the pubkey is not found (rows_affected == 0).
 /// Returns an error if `policy` is not one of the valid ENUM values.
-pub async fn set_channel_add_policy(pool: &MySqlPool, pubkey: &[u8], policy: &str) -> Result<()> {
+pub async fn set_channel_add_policy(pool: &PgPool, pubkey: &[u8], policy: &str) -> Result<()> {
     if !matches!(policy, "anyone" | "owner_only" | "nobody") {
         return Err(crate::error::DbError::InvalidData(format!(
             "invalid channel_add_policy: {policy}"
         )));
     }
-    let result = sqlx::query(r#"UPDATE users SET channel_add_policy = ? WHERE pubkey = ?"#)
-        .bind(policy)
-        .bind(pubkey)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query(
+        r#"UPDATE users SET channel_add_policy = $1::channel_add_policy WHERE pubkey = $2"#,
+    )
+    .bind(policy)
+    .bind(pubkey)
+    .execute(pool)
+    .await?;
     if result.rows_affected() == 0 {
         return Err(crate::error::DbError::NotFound(
             "pubkey not found in users table".into(),
@@ -314,16 +321,12 @@ mod tests {
     use crate::Db;
     use nostr::Keys;
 
-    const TEST_DB_URL: &str = "mysql://sprout:sprout_dev@localhost:3306/sprout";
+    const TEST_DB_URL: &str = "postgres://sprout:sprout_dev@localhost:5432/sprout";
 
     async fn setup_db() -> Db {
-        let pool = MySqlPool::connect(TEST_DB_URL)
+        let pool = PgPool::connect(TEST_DB_URL)
             .await
             .expect("connect to test DB");
-        sqlx::migrate!("../../migrations")
-            .run(&pool)
-            .await
-            .expect("migrate");
         Db::from_pool(pool)
     }
 
@@ -334,7 +337,7 @@ mod tests {
     /// Setting an agent owner then reading back the policy should return
     /// the default "anyone" policy and the owner pubkey.
     #[tokio::test]
-    #[ignore = "requires MySQL"]
+    #[ignore = "requires Postgres"]
     async fn test_set_agent_owner_and_get_policy() {
         let db = setup_db().await;
         let agent_pk = random_pubkey();
@@ -366,7 +369,7 @@ mod tests {
 
     /// set_channel_add_policy should persist each of the three valid policies.
     #[tokio::test]
-    #[ignore = "requires MySQL"]
+    #[ignore = "requires Postgres"]
     async fn test_set_channel_add_policy() {
         let db = setup_db().await;
         let pk = random_pubkey();
@@ -409,7 +412,7 @@ mod tests {
     /// get_agent_channel_policy should return None for a pubkey that has
     /// never been inserted into the users table.
     #[tokio::test]
-    #[ignore = "requires MySQL"]
+    #[ignore = "requires Postgres"]
     async fn test_get_policy_unknown_pubkey() {
         let db = setup_db().await;
         let pk = random_pubkey();
@@ -422,15 +425,15 @@ mod tests {
     }
 
     /// set_agent_owner should return Err when the agent pubkey does not exist
-    /// in the users table (0 rows affected → NotFound).
+    /// in the users table (0 rows affected -> NotFound).
     #[tokio::test]
-    #[ignore = "requires MySQL"]
+    #[ignore = "requires Postgres"]
     async fn test_set_agent_owner_nonexistent_agent() {
         let db = setup_db().await;
         let agent_pk = random_pubkey();
         let owner_pk = random_pubkey();
 
-        // Only ensure the owner exists — agent is intentionally absent.
+        // Only ensure the owner exists -- agent is intentionally absent.
         ensure_user(&db.pool, &owner_pk)
             .await
             .expect("ensure owner");
@@ -443,9 +446,9 @@ mod tests {
     }
 
     /// set_channel_add_policy should return Err when the pubkey does not exist
-    /// in the users table (0 rows affected → NotFound).
+    /// in the users table (0 rows affected -> NotFound).
     #[tokio::test]
-    #[ignore = "requires MySQL"]
+    #[ignore = "requires Postgres"]
     async fn test_set_channel_add_policy_nonexistent_user() {
         let db = setup_db().await;
         let pk = random_pubkey();
@@ -458,7 +461,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires MySQL"]
+    #[ignore = "requires Postgres"]
     async fn test_set_channel_add_policy_rejects_invalid() {
         let db = setup_db().await;
         let pubkey = nostr::Keys::generate().public_key().serialize().to_vec();
@@ -470,7 +473,7 @@ mod tests {
     /// A user with "owner_only" policy but no agent_owner_pubkey set should
     /// return Some(("owner_only", None)).
     #[tokio::test]
-    #[ignore = "requires MySQL"]
+    #[ignore = "requires Postgres"]
     async fn test_owner_only_with_no_owner() {
         let db = setup_db().await;
         let pk = random_pubkey();

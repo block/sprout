@@ -429,7 +429,7 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
             // We use Some(vec![]) which the DB layer treats as "no matching kinds".
             vec![]
         } else {
-            // Cast to i32 for MySQL INT column; safe because all Sprout kinds fit in i32.
+            // Cast to i32 for Postgres INT column; safe because all Sprout kinds fit in i32.
             ks.iter().map(|k| k.as_u16() as i32).collect()
         }
     });

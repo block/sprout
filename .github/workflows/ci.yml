@@ -130,15 +130,23 @@ jobs:
             docker logs "${container}" || true
             return 1
           }
-          wait_healthy "MySQL" "sprout-mysql"
+          wait_healthy "Postgres" "sprout-postgres"
           wait_healthy "Redis" "sprout-redis"
           wait_healthy "Typesense" "sprout-typesense"
+      - name: Apply database schema
+        run: ./bin/pgschema apply --file schema/schema.sql --auto-approve
+        env:
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: sprout
+          PGPASSWORD: sprout_dev
+          PGDATABASE: sprout
       - name: Build relay
         run: cargo build -p sprout-relay
       - name: Start relay
         run: |
           nohup env \
-            DATABASE_URL=mysql://sprout:sprout_dev@localhost:3306/sprout \
+            DATABASE_URL=postgres://sprout:sprout_dev@localhost:5432/sprout \
             REDIS_URL=redis://localhost:6379 \
             TYPESENSE_URL=http://localhost:8108 \
             TYPESENSE_API_KEY=sprout_dev_key \
