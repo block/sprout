@@ -10,7 +10,7 @@
 //!   - `state.db.insert_thread_metadata(...)` → thread::insert_thread_metadata
 //!   - `state.db.get_thread_replies(root_id, depth_limit, limit, cursor)` → thread::get_thread_replies
 //!   - `state.db.get_thread_summary(event_id)` → thread::get_thread_summary
-//!   - `state.db.get_channel_messages_top_level(channel_id, limit, before)` → thread::get_channel_messages_top_level
+//!   - `state.db.get_channel_messages_top_level(channel_id, limit, before, kind_filter)` → thread::get_channel_messages_top_level
 //!   - `state.db.get_thread_metadata_by_event(event_id)` → thread::get_thread_metadata_by_event
 //!   - `state.db.get_event_by_id(id_bytes)` → event::get_event_by_id  (already exists)
 //!   - `state.db.insert_event(event, channel_id)` → event::insert_event  (already exists)
@@ -949,16 +949,19 @@ pub struct ListMessagesParams {
     /// Pagination cursor — Unix timestamp (seconds). Returns messages created
     /// strictly before this time.
     pub before: Option<i64>,
-    /// When `true`, include thread summaries for each message.
+    /// Legacy parameter (thread summaries are now always included). Kept for backward compatibility.
     #[serde(default)]
     pub with_threads: bool,
+    /// Comma-separated event kind numbers to filter by (e.g. "45001" or "9,45001").
+    #[serde(default)]
+    pub kinds: Option<String>,
 }
 
 /// List top-level messages in a channel (newest first).
 ///
-/// Returns root messages and broadcast replies. Thread replies are excluded
-/// unless `with_threads=true`, in which case each message includes a
-/// `thread_summary` with reply counts and participant pubkeys.
+/// Returns root messages and broadcast replies. Thread summaries (reply counts,
+/// participant pubkeys) are always included. Thread replies themselves are excluded —
+/// use `get_thread` to fetch the full reply tree for a specific message.
 pub async fn list_messages(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -982,9 +985,22 @@ pub async fn list_messages(
         .before
         .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
 
+    let kind_filter: Option<Vec<u32>> = params
+        .kinds
+        .as_deref()
+        .map(|s| {
+            s.split(',')
+                .map(|k| k.trim().parse::<u32>())
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()
+        .map_err(|_| {
+            api_error(StatusCode::BAD_REQUEST, "Invalid 'kinds' parameter — expected comma-separated integers (e.g. '45001' or '9,45001')")
+        })?;
+
     let mut messages = state
         .db
-        .get_channel_messages_top_level(channel_id, limit, before_cursor)
+        .get_channel_messages_top_level(channel_id, limit, before_cursor, kind_filter.as_deref())
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
@@ -1516,5 +1532,65 @@ mod tests {
             format!("thumb /media/{HASH}.thumb.jpg"),
         ];
         assert!(validate_imeta_tags(&[tag], BASE).is_ok());
+    }
+
+    // ── kinds filter parsing ────────────────────────────────────────────────
+
+    /// Helper: simulate the kinds-parsing logic from `list_messages`.
+    fn parse_kinds(input: Option<&str>) -> Result<Option<Vec<u32>>, ()> {
+        input
+            .map(|s| {
+                s.split(',')
+                    .map(|k| k.trim().parse::<u32>())
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+            .map_err(|_| ())
+    }
+
+    #[test]
+    fn kinds_none_returns_none() {
+        assert_eq!(parse_kinds(None), Ok(None));
+    }
+
+    #[test]
+    fn kinds_single_value() {
+        assert_eq!(parse_kinds(Some("45001")), Ok(Some(vec![45001])));
+    }
+
+    #[test]
+    fn kinds_multiple_values() {
+        assert_eq!(
+            parse_kinds(Some("9,45001,45002")),
+            Ok(Some(vec![9, 45001, 45002]))
+        );
+    }
+
+    #[test]
+    fn kinds_with_whitespace() {
+        assert_eq!(
+            parse_kinds(Some("45001 , 45002")),
+            Ok(Some(vec![45001, 45002]))
+        );
+    }
+
+    #[test]
+    fn kinds_empty_string_is_error() {
+        assert!(parse_kinds(Some("")).is_err());
+    }
+
+    #[test]
+    fn kinds_non_numeric_is_error() {
+        assert!(parse_kinds(Some("abc")).is_err());
+    }
+
+    #[test]
+    fn kinds_mixed_valid_invalid_is_error() {
+        assert!(parse_kinds(Some("45001,abc")).is_err());
+    }
+
+    #[test]
+    fn kinds_negative_is_error() {
+        assert!(parse_kinds(Some("-1")).is_err());
     }
 }

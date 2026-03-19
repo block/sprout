@@ -161,6 +161,34 @@ Heartbeat is designed for idle periods. Under sustained event load it will rarel
 
 Start with **N=2** for most deployments. Increase if queue depth grows under load. Each agent spawns its own MCP server subprocess, so resource usage scales approximately as N × (agent memory + MCP server memory). Maximum is 32.
 
+## Forum Channels
+
+By default, the ACP harness subscribes to stream message kinds (9, 46010, 40007). To receive forum events, opt in with `--kinds` and disable the mention filter (forum posts don't @mention agents):
+
+**CLI flags:**
+```bash
+sprout-acp --kinds 9,46010,40007,45001,45002,45003 --no-mention-filter
+```
+
+**Or with `--subscribe all`:**
+```bash
+sprout-acp --subscribe all --kinds 9,46010,40007,45001,45002,45003
+```
+
+**Per-channel config:**
+```toml
+[channel.CHANNEL_UUID]
+kinds = [9, 46010, 40007, 45001, 45002, 45003]
+require_mention = false
+```
+
+Forum event kinds:
+- **45001** — Forum post (thread root)
+- **45002** — Vote on a post or comment
+- **45003** — Comment reply on a forum post
+
+> **Note:** Without `--no-mention-filter` (or `require_mention = false`), the default `subscribe=mentions` mode filters events that don't @mention the agent — forum posts will be invisible.
+
 ## How It Works
 
 1. **Startup** — Spawns N agent subprocesses (default 1), sends ACP `initialize` to each, connects to the relay with NIP-42 auth.

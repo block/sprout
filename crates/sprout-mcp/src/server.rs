@@ -120,12 +120,16 @@ pub struct GetMessagesParams {
     /// Maximum number of messages to return (default 50, max 200).
     #[serde(default)]
     pub limit: Option<u32>,
-    /// If true, fetch messages with thread metadata via REST instead of WebSocket.
+    /// Legacy parameter (thread summaries are now always included). Kept for backward compatibility.
     #[serde(default)]
     pub with_threads: Option<bool>,
     /// Unix timestamp cursor for pagination. Returns messages before this time.
     #[serde(default)]
     pub before: Option<i64>,
+    /// Comma-separated event kind numbers to filter by (e.g. "45001" for forum posts,
+    /// "45002" for votes). When omitted, all kinds are returned.
+    #[serde(default)]
+    pub kinds: Option<String>,
 }
 
 /// Parameters for the `list_channels` tool.
@@ -539,6 +543,27 @@ pub struct SendDiffMessageParams {
     pub parent_event_id: Option<String>,
 }
 
+/// Vote direction for forum posts.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VoteDirection {
+    /// Upvote.
+    Up,
+    /// Downvote.
+    Down,
+}
+
+/// Parameters for the `vote_on_post` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct VoteOnPostParams {
+    /// UUID of the forum channel.
+    pub channel_id: String,
+    /// 64-character hex event ID of the post or comment being voted on.
+    pub event_id: String,
+    /// Vote direction.
+    pub direction: VoteDirection,
+}
+
 // ── Diff utility functions ────────────────────────────────────────────────────
 
 // Truncation notice appended when a diff is cut. This constant is used to
@@ -657,7 +682,10 @@ impl SproutMcpServer {
     /// Send a message to a Sprout channel.
     #[tool(
         name = "send_message",
-        description = "Send a message to a Sprout channel. Include `parent_event_id` to reply in a thread. Set `broadcast_to_channel` to also surface the reply in the main channel timeline."
+        description = "Send a message to a Sprout channel. Include `parent_event_id` to reply in a thread. \
+Set `broadcast_to_channel` to also surface the reply in the main channel timeline. \
+For forum channels, set `kind` to 45001 (post) or 45003 (comment with `parent_event_id`). \
+Default kind is 9 (stream message)."
     )]
     pub async fn send_message(&self, Parameters(p): Parameters<SendMessageParams>) -> String {
         if let Err(e) = validate_uuid(&p.channel_id) {
@@ -923,7 +951,10 @@ impl SproutMcpServer {
     /// Get recent messages from a Sprout channel.
     #[tool(
         name = "get_messages",
-        description = "Get recent messages from a Sprout channel. Use `before` for pagination (Unix timestamp). Set `with_threads=true` to include thread metadata."
+        description = "Fetch recent top-level messages from a Sprout channel. Use `before` for pagination \
+(Unix timestamp). Use `kinds` to filter by event type (e.g. \"45001\" for forum posts, \
+\"45002\" for votes). Thread summaries are included automatically. Threaded replies \
+are not returned — use `get_thread` to fetch the full reply tree for a specific message."
     )]
     pub async fn get_messages(&self, Parameters(p): Parameters<GetMessagesParams>) -> String {
         if let Err(e) = validate_uuid(&p.channel_id) {
@@ -933,8 +964,8 @@ impl SproutMcpServer {
         const MAX_HISTORY_LIMIT: u32 = 200;
         let limit = p.limit.unwrap_or(50).min(MAX_HISTORY_LIMIT);
 
-        // Use the REST endpoint so callers get the canonical history payload,
-        // including thread metadata when requested.
+        // Use the REST endpoint so callers get the canonical history payload.
+        // Note: with_threads is legacy — summaries are always included server-side.
         let with_threads = p.with_threads.unwrap_or(false);
         let mut query_parts: Vec<String> = Vec::new();
         if with_threads {
@@ -943,6 +974,9 @@ impl SproutMcpServer {
         query_parts.push(format!("limit={limit}"));
         if let Some(before) = p.before {
             query_parts.push(format!("before={before}"));
+        }
+        if let Some(ref kinds) = p.kinds {
+            query_parts.push(format!("kinds={}", percent_encode(kinds)));
         }
         let path = format!(
             "/api/channels/{}/messages?{}",
@@ -1484,7 +1518,9 @@ impl SproutMcpServer {
     /// Get a message thread (replies to a message).
     #[tool(
         name = "get_thread",
-        description = "Get a message thread from a Sprout channel. Returns the root message and all nested replies."
+        description = "Fetch a full thread tree rooted at an event. Returns the root message and all nested \
+replies. Works for both stream message threads and forum post threads (kind:45001 root \
+with kind:45003 comments)."
     )]
     pub async fn get_thread(&self, Parameters(p): Parameters<GetThreadParams>) -> String {
         if let Err(e) = validate_uuid(&p.channel_id) {
@@ -1763,6 +1799,57 @@ impl SproutMcpServer {
             Err(e) => format!("Error: {e}"),
         }
     }
+
+    /// Vote on a forum post or comment (kind:45002).
+    #[tool(
+        name = "vote_on_post",
+        description = "Vote on a forum post or comment. Creates a kind:45002 event. \
+                       Each vote is a separate event — vote deduplication is not yet enforced."
+    )]
+    pub async fn vote_on_post(&self, Parameters(p): Parameters<VoteOnPostParams>) -> String {
+        if let Err(e) = validate_uuid(&p.channel_id) {
+            return format!("Error: {e}");
+        }
+        if p.event_id.len() != 64 || !p.event_id.chars().all(|c| c.is_ascii_hexdigit()) {
+            return format!(
+                "Error: event_id must be a 64-character hex string (got {:?})",
+                p.event_id
+            );
+        }
+        let content = match p.direction {
+            VoteDirection::Up => "+",
+            VoteDirection::Down => "-",
+        };
+
+        let sender_pubkey = self.client.keys().public_key().to_hex();
+        let tags = match (
+            Tag::parse(&["h", &p.channel_id]),
+            Tag::parse(&["p", &sender_pubkey]),
+            Tag::parse(&["e", &p.event_id]),
+        ) {
+            (Ok(h), Ok(p), Ok(e)) => vec![h, p, e],
+            (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+                return format!("Error: failed to build tags: {e}");
+            }
+        };
+
+        let kind = Kind::from(sprout_core::kind::KIND_FORUM_VOTE as u16);
+        let event = match EventBuilder::new(kind, content, tags).sign_with_keys(self.client.keys())
+        {
+            Ok(event) => event,
+            Err(e) => return format!("Error signing event: {e}"),
+        };
+
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
 }
 
 #[tool_handler]
@@ -2005,6 +2092,50 @@ mod tests {
                 vec!["p".to_string(), sender.to_string()],
             ]
         );
+    }
+
+    // ── VoteDirection serde ───────────────────────────────────────────────────
+
+    #[test]
+    fn vote_direction_serializes_lowercase() {
+        assert_eq!(serde_json::to_string(&VoteDirection::Up).unwrap(), "\"up\"");
+        assert_eq!(
+            serde_json::to_string(&VoteDirection::Down).unwrap(),
+            "\"down\""
+        );
+    }
+
+    #[test]
+    fn vote_direction_deserializes_lowercase() {
+        assert!(matches!(
+            serde_json::from_str::<VoteDirection>("\"up\"").unwrap(),
+            VoteDirection::Up
+        ));
+        assert!(matches!(
+            serde_json::from_str::<VoteDirection>("\"down\"").unwrap(),
+            VoteDirection::Down
+        ));
+    }
+
+    #[test]
+    fn vote_direction_rejects_invalid() {
+        assert!(serde_json::from_str::<VoteDirection>("\"sideways\"").is_err());
+        assert!(serde_json::from_str::<VoteDirection>("\"UP\"").is_err());
+        assert!(serde_json::from_str::<VoteDirection>("\"\"").is_err());
+    }
+
+    #[test]
+    fn vote_on_post_params_round_trip() {
+        let params = VoteOnPostParams {
+            channel_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            event_id: "a".repeat(64),
+            direction: VoteDirection::Up,
+        };
+        let json = serde_json::to_string(&params).unwrap();
+        let parsed: VoteOnPostParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.channel_id, params.channel_id);
+        assert_eq!(parsed.event_id, params.event_id);
+        assert!(matches!(parsed.direction, VoteDirection::Up));
     }
 }
 
