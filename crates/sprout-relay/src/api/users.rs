@@ -91,7 +91,7 @@ pub async fn update_profile(
         .await
         .map_err(|e| {
             let msg = format!("{e}");
-            if msg.contains("Duplicate entry") || msg.contains("1062") {
+            if msg.contains("duplicate key value") || msg.contains("23505") {
                 api_error(
                     StatusCode::CONFLICT,
                     "nip05_handle is already claimed by another user",
