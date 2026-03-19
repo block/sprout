@@ -1,64 +1,22 @@
 use nostr::{Keys, ToBech32};
-use reqwest::Method;
 use tauri::{AppHandle, State};
 
 use crate::{
     app_state::AppState,
     managed_agents::{
-        admin_command, build_managed_agent_summary, command_availability, default_token_scopes,
-        discover_local_acp_providers, find_managed_agent_mut, load_managed_agents,
-        managed_agent_avatar_url, managed_agent_log_path, read_log_tail,
-        run_sprout_admin_mint_token, save_managed_agents, start_managed_agent_process,
-        stop_managed_agent_process, sync_managed_agent_processes, AcpProviderInfo,
-        CreateManagedAgentRequest, CreateManagedAgentResponse, DiscoverManagedAgentPrereqsRequest,
-        ManagedAgentLogResponse, ManagedAgentPrereqsInfo, ManagedAgentSummary,
-        MintManagedAgentTokenRequest, MintManagedAgentTokenResponse, RelayAgentInfo,
-        DEFAULT_ACP_COMMAND, DEFAULT_AGENT_ARG, DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM,
-        DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
+        build_managed_agent_summary, default_token_scopes, find_managed_agent_mut,
+        load_managed_agents, load_personas, managed_agent_avatar_url, managed_agent_log_path,
+        read_log_tail, save_managed_agents,
+        start_managed_agent_process, stop_managed_agent_process, sync_managed_agent_processes,
+        CreateManagedAgentRequest, CreateManagedAgentResponse, ManagedAgentLogResponse,
+        ManagedAgentSummary, MintManagedAgentTokenRequest, MintManagedAgentTokenResponse,
+        DEFAULT_ACP_COMMAND, DEFAULT_AGENT_ARG, DEFAULT_AGENT_COMMAND,
+        DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
+        DEFAULT_MCP_COMMAND,
     },
-    relay::{
-        build_authed_request, managed_agent_owner_pubkey, relay_ws_url, send_json_request,
-        sync_managed_agent_profile,
-    },
+    relay::{mint_managed_agent_api_token, relay_ws_url, sync_managed_agent_profile},
     util::now_iso,
 };
-
-#[tauri::command]
-pub fn discover_acp_providers() -> Vec<AcpProviderInfo> {
-    discover_local_acp_providers()
-}
-
-#[tauri::command]
-pub fn discover_managed_agent_prereqs(
-    input: DiscoverManagedAgentPrereqsRequest,
-    app: AppHandle,
-) -> ManagedAgentPrereqsInfo {
-    let acp_command = input
-        .acp_command
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_ACP_COMMAND);
-    let mcp_command = input
-        .mcp_command
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_MCP_COMMAND);
-    let admin_command = admin_command();
-
-    ManagedAgentPrereqsInfo {
-        admin: command_availability(&admin_command, Some(&app)),
-        acp: command_availability(acp_command, Some(&app)),
-        mcp: command_availability(mcp_command, Some(&app)),
-    }
-}
-
-#[tauri::command]
-pub async fn list_relay_agents(state: State<'_, AppState>) -> Result<Vec<RelayAgentInfo>, String> {
-    let request = build_authed_request(&state.http_client, Method::GET, "/api/agents", &state)?;
-    send_json_request(request).await
-}
 
 #[tauri::command]
 pub fn list_managed_agents(
@@ -95,188 +53,196 @@ pub async fn create_managed_agent(
     if name.is_empty() {
         return Err("agent name is required".to_string());
     }
+    let requested_persona_id = input
+        .persona_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     if let Some(parallelism) = input.parallelism {
         if !(1..=32).contains(&parallelism) {
             return Err("parallelism must be between 1 and 32".to_string());
         }
     }
 
-    let owner_pubkey = if input.mint_token {
-        Some(managed_agent_owner_pubkey(&state).await?)
+    let resolved_relay_url = input
+        .relay_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(relay_ws_url);
+    let keys = Keys::generate();
+    let pubkey = keys.public_key().to_hex();
+    let private_key_nsec = keys
+        .secret_key()
+        .to_bech32()
+        .map_err(|error| format!("failed to encode private key: {error}"))?;
+    let token_scopes = if input.mint_token {
+        let requested = input
+            .token_scopes
+            .iter()
+            .map(|scope| scope.trim().to_string())
+            .filter(|scope| !scope.is_empty())
+            .collect::<Vec<_>>();
+        if requested.is_empty() {
+            default_token_scopes()
+        } else {
+            requested
+        }
+    } else {
+        Vec::new()
+    };
+    let token_name = input
+        .token_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(name)
+        .to_string();
+    let api_token = if input.mint_token {
+        Some(
+            mint_managed_agent_api_token(
+                &state.http_client,
+                &resolved_relay_url,
+                &keys,
+                &token_name,
+                &token_scopes,
+            )
+            .await?
+            .token,
+        )
     } else {
         None
     };
+    let mut agent_args = input
+        .agent_args
+        .into_iter()
+        .map(|arg| arg.trim().to_string())
+        .filter(|arg| !arg.is_empty())
+        .collect::<Vec<_>>();
+    if agent_args.is_empty() {
+        agent_args.push(DEFAULT_AGENT_ARG.to_string());
+    }
+    let system_prompt = input
+        .system_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let model = input
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let acp_command = input
+        .acp_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_ACP_COMMAND)
+        .to_string();
+    let agent_command = input
+        .agent_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_AGENT_COMMAND)
+        .to_string();
+    let mcp_command = input
+        .mcp_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_MCP_COMMAND)
+        .to_string();
+    let turn_timeout_seconds = input
+        .turn_timeout_seconds
+        .filter(|seconds| *seconds > 0)
+        .unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_SECONDS);
+    let parallelism = input
+        .parallelism
+        .filter(|count| (1..=32).contains(count))
+        .unwrap_or(DEFAULT_AGENT_PARALLELISM);
 
-    let (agent, private_key_nsec, api_token, pubkey, resolved_relay_url, spawn_error, token_scopes) =
-        {
-            let _store_guard = state
-                .managed_agents_store_lock
-                .lock()
-                .map_err(|error| error.to_string())?;
-            let mut records = load_managed_agents(&app)?;
-            let mut runtimes = state
-                .managed_agent_processes
-                .lock()
-                .map_err(|error| error.to_string())?;
+    let (agent, spawn_error) = {
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let mut records = load_managed_agents(&app)?;
+        let mut runtimes = state
+            .managed_agent_processes
+            .lock()
+            .map_err(|error| error.to_string())?;
 
-            if sync_managed_agent_processes(&mut records, &mut runtimes) {
-                save_managed_agents(&app, &records)?;
-            }
-
-            let keys = Keys::generate();
-            let pubkey = keys.public_key().to_hex();
-            if records.iter().any(|record| record.pubkey == pubkey) {
-                return Err(format!("agent {pubkey} already exists"));
-            }
-
-            let private_key_nsec = keys
-                .secret_key()
-                .to_bech32()
-                .map_err(|error| format!("failed to encode private key: {error}"))?;
-            let token_scopes = if input.mint_token {
-                let requested = input
-                    .token_scopes
-                    .into_iter()
-                    .map(|scope| scope.trim().to_string())
-                    .filter(|scope| !scope.is_empty())
-                    .collect::<Vec<_>>();
-                if requested.is_empty() {
-                    default_token_scopes()
-                } else {
-                    requested
-                }
-            } else {
-                Vec::new()
-            };
-            let api_token = if input.mint_token {
-                let token_name = input
-                    .token_name
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or(name);
-                Some(
-                    run_sprout_admin_mint_token(
-                        &app,
-                        &pubkey,
-                        owner_pubkey.as_deref().ok_or_else(|| {
-                            "managed agent owner pubkey was not resolved".to_string()
-                        })?,
-                        token_name,
-                        &token_scopes,
-                    )?
-                    .api_token,
-                )
-            } else {
-                None
-            };
-            let resolved_relay_url = input
-                .relay_url
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(relay_ws_url);
-
-            let mut record = crate::managed_agents::ManagedAgentRecord {
-                pubkey: pubkey.clone(),
-                name: name.to_string(),
-                private_key_nsec: private_key_nsec.clone(),
-                api_token: api_token.clone(),
-                relay_url: resolved_relay_url.clone(),
-                acp_command: input
-                    .acp_command
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or(DEFAULT_ACP_COMMAND)
-                    .to_string(),
-                agent_command: input
-                    .agent_command
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or(DEFAULT_AGENT_COMMAND)
-                    .to_string(),
-                agent_args: input
-                    .agent_args
-                    .into_iter()
-                    .map(|arg| arg.trim().to_string())
-                    .filter(|arg| !arg.is_empty())
-                    .collect::<Vec<_>>(),
-                mcp_command: input
-                    .mcp_command
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or(DEFAULT_MCP_COMMAND)
-                    .to_string(),
-                turn_timeout_seconds: input
-                    .turn_timeout_seconds
-                    .filter(|seconds| *seconds > 0)
-                    .unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_SECONDS),
-                parallelism: input
-                    .parallelism
-                    .filter(|count| (1..=32).contains(count))
-                    .unwrap_or(DEFAULT_AGENT_PARALLELISM),
-                system_prompt: input
-                    .system_prompt
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string),
-                model: input
-                    .model
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string),
-                start_on_app_launch: input.start_on_app_launch,
-                runtime_pid: None,
-                created_at: now_iso(),
-                updated_at: now_iso(),
-                last_started_at: None,
-                last_stopped_at: None,
-                last_exit_code: None,
-                last_error: None,
-            };
-
-            if record.agent_args.is_empty() {
-                record.agent_args.push(DEFAULT_AGENT_ARG.to_string());
-            }
-
-            records.push(record);
-
-            let mut spawn_error = None;
-            if input.spawn_after_create {
-                let record = find_managed_agent_mut(&mut records, &pubkey)?;
-                if let Err(error) = start_managed_agent_process(&app, record, &mut runtimes) {
-                    record.updated_at = now_iso();
-                    record.last_error = Some(error.clone());
-                    spawn_error = Some(error);
-                }
-            }
-
+        if sync_managed_agent_processes(&mut records, &mut runtimes) {
             save_managed_agents(&app, &records)?;
+        }
+        if let Some(persona_id) = requested_persona_id.as_deref() {
+            let personas = load_personas(&app)?;
+            if !personas.iter().any(|persona| persona.id == persona_id) {
+                return Err(format!("persona {persona_id} not found"));
+            }
+        }
+        if records.iter().any(|record| record.pubkey == pubkey) {
+            return Err(format!("agent {pubkey} already exists"));
+        }
 
-            let record = records
-                .iter()
-                .find(|record| record.pubkey == pubkey)
-                .ok_or_else(|| "created agent disappeared unexpectedly".to_string())?;
-            let agent = build_managed_agent_summary(&app, record, &runtimes)?;
+        records.push(crate::managed_agents::ManagedAgentRecord {
+            pubkey: pubkey.clone(),
+            name: name.to_string(),
+            persona_id: requested_persona_id.clone(),
+            private_key_nsec: private_key_nsec.clone(),
+            api_token: api_token.clone(),
+            relay_url: resolved_relay_url.clone(),
+            acp_command,
+            agent_command,
+            agent_args,
+            mcp_command,
+            turn_timeout_seconds,
+            parallelism,
+            system_prompt,
+            model,
+            start_on_app_launch: input.start_on_app_launch,
+            runtime_pid: None,
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            last_started_at: None,
+            last_stopped_at: None,
+            last_exit_code: None,
+            last_error: None,
+        });
 
-            Ok::<_, String>((
-                agent,
-                private_key_nsec,
-                api_token,
-                pubkey,
-                resolved_relay_url,
-                spawn_error,
-                token_scopes,
-            ))
-        }?;
+        let mut spawn_error = None;
+        if input.spawn_after_create {
+            let record = find_managed_agent_mut(&mut records, &pubkey)?;
+            if let Err(error) = start_managed_agent_process(&app, record, &mut runtimes) {
+                record.updated_at = now_iso();
+                record.last_error = Some(error.clone());
+                spawn_error = Some(error);
+            }
+        }
 
-    let avatar_url = managed_agent_avatar_url(agent.agent_command.as_str());
+        save_managed_agents(&app, &records)?;
+
+        let record = records
+            .iter()
+            .find(|record| record.pubkey == pubkey)
+            .ok_or_else(|| "created agent disappeared unexpectedly".to_string())?;
+        let agent = build_managed_agent_summary(&app, record, &runtimes)?;
+
+        Ok::<_, String>((agent, spawn_error))
+    }?;
+
+    let avatar_url = input
+        .avatar_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| managed_agent_avatar_url(agent.agent_command.as_str()));
     let profile_sync_error = match sync_managed_agent_profile(
         &state,
         &resolved_relay_url,
@@ -406,7 +372,56 @@ pub async fn mint_managed_agent_token(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<MintManagedAgentTokenResponse, String> {
-    let owner_pubkey = managed_agent_owner_pubkey(&state).await?;
+    let scopes = input
+        .scopes
+        .into_iter()
+        .map(|scope| scope.trim().to_string())
+        .filter(|scope| !scope.is_empty())
+        .collect::<Vec<_>>();
+    let scopes = if scopes.is_empty() {
+        default_token_scopes()
+    } else {
+        scopes
+    };
+    let (pubkey, relay_url, private_key_nsec, token_name) = {
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let mut records = load_managed_agents(&app)?;
+        let mut runtimes = state
+            .managed_agent_processes
+            .lock()
+            .map_err(|error| error.to_string())?;
+
+        if sync_managed_agent_processes(&mut records, &mut runtimes) {
+            save_managed_agents(&app, &records)?;
+        }
+
+        let record = find_managed_agent_mut(&mut records, &input.pubkey)?;
+        (
+            record.pubkey.clone(),
+            record.relay_url.clone(),
+            record.private_key_nsec.clone(),
+            input
+                .token_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{}-token", record.name)),
+        )
+    };
+    let keys = Keys::parse(private_key_nsec.trim())
+        .map_err(|error| format!("failed to parse managed agent private key: {error}"))?;
+    let minted = mint_managed_agent_api_token(
+        &state.http_client,
+        &relay_url,
+        &keys,
+        &token_name,
+        &scopes,
+    )
+    .await?;
 
     let _store_guard = state
         .managed_agents_store_lock
@@ -422,32 +437,10 @@ pub async fn mint_managed_agent_token(
         save_managed_agents(&app, &records)?;
     }
 
-    let record = find_managed_agent_mut(&mut records, &input.pubkey)?;
-    let scopes = input
-        .scopes
-        .into_iter()
-        .map(|scope| scope.trim().to_string())
-        .filter(|scope| !scope.is_empty())
-        .collect::<Vec<_>>();
-    let scopes = if scopes.is_empty() {
-        default_token_scopes()
-    } else {
-        scopes
-    };
-    let token_name = input
-        .token_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("{}-token", record.name));
-    let minted =
-        run_sprout_admin_mint_token(&app, &record.pubkey, &owner_pubkey, &token_name, &scopes)?;
-
-    record.api_token = Some(minted.api_token.clone());
+    let record = find_managed_agent_mut(&mut records, &pubkey)?;
+    record.api_token = Some(minted.token.clone());
     record.updated_at = now_iso();
     record.last_error = None;
-    let pubkey = record.pubkey.clone();
 
     save_managed_agents(&app, &records)?;
     let record = records
@@ -458,7 +451,7 @@ pub async fn mint_managed_agent_token(
 
     Ok(MintManagedAgentTokenResponse {
         agent,
-        token: minted.api_token,
+        token: minted.token,
     })
 }
 

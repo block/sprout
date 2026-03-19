@@ -14,9 +14,7 @@ import type {
   MintTokenInput,
   MintTokenResponse,
   MintManagedAgentTokenInput,
-  MintManagedAgentTokenResponse,
   ManagedAgent,
-  ManagedAgentLog,
   RelayAgent,
   PresenceLookup,
   PresenceStatus,
@@ -36,12 +34,10 @@ import type {
   UserSearchResult,
   UsersBatchResponse,
   CreateManagedAgentInput,
-  CreateManagedAgentResponse,
   AgentModelsResponse,
   UpdateManagedAgentInput,
   AcpProvider,
   CommandAvailability,
-  ManagedAgentPrereqs,
   OpenDmInput,
 } from "@/shared/api/types";
 
@@ -223,6 +219,7 @@ type RawRelayAgent = {
 export type RawManagedAgent = {
   pubkey: string;
   name: string;
+  persona_id: string | null;
   relay_url: string;
   acp_command: string;
   agent_command: string;
@@ -749,6 +746,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
   return {
     pubkey: agent.pubkey,
     name: agent.name,
+    personaId: agent.persona_id,
     relayUrl: agent.relay_url,
     acpCommand: agent.acp_command,
     agentCommand: agent.agent_command,
@@ -829,23 +827,24 @@ export async function revokeAllTokens(): Promise<{ revokedCount: number }> {
 }
 
 export async function listRelayAgents(): Promise<RelayAgent[]> {
-  const response = await invokeTauri<RawRelayAgent[]>("list_relay_agents");
-  return response.map(fromRawRelayAgent);
+  return (await invokeTauri<RawRelayAgent[]>("list_relay_agents")).map(
+    fromRawRelayAgent,
+  );
 }
 
 export async function listManagedAgents(): Promise<ManagedAgent[]> {
-  const response = await invokeTauri<RawManagedAgent[]>("list_managed_agents");
-  return response.map(fromRawManagedAgent);
+  return (await invokeTauri<RawManagedAgent[]>("list_managed_agents")).map(
+    fromRawManagedAgent,
+  );
 }
 
-export async function createManagedAgent(
-  input: CreateManagedAgentInput,
-): Promise<CreateManagedAgentResponse> {
+export async function createManagedAgent(input: CreateManagedAgentInput) {
   const response = await invokeTauri<RawCreateManagedAgentResponse>(
     "create_managed_agent",
     {
       input: {
         name: input.name,
+        personaId: input.personaId,
         relayUrl: input.relayUrl,
         acpCommand: input.acpCommand,
         agentCommand: input.agentCommand,
@@ -854,6 +853,8 @@ export async function createManagedAgent(
         turnTimeoutSeconds: input.turnTimeoutSeconds,
         parallelism: input.parallelism,
         systemPrompt: input.systemPrompt,
+        avatarUrl: input.avatarUrl,
+        model: input.model,
         mintToken: input.mintToken,
         tokenScopes: input.tokenScopes,
         tokenName: input.tokenName,
@@ -890,9 +891,7 @@ export async function deleteManagedAgent(pubkey: string): Promise<void> {
   await invokeTauri("delete_managed_agent", { pubkey });
 }
 
-export async function mintManagedAgentToken(
-  input: MintManagedAgentTokenInput,
-): Promise<MintManagedAgentTokenResponse> {
+export async function mintManagedAgentToken(input: MintManagedAgentTokenInput) {
   const response = await invokeTauri<RawMintManagedAgentTokenResponse>(
     "mint_managed_agent_token",
     {
@@ -910,10 +909,7 @@ export async function mintManagedAgentToken(
   };
 }
 
-export async function getManagedAgentLog(
-  pubkey: string,
-  lineCount?: number,
-): Promise<ManagedAgentLog> {
+export async function getManagedAgentLog(pubkey: string, lineCount?: number) {
   const response = await invokeTauri<RawManagedAgentLog>(
     "get_managed_agent_log",
     {
@@ -929,16 +925,15 @@ export async function getManagedAgentLog(
 }
 
 export async function discoverAcpProviders(): Promise<AcpProvider[]> {
-  const response = await invokeTauri<RawAcpProvider[]>(
-    "discover_acp_providers",
+  return (await invokeTauri<RawAcpProvider[]>("discover_acp_providers")).map(
+    fromRawAcpProvider,
   );
-  return response.map(fromRawAcpProvider);
 }
 
 export async function discoverManagedAgentPrereqs(input: {
   acpCommand?: string;
   mcpCommand?: string;
-}): Promise<ManagedAgentPrereqs> {
+}) {
   const response = await invokeTauri<RawManagedAgentPrereqs>(
     "discover_managed_agent_prereqs",
     {
@@ -958,9 +953,7 @@ export async function discoverManagedAgentPrereqs(input: {
 
 // ── Model discovery ───────────────────────────────────────────────────────────
 
-export async function getAgentModels(
-  pubkey: string,
-): Promise<AgentModelsResponse> {
+export async function getAgentModels(pubkey: string) {
   return invokeTauri<AgentModelsResponse>("get_agent_models", { pubkey });
 }
 

@@ -3,6 +3,18 @@ use std::{path::PathBuf, process::Child};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonaRecord {
+    pub id: String,
+    pub display_name: String,
+    pub avatar_url: Option<String>,
+    pub system_prompt: String,
+    #[serde(default)]
+    pub is_builtin: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayAgentInfo {
     pub pubkey: String,
     pub name: String,
@@ -16,6 +28,8 @@ pub struct RelayAgentInfo {
 pub struct ManagedAgentRecord {
     pub pubkey: String,
     pub name: String,
+    #[serde(default)]
+    pub persona_id: Option<String>,
     pub private_key_nsec: String,
     pub api_token: Option<String>,
     pub relay_url: String,
@@ -54,6 +68,7 @@ pub struct ManagedAgentProcess {
 pub struct ManagedAgentSummary {
     pub pubkey: String,
     pub name: String,
+    pub persona_id: Option<String>,
     pub relay_url: String,
     pub acp_command: String,
     pub agent_command: String,
@@ -80,6 +95,8 @@ pub struct ManagedAgentSummary {
 #[serde(rename_all = "camelCase")]
 pub struct CreateManagedAgentRequest {
     pub name: String,
+    #[serde(default)]
+    pub persona_id: Option<String>,
     pub relay_url: Option<String>,
     pub acp_command: Option<String>,
     pub agent_command: Option<String>,
@@ -89,6 +106,7 @@ pub struct CreateManagedAgentRequest {
     pub turn_timeout_seconds: Option<u64>,
     pub parallelism: Option<u32>,
     pub system_prompt: Option<String>,
+    pub avatar_url: Option<String>,
     pub model: Option<String>,
     #[serde(default)]
     pub mint_token: bool,
@@ -108,6 +126,23 @@ pub struct CreateManagedAgentResponse {
     pub api_token: Option<String>,
     pub profile_sync_error: Option<String>,
     pub spawn_error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePersonaRequest {
+    pub display_name: String,
+    pub avatar_url: Option<String>,
+    pub system_prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePersonaRequest {
+    pub id: String,
+    pub display_name: String,
+    pub avatar_url: Option<String>,
+    pub system_prompt: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -159,16 +194,6 @@ pub struct ManagedAgentPrereqsInfo {
     pub admin: CommandAvailabilityInfo,
     pub acp: CommandAvailabilityInfo,
     pub mcp: CommandAvailabilityInfo,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SproutAdminMintTokenJsonOutput {
-    pub token_id: String,
-    pub name: String,
-    pub scopes: Vec<String>,
-    pub pubkey: String,
-    pub private_key_nsec: Option<String>,
-    pub api_token: String,
 }
 
 /// Patch request for updating a managed agent's mutable fields.

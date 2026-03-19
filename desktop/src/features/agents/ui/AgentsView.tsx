@@ -2,37 +2,62 @@ import * as React from "react";
 
 import {
   type AttachManagedAgentToChannelResult,
+  useCreatePersonaMutation,
+  useDeletePersonaMutation,
   useDeleteManagedAgentMutation,
   useManagedAgentLogQuery,
   useManagedAgentsQuery,
   useMintManagedAgentTokenMutation,
+  usePersonasQuery,
   useRelayAgentsQuery,
   useSetManagedAgentStartOnAppLaunchMutation,
   useStartManagedAgentMutation,
   useStopManagedAgentMutation,
+  useUpdatePersonaMutation,
 } from "@/features/agents/hooks";
 import type {
+  AgentPersona,
   Channel,
+  CreatePersonaInput,
   CreateManagedAgentResponse,
   ManagedAgent,
+  UpdatePersonaInput,
 } from "@/shared/api/types";
 import { AddAgentToChannelDialog } from "./AddAgentToChannelDialog";
 import { CreateAgentDialog } from "./CreateAgentDialog";
 import { ManagedAgentLogPanel } from "./ManagedAgentLogPanel";
 import { ManagedAgentsSection } from "./ManagedAgentsSection";
+import { PersonaDialog } from "./PersonaDialog";
+import { PersonaDeleteDialog } from "./PersonaDeleteDialog";
+import { PersonasSection } from "./PersonasSection";
 import { RelayDirectorySection } from "./RelayDirectorySection";
 import { SecretRevealDialog } from "./SecretRevealDialog";
 import { TokenRevealDialog } from "./TokenRevealDialog";
 
+type PersonaDialogState = {
+  description: string;
+  initialValues: CreatePersonaInput | UpdatePersonaInput;
+  submitLabel: string;
+  title: string;
+} | null;
+
 export function AgentsView() {
   const relayAgentsQuery = useRelayAgentsQuery();
   const managedAgentsQuery = useManagedAgentsQuery();
+  const personasQuery = usePersonasQuery();
   const startMutation = useStartManagedAgentMutation();
   const stopMutation = useStopManagedAgentMutation();
   const startOnLaunchMutation = useSetManagedAgentStartOnAppLaunchMutation();
   const deleteMutation = useDeleteManagedAgentMutation();
   const mintTokenMutation = useMintManagedAgentTokenMutation();
+  const createPersonaMutation = useCreatePersonaMutation();
+  const updatePersonaMutation = useUpdatePersonaMutation();
+  const deletePersonaMutation = useDeletePersonaMutation();
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
+  const [personaDialogState, setPersonaDialogState] =
+    React.useState<PersonaDialogState>(null);
+  const [personaToDelete, setPersonaToDelete] =
+    React.useState<AgentPersona | null>(null);
   const [agentToAddToChannel, setAgentToAddToChannel] =
     React.useState<ManagedAgent | null>(null);
   const [createdAgent, setCreatedAgent] =
@@ -57,6 +82,14 @@ export function AgentsView() {
         return left.name.localeCompare(right.name);
       }),
     [managedAgentsQuery.data],
+  );
+  const personas = personasQuery.data ?? [];
+  const personaLabelsById = React.useMemo(
+    () =>
+      Object.fromEntries(
+        personas.map((persona) => [persona.id, persona.displayName]),
+      ),
+    [personas],
   );
   const [logAgentPubkey, setLogAgentPubkey] = React.useState<string | null>(
     null,
@@ -167,6 +200,43 @@ export function AgentsView() {
     }
   }
 
+  async function handlePersonaSubmit(
+    input: CreatePersonaInput | UpdatePersonaInput,
+  ) {
+    setActionNoticeMessage(null);
+    setActionErrorMessage(null);
+
+    try {
+      if ("id" in input) {
+        await updatePersonaMutation.mutateAsync(input);
+        setActionNoticeMessage(`Updated ${input.displayName}.`);
+      } else {
+        await createPersonaMutation.mutateAsync(input);
+        setActionNoticeMessage(`Created ${input.displayName}.`);
+      }
+      setPersonaDialogState(null);
+    } catch (error) {
+      setActionErrorMessage(
+        error instanceof Error ? error.message : "Failed to save persona.",
+      );
+    }
+  }
+
+  async function handleDeletePersona(persona: AgentPersona) {
+    setActionNoticeMessage(null);
+    setActionErrorMessage(null);
+
+    try {
+      await deletePersonaMutation.mutateAsync(persona.id);
+      setActionNoticeMessage(`Deleted ${persona.displayName}.`);
+      setPersonaToDelete(null);
+    } catch (error) {
+      setActionErrorMessage(
+        error instanceof Error ? error.message : "Failed to delete persona.",
+      );
+    }
+  }
+
   function handleAddedToChannel(
     channel: Channel,
     result: AttachManagedAgentToChannelResult,
@@ -202,13 +272,81 @@ export function AgentsView() {
     stopMutation.isPending ||
     startOnLaunchMutation.isPending ||
     deleteMutation.isPending ||
-    mintTokenMutation.isPending;
+    mintTokenMutation.isPending ||
+    createPersonaMutation.isPending ||
+    updatePersonaMutation.isPending ||
+    deletePersonaMutation.isPending;
 
   return (
     <>
       <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-4 sm:px-6">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
           <div className="flex flex-col gap-6">
+            <PersonasSection
+              error={
+                personasQuery.error instanceof Error
+                  ? personasQuery.error
+                  : null
+              }
+              isLoading={personasQuery.isLoading}
+              isPending={
+                createPersonaMutation.isPending ||
+                updatePersonaMutation.isPending ||
+                deletePersonaMutation.isPending
+              }
+              onCreate={() => {
+                setActionNoticeMessage(null);
+                setActionErrorMessage(null);
+                setPersonaDialogState({
+                  title: "Create persona",
+                  description:
+                    "Save a reusable role, prompt, and optional avatar for future agent deployments.",
+                  submitLabel: "Create persona",
+                  initialValues: {
+                    displayName: "",
+                    avatarUrl: "",
+                    systemPrompt: "",
+                  },
+                });
+              }}
+              onDelete={setPersonaToDelete}
+              onDuplicate={(persona) => {
+                setActionNoticeMessage(null);
+                setActionErrorMessage(null);
+                setPersonaDialogState({
+                  title: `Duplicate ${persona.displayName}`,
+                  description:
+                    "Create a new persona by copying this template and adjusting it as needed.",
+                  submitLabel: "Create persona",
+                  initialValues: {
+                    displayName: `${persona.displayName} copy`,
+                    avatarUrl: persona.avatarUrl ?? "",
+                    systemPrompt: persona.systemPrompt,
+                  },
+                });
+              }}
+              onEdit={(persona) => {
+                setActionNoticeMessage(null);
+                setActionErrorMessage(null);
+                setPersonaDialogState({
+                  title: `Edit ${persona.displayName}`,
+                  description:
+                    "Update this saved persona. New deployments will use the updated values.",
+                  submitLabel: "Save changes",
+                  initialValues: {
+                    id: persona.id,
+                    displayName: persona.displayName,
+                    avatarUrl: persona.avatarUrl ?? "",
+                    systemPrompt: persona.systemPrompt,
+                  },
+                });
+              }}
+              onRefresh={() => {
+                void personasQuery.refetch();
+              }}
+              personas={personas}
+            />
+
             <ManagedAgentsSection
               actionErrorMessage={actionErrorMessage}
               actionNoticeMessage={actionNoticeMessage}
@@ -220,6 +358,7 @@ export function AgentsView() {
               }
               isActionPending={isActionPending}
               isLoading={managedAgentsQuery.isLoading}
+              personaLabelsById={personaLabelsById}
               onAddToChannel={(agent) => {
                 setActionNoticeMessage(null);
                 setActionErrorMessage(null);
@@ -306,6 +445,41 @@ export function AgentsView() {
           }
         }}
         token={revealedToken?.token ?? null}
+      />
+      <PersonaDialog
+        description={personaDialogState?.description ?? ""}
+        error={
+          updatePersonaMutation.error instanceof Error
+            ? updatePersonaMutation.error
+            : createPersonaMutation.error instanceof Error
+              ? createPersonaMutation.error
+              : null
+        }
+        initialValues={personaDialogState?.initialValues ?? null}
+        isPending={
+          createPersonaMutation.isPending || updatePersonaMutation.isPending
+        }
+        onOpenChange={(open) => {
+          if (!open) {
+            setPersonaDialogState(null);
+          }
+        }}
+        onSubmit={handlePersonaSubmit}
+        open={personaDialogState !== null}
+        submitLabel={personaDialogState?.submitLabel ?? "Save"}
+        title={personaDialogState?.title ?? "Persona"}
+      />
+      <PersonaDeleteDialog
+        onConfirm={(persona) => {
+          void handleDeletePersona(persona);
+        }}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPersonaToDelete(null);
+          }
+        }}
+        open={personaToDelete !== null}
+        persona={personaToDelete}
       />
     </>
   );

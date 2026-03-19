@@ -4106,6 +4106,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "tokio",
  "url",
+ "uuid",
  "windows-sys 0.59.0",
 ]
 

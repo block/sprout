@@ -159,6 +159,10 @@ pub fn run() {
             get_managed_agent_log,
             get_agent_models,
             update_managed_agent,
+            list_personas,
+            create_persona,
+            update_persona,
+            delete_persona,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

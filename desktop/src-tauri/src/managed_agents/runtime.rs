@@ -165,6 +165,7 @@ pub fn build_managed_agent_summary(
     Ok(ManagedAgentSummary {
         pubkey: record.pubkey.clone(),
         name: record.name.clone(),
+        persona_id: record.persona_id.clone(),
         relay_url: record.relay_url.clone(),
         acp_command: record.acp_command.clone(),
         agent_command: record.agent_command.clone(),

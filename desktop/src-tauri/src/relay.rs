@@ -1,12 +1,12 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use nostr::{EventBuilder, JsonUtil, Kind, Tag};
+use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
 use reqwest::Method;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
 use crate::{
     app_state::AppState,
-    models::{ProfileInfo, UpdateProfileBody},
+    models::{MintTokenBody, MintTokenResponse, UpdateProfileBody},
 };
 
 pub fn relay_ws_url() -> String {
@@ -55,26 +55,6 @@ pub fn build_authed_request(
 pub fn auth_pubkey_header(state: &AppState) -> Result<String, String> {
     let keys = state.keys.lock().map_err(|error| error.to_string())?;
     Ok(keys.public_key().to_hex())
-}
-
-pub async fn managed_agent_owner_pubkey(state: &AppState) -> Result<String, String> {
-    if state.configured_api_token.is_none() {
-        return auth_pubkey_header(state);
-    }
-
-    let request = build_authed_request(
-        &state.http_client,
-        Method::GET,
-        "/api/users/me/profile",
-        state,
-    )?;
-    let profile: ProfileInfo = send_json_request(request).await.map_err(|error| {
-        format!(
-            "failed to resolve the authenticated token owner: {error}. Managed-agent minting with SPROUT_API_TOKEN requires a token for the desktop identity with `users:read`."
-        )
-    })?;
-
-    Ok(profile.pubkey)
 }
 
 fn token_supports_scope(scopes: &[String], required_scope: &str) -> bool {
@@ -162,6 +142,15 @@ pub fn build_nip98_auth_header(
     state: &AppState,
 ) -> Result<String, String> {
     let keys = state.keys.lock().map_err(|error| error.to_string())?;
+    build_nip98_auth_header_for_keys(&keys, method, url, body)
+}
+
+pub fn build_nip98_auth_header_for_keys(
+    keys: &Keys,
+    method: &Method,
+    url: &str,
+    body: &[u8],
+) -> Result<String, String> {
     let payload_hash = format!("{:x}", Sha256::digest(body));
     let tags = vec![
         Tag::parse(vec!["u", url]).map_err(|error| format!("url tag failed: {error}"))?,
@@ -180,6 +169,38 @@ pub fn build_nip98_auth_header(
         "Nostr {}",
         BASE64.encode(event.as_json().as_bytes())
     ))
+}
+
+pub async fn mint_managed_agent_api_token(
+    client: &reqwest::Client,
+    relay_url: &str,
+    keys: &Keys,
+    name: &str,
+    scopes: &[String],
+) -> Result<MintTokenResponse, String> {
+    let url = format!("{}{}", relay_http_base_url(relay_url), "/api/tokens");
+    let body = MintTokenBody {
+        name,
+        scopes,
+        channel_ids: None,
+        expires_in_days: None,
+    };
+    let body_bytes =
+        serde_json::to_vec(&body).map_err(|error| format!("serialize failed: {error}"))?;
+    let auth_header = build_nip98_auth_header_for_keys(keys, &Method::POST, &url, &body_bytes)?;
+    let forwarded_proto = if url.starts_with("http://") {
+        "http"
+    } else {
+        "https"
+    };
+    let request = client
+        .request(Method::POST, url)
+        .header("Authorization", auth_header)
+        .header("Content-Type", "application/json")
+        .header("X-Forwarded-Proto", forwarded_proto)
+        .body(body_bytes);
+
+    send_json_request(request).await
 }
 
 pub async fn relay_error_message(response: reqwest::Response) -> String {

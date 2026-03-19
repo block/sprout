@@ -1,3 +1,4 @@
+mod agent_discovery;
 mod agent_models;
 mod agent_settings;
 mod agents;
@@ -6,9 +7,11 @@ mod dms;
 mod identity;
 mod media;
 mod messages;
+mod personas;
 mod profile;
 mod tokens;
 
+pub use agent_discovery::*;
 pub use agent_models::*;
 pub use agent_settings::*;
 pub use agents::*;
@@ -17,5 +20,6 @@ pub use dms::*;
 pub use identity::*;
 pub use media::*;
 pub use messages::*;
+pub use personas::*;
 pub use profile::*;
 pub use tokens::*;

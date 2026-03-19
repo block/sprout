@@ -16,16 +16,11 @@ export const TOKEN_SCOPE_OPTIONS: Array<{
 export const MANAGED_AGENT_SCOPE_OPTIONS: Array<{
   value: TokenScope;
   label: string;
-}> = [
-  ...TOKEN_SCOPE_OPTIONS.slice(0, 5),
-  { value: "users:write", label: "Users: Write" },
-  ...TOKEN_SCOPE_OPTIONS.slice(5),
-];
+}> = [...TOKEN_SCOPE_OPTIONS];
 
 export const DEFAULT_MANAGED_AGENT_SCOPES: TokenScope[] = [
   "messages:read",
   "messages:write",
   "channels:read",
   "users:read",
-  "users:write",
 ];

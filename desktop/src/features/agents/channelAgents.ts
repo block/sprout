@@ -47,6 +47,8 @@ export type CreateChannelManagedAgentInput = {
   provider: ChannelAgentProvider;
   name: string;
   systemPrompt?: string;
+  avatarUrl?: string;
+  personaId?: string | null;
   role?: Exclude<ChannelRole, "owner">;
   ensureRunning?: boolean;
 };
@@ -56,6 +58,18 @@ export type CreateChannelManagedAgentResult =
     created: true;
     providerId: string;
   };
+
+export type CreateChannelManagedAgentBatchFailure = {
+  kind: "generic" | "persona";
+  name: string;
+  personaId: string | null;
+  error: string;
+};
+
+export type CreateChannelManagedAgentsResult = {
+  successes: CreateChannelManagedAgentResult[];
+  failures: CreateChannelManagedAgentBatchFailure[];
+};
 
 function normalizePubkey(pubkey: string) {
   return pubkey.trim().toLowerCase();
@@ -88,17 +102,21 @@ export async function attachManagedAgentToChannel(
 ) {
   const role = input.role ?? "bot";
   const ensureRunning = input.ensureRunning ?? true;
-  const members = await getChannelMembers(channelId);
-  const membershipAdded = !members.some(
-    (member) =>
-      normalizePubkey(member.pubkey) === normalizePubkey(input.agent.pubkey),
-  );
-
-  await addChannelMembers({
+  const agentPubkey = normalizePubkey(input.agent.pubkey);
+  const membershipResult = await addChannelMembers({
     channelId,
     pubkeys: [input.agent.pubkey],
     role,
   });
+  const membershipError = membershipResult.errors.find(
+    (error) => normalizePubkey(error.pubkey) === agentPubkey,
+  );
+  if (membershipError) {
+    throw new Error(membershipError.error);
+  }
+  const membershipAdded = membershipResult.added.some(
+    (pubkey) => normalizePubkey(pubkey) === agentPubkey,
+  );
 
   let agent = input.agent;
   let started = false;
@@ -256,7 +274,9 @@ export async function createChannelManagedAgent(
     mintToken: true,
     tokenName: `${trimmedName} agent`,
     tokenScopes: DEFAULT_MANAGED_AGENT_SCOPES,
+    personaId: input.personaId ?? undefined,
     systemPrompt: input.systemPrompt?.trim() || undefined,
+    avatarUrl: input.avatarUrl?.trim() || undefined,
     spawnAfterCreate: false,
   });
   const attached = await attachManagedAgentToChannel(channelId, {
@@ -269,5 +289,31 @@ export async function createChannelManagedAgent(
     ...attached,
     created: true,
     providerId: input.provider.id,
+  };
+}
+
+export async function createChannelManagedAgents(
+  channelId: string,
+  inputs: readonly CreateChannelManagedAgentInput[],
+): Promise<CreateChannelManagedAgentsResult> {
+  const successes: CreateChannelManagedAgentResult[] = [];
+  const failures: CreateChannelManagedAgentBatchFailure[] = [];
+
+  for (const input of inputs) {
+    try {
+      successes.push(await createChannelManagedAgent(channelId, input));
+    } catch (error) {
+      failures.push({
+        kind: input.personaId ? "persona" : "generic",
+        name: input.name.trim() || "agent",
+        personaId: input.personaId ?? null,
+        error: error instanceof Error ? error.message : "Failed to add agent.",
+      });
+    }
+  }
+
+  return {
+    successes,
+    failures,
   };
 }
