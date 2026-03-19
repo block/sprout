@@ -22,6 +22,7 @@ tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 url = { workspace = true }
+rustls = "0.23"
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

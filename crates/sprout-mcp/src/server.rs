@@ -707,7 +707,11 @@ impl SproutMcpServer {
 
     /// Build NIP-10 reply tags for a threaded reply.
     ///
-    /// Fetches the parent event to determine thread ancestry:
+    /// Fetches the parent event via `GET /api/events/{id}` to determine thread
+    /// ancestry. This requires `MessagesRead` scope — acceptable because the MCP
+    /// server's read tools (get_messages, list_channels, search, etc.) already
+    /// require it, so any usable MCP token will have it.
+    ///
     /// - Direct reply (parent is top-level): `["e", parent, "", "reply"]`
     /// - Nested reply (parent is a reply): `["e", root, "", "root"]` + `["e", parent, "", "reply"]`
     async fn build_reply_tags(&self, parent_event_id: &str) -> Result<Vec<Tag>, String> {
