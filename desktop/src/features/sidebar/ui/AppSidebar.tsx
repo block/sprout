@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Bot, Compass, Home, PenSquare, Plus, Search } from "lucide-react";
+import { Bot, Home, PenSquare, Plus, Search } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
@@ -81,6 +81,7 @@ function StreamsSection({
   isActiveChannel,
   selectedChannelId,
   unreadChannelIds,
+  onOpenBrowseChannels,
 }: {
   items: Channel[];
   isCreateOpen: boolean;
@@ -98,25 +99,38 @@ function StreamsSection({
   isActiveChannel: boolean;
   selectedChannelId: string | null;
   unreadChannelIds: Set<string>;
+  onOpenBrowseChannels: () => void;
 }) {
   return (
     <SidebarGroup className="pt-1">
       <SidebarGroupLabel>Channels</SidebarGroupLabel>
-      <SidebarGroupAction
-        aria-expanded={isCreateOpen}
-        aria-label={isCreateOpen ? "Close new stream form" : "Create a stream"}
-        className="top-3 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-        onClick={onToggleCreate}
-        type="button"
-      >
-        <Plus
-          className={
-            isCreateOpen
-              ? "rotate-45 transition-transform"
-              : "transition-transform"
+      <div className="absolute right-1 top-3 flex items-center gap-0.5">
+        <button
+          aria-label="Browse channels"
+          className="flex h-5 w-5 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+          onClick={onOpenBrowseChannels}
+          type="button"
+        >
+          <Search className="h-3.5 w-3.5" />
+        </button>
+        <button
+          aria-expanded={isCreateOpen}
+          aria-label={
+            isCreateOpen ? "Close new stream form" : "Create a stream"
           }
-        />
-      </SidebarGroupAction>
+          className="flex h-5 w-5 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+          onClick={onToggleCreate}
+          type="button"
+        >
+          <Plus
+            className={
+              isCreateOpen
+                ? "h-4 w-4 rotate-45 transition-transform"
+                : "h-4 w-4 transition-transform"
+            }
+          />
+        </button>
+      </div>
       <SidebarGroupContent>
         {isCreateOpen ? (
           <form
@@ -206,6 +220,7 @@ function ForumsSection({
   isActiveChannel,
   selectedChannelId,
   unreadChannelIds,
+  onOpenBrowseChannels,
 }: {
   items: Channel[];
   isCreateOpen: boolean;
@@ -223,25 +238,36 @@ function ForumsSection({
   isActiveChannel: boolean;
   selectedChannelId: string | null;
   unreadChannelIds: Set<string>;
+  onOpenBrowseChannels: () => void;
 }) {
   return (
     <SidebarGroup>
       <SidebarGroupLabel>Forums</SidebarGroupLabel>
-      <SidebarGroupAction
-        aria-expanded={isCreateOpen}
-        aria-label={isCreateOpen ? "Close new forum form" : "New forum"}
-        className="top-3 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-        onClick={onToggleCreate}
-        type="button"
-      >
-        <Plus
-          className={
-            isCreateOpen
-              ? "rotate-45 transition-transform"
-              : "transition-transform"
-          }
-        />
-      </SidebarGroupAction>
+      <div className="absolute right-1 top-3 flex items-center gap-0.5">
+        <button
+          aria-label="Browse forums"
+          className="flex h-5 w-5 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+          onClick={onOpenBrowseChannels}
+          type="button"
+        >
+          <Search className="h-3.5 w-3.5" />
+        </button>
+        <button
+          aria-expanded={isCreateOpen}
+          aria-label={isCreateOpen ? "Close new forum form" : "New forum"}
+          className="flex h-5 w-5 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+          onClick={onToggleCreate}
+          type="button"
+        >
+          <Plus
+            className={
+              isCreateOpen
+                ? "h-4 w-4 rotate-45 transition-transform"
+                : "h-4 w-4 transition-transform"
+            }
+          />
+        </button>
+      </div>
       <SidebarGroupContent>
         {isCreateOpen ? (
           <form
@@ -558,6 +584,7 @@ export function AppSidebar({
               isCreatingChannel={isCreatingChannel}
               isActiveChannel={selectedView === "channel"}
               items={streamChannels}
+              onOpenBrowseChannels={onOpenBrowseChannels}
               onCancelCreate={() => {
                 setCreateErrorMessage(undefined);
                 setDraftName("");
@@ -583,20 +610,6 @@ export function AppSidebar({
               selectedChannelId={selectedChannelId}
               unreadChannelIds={unreadChannelIds}
             />
-            <SidebarMenu className="px-2">
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  className="text-sidebar-foreground/60 hover:text-sidebar-foreground"
-                  data-testid="browse-channels"
-                  onClick={onOpenBrowseChannels}
-                  tooltip="Browse channels"
-                  type="button"
-                >
-                  <Compass className="h-4 w-4" />
-                  <span>Browse channels</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
             <ForumsSection
               createErrorMessage={forumCreateErrorMessage}
               createInputRef={forumCreateInputRef}
@@ -606,6 +619,7 @@ export function AppSidebar({
               isCreateOpen={isForumCreateOpen}
               isCreatingForum={isCreatingForum}
               items={forumChannels}
+              onOpenBrowseChannels={onOpenBrowseChannels}
               onCancelCreate={() => {
                 setForumCreateErrorMessage(undefined);
                 setForumDraftName("");
