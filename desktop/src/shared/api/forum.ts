@@ -54,10 +54,22 @@ type RawForumThreadResponse = {
   next_cursor: string | null;
 };
 
+function getAttributedAuthorPubkey(pubkey: string, tags: string[][]): string {
+  const firstTag = tags[0];
+  const attributedPubkey =
+    firstTag?.[0] === "p" ? firstTag[1]?.toLowerCase() : null;
+
+  if (attributedPubkey && /^[0-9a-f]{64}$/.test(attributedPubkey)) {
+    return attributedPubkey;
+  }
+
+  return pubkey.toLowerCase();
+}
+
 function fromRawForumPost(post: RawForumPost): ForumPost {
   return {
     eventId: post.event_id,
-    pubkey: post.pubkey,
+    pubkey: getAttributedAuthorPubkey(post.pubkey, post.tags),
     content: post.content,
     kind: post.kind,
     createdAt: post.created_at,
@@ -77,7 +89,7 @@ function fromRawForumPost(post: RawForumPost): ForumPost {
 function fromRawThreadReply(reply: RawThreadReply): ThreadReply {
   return {
     eventId: reply.event_id,
-    pubkey: reply.pubkey,
+    pubkey: getAttributedAuthorPubkey(reply.pubkey, reply.tags),
     content: reply.content,
     kind: reply.kind,
     createdAt: reply.created_at,
