@@ -2,27 +2,17 @@
 --
 -- This file represents the desired state of the database schema.
 -- Use `pgschema apply --file schema/schema.sql` to bring the database up to date.
-
--- ── Custom types ──────────────────────────────────────────────────────────────
-
-CREATE TYPE channel_type AS ENUM ('stream', 'forum', 'dm', 'workflow');
-CREATE TYPE channel_visibility AS ENUM ('open', 'private');
-CREATE TYPE member_role AS ENUM ('owner', 'admin', 'member', 'guest', 'bot');
-CREATE TYPE workflow_status AS ENUM ('active', 'disabled', 'archived');
-CREATE TYPE run_status AS ENUM ('pending', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled');
-CREATE TYPE approval_status AS ENUM ('pending', 'granted', 'denied', 'expired');
-CREATE TYPE delivery_method AS ENUM ('webhook', 'websocket');
-CREATE TYPE subscription_status AS ENUM ('active', 'paused', 'deleted');
-CREATE TYPE pause_reason AS ENUM ('user', 'system', 'rate_limit');
-CREATE TYPE channel_add_policy AS ENUM ('anyone', 'owner_only', 'nobody');
+--
+-- All "enum" columns use TEXT + CHECK constraints instead of CREATE TYPE so that
+-- sqlx runtime queries can decode them as plain String without custom type registration.
 
 -- ── Channels ──────────────────────────────────────────────────────────────────
 
 CREATE TABLE channels (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name            VARCHAR(255) NOT NULL,
-    channel_type    channel_type NOT NULL DEFAULT 'stream',
-    visibility      channel_visibility NOT NULL DEFAULT 'open',
+    channel_type    TEXT NOT NULL DEFAULT 'stream',
+    visibility      TEXT NOT NULL DEFAULT 'open',
     description     TEXT,
     canvas          TEXT,
     created_by      BYTEA NOT NULL,
@@ -39,7 +29,9 @@ CREATE TABLE channels (
     purpose         TEXT,
     purpose_set_by  BYTEA,
     purpose_set_at  TIMESTAMPTZ,
-    participant_hash BYTEA
+    participant_hash BYTEA,
+    CONSTRAINT chk_channel_type CHECK (channel_type IN ('stream', 'forum', 'dm', 'workflow')),
+    CONSTRAINT chk_channel_visibility CHECK (visibility IN ('open', 'private'))
 );
 
 CREATE INDEX idx_channels_type ON channels (channel_type);
@@ -52,12 +44,13 @@ CREATE UNIQUE INDEX idx_channels_dm_hash ON channels (participant_hash);
 CREATE TABLE channel_members (
     channel_id  UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
     pubkey      BYTEA NOT NULL,
-    role        member_role NOT NULL DEFAULT 'member',
+    role        TEXT NOT NULL DEFAULT 'member',
     joined_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     invited_by  BYTEA,
     removed_at  TIMESTAMPTZ,
     removed_by  BYTEA,
-    PRIMARY KEY (channel_id, pubkey)
+    PRIMARY KEY (channel_id, pubkey),
+    CONSTRAINT chk_member_role CHECK (role IN ('owner', 'admin', 'member', 'guest', 'bot'))
 );
 
 -- ── Users ─────────────────────────────────────────────────────────────────────
@@ -76,8 +69,9 @@ CREATE TABLE users (
     deactivated_at      TIMESTAMPTZ,
     metadata_event_id   BYTEA,
     agent_owner_pubkey  BYTEA REFERENCES users(pubkey) ON DELETE SET NULL,
-    channel_add_policy  channel_add_policy NOT NULL DEFAULT 'anyone',
-    CONSTRAINT chk_users_pubkey_len CHECK (LENGTH(pubkey) = 32)
+    channel_add_policy  TEXT NOT NULL DEFAULT 'anyone',
+    CONSTRAINT chk_users_pubkey_len CHECK (LENGTH(pubkey) = 32),
+    CONSTRAINT chk_channel_add_policy CHECK (channel_add_policy IN ('anyone', 'owner_only', 'nobody'))
 );
 
 -- ── Events (partitioned by month on created_at) ──────────────────────────────
@@ -142,14 +136,17 @@ CREATE TABLE subscriptions (
     filter_channel_ids  JSONB,
     filter_since        TIMESTAMPTZ,
     filter_until        TIMESTAMPTZ,
-    delivery_method     delivery_method NOT NULL DEFAULT 'webhook',
+    delivery_method     TEXT NOT NULL DEFAULT 'webhook',
     delivery_url        TEXT,
-    status              subscription_status NOT NULL DEFAULT 'active',
-    pause_reason        pause_reason,
+    status              TEXT NOT NULL DEFAULT 'active',
+    pause_reason        TEXT,
     delivered_count     BIGINT NOT NULL DEFAULT 0,
     error_count         BIGINT NOT NULL DEFAULT 0,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_delivery_method CHECK (delivery_method IN ('webhook', 'websocket')),
+    CONSTRAINT chk_subscription_status CHECK (status IN ('active', 'paused', 'deleted')),
+    CONSTRAINT chk_pause_reason CHECK (pause_reason IS NULL OR pause_reason IN ('user', 'system', 'rate_limit'))
 );
 
 -- ── Delivery log (partitioned by month on delivered_at) ──────────────────────
@@ -158,7 +155,7 @@ CREATE TABLE delivery_log (
     id              BIGINT GENERATED ALWAYS AS IDENTITY,
     subscription_id VARCHAR(255),
     event_id        BYTEA,
-    method          delivery_method,
+    method          TEXT,
     delivered_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     success         BOOLEAN,
     http_status     INT,
@@ -187,10 +184,11 @@ CREATE TABLE workflows (
     channel_id      UUID REFERENCES channels(id),
     definition      JSONB NOT NULL,
     definition_hash BYTEA NOT NULL,
-    status          workflow_status NOT NULL DEFAULT 'active',
+    status          TEXT NOT NULL DEFAULT 'active',
     enabled         BOOLEAN NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_workflow_status CHECK (status IN ('active', 'disabled', 'archived'))
 );
 
 CREATE INDEX idx_workflows_channel_active ON workflows (channel_id, status, enabled);
@@ -200,7 +198,7 @@ CREATE INDEX idx_workflows_channel_active ON workflows (channel_id, status, enab
 CREATE TABLE workflow_runs (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workflow_id         UUID NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
-    status              run_status NOT NULL DEFAULT 'pending',
+    status              TEXT NOT NULL DEFAULT 'pending',
     trigger_event_id    BYTEA,
     current_step        INT NOT NULL DEFAULT 0,
     execution_trace     JSONB NOT NULL DEFAULT '[]',
@@ -208,7 +206,8 @@ CREATE TABLE workflow_runs (
     started_at          TIMESTAMPTZ,
     completed_at        TIMESTAMPTZ,
     error_message       TEXT,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_run_status CHECK (status IN ('pending', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled'))
 );
 
 CREATE INDEX idx_workflow_runs_workflow ON workflow_runs (workflow_id);
@@ -223,13 +222,14 @@ CREATE TABLE workflow_approvals (
     step_id         VARCHAR(64) NOT NULL,
     step_index      INT NOT NULL,
     approver_spec   TEXT NOT NULL,
-    status          approval_status NOT NULL DEFAULT 'pending',
+    status          TEXT NOT NULL DEFAULT 'pending',
     approver_pubkey BYTEA,
     note            TEXT,
     granted_at      TIMESTAMPTZ,
     denied_at       TIMESTAMPTZ,
     expires_at      TIMESTAMPTZ NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_approval_status CHECK (status IN ('pending', 'granted', 'denied', 'expired'))
 );
 
 CREATE INDEX idx_workflow_approvals_workflow ON workflow_approvals (workflow_id);
@@ -239,7 +239,7 @@ CREATE INDEX idx_workflow_approvals_status ON workflow_approvals (status);
 -- ── API tokens ────────────────────────────────────────────────────────────────
 
 CREATE TABLE api_tokens (
-    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id                  BYTEA PRIMARY KEY,
     token_hash          BYTEA NOT NULL UNIQUE,
     owner_pubkey        BYTEA NOT NULL REFERENCES users(pubkey),
     name                VARCHAR(255) NOT NULL,

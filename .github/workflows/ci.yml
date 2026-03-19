@@ -133,6 +133,14 @@ jobs:
           wait_healthy "Postgres" "sprout-postgres"
           wait_healthy "Redis" "sprout-redis"
           wait_healthy "Typesense" "sprout-typesense"
+      - name: Apply database schema
+        run: ./bin/pgschema apply --file schema/schema.sql --auto-approve
+        env:
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: sprout
+          PGPASSWORD: sprout_dev
+          PGDATABASE: sprout
       - name: Build relay
         run: cargo build -p sprout-relay
       - name: Start relay

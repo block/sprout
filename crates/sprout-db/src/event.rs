@@ -64,8 +64,6 @@ pub async fn insert_event(
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
     let received_at = Utc::now();
-    let channel_id_bytes: Option<[u8; 16]> = channel_id.map(|u| *u.as_bytes());
-
     let result = sqlx::query(
         r#"
         INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id)
@@ -81,7 +79,7 @@ pub async fn insert_event(
     .bind(&event.content)
     .bind(sig_bytes.as_slice())
     .bind(received_at)
-    .bind(channel_id_bytes.as_ref().map(|b| b.as_slice()))
+    .bind(channel_id)
     .execute(pool)
     .await?;
 
@@ -129,7 +127,7 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
 
     if let Some(ch) = q.channel_id {
         qb.push(format!(" AND {col_prefix}channel_id = "))
-            .push_bind(ch.as_bytes().to_vec());
+            .push_bind(ch);
     }
 
     if let Some(ks) = q.kinds.as_deref().filter(|k| !k.is_empty()) {
@@ -179,8 +177,7 @@ pub(crate) fn row_to_stored_event(row: sqlx::postgres::PgRow) -> Result<Option<S
     let sig_bytes: Vec<u8> = row.try_get("sig")?;
     let received_at: DateTime<Utc> = row.try_get("received_at")?;
 
-    let channel_id_bytes: Option<Vec<u8>> = row.try_get("channel_id")?;
-    let channel_id: Option<Uuid> = channel_id_bytes.map(|b| uuid_from_bytes(&b)).transpose()?;
+    let channel_id: Option<Uuid> = row.try_get("channel_id")?;
 
     // kind is stored as i32 (Postgres INT) but Nostr uses u16. Values > 65535 are corrupt.
     let kind_u16 = u16::try_from(kind_i32)
@@ -282,13 +279,12 @@ pub async fn get_last_message_at(
     pool: &PgPool,
     channel_id: uuid::Uuid,
 ) -> Result<Option<DateTime<Utc>>> {
-    let id_bytes = channel_id.as_bytes().as_slice().to_vec();
     let row = sqlx::query(
         "SELECT created_at FROM events \
          WHERE channel_id = $1 AND deleted_at IS NULL \
          ORDER BY created_at DESC LIMIT 1",
     )
-    .bind(&id_bytes)
+    .bind(channel_id)
     .fetch_optional(pool)
     .await?;
 
@@ -316,7 +312,7 @@ pub async fn get_last_message_at_bulk(
     );
     let mut sep = qb.separated(", ");
     for id in channel_ids {
-        sep.push_bind(id.as_bytes().to_vec());
+        sep.push_bind(*id);
     }
     qb.push(") GROUP BY channel_id");
 
@@ -324,8 +320,7 @@ pub async fn get_last_message_at_bulk(
 
     let mut map = std::collections::HashMap::with_capacity(rows.len());
     for row in rows {
-        let id_bytes: Vec<u8> = row.try_get("channel_id")?;
-        let id = uuid_from_bytes(&id_bytes)?;
+        let id: Uuid = row.try_get("channel_id")?;
         let last_at: DateTime<Utc> = row.try_get("last_at")?;
         map.insert(id, last_at);
     }
@@ -462,8 +457,6 @@ pub async fn insert_event_with_thread_metadata(
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
     let received_at = Utc::now();
-    let channel_id_bytes: Option<[u8; 16]> = channel_id.map(|u| *u.as_bytes());
-
     let mut tx = pool.begin().await?;
 
     // ── Insert event ──────────────────────────────────────────────────────────
@@ -482,7 +475,7 @@ pub async fn insert_event_with_thread_metadata(
     .bind(&event.content)
     .bind(sig_bytes.as_slice())
     .bind(received_at)
-    .bind(channel_id_bytes.as_ref().map(|b| b.as_slice()))
+    .bind(channel_id)
     .execute(&mut *tx)
     .await?;
 
@@ -491,7 +484,6 @@ pub async fn insert_event_with_thread_metadata(
     // ── Insert thread metadata (if provided and event was actually inserted) ──
     if was_inserted {
         if let Some(ref meta) = thread_meta {
-            let ch_bytes = meta.channel_id.as_bytes().as_slice().to_vec();
             let broadcast_val: bool = meta.broadcast;
 
             let tm_result = sqlx::query(
@@ -507,7 +499,7 @@ pub async fn insert_event_with_thread_metadata(
             )
             .bind(meta.event_created_at)
             .bind(meta.event_id)
-            .bind(ch_bytes.as_slice())
+            .bind(meta.channel_id)
             .bind(meta.parent_event_id)
             .bind(meta.parent_event_created_at)
             .bind(meta.root_event_id)
@@ -539,7 +531,7 @@ pub async fn insert_event_with_thread_metadata(
                     )
                     .bind(parent_ts)
                     .bind(pid)
-                    .bind(ch_bytes.as_slice())
+                    .bind(meta.channel_id)
                     .execute(&mut *tx)
                     .await?;
 
@@ -561,7 +553,7 @@ pub async fn insert_event_with_thread_metadata(
                             )
                             .bind(root_ts)
                             .bind(root_id)
-                            .bind(ch_bytes.as_slice())
+                            .bind(meta.channel_id)
                             .execute(&mut *tx)
                             .await?;
                         }

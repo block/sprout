@@ -9,7 +9,6 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::event::uuid_from_bytes;
 
 // -- Structs ------------------------------------------------------------------
 
@@ -120,8 +119,6 @@ pub async fn insert_thread_metadata(
     depth: i32,
     broadcast: bool,
 ) -> Result<()> {
-    let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
-
     let mut tx = pool.begin().await?;
 
     let result = sqlx::query(
@@ -137,7 +134,7 @@ pub async fn insert_thread_metadata(
     )
     .bind(event_created_at)
     .bind(event_id)
-    .bind(channel_id_bytes.as_slice())
+    .bind(channel_id)
     .bind(parent_event_id)
     .bind(parent_event_created_at)
     .bind(root_event_id)
@@ -168,7 +165,7 @@ pub async fn insert_thread_metadata(
             )
             .bind(parent_ts)
             .bind(pid)
-            .bind(channel_id_bytes.as_slice())
+            .bind(channel_id)
             .execute(&mut *tx)
             .await?;
 
@@ -189,7 +186,7 @@ pub async fn insert_thread_metadata(
                     )
                     .bind(root_ts)
                     .bind(root_id)
-                    .bind(channel_id_bytes.as_slice())
+                    .bind(channel_id)
                     .execute(&mut *tx)
                     .await?;
                 }
@@ -392,7 +389,7 @@ pub async fn get_thread_replies(
         let event_id: Vec<u8> = row.try_get("event_id")?;
         let parent_event_id: Option<Vec<u8>> = row.try_get("parent_event_id")?;
         let root_event_id_col: Option<Vec<u8>> = row.try_get("root_event_id")?;
-        let channel_id_bytes: Vec<u8> = row.try_get("channel_id")?;
+        let channel_id: Uuid = row.try_get("channel_id")?;
         let pubkey: Vec<u8> = row.try_get("pubkey")?;
         let tags: serde_json::Value = row.try_get("tags")?;
         let content: String = row.try_get("content")?;
@@ -400,8 +397,6 @@ pub async fn get_thread_replies(
         let depth: i32 = row.try_get("depth")?;
         let created_at: DateTime<Utc> = row.try_get("event_created_at")?;
         let broadcast_val: bool = row.try_get("broadcast")?;
-
-        let channel_id = uuid_from_bytes(&channel_id_bytes)?;
 
         replies.push(ThreadReply {
             event_id,
@@ -495,8 +490,6 @@ pub async fn get_channel_messages_top_level(
     before_cursor: Option<DateTime<Utc>>,
     kind_filter: Option<&[u32]>,
 ) -> Result<Vec<TopLevelMessage>> {
-    let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
-
     let mut param_idx = 2u32; // $1 is channel_id
     let mut sql = String::from(
         r#"
@@ -540,7 +533,7 @@ pub async fn get_channel_messages_top_level(
 
     sql.push_str(&format!(" ORDER BY e.created_at DESC LIMIT ${param_idx}"));
 
-    let mut q = sqlx::query(&sql).bind(channel_id_bytes.as_slice());
+    let mut q = sqlx::query(&sql).bind(channel_id);
 
     if let Some(cursor) = before_cursor {
         q = q.bind(cursor);
@@ -557,8 +550,7 @@ pub async fn get_channel_messages_top_level(
         let content: String = row.try_get("content")?;
         let kind: i32 = row.try_get("kind")?;
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
-        let channel_id_col: Vec<u8> = row.try_get("channel_id_bytes")?;
-        let ch_id = uuid_from_bytes(&channel_id_col)?;
+        let ch_id: Uuid = row.try_get("channel_id_bytes")?;
 
         messages.push(TopLevelMessage {
             event_id,
@@ -611,15 +603,13 @@ pub async fn get_thread_metadata_by_event(
 
     let event_id_col: Vec<u8> = row.try_get("event_id")?;
     let event_created_at: DateTime<Utc> = row.try_get("event_created_at")?;
-    let channel_id_bytes: Vec<u8> = row.try_get("channel_id")?;
+    let channel_id: Uuid = row.try_get("channel_id")?;
     let parent_event_id: Option<Vec<u8>> = row.try_get("parent_event_id")?;
     let root_event_id: Option<Vec<u8>> = row.try_get("root_event_id")?;
     let depth: i32 = row.try_get("depth")?;
     let reply_count: i32 = row.try_get("reply_count")?;
     let descendant_count: i32 = row.try_get("descendant_count")?;
     let broadcast_val: bool = row.try_get("broadcast")?;
-
-    let channel_id = uuid_from_bytes(&channel_id_bytes)?;
 
     Ok(Some(ThreadMetadataRecord {
         event_id: event_id_col,
