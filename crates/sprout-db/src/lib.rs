@@ -37,7 +37,7 @@ pub use event::EventQuery;
 
 use chrono::{DateTime, Utc};
 use sqlx::mysql::MySqlPoolOptions;
-use sqlx::{MySqlPool, Row};
+use sqlx::{MySqlPool, QueryBuilder, Row};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -78,31 +78,42 @@ pub async fn insert_mentions(
     let channel_id_bytes = channel_id.map(|id| id.as_bytes().to_vec());
     let kind = event.kind.as_u16() as u32;
 
-    for pubkey_hex in p_tags {
-        // Validate: must be exactly 64 hex characters (32-byte pubkey)
-        if pubkey_hex.len() != 64 || !pubkey_hex.chars().all(|c| c.is_ascii_hexdigit()) {
-            tracing::debug!(
-                event_id = %event.id,
-                invalid_ptag = pubkey_hex,
-                "skipping malformed p-tag in mentions insert"
-            );
-            continue;
-        }
-        // Normalize to lowercase — queries use hex::encode which produces lowercase.
-        let pubkey_lower = pubkey_hex.to_ascii_lowercase();
-        sqlx::query(
-            "INSERT IGNORE INTO event_mentions \
-             (pubkey_hex, event_id, event_created_at, channel_id, event_kind) \
-             VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(&pubkey_lower)
-        .bind(event_id_bytes.as_slice())
-        .bind(created_at)
-        .bind(channel_id_bytes.as_deref())
-        .bind(kind)
-        .execute(pool)
-        .await?;
+    // Validate and normalize pubkeys, logging any malformed ones.
+    let valid_pubkeys: Vec<String> = p_tags
+        .into_iter()
+        .filter(|pk| {
+            if pk.len() != 64 || !pk.chars().all(|c| c.is_ascii_hexdigit()) {
+                tracing::debug!(
+                    event_id = %event.id,
+                    invalid_ptag = pk,
+                    "skipping malformed p-tag in mentions insert"
+                );
+                return false;
+            }
+            true
+        })
+        .map(|pk| pk.to_ascii_lowercase())
+        .collect();
+
+    if valid_pubkeys.is_empty() {
+        return Ok(());
     }
+
+    // Single multi-row INSERT IGNORE — one round-trip regardless of mention count.
+    let mut qb: QueryBuilder<'_, sqlx::MySql> = QueryBuilder::new(
+        "INSERT IGNORE INTO event_mentions \
+         (pubkey_hex, event_id, event_created_at, channel_id, event_kind) ",
+    );
+
+    qb.push_values(&valid_pubkeys, |mut b, pubkey| {
+        b.push_bind(pubkey.as_str())
+            .push_bind(event_id_bytes.as_slice())
+            .push_bind(created_at)
+            .push_bind(channel_id_bytes.as_deref())
+            .push_bind(kind);
+    });
+
+    qb.build().execute(pool).await?;
     Ok(())
 }
 

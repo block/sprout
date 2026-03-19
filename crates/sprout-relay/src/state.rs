@@ -13,6 +13,7 @@ use uuid::Uuid;
 use deadpool_redis;
 use sprout_audit::AuditService;
 use sprout_auth::AuthService;
+use sprout_core::event::StoredEvent;
 use sprout_db::Db;
 use sprout_media::MediaStorage;
 use sprout_pubsub::PubSubManager;
@@ -151,6 +152,13 @@ pub struct AppState {
     /// consumer skips them to avoid double delivery. Entries expire after
     /// 60 seconds via moka's TTL eviction — bounded regardless of subscriber health.
     pub local_event_ids: Arc<moka::sync::Cache<[u8; 32], ()>>,
+    /// Membership cache: (channel_id, pubkey_bytes) → is_member.
+    /// Short TTL (10s) — membership changes are rare but must propagate.
+    pub membership_cache: Arc<moka::sync::Cache<(Uuid, Vec<u8>), bool>>,
+
+    /// Bounded channel for search indexing — prevents OOM if Typesense is slow/down.
+    /// Capacity 1000: at ~1KB/event that's ~1MB of backlog before we start dropping.
+    pub search_index_tx: mpsc::Sender<StoredEvent>,
     /// Media storage client (S3/MinIO).
     pub media_storage: Arc<MediaStorage>,
     /// Set to `true` on SIGTERM — readiness probe returns 503.
@@ -176,6 +184,30 @@ impl AppState {
     ) -> Self {
         let max_connections = config.max_connections;
         let max_concurrent_handlers = config.max_concurrent_handlers;
+        let search_arc = Arc::new(search);
+
+        let (search_index_tx, mut search_index_rx) = mpsc::channel::<StoredEvent>(1000);
+        let search_for_worker = Arc::clone(&search_arc);
+        tokio::spawn(async move {
+            while let Some(stored_event) = search_index_rx.recv().await {
+                let t = std::time::Instant::now();
+                match search_for_worker.index_event(&stored_event).await {
+                    Ok(()) => {
+                        metrics::histogram!("sprout_search_index_seconds")
+                            .record(t.elapsed().as_secs_f64());
+                    }
+                    Err(e) => {
+                        metrics::counter!("sprout_search_index_errors_total").increment(1);
+                        tracing::error!(
+                            event_id = %stored_event.event.id.to_hex(),
+                            "Search index failed: {e}"
+                        );
+                    }
+                }
+            }
+            tracing::warn!("search index worker exited (expected on shutdown)");
+        });
+
         Self {
             config: Arc::new(config),
             db,
@@ -183,7 +215,7 @@ impl AppState {
             audit: Arc::new(audit),
             pubsub,
             auth: Arc::new(auth),
-            search: Arc::new(search),
+            search: search_arc,
             sub_registry: Arc::new(SubscriptionRegistry::new()),
             conn_manager: Arc::new(ConnectionManager::new()),
             conn_semaphore: Arc::new(Semaphore::new(max_connections)),
@@ -198,6 +230,14 @@ impl AppState {
                     .time_to_live(std::time::Duration::from_secs(60))
                     .build(),
             ),
+            membership_cache: Arc::new(
+                moka::sync::Cache::builder()
+                    .max_capacity(10_000)
+                    .time_to_live(std::time::Duration::from_secs(10))
+                    .build(),
+            ),
+
+            search_index_tx,
             media_storage: Arc::new(media_storage),
             shutting_down: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),

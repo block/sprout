@@ -100,22 +100,15 @@ pub(crate) async fn dispatch_persistent_event(
 
     // Skip search indexing for NIP-17 gift wraps — content is ciphertext,
     // and indexing would leak #p tag metadata into the search index.
-    if kind_u32 != KIND_GIFT_WRAP {
-        let search = Arc::clone(&state.search);
-        let stored_for_search = stored_event.clone();
-        tokio::spawn(async move {
-            let t = std::time::Instant::now();
-            match search.index_event(&stored_for_search).await {
-                Ok(()) => {
-                    metrics::histogram!("sprout_search_index_seconds")
-                        .record(t.elapsed().as_secs_f64());
-                }
-                Err(e) => {
-                    metrics::counter!("sprout_search_index_errors_total").increment(1);
-                    error!(event_id = %stored_for_search.event.id.to_hex(), "Search index failed: {e}");
-                }
-            }
-        });
+    // Use the bounded mpsc channel to prevent OOM if Typesense is slow/down.
+    if kind_u32 != KIND_GIFT_WRAP
+        && state
+            .search_index_tx
+            .try_send(stored_event.clone())
+            .is_err()
+    {
+        metrics::counter!("sprout_search_index_errors_total").increment(1);
+        warn!(event_id = %event_id_hex, "Search index channel full — dropping event");
     }
 
     let audit = Arc::clone(&state.audit);
@@ -651,8 +644,39 @@ async fn check_channel_membership(
     conn_id: uuid::Uuid,
     event_id_hex: &str,
 ) -> Result<(), String> {
+    let cache_key = (ch_id, pubkey_bytes.to_vec());
+
+    // Check cache first.
+    if let Some(is_member) = state.membership_cache.get(&cache_key) {
+        if is_member {
+            return Ok(());
+        }
+        // Cached as non-member — still need to check open channel fallback.
+        let is_open = match state.db.get_channel(ch_id).await {
+            Ok(ch) => ch.visibility == "open",
+            Err(e) => {
+                tracing::warn!(conn_id = %conn_id, channel = %ch_id, error = %e,
+                               "channel lookup failed during membership fallback, denying");
+                false
+            }
+        };
+        return if is_open {
+            Ok(())
+        } else {
+            Err(RelayMessage::ok(
+                event_id_hex,
+                false,
+                "restricted: not a channel member",
+            ))
+        };
+    }
+
+    // Cache miss — query DB.
     match state.db.is_member(ch_id, pubkey_bytes).await {
-        Ok(true) => Ok(()),
+        Ok(true) => {
+            state.membership_cache.insert(cache_key, true);
+            Ok(())
+        }
         Ok(false) => {
             let is_open = match state.db.get_channel(ch_id).await {
                 Ok(ch) => ch.visibility == "open",
@@ -663,8 +687,11 @@ async fn check_channel_membership(
                 }
             };
             if is_open {
+                // Don't cache — non-members in open channels are always allowed,
+                // and caching false would force a redundant get_channel on every hit.
                 Ok(())
             } else {
+                state.membership_cache.insert(cache_key, false);
                 Err(RelayMessage::ok(
                     event_id_hex,
                     false,
@@ -890,10 +917,12 @@ async fn resolve_nip10_thread_meta(
     let parent_bytes =
         hex::decode(&parent_hex).map_err(|_| "invalid parent event ID hex".to_string())?;
 
-    let parent_event = state
-        .db
-        .get_event_by_id(&parent_bytes)
-        .await
+    let (parent_event_result, parent_meta_result) = tokio::join!(
+        state.db.get_event_by_id(&parent_bytes),
+        state.db.get_thread_metadata_by_event(&parent_bytes),
+    );
+
+    let parent_event = parent_event_result
         .map_err(|e| format!("db error looking up parent: {e}"))?
         .ok_or_else(|| "reply parent not found".to_string())?;
 
@@ -913,11 +942,8 @@ async fn resolve_nip10_thread_meta(
     let client_root_bytes =
         hex::decode(&root_hex).map_err(|_| "invalid root event ID hex".to_string())?;
 
-    let parent_meta = state
-        .db
-        .get_thread_metadata_by_event(&parent_bytes)
-        .await
-        .map_err(|e| format!("db error looking up thread metadata: {e}"))?;
+    let parent_meta =
+        parent_meta_result.map_err(|e| format!("db error looking up thread metadata: {e}"))?;
 
     let (final_root_bytes, root_created, depth) = match parent_meta {
         Some(meta) => {

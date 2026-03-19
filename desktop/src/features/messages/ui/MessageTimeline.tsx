@@ -109,11 +109,9 @@ export function MessageTimeline({
                 ) : (
                   <MessageRow
                     activeReplyTargetId={activeReplyTargetId}
+                    highlighted={message.id === highlightedMessageId}
                     key={message.id}
-                    message={{
-                      ...message,
-                      highlighted: message.id === highlightedMessageId,
-                    }}
+                    message={message}
                     onToggleReaction={onToggleReaction}
                     onReply={onReply}
                   />

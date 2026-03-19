@@ -136,15 +136,15 @@ export function SearchDialog({
   onOpenResult,
 }: SearchDialogProps) {
   const [query, setQuery] = React.useState("");
+  const [debouncedQuery, setDebouncedQuery] = React.useState("");
   const [selectedIndex, setSelectedIndex] = React.useState(0);
-  const deferredQuery = React.useDeferredValue(query.trim());
   const inputRef = React.useRef<HTMLInputElement>(null);
   const channelLookup = React.useMemo(
     () => new Map(channels.map((channel) => [channel.id, channel])),
     [channels],
   );
 
-  const searchQuery = useSearchMessagesQuery(deferredQuery, {
+  const searchQuery = useSearchMessagesQuery(debouncedQuery, {
     enabled: open,
     limit: 12,
   });
@@ -165,6 +165,22 @@ export function SearchDialog({
     },
     [onOpenChange, onOpenResult],
   );
+
+  React.useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length < MIN_QUERY_LENGTH) {
+      setDebouncedQuery("");
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setDebouncedQuery(trimmed);
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [query]);
 
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -190,6 +206,7 @@ export function SearchDialog({
   React.useEffect(() => {
     if (!open) {
       setQuery("");
+      setDebouncedQuery("");
       setSelectedIndex(0);
       return;
     }
@@ -276,7 +293,7 @@ export function SearchDialog({
         </DialogHeader>
 
         <div className="max-h-[60vh] overflow-y-auto">
-          {deferredQuery.length < MIN_QUERY_LENGTH ? (
+          {debouncedQuery.length < MIN_QUERY_LENGTH ? (
             <SearchState
               description="Type at least two characters to search the relay-backed history for streams, forums, DMs, approvals, and agent updates."
               icon={MessagesSquare}

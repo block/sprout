@@ -17,6 +17,13 @@ import {
   KIND_SYSTEM_MESSAGE,
 } from "@/shared/constants/kinds";
 
+const HEX_RE = /^[0-9a-f]+$/i;
+
+const TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 function isTimelineContentEvent(event: RelayEvent) {
   return (
     event.kind === KIND_STREAM_MESSAGE ||
@@ -32,7 +39,7 @@ function getDeletionTargets(tags: string[][]) {
         tag[0] === "e" &&
         typeof tag[1] === "string" &&
         tag[1].length === 64 &&
-        /^[0-9a-f]+$/i.test(tag[1]),
+        HEX_RE.test(tag[1]),
     )
     .map((tag) => tag[1]);
 }
@@ -44,7 +51,7 @@ function getReactionTargetId(tags: string[][]) {
       tag?.[0] === "e" &&
       typeof tag[1] === "string" &&
       tag[1].length === 64 &&
-      /^[0-9a-f]+$/i.test(tag[1])
+      HEX_RE.test(tag[1])
     ) {
       return tag[1];
     }
@@ -250,10 +257,7 @@ export function formatTimelineMessages(
         currentUserAvatarUrl,
         profiles,
       }),
-      time: new Intl.DateTimeFormat("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(new Date(event.created_at * 1_000)),
+      time: TIME_FORMATTER.format(new Date(event.created_at * 1_000)),
       body: event.content,
       parentId: thread.parentId,
       rootId: thread.rootId,
