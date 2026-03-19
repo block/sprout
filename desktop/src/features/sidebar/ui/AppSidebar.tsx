@@ -564,7 +564,6 @@ export function AppSidebar({
                 </SidebarGroupAction>
               }
               dmParticipantsByChannelId={dmParticipantsByChannelId}
-              emptyState="No direct messages yet."
               isActiveChannel={selectedView === "channel"}
               items={directMessages}
               channelLabels={dmChannelLabels}
