@@ -551,8 +551,10 @@ impl Db {
         channel_id: Uuid,
         limit: u32,
         before: Option<DateTime<Utc>>,
+        kind_filter: Option<&[u32]>,
     ) -> Result<Vec<thread::TopLevelMessage>> {
-        thread::get_channel_messages_top_level(&self.pool, channel_id, limit, before).await
+        thread::get_channel_messages_top_level(&self.pool, channel_id, limit, before, kind_filter)
+            .await
     }
 
     /// Decrement reply counts when a thread reply is deleted.

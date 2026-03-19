@@ -496,6 +496,7 @@ pub async fn get_channel_messages_top_level(
     channel_id: Uuid,
     limit: u32,
     before_cursor: Option<DateTime<Utc>>,
+    kind_filter: Option<&[u32]>,
 ) -> Result<Vec<TopLevelMessage>> {
     let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
 
@@ -525,6 +526,17 @@ pub async fn get_channel_messages_top_level(
 
     if before_cursor.is_some() {
         sql.push_str(" AND e.created_at < ?");
+    }
+
+    if let Some(kinds) = kind_filter {
+        if !kinds.is_empty() {
+            let list = kinds
+                .iter()
+                .map(|k| k.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            sql.push_str(&format!(" AND e.kind IN ({list})"));
+        }
     }
 
     sql.push_str(" ORDER BY e.created_at DESC LIMIT ?");

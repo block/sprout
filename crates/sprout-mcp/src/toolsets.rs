@@ -25,6 +25,7 @@
 //! | `canvas`        | 2     |
 //! | `workflow_admin`| 5     |
 //! | `identity`      | 1     |
+//! | `forums`        | 1     |
 
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -39,7 +40,7 @@ use std::sync::LazyLock;
 /// classification. `is_read = true` means the tool is safe to include under
 /// a `:ro` (read-only) mode restriction.
 ///
-/// 41 tools total. See [`DEFERRED_TOOLS`] for tools planned but not yet implemented.
+/// 42 tools total. See [`DEFERRED_TOOLS`] for tools planned but not yet implemented.
 pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     // ── default ─────────────────────────────────────────────────────────────
     ("send_message", "default", false),
@@ -88,6 +89,8 @@ pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     ("get_workflow_runs", "workflow_admin", true),
     // ── identity ──────────────────────────────────────────────────────────────
     ("set_channel_add_policy", "identity", false),
+    // ── forums ───────────────────────────────────────────────────────────────
+    ("vote_on_post", "forums", false),
     // Deferred tools (not yet implemented): upload_file, subscribe, unsubscribe
 ];
 
@@ -152,6 +155,7 @@ const KNOWN_TOOLSETS: &[&str] = &[
     "media",
     "realtime",
     "identity",
+    "forums",
 ];
 
 // ---------------------------------------------------------------------------
@@ -366,8 +370,8 @@ mod tests {
     }
 
     #[test]
-    fn all_tools_count_is_41() {
-        assert_eq!(ALL_TOOLS.len(), 41);
+    fn all_tools_count_is_42() {
+        assert_eq!(ALL_TOOLS.len(), 42);
     }
 
     #[test]
@@ -391,13 +395,14 @@ mod tests {
 
     #[test]
     fn all_toolsets_returns_correct_count() {
-        // ALL_TOOLS covers: default, channel_admin, dms, canvas, workflow_admin, identity
+        // ALL_TOOLS covers: default, channel_admin, dms, canvas, workflow_admin, identity, forums
         // (media and realtime have no implemented tools yet)
         let defs = all_toolsets();
-        assert_eq!(defs.len(), 6);
+        assert_eq!(defs.len(), 7);
         let names: Vec<_> = defs.iter().map(|d| d.name).collect();
         assert!(names.contains(&"default"));
         assert!(names.contains(&"canvas"));
+        assert!(names.contains(&"forums"));
     }
 
     // ── Cross-check: ALL_TOOLS integrity ────────────────────────────────────

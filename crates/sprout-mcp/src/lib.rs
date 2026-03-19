@@ -61,7 +61,7 @@
 //!
 //! ## Available Tools
 //!
-//! 41 tools total, organized into toolsets. Tools are organized into toolsets. Set
+//! 42 tools total, organized into toolsets. Tools are organized into toolsets. Set
 //! `SPROUT_TOOLSETS` to control which are active (default: 25 core tools).
 //!
 //! ### Messaging (default toolset)
