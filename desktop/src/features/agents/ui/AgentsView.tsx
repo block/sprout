@@ -58,31 +58,28 @@ export function AgentsView() {
       }),
     [managedAgentsQuery.data],
   );
-  const [selectedAgentPubkey, setSelectedAgentPubkey] = React.useState<
-    string | null
-  >(null);
-  const selectedAgent =
-    managedAgents.find((agent) => agent.pubkey === selectedAgentPubkey) ??
-    managedAgents[0] ??
-    null;
+  const [logAgentPubkey, setLogAgentPubkey] = React.useState<string | null>(
+    null,
+  );
+  const logAgent =
+    managedAgents.find((agent) => agent.pubkey === logAgentPubkey) ?? null;
   const managedAgentLogQuery = useManagedAgentLogQuery(
-    selectedAgent?.pubkey ?? null,
+    logAgent?.pubkey ?? null,
   );
   const managedPubkeys = React.useMemo(
     () => new Set(managedAgents.map((agent) => agent.pubkey)),
     [managedAgents],
   );
 
+  // Clear log selection if the agent was removed
   React.useEffect(() => {
     if (
-      selectedAgentPubkey &&
-      managedAgents.some((agent) => agent.pubkey === selectedAgentPubkey)
+      logAgentPubkey &&
+      !managedAgents.some((agent) => agent.pubkey === logAgentPubkey)
     ) {
-      return;
+      setLogAgentPubkey(null);
     }
-
-    setSelectedAgentPubkey(managedAgents[0]?.pubkey ?? null);
-  }, [managedAgents, selectedAgentPubkey]);
+  }, [managedAgents, logAgentPubkey]);
 
   async function handleStart(pubkey: string) {
     setActionNoticeMessage(null);
@@ -116,8 +113,8 @@ export function AgentsView() {
 
     try {
       await deleteMutation.mutateAsync(pubkey);
-      if (selectedAgentPubkey === pubkey) {
-        setSelectedAgentPubkey(null);
+      if (logAgentPubkey === pubkey) {
+        setLogAgentPubkey(null);
       }
     } catch (error) {
       setActionErrorMessage(
@@ -240,7 +237,6 @@ export function AgentsView() {
                 void handleMintToken(pubkey, name);
               }}
               onRefresh={handleRefresh}
-              onSelect={setSelectedAgentPubkey}
               onStart={(pubkey) => {
                 void handleStart(pubkey);
               }}
@@ -250,7 +246,7 @@ export function AgentsView() {
               onToggleStartOnAppLaunch={(pubkey, startOnAppLaunch) => {
                 void handleToggleStartOnAppLaunch(pubkey, startOnAppLaunch);
               }}
-              selectedAgentPubkey={selectedAgent?.pubkey ?? null}
+              onViewLogs={setLogAgentPubkey}
             />
 
             <RelayDirectorySection
@@ -273,7 +269,7 @@ export function AgentsView() {
             }
             isLoading={managedAgentLogQuery.isLoading}
             logContent={managedAgentLogQuery.data?.content ?? null}
-            selectedAgent={selectedAgent}
+            selectedAgent={logAgent}
           />
         </div>
       </div>

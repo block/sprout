@@ -37,7 +37,7 @@ export function RelayDirectorySection({
       </div>
 
       {isLoading ? (
-        <div className="overflow-hidden rounded-3xl border border-border/70 bg-card/80 shadow-sm">
+        <div className="overflow-hidden rounded-xl border border-border/70 bg-card/80 shadow-sm">
           <div className="grid gap-0">
             {["directory-1", "directory-2", "directory-3"].map((key) => (
               <div
@@ -59,7 +59,7 @@ export function RelayDirectorySection({
       ) : null}
 
       {!isLoading && relayAgents.length === 0 ? (
-        <div className="rounded-3xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center">
+        <div className="rounded-xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center">
           <p className="text-sm font-semibold tracking-tight">
             No relay-visible agents yet
           </p>
@@ -71,7 +71,7 @@ export function RelayDirectorySection({
       ) : null}
 
       {!isLoading && relayAgents.length > 0 ? (
-        <div className="overflow-hidden rounded-3xl border border-border/70 bg-card/80 shadow-sm">
+        <div className="overflow-hidden rounded-xl border border-border/70 bg-card/80 shadow-sm">
           <div className="overflow-x-auto">
             <table
               className="w-full border-collapse text-left text-sm"
