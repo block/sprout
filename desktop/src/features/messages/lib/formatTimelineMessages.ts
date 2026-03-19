@@ -16,6 +16,7 @@ import {
   KIND_STREAM_MESSAGE_DIFF,
   KIND_SYSTEM_MESSAGE,
 } from "@/shared/constants/kinds";
+import { resolveEventAuthorPubkey } from "@/shared/lib/authors";
 
 const HEX_RE = /^[0-9a-f]+$/i;
 
@@ -60,31 +61,18 @@ function getReactionTargetId(tags: string[][]) {
   return null;
 }
 
-function getEffectiveAuthorPubkey(event: RelayEvent) {
-  const actorTag = event.tags.find((tag) => tag[0] === "actor")?.[1];
-  if (actorTag) {
-    return actorTag;
-  }
-
-  const [firstTag] = event.tags;
-  if (
-    firstTag?.[0] === "p" &&
-    firstTag[1] &&
-    event.tags.some((tag) => tag[0] === "h")
-  ) {
-    return firstTag[1];
-  }
-
-  return event.pubkey;
-}
-
 function formatMessageAuthor(
   event: RelayEvent,
   channel: Channel | null,
   currentPubkey: string | undefined,
   profiles: UserProfileLookup | undefined,
 ) {
-  const authorPubkey = getEffectiveAuthorPubkey(event);
+  const authorPubkey = resolveEventAuthorPubkey({
+    pubkey: event.pubkey,
+    tags: event.tags,
+    preferActorTag: true,
+    requireChannelTagForPTags: true,
+  });
   const fallbackName =
     channel?.channelType === "dm"
       ? (() => {
@@ -164,7 +152,12 @@ export function formatTimelineMessages(
       continue;
     }
 
-    const actorPubkey = getEffectiveAuthorPubkey(event).toLowerCase();
+    const actorPubkey = resolveEventAuthorPubkey({
+      pubkey: event.pubkey,
+      tags: event.tags,
+      preferActorTag: true,
+      requireChannelTagForPTags: true,
+    }).toLowerCase();
     const emoji = event.content.trim() || "+";
     reactionPresence.set(`${targetId}:${actorPubkey}:${emoji}`, {
       targetId,
@@ -202,7 +195,12 @@ export function formatTimelineMessages(
       return cached;
     }
 
-    const authorPubkey = getEffectiveAuthorPubkey(event);
+    const authorPubkey = resolveEventAuthorPubkey({
+      pubkey: event.pubkey,
+      tags: event.tags,
+      preferActorTag: true,
+      requireChannelTagForPTags: true,
+    });
     const author = formatMessageAuthor(event, channel, currentPubkey, profiles);
 
     authorPubkeyByEventId.set(event.id, authorPubkey);
@@ -244,7 +242,13 @@ export function formatTimelineMessages(
   return visibleEvents.map((event) => {
     const author = getAuthorLabel(event);
     const authorPubkey =
-      authorPubkeyByEventId.get(event.id) ?? getEffectiveAuthorPubkey(event);
+      authorPubkeyByEventId.get(event.id) ??
+      resolveEventAuthorPubkey({
+        pubkey: event.pubkey,
+        tags: event.tags,
+        preferActorTag: true,
+        requireChannelTagForPTags: true,
+      });
     const thread = getThreadReference(event.tags);
     return {
       id: event.id,
@@ -307,7 +311,14 @@ export function collectMessageAuthorPubkeys(events: RelayEvent[]) {
         pubkeys.add(pk);
       }
     } else {
-      pubkeys.add(getEffectiveAuthorPubkey(event).toLowerCase());
+      pubkeys.add(
+        resolveEventAuthorPubkey({
+          pubkey: event.pubkey,
+          tags: event.tags,
+          preferActorTag: true,
+          requireChannelTagForPTags: true,
+        }).toLowerCase(),
+      );
     }
   }
 

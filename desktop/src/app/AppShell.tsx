@@ -37,6 +37,7 @@ import { usePresenceSession } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useHomeFeedNotifications } from "@/features/notifications/hooks";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
+import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
 import { ChannelBrowserDialog } from "@/features/channels/ui/ChannelBrowserDialog";
 import { SearchDialog } from "@/features/search/ui/SearchDialog";
 import {
@@ -165,6 +166,14 @@ export function AppShell() {
   const messageProfilesQuery = useUsersBatchQuery(messageProfilePubkeys, {
     enabled: messageProfilePubkeys.length > 0,
   });
+  const messageProfiles = React.useMemo(
+    () =>
+      mergeCurrentProfileIntoLookup(
+        messageProfilesQuery.data?.profiles,
+        profileQuery.data,
+      ),
+    [messageProfilesQuery.data?.profiles, profileQuery.data],
+  );
 
   const timelineMessages = React.useMemo(
     () =>
@@ -173,13 +182,13 @@ export function AppShell() {
         activeChannel,
         identityQuery.data?.pubkey,
         profileQuery.data?.avatarUrl ?? null,
-        messageProfilesQuery.data?.profiles,
+        messageProfiles,
       ),
     [
       activeChannel,
       identityQuery.data?.pubkey,
+      messageProfiles,
       profileQuery.data?.avatarUrl,
-      messageProfilesQuery.data?.profiles,
       resolvedMessages,
     ],
   );
@@ -679,7 +688,7 @@ export function AppShell() {
                         }
                       : undefined
                   }
-                  profiles={messageProfilesQuery.data?.profiles}
+                  profiles={messageProfiles}
                   replyTargetId={replyTargetId}
                   replyTargetMessage={replyTargetMessage}
                   targetMessageId={

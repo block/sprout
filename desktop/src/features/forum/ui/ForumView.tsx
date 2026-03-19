@@ -2,7 +2,7 @@ import { MessageSquareText } from "lucide-react";
 import * as React from "react";
 
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
-import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
 import { Skeleton } from "@/shared/ui/skeleton";
 
@@ -76,23 +76,14 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
     enabled: allPubkeys.length > 0,
   });
   const effectiveCurrentPubkey = currentPubkey ?? profileQuery.data?.pubkey;
-  const profiles = React.useMemo<UserProfileLookup | undefined>(() => {
-    const batchProfiles = profilesQuery.data?.profiles;
-    const currentProfile = profileQuery.data;
-
-    if (!currentProfile) {
-      return batchProfiles;
-    }
-
-    return {
-      ...(batchProfiles ?? {}),
-      [currentProfile.pubkey.toLowerCase()]: {
-        displayName: currentProfile.displayName,
-        avatarUrl: currentProfile.avatarUrl,
-        nip05Handle: currentProfile.nip05Handle,
-      },
-    };
-  }, [profileQuery.data, profilesQuery.data?.profiles]);
+  const profiles = React.useMemo(
+    () =>
+      mergeCurrentProfileIntoLookup(
+        profilesQuery.data?.profiles,
+        profileQuery.data,
+      ),
+    [profileQuery.data, profilesQuery.data?.profiles],
+  );
 
   // Reset expanded post when channel changes
   const previousChannelIdRef = React.useRef(channel.id);

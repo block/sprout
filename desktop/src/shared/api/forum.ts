@@ -5,6 +5,7 @@ import type {
   ThreadReply,
 } from "@/shared/api/types";
 import { KIND_FORUM_POST } from "@/shared/constants/kinds";
+import { resolveEventAuthorPubkey } from "@/shared/lib/authors";
 
 import { invokeTauri } from "./tauri";
 
@@ -54,22 +55,13 @@ type RawForumThreadResponse = {
   next_cursor: string | null;
 };
 
-function getAttributedAuthorPubkey(pubkey: string, tags: string[][]): string {
-  const firstTag = tags[0];
-  const attributedPubkey =
-    firstTag?.[0] === "p" ? firstTag[1]?.toLowerCase() : null;
-
-  if (attributedPubkey && /^[0-9a-f]{64}$/.test(attributedPubkey)) {
-    return attributedPubkey;
-  }
-
-  return pubkey.toLowerCase();
-}
-
 function fromRawForumPost(post: RawForumPost): ForumPost {
   return {
     eventId: post.event_id,
-    pubkey: getAttributedAuthorPubkey(post.pubkey, post.tags),
+    pubkey: resolveEventAuthorPubkey({
+      pubkey: post.pubkey,
+      tags: post.tags,
+    }),
     content: post.content,
     kind: post.kind,
     createdAt: post.created_at,
@@ -89,7 +81,10 @@ function fromRawForumPost(post: RawForumPost): ForumPost {
 function fromRawThreadReply(reply: RawThreadReply): ThreadReply {
   return {
     eventId: reply.event_id,
-    pubkey: getAttributedAuthorPubkey(reply.pubkey, reply.tags),
+    pubkey: resolveEventAuthorPubkey({
+      pubkey: reply.pubkey,
+      tags: reply.tags,
+    }),
     content: reply.content,
     kind: reply.kind,
     createdAt: reply.created_at,
