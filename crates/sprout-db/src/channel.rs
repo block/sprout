@@ -709,7 +709,7 @@ pub async fn get_accessible_channels(
 
     let base = format!(
         r#"
-        SELECT DISTINCT c.id, c.name, c.channel_type::text AS channel_type,
+        SELECT c.id, c.name, c.channel_type::text AS channel_type,
                c.visibility::text AS visibility, c.description, c.canvas,
                c.created_by, c.created_at, c.updated_at, c.archived_at, c.deleted_at,
                c.nip29_group_id, c.topic_required, c.max_members,
