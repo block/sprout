@@ -39,6 +39,36 @@ fi
 
 cd "${REPO_ROOT}"
 
+# ---- Load environment -------------------------------------------------------
+
+load_env() {
+  if [[ -f ".env" ]]; then
+    log "Loading .env..."
+    set -o allexport
+    # shellcheck disable=SC1091
+    source .env
+    set +o allexport
+  fi
+
+  export DATABASE_URL="${DATABASE_URL:-postgres://sprout:sprout_dev@localhost:5432/sprout}"
+  export PGHOST="${PGHOST:-localhost}"
+  export PGPORT="${PGPORT:-5432}"
+  export PGUSER="${PGUSER:-sprout}"
+  export PGPASSWORD="${PGPASSWORD:-sprout_dev}"
+  export PGDATABASE="${PGDATABASE:-sprout}"
+  export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
+  export TYPESENSE_API_KEY="${TYPESENSE_API_KEY:-sprout_dev_key}"
+  export TYPESENSE_URL="${TYPESENSE_URL:-http://localhost:8108}"
+}
+
+postgres_accepting_connections() {
+  docker exec sprout-postgres \
+    pg_isready -h localhost -p 5432 -U "${PGUSER}" -d "${PGDATABASE}" \
+    >/dev/null 2>&1
+}
+
+load_env
+
 # ---- Start services ---------------------------------------------------------
 
 log "Starting services..."
@@ -103,10 +133,18 @@ else
     log "Using pgschema for migrations..."
     attempts=0
     max_attempts=10
-    until "${PGSCHEMA}" apply --file "${SCHEMA_FILE}" --auto-approve 2>/dev/null; do
+    pgschema_output="$(mktemp)"
+    trap 'rm -f "${pgschema_output}"' EXIT
+    until "${PGSCHEMA}" apply --file "${SCHEMA_FILE}" --auto-approve >"${pgschema_output}" 2>&1; do
       attempts=$((attempts + 1))
+      if postgres_accepting_connections; then
+        error "pgschema failed even though Postgres is accepting connections"
+        cat "${pgschema_output}" >&2
+        exit 1
+      fi
       if [[ ${attempts} -ge ${max_attempts} ]]; then
         error "Failed to run migrations after ${max_attempts} attempts"
+        cat "${pgschema_output}" >&2
         exit 1
       fi
       log "Postgres not ready for connections yet, retrying in 2s... (${attempts}/${max_attempts})"
@@ -126,9 +164,9 @@ echo -e "${GREEN}=======================================================${NC}"
 echo -e "${GREEN}  Sprout dev environment is ready!${NC}"
 echo -e "${GREEN}=======================================================${NC}"
 echo ""
-echo -e "  ${BLUE}Postgres${NC}    postgres://sprout:sprout_dev@localhost:5432/sprout"
-echo -e "  ${BLUE}Redis${NC}       redis://localhost:6379"
-echo -e "  ${BLUE}Typesense${NC}   http://localhost:8108  (key: sprout_dev_key)"
+echo -e "  ${BLUE}Postgres${NC}    ${DATABASE_URL}"
+echo -e "  ${BLUE}Redis${NC}       ${REDIS_URL}"
+echo -e "  ${BLUE}Typesense${NC}   ${TYPESENSE_URL}  (key: ${TYPESENSE_API_KEY})"
 echo -e "  ${BLUE}Adminer${NC}     http://localhost:8082  (DB browser)"
 echo -e "  ${BLUE}Keycloak${NC}    http://localhost:8180  (admin / admin — local OAuth testing)"
 echo ""
