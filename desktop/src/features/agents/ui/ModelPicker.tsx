@@ -39,12 +39,17 @@ export function ModelPicker({
     }
   }, [agent.pubkey]);
 
+  // Auto-fetch on mount
+  React.useEffect(() => {
+    void fetchModels();
+  }, [fetchModels]);
+
   const currentValue = agent.model ?? modelsData?.agentDefaultModel ?? "";
   const displayLabel =
     agent.model ??
     (modelsData?.agentDefaultModel
       ? `${modelsData.agentDefaultModel} (default)`
-      : "Select model…");
+      : "—");
 
   const handleModelChange = async (modelId: string) => {
     setSaving(true);
@@ -64,79 +69,41 @@ export function ModelPicker({
     }
   };
 
-  if (!modelsData && !loading && !error) {
-    return (
-      <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-          Model
-        </p>
-        <Button
-          className="mt-1 h-7 px-2 text-sm"
-          onClick={fetchModels}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
-          Discover models
-        </Button>
-      </div>
-    );
-  }
-
   if (loading) {
     return (
-      <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-          Model
-        </p>
-        <div className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Discovering…
-        </div>
-      </div>
+      <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      </span>
     );
   }
 
   if (error) {
     return (
-      <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-destructive">
-          Model
-        </p>
-        <p className="mt-1 text-sm text-destructive">{error}</p>
-        <Button
-          className="mt-1 h-6 px-2 text-xs"
+      <span className="inline-flex items-center gap-1.5 text-sm">
+        <span className="text-destructive">Failed</span>
+        <button
+          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
           onClick={fetchModels}
-          size="sm"
           type="button"
-          variant="outline"
         >
-          Retry
-        </Button>
-      </div>
+          retry
+        </button>
+      </span>
     );
   }
 
   if (!modelsData?.supportsSwitching) {
     return (
-      <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-          Model
-        </p>
-        <p className="mt-1 text-sm text-muted-foreground">Not configurable</p>
-      </div>
+      <span className="text-sm text-muted-foreground">{displayLabel}</span>
     );
   }
 
   return (
-    <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-        Model
-      </p>
+    <span className="inline-flex items-center gap-1.5">
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <Button
-            className="mt-1 h-7 max-w-full justify-start gap-1.5 rounded-full border border-border/50 bg-muted/45 px-2.5 text-xs font-medium text-foreground shadow-none hover:bg-muted/70"
+            className="h-7 max-w-full justify-start gap-1.5 rounded-full border border-border/50 bg-muted/45 px-2.5 text-xs font-medium text-foreground shadow-none hover:bg-muted/70"
             disabled={saving}
             size="sm"
             type="button"
@@ -164,10 +131,10 @@ export function ModelPicker({
         </DropdownMenuContent>
       </DropdownMenu>
       {needsRestart ? (
-        <p className="mt-1 text-[10px] text-amber-600 dark:text-amber-400">
-          Restart agent to apply
-        </p>
+        <span className="text-[10px] text-amber-600 dark:text-amber-400">
+          restart to apply
+        </span>
       ) : null}
-    </div>
+    </span>
   );
 }

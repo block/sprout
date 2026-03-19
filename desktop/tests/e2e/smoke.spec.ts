@@ -90,6 +90,9 @@ test("create agent supports parallelism and system prompt overrides", async ({
   ).toBeVisible();
   await page.getByRole("button", { name: "Done" }).click();
 
+  await expect(page.getByTestId("managed-agents-table")).toContainText(
+    agentName,
+  );
   await expect(page.getByTestId("managed-agent-log-content")).toContainText(
     "parallelism=3",
   );

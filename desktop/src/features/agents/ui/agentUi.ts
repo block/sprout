@@ -1,16 +1,3 @@
-export function formatTimestamp(value: string | null) {
-  if (!value) {
-    return "Never";
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
 export function truncatePubkey(pubkey: string) {
   return `${pubkey.slice(0, 8)}…${pubkey.slice(-6)}`;
 }

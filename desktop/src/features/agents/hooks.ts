@@ -125,6 +125,19 @@ export function useCreateManagedAgentMutation() {
 
   return useMutation({
     mutationFn: (input: CreateManagedAgentInput) => createManagedAgent(input),
+    onSuccess: (created) => {
+      queryClient.setQueryData<ManagedAgent[]>(
+        managedAgentsQueryKey,
+        (current) => {
+          const next = current ?? [];
+
+          return [
+            created.agent,
+            ...next.filter((agent) => agent.pubkey !== created.agent.pubkey),
+          ];
+        },
+      );
+    },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
       await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });
