@@ -1,6 +1,6 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
-//! sprout-db — MySQL event store for Sprout.
+//! sprout-db — Postgres event store for Sprout.
 //!
 //! ## Design invariants
 //! - AUTH events (kind 22242) are never stored — they carry bearer tokens.
@@ -36,8 +36,8 @@ pub use error::{DbError, Result};
 pub use event::EventQuery;
 
 use chrono::{DateTime, Utc};
-use sqlx::mysql::MySqlPoolOptions;
-use sqlx::{MySqlPool, QueryBuilder, Row};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, QueryBuilder, Row};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -48,9 +48,9 @@ use crate::event::uuid_from_bytes;
 /// Extract p-tag mentions from an event and insert into the `event_mentions` table.
 ///
 /// Called after event insertion. Failures are logged but do not block event storage.
-/// Uses `INSERT IGNORE` so duplicate inserts (e.g. on retry) are silently skipped.
+/// Uses `INSERT ... ON CONFLICT DO NOTHING` so duplicate inserts are silently skipped.
 pub async fn insert_mentions(
-    pool: &MySqlPool,
+    pool: &PgPool,
     event: &nostr::Event,
     channel_id: Option<Uuid>,
 ) -> Result<()> {
@@ -86,11 +86,12 @@ pub async fn insert_mentions(
                 tracing::debug!(
                     event_id = %event.id,
                     invalid_ptag = pk,
-                    "skipping malformed p-tag in mentions insert"
+                    "skipping malformed p-tag in insert_mentions"
                 );
-                return false;
+                false
+            } else {
+                true
             }
-            true
         })
         .map(|pk| pk.to_ascii_lowercase())
         .collect();
@@ -99,9 +100,9 @@ pub async fn insert_mentions(
         return Ok(());
     }
 
-    // Single multi-row INSERT IGNORE — one round-trip regardless of mention count.
-    let mut qb: QueryBuilder<'_, sqlx::MySql> = QueryBuilder::new(
-        "INSERT IGNORE INTO event_mentions \
+    // Single multi-row INSERT ... ON CONFLICT DO NOTHING — one round-trip regardless of mention count.
+    let mut qb: QueryBuilder<'_, sqlx::Postgres> = QueryBuilder::new(
+        "INSERT INTO event_mentions \
          (pubkey_hex, event_id, event_created_at, channel_id, event_kind) ",
     );
 
@@ -110,8 +111,10 @@ pub async fn insert_mentions(
             .push_bind(event_id_bytes.as_slice())
             .push_bind(created_at)
             .push_bind(channel_id_bytes.as_deref())
-            .push_bind(kind);
+            .push_bind(kind as i32);
     });
+
+    qb.push(" ON CONFLICT DO NOTHING");
 
     qb.build().execute(pool).await?;
     Ok(())
@@ -120,13 +123,13 @@ pub async fn insert_mentions(
 /// Database handle. Clone is cheap (Arc-backed pool).
 #[derive(Clone, Debug)]
 pub struct Db {
-    pub(crate) pool: MySqlPool,
+    pub(crate) pool: PgPool,
 }
 
-/// Configuration for the MySQL connection pool.
+/// Configuration for the Postgres connection pool.
 #[derive(Debug, Clone)]
 pub struct DbConfig {
-    /// MySQL connection URL (e.g. `mysql://user:pass@host/db`).
+    /// Postgres connection URL (e.g. `postgres://user:pass@host/db`).
     pub database_url: String,
     /// Maximum number of connections in the pool.
     pub max_connections: u32,
@@ -143,7 +146,7 @@ pub struct DbConfig {
 impl Default for DbConfig {
     fn default() -> Self {
         Self {
-            database_url: "mysql://sprout:sprout_dev@localhost:3306/sprout".to_string(),
+            database_url: "postgres://sprout:sprout_dev@localhost:5432/sprout".to_string(),
             max_connections: 50,
             min_connections: 5,
             acquire_timeout_secs: 3,
@@ -171,9 +174,9 @@ pub struct TokenSummary {
 }
 
 impl Db {
-    /// Creates a new `Db` by connecting a MySQL pool with the given config.
+    /// Creates a new `Db` by connecting a Postgres pool with the given config.
     pub async fn new(config: &DbConfig) -> Result<Self> {
-        let pool = MySqlPoolOptions::new()
+        let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)
             .min_connections(config.min_connections)
             .acquire_timeout(Duration::from_secs(config.acquire_timeout_secs))
@@ -184,15 +187,9 @@ impl Db {
         Ok(Self { pool })
     }
 
-    /// Creates a `Db` from an existing `MySqlPool` (useful in tests).
-    pub fn from_pool(pool: MySqlPool) -> Self {
+    /// Creates a `Db` from an existing `PgPool` (useful in tests).
+    pub fn from_pool(pool: PgPool) -> Self {
         Self { pool }
-    }
-
-    /// Runs all pending SQLx migrations against the database.
-    pub async fn migrate(&self) -> Result<()> {
-        sqlx::migrate!("../../migrations").run(&self.pool).await?;
-        Ok(())
     }
 
     /// Returns `true` if the database is reachable (used by readiness probes).
@@ -229,9 +226,7 @@ impl Db {
         event::get_event_by_id(&self.pool, id_bytes).await
     }
 
-    /// Fetches a single event by ID, **including soft-deleted rows**.
-    ///
-    /// Most callers should use [`get_event_by_id`] instead.
+    /// Fetches a single event by its raw ID bytes, **including soft-deleted rows**.
     pub async fn get_event_by_id_including_deleted(
         &self,
         id_bytes: &[u8],
@@ -239,40 +234,12 @@ impl Db {
         event::get_event_by_id_including_deleted(&self.pool, id_bytes).await
     }
 
-    /// Batch-fetch non-deleted events by their raw ID bytes.
-    ///
-    /// Returns events in arbitrary order — callers reorder as needed.
-    pub async fn get_events_by_ids(&self, ids: &[&[u8]]) -> Result<Vec<StoredEvent>> {
-        event::get_events_by_ids(&self.pool, ids).await
-    }
-
-    /// Atomically insert an event and its thread metadata in one transaction.
-    ///
-    /// Prevents the race where a concurrent delete between separate insert calls
-    /// could leave reply counters permanently inflated.
-    pub async fn insert_event_with_thread_metadata(
-        &self,
-        ev: &nostr::Event,
-        channel_id: Option<Uuid>,
-        thread_meta: Option<event::ThreadMetadataParams<'_>>,
-    ) -> Result<(StoredEvent, bool)> {
-        let result =
-            event::insert_event_with_thread_metadata(&self.pool, ev, channel_id, thread_meta)
-                .await?;
-        if result.1 {
-            if let Err(e) = insert_mentions(&self.pool, ev, channel_id).await {
-                tracing::warn!(event_id = %ev.id, "Failed to insert mentions: {e}");
-            }
-        }
-        Ok(result)
-    }
-
-    /// Soft-delete an event. Returns `true` if the event was deleted.
+    /// Soft-deletes an event. Returns `Ok(true)` if deleted, `Ok(false)` if already deleted.
     pub async fn soft_delete_event(&self, event_id: &[u8]) -> Result<bool> {
         event::soft_delete_event(&self.pool, event_id).await
     }
 
-    /// Atomically soft-delete an event and decrement thread counters in one transaction.
+    /// Atomically soft-delete an event and decrement thread reply counters.
     pub async fn soft_delete_event_and_update_thread(
         &self,
         event_id: &[u8],
@@ -288,12 +255,12 @@ impl Db {
         .await
     }
 
-    /// Returns the timestamp of the most recent non-deleted event in a channel.
+    /// Returns the most recent `created_at` for a channel.
     pub async fn get_last_message_at(&self, channel_id: Uuid) -> Result<Option<DateTime<Utc>>> {
         event::get_last_message_at(&self.pool, channel_id).await
     }
 
-    /// Bulk-fetch last message timestamps for multiple channels in one query.
+    /// Bulk-fetch the most recent `created_at` for a set of channel IDs.
     pub async fn get_last_message_at_bulk(
         &self,
         channel_ids: &[Uuid],
@@ -301,38 +268,27 @@ impl Db {
         event::get_last_message_at_bulk(&self.pool, channel_ids).await
     }
 
-    // ── Feed ─────────────────────────────────────────────────────────────────
-
-    /// Returns events that mention `pubkey` in the given channels.
-    pub async fn query_feed_mentions(
-        &self,
-        pubkey: &[u8],
-        channel_ids: &[Uuid],
-        since: Option<DateTime<Utc>>,
-        limit: i64,
-    ) -> Result<Vec<StoredEvent>> {
-        feed::query_mentions(&self.pool, pubkey, channel_ids, since, limit).await
+    /// Batch-fetch non-deleted events by their raw IDs.
+    pub async fn get_events_by_ids(&self, ids: &[&[u8]]) -> Result<Vec<StoredEvent>> {
+        event::get_events_by_ids(&self.pool, ids).await
     }
 
-    /// Returns events that require action from `pubkey` (approvals, reactions, etc.).
-    pub async fn query_feed_needs_action(
+    /// Atomically insert an event AND its thread metadata in a single transaction.
+    pub async fn insert_event_with_thread_metadata(
         &self,
-        pubkey: &[u8],
-        channel_ids: &[Uuid],
-        since: Option<DateTime<Utc>>,
-        limit: i64,
-    ) -> Result<Vec<StoredEvent>> {
-        feed::query_needs_action(&self.pool, pubkey, channel_ids, since, limit).await
-    }
-
-    /// Returns recent activity across the given channels.
-    pub async fn query_feed_activity(
-        &self,
-        channel_ids: &[Uuid],
-        since: Option<DateTime<Utc>>,
-        limit: i64,
-    ) -> Result<Vec<StoredEvent>> {
-        feed::query_activity(&self.pool, channel_ids, since, limit).await
+        event: &nostr::Event,
+        channel_id: Option<Uuid>,
+        thread_meta: Option<event::ThreadMetadataParams<'_>>,
+    ) -> Result<(StoredEvent, bool)> {
+        let result =
+            event::insert_event_with_thread_metadata(&self.pool, event, channel_id, thread_meta)
+                .await?;
+        if result.1 {
+            if let Err(e) = insert_mentions(&self.pool, event, channel_id).await {
+                tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
+            }
+        }
+        Ok(result)
     }
 
     // ── Channels ─────────────────────────────────────────────────────────────
@@ -362,42 +318,6 @@ impl Db {
         channel::get_channel(&self.pool, channel_id).await
     }
 
-    /// Adds a member to a channel with the given role.
-    pub async fn add_member(
-        &self,
-        channel_id: Uuid,
-        pubkey: &[u8],
-        role: channel::MemberRole,
-        invited_by: Option<&[u8]>,
-    ) -> Result<channel::MemberRecord> {
-        channel::add_member(&self.pool, channel_id, pubkey, role, invited_by).await
-    }
-
-    /// Remove a member. `actor_pubkey` must be an owner/admin or the member themselves.
-    pub async fn remove_member(
-        &self,
-        channel_id: Uuid,
-        pubkey: &[u8],
-        actor_pubkey: &[u8],
-    ) -> Result<()> {
-        channel::remove_member(&self.pool, channel_id, pubkey, actor_pubkey).await
-    }
-
-    /// Returns `true` if the given pubkey is an active member of the channel.
-    pub async fn is_member(&self, channel_id: Uuid, pubkey: &[u8]) -> Result<bool> {
-        channel::is_member(&self.pool, channel_id, pubkey).await
-    }
-
-    /// Returns all active members of the given channel.
-    pub async fn get_members(&self, channel_id: Uuid) -> Result<Vec<channel::MemberRecord>> {
-        channel::get_members(&self.pool, channel_id).await
-    }
-
-    /// Returns IDs of all channels accessible to the given pubkey.
-    pub async fn get_accessible_channel_ids(&self, pubkey: &[u8]) -> Result<Vec<Uuid>> {
-        channel::get_accessible_channel_ids(&self.pool, pubkey).await
-    }
-
     /// Returns the canvas content for a channel, if any.
     pub async fn get_canvas(&self, channel_id: Uuid) -> Result<Option<String>> {
         channel::get_canvas(&self.pool, channel_id).await
@@ -408,7 +328,43 @@ impl Db {
         channel::set_canvas(&self.pool, channel_id, canvas).await
     }
 
-    /// Lists channels, optionally filtered by visibility (`"open"`, `"private"`, etc.).
+    /// Adds a member to a channel.
+    pub async fn add_member(
+        &self,
+        channel_id: Uuid,
+        pubkey: &[u8],
+        role: channel::MemberRole,
+        invited_by: Option<&[u8]>,
+    ) -> Result<channel::MemberRecord> {
+        channel::add_member(&self.pool, channel_id, pubkey, role, invited_by).await
+    }
+
+    /// Removes a member from a channel.
+    pub async fn remove_member(
+        &self,
+        channel_id: Uuid,
+        pubkey: &[u8],
+        actor_pubkey: &[u8],
+    ) -> Result<()> {
+        channel::remove_member(&self.pool, channel_id, pubkey, actor_pubkey).await
+    }
+
+    /// Returns `true` if the pubkey is an active member.
+    pub async fn is_member(&self, channel_id: Uuid, pubkey: &[u8]) -> Result<bool> {
+        channel::is_member(&self.pool, channel_id, pubkey).await
+    }
+
+    /// Returns all active members of a channel.
+    pub async fn get_members(&self, channel_id: Uuid) -> Result<Vec<channel::MemberRecord>> {
+        channel::get_members(&self.pool, channel_id).await
+    }
+
+    /// Get all channel IDs accessible to a pubkey.
+    pub async fn get_accessible_channel_ids(&self, pubkey: &[u8]) -> Result<Vec<Uuid>> {
+        channel::get_accessible_channel_ids(&self.pool, pubkey).await
+    }
+
+    /// Lists channels, optionally filtered by visibility.
     pub async fn list_channels(
         &self,
         visibility: Option<&str>,
@@ -416,12 +372,7 @@ impl Db {
         channel::list_channels(&self.pool, visibility).await
     }
 
-    /// Returns full channel records for all channels accessible to `pubkey`:
-    /// open channels plus channels where the user is an active member.
-    ///
-    /// If `visibility_filter` is `Some("open")` or `Some("private")`, only channels
-    /// with that visibility are returned.
-    /// If `member_only` is `Some(true)`, only channels the user is a member of are returned.
+    /// Returns full channel records for all channels a user can access.
     pub async fn get_accessible_channels(
         &self,
         pubkey: &[u8],
@@ -431,17 +382,15 @@ impl Db {
         channel::get_accessible_channels(&self.pool, pubkey, visibility_filter, member_only).await
     }
 
-    /// Returns all bot-role members with aggregated channel names.
+    /// Returns all bot-role members with their aggregated channel names.
     pub async fn get_bot_members(&self) -> Result<Vec<channel::BotMemberRecord>> {
         channel::get_bot_members(&self.pool).await
     }
 
-    /// Bulk-fetch user records by pubkey. Returns empty vec for empty input.
+    /// Bulk-fetch user records by pubkey.
     pub async fn get_users_bulk(&self, pubkeys: &[Vec<u8>]) -> Result<Vec<channel::UserRecord>> {
         channel::get_users_bulk(&self.pool, pubkeys).await
     }
-
-    // ── Channel Metadata ─────────────────────────────────────────────────────
 
     /// Updates a channel's name and/or description.
     pub async fn update_channel(
@@ -472,7 +421,7 @@ impl Db {
         channel::unarchive_channel(&self.pool, channel_id).await
     }
 
-    /// Soft-delete a channel. Returns `true` if the channel was deleted.
+    /// Soft-delete a channel.
     pub async fn soft_delete_channel(&self, channel_id: Uuid) -> Result<bool> {
         channel::soft_delete_channel(&self.pool, channel_id).await
     }
@@ -482,7 +431,7 @@ impl Db {
         channel::get_member_count(&self.pool, channel_id).await
     }
 
-    /// Bulk-fetch member counts for multiple channels in one query.
+    /// Bulk-fetch member counts for a set of channel IDs.
     pub async fn get_member_counts_bulk(
         &self,
         channel_ids: &[Uuid],
@@ -490,14 +439,120 @@ impl Db {
         channel::get_member_counts_bulk(&self.pool, channel_ids).await
     }
 
-    /// Returns the active role of a pubkey in a channel.
+    /// Get the active role of a pubkey in a channel.
     pub async fn get_member_role(&self, channel_id: Uuid, pubkey: &[u8]) -> Result<Option<String>> {
         channel::get_member_role(&self.pool, channel_id, pubkey).await
     }
 
-    // ── Threads ───────────────────────────────────────────────────────────────
+    // ── Users ────────────────────────────────────────────────────────────────
 
-    /// Insert a row into `thread_metadata`.
+    /// Ensure a user record exists (upsert).
+    pub async fn ensure_user(&self, pubkey: &[u8]) -> Result<()> {
+        user::ensure_user(&self.pool, pubkey).await
+    }
+
+    /// Get a single user record by pubkey.
+    pub async fn get_user(&self, pubkey: &[u8]) -> Result<Option<user::UserProfile>> {
+        user::get_user(&self.pool, pubkey).await
+    }
+
+    /// Update a user's profile fields.
+    pub async fn update_user_profile(
+        &self,
+        pubkey: &[u8],
+        display_name: Option<&str>,
+        avatar_url: Option<&str>,
+        about: Option<&str>,
+        nip05_handle: Option<&str>,
+    ) -> Result<()> {
+        user::update_user_profile(
+            &self.pool,
+            pubkey,
+            display_name,
+            avatar_url,
+            about,
+            nip05_handle,
+        )
+        .await
+    }
+
+    /// Look up a user by NIP-05 handle.
+    pub async fn get_user_by_nip05(
+        &self,
+        local_part: &str,
+        domain: &str,
+    ) -> Result<Option<user::UserProfile>> {
+        user::get_user_by_nip05(&self.pool, local_part, domain).await
+    }
+
+    /// Search users by display name, NIP-05 handle, or pubkey prefix.
+    pub async fn search_users(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<user::UserSearchProfile>> {
+        user::search_users(&self.pool, query, limit).await
+    }
+
+    /// Set the owner pubkey for an agent user.
+    pub async fn set_agent_owner(&self, agent_pubkey: &[u8], owner_pubkey: &[u8]) -> Result<()> {
+        user::set_agent_owner(&self.pool, agent_pubkey, owner_pubkey).await
+    }
+
+    /// Get the channel_add_policy and agent_owner_pubkey for a user.
+    pub async fn get_agent_channel_policy(
+        &self,
+        pubkey: &[u8],
+    ) -> Result<Option<(String, Option<Vec<u8>>)>> {
+        user::get_agent_channel_policy(&self.pool, pubkey).await
+    }
+
+    /// Set the channel_add_policy for a user.
+    pub async fn set_channel_add_policy(&self, pubkey: &[u8], policy: &str) -> Result<()> {
+        user::set_channel_add_policy(&self.pool, pubkey, policy).await
+    }
+
+    // ── Direct Messages ──────────────────────────────────────────────────────
+
+    /// Find an existing DM by its participant hash.
+    pub async fn find_dm_by_participants(
+        &self,
+        participant_hash: &[u8],
+    ) -> Result<Option<channel::ChannelRecord>> {
+        dm::find_dm_by_participants(&self.pool, participant_hash).await
+    }
+
+    /// Create or return an existing DM channel.
+    pub async fn create_dm(
+        &self,
+        participants: &[&[u8]],
+        created_by: &[u8],
+    ) -> Result<channel::ChannelRecord> {
+        dm::create_dm(&self.pool, participants, created_by).await
+    }
+
+    /// List all DMs for a user.
+    pub async fn list_dms_for_user(
+        &self,
+        pubkey: &[u8],
+        limit: u32,
+        cursor: Option<Uuid>,
+    ) -> Result<Vec<dm::DmRecord>> {
+        dm::list_dms_for_user(&self.pool, pubkey, limit, cursor).await
+    }
+
+    /// Open or retrieve a DM for the given participants.
+    pub async fn open_dm(
+        &self,
+        pubkeys: &[&[u8]],
+        created_by: &[u8],
+    ) -> Result<(channel::ChannelRecord, bool)> {
+        dm::open_dm(&self.pool, pubkeys, created_by).await
+    }
+
+    // ── Threads ──────────────────────────────────────────────────────────────
+
+    /// Insert thread metadata.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_thread_metadata(
         &self,
@@ -526,7 +581,7 @@ impl Db {
         .await
     }
 
-    /// Fetch replies within a thread, optionally limited by depth.
+    /// Fetch replies under a root event.
     pub async fn get_thread_replies(
         &self,
         root_event_id: &[u8],
@@ -537,7 +592,7 @@ impl Db {
         thread::get_thread_replies(&self.pool, root_event_id, depth_limit, limit, cursor).await
     }
 
-    /// Get aggregated thread statistics for a root message.
+    /// Fetch aggregated thread stats.
     pub async fn get_thread_summary(
         &self,
         event_id: &[u8],
@@ -545,22 +600,33 @@ impl Db {
         thread::get_thread_summary(&self.pool, event_id).await
     }
 
-    /// Get top-level channel messages with optional thread summaries.
+    /// Top-level messages for a channel.
     pub async fn get_channel_messages_top_level(
         &self,
         channel_id: Uuid,
         limit: u32,
-        before: Option<DateTime<Utc>>,
+        before_cursor: Option<DateTime<Utc>>,
         kind_filter: Option<&[u32]>,
     ) -> Result<Vec<thread::TopLevelMessage>> {
-        thread::get_channel_messages_top_level(&self.pool, channel_id, limit, before, kind_filter)
-            .await
+        thread::get_channel_messages_top_level(
+            &self.pool,
+            channel_id,
+            limit,
+            before_cursor,
+            kind_filter,
+        )
+        .await
     }
 
-    /// Decrement reply counts when a thread reply is deleted.
-    ///
-    /// Decrements `reply_count` on the parent and `descendant_count` on the root
-    /// (floor at 0). Mirrors [`thread::increment_reply_count`] exactly.
+    /// Look up a single thread_metadata row by event_id.
+    pub async fn get_thread_metadata_by_event(
+        &self,
+        event_id: &[u8],
+    ) -> Result<Option<thread::ThreadMetadataRecord>> {
+        thread::get_thread_metadata_by_event(&self.pool, event_id).await
+    }
+
+    /// Decrement reply counts.
     pub async fn decrement_reply_count(
         &self,
         parent_event_id: &[u8],
@@ -569,44 +635,7 @@ impl Db {
         thread::decrement_reply_count(&self.pool, parent_event_id, root_event_id).await
     }
 
-    /// Fetch a raw thread_metadata row by event ID.
-    pub async fn get_thread_metadata_by_event(
-        &self,
-        event_id: &[u8],
-    ) -> Result<Option<thread::ThreadMetadataRecord>> {
-        thread::get_thread_metadata_by_event(&self.pool, event_id).await
-    }
-
-    // ── DMs ───────────────────────────────────────────────────────────────────
-
-    /// Open (or find existing) a DM channel for the given set of pubkeys.
-    pub async fn open_dm(
-        &self,
-        pubkeys: &[&[u8]],
-        created_by: &[u8],
-    ) -> Result<(channel::ChannelRecord, bool)> {
-        dm::open_dm(&self.pool, pubkeys, created_by).await
-    }
-
-    /// List all DM conversations for a given user.
-    pub async fn list_dms_for_user(
-        &self,
-        pubkey: &[u8],
-        limit: u32,
-        cursor: Option<Uuid>,
-    ) -> Result<Vec<dm::DmRecord>> {
-        dm::list_dms_for_user(&self.pool, pubkey, limit, cursor).await
-    }
-
-    /// Find an existing DM by its participant hash.
-    pub async fn find_dm_by_participants(
-        &self,
-        participant_hash: &[u8],
-    ) -> Result<Option<channel::ChannelRecord>> {
-        dm::find_dm_by_participants(&self.pool, participant_hash).await
-    }
-
-    // ── Reactions ─────────────────────────────────────────────────────────────
+    // ── Reactions ────────────────────────────────────────────────────────────
 
     /// Add (or re-activate) a reaction.
     pub async fn add_reaction(
@@ -639,12 +668,24 @@ impl Db {
         reaction::remove_reaction(&self.pool, event_id, event_created_at, pubkey, emoji).await
     }
 
-    /// Soft-delete a reaction by the reaction event's own event ID.
+    /// Soft-delete a reaction by its source event ID.
     pub async fn remove_reaction_by_source_event_id(
         &self,
         reaction_event_id: &[u8],
     ) -> Result<bool> {
         reaction::remove_reaction_by_source_event_id(&self.pool, reaction_event_id).await
+    }
+
+    /// Look up the active reaction row for one actor + emoji + target tuple.
+    pub async fn get_active_reaction_record(
+        &self,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        pubkey: &[u8],
+        emoji: &str,
+    ) -> Result<Option<reaction::ActiveReactionRecord>> {
+        reaction::get_active_reaction_record(&self.pool, event_id, event_created_at, pubkey, emoji)
+            .await
     }
 
     /// Backfill the source event ID on an active reaction row.
@@ -667,18 +708,6 @@ impl Db {
         .await
     }
 
-    /// Look up the active reaction row for one actor + emoji + target tuple.
-    pub async fn get_active_reaction_record(
-        &self,
-        event_id: &[u8],
-        event_created_at: DateTime<Utc>,
-        pubkey: &[u8],
-        emoji: &str,
-    ) -> Result<Option<reaction::ActiveReactionRecord>> {
-        reaction::get_active_reaction_record(&self.pool, event_id, event_created_at, pubkey, emoji)
-            .await
-    }
-
     /// Get all active reactions for an event, grouped by emoji.
     pub async fn get_reactions(
         &self,
@@ -698,141 +727,103 @@ impl Db {
         reaction::get_reactions_bulk(&self.pool, event_ids).await
     }
 
-    // ── Users ────────────────────────────────────────────────────────────────
+    // ── Feed ─────────────────────────────────────────────────────────────────
 
-    /// Ensures a user row exists for the given pubkey (upsert).
-    pub async fn ensure_user(&self, pubkey: &[u8]) -> Result<()> {
-        user::ensure_user(&self.pool, pubkey).await
-    }
-
-    /// Fetch a user profile by pubkey.
-    pub async fn get_user(&self, pubkey: &[u8]) -> Result<Option<user::UserProfile>> {
-        user::get_user(&self.pool, pubkey).await
-    }
-
-    /// Search users by display name, NIP-05 handle, or pubkey prefix.
-    pub async fn search_users(
+    /// Find events that @mention the given pubkey.
+    pub async fn query_feed_mentions(
         &self,
-        query: &str,
-        limit: u32,
-    ) -> Result<Vec<user::UserSearchProfile>> {
-        user::search_users(&self.pool, query, limit).await
-    }
-
-    /// Update a user's display_name, avatar_url, about, and/or nip05_handle.
-    pub async fn update_user_profile(
-        &self,
-        pubkey: &[u8],
-        display_name: Option<&str>,
-        avatar_url: Option<&str>,
-        about: Option<&str>,
-        nip05_handle: Option<&str>,
-    ) -> Result<()> {
-        user::update_user_profile(
+        pubkey_bytes: &[u8],
+        accessible_channel_ids: &[Uuid],
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        feed::query_mentions(
             &self.pool,
-            pubkey,
-            display_name,
-            avatar_url,
-            about,
-            nip05_handle,
+            pubkey_bytes,
+            accessible_channel_ids,
+            since,
+            limit,
         )
         .await
     }
 
-    /// Look up a user by their full NIP-05 handle (exact match).
-    pub async fn get_user_by_nip05(
+    /// Find events that require action from the given pubkey.
+    pub async fn query_feed_needs_action(
         &self,
-        local_part: &str,
-        domain: &str,
-    ) -> Result<Option<user::UserProfile>> {
-        user::get_user_by_nip05(&self.pool, local_part, domain).await
+        pubkey_bytes: &[u8],
+        accessible_channel_ids: &[Uuid],
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        feed::query_needs_action(
+            &self.pool,
+            pubkey_bytes,
+            accessible_channel_ids,
+            since,
+            limit,
+        )
+        .await
     }
 
-    /// Set the owner pubkey for an agent user.
-    pub async fn set_agent_owner(&self, agent_pubkey: &[u8], owner_pubkey: &[u8]) -> Result<()> {
-        user::set_agent_owner(&self.pool, agent_pubkey, owner_pubkey).await
-    }
-
-    /// Get the channel_add_policy and agent_owner_pubkey for a user.
-    pub async fn get_agent_channel_policy(
+    /// Find recent activity across accessible channels.
+    pub async fn query_feed_activity(
         &self,
-        pubkey: &[u8],
-    ) -> Result<Option<(String, Option<Vec<u8>>)>> {
-        user::get_agent_channel_policy(&self.pool, pubkey).await
+        accessible_channel_ids: &[Uuid],
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        feed::query_activity(&self.pool, accessible_channel_ids, since, limit).await
     }
 
-    /// Set the channel_add_policy for a user.
-    pub async fn set_channel_add_policy(&self, pubkey: &[u8], policy: &str) -> Result<()> {
-        user::set_channel_add_policy(&self.pool, pubkey, policy).await
+    /// Find events that @mention the given pubkey (alias).
+    pub async fn query_mentions(
+        &self,
+        pubkey_bytes: &[u8],
+        accessible_channel_ids: &[Uuid],
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        feed::query_mentions(
+            &self.pool,
+            pubkey_bytes,
+            accessible_channel_ids,
+            since,
+            limit,
+        )
+        .await
+    }
+
+    /// Find events that require action from the given pubkey.
+    pub async fn query_needs_action(
+        &self,
+        pubkey_bytes: &[u8],
+        accessible_channel_ids: &[Uuid],
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        feed::query_needs_action(
+            &self.pool,
+            pubkey_bytes,
+            accessible_channel_ids,
+            since,
+            limit,
+        )
+        .await
+    }
+
+    /// Find recent activity across accessible channels.
+    pub async fn query_activity(
+        &self,
+        accessible_channel_ids: &[Uuid],
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        feed::query_activity(&self.pool, accessible_channel_ids, since, limit).await
     }
 
     // ── API Tokens ───────────────────────────────────────────────────────────
 
-    /// Looks up a non-revoked API token by its SHA-256 hash.
-    pub async fn get_api_token_by_hash(&self, hash: &[u8]) -> Result<ApiTokenRecord> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, token_hash, owner_pubkey, name, scopes, channel_ids,
-                   created_at, expires_at, last_used_at, revoked_at, revoked_by
-            FROM api_tokens
-            WHERE token_hash = ? AND revoked_at IS NULL
-            "#,
-        )
-        .bind(hash)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(DbError::InvalidData(
-            "token not found or revoked".to_string(),
-        ))?;
-
-        let id_bytes: Vec<u8> = row.try_get("id")?;
-        let id = uuid_from_bytes(&id_bytes)?;
-
-        let scopes_json: serde_json::Value = row.try_get("scopes")?;
-        let scopes: Vec<String> = serde_json::from_value(scopes_json)
-            .map_err(|e| DbError::InvalidData(format!("scopes JSON: {e}")))?;
-
-        let channel_ids: Option<Vec<Uuid>> = {
-            let raw: Option<serde_json::Value> = row.try_get("channel_ids")?;
-            match raw {
-                None => None,
-                Some(v) => {
-                    let strings: Vec<String> = serde_json::from_value(v)
-                        .map_err(|e| DbError::InvalidData(format!("channel_ids JSON: {e}")))?;
-                    let uuids: std::result::Result<Vec<Uuid>, _> =
-                        strings.iter().map(|s| s.parse::<Uuid>()).collect();
-                    Some(
-                        uuids
-                            .map_err(|e| DbError::InvalidData(format!("channel_ids UUID: {e}")))?,
-                    )
-                }
-            }
-        };
-
-        Ok(ApiTokenRecord {
-            id,
-            token_hash: row.try_get("token_hash")?,
-            owner_pubkey: row.try_get("owner_pubkey")?,
-            name: row.try_get("name")?,
-            scopes,
-            channel_ids,
-            created_at: row.try_get("created_at")?,
-            expires_at: row.try_get("expires_at")?,
-            last_used_at: row.try_get("last_used_at")?,
-            revoked_at: row.try_get("revoked_at")?,
-        })
-    }
-
-    /// Updates the `last_used_at` timestamp for the token with the given hash.
-    pub async fn update_token_last_used(&self, hash: &[u8]) -> Result<()> {
-        sqlx::query("UPDATE api_tokens SET last_used_at = NOW() WHERE token_hash = ?")
-            .bind(hash)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    /// Creates a new API token record and returns its UUID.
+    /// Create a new API token record.
     pub async fn create_api_token(
         &self,
         token_hash: &[u8],
@@ -854,10 +845,7 @@ impl Db {
         .await
     }
 
-    /// Atomic conditional INSERT: create a self-minted token only if the owner has
-    /// fewer than 10 active (non-revoked, non-expired) tokens.
-    ///
-    /// Returns `Ok(Some(uuid))` on success, `Ok(None)` if the limit is exceeded.
+    /// Atomic conditional INSERT with 10-token limit.
     pub async fn create_api_token_if_under_limit(
         &self,
         token_hash: &[u8],
@@ -879,10 +867,27 @@ impl Db {
         .await
     }
 
-    /// Look up an API token by its SHA-256 hash, **including revoked tokens**.
-    ///
-    /// Unlike [`Db::get_api_token_by_hash`], this does not filter on `revoked_at IS NULL`.
-    /// Used by the relay to return distinct `token_revoked` vs `invalid_token` errors.
+    /// Look up an active (non-revoked) API token by its SHA-256 hash.
+    pub async fn get_api_token_by_hash(&self, hash: &[u8]) -> Result<Option<ApiTokenRecord>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, token_hash, owner_pubkey, name, scopes, channel_ids,
+                   created_at, expires_at, last_used_at, revoked_at
+            FROM api_tokens
+            WHERE token_hash = $1 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            None => Ok(None),
+            Some(r) => parse_api_token_row(r).map(Some),
+        }
+    }
+
+    /// Look up an API token by hash, including revoked.
     pub async fn get_api_token_by_hash_including_revoked(
         &self,
         hash: &[u8],
@@ -890,42 +895,27 @@ impl Db {
         api_token::get_api_token_by_hash_including_revoked(&self.pool, hash).await
     }
 
-    /// List all tokens (including revoked) for a pubkey, ordered by `created_at DESC`.
-    ///
-    /// Does not return `token_hash`. Used by `GET /api/tokens`.
-    pub async fn list_tokens_by_owner(&self, pubkey: &[u8]) -> Result<Vec<ApiTokenRecord>> {
-        api_token::list_tokens_by_owner(&self.pool, pubkey).await
+    /// Record a token usage (update `last_used_at`).
+    pub async fn touch_api_token(&self, hash: &[u8]) -> Result<()> {
+        sqlx::query("UPDATE api_tokens SET last_used_at = NOW() WHERE token_hash = $1")
+            .bind(hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
-    /// Revoke a single token by ID, scoped to the owner.
-    ///
-    /// Returns `true` if revoked, `false` if not found, not owned by caller, or already revoked.
-    pub async fn revoke_token(
-        &self,
-        id: Uuid,
-        owner_pubkey: &[u8],
-        revoked_by: &[u8],
-    ) -> Result<bool> {
-        api_token::revoke_token(&self.pool, id, owner_pubkey, revoked_by).await
+    /// Alias for [`touch_api_token`].
+    pub async fn update_token_last_used(&self, hash: &[u8]) -> Result<()> {
+        self.touch_api_token(hash).await
     }
 
-    /// Revoke all active tokens for a pubkey. Skips already-revoked tokens (idempotent).
-    ///
-    /// Returns the count of newly revoked tokens (0 if all already revoked).
-    pub async fn revoke_all_tokens(&self, owner_pubkey: &[u8], revoked_by: &[u8]) -> Result<u64> {
-        api_token::revoke_all_tokens(&self.pool, owner_pubkey, revoked_by).await
-    }
-
-    /// List all non-revoked, non-expired API tokens.
-    ///
-    /// Returns a summary view — does not expose raw token hashes.
+    /// List all active (non-revoked) tokens, newest first.
     pub async fn list_active_tokens(&self) -> Result<Vec<TokenSummary>> {
         let rows = sqlx::query(
             r#"
             SELECT id, name, owner_pubkey, scopes, created_at, expires_at
             FROM api_tokens
             WHERE revoked_at IS NULL
-              AND (expires_at IS NULL OR expires_at > NOW())
             ORDER BY created_at DESC
             LIMIT 1000
             "#,
@@ -937,7 +927,6 @@ impl Db {
         for row in rows {
             let id_bytes: Vec<u8> = row.try_get("id")?;
             let id = uuid_from_bytes(&id_bytes)?;
-
             let scopes_json: serde_json::Value = row.try_get("scopes")?;
             let scopes: Vec<String> = serde_json::from_value(scopes_json)
                 .map_err(|e| DbError::InvalidData(format!("scopes JSON: {e}")))?;
@@ -954,152 +943,29 @@ impl Db {
         Ok(out)
     }
 
-    // ── Pubkey Allowlist ─────────────────────────────────────────────────────
-
-    /// Returns `true` if the given pubkey is in the allowlist.
-    pub async fn is_pubkey_allowed(&self, pubkey: &[u8]) -> Result<bool> {
-        let row = sqlx::query("SELECT 1 FROM pubkey_allowlist WHERE pubkey = ?")
-            .bind(pubkey)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.is_some())
+    /// List all tokens for a pubkey (including revoked).
+    pub async fn list_tokens_by_owner(&self, pubkey: &[u8]) -> Result<Vec<ApiTokenRecord>> {
+        api_token::list_tokens_by_owner(&self.pool, pubkey).await
     }
 
-    // ── Addressable Event Replacement ────────────────────────────────────────
-
-    /// Atomically replace the active addressable event for a (kind, pubkey, channel)
-    /// tuple. Insert-first ordering guarantees at least one active row at all times:
-    ///
-    /// 1. INSERT the new event (IGNORE on duplicate ID — a no-op, not an error).
-    /// 2. Soft-delete all OTHER active events for the same address, excluding the
-    ///    just-inserted row by ID.
-    ///
-    /// If the INSERT was a no-op (duplicate event ID), the delete step is skipped
-    /// entirely — the existing row is already the latest state.
-    ///
-    /// Used for NIP-29 group discovery events (39000/39001/39002) which should
-    /// only have one active version per group.
-    ///
-    /// Returns `(StoredEvent, was_inserted)` — `was_inserted` is `false` on duplicate.
-    pub async fn replace_addressable_event(
+    /// Revoke a single token by ID.
+    pub async fn revoke_token(
         &self,
-        event: &nostr::Event,
-        channel_id: Uuid,
-    ) -> Result<(StoredEvent, bool)> {
-        use sprout_core::kind::event_kind_i32;
-
-        let id_bytes = event.id.as_bytes();
-        let pubkey_bytes = event.pubkey.to_bytes();
-        let sig_bytes = event.sig.serialize();
-        let tags_json = serde_json::to_value(&event.tags)?;
-        let kind_i32 = event_kind_i32(event);
-        let created_at_secs = event.created_at.as_u64() as i64;
-        let created_at = DateTime::from_timestamp(created_at_secs, 0)
-            .ok_or(crate::error::DbError::InvalidTimestamp(created_at_secs))?;
-        let received_at = Utc::now();
-        let channel_id_bytes: [u8; 16] = *channel_id.as_bytes();
-
-        let mut tx = self.pool.begin().await?;
-
-        // Step 0: Acquire an exclusive next-key lock on the logical address
-        // (kind, pubkey, channel_id) via idx_events_addressable. This serializes
-        // concurrent replacements — a second transaction blocks here until the
-        // first commits. The index is required so InnoDB can take a gap lock
-        // even on a cold address (no existing rows), preventing two concurrent
-        // first-time emissions from both inserting.
-        sqlx::query(
-            "SELECT id FROM events \
-             WHERE kind = ? AND pubkey = ? AND channel_id = ? AND deleted_at IS NULL \
-             FOR UPDATE",
-        )
-        .bind(kind_i32)
-        .bind(pubkey_bytes.as_slice())
-        .bind(channel_id_bytes.as_slice())
-        .fetch_all(&mut *tx)
-        .await?;
-
-        // Step 1: Insert the new event first — guarantees at least one active row.
-        let result = sqlx::query(
-            "INSERT IGNORE INTO events \
-             (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(id_bytes.as_slice())
-        .bind(pubkey_bytes.as_slice())
-        .bind(created_at)
-        .bind(kind_i32)
-        .bind(&tags_json)
-        .bind(&event.content)
-        .bind(sig_bytes.as_slice())
-        .bind(received_at)
-        .bind(channel_id_bytes.as_slice())
-        .execute(&mut *tx)
-        .await?;
-
-        let was_inserted = result.rows_affected() > 0;
-
-        // Step 2: Soft-delete previous active events for this address, excluding
-        // the row we just inserted. Skipped on duplicate (was_inserted == false)
-        // because the existing row is already the current state.
-        if was_inserted {
-            sqlx::query(
-                "UPDATE events SET deleted_at = NOW(6) \
-                 WHERE kind = ? AND pubkey = ? AND channel_id = ? \
-                 AND deleted_at IS NULL AND id != ?",
-            )
-            .bind(kind_i32)
-            .bind(pubkey_bytes.as_slice())
-            .bind(channel_id_bytes.as_slice())
-            .bind(id_bytes.as_slice())
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        tx.commit().await?;
-
-        if was_inserted {
-            if let Err(e) = insert_mentions(&self.pool, event, Some(channel_id)).await {
-                tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
-            }
-        }
-
-        Ok((
-            StoredEvent::with_received_at(event.clone(), received_at, Some(channel_id), true),
-            was_inserted,
-        ))
+        id: Uuid,
+        owner_pubkey: &[u8],
+        revoked_by: &[u8],
+    ) -> Result<bool> {
+        api_token::revoke_token(&self.pool, id, owner_pubkey, revoked_by).await
     }
 
-    /// Soft-delete all NIP-29 discovery events (39000/39001/39002) for a channel.
-    ///
-    /// Used during group deletion to clean up addressable discovery events.
-    pub async fn soft_delete_discovery_events(
-        &self,
-        channel_id: Uuid,
-        relay_pubkey: &[u8],
-    ) -> Result<u64> {
-        let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
-        let result = sqlx::query(
-            "UPDATE events SET deleted_at = NOW(6) \
-             WHERE kind IN (39000, 39001, 39002) AND pubkey = ? AND channel_id = ? \
-             AND deleted_at IS NULL",
-        )
-        .bind(relay_pubkey)
-        .bind(&channel_id_bytes)
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected())
+    /// Revoke all active tokens for a pubkey.
+    pub async fn revoke_all_tokens(&self, owner_pubkey: &[u8], revoked_by: &[u8]) -> Result<u64> {
+        api_token::revoke_all_tokens(&self.pool, owner_pubkey, revoked_by).await
     }
 
-    // ── Partitions ───────────────────────────────────────────────────────────
+    // ── Workflows ────────────────────────────────────────────────────────────
 
-    /// Ensures monthly partition tables exist for the next `months_ahead` months.
-    pub async fn ensure_future_partitions(&self, months_ahead: u32) -> Result<()> {
-        partition::ensure_future_partitions(&self.pool, months_ahead).await
-    }
-
-    // ── Workflows ─────────────────────────────────────────────────────────────
-
-    /// Creates a new workflow definition and returns its UUID.
+    /// Create a new workflow.
     pub async fn create_workflow(
         &self,
         channel_id: Option<Uuid>,
@@ -1119,20 +985,22 @@ impl Db {
         .await
     }
 
-    /// Fetches a workflow definition by ID.
+    /// Fetch a single workflow by ID.
     pub async fn get_workflow(&self, id: Uuid) -> Result<workflow::WorkflowRecord> {
         workflow::get_workflow(&self.pool, id).await
     }
 
-    /// Lists all workflows for a channel (enabled and disabled).
+    /// List workflows for a channel.
     pub async fn list_channel_workflows(
         &self,
         channel_id: Uuid,
+        limit: Option<i64>,
+        offset: Option<i64>,
     ) -> Result<Vec<workflow::WorkflowRecord>> {
-        workflow::list_channel_workflows(&self.pool, channel_id, None, None).await
+        workflow::list_channel_workflows(&self.pool, channel_id, limit, offset).await
     }
 
-    /// Lists only enabled workflows for a channel.
+    /// List active, enabled workflows for a channel.
     pub async fn list_enabled_channel_workflows(
         &self,
         channel_id: Uuid,
@@ -1140,14 +1008,12 @@ impl Db {
         workflow::list_enabled_channel_workflows(&self.pool, channel_id).await
     }
 
-    /// Lists all active, enabled workflows across all channels.
-    ///
-    /// Used by the cron scheduler.
+    /// List all active, enabled schedule-triggered workflows.
     pub async fn list_all_enabled_workflows(&self) -> Result<Vec<workflow::WorkflowRecord>> {
         workflow::list_all_enabled_workflows(&self.pool).await
     }
 
-    /// Updates a workflow's name and definition.
+    /// Update a workflow's name, definition, and hash.
     pub async fn update_workflow(
         &self,
         id: Uuid,
@@ -1158,12 +1024,26 @@ impl Db {
         workflow::update_workflow(&self.pool, id, name, definition_json, definition_hash).await
     }
 
-    /// Deletes a workflow definition by ID.
+    /// Update a workflow's status.
+    pub async fn update_workflow_status(
+        &self,
+        id: Uuid,
+        status: workflow::WorkflowStatus,
+    ) -> Result<()> {
+        workflow::update_workflow_status(&self.pool, id, status).await
+    }
+
+    /// Enable or disable a workflow.
+    pub async fn set_workflow_enabled(&self, id: Uuid, enabled: bool) -> Result<()> {
+        workflow::set_workflow_enabled(&self.pool, id, enabled).await
+    }
+
+    /// Delete a workflow and all its runs/approvals.
     pub async fn delete_workflow(&self, id: Uuid) -> Result<()> {
         workflow::delete_workflow(&self.pool, id).await
     }
 
-    /// Creates a new workflow run record and returns its UUID.
+    /// Create a new workflow run.
     pub async fn create_workflow_run(
         &self,
         workflow_id: Uuid,
@@ -1174,12 +1054,12 @@ impl Db {
             .await
     }
 
-    /// Fetches a workflow run record by ID.
+    /// Fetch a single workflow run.
     pub async fn get_workflow_run(&self, id: Uuid) -> Result<workflow::WorkflowRunRecord> {
         workflow::get_workflow_run(&self.pool, id).await
     }
 
-    /// Lists the most recent runs for a workflow, up to `limit`.
+    /// List runs for a workflow.
     pub async fn list_workflow_runs(
         &self,
         workflow_id: Uuid,
@@ -1188,21 +1068,7 @@ impl Db {
         workflow::list_workflow_runs(&self.pool, workflow_id, limit).await
     }
 
-    /// Updates the enabled/disabled status of a workflow definition.
-    pub async fn update_workflow_status(
-        &self,
-        id: Uuid,
-        status: workflow::WorkflowStatus,
-    ) -> Result<()> {
-        workflow::update_workflow_status(&self.pool, id, status).await
-    }
-
-    /// Enables or disables a workflow.
-    pub async fn set_workflow_enabled(&self, id: Uuid, enabled: bool) -> Result<()> {
-        workflow::set_workflow_enabled(&self.pool, id, enabled).await
-    }
-
-    /// Updates a workflow run's status, current step index, execution trace, and error.
+    /// Update a workflow run's status.
     pub async fn update_workflow_run(
         &self,
         id: Uuid,
@@ -1214,17 +1080,17 @@ impl Db {
         workflow::update_workflow_run(&self.pool, id, status, current_step, trace, error).await
     }
 
-    /// Creates a pending approval record for a workflow step.
+    /// Create an approval request.
     pub async fn create_approval(&self, params: workflow::CreateApprovalParams<'_>) -> Result<()> {
         workflow::create_approval(&self.pool, params).await
     }
 
-    /// Fetches an approval record by its token string.
+    /// Fetch an approval by raw token.
     pub async fn get_approval(&self, token: &str) -> Result<workflow::ApprovalRecord> {
         workflow::get_approval(&self.pool, token).await
     }
 
-    /// Updates an approval's status. Returns `true` if the row was updated.
+    /// Update an approval's status.
     pub async fn update_approval(
         &self,
         token: &str,
@@ -1234,14 +1100,144 @@ impl Db {
     ) -> Result<bool> {
         workflow::update_approval(&self.pool, token, status, approver_pubkey, note).await
     }
+
+    // ── Partitions ──────────────────────────────────────────────────────────
+
+    /// Ensures monthly partitions exist for the next N months.
+    pub async fn ensure_future_partitions(&self, months_ahead: u32) -> Result<()> {
+        partition::ensure_future_partitions(&self.pool, months_ahead).await
+    }
+
+    // ── Pubkey Allowlist ─────────────────────────────────────────────────────
+
+    /// Check if a pubkey is in the allowlist.
+    pub async fn is_pubkey_allowed(&self, pubkey: &[u8]) -> Result<bool> {
+        let row = sqlx::query("SELECT COUNT(*) as cnt FROM pubkey_allowlist WHERE pubkey = $1")
+            .bind(pubkey)
+            .fetch_one(&self.pool)
+            .await?;
+        let cnt: i64 = row.try_get("cnt")?;
+        Ok(cnt > 0)
+    }
+
+    /// Check if the allowlist has any entries (i.e. is enforcement active).
+    pub async fn has_allowlist_entries(&self) -> Result<bool> {
+        let row = sqlx::query("SELECT COUNT(*) as cnt FROM pubkey_allowlist")
+            .fetch_one(&self.pool)
+            .await?;
+        let cnt: i64 = row.try_get("cnt")?;
+        Ok(cnt > 0)
+    }
+
+    /// Add a pubkey to the allowlist.
+    pub async fn add_to_allowlist(
+        &self,
+        pubkey: &[u8],
+        added_by: &[u8],
+        note: Option<&str>,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "INSERT INTO pubkey_allowlist (pubkey, added_by, note) VALUES ($1, $2, $3) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(pubkey)
+        .bind(added_by)
+        .bind(note)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Remove a pubkey from the allowlist.
+    pub async fn remove_from_allowlist(&self, pubkey: &[u8]) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM pubkey_allowlist WHERE pubkey = $1")
+            .bind(pubkey)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// List all pubkeys in the allowlist.
+    pub async fn list_allowlist(&self) -> Result<Vec<AllowlistEntry>> {
+        let rows = sqlx::query(
+            "SELECT pubkey, added_by, added_at, note FROM pubkey_allowlist ORDER BY added_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(AllowlistEntry {
+                pubkey: row.try_get("pubkey")?,
+                added_by: row.try_get("added_by")?,
+                added_at: row.try_get("added_at")?,
+                note: row.try_get("note")?,
+            });
+        }
+        Ok(out)
+    }
+
+    // ── Discovery events ─────────────────────────────────────────────────────
+
+    /// Soft-delete NIP-29 discovery events for a channel created by a specific relay pubkey.
+    pub async fn soft_delete_discovery_events(
+        &self,
+        channel_id: Uuid,
+        relay_pubkey: &[u8],
+    ) -> Result<u64> {
+        let channel_id_bytes = channel_id.as_bytes().to_vec();
+        let result = sqlx::query(
+            "UPDATE events SET deleted_at = NOW() \
+             WHERE channel_id = $1 AND pubkey = $2 AND deleted_at IS NULL AND kind IN (39000, 39001, 39002)",
+        )
+        .bind(channel_id_bytes.as_slice())
+        .bind(relay_pubkey)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    // ── Addressable events ──────────────────────────────────────────────────
+
+    /// Replace an addressable event (NIP-33-like): soft-delete any existing
+    /// event with the same (kind, pubkey, channel_id) and insert the new one.
+    pub async fn replace_addressable_event(
+        &self,
+        event: &nostr::Event,
+        channel_id: Option<Uuid>,
+    ) -> Result<(StoredEvent, bool)> {
+        let kind_i32 = sprout_core::kind::event_kind_i32(event);
+        let pubkey_bytes = event.pubkey.to_bytes();
+        let channel_id_bytes: Option<Vec<u8>> = channel_id.map(|u| u.as_bytes().to_vec());
+
+        let mut tx = self.pool.begin().await?;
+
+        // Soft-delete existing events with the same (kind, pubkey, channel_id).
+        // The idx_events_addressable index supports this lookup efficiently.
+        sqlx::query(
+            "UPDATE events SET deleted_at = NOW() \
+             WHERE kind = $1 AND pubkey = $2 AND channel_id = $3 AND deleted_at IS NULL",
+        )
+        .bind(kind_i32)
+        .bind(pubkey_bytes.as_slice())
+        .bind(channel_id_bytes.as_deref())
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        // Insert the new event (outside the tx — uses the standard path with
+        // dedup via ON CONFLICT DO NOTHING).
+        self.insert_event(event, channel_id).await
+    }
 }
 
-/// Full API token record (for auth middleware use).
+/// A full API token record.
 #[derive(Debug, Clone)]
 pub struct ApiTokenRecord {
     /// Unique token identifier.
     pub id: Uuid,
-    /// SHA-256 hash of the raw token bytes.
+    /// SHA-256 hash of the raw token value.
     pub token_hash: Vec<u8>,
     /// Compressed public key bytes of the token owner.
     pub owner_pubkey: Vec<u8>,
@@ -1249,379 +1245,63 @@ pub struct ApiTokenRecord {
     pub name: String,
     /// Permission scopes granted to this token.
     pub scopes: Vec<String>,
-    /// Optional channel restriction; `None` means all channels.
+    /// Optional channel ID restrictions.
     pub channel_ids: Option<Vec<Uuid>>,
     /// When the token was created.
     pub created_at: DateTime<Utc>,
-    /// Optional expiry timestamp; `None` means no expiry.
+    /// Optional expiry timestamp.
     pub expires_at: Option<DateTime<Utc>>,
-    /// Last time this token was used for authentication.
+    /// When the token was last used.
     pub last_used_at: Option<DateTime<Utc>>,
-    /// When the token was revoked, if applicable.
+    /// When the token was revoked.
     pub revoked_at: Option<DateTime<Utc>>,
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+/// An entry in the pubkey allowlist.
+#[derive(Debug, Clone)]
+pub struct AllowlistEntry {
+    /// The allowed pubkey.
+    pub pubkey: Vec<u8>,
+    /// Who added this entry.
+    pub added_by: Vec<u8>,
+    /// When the entry was added.
+    pub added_at: DateTime<Utc>,
+    /// Optional note.
+    pub note: Option<String>,
+}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use nostr::{EventBuilder, Keys, Kind};
+fn parse_api_token_row(row: sqlx::postgres::PgRow) -> Result<ApiTokenRecord> {
+    let id_bytes: Vec<u8> = row.try_get("id")?;
+    let id = uuid_from_bytes(&id_bytes)?;
 
-    const TEST_DB_URL: &str = "mysql://sprout:sprout_dev@localhost:3306/sprout";
+    let scopes_json: serde_json::Value = row.try_get("scopes")?;
+    let scopes: Vec<String> = serde_json::from_value(scopes_json)
+        .map_err(|e| DbError::InvalidData(format!("scopes JSON: {e}")))?;
 
-    async fn setup_db() -> Db {
-        let pool = MySqlPool::connect(TEST_DB_URL)
-            .await
-            .expect("connect to test DB");
-        sqlx::migrate!("../../migrations")
-            .run(&pool)
-            .await
-            .expect("migrate");
-        Db::from_pool(pool)
-    }
-
-    fn make_event(kind: Kind) -> nostr::Event {
-        let keys = Keys::generate();
-        EventBuilder::new(kind, "test content", [])
-            .sign_with_keys(&keys)
-            .expect("sign")
-    }
-
-    async fn cleanup_channel(db: &Db, channel_id: Uuid) {
-        let id = channel_id.as_bytes().to_vec();
-        sqlx::query("DELETE FROM events WHERE channel_id = ?")
-            .bind(&id)
-            .execute(&db.pool)
-            .await
-            .ok();
-        sqlx::query("DELETE FROM channel_members WHERE channel_id = ?")
-            .bind(&id)
-            .execute(&db.pool)
-            .await
-            .ok();
-        sqlx::query("DELETE FROM channels WHERE id = ?")
-            .bind(&id)
-            .execute(&db.pool)
-            .await
-            .ok();
-    }
-
-    async fn cleanup_event(db: &Db, event_id: &[u8]) {
-        sqlx::query("DELETE FROM events WHERE id = ?")
-            .bind(event_id)
-            .execute(&db.pool)
-            .await
-            .ok();
-    }
-
-    #[tokio::test]
-    #[ignore = "requires MySQL"]
-    async fn insert_and_retrieve_event() {
-        let db = setup_db().await;
-        let event = make_event(Kind::TextNote);
-        let event_id = event.id.as_bytes().to_vec();
-
-        let (stored, was_inserted) = db.insert_event(&event, None).await.expect("insert");
-        assert_eq!(stored.event.id, event.id);
-        assert!(stored.is_verified());
-        assert!(was_inserted);
-
-        let retrieved = db
-            .get_event_by_id(&event_id)
-            .await
-            .expect("get")
-            .expect("exists");
-        assert_eq!(retrieved.event.id, event.id);
-
-        cleanup_event(&db, &event_id).await;
-    }
-
-    #[tokio::test]
-    #[ignore = "requires MySQL"]
-    async fn duplicate_insert_is_noop() {
-        let db = setup_db().await;
-        let event = make_event(Kind::TextNote);
-        let event_id = event.id.as_bytes().to_vec();
-
-        let (_, first) = db.insert_event(&event, None).await.expect("first insert");
-        assert!(first);
-        let (_, second) = db.insert_event(&event, None).await.expect("second insert");
-        assert!(!second);
-
-        let cnt: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM events WHERE id = ?")
-            .bind(&event_id)
-            .fetch_one(&db.pool)
-            .await
-            .expect("count")
-            .try_get("cnt")
-            .unwrap();
-        assert_eq!(cnt, 1);
-
-        cleanup_event(&db, &event_id).await;
-    }
-
-    #[tokio::test]
-    #[ignore = "requires MySQL"]
-    async fn auth_event_rejected() {
-        let db = setup_db().await;
-        let event = make_event(Kind::from(22242u16));
-        let result = db.insert_event(&event, None).await;
-        assert!(matches!(result, Err(DbError::AuthEventRejected)));
-    }
-
-    #[tokio::test]
-    #[ignore = "requires MySQL"]
-    async fn query_events_by_channel_and_kind() {
-        let db = setup_db().await;
-        let keys = Keys::generate();
-        let pubkey = keys.public_key().serialize().to_vec();
-
-        let channel = db
-            .create_channel(
-                "test-query",
-                channel::ChannelType::Stream,
-                channel::ChannelVisibility::Open,
-                None,
-                &pubkey,
-            )
-            .await
-            .expect("create channel");
-
-        let ev1 = make_event(Kind::TextNote);
-        let ev2 = make_event(Kind::TextNote);
-        let ev3 = make_event(Kind::Metadata);
-        let ev3_id = ev3.id.as_bytes().to_vec();
-
-        db.insert_event(&ev1, Some(channel.id)).await.expect("ev1");
-        db.insert_event(&ev2, Some(channel.id)).await.expect("ev2");
-        db.insert_event(&ev3, None).await.expect("ev3");
-
-        let by_channel = db
-            .query_events(&EventQuery {
-                channel_id: Some(channel.id),
-                ..Default::default()
-            })
-            .await
-            .expect("query");
-        assert_eq!(by_channel.len(), 2);
-
-        let by_kind = db
-            .query_events(&EventQuery {
-                kinds: Some(vec![1i32]),
-                ..Default::default()
-            })
-            .await
-            .expect("query by kind");
-        assert!(by_kind.iter().all(|e| e.event.kind.as_u16() == 1));
-
-        cleanup_channel(&db, channel.id).await;
-        cleanup_event(&db, &ev3_id).await;
-    }
-
-    #[tokio::test]
-    #[ignore = "requires MySQL"]
-    async fn query_events_pagination() {
-        let db = setup_db().await;
-        let keys = Keys::generate();
-        let pubkey = keys.public_key().serialize().to_vec();
-        let channel = db
-            .create_channel(
-                "test-pagination",
-                channel::ChannelType::Stream,
-                channel::ChannelVisibility::Open,
-                None,
-                &pubkey,
-            )
-            .await
-            .expect("create channel");
-
-        for i in 0..5 {
-            let ev = EventBuilder::new(Kind::TextNote, format!("msg {i}"), [])
-                .sign_with_keys(&keys)
-                .expect("sign");
-            db.insert_event(&ev, Some(channel.id))
-                .await
-                .expect("insert");
+    let channel_ids: Option<Vec<Uuid>> = {
+        let raw: Option<serde_json::Value> = row.try_get("channel_ids")?;
+        match raw {
+            None => None,
+            Some(v) => {
+                let strings: Vec<String> = serde_json::from_value(v)
+                    .map_err(|e| DbError::InvalidData(format!("channel_ids JSON: {e}")))?;
+                let uuids: std::result::Result<Vec<Uuid>, _> =
+                    strings.iter().map(|s| s.parse::<Uuid>()).collect();
+                Some(uuids.map_err(|e| DbError::InvalidData(format!("channel_ids UUID: {e}")))?)
+            }
         }
+    };
 
-        let page1 = db
-            .query_events(&EventQuery {
-                channel_id: Some(channel.id),
-                limit: Some(2),
-                offset: Some(0),
-                ..Default::default()
-            })
-            .await
-            .expect("page1");
-        let page2 = db
-            .query_events(&EventQuery {
-                channel_id: Some(channel.id),
-                limit: Some(2),
-                offset: Some(2),
-                ..Default::default()
-            })
-            .await
-            .expect("page2");
-        assert_eq!(page1.len(), 2);
-        assert_eq!(page2.len(), 2);
-        let p1_ids: Vec<_> = page1.iter().map(|e| e.event.id).collect();
-        for e in &page2 {
-            assert!(!p1_ids.contains(&e.event.id));
-        }
-
-        cleanup_channel(&db, channel.id).await;
-    }
-
-    #[tokio::test]
-    #[ignore = "requires MySQL"]
-    async fn channel_create_get_membership() {
-        let db = setup_db().await;
-        let owner_keys = Keys::generate();
-        let owner = owner_keys.public_key().serialize().to_vec();
-        let member_keys = Keys::generate();
-        let member = member_keys.public_key().serialize().to_vec();
-
-        let channel = db
-            .create_channel(
-                "test-membership",
-                channel::ChannelType::Stream,
-                channel::ChannelVisibility::Private,
-                Some("desc"),
-                &owner,
-            )
-            .await
-            .expect("create");
-        assert_eq!(channel.name, "test-membership");
-        assert_eq!(channel.description, Some("desc".to_string()));
-        assert!(db.is_member(channel.id, &owner).await.unwrap());
-
-        db.add_member(
-            channel.id,
-            &member,
-            channel::MemberRole::Member,
-            Some(&owner),
-        )
-        .await
-        .expect("add member");
-        assert!(db.is_member(channel.id, &member).await.unwrap());
-
-        let members = db.get_members(channel.id).await.expect("get members");
-        assert_eq!(members.len(), 2);
-
-        db.remove_member(channel.id, &member, &owner)
-            .await
-            .expect("remove");
-        assert!(!db.is_member(channel.id, &member).await.unwrap());
-
-        cleanup_channel(&db, channel.id).await;
-    }
-
-    #[tokio::test]
-    #[ignore = "requires MySQL"]
-    async fn open_channel_join_no_invite() {
-        let db = setup_db().await;
-        let creator = Keys::generate().public_key().serialize().to_vec();
-        let joiner = Keys::generate().public_key().serialize().to_vec();
-
-        let channel = db
-            .create_channel(
-                "test-open",
-                channel::ChannelType::Stream,
-                channel::ChannelVisibility::Open,
-                None,
-                &creator,
-            )
-            .await
-            .expect("create");
-
-        db.add_member(channel.id, &joiner, channel::MemberRole::Member, None)
-            .await
-            .expect("join open");
-        assert!(db.is_member(channel.id, &joiner).await.unwrap());
-
-        cleanup_channel(&db, channel.id).await;
-    }
-
-    #[tokio::test]
-    #[ignore = "requires MySQL"]
-    async fn private_channel_requires_invite() {
-        let db = setup_db().await;
-        let creator = Keys::generate().public_key().serialize().to_vec();
-        let outsider = Keys::generate().public_key().serialize().to_vec();
-
-        let channel = db
-            .create_channel(
-                "test-private",
-                channel::ChannelType::Stream,
-                channel::ChannelVisibility::Private,
-                None,
-                &creator,
-            )
-            .await
-            .expect("create");
-
-        let result = db
-            .add_member(channel.id, &outsider, channel::MemberRole::Member, None)
-            .await;
-        assert!(matches!(result, Err(DbError::AccessDenied(_))));
-        assert!(!db.is_member(channel.id, &outsider).await.unwrap());
-
-        cleanup_channel(&db, channel.id).await;
-    }
-
-    #[tokio::test]
-    #[ignore = "requires MySQL"]
-    async fn remove_member_requires_authorization() {
-        let db = setup_db().await;
-        let owner = Keys::generate().public_key().serialize().to_vec();
-        let member = Keys::generate().public_key().serialize().to_vec();
-        let rando = Keys::generate().public_key().serialize().to_vec();
-
-        let channel = db
-            .create_channel(
-                "test-remove-auth",
-                channel::ChannelType::Stream,
-                channel::ChannelVisibility::Private,
-                None,
-                &owner,
-            )
-            .await
-            .expect("create");
-
-        db.add_member(channel.id, &owner, channel::MemberRole::Owner, Some(&owner))
-            .await
-            .expect("add owner");
-        db.add_member(
-            channel.id,
-            &member,
-            channel::MemberRole::Member,
-            Some(&owner),
-        )
-        .await
-        .expect("add member");
-        db.add_member(
-            channel.id,
-            &rando,
-            channel::MemberRole::Member,
-            Some(&owner),
-        )
-        .await
-        .expect("add rando");
-
-        let result = db.remove_member(channel.id, &member, &rando).await;
-        assert!(matches!(result, Err(DbError::AccessDenied(_))));
-
-        db.remove_member(channel.id, &member, &owner)
-            .await
-            .expect("owner removes");
-        assert!(!db.is_member(channel.id, &member).await.unwrap());
-
-        db.remove_member(channel.id, &rando, &rando)
-            .await
-            .expect("self-remove");
-        assert!(!db.is_member(channel.id, &rando).await.unwrap());
-
-        cleanup_channel(&db, channel.id).await;
-    }
+    Ok(ApiTokenRecord {
+        id,
+        token_hash: row.try_get("token_hash")?,
+        owner_pubkey: row.try_get("owner_pubkey")?,
+        name: row.try_get("name")?,
+        scopes,
+        channel_ids,
+        created_at: row.try_get("created_at")?,
+        expires_at: row.try_get("expires_at")?,
+        last_used_at: row.try_get("last_used_at")?,
+        revoked_at: row.try_get("revoked_at")?,
+    })
 }

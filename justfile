@@ -145,21 +145,9 @@ desktop-app *ARGS:
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 
-# Run database migrations (uses sqlx CLI if available, falls back to docker exec)
+# Apply schema migrations via pgschema
 migrate:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if command -v sqlx &>/dev/null; then
-        echo "Running migrations via sqlx..."
-        sqlx migrate run --source migrations
-    else
-        echo "sqlx CLI not found — applying migrations via docker exec..."
-        for sql_file in migrations/*.sql; do
-            echo "  Applying $(basename "$sql_file")..."
-            docker run --rm -i --network "${SPROUT_DOCKER_NETWORK:-sprout-net}" -e MYSQL_PWD="${SPROUT_DB_PASS:-sprout_dev}" "${SPROUT_DB_CLIENT_IMAGE:-mysql:8.0}" mysql -h"${SPROUT_DOCKER_DB_HOST:-mysql}" -u"${SPROUT_DB_USER:-sprout}" "${SPROUT_DB_NAME:-sprout}" < "$sql_file" 2>/dev/null || true
-        done
-        echo "Migrations applied."
-    fi
+    ./bin/pgschema apply --file schema/schema.sql --auto-approve
 
 # ─── Utilities ────────────────────────────────────────────────────────────────
 

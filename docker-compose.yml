@@ -1,20 +1,19 @@
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: sprout-mysql
+  postgres:
+    image: postgres:17-alpine
+    container_name: sprout-postgres
     environment:
-      MYSQL_ROOT_PASSWORD: sprout_dev
-      MYSQL_DATABASE: sprout
-      MYSQL_USER: sprout
-      MYSQL_PASSWORD: sprout_dev
+      POSTGRES_USER: sprout
+      POSTGRES_PASSWORD: sprout_dev
+      POSTGRES_DB: sprout
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - mysql-data:/var/lib/mysql
+      - postgres-data:/var/lib/postgresql/data
     networks:
       - sprout-net
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -psprout_dev"]
+      test: ["CMD-SHELL", "pg_isready -U sprout"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -24,7 +23,7 @@ services:
         limits:
           memory: 512m
     labels:
-      com.sprout.service: "mysql"
+      com.sprout.service: "postgres"
       com.sprout.env: "dev"
     restart: unless-stopped
 
@@ -86,10 +85,10 @@ services:
     networks:
       - sprout-net
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
     environment:
-      ADMINER_DEFAULT_SERVER: mysql
+      ADMINER_DEFAULT_SERVER: postgres
     deploy:
       resources:
         limits:
@@ -196,10 +195,10 @@ services:
     restart: unless-stopped
 
 volumes:
-  mysql-data:
-    name: sprout-mysql-data
+  postgres-data:
+    name: sprout-postgres-data
     labels:
-      com.sprout.volume: "mysql"
+      com.sprout.volume: "postgres"
   typesense-data:
     name: sprout-typesense-data
     labels:

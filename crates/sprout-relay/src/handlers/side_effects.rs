@@ -415,7 +415,7 @@ async fn emit_addressable_discovery_event(
 
     let (stored, _) = state
         .db
-        .replace_addressable_event(&event, channel_id)
+        .replace_addressable_event(&event, Some(channel_id))
         .await?;
     let kind_u32 = event_kind_u32(&stored.event);
     dispatch_persistent_event(state, &stored, kind_u32, relay_pubkey_hex).await;

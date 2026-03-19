@@ -62,7 +62,17 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             let hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
 
             let record = match state.db.get_api_token_by_hash(&hash).await {
-                Ok(r) => r,
+                Ok(Some(r)) => r,
+                Ok(None) => {
+                    warn!(conn_id = %conn_id, "API token not found");
+                    *conn.auth_state.write().await = AuthState::Failed;
+                    conn.send(RelayMessage::ok(
+                        &event_id_hex,
+                        false,
+                        "auth-required: invalid token",
+                    ));
+                    return;
+                }
                 Err(e) => {
                     warn!(conn_id = %conn_id, error = %e, "API token lookup failed");
                     *conn.auth_state.write().await = AuthState::Failed;

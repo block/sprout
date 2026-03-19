@@ -50,22 +50,16 @@ async fn main() -> anyhow::Result<()> {
         ..DbConfig::default()
     };
     let db = Db::new(&db_config).await.map_err(|e| {
-        error!("Failed to connect to MySQL: {e}");
+        error!("Failed to connect to Postgres: {e}");
         anyhow::anyhow!("DB connection failed: {e}")
     })?;
-    info!("MySQL connected");
-
-    db.migrate().await.map_err(|e| {
-        error!("Migration failed: {e}");
-        anyhow::anyhow!("Migration failed: {e}")
-    })?;
-    info!("Migrations applied");
+    info!("Postgres connected");
 
     if let Err(e) = db.ensure_future_partitions(3).await {
         error!("Failed to ensure partitions: {e}");
     }
 
-    let audit_pool = sqlx::MySqlPool::connect(&config.database_url)
+    let audit_pool = sqlx::PgPool::connect(&config.database_url)
         .await
         .map_err(|e| anyhow::anyhow!("Audit DB connection failed: {e}"))?;
     let audit = AuditService::new(audit_pool);

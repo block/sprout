@@ -5,13 +5,13 @@
 //! ingested and updated as replies arrive or are deleted.
 
 use chrono::{DateTime, Utc};
-use sqlx::{MySqlPool, Row};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::event::uuid_from_bytes;
 
-// ── Structs ───────────────────────────────────────────────────────────────────
+// -- Structs ------------------------------------------------------------------
 
 /// A single reply within a thread, joined with event content.
 #[derive(Debug, Clone)]
@@ -74,7 +74,7 @@ pub struct TopLevelMessage {
     pub thread_summary: Option<ThreadSummary>,
 }
 
-/// Raw thread_metadata row — used when processing deletes or computing ancestry.
+/// Raw thread_metadata row -- used when processing deletes or computing ancestry.
 #[derive(Debug, Clone)]
 pub struct ThreadMetadataRecord {
     /// The Nostr event ID this metadata row tracks.
@@ -97,7 +97,7 @@ pub struct ThreadMetadataRecord {
     pub broadcast: bool,
 }
 
-// ── Write operations ──────────────────────────────────────────────────────────
+// -- Write operations ---------------------------------------------------------
 
 /// Insert a row into `thread_metadata`.
 ///
@@ -109,7 +109,7 @@ pub struct ThreadMetadataRecord {
 /// with the actual number of reply rows (F9).
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_thread_metadata(
-    pool: &MySqlPool,
+    pool: &PgPool,
     event_id: &[u8],
     event_created_at: DateTime<Utc>,
     channel_id: Uuid,
@@ -121,18 +121,18 @@ pub async fn insert_thread_metadata(
     broadcast: bool,
 ) -> Result<()> {
     let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
-    let broadcast_val: i8 = if broadcast { 1 } else { 0 };
 
     let mut tx = pool.begin().await?;
 
     let result = sqlx::query(
         r#"
-        INSERT IGNORE INTO thread_metadata
+        INSERT INTO thread_metadata
             (event_created_at, event_id, channel_id,
              parent_event_id, parent_event_created_at,
              root_event_id, root_event_created_at,
              depth, broadcast)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT DO NOTHING
         "#,
     )
     .bind(event_created_at)
@@ -143,26 +143,27 @@ pub async fn insert_thread_metadata(
     .bind(root_event_id)
     .bind(root_event_created_at)
     .bind(depth)
-    .bind(broadcast_val)
+    .bind(broadcast)
     .execute(&mut *tx)
     .await?;
 
     // Only bump reply counts if the row was actually inserted (not a duplicate).
-    // INSERT IGNORE on a duplicate key returns rows_affected = 0.
+    // ON CONFLICT DO NOTHING on a duplicate key returns rows_affected = 0.
     if result.rows_affected() > 0 {
         if let Some(pid) = parent_event_id {
             // Ensure the parent has a thread_metadata row so the UPDATE below
             // has something to hit. Root (depth=0) messages don't get a row on
-            // first insert, so we create a stub here with INSERT IGNORE.
+            // first insert, so we create a stub here.
             let parent_ts = parent_event_created_at.unwrap_or(event_created_at);
             sqlx::query(
                 r#"
-                INSERT IGNORE INTO thread_metadata
+                INSERT INTO thread_metadata
                     (event_created_at, event_id, channel_id,
                      parent_event_id, parent_event_created_at,
                      root_event_id, root_event_created_at,
                      depth, broadcast)
-                VALUES (?, ?, ?, NULL, NULL, NULL, NULL, 0, 0)
+                VALUES ($1, $2, $3, NULL, NULL, NULL, NULL, 0, false)
+                ON CONFLICT DO NOTHING
                 "#,
             )
             .bind(parent_ts)
@@ -177,12 +178,13 @@ pub async fn insert_thread_metadata(
                     let root_ts = root_event_created_at.unwrap_or(event_created_at);
                     sqlx::query(
                         r#"
-                        INSERT IGNORE INTO thread_metadata
+                        INSERT INTO thread_metadata
                             (event_created_at, event_id, channel_id,
                              parent_event_id, parent_event_created_at,
                              root_event_id, root_event_created_at,
                              depth, broadcast)
-                        VALUES (?, ?, ?, NULL, NULL, NULL, NULL, 0, 0)
+                        VALUES ($1, $2, $3, NULL, NULL, NULL, NULL, 0, false)
+                        ON CONFLICT DO NOTHING
                         "#,
                     )
                     .bind(root_ts)
@@ -198,8 +200,8 @@ pub async fn insert_thread_metadata(
                 r#"
                 UPDATE thread_metadata
                 SET reply_count   = reply_count + 1,
-                    last_reply_at = NOW(6)
-                WHERE event_id = ?
+                    last_reply_at = NOW()
+                WHERE event_id = $1
                 "#,
             )
             .bind(pid)
@@ -212,7 +214,7 @@ pub async fn insert_thread_metadata(
                     r#"
                     UPDATE thread_metadata
                     SET descendant_count = descendant_count + 1
-                    WHERE event_id = ?
+                    WHERE event_id = $1
                     "#,
                 )
                 .bind(root_id)
@@ -229,7 +231,7 @@ pub async fn insert_thread_metadata(
 
 /// Increment `reply_count` (and `last_reply_at`) on the parent event.
 /// If `root_event_id` is provided, also increments `descendant_count` on the
-/// root — even when root == parent (direct reply to root). This is correct
+/// root -- even when root == parent (direct reply to root). This is correct
 /// because `reply_count` tracks direct children only, while `descendant_count`
 /// tracks ALL descendants at every nesting level.
 ///
@@ -238,7 +240,7 @@ pub async fn insert_thread_metadata(
 /// incrementing outside of insert is needed (e.g., event re-parenting).
 #[allow(dead_code)]
 pub async fn increment_reply_count(
-    pool: &MySqlPool,
+    pool: &PgPool,
     parent_event_id: &[u8],
     root_event_id: Option<&[u8]>,
 ) -> Result<()> {
@@ -247,8 +249,8 @@ pub async fn increment_reply_count(
         r#"
         UPDATE thread_metadata
         SET reply_count  = reply_count + 1,
-            last_reply_at = NOW(6)
-        WHERE event_id = ?
+            last_reply_at = NOW()
+        WHERE event_id = $1
         "#,
     )
     .bind(parent_event_id)
@@ -256,14 +258,12 @@ pub async fn increment_reply_count(
     .await?;
 
     // Always bump root's descendant_count, regardless of whether root == parent.
-    // - Direct reply (root == parent): root row gets reply_count+1 AND descendant_count+1.
-    // - Nested reply (root != parent): parent gets reply_count+1, root gets descendant_count+1.
     if let Some(root_id) = root_event_id {
         sqlx::query(
             r#"
             UPDATE thread_metadata
             SET descendant_count = descendant_count + 1
-            WHERE event_id = ?
+            WHERE event_id = $1
             "#,
         )
         .bind(root_id)
@@ -276,9 +276,9 @@ pub async fn increment_reply_count(
 
 /// Decrement `reply_count` on the parent event (floor at 0).
 /// If `root_event_id` is provided, also decrements `descendant_count` on the
-/// root — even when root == parent. Mirrors the increment logic exactly.
+/// root -- even when root == parent. Mirrors the increment logic exactly.
 pub async fn decrement_reply_count(
-    pool: &MySqlPool,
+    pool: &PgPool,
     parent_event_id: &[u8],
     root_event_id: Option<&[u8]>,
 ) -> Result<()> {
@@ -287,7 +287,7 @@ pub async fn decrement_reply_count(
         r#"
         UPDATE thread_metadata
         SET reply_count = GREATEST(reply_count - 1, 0)
-        WHERE event_id = ?
+        WHERE event_id = $1
         "#,
     )
     .bind(parent_event_id)
@@ -300,7 +300,7 @@ pub async fn decrement_reply_count(
             r#"
             UPDATE thread_metadata
             SET descendant_count = GREATEST(descendant_count - 1, 0)
-            WHERE event_id = ?
+            WHERE event_id = $1
             "#,
         )
         .bind(root_id)
@@ -311,27 +311,23 @@ pub async fn decrement_reply_count(
     Ok(())
 }
 
-// ── Read operations ───────────────────────────────────────────────────────────
+// -- Read operations ----------------------------------------------------------
 
 /// Fetch all replies under a root event, ordered chronologically.
 ///
-/// - `depth_limit` — if `Some(n)`, only returns replies at depth ≤ n.
-/// - `cursor` — if `Some(ts_bytes)`, returns replies with `event_created_at`
+/// - `depth_limit` -- if `Some(n)`, only returns replies at depth <= n.
+/// - `cursor` -- if `Some(ts_bytes)`, returns replies with `event_created_at`
 ///   strictly after the timestamp encoded in `ts_bytes`. The bytes must be an
-///   8-byte big-endian i64 Unix timestamp in seconds. The caller (REST handler)
-///   encodes the last reply's `created_at` as the next-page cursor.
-///   Binary event IDs do NOT correlate with chronological order, so the old
-///   `event_id > cursor` condition produced non-deterministic pagination (F8).
-/// - `limit` — maximum rows returned (caller should cap this).
+///   8-byte big-endian i64 Unix timestamp in seconds.
+/// - `limit` -- maximum rows returned (caller should cap this).
 pub async fn get_thread_replies(
-    pool: &MySqlPool,
+    pool: &PgPool,
     root_event_id: &[u8],
     depth_limit: Option<u32>,
     limit: u32,
     cursor: Option<&[u8]>,
 ) -> Result<Vec<ThreadReply>> {
-    // Decode cursor bytes → DateTime<Utc> for the keyset condition.
-    // Bytes are an 8-byte big-endian i64 Unix timestamp (seconds).
+    // Decode cursor bytes -> DateTime<Utc> for the keyset condition.
     let cursor_ts: Option<DateTime<Utc>> = match cursor {
         Some(bytes) if bytes.len() == 8 => {
             let secs = i64::from_be_bytes(bytes.try_into().expect("length checked"));
@@ -341,6 +337,8 @@ pub async fn get_thread_replies(
     };
 
     // Build the query dynamically based on optional filters.
+    // Track the next positional parameter index.
+    let mut param_idx = 2u32; // $1 is root_event_id
     let mut sql = String::from(
         r#"
         SELECT
@@ -359,29 +357,33 @@ pub async fn get_thread_replies(
         JOIN events e
             ON e.created_at = tm.event_created_at
            AND e.id         = tm.event_id
-        WHERE tm.root_event_id = ?
+        WHERE tm.root_event_id = $1
           AND e.deleted_at IS NULL
         "#,
     );
 
     if depth_limit.is_some() {
-        sql.push_str(" AND tm.depth <= ?");
+        sql.push_str(&format!(" AND tm.depth <= ${param_idx}"));
+        param_idx += 1;
     }
     if cursor_ts.is_some() {
-        sql.push_str(" AND tm.event_created_at > ?");
+        sql.push_str(&format!(" AND tm.event_created_at > ${param_idx}"));
+        param_idx += 1;
     }
 
-    sql.push_str(" ORDER BY tm.event_created_at ASC LIMIT ?");
+    sql.push_str(&format!(
+        " ORDER BY tm.event_created_at ASC LIMIT ${param_idx}"
+    ));
 
     let mut q = sqlx::query(&sql).bind(root_event_id);
 
     if let Some(dl) = depth_limit {
-        q = q.bind(dl);
+        q = q.bind(dl as i32);
     }
     if let Some(ts) = cursor_ts {
         q = q.bind(ts);
     }
-    q = q.bind(limit);
+    q = q.bind(limit as i32);
 
     let rows = q.fetch_all(pool).await?;
 
@@ -397,7 +399,7 @@ pub async fn get_thread_replies(
         let kind: i32 = row.try_get("kind")?;
         let depth: i32 = row.try_get("depth")?;
         let created_at: DateTime<Utc> = row.try_get("event_created_at")?;
-        let broadcast_val: i8 = row.try_get("broadcast")?;
+        let broadcast_val: bool = row.try_get("broadcast")?;
 
         let channel_id = uuid_from_bytes(&channel_id_bytes)?;
 
@@ -412,7 +414,7 @@ pub async fn get_thread_replies(
             kind,
             depth,
             created_at,
-            broadcast: broadcast_val != 0,
+            broadcast: broadcast_val,
         });
     }
 
@@ -420,15 +422,12 @@ pub async fn get_thread_replies(
 }
 
 /// Fetch aggregated thread stats for a single event, plus up to 10 participant pubkeys.
-pub async fn get_thread_summary(
-    pool: &MySqlPool,
-    event_id: &[u8],
-) -> Result<Option<ThreadSummary>> {
+pub async fn get_thread_summary(pool: &PgPool, event_id: &[u8]) -> Result<Option<ThreadSummary>> {
     let row = sqlx::query(
         r#"
         SELECT reply_count, descendant_count, last_reply_at
         FROM thread_metadata
-        WHERE event_id = ?
+        WHERE event_id = $1
         LIMIT 1
         "#,
     )
@@ -445,9 +444,7 @@ pub async fn get_thread_summary(
     let descendant_count: i32 = row.try_get("descendant_count")?;
     let last_reply_at: Option<DateTime<Utc>> = row.try_get("last_reply_at")?;
 
-    // Collect distinct participant pubkeys from the thread, most recent first (M1).
-    // Without ORDER BY the result is non-deterministic across MySQL restarts/replicas.
-    // Wrapping in a subquery lets us ORDER BY after DISTINCT.
+    // Collect distinct participant pubkeys from the thread, most recent first.
     let participant_rows = sqlx::query(
         r#"
         SELECT pubkey FROM (
@@ -456,7 +453,7 @@ pub async fn get_thread_summary(
             JOIN events e
                 ON e.created_at = tm.event_created_at
                AND e.id         = tm.event_id
-            WHERE tm.root_event_id = ?
+            WHERE tm.root_event_id = $1
               AND e.deleted_at IS NULL
             GROUP BY e.pubkey
         ) sub
@@ -486,13 +483,13 @@ pub async fn get_thread_summary(
 /// Returns events that are either:
 /// - Not in thread_metadata at all (no thread context set yet), OR
 /// - At depth 0 (root messages), OR
-/// - At depth 1 with `broadcast = 1` (replies surfaced to the channel)
+/// - At depth 1 with `broadcast = true` (replies surfaced to the channel)
 ///
 /// Results are ordered newest-first for a standard channel view.
 /// `before_cursor` enables keyset pagination (pass the `created_at` of the
 /// last item from the previous page).
 pub async fn get_channel_messages_top_level(
-    pool: &MySqlPool,
+    pool: &PgPool,
     channel_id: Uuid,
     limit: u32,
     before_cursor: Option<DateTime<Utc>>,
@@ -500,6 +497,7 @@ pub async fn get_channel_messages_top_level(
 ) -> Result<Vec<TopLevelMessage>> {
     let channel_id_bytes = channel_id.as_bytes().as_slice().to_vec();
 
+    let mut param_idx = 2u32; // $1 is channel_id
     let mut sql = String::from(
         r#"
         SELECT
@@ -514,18 +512,19 @@ pub async fn get_channel_messages_top_level(
         LEFT JOIN thread_metadata tm
             ON tm.event_created_at = e.created_at
            AND tm.event_id         = e.id
-        WHERE e.channel_id = ?
+        WHERE e.channel_id = $1
           AND e.deleted_at IS NULL
           AND (
                 tm.depth IS NULL
              OR tm.depth = 0
-             OR (tm.depth = 1 AND tm.broadcast = 1)
+             OR (tm.depth = 1 AND tm.broadcast = true)
           )
         "#,
     );
 
     if before_cursor.is_some() {
-        sql.push_str(" AND e.created_at < ?");
+        sql.push_str(&format!(" AND e.created_at < ${param_idx}"));
+        param_idx += 1;
     }
 
     if let Some(kinds) = kind_filter {
@@ -539,14 +538,14 @@ pub async fn get_channel_messages_top_level(
         }
     }
 
-    sql.push_str(" ORDER BY e.created_at DESC LIMIT ?");
+    sql.push_str(&format!(" ORDER BY e.created_at DESC LIMIT ${param_idx}"));
 
     let mut q = sqlx::query(&sql).bind(channel_id_bytes.as_slice());
 
     if let Some(cursor) = before_cursor {
         q = q.bind(cursor);
     }
-    q = q.bind(limit);
+    q = q.bind(limit as i32);
 
     let rows = q.fetch_all(pool).await?;
 
@@ -581,7 +580,7 @@ pub async fn get_channel_messages_top_level(
 /// Used when processing soft-deletes to find the parent/root so reply counts
 /// can be decremented.
 pub async fn get_thread_metadata_by_event(
-    pool: &MySqlPool,
+    pool: &PgPool,
     event_id: &[u8],
 ) -> Result<Option<ThreadMetadataRecord>> {
     let row = sqlx::query(
@@ -597,7 +596,7 @@ pub async fn get_thread_metadata_by_event(
             descendant_count,
             broadcast
         FROM thread_metadata
-        WHERE event_id = ?
+        WHERE event_id = $1
         LIMIT 1
         "#,
     )
@@ -618,7 +617,7 @@ pub async fn get_thread_metadata_by_event(
     let depth: i32 = row.try_get("depth")?;
     let reply_count: i32 = row.try_get("reply_count")?;
     let descendant_count: i32 = row.try_get("descendant_count")?;
-    let broadcast_val: i8 = row.try_get("broadcast")?;
+    let broadcast_val: bool = row.try_get("broadcast")?;
 
     let channel_id = uuid_from_bytes(&channel_id_bytes)?;
 
@@ -631,6 +630,6 @@ pub async fn get_thread_metadata_by_event(
         depth,
         reply_count,
         descendant_count,
-        broadcast: broadcast_val != 0,
+        broadcast: broadcast_val,
     }))
 }

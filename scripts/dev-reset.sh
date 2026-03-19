@@ -20,16 +20,16 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 log()    { echo -e "${BLUE}[dev-reset]${NC} $*"; }
-success(){ echo -e "${GREEN}[dev-reset]${NC} ✅ $*"; }
-warn()   { echo -e "${YELLOW}[dev-reset]${NC} ⚠️  $*"; }
-error()  { echo -e "${RED}[dev-reset]${NC} ❌ $*" >&2; }
+success(){ echo -e "${GREEN}[dev-reset]${NC} $*"; }
+warn()   { echo -e "${YELLOW}[dev-reset]${NC} $*"; }
+error()  { echo -e "${RED}[dev-reset]${NC} $*" >&2; }
 
 cd "${REPO_ROOT}"
 
 # ---- Confirm ----------------------------------------------------------------
 
 if [[ "${1:-}" != "--yes" ]]; then
-  echo -e "${YELLOW}⚠️  WARNING: This will DELETE all local data (mysql, typesense volumes).${NC}"
+  echo -e "${YELLOW}WARNING: This will DELETE all local data (postgres, typesense volumes).${NC}"
   echo -e "   Redis data is ephemeral and always wiped on restart."
   echo ""
   read -r -p "Are you sure? [y/N] " confirm

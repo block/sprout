@@ -308,7 +308,7 @@ pub fn event_kind_u32(event: &nostr::Event) -> u32 {
     event.kind.as_u16() as u32
 }
 
-/// Extract the kind from a nostr Event as i32 (for MySQL INT columns).
+/// Extract the kind from a nostr Event as i32 (for Postgres INT columns).
 /// Safe: all Sprout kinds fit in i32 (max 65535 < i32::MAX).
 pub fn event_kind_i32(event: &nostr::Event) -> i32 {
     event.kind.as_u16() as i32

@@ -192,10 +192,9 @@ mod tests {
         let ev = signed_parse(r#"{"event":"room_finished","room":{"name":"r1"}}"#).unwrap();
         assert_eq!(ev, WebhookEvent::RoomFinished { room: "r1".into() });
 
-        let ev = signed_parse(
-            r#"{"event":"participant_joined","room":{"name":"r1"},"participant":{"identity":"alice"}}"#,
-        )
-        .unwrap();
+        let ev =
+            signed_parse(r#"{"event":"participant_joined","room":{"name":"r1"},"participant":{"identity":"alice"}}"#)
+                .unwrap();
         assert_eq!(
             ev,
             WebhookEvent::ParticipantJoined {
@@ -204,10 +203,9 @@ mod tests {
             }
         );
 
-        let ev = signed_parse(
-            r#"{"event":"participant_left","room":{"name":"r1"},"participant":{"identity":"alice"}}"#,
-        )
-        .unwrap();
+        let ev =
+            signed_parse(r#"{"event":"participant_left","room":{"name":"r1"},"participant":{"identity":"alice"}}"#)
+                .unwrap();
         assert_eq!(
             ev,
             WebhookEvent::ParticipantLeft {
