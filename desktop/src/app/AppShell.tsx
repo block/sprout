@@ -70,6 +70,9 @@ export function AppShell() {
   const [browseDialogType, setBrowseDialogType] = React.useState<
     "stream" | "forum" | null
   >(null);
+  const handleBrowseDialogOpenChange = React.useCallback((open: boolean) => {
+    setBrowseDialogType(open ? "stream" : null);
+  }, []);
   const [searchAnchor, setSearchAnchor] = React.useState<SearchHit | null>(
     null,
   );
@@ -715,9 +718,7 @@ export function AppShell() {
         channels={channels}
         channelTypeFilter={browseDialogType ?? "stream"}
         onJoinChannel={handleBrowseChannelJoin}
-        onOpenChange={(open) => {
-          if (!open) setBrowseDialogType(null);
-        }}
+        onOpenChange={handleBrowseDialogOpenChange}
         onSelectChannel={handleOpenChannel}
         open={browseDialogType !== null}
       />
