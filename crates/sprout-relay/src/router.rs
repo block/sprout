@@ -247,7 +247,7 @@ async fn liveness_handler() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
-/// Readiness probe — checks shutdown flag, MySQL, and Redis connectivity.
+/// Readiness probe — checks shutdown flag, Postgres, and Redis connectivity.
 ///
 /// Returns 503 immediately during graceful shutdown (SIGTERM received).
 /// Otherwise returns 200 when both backends are reachable, or 503 with details.
@@ -264,22 +264,22 @@ async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
     }
 
     let check = async {
-        let (mysql_ok, redis_ok) = tokio::join!(state.db.ping(), async {
+        let (pg_ok, redis_ok) = tokio::join!(state.db.ping(), async {
             state.redis_pool.get().await.is_ok()
         },);
-        (mysql_ok, redis_ok)
+        (pg_ok, redis_ok)
     };
 
-    let (mysql_ok, redis_ok) = tokio::time::timeout(Duration::from_secs(2), check)
+    let (pg_ok, redis_ok) = tokio::time::timeout(Duration::from_secs(2), check)
         .await
         .unwrap_or((false, false));
 
-    if mysql_ok && redis_ok {
+    if pg_ok && redis_ok {
         (StatusCode::OK, Json(json!({"status": "ready"}))).into_response()
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"status": "not_ready", "mysql": mysql_ok, "redis": redis_ok})),
+            Json(json!({"status": "not_ready", "postgres": pg_ok, "redis": redis_ok})),
         )
             .into_response()
     }

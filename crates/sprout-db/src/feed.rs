@@ -76,7 +76,7 @@ pub async fn query_mentions(
         qb.push(" AND e.channel_id IN (");
         let mut sep = qb.separated(", ");
         for id in accessible_channel_ids {
-            sep.push_bind(id.as_bytes().to_vec());
+            sep.push_bind(*id);
         }
         qb.push(")");
     }
@@ -135,7 +135,7 @@ pub async fn query_needs_action(
         qb.push(" AND e.channel_id IN (");
         let mut sep = qb.separated(", ");
         for id in accessible_channel_ids {
-            sep.push_bind(id.as_bytes().to_vec());
+            sep.push_bind(*id);
         }
         qb.push(")");
     }
@@ -185,7 +185,7 @@ pub async fn query_activity(
         qb.push(" AND channel_id IN (");
         let mut sep = qb.separated(", ");
         for id in accessible_channel_ids {
-            sep.push_bind(id.as_bytes().to_vec());
+            sep.push_bind(*id);
         }
         qb.push(")");
     }

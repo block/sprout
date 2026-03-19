@@ -38,7 +38,7 @@ Sprout is a Rust monorepo (~22.7K LOC across 13 crates), licensed Apache 2.0 und
 └──────────┬──────────────┬──────────────────────────────────────────┘
            │              │
      ┌─────▼──────┐  ┌────▼──────┐
-     │   MySQL    │  │   Redis   │
+     │  Postgres  │  │   Redis   │
      │  (events,  │  │ (presence │
      │  channels, │  │  SET EX,  │
      │  tokens,   │  │  typing   │
@@ -69,7 +69,7 @@ Sprout is a Rust monorepo (~22.7K LOC across 13 crates), licensed Apache 2.0 und
 ```
 sprout-core  (zero I/O — types, verification, filter matching, kind registry)
     │
-    ├── sprout-db        (MySQL: events, channels, tokens, workflows, audit)
+    ├── sprout-db        (Postgres: events, channels, tokens, workflows, audit)
     ├── sprout-auth      (NIP-42, Okta JWT, API tokens, scopes, rate limiting)
     ├── sprout-pubsub    (Redis pub/sub, presence, typing indicators)
     ├── sprout-search    (Typesense: index, query, delete)
@@ -245,7 +245,7 @@ Presence events skip membership checks and use local-only fan-out. Multi-node pr
 3. REDIS PUBLISH     — pubsub.publish_event (no DB write)
 ```
 
-Ephemeral events are never stored in MySQL and never appear in REQ historical queries.
+Ephemeral events are never stored in Postgres and never appear in REQ historical queries.
 
 ### Handler Semaphore
 
@@ -304,7 +304,7 @@ This prevents a race where a non-member receives live fan-out events from a priv
 
 ### Historical Query (EOSE)
 
-After registering, the REQ handler queries MySQL for stored events matching the filters (up to 500 per filter, hard cap). These are sent as `["EVENT", sub_id, event]` frames before `["EOSE", sub_id]`. New events arriving after EOSE are delivered via the fan-out path.
+After registering, the REQ handler queries Postgres for stored events matching the filters (up to 500 per filter, hard cap). These are sent as `["EVENT", sub_id, event]` frames before `["EOSE", sub_id]`. New events arriving after EOSE are delivered via the fan-out path.
 
 ---
 
@@ -377,7 +377,7 @@ pub trait RateLimiter: Send + Sync { ... }
 
 ---
 
-### sprout-db — MySQL Event Store
+### sprout-db — Postgres Event Store
 
 **3,698 LOC.** All database access. Uses `sqlx::query()` (runtime, not compile-time macros) — no `.sqlx/` offline cache required.
 
@@ -407,7 +407,7 @@ pub trait RateLimiter: Send + Sync { ... }
 - Approval tokens: raw token never reaches the DB — caller hashes with SHA-256 before passing to `create_api_token`.
 - DDL injection protection in partition manager: allowlist of table names + strict suffix/date validators.
 
-**Does NOT:** cache queries, implement connection pooling logic (delegated to sqlx), or make network calls outside MySQL.
+**Does NOT:** cache queries, implement connection pooling logic (delegated to sqlx), or make network calls outside Postgres.
 
 ---
 
@@ -457,7 +457,7 @@ EXPIRE sprout:typing:{channel_id} 60
 - `delete_event()` is idempotent: 404 treated as success.
 - Permission filtering is **caller's responsibility** — `sprout-search` provides the `filter_by` mechanism but does not enforce access policy.
 
-**Does NOT:** enforce channel membership or access control. Does NOT store events in MySQL.
+**Does NOT:** enforce channel membership or access control. Does NOT store events in Postgres.
 
 ---
 
@@ -732,7 +732,7 @@ Every security-sensitive operation uses an explicit, verified pattern. No implic
 | Token storage | SHA-256 hash only — raw token shown once at mint, never stored |
 | JWKS cache | Double-checked locking; HTTP fetch with no lock held (prevents global DoS) |
 | NIP-42 timestamp | ±60 second tolerance — prevents replay attacks |
-| AUTH events | Never stored in MySQL, never logged in audit chain |
+| AUTH events | Never stored in Postgres, never logged in audit chain |
 | Scopeless JWT | Defaults to `[MessagesRead]` only — least-privilege default |
 
 ### Input Validation
@@ -766,7 +766,7 @@ Applied in: `sprout-workflow` (CallWebhook action), `sprout-core` (shared utilit
 
 - Channel membership is the only gate — enforced by the relay at every operation
 - REQ handler checks access before subscription registration — no race window for private channel leaks
-- TOCTOU-safe membership operations: all check-then-modify sequences run inside MySQL transactions
+- TOCTOU-safe membership operations: all check-then-modify sequences run inside Postgres transactions
 - Approval tokens: UUID (CSPRNG), stored as SHA-256 hash, single-use enforced with `AND status = 'pending'` in UPDATE
 
 ### Webhook Security
@@ -785,13 +785,13 @@ Docker Compose provides the full local development stack. All services include h
 
 | Service | Image | Port | Purpose |
 |---------|-------|------|---------|
-| MySQL | `mysql:8.0` | 3306 | Primary event store — events, channels, tokens, workflows, audit |
+| Postgres | `postgres:17-alpine` | 5432 | Primary event store — events, channels, tokens, workflows, audit |
 | Redis | `redis:7-alpine` | 6379 | Pub/sub fan-out, presence (SET EX), typing (sorted sets) |
 | Typesense | `typesense/typesense:27.1` | 8108 | Full-text search index |
-| Adminer | `adminer` | 8080 | MySQL web UI (dev only) |
+| Adminer | `adminer` | 8080 | DB web UI (dev only) |
 | Keycloak | `quay.io/keycloak/keycloak:26` | 8443 | Local OAuth/OIDC stand-in for Okta |
 
-### MySQL Schema (key tables)
+### Postgres Schema (key tables)
 
 | Table | Purpose |
 |-------|---------|

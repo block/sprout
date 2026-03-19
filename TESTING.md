@@ -73,7 +73,7 @@ goose run --help | head -5
 ```bash
 sqlx --version
 # If missing:
-cargo install sqlx-cli --no-default-features --features mysql
+# pgschema manages the schema now — sqlx-cli is no longer needed
 ```
 
 ### screen
@@ -113,7 +113,7 @@ lsof -ti :3000 | xargs kill -9 2>/dev/null
 
 # Check Docker services — if already running, skip `docker compose up`
 docker compose ps --format '{{.Name}} {{.Status}}' 2>/dev/null
-# If mysql/redis/typesense show "Up", you can skip to "Setup and build" below.
+# If postgres/redis/typesense show "Up", you can skip to "Setup and build" below.
 # If not running:
 docker compose up -d
 ```
@@ -136,9 +136,9 @@ docker compose up -d
 export $(cat .env | grep -v "^#" | grep -v "^$" | xargs) 2>/dev/null
 
 # Reset database (fresh state for tests)
-docker exec sprout-mysql mysql -u root -psprout_dev -e \
+docker exec sprout-postgres psql -U sprout -d postgres -c \
   "DROP DATABASE IF EXISTS sprout; CREATE DATABASE sprout;" 2>/dev/null
-sqlx migrate run --database-url "$DATABASE_URL"
+./bin/pgschema apply --file schema/schema.sql --auto-approve
 
 # Build the full workspace (relay, MCP server, ACP harness, test client, etc.)
 cargo build --release --workspace
@@ -227,7 +227,7 @@ Run all commands from the sprout repo root.
 cd /path/to/sprout
 . bin/activate-hermit
 
-# 1. Start Docker services (MySQL, Redis, Typesense, Keycloak)
+# 1. Start Docker services (Postgres, Redis, Typesense, Keycloak)
 docker compose down -v && docker compose up -d
 docker compose ps   # All services should show "Up"
 
@@ -235,8 +235,8 @@ docker compose ps   # All services should show "Up"
 [ -f .env ] || cp .env.example .env
 export $(cat .env | grep -v "^#" | grep -v "^$" | xargs) 2>/dev/null
 
-# 3. Run database migrations
-sqlx migrate run --database-url "$DATABASE_URL"
+# 3. Apply database schema
+./bin/pgschema apply --file schema/schema.sql --auto-approve
 
 # 4. Build all binaries (sprout-acp, sprout-mcp-server, mention, sprout-admin)
 cargo build --release --workspace
@@ -1328,8 +1328,8 @@ To start fresh with no stale events, use a new keypair (mint a new token) for th
 docker compose ps
 # If any service is not "Up":
 docker compose down -v && docker compose up -d
-# Wait 30s then re-run migrations:
-sqlx migrate run --database-url "$DATABASE_URL"
+# Wait 30s then re-apply schema:
+./bin/pgschema apply --file schema/schema.sql --auto-approve
 ```
 
 ---
@@ -1380,7 +1380,7 @@ Manual testing guide for the Sprout Agent Channel Protection feature. Follow the
 ### 1.1 Sprout Relay
 
 - Running Sprout relay in dev mode with `require_auth_token=false` disabled (auth tokens required for all tests)
-- MySQL database with the `agent_channel_protection` migration applied (see §2.2)
+- Postgres database with schema applied via pgschema (see §2.2)
 - Default relay URL: `http://localhost:3001` — adjust if different
 
 ### 1.2 Tools Required
@@ -1389,7 +1389,7 @@ Manual testing guide for the Sprout Agent Channel Protection feature. Follow the
 |------|---------|---------|
 | `curl` | REST API testing | Pre-installed on macOS/Linux |
 | `websocat` | NIP-29 WebSocket testing | `brew install websocat` or `cargo install websocat` |
-| `mysql` / `mysql-client` | DB verification queries | `brew install mysql-client` |
+| `psql` / `postgresql-client` | DB verification queries | `brew install postgresql` |
 | `sprout-admin` | Minting agent tokens | Built from `crates/sprout-admin/` |
 | `jq` | Pretty-print JSON responses | `brew install jq` |
 
@@ -1476,20 +1476,19 @@ curl -s http://localhost:3001/health | jq .
 The `agent_channel_protection` migration adds `agent_owner_pubkey` and `channel_add_policy` to the `users` table.
 
 ```bash
-# Using sqlx-cli
-cargo install sqlx-cli --no-default-features --features mysql
-sqlx migrate run --database-url "$DATABASE_URL"
+# Apply schema via pgschema
+./bin/pgschema apply --file schema/schema.sql --auto-approve
 
 # Or via justfile if configured
 just migrate
 ```
 
-Verify migration applied:
+Verify schema applied:
 ```bash
-mysql -u root -p sprout -e "DESCRIBE users;" | grep -E "agent_owner|channel_add"
+docker exec sprout-postgres psql -U sprout -d sprout -c "\d users" | grep -E "agent_owner|channel_add"
 # Expected output:
-# agent_owner_pubkey  | varbinary(32) | YES  | MUL | NULL    |
-# channel_add_policy  | enum(...)     | NO   |     | anyone  |
+# agent_owner_pubkey  | bytea         |           |          |
+# channel_add_policy  | text          |           | not null |
 ```
 
 ### 2.3 Create a Test Channel
@@ -2042,10 +2041,10 @@ curl -s http://localhost:3001/api/users/me \
 Direct SQL queries to verify schema and data state.
 
 ```bash
-# Connect to MySQL
-mysql -u root -p sprout
-# Or with DATABASE_URL
-mysql "$DATABASE_URL"
+# Connect to Postgres
+docker exec -it sprout-postgres psql -U sprout -d sprout
+# Or with the connection URL:
+psql "$DATABASE_URL"
 ```
 
 ### 6.1 Verify Migration Applied (AC-6 prerequisite)

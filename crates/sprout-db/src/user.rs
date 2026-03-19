@@ -277,7 +277,7 @@ pub async fn get_agent_channel_policy(
     pubkey: &[u8],
 ) -> Result<Option<(String, Option<Vec<u8>>)>> {
     let row = sqlx::query(
-        r#"SELECT channel_add_policy, agent_owner_pubkey FROM users WHERE pubkey = $1"#,
+        r#"SELECT channel_add_policy::text AS channel_add_policy, agent_owner_pubkey FROM users WHERE pubkey = $1"#,
     )
     .bind(pubkey)
     .fetch_optional(pool)

@@ -96,6 +96,8 @@ CREATE TABLE events (
     PRIMARY KEY (created_at, id)
 ) PARTITION BY RANGE (created_at);
 
+CREATE TABLE events_p_past PARTITION OF events
+    FOR VALUES FROM (MINVALUE) TO ('2026-01-01');
 CREATE TABLE events_p2026_01 PARTITION OF events
     FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
 CREATE TABLE events_p2026_02 PARTITION OF events
@@ -167,6 +169,8 @@ CREATE TABLE delivery_log (
     PRIMARY KEY (delivered_at, id)
 ) PARTITION BY RANGE (delivered_at);
 
+CREATE TABLE delivery_log_p_past PARTITION OF delivery_log
+    FOR VALUES FROM (MINVALUE) TO ('2026-03-01');
 CREATE TABLE delivery_log_p2026_03 PARTITION OF delivery_log
     FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
 CREATE TABLE delivery_log_p2026_04 PARTITION OF delivery_log

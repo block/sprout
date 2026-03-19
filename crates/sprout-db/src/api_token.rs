@@ -5,7 +5,6 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::error::{DbError, Result};
-use crate::event::uuid_from_bytes;
 
 /// Create a new API token record. The caller is responsible for generating
 /// the raw token and computing its SHA-256 hash.
@@ -19,7 +18,6 @@ pub async fn create_api_token(
     expires_at: Option<DateTime<Utc>>,
 ) -> Result<Uuid> {
     let id = Uuid::new_v4();
-    let id_bytes = id.as_bytes().as_slice();
 
     let scopes_json =
         serde_json::to_value(scopes).map_err(|e| DbError::InvalidData(e.to_string()))?;
@@ -38,7 +36,7 @@ pub async fn create_api_token(
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         "#,
     )
-    .bind(id_bytes)
+    .bind(id)
     .bind(token_hash)
     .bind(owner_pubkey)
     .bind(name)
@@ -67,7 +65,6 @@ pub async fn create_api_token_if_under_limit(
     expires_at: Option<DateTime<Utc>>,
 ) -> Result<Option<Uuid>> {
     let id = Uuid::new_v4();
-    let id_bytes = id.as_bytes().as_slice();
 
     let scopes_json =
         serde_json::to_value(scopes).map_err(|e| DbError::InvalidData(e.to_string()))?;
@@ -95,7 +92,7 @@ pub async fn create_api_token_if_under_limit(
         ) < 10
         "#,
     )
-    .bind(id_bytes)
+    .bind(id)
     .bind(token_hash)
     .bind(owner_pubkey)
     .bind(name)
@@ -141,8 +138,7 @@ pub async fn get_api_token_by_hash_including_revoked(
         Some(r) => r,
     };
 
-    let id_bytes: Vec<u8> = row.try_get("id")?;
-    let id = uuid_from_bytes(&id_bytes)?;
+    let id: Uuid = row.try_get("id")?;
 
     let scopes_json: serde_json::Value = row.try_get("scopes")?;
     let scopes: Vec<String> = serde_json::from_value(scopes_json)
@@ -201,8 +197,7 @@ pub async fn list_tokens_by_owner(
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let id_bytes: Vec<u8> = row.try_get("id")?;
-        let id = uuid_from_bytes(&id_bytes)?;
+        let id: Uuid = row.try_get("id")?;
 
         let scopes_json: serde_json::Value = row.try_get("scopes")?;
         let scopes: Vec<String> = serde_json::from_value(scopes_json)
@@ -251,7 +246,6 @@ pub async fn revoke_token(
     owner_pubkey: &[u8],
     revoked_by: &[u8],
 ) -> Result<bool> {
-    let id_bytes = id.as_bytes().as_slice();
     let result = sqlx::query(
         r#"
         UPDATE api_tokens
@@ -262,7 +256,7 @@ pub async fn revoke_token(
         "#,
     )
     .bind(revoked_by)
-    .bind(id_bytes)
+    .bind(id)
     .bind(owner_pubkey)
     .execute(pool)
     .await?;

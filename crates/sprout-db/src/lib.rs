@@ -43,8 +43,6 @@ use uuid::Uuid;
 
 use sprout_core::StoredEvent;
 
-use crate::event::uuid_from_bytes;
-
 /// Extract p-tag mentions from an event and insert into the `event_mentions` table.
 ///
 /// Called after event insertion. Failures are logged but do not block event storage.
@@ -75,7 +73,6 @@ pub async fn insert_mentions(
     let created_at_secs = event.created_at.as_u64() as i64;
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(crate::error::DbError::InvalidTimestamp(created_at_secs))?;
-    let channel_id_bytes = channel_id.map(|id| id.as_bytes().to_vec());
     let kind = event.kind.as_u16() as u32;
 
     // Validate and normalize pubkeys, logging any malformed ones.
@@ -110,7 +107,7 @@ pub async fn insert_mentions(
         b.push_bind(pubkey.as_str())
             .push_bind(event_id_bytes.as_slice())
             .push_bind(created_at)
-            .push_bind(channel_id_bytes.as_deref())
+            .push_bind(channel_id)
             .push_bind(kind as i32);
     });
 
@@ -925,8 +922,7 @@ impl Db {
 
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            let id_bytes: Vec<u8> = row.try_get("id")?;
-            let id = uuid_from_bytes(&id_bytes)?;
+            let id: Uuid = row.try_get("id")?;
             let scopes_json: serde_json::Value = row.try_get("scopes")?;
             let scopes: Vec<String> = serde_json::from_value(scopes_json)
                 .map_err(|e| DbError::InvalidData(format!("scopes JSON: {e}")))?;
@@ -1185,12 +1181,11 @@ impl Db {
         channel_id: Uuid,
         relay_pubkey: &[u8],
     ) -> Result<u64> {
-        let channel_id_bytes = channel_id.as_bytes().to_vec();
         let result = sqlx::query(
             "UPDATE events SET deleted_at = NOW() \
              WHERE channel_id = $1 AND pubkey = $2 AND deleted_at IS NULL AND kind IN (39000, 39001, 39002)",
         )
-        .bind(channel_id_bytes.as_slice())
+        .bind(channel_id)
         .bind(relay_pubkey)
         .execute(&self.pool)
         .await?;
@@ -1208,8 +1203,6 @@ impl Db {
     ) -> Result<(StoredEvent, bool)> {
         let kind_i32 = sprout_core::kind::event_kind_i32(event);
         let pubkey_bytes = event.pubkey.to_bytes();
-        let channel_id_bytes: Option<Vec<u8>> = channel_id.map(|u| u.as_bytes().to_vec());
-
         let mut tx = self.pool.begin().await?;
 
         // Soft-delete existing events with the same (kind, pubkey, channel_id).
@@ -1220,7 +1213,7 @@ impl Db {
         )
         .bind(kind_i32)
         .bind(pubkey_bytes.as_slice())
-        .bind(channel_id_bytes.as_deref())
+        .bind(channel_id)
         .execute(&mut *tx)
         .await?;
 
@@ -1271,8 +1264,7 @@ pub struct AllowlistEntry {
 }
 
 fn parse_api_token_row(row: sqlx::postgres::PgRow) -> Result<ApiTokenRecord> {
-    let id_bytes: Vec<u8> = row.try_get("id")?;
-    let id = uuid_from_bytes(&id_bytes)?;
+    let id: Uuid = row.try_get("id")?;
 
     let scopes_json: serde_json::Value = row.try_get("scopes")?;
     let scopes: Vec<String> = serde_json::from_value(scopes_json)

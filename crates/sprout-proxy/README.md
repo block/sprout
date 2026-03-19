@@ -17,7 +17,7 @@ Client (NIP-28)  ←→  sprout-proxy :4869  ←→  sprout-relay :3000
 ### 1. Start infrastructure and relay
 
 ```bash
-just setup    # Docker: MySQL + Redis
+just setup    # Docker: Postgres + Redis
 just relay    # Relay on :3000
 ```
 

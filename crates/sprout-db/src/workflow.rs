@@ -1,6 +1,6 @@
 //! Workflow CRUD -- workflows, workflow_runs, and workflow_approvals tables.
 //!
-//! All IDs are stored as BINARY(16) (UUID bytes). Never uses string interpolation
+//! All IDs are native Postgres UUID columns. Never uses string interpolation
 //! for query values -- all user data goes through bind parameters.
 //!
 //! Security notes:
@@ -16,7 +16,6 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::error::{DbError, Result};
-use crate::event::uuid_from_bytes;
 
 // -- Token hashing ------------------------------------------------------------
 
@@ -252,7 +251,6 @@ pub async fn create_workflow(
     definition_hash: &[u8],
 ) -> Result<Uuid> {
     let id = Uuid::new_v4();
-    let channel_id_bytes: Option<Vec<u8>> = channel_id.map(|u| u.as_bytes().to_vec());
 
     sqlx::query(
         r#"
@@ -261,10 +259,10 @@ pub async fn create_workflow(
         VALUES ($1, $2, $3, $4, $5, $6, 'active', TRUE)
         "#,
     )
-    .bind(id.as_bytes().to_vec())
+    .bind(id)
     .bind(name)
     .bind(owner_pubkey)
-    .bind(channel_id_bytes)
+    .bind(channel_id)
     .bind(definition_json)
     .bind(definition_hash)
     .execute(pool)
@@ -278,12 +276,12 @@ pub async fn get_workflow(pool: &PgPool, id: Uuid) -> Result<WorkflowRecord> {
     let row = sqlx::query(
         r#"
         SELECT id, name, owner_pubkey, channel_id, definition, definition_hash,
-               status, enabled, created_at, updated_at
+               status::text AS status, enabled, created_at, updated_at
         FROM workflows
         WHERE id = $1
         "#,
     )
-    .bind(id.as_bytes().to_vec())
+    .bind(id)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| DbError::NotFound(format!("workflow {id}")))?;
@@ -307,14 +305,14 @@ pub async fn list_channel_workflows(
     let rows = sqlx::query(
         r#"
         SELECT id, name, owner_pubkey, channel_id, definition, definition_hash,
-               status, enabled, created_at, updated_at
+               status::text AS status, enabled, created_at, updated_at
         FROM workflows
         WHERE channel_id = $1
         ORDER BY created_at DESC
         LIMIT $2 OFFSET $3
         "#,
     )
-    .bind(channel_id.as_bytes().to_vec())
+    .bind(channel_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(pool)
@@ -336,7 +334,7 @@ pub async fn list_enabled_channel_workflows(
     let rows = sqlx::query(
         r#"
         SELECT id, name, owner_pubkey, channel_id, definition, definition_hash,
-               status, enabled, created_at, updated_at
+               status::text AS status, enabled, created_at, updated_at
         FROM workflows
         WHERE channel_id = $1
           AND status = 'active'
@@ -345,7 +343,7 @@ pub async fn list_enabled_channel_workflows(
         LIMIT $2
         "#,
     )
-    .bind(channel_id.as_bytes().to_vec())
+    .bind(channel_id)
     .bind(LIST_MAX_LIMIT)
     .fetch_all(pool)
     .await?;
@@ -362,7 +360,7 @@ pub async fn list_all_enabled_workflows(pool: &PgPool) -> Result<Vec<WorkflowRec
     let rows = sqlx::query(
         r#"
         SELECT id, name, owner_pubkey, channel_id, definition, definition_hash,
-               status, enabled, created_at, updated_at
+               status::text AS status, enabled, created_at, updated_at
         FROM workflows
         WHERE status = 'active'
           AND enabled = TRUE
@@ -396,7 +394,7 @@ pub async fn update_workflow(
     .bind(name)
     .bind(definition_json)
     .bind(definition_hash)
-    .bind(id.as_bytes().to_vec())
+    .bind(id)
     .execute(pool)
     .await?
     .rows_affected();
@@ -417,7 +415,7 @@ pub async fn update_workflow_status(pool: &PgPool, id: Uuid, status: WorkflowSta
         "#,
     )
     .bind(status.to_string())
-    .bind(id.as_bytes().to_vec())
+    .bind(id)
     .execute(pool)
     .await?
     .rows_affected();
@@ -438,7 +436,7 @@ pub async fn set_workflow_enabled(pool: &PgPool, id: Uuid, enabled: bool) -> Res
         "#,
     )
     .bind(enabled)
-    .bind(id.as_bytes().to_vec())
+    .bind(id)
     .execute(pool)
     .await?
     .rows_affected();
@@ -452,7 +450,7 @@ pub async fn set_workflow_enabled(pool: &PgPool, id: Uuid, enabled: bool) -> Res
 /// Delete a workflow and all its runs/approvals (CASCADE).
 pub async fn delete_workflow(pool: &PgPool, id: Uuid) -> Result<()> {
     let affected = sqlx::query("DELETE FROM workflows WHERE id = $1")
-        .bind(id.as_bytes().to_vec())
+        .bind(id)
         .execute(pool)
         .await?
         .rows_affected();
@@ -485,8 +483,8 @@ pub async fn create_workflow_run(
         VALUES ($1, $2, 'pending', $3, 0, '[]', $4)
         "#,
     )
-    .bind(id.as_bytes().to_vec())
-    .bind(workflow_id.as_bytes().to_vec())
+    .bind(id)
+    .bind(workflow_id)
     .bind(trigger_event_id)
     .bind(trigger_context)
     .execute(pool)
@@ -499,13 +497,13 @@ pub async fn create_workflow_run(
 pub async fn get_workflow_run(pool: &PgPool, id: Uuid) -> Result<WorkflowRunRecord> {
     let row = sqlx::query(
         r#"
-        SELECT id, workflow_id, status, trigger_event_id, current_step,
+        SELECT id, workflow_id, status::text AS status, trigger_event_id, current_step,
                execution_trace, trigger_context, started_at, completed_at, error_message, created_at
         FROM workflow_runs
         WHERE id = $1
         "#,
     )
-    .bind(id.as_bytes().to_vec())
+    .bind(id)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| DbError::NotFound(format!("workflow_run {id}")))?;
@@ -522,7 +520,7 @@ pub async fn list_workflow_runs(
     let limit = limit.min(1000);
     let rows = sqlx::query(
         r#"
-        SELECT id, workflow_id, status, trigger_event_id, current_step,
+        SELECT id, workflow_id, status::text AS status, trigger_event_id, current_step,
                execution_trace, trigger_context, started_at, completed_at, error_message, created_at
         FROM workflow_runs
         WHERE workflow_id = $1
@@ -530,7 +528,7 @@ pub async fn list_workflow_runs(
         LIMIT $2
         "#,
     )
-    .bind(workflow_id.as_bytes().to_vec())
+    .bind(workflow_id)
     .bind(limit)
     .fetch_all(pool)
     .await?;
@@ -573,7 +571,7 @@ pub async fn update_workflow_run(
     .bind(error)
     .bind(&status_str) // for started_at CASE
     .bind(&status_str) // for completed_at CASE
-    .bind(id.as_bytes().to_vec())
+    .bind(id)
     .execute(pool)
     .await?
     .rows_affected();
@@ -628,8 +626,8 @@ pub async fn create_approval(pool: &PgPool, params: CreateApprovalParams<'_>) ->
         "#,
     )
     .bind(token_hash)
-    .bind(workflow_id.as_bytes().to_vec())
-    .bind(run_id.as_bytes().to_vec())
+    .bind(workflow_id)
+    .bind(run_id)
     .bind(step_id)
     .bind(step_index)
     .bind(approver_spec)
@@ -650,7 +648,7 @@ pub async fn get_approval(pool: &PgPool, token: &str) -> Result<ApprovalRecord> 
     let row = sqlx::query(
         r#"
         SELECT token, workflow_id, run_id, step_id, step_index, approver_spec,
-               status, approver_pubkey, note, expires_at, created_at
+               status::text AS status, approver_pubkey, note, expires_at, created_at
         FROM workflow_approvals
         WHERE token = $1
         "#,
@@ -710,13 +708,8 @@ pub async fn update_approval(
 // -- Row mappers --------------------------------------------------------------
 
 fn row_to_workflow_record(row: sqlx::postgres::PgRow) -> Result<WorkflowRecord> {
-    let id_bytes: Vec<u8> = row.try_get("id")?;
-    let id = uuid_from_bytes(&id_bytes)?;
-
-    let channel_id: Option<Uuid> = {
-        let raw: Option<Vec<u8>> = row.try_get("channel_id")?;
-        raw.map(|b| uuid_from_bytes(&b)).transpose()?
-    };
+    let id: Uuid = row.try_get("id")?;
+    let channel_id: Option<Uuid> = row.try_get("channel_id")?;
 
     let status_str: String = row.try_get("status")?;
     let status = status_str.parse::<WorkflowStatus>()?;
@@ -738,11 +731,8 @@ fn row_to_workflow_record(row: sqlx::postgres::PgRow) -> Result<WorkflowRecord> 
 }
 
 fn row_to_run_record(row: sqlx::postgres::PgRow) -> Result<WorkflowRunRecord> {
-    let id_bytes: Vec<u8> = row.try_get("id")?;
-    let id = uuid_from_bytes(&id_bytes)?;
-
-    let wf_bytes: Vec<u8> = row.try_get("workflow_id")?;
-    let workflow_id = uuid_from_bytes(&wf_bytes)?;
+    let id: Uuid = row.try_get("id")?;
+    let workflow_id: Uuid = row.try_get("workflow_id")?;
 
     let status_str: String = row.try_get("status")?;
     let status = status_str.parse::<RunStatus>()?;
@@ -763,11 +753,8 @@ fn row_to_run_record(row: sqlx::postgres::PgRow) -> Result<WorkflowRunRecord> {
 }
 
 fn row_to_approval_record(row: sqlx::postgres::PgRow) -> Result<ApprovalRecord> {
-    let wf_bytes: Vec<u8> = row.try_get("workflow_id")?;
-    let workflow_id = uuid_from_bytes(&wf_bytes)?;
-
-    let run_bytes: Vec<u8> = row.try_get("run_id")?;
-    let run_id = uuid_from_bytes(&run_bytes)?;
+    let workflow_id: Uuid = row.try_get("workflow_id")?;
+    let run_id: Uuid = row.try_get("run_id")?;
 
     let status_str: String = row.try_get("status")?;
     let status = status_str.parse::<ApprovalStatus>()?;
@@ -1239,38 +1226,5 @@ mod tests {
 
         assert_eq!(record.status, ApprovalStatus::Pending);
         assert_eq!(cloned.status, ApprovalStatus::Granted);
-    }
-
-    // -- uuid_from_bytes (helper) ---------------------------------------------
-
-    #[test]
-    fn uuid_from_bytes_round_trips() {
-        let original = Uuid::new_v4();
-        let bytes = original.as_bytes().to_vec();
-        let recovered = uuid_from_bytes(&bytes).expect("uuid_from_bytes failed");
-        assert_eq!(original, recovered);
-    }
-
-    #[test]
-    fn uuid_from_bytes_rejects_wrong_length() {
-        let bad_bytes = vec![0u8; 10]; // UUID requires exactly 16 bytes
-        let err = uuid_from_bytes(&bad_bytes).unwrap_err();
-        assert!(
-            matches!(err, DbError::InvalidData(_)),
-            "expected InvalidData, got: {err}"
-        );
-    }
-
-    #[test]
-    fn uuid_from_bytes_rejects_empty() {
-        let err = uuid_from_bytes(&[]).unwrap_err();
-        assert!(matches!(err, DbError::InvalidData(_)));
-    }
-
-    #[test]
-    fn uuid_from_bytes_accepts_nil_uuid() {
-        let nil_bytes = [0u8; 16];
-        let result = uuid_from_bytes(&nil_bytes).expect("nil UUID should parse");
-        assert_eq!(result, Uuid::nil());
     }
 }

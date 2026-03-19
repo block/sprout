@@ -10,7 +10,6 @@ use uuid::Uuid;
 
 use crate::channel::ChannelRecord;
 use crate::error::{DbError, Result};
-use crate::event::uuid_from_bytes;
 
 // -- Public structs -----------------------------------------------------------
 
@@ -68,7 +67,8 @@ pub async fn find_dm_by_participants(
 ) -> Result<Option<ChannelRecord>> {
     let row = sqlx::query(
         r#"
-        SELECT id, name, channel_type, visibility, description, canvas,
+        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+               description, canvas,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
@@ -125,7 +125,8 @@ pub async fn create_dm(
     // Idempotency check inside the transaction.
     let existing = sqlx::query(
         r#"
-        SELECT id, name, channel_type, visibility, description, canvas,
+        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+               description, canvas,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
@@ -154,7 +155,6 @@ pub async fn create_dm(
     };
 
     let id = Uuid::new_v4();
-    let id_bytes = id.as_bytes().as_slice().to_vec();
 
     sqlx::query(
         r#"
@@ -163,7 +163,7 @@ pub async fn create_dm(
         VALUES ($1, $2, 'dm', 'private', $3, $4)
         "#,
     )
-    .bind(&id_bytes)
+    .bind(id)
     .bind(&name)
     .bind(created_by)
     .bind(hash.as_slice())
@@ -182,7 +182,7 @@ pub async fn create_dm(
                 role = EXCLUDED.role
             "#,
         )
-        .bind(&id_bytes)
+        .bind(id)
         .bind(*pk)
         .bind(created_by)
         .execute(&mut *tx)
@@ -191,7 +191,8 @@ pub async fn create_dm(
 
     let row = sqlx::query(
         r#"
-        SELECT id, name, channel_type, visibility, description, canvas,
+        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+               description, canvas,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
@@ -199,7 +200,7 @@ pub async fn create_dm(
         FROM channels WHERE id = $1
         "#,
     )
-    .bind(&id_bytes)
+    .bind(id)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -222,9 +223,8 @@ pub async fn list_dms_for_user(
 
     // Resolve cursor to a timestamp for keyset pagination.
     let cursor_ts: Option<DateTime<Utc>> = if let Some(cid) = cursor {
-        let cid_bytes = cid.as_bytes().as_slice().to_vec();
         let row = sqlx::query("SELECT updated_at FROM channels WHERE id = $1")
-            .bind(&cid_bytes)
+            .bind(cid)
             .fetch_optional(pool)
             .await?;
         row.map(|r| r.try_get::<DateTime<Utc>, _>("updated_at"))
@@ -279,15 +279,14 @@ pub async fn list_dms_for_user(
     let mut results = Vec::with_capacity(channel_rows.len());
 
     for row in channel_rows {
-        let id_bytes: Vec<u8> = row.try_get("id")?;
-        let channel_id = uuid_from_bytes(&id_bytes)?;
+        let channel_id: Uuid = row.try_get("id")?;
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
         let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
 
         // Fetch participants for this DM.
         let member_rows = sqlx::query(
             r#"
-            SELECT cm.pubkey, cm.role, u.display_name
+            SELECT cm.pubkey, cm.role::text AS role, u.display_name
             FROM channel_members cm
             LEFT JOIN users u ON cm.pubkey = u.pubkey
             WHERE cm.channel_id = $1
@@ -295,7 +294,7 @@ pub async fn list_dms_for_user(
             ORDER BY cm.joined_at ASC
             "#,
         )
-        .bind(&id_bytes)
+        .bind(channel_id)
         .fetch_all(pool)
         .await?;
 
@@ -363,8 +362,7 @@ pub async fn open_dm(
 // -- Row mapping --------------------------------------------------------------
 
 fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
-    let id_bytes: Vec<u8> = row.try_get("id")?;
-    let id = uuid_from_bytes(&id_bytes)?;
+    let id: Uuid = row.try_get("id")?;
     let topic_required: bool = row.try_get("topic_required")?;
 
     Ok(ChannelRecord {

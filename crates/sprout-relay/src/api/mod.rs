@@ -735,7 +735,7 @@ mod tests {
     //
     // The logic is: member → Ok, else open channel → Ok, else → 403 Forbidden.
     //
-    // Unit tests for this function require a live MySQL connection (no mock Db
+    // Unit tests for this function require a live Postgres connection (no mock Db
     // exists in the codebase).  The logic is simple enough that it is fully
     // covered by the integration tests in `tests/` which run against a test DB.
     //
