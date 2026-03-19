@@ -67,6 +67,7 @@ type AppSidebarProps = {
     description?: string;
   }) => Promise<void>;
   onOpenBrowseChannels: () => void;
+  onOpenBrowseForums: () => void;
   onOpenSearch: () => void;
   onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
   onSelectAgents: () => void;
@@ -366,6 +367,7 @@ export function AppSidebar({
   onCreateChannel,
   onCreateForum,
   onOpenBrowseChannels,
+  onOpenBrowseForums,
   onOpenSearch,
   onOpenDm,
   onSelectAgents,
@@ -527,6 +529,7 @@ export function AppSidebar({
             />
             <ChannelGroupSection
               browseAriaLabel="Browse forums"
+              browseTestId="browse-forums"
               closeAriaLabel="Close new forum form"
               createAriaLabel="New forum"
               createFormTestId="create-forum-form"
@@ -539,7 +542,7 @@ export function AppSidebar({
               items={forumChannels}
               listTestId="forum-list"
               namePlaceholder="design-discussions"
-              onBrowse={onOpenBrowseChannels}
+              onBrowse={onOpenBrowseForums}
               onSelectChannel={onSelectChannel}
               selectedChannelId={selectedChannelId}
               title="Forums"

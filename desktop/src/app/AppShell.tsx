@@ -67,7 +67,9 @@ export function AppShell() {
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
   const [isSearchOpen, setIsSearchOpen] = React.useState(false);
-  const [isBrowseChannelsOpen, setIsBrowseChannelsOpen] = React.useState(false);
+  const [browseDialogType, setBrowseDialogType] = React.useState<
+    "stream" | "forum" | null
+  >(null);
   const [searchAnchor, setSearchAnchor] = React.useState<SearchHit | null>(
     null,
   );
@@ -547,7 +549,11 @@ export function AppShell() {
               openChannelView(createdForum.id);
             }}
             onOpenBrowseChannels={() => {
-              setIsBrowseChannelsOpen(true);
+              setBrowseDialogType("stream");
+              void refetchChannels();
+            }}
+            onOpenBrowseForums={() => {
+              setBrowseDialogType("forum");
               void refetchChannels();
             }}
             onOpenSearch={() => {
@@ -707,10 +713,13 @@ export function AppShell() {
 
       <ChannelBrowserDialog
         channels={channels}
+        channelTypeFilter={browseDialogType ?? "stream"}
         onJoinChannel={handleBrowseChannelJoin}
-        onOpenChange={setIsBrowseChannelsOpen}
+        onOpenChange={(open) => {
+          if (!open) setBrowseDialogType(null);
+        }}
         onSelectChannel={handleOpenChannel}
-        open={isBrowseChannelsOpen}
+        open={browseDialogType !== null}
       />
 
       <SearchDialog
