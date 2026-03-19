@@ -23,6 +23,7 @@ tokio = { workspace = true }
 
 # WebSocket
 tokio-tungstenite = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 futures-util = { workspace = true }
 
 # HTTP (channel discovery REST API)

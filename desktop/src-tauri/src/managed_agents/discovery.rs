@@ -1,11 +1,18 @@
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
+use reqwest::Method;
+use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 
-use crate::managed_agents::{AcpProviderInfo, CommandAvailabilityInfo, DEFAULT_AGENT_ARG};
+use crate::{
+    app_state::AppState,
+    managed_agents::{AcpProviderInfo, CommandAvailabilityInfo, DEFAULT_AGENT_ARG},
+    models::MintTokenBody,
+    relay::{relay_http_base_url, send_json_request},
+};
 
 struct KnownAcpProvider {
     id: &'static str,
@@ -263,16 +270,65 @@ pub fn managed_agent_avatar_url(command: &str) -> Option<String> {
     Some(provider.avatar_url.to_string())
 }
 
-pub fn admin_command() -> String {
-    std::env::var("SPROUT_ADMIN_COMMAND").unwrap_or_else(|_| "sprout-admin".to_string())
-}
-
 pub fn default_token_scopes() -> Vec<String> {
     vec![
         "messages:read".to_string(),
         "messages:write".to_string(),
         "channels:read".to_string(),
     ]
+}
+
+/// Mint an API token for `agent_keys` by signing a NIP-98 auth event with the
+/// agent's own keypair and posting to `POST /api/tokens` on the relay.
+///
+/// The relay mints the token for the signing pubkey, so using the agent's keys
+/// here ensures the token is bound to the agent's identity — not the desktop
+/// user's. No `sprout-admin` binary or database access is required.
+pub async fn mint_token_via_api(
+    state: &AppState,
+    agent_keys: &Keys,
+    relay_url: &str,
+    name: &str,
+    scopes: &[String],
+) -> Result<String, String> {
+    let http_base = relay_http_base_url(relay_url);
+    let url = format!("{http_base}/api/tokens");
+
+    let body = MintTokenBody {
+        name,
+        scopes,
+        channel_ids: None,
+        expires_in_days: None,
+    };
+    let body_bytes =
+        serde_json::to_vec(&body).map_err(|e| format!("serialize mint body failed: {e}"))?;
+
+    // Build NIP-98 auth header signed by the AGENT's keys (not the desktop user's).
+    let payload_hash = format!("{:x}", Sha256::digest(&body_bytes));
+    let forwarded_proto = if url.starts_with("http://") { "http" } else { "https" };
+    let tags = vec![
+        Tag::parse(vec!["u", &url]).map_err(|e| format!("url tag failed: {e}"))?,
+        Tag::parse(vec!["method", "POST"]).map_err(|e| format!("method tag failed: {e}"))?,
+        Tag::parse(vec!["payload", &payload_hash])
+            .map_err(|e| format!("payload tag failed: {e}"))?,
+    ];
+    let event = EventBuilder::new(Kind::HttpAuth, "")
+        .tags(tags)
+        .sign_with_keys(agent_keys)
+        .map_err(|e| format!("sign failed: {e}"))?;
+    let auth_header = format!("Nostr {}", BASE64.encode(event.as_json().as_bytes()));
+
+    let request = state
+        .http_client
+        .request(Method::POST, &url)
+        .header("Authorization", auth_header)
+        .header("Content-Type", "application/json")
+        .header("X-Forwarded-Proto", forwarded_proto)
+        .body(body_bytes);
+
+    let response: crate::models::MintTokenResponse = send_json_request(request).await?;
+
+    Ok(response.token)
 }
 
 #[cfg(test)]

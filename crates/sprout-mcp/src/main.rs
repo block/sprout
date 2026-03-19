@@ -9,6 +9,8 @@ use sprout_mcp::toolsets::ToolsetConfig;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install the ring crypto provider for rustls (required for wss:// connections).
+    let _ = rustls::crypto::ring::default_provider().install_default();
     // Log to stderr — stdout is the MCP JSON-RPC channel.
     tracing_subscriber::fmt()
         .with_env_filter(

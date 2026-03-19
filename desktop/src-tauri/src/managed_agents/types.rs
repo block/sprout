@@ -191,7 +191,6 @@ pub struct DiscoverManagedAgentPrereqsRequest {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ManagedAgentPrereqsInfo {
-    pub admin: CommandAvailabilityInfo,
     pub acp: CommandAvailabilityInfo,
     pub mcp: CommandAvailabilityInfo,
 }

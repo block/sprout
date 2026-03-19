@@ -34,6 +34,9 @@ serde_json = { workspace = true }
 # HTTP client (for relay REST API calls)
 reqwest = { workspace = true }
 
+# TLS crypto provider (required for wss:// connections)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+
 # Utilities
 uuid = { workspace = true }
 tracing = { workspace = true }
