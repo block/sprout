@@ -300,11 +300,13 @@ pub async fn set_channel_add_policy(pool: &PgPool, pubkey: &[u8], policy: &str) 
             "invalid channel_add_policy: {policy}"
         )));
     }
-    let result = sqlx::query(r#"UPDATE users SET channel_add_policy = $1::channel_add_policy WHERE pubkey = $2"#)
-        .bind(policy)
-        .bind(pubkey)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query(
+        r#"UPDATE users SET channel_add_policy = $1::channel_add_policy WHERE pubkey = $2"#,
+    )
+    .bind(policy)
+    .bind(pubkey)
+    .execute(pool)
+    .await?;
     if result.rows_affected() == 0 {
         return Err(crate::error::DbError::NotFound(
             "pubkey not found in users table".into(),
