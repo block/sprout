@@ -578,12 +578,6 @@ export function AppSidebar({
           </>
         ) : null}
 
-        {!isLoading && channels.length === 0 ? (
-          <div className="px-3 py-2 text-sm text-sidebar-foreground/70">
-            No channels available yet.
-          </div>
-        ) : null}
-
         {errorMessage ? (
           <div className="px-3 py-2 text-sm text-destructive">
             {errorMessage}
