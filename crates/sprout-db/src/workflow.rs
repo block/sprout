@@ -256,7 +256,7 @@ pub async fn create_workflow(
         r#"
         INSERT INTO workflows
             (id, name, owner_pubkey, channel_id, definition, definition_hash, status, enabled)
-        VALUES ($1, $2, $3, $4, $5, $6, 'active', TRUE)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6, 'active', TRUE)
         "#,
     )
     .bind(id)
@@ -387,7 +387,7 @@ pub async fn update_workflow(
     let affected = sqlx::query(
         r#"
         UPDATE workflows
-        SET name = $1, definition = $2, definition_hash = $3
+        SET name = $1, definition = $2::jsonb, definition_hash = $3
         WHERE id = $4
         "#,
     )
