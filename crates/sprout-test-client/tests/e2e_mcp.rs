@@ -102,7 +102,7 @@ fn spawn_mcp_server(keys: &Keys) -> Child {
         ])
         .env("SPROUT_RELAY_URL", relay_ws_url())
         .env("SPROUT_PRIVATE_KEY", &nsec)
-        // Tests exercise all 43 tools — enable every toolset.
+        // Tests exercise all 42 tools — enable every toolset.
         .env("SPROUT_TOOLSETS", "all")
         // Prevent a stale SPROUT_API_TOKEN from the host .env leaking into
         // the subprocess and causing NIP-42 auth failures against a fresh DB.
@@ -251,7 +251,7 @@ impl McpSession {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// Spawn the MCP server, complete the initialize handshake, and verify that
-/// all 41 expected tools are listed by `tools/list`.
+/// all 42 expected tools are listed by `tools/list`.
 #[tokio::test]
 #[ignore]
 async fn test_mcp_initialize_and_list_tools() {
@@ -313,47 +313,48 @@ async fn test_mcp_initialize_and_list_tools() {
     let tool_names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
 
     let expected_tools = [
-        "send_message",
-        "get_channel_history",
-        "list_channels",
-        "create_channel",
-        "get_canvas",
-        "set_canvas",
-        "list_workflows",
-        "create_workflow",
-        "update_workflow",
-        "delete_workflow",
-        "trigger_workflow",
-        "get_workflow_runs",
-        "approve_workflow_step",
-        "get_feed",
-        "get_feed_mentions",
-        "get_feed_actions",
         "add_channel_member",
-        "remove_channel_member",
-        "list_channel_members",
+        "add_dm_member",
+        "add_reaction",
+        "approve_step",
+        "archive_channel",
+        "create_channel",
+        "create_workflow",
+        "delete_message",
+        "delete_workflow",
+        "edit_message",
+        "get_canvas",
+        "get_channel",
+        "get_feed",
+        "get_messages",
+        "get_presence",
+        "get_reactions",
+        "get_thread",
+        "get_users",
+        "get_workflow_runs",
         "join_channel",
         "leave_channel",
-        "get_channel",
-        "update_channel",
-        "set_channel_topic",
-        "set_channel_purpose",
-        "archive_channel",
-        "unarchive_channel",
-        "send_reply",
-        "get_thread",
-        "open_dm",
-        "add_dm_member",
+        "list_channel_members",
+        "list_channels",
         "list_dms",
-        "add_reaction",
+        "list_workflows",
+        "open_dm",
+        "remove_channel_member",
         "remove_reaction",
-        "get_reactions",
-        "set_profile",
-        "get_user_profile",
-        "get_users_batch",
         "search",
-        "get_presence",
+        "send_diff_message",
+        "send_message",
+        "set_canvas",
+        "set_channel_add_policy",
+        "set_channel_purpose",
+        "set_channel_topic",
         "set_presence",
+        "set_profile",
+        "trigger_workflow",
+        "unarchive_channel",
+        "update_channel",
+        "update_workflow",
+        "vote_on_post",
     ];
 
     for expected in &expected_tools {
@@ -442,7 +443,7 @@ async fn test_mcp_list_channels() {
 }
 
 /// Send a message to a channel via `send_message`, then read it back via
-/// `get_channel_history` and verify the content matches.
+/// `get_messages` and verify the content matches.
 #[tokio::test]
 #[ignore]
 async fn test_mcp_send_and_read_message() {
@@ -487,9 +488,9 @@ async fn test_mcp_send_and_read_message() {
     // Small delay to let the event propagate through the relay.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // ── get_channel_history ─────────────────────────────────────────────────
+    // ── get_messages ─────────────────────────────────────────────────
     let history_resp = session.call_tool(
-        "get_channel_history",
+        "get_messages",
         json!({
             "channel_id": channel_id,
             "limit": 20,
@@ -498,17 +499,17 @@ async fn test_mcp_send_and_read_message() {
 
     assert!(
         history_resp.get("error").is_none(),
-        "get_channel_history returned a JSON-RPC error: {history_resp}"
+        "get_messages returned a JSON-RPC error: {history_resp}"
     );
 
     let history_text = McpSession::tool_text(&history_resp);
     assert!(
         !history_text.starts_with("Error"),
-        "get_channel_history returned an error: {history_text}"
+        "get_messages returned an error: {history_text}"
     );
 
     let history_json: Value = serde_json::from_str(&history_text).unwrap_or_else(|e| {
-        panic!("get_channel_history response is not valid JSON: {e}\n{history_text}")
+        panic!("get_messages response is not valid JSON: {e}\n{history_text}")
     });
     let events = history_json
         .get("messages")
@@ -580,13 +581,13 @@ async fn test_mcp_search() {
         "list_channels failed before search: {channels_text}"
     );
 
-    // ── get_channel_history as a proxy for search ────────────────────────────
+    // ── get_messages as a proxy for search ────────────────────────────
     // The MCP server's `search` tool is not directly exposed; instead we verify
-    // the message is findable via get_channel_history (which uses the relay's
+    // the message is findable via get_messages (which uses the relay's
     // subscription API, not Typesense). This confirms the full send→store→retrieve
     // round-trip works through MCP.
     let history_resp = session.call_tool(
-        "get_channel_history",
+        "get_messages",
         json!({
             "channel_id": channel_id,
             "limit": 50,
@@ -595,17 +596,17 @@ async fn test_mcp_search() {
 
     assert!(
         history_resp.get("error").is_none(),
-        "get_channel_history returned a JSON-RPC error: {history_resp}"
+        "get_messages returned a JSON-RPC error: {history_resp}"
     );
 
     let history_text = McpSession::tool_text(&history_resp);
     assert!(
         !history_text.starts_with("Error"),
-        "get_channel_history returned an error: {history_text}"
+        "get_messages returned an error: {history_text}"
     );
 
     let history_json: Value = serde_json::from_str(&history_text).unwrap_or_else(|e| {
-        panic!("get_channel_history response is not valid JSON: {e}\n{history_text}")
+        panic!("get_messages response is not valid JSON: {e}\n{history_text}")
     });
     let events = history_json
         .get("messages")
@@ -811,7 +812,7 @@ async fn test_mcp_create_and_trigger_workflow() {
     session.stop();
 }
 
-/// Verify the MCP feed tools work: `get_feed`, `get_feed_mentions`, `get_feed_actions`.
+/// Verify the MCP feed tools work: `get_feed` (with types: "mentions" and "needs_action").
 #[tokio::test]
 #[ignore]
 async fn test_mcp_feed_tools() {
@@ -856,32 +857,32 @@ async fn test_mcp_feed_tools() {
         "feed missing 'activity' section"
     );
 
-    // ── get_feed_mentions ───────────────────────────────────────────────────
-    let mentions_resp = session.call_tool("get_feed_mentions", json!({"limit": 10}));
+    // ── get_feed with types: "mentions" ─────────────────────────────────────
+    let mentions_resp = session.call_tool("get_feed", json!({"types": "mentions", "limit": 10}));
 
     assert!(
         mentions_resp.get("error").is_none(),
-        "get_feed_mentions returned a JSON-RPC error: {mentions_resp}"
+        "get_feed(mentions) returned a JSON-RPC error: {mentions_resp}"
     );
 
     let mentions_text = McpSession::tool_text(&mentions_resp);
     assert!(
         !mentions_text.starts_with("Error"),
-        "get_feed_mentions returned an error: {mentions_text}"
+        "get_feed(mentions) returned an error: {mentions_text}"
     );
 
-    // ── get_feed_actions ────────────────────────────────────────────────────
-    let actions_resp = session.call_tool("get_feed_actions", json!({"limit": 10}));
+    // ── get_feed with types: "needs_action" ──────────────────────────────────
+    let actions_resp = session.call_tool("get_feed", json!({"types": "needs_action", "limit": 10}));
 
     assert!(
         actions_resp.get("error").is_none(),
-        "get_feed_actions returned a JSON-RPC error: {actions_resp}"
+        "get_feed(needs_action) returned a JSON-RPC error: {actions_resp}"
     );
 
     let actions_text = McpSession::tool_text(&actions_resp);
     assert!(
         !actions_text.starts_with("Error"),
-        "get_feed_actions returned an error: {actions_text}"
+        "get_feed(needs_action) returned an error: {actions_text}"
     );
 
     session.stop();
@@ -950,7 +951,7 @@ async fn test_mcp_canvas_set_and_get() {
 
 // ── Public profile MCP tests ──────────────────────────────────────────────────
 
-/// Call `get_user_profile` with no arguments to retrieve the authenticated user's own profile.
+/// Call `get_users` with no arguments to retrieve the authenticated user's own profile.
 #[tokio::test]
 #[ignore]
 async fn test_mcp_get_user_profile_self() {
@@ -970,11 +971,11 @@ async fn test_mcp_get_user_profile_self() {
     let mut session = McpSession::start(&keys).await;
     session.initialize();
 
-    // Get own profile (no pubkey arg)
+    // Get own profile (no pubkeys arg)
     let resp = session.send_request(
         "tools/call",
         json!({
-            "name": "get_user_profile",
+            "name": "get_users",
             "arguments": {}
         }),
     );
@@ -988,7 +989,7 @@ async fn test_mcp_get_user_profile_self() {
     session.stop();
 }
 
-/// Call `get_user_profile` with a pubkey argument to retrieve another user's profile.
+/// Call `get_users` with a pubkeys argument to retrieve another user's profile.
 #[tokio::test]
 #[ignore]
 async fn test_mcp_get_user_profile_other() {
@@ -1012,8 +1013,8 @@ async fn test_mcp_get_user_profile_other() {
     let resp = session.send_request(
         "tools/call",
         json!({
-            "name": "get_user_profile",
-            "arguments": {"pubkey": other_hex}
+            "name": "get_users",
+            "arguments": {"pubkeys": [other_hex]}
         }),
     );
 
@@ -1025,7 +1026,7 @@ async fn test_mcp_get_user_profile_other() {
     session.stop();
 }
 
-/// Call `get_users_batch` with a mix of known and unknown pubkeys.
+/// Call `get_users` with a mix of known and unknown pubkeys.
 #[tokio::test]
 #[ignore]
 async fn test_mcp_get_users_batch() {
@@ -1050,7 +1051,7 @@ async fn test_mcp_get_users_batch() {
     let resp = session.send_request(
         "tools/call",
         json!({
-            "name": "get_users_batch",
+            "name": "get_users",
             "arguments": {"pubkeys": [pubkey_hex, unknown_hex]}
         }),
     );
