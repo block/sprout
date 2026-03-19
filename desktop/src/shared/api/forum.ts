@@ -5,6 +5,7 @@ import type {
   ThreadReply,
 } from "@/shared/api/types";
 import { KIND_FORUM_POST } from "@/shared/constants/kinds";
+import { resolveEventAuthorPubkey } from "@/shared/lib/authors";
 
 import { invokeTauri } from "./tauri";
 
@@ -57,7 +58,10 @@ type RawForumThreadResponse = {
 function fromRawForumPost(post: RawForumPost): ForumPost {
   return {
     eventId: post.event_id,
-    pubkey: post.pubkey,
+    pubkey: resolveEventAuthorPubkey({
+      pubkey: post.pubkey,
+      tags: post.tags,
+    }),
     content: post.content,
     kind: post.kind,
     createdAt: post.created_at,
@@ -77,7 +81,10 @@ function fromRawForumPost(post: RawForumPost): ForumPost {
 function fromRawThreadReply(reply: RawThreadReply): ThreadReply {
   return {
     eventId: reply.event_id,
-    pubkey: reply.pubkey,
+    pubkey: resolveEventAuthorPubkey({
+      pubkey: reply.pubkey,
+      tags: reply.tags,
+    }),
     content: reply.content,
     kind: reply.kind,
     createdAt: reply.created_at,

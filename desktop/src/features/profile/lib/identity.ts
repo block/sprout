@@ -1,4 +1,4 @@
-import type { UserProfileSummary } from "@/shared/api/types";
+import type { Profile, UserProfileSummary } from "@/shared/api/types";
 
 export type UserProfileLookup = Record<string, UserProfileSummary>;
 
@@ -19,6 +19,27 @@ function getResolvedProfile(
   }
 
   return profiles[normalizePubkey(pubkey)] ?? null;
+}
+
+export function mergeCurrentProfileIntoLookup(
+  profiles: UserProfileLookup | undefined,
+  currentProfile:
+    | Pick<Profile, "pubkey" | "displayName" | "avatarUrl" | "nip05Handle">
+    | null
+    | undefined,
+) {
+  if (!currentProfile) {
+    return profiles;
+  }
+
+  return {
+    ...(profiles ?? {}),
+    [normalizePubkey(currentProfile.pubkey)]: {
+      displayName: currentProfile.displayName,
+      avatarUrl: currentProfile.avatarUrl,
+      nip05Handle: currentProfile.nip05Handle,
+    },
+  };
 }
 
 export function resolveUserLabel(input: {

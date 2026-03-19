@@ -1,7 +1,8 @@
 import { MessageSquareText } from "lucide-react";
 import * as React from "react";
 
-import { useUsersBatchQuery } from "@/features/profile/hooks";
+import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
+import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
 import { Skeleton } from "@/shared/ui/skeleton";
 
@@ -35,6 +36,7 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
   );
   const [isComposerOpen, setIsComposerOpen] = React.useState(false);
 
+  const profileQuery = useProfileQuery();
   const postsQuery = useForumPostsQuery(channel);
   const threadQuery = useForumThreadQuery(
     expandedPostId ? channel.id : null,
@@ -73,6 +75,15 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
   const profilesQuery = useUsersBatchQuery(allPubkeys, {
     enabled: allPubkeys.length > 0,
   });
+  const effectiveCurrentPubkey = currentPubkey ?? profileQuery.data?.pubkey;
+  const profiles = React.useMemo(
+    () =>
+      mergeCurrentProfileIntoLookup(
+        profilesQuery.data?.profiles,
+        profileQuery.data,
+      ),
+    [profileQuery.data, profilesQuery.data?.profiles],
+  );
 
   // Reset expanded post when channel changes
   const previousChannelIdRef = React.useRef(channel.id);
@@ -85,13 +96,13 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
   if (expandedPostId) {
     const threadPost = threadQuery.data?.post;
     const canDeleteExpandedPost = threadPost
-      ? canDelete(threadPost.pubkey, currentPubkey)
+      ? canDelete(threadPost.pubkey, effectiveCurrentPubkey)
       : false;
 
     return (
       <ForumThreadPanel
         canDeletePost={canDeleteExpandedPost}
-        currentPubkey={currentPubkey}
+        currentPubkey={effectiveCurrentPubkey}
         isDeletingPost={deletePostMutation.isPending}
         isLoading={threadQuery.isLoading}
         isSendingReply={createReplyMutation.isPending}
@@ -113,7 +124,7 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
             mentionPubkeys,
           });
         }}
-        profiles={profilesQuery.data?.profiles}
+        profiles={profiles}
         thread={threadQuery.data}
       />
     );
@@ -181,8 +192,8 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
           <div className="space-y-3 p-4">
             {posts.map((post) => (
               <ForumPostCard
-                canDelete={canDelete(post.pubkey, currentPubkey)}
-                currentPubkey={currentPubkey}
+                canDelete={canDelete(post.pubkey, effectiveCurrentPubkey)}
+                currentPubkey={effectiveCurrentPubkey}
                 isActive={false}
                 isDeleting={
                   deletePostMutation.isPending &&
@@ -194,7 +205,7 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
                   deletePostMutation.mutate({ eventId });
                 }}
                 post={post}
-                profiles={profilesQuery.data?.profiles}
+                profiles={profiles}
               />
             ))}
           </div>
