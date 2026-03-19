@@ -630,7 +630,8 @@ async fn test_approval_gate_stub_fails_gracefully() {
     let base = relay_http_url();
 
     // ── Step 1: Create a workflow with a request_approval step ────────────────
-    let workflow_yaml = r#"name: approval-test
+    let workflow_yaml = format!(
+        r#"name: approval-test
 description: Test approval gate
 trigger:
   on: webhook
@@ -638,6 +639,7 @@ steps:
   - id: step1
     name: Pre-approval step
     action: send_message
+    channel: "{CHANNEL_GENERAL}"
     text: "Before approval"
   - id: approve
     action: request_approval
@@ -646,9 +648,11 @@ steps:
   - id: step3
     name: Post-approval step
     action: send_message
+    channel: "{CHANNEL_GENERAL}"
     text: "After approval"
-"#;
-    let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, workflow_yaml).await;
+"#
+    );
+    let created = create_workflow(&client, &base, pubkey_hex, CHANNEL_GENERAL, &workflow_yaml).await;
     let workflow_id = created["id"]
         .as_str()
         .expect("created workflow must have 'id'")
@@ -709,7 +713,7 @@ steps:
         "approval gate stub must cause the run to fail"
     );
 
-    let error_msg = run["error"].as_str().unwrap_or("");
+    let error_msg = run["error_message"].as_str().unwrap_or("");
     assert!(
         error_msg.contains("approval gates not yet implemented"),
         "run error must contain 'approval gates not yet implemented', got: {error_msg:?}"
