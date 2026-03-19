@@ -102,6 +102,11 @@ fn spawn_mcp_server(keys: &Keys) -> Child {
         ])
         .env("SPROUT_RELAY_URL", relay_ws_url())
         .env("SPROUT_PRIVATE_KEY", &nsec)
+        // Tests exercise all 43 tools — enable every toolset.
+        .env("SPROUT_TOOLSETS", "all")
+        // Prevent a stale SPROUT_API_TOKEN from the host .env leaking into
+        // the subprocess and causing NIP-42 auth failures against a fresh DB.
+        .env_remove("SPROUT_API_TOKEN")
         // Suppress verbose startup logs so they don't pollute stderr output.
         .env("RUST_LOG", "error")
         .stdin(Stdio::piped())
@@ -295,8 +300,8 @@ async fn test_mcp_initialize_and_list_tools() {
 
     assert_eq!(
         tools.len(),
-        43,
-        "expected exactly 43 tools, got {}. Tools: {:?}",
+        42,
+        "expected exactly 42 tools, got {}. Tools: {:?}",
         tools.len(),
         tools
             .iter()

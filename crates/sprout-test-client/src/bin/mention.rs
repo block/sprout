@@ -6,6 +6,8 @@ use sprout_test_client::SproutTestClient;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // rustls needs a CryptoProvider even for plain ws:// connections.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 4 {
         eprintln!("Usage: mention <channel_uuid> <target_pubkey_hex> <message>");
