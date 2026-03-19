@@ -3,12 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   attachManagedAgentToChannel,
   createChannelManagedAgent,
+  createChannelManagedAgents,
   ensureChannelAgentPresetInChannel,
 } from "@/features/agents/channelAgents";
 import { channelsQueryKey } from "@/features/channels/hooks";
 import {
-  deleteManagedAgent,
   createManagedAgent,
+  deleteManagedAgent,
   discoverAcpProviders,
   discoverManagedAgentPrereqs,
   getManagedAgentLog,
@@ -18,16 +19,26 @@ import {
   startManagedAgent,
   stopManagedAgent,
 } from "@/shared/api/tauri";
+import {
+  createPersona,
+  deletePersona,
+  listPersonas,
+  updatePersona,
+} from "@/shared/api/tauriPersonas";
 import { setManagedAgentStartOnAppLaunch } from "@/shared/api/tauriManagedAgents";
 import type {
+  AgentPersona,
   CreateManagedAgentInput,
+  CreatePersonaInput,
   ManagedAgent,
   MintManagedAgentTokenInput,
+  UpdatePersonaInput,
 } from "@/shared/api/types";
 import type {
   AttachManagedAgentToChannelInput,
   AttachManagedAgentToChannelResult,
   CreateChannelManagedAgentInput,
+  CreateChannelManagedAgentsResult,
   CreateChannelManagedAgentResult,
   EnsureChannelAgentPresetInput,
   EnsureChannelAgentPresetResult,
@@ -36,6 +47,8 @@ export type {
   AttachManagedAgentToChannelInput,
   AttachManagedAgentToChannelResult,
   CreateChannelManagedAgentInput,
+  CreateChannelManagedAgentBatchFailure,
+  CreateChannelManagedAgentsResult,
   CreateChannelManagedAgentResult,
   EnsureChannelAgentPresetInput,
   EnsureChannelAgentPresetResult,
@@ -43,6 +56,7 @@ export type {
 
 export const relayAgentsQueryKey = ["relay-agents"] as const;
 export const managedAgentsQueryKey = ["managed-agents"] as const;
+export const personasQueryKey = ["personas"] as const;
 export const acpProvidersQueryKey = ["acp-providers"] as const;
 export const managedAgentPrereqsQueryKey = ["managed-agent-prereqs"] as const;
 
@@ -73,6 +87,14 @@ export function useAcpProvidersQuery() {
     queryKey: acpProvidersQueryKey,
     queryFn: discoverAcpProviders,
     staleTime: 60_000,
+  });
+}
+
+export function usePersonasQuery() {
+  return useQuery({
+    queryKey: personasQueryKey,
+    queryFn: listPersonas,
+    staleTime: 30_000,
   });
 }
 
@@ -141,6 +163,54 @@ export function useCreateManagedAgentMutation() {
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
       await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });
+    },
+  });
+}
+
+export function useCreatePersonaMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: CreatePersonaInput) => createPersona(input),
+    onSuccess: (created) => {
+      queryClient.setQueryData<AgentPersona[]>(personasQueryKey, (current) => {
+        const next = current ?? [];
+        return [
+          created,
+          ...next.filter((persona) => persona.id !== created.id),
+        ];
+      });
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: personasQueryKey });
+    },
+  });
+}
+
+export function useUpdatePersonaMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: UpdatePersonaInput) => updatePersona(input),
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: personasQueryKey }),
+        queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
+      ]);
+    },
+  });
+}
+
+export function useDeletePersonaMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => deletePersona(id),
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: personasQueryKey }),
+        queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
+      ]);
     },
   });
 }
@@ -262,6 +332,27 @@ export function useCreateChannelManagedAgentMutation(channelId: string | null) {
       }
 
       return createChannelManagedAgent(channelId, input);
+    },
+    onSettled: async () => {
+      await invalidateAgentQueries(queryClient, channelId);
+    },
+  });
+}
+
+export function useCreateChannelManagedAgentsMutation(
+  channelId: string | null,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (
+      inputs: readonly CreateChannelManagedAgentInput[],
+    ): Promise<CreateChannelManagedAgentsResult> => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      return createChannelManagedAgents(channelId, inputs);
     },
     onSettled: async () => {
       await invalidateAgentQueries(queryClient, channelId);

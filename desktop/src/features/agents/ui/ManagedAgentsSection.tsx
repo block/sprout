@@ -33,6 +33,7 @@ export function ManagedAgentsSection({
   error,
   isActionPending,
   isLoading,
+  personaLabelsById,
   onAddToChannel,
   onCreate,
   onDelete,
@@ -49,6 +50,7 @@ export function ManagedAgentsSection({
   error: Error | null;
   isActionPending: boolean;
   isLoading: boolean;
+  personaLabelsById: Record<string, string>;
   onAddToChannel: (agent: ManagedAgent) => void;
   onCreate: () => void;
   onDelete: (pubkey: string) => void;
@@ -132,6 +134,7 @@ export function ManagedAgentsSection({
                     agent={agent}
                     isActionPending={isActionPending}
                     key={agent.pubkey}
+                    personaLabelsById={personaLabelsById}
                     onAddToChannel={onAddToChannel}
                     onDelete={onDelete}
                     onMintToken={onMintToken}
@@ -172,6 +175,7 @@ export function ManagedAgentsSection({
 function ManagedAgentRow({
   agent,
   isActionPending,
+  personaLabelsById,
   onAddToChannel,
   onDelete,
   onMintToken,
@@ -183,6 +187,7 @@ function ManagedAgentRow({
 }: {
   agent: ManagedAgent;
   isActionPending: boolean;
+  personaLabelsById: Record<string, string>;
   onAddToChannel: (agent: ManagedAgent) => void;
   onDelete: (pubkey: string) => void;
   onMintToken: (pubkey: string, name: string) => void;
@@ -193,6 +198,9 @@ function ManagedAgentRow({
   onViewLogs: (pubkey: string) => void;
 }) {
   const isRunning = agent.status === "running";
+  const personaLabel = agent.personaId
+    ? (personaLabelsById[agent.personaId] ?? null)
+    : null;
 
   return (
     <tr
@@ -201,6 +209,13 @@ function ManagedAgentRow({
     >
       <td className="px-4 py-3">
         <p className="truncate font-medium text-foreground">{agent.name}</p>
+        {personaLabel ? (
+          <p className="mt-1">
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              {personaLabel}
+            </span>
+          </p>
+        ) : null}
         <p className="mt-0.5 text-xs text-muted-foreground">
           {truncatePubkey(agent.pubkey)}
         </p>

@@ -258,6 +258,7 @@ export type RelayAgent = {
 export type ManagedAgent = {
   pubkey: string;
   name: string;
+  personaId: string | null;
   relayUrl: string;
   acpCommand: string;
   agentCommand: string;
@@ -282,6 +283,7 @@ export type ManagedAgent = {
 
 export type CreateManagedAgentInput = {
   name: string;
+  personaId?: string;
   relayUrl?: string;
   acpCommand?: string;
   agentCommand?: string;
@@ -290,6 +292,7 @@ export type CreateManagedAgentInput = {
   turnTimeoutSeconds?: number;
   parallelism?: number;
   systemPrompt?: string;
+  avatarUrl?: string;
   model?: string;
   mintToken?: boolean;
   tokenScopes?: TokenScope[];
@@ -363,6 +366,29 @@ export type UpdateManagedAgentInput = {
   pubkey: string;
   model?: string | null;
   systemPrompt?: string | null;
+};
+
+export type AgentPersona = {
+  id: string;
+  displayName: string;
+  avatarUrl: string | null;
+  systemPrompt: string;
+  isBuiltIn: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreatePersonaInput = {
+  displayName: string;
+  avatarUrl?: string;
+  systemPrompt: string;
+};
+
+export type UpdatePersonaInput = {
+  id: string;
+  displayName: string;
+  avatarUrl?: string;
+  systemPrompt: string;
 };
 
 // ── Forum types ───────────────────────────────────────────────────────────────

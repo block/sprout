@@ -219,6 +219,7 @@ type RawRelayAgent = {
 type RawManagedAgent = {
   pubkey: string;
   name: string;
+  persona_id: string | null;
   relay_url: string;
   acp_command: string;
   agent_command: string;
@@ -277,6 +278,16 @@ type RawManagedAgentPrereqs = {
   admin: RawCommandAvailability;
   acp: RawCommandAvailability;
   mcp: RawCommandAvailability;
+};
+
+type RawPersona = {
+  id: string;
+  display_name: string;
+  avatar_url: string | null;
+  system_prompt: string;
+  is_builtin: boolean;
+  created_at: string;
+  updated_at: string;
 };
 
 type MockToken = RawToken & {
@@ -518,6 +529,7 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
   return {
     pubkey: agent.pubkey,
     name: agent.name,
+    persona_id: agent.persona_id,
     relay_url: agent.relay_url,
     acp_command: agent.acp_command,
     agent_command: agent.agent_command,
@@ -558,6 +570,72 @@ function resetMockTokens(config: E2eConfig | undefined) {
 function resetMockManagedAgents() {
   mockManagedAgents = [];
   syncMockRelayAgentsFromManagedAgents();
+}
+
+function resetMockPersonas() {
+  const now = new Date().toISOString();
+  mockPersonas = [
+    {
+      id: "builtin:orchestrator",
+      display_name: "Orchestrator",
+      avatar_url: null,
+      system_prompt:
+        "You are an orchestration agent. Coordinate multi-step work across specialized agents, keep the overall plan moving, and synthesize results into a clear final outcome. When another agent should take a task, @mention them explicitly with the assignment, expected deliverable, and any relevant constraints or deadlines.",
+      is_builtin: true,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: "builtin:researcher",
+      display_name: "Researcher",
+      avatar_url: null,
+      system_prompt:
+        "You are a research agent. Gather relevant information, compare sources, call out uncertainty, and return concise findings with evidence.",
+      is_builtin: true,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: "builtin:planner",
+      display_name: "Planner",
+      avatar_url: null,
+      system_prompt:
+        "You are a planning agent. Turn ambiguous requests into structured plans with milestones, dependencies, risks, and clear next actions. Do not implement the work yourself unless asked.",
+      is_builtin: true,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: "builtin:implementer",
+      display_name: "Builder",
+      avatar_url: null,
+      system_prompt:
+        "You are a builder agent. Execute tasks directly, make code and configuration changes carefully, validate the result, and explain important decisions and follow-up items.",
+      is_builtin: true,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: "builtin:refactor",
+      display_name: "Refactor",
+      avatar_url: null,
+      system_prompt:
+        "You are a refactoring agent. Improve structure, naming, duplication, and module boundaries without changing externally observable behavior. Keep changes incremental, preserve compatibility, and add or update validation when behavior could drift.",
+      is_builtin: true,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: "builtin:reviewer",
+      display_name: "Reviewer",
+      avatar_url: null,
+      system_prompt:
+        "You are a review agent. Inspect plans, code, and outputs for bugs, regressions, edge cases, security issues, and missing tests. Prioritize findings by severity, cite concrete evidence, and keep summaries secondary to the actual review.",
+      is_builtin: true,
+      created_at: now,
+      updated_at: now,
+    },
+  ];
 }
 
 function getMockProfileByPubkey(pubkey: string): RawProfile | null {
@@ -891,6 +969,7 @@ const realSockets = new Map<number, WebSocket>();
 let mockTokens: MockToken[] = [];
 let mockMintTokenError: string | null = null;
 let mockManagedAgents: MockManagedAgent[] = [];
+let mockPersonas: RawPersona[] = [];
 let mockRelayAgents: RawRelayAgent[] = [
   {
     pubkey: ALICE_PUBKEY,
@@ -2249,9 +2328,80 @@ async function handleListManagedAgents(): Promise<RawManagedAgent[]> {
   return mockManagedAgents.map(cloneManagedAgent);
 }
 
+async function handleListPersonas(): Promise<RawPersona[]> {
+  return mockPersonas.map((persona) => ({ ...persona }));
+}
+
+async function handleCreatePersona(args: {
+  input: {
+    displayName: string;
+    avatarUrl?: string;
+    systemPrompt: string;
+  };
+}): Promise<RawPersona> {
+  const now = new Date().toISOString();
+  const persona: RawPersona = {
+    id: crypto.randomUUID(),
+    display_name: args.input.displayName.trim(),
+    avatar_url: args.input.avatarUrl?.trim() || null,
+    system_prompt: args.input.systemPrompt.trim(),
+    is_builtin: false,
+    created_at: now,
+    updated_at: now,
+  };
+  mockPersonas.push(persona);
+  return { ...persona };
+}
+
+async function handleUpdatePersona(args: {
+  input: {
+    id: string;
+    displayName: string;
+    avatarUrl?: string;
+    systemPrompt: string;
+  };
+}): Promise<RawPersona> {
+  const persona = mockPersonas.find(
+    (candidate) => candidate.id === args.input.id,
+  );
+  if (!persona) {
+    throw new Error(`Persona ${args.input.id} not found.`);
+  }
+  if (persona.is_builtin) {
+    throw new Error("Built-in personas cannot be edited.");
+  }
+
+  persona.display_name = args.input.displayName.trim();
+  persona.avatar_url = args.input.avatarUrl?.trim() || null;
+  persona.system_prompt = args.input.systemPrompt.trim();
+  persona.updated_at = new Date().toISOString();
+
+  return { ...persona };
+}
+
+async function handleDeletePersona(args: { id: string }): Promise<void> {
+  const persona = mockPersonas.find((candidate) => candidate.id === args.id);
+  if (!persona) {
+    throw new Error(`Persona ${args.id} not found.`);
+  }
+  if (persona.is_builtin) {
+    throw new Error("Built-in personas cannot be deleted.");
+  }
+
+  mockPersonas = mockPersonas.filter((candidate) => candidate.id !== args.id);
+  const now = new Date().toISOString();
+  for (const agent of mockManagedAgents) {
+    if (agent.persona_id === args.id) {
+      agent.persona_id = null;
+      agent.updated_at = now;
+    }
+  }
+}
+
 async function handleCreateManagedAgent(args: {
   input: {
     name: string;
+    personaId?: string;
     relayUrl?: string;
     acpCommand?: string;
     agentCommand?: string;
@@ -2260,6 +2410,7 @@ async function handleCreateManagedAgent(args: {
     turnTimeoutSeconds?: number;
     parallelism?: number;
     systemPrompt?: string;
+    avatarUrl?: string;
     model?: string;
     mintToken?: boolean;
     tokenScopes?: string[];
@@ -2282,6 +2433,7 @@ async function handleCreateManagedAgent(args: {
   const managedAgent: MockManagedAgent = {
     pubkey,
     name,
+    persona_id: args.input.personaId ?? null,
     relay_url: args.input.relayUrl ?? DEFAULT_RELAY_WS_URL,
     acp_command: args.input.acpCommand ?? "sprout-acp",
     agent_command: args.input.agentCommand ?? "goose",
@@ -2882,6 +3034,7 @@ export function maybeInstallE2eTauriMocks() {
 
   resetMockTokens(config);
   resetMockManagedAgents();
+  resetMockPersonas();
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({
@@ -2994,6 +3147,20 @@ export function maybeInstallE2eTauriMocks() {
         return handleRevokeAllTokens(activeConfig);
       case "list_relay_agents":
         return handleListRelayAgents();
+      case "list_personas":
+        return handleListPersonas();
+      case "create_persona":
+        return handleCreatePersona(
+          payload as Parameters<typeof handleCreatePersona>[0],
+        );
+      case "update_persona":
+        return handleUpdatePersona(
+          payload as Parameters<typeof handleUpdatePersona>[0],
+        );
+      case "delete_persona":
+        return handleDeletePersona(
+          payload as Parameters<typeof handleDeletePersona>[0],
+        );
       case "list_managed_agents":
         return handleListManagedAgents();
       case "create_managed_agent":

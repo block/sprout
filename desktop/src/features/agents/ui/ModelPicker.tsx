@@ -25,6 +25,7 @@ export function ModelPicker({
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [needsRestart, setNeedsRestart] = React.useState(false);
+  const [hasRequestedModels, setHasRequestedModels] = React.useState(false);
 
   const fetchModels = React.useCallback(async () => {
     setLoading(true);
@@ -39,17 +40,26 @@ export function ModelPicker({
     }
   }, [agent.pubkey]);
 
-  // Auto-fetch on mount
-  React.useEffect(() => {
-    void fetchModels();
-  }, [fetchModels]);
+  const handleOpenChange = React.useCallback(
+    (open: boolean) => {
+      if (!open || loading || modelsData) {
+        return;
+      }
+
+      setHasRequestedModels(true);
+      void fetchModels();
+    },
+    [fetchModels, loading, modelsData],
+  );
 
   const currentValue = agent.model ?? modelsData?.agentDefaultModel ?? "";
   const displayLabel =
     agent.model ??
     (modelsData?.agentDefaultModel
       ? `${modelsData.agentDefaultModel} (default)`
-      : "—");
+      : hasRequestedModels && loading
+        ? "Loading..."
+        : "Auto");
 
   const handleModelChange = async (modelId: string) => {
     setSaving(true);
@@ -69,38 +79,9 @@ export function ModelPicker({
     }
   };
 
-  if (loading) {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-      </span>
-    );
-  }
-
-  if (error) {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-sm">
-        <span className="text-destructive">Failed</span>
-        <button
-          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-          onClick={fetchModels}
-          type="button"
-        >
-          retry
-        </button>
-      </span>
-    );
-  }
-
-  if (!modelsData?.supportsSwitching) {
-    return (
-      <span className="text-sm text-muted-foreground">{displayLabel}</span>
-    );
-  }
-
   return (
     <span className="inline-flex items-center gap-1.5">
-      <DropdownMenu modal={false}>
+      <DropdownMenu modal={false} onOpenChange={handleOpenChange}>
         <DropdownMenuTrigger asChild>
           <Button
             className="h-7 max-w-full justify-start gap-1.5 rounded-full border border-border/50 bg-muted/45 px-2.5 text-xs font-medium text-foreground shadow-none hover:bg-muted/70"
@@ -118,16 +99,45 @@ export function ModelPicker({
           className="max-h-64 min-w-48 overflow-y-auto"
           onCloseAutoFocus={(event) => event.preventDefault()}
         >
-          <DropdownMenuRadioGroup
-            onValueChange={handleModelChange}
-            value={currentValue}
-          >
-            {modelsData.models.map((model) => (
-              <DropdownMenuRadioItem key={model.id} value={model.id}>
-                {model.name ?? model.id}
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
+          {loading ? (
+            <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Loading models...
+            </div>
+          ) : error ? (
+            <div className="space-y-2 px-3 py-2 text-sm">
+              <p className="text-destructive">Failed to load models.</p>
+              <button
+                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                onClick={() => {
+                  setHasRequestedModels(true);
+                  void fetchModels();
+                }}
+                type="button"
+              >
+                Retry
+              </button>
+            </div>
+          ) : !modelsData ? (
+            <div className="px-3 py-2 text-sm text-muted-foreground">
+              Open to load available models.
+            </div>
+          ) : !modelsData.supportsSwitching ? (
+            <div className="px-3 py-2 text-sm text-muted-foreground">
+              This agent uses the runtime&apos;s default model.
+            </div>
+          ) : (
+            <DropdownMenuRadioGroup
+              onValueChange={handleModelChange}
+              value={currentValue}
+            >
+              {modelsData.models.map((model) => (
+                <DropdownMenuRadioItem key={model.id} value={model.id}>
+                  {model.name ?? model.id}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
       {needsRestart ? (
