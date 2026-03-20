@@ -33,7 +33,10 @@ jobs:
     steps:
       - name: Resolve commit SHA
         id: resolve
-        run: echo "sha=${{ github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+        env:
+          WF_SHA: ${{ github.event.workflow_run.head_sha }}
+          FALLBACK_SHA: ${{ github.sha }}
+        run: echo "sha=${WF_SHA:-$FALLBACK_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -54,8 +57,10 @@ jobs:
           tool: cross@0.2.5
 
       - name: Build binaries
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          cross build --release --target ${{ matrix.target }} \
+          cross build --release --target "$TARGET" \
             -p sprout-relay \
             -p sprout-acp \
             -p sprout-mcp
@@ -89,7 +94,10 @@ jobs:
     steps:
       - name: Resolve commit SHA
         id: resolve
-        run: echo "sha=${{ github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+        env:
+          WF_SHA: ${{ github.event.workflow_run.head_sha }}
+          FALLBACK_SHA: ${{ github.sha }}
+        run: echo "sha=${WF_SHA:-$FALLBACK_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -107,8 +115,10 @@ jobs:
         run: echo "ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Force-move canary tag
+        env:
+          COMMIT_SHA: ${{ steps.resolve.outputs.sha }}
         run: |
-          git tag -f canary ${{ steps.resolve.outputs.sha }}
+          git tag -f canary "$COMMIT_SHA"
           git push origin canary --force
 
       - name: Create or update canary release
