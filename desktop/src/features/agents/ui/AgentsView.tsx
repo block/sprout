@@ -15,6 +15,7 @@ import {
   useStopManagedAgentMutation,
   useUpdatePersonaMutation,
 } from "@/features/agents/hooks";
+import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { sendChannelMessage } from "@/shared/api/tauri";
 import type {
@@ -46,6 +47,7 @@ type PersonaDialogState = {
 export function AgentsView() {
   const relayAgentsQuery = useRelayAgentsQuery();
   const managedAgentsQuery = useManagedAgentsQuery();
+  const channelsQuery = useChannelsQuery();
   const personasQuery = usePersonasQuery();
   const startMutation = useStartManagedAgentMutation();
   const stopMutation = useStopManagedAgentMutation();
@@ -115,7 +117,15 @@ export function AgentsView() {
   function resolveAgentChannelId(pubkey: string): string | null {
     const relayAgents = relayAgentsQuery.data ?? [];
     const relayAgent = relayAgents.find((ra) => ra.pubkey === pubkey);
-    return relayAgent?.channelIds?.[0] ?? null;
+    // Prefer channelIds (new relay with json_agg). Fall back to resolving
+    // channel names via the channels query (old relay without channel_ids).
+    if (relayAgent?.channelIds?.length) {
+      return relayAgent.channelIds[0];
+    }
+    const channelName = relayAgent?.channels?.[0];
+    if (!channelName) return null;
+    const channels = channelsQuery.data ?? [];
+    return channels.find((ch) => ch.name === channelName)?.id ?? null;
   }
 
   // Clear log selection if the agent was removed

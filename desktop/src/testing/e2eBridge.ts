@@ -230,7 +230,7 @@ type RawManagedAgent = {
   system_prompt: string | null;
   model: string | null;
   has_api_token: boolean;
-  status: "running" | "stopped";
+  status: "running" | "stopped" | "deployed" | "not_deployed";
   pid: number | null;
   created_at: string;
   updated_at: string;
@@ -240,6 +240,10 @@ type RawManagedAgent = {
   last_error: string | null;
   log_path: string;
   start_on_app_launch: boolean;
+  backend:
+    | { type: "local" }
+    | { type: "provider"; id: string; config: Record<string, unknown> };
+  backend_agent_id: string | null;
 };
 
 type RawCreateManagedAgentResponse = {
@@ -550,6 +554,8 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     last_error: agent.last_error,
     log_path: agent.log_path,
     start_on_app_launch: agent.start_on_app_launch,
+    backend: agent.backend ?? { type: "local" as const },
+    backend_agent_id: agent.backend_agent_id ?? null,
   };
 }
 
@@ -2417,6 +2423,9 @@ async function handleCreateManagedAgent(args: {
     tokenName?: string;
     spawnAfterCreate?: boolean;
     startOnAppLaunch?: boolean;
+    backend?:
+      | { type: "local" }
+      | { type: "provider"; id: string; config: Record<string, unknown> };
   };
 }): Promise<RawCreateManagedAgentResponse> {
   const name = args.input.name.trim();
@@ -2457,6 +2466,8 @@ async function handleCreateManagedAgent(args: {
     last_error: null,
     log_path: `/tmp/mock-agent-${pubkey}.log`,
     start_on_app_launch: args.input.startOnAppLaunch ?? true,
+    backend: args.input.backend ?? { type: "local" as const },
+    backend_agent_id: null,
     private_key_nsec: `nsec1mock${pubkey.slice(0, 20)}`,
     api_token: token,
     log_lines: [
@@ -3120,6 +3131,10 @@ export function maybeInstallE2eTauriMocks() {
         return getRelayWsUrl(activeConfig);
       case "discover_acp_providers":
         return handleDiscoverAcpProviders();
+      case "discover_backend_providers":
+        return [];
+      case "probe_backend_provider":
+        return { ok: false, error: "mock: no providers available" };
       case "discover_managed_agent_prereqs":
         return handleDiscoverManagedAgentPrereqs(
           payload as Parameters<typeof handleDiscoverManagedAgentPrereqs>[0],
