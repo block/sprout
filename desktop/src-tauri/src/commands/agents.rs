@@ -261,10 +261,7 @@ pub async fn create_managed_agent(
         if records.iter().any(|record| record.pubkey == pubkey) {
             return Err(format!("agent {pubkey} already exists"));
         }
-        // Validate provider config if backend is Provider.
-        if let BackendKind::Provider { ref config, .. } = input.backend {
-            validate_provider_config(config)?;
-        }
+        // Provider config was already validated in Pre-Phase 2.
         // Resolve provider binary path if backend is Provider.
         let provider_binary_path = if let BackendKind::Provider { ref id, .. } = input.backend {
             let bin_name = format!("sprout-backend-{id}");
@@ -729,6 +726,8 @@ pub async fn probe_backend_provider(binary_path: String) -> Result<serde_json::V
             "binary '{binary_path}' is not a discovered sprout-backend-* provider"
         ));
     }
+    // request_id is for provider-side logging — not validated in the response
+    // (stdin→stdout is 1:1 per process invocation).
     let request = serde_json::json!({
         "op": "info",
         "request_id": uuid::Uuid::new_v4().to_string(),

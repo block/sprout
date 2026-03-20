@@ -583,10 +583,13 @@ pub async fn post_tokens(
                     .map_err(|e| internal_error(&format!("db error checking owner: {e}")))?
                     .and_then(|(_, owner)| owner);
                 if existing.as_deref() != Some(owner_bytes.as_slice()) {
-                    let _ = state
+                    if let Err(revoke_err) = state
                         .db
                         .revoke_token(token_id, &ctx.pubkey_bytes, &ctx.pubkey_bytes)
-                        .await;
+                        .await
+                    {
+                        tracing::error!("failed to revoke orphaned token {token_id} after owner conflict: {revoke_err}");
+                    }
                     return Err(api_error(
                         StatusCode::CONFLICT,
                         "agent already has a different owner",
@@ -600,10 +603,13 @@ pub async fn post_tokens(
         Err(e) => {
             if req.owner_pubkey.is_some() {
                 // Explicit owner requested but failed — revoke the orphaned token.
-                let _ = state
+                if let Err(revoke_err) = state
                     .db
                     .revoke_token(token_id, &ctx.pubkey_bytes, &ctx.pubkey_bytes)
-                    .await;
+                    .await
+                {
+                    tracing::error!("failed to revoke orphaned token {token_id} after set_agent_owner error: {revoke_err}");
+                }
                 return Err(internal_error(&format!("failed to set agent owner: {e}")));
             }
             tracing::warn!("set_agent_owner failed for self-mint: {e}");

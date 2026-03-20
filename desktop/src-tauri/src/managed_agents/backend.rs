@@ -87,6 +87,19 @@ pub fn invoke_provider(
         })
         .unwrap_or_else(|| "unknown".to_string());
 
+    // Fail on non-zero exit regardless of stdout content. A provider that
+    // crashes mid-deploy may flush partial JSON before dying — trusting that
+    // output would be worse than surfacing the failure.
+    let exited_ok = exit_status.map_or(false, |s| s.success());
+    if !exited_ok {
+        let stderr_snippet = &stderr_redacted[..stderr_redacted.len().min(4096)];
+        if stderr_snippet.is_empty() {
+            return Err(format!("provider failed ({exit_info}, empty stderr)"));
+        } else {
+            return Err(format!("provider failed ({exit_info}). stderr: {stderr_snippet}"));
+        }
+    }
+
     let response: serde_json::Value = stdout
         .lines()
         .find_map(|line| serde_json::from_str(line).ok())
@@ -160,6 +173,9 @@ fn redact_secrets(s: &str) -> String {
 }
 
 /// Deploy an agent via provider binary. Returns the provider-assigned agent_id.
+///
+/// `request_id` is included for provider-side logging/correlation but is not
+/// validated in the response — the stdin→stdout exchange is 1:1 per process.
 pub fn provider_deploy(
     binary: &Path,
     agent: &serde_json::Value,
