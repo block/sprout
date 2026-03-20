@@ -173,12 +173,20 @@ export function formatTimelineMessages(
       emoji,
       count: 0,
       reactedByCurrentUser: false,
+      users: [],
     };
 
     existing.count += 1;
     if (currentPubkeyLower && actorPubkey === currentPubkeyLower) {
       existing.reactedByCurrentUser = true;
     }
+
+    const profile = profiles?.[actorPubkey];
+    const displayName =
+      profile?.displayName?.trim() ||
+      profile?.nip05Handle?.trim() ||
+      `${actorPubkey.slice(0, 8)}…`;
+    existing.users.push({ pubkey: actorPubkey, displayName });
 
     current.set(emoji, existing);
     reactionsByEventId.set(targetId, current);

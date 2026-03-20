@@ -401,14 +401,9 @@ export function useManagedAgentLogQuery(
 ) {
   return useQuery({
     queryKey: ["managed-agent-log", pubkey, lineCount],
-    queryFn: () => {
-      if (!pubkey) {
-        throw new Error("No agent selected.");
-      }
-
-      return getManagedAgentLog(pubkey, lineCount);
-    },
+    queryFn: () => getManagedAgentLog(pubkey!, lineCount),
     enabled: pubkey !== null,
+    retry: false,
     staleTime: 1_000,
     refetchInterval: pubkey ? 2_000 : false,
   });

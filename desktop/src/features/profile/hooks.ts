@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -40,6 +41,7 @@ export function useUsersBatchQuery(
     enabled?: boolean;
   },
 ) {
+  const queryClient = useQueryClient();
   const normalizedPubkeys = [
     ...new Set(pubkeys.map((pubkey) => pubkey.toLowerCase())),
   ]
@@ -47,13 +49,28 @@ export function useUsersBatchQuery(
     .sort();
   const enabled = (options?.enabled ?? true) && normalizedPubkeys.length > 0;
 
-  return useQuery<UsersBatchResponse>({
+  const query = useQuery<UsersBatchResponse>({
     enabled,
     queryKey: ["users-batch", ...normalizedPubkeys],
     queryFn: () => getUsersBatch(normalizedPubkeys),
     staleTime: 60_000,
     gcTime: 5 * 60 * 1_000,
   });
+
+  // Seed individual "user-profile" cache entries so avatar clicks are instant
+  // cache hits instead of fresh network requests.
+  useEffect(() => {
+    const profiles = query.data?.profiles;
+    if (!profiles) return;
+    for (const [pubkey, summary] of Object.entries(profiles)) {
+      queryClient.setQueryData<Profile>(
+        ["user-profile", pubkey],
+        (existing) => existing ?? { pubkey, about: null, ...summary },
+      );
+    }
+  }, [query.data, queryClient]);
+
+  return query;
 }
 
 export function useUserSearchQuery(

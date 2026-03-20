@@ -64,7 +64,9 @@ pub struct ChannelInfo {
     pub member_count: i64,
     pub last_message_at: Option<String>,
     pub archived_at: Option<String>,
+    #[serde(default)]
     pub participants: Vec<String>,
+    #[serde(default)]
     pub participant_pubkeys: Vec<String>,
     #[serde(default = "default_true")]
     pub is_member: bool,
@@ -127,11 +129,9 @@ pub struct OpenDmBody<'a> {
     pub pubkeys: &'a [String],
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 pub struct OpenDmResponse {
     pub channel_id: String,
-    pub created: bool,
-    pub participants: Vec<String>,
 }
 
 #[derive(Serialize)]

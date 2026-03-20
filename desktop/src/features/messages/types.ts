@@ -2,6 +2,7 @@ export type TimelineReaction = {
   emoji: string;
   count: number;
   reactedByCurrentUser?: boolean;
+  users: Array<{ pubkey: string; displayName: string }>;
 };
 
 export type TimelineMessage = {

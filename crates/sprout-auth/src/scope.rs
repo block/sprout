@@ -150,15 +150,19 @@ impl FromStr for Scope {
 
 /// Scopes that can be self-minted via `POST /api/tokens`.
 ///
-/// Admin-only scopes (`AdminChannels`, `UsersWrite`, `AdminUsers`, `JobsRead`, `JobsWrite`,
+/// Admin-only scopes (`AdminChannels`, `AdminUsers`, `JobsRead`, `JobsWrite`,
 /// `SubscriptionsRead`, `SubscriptionsWrite`) are intentionally excluded — they require
 /// `sprout-admin mint-token`.
+///
+/// `UsersWrite` is included because it only guards self-profile endpoints
+/// (`PUT /api/users/me/profile`, `PUT /api/users/me/channel-add-policy`).
 pub const SELF_MINTABLE_SCOPES: &[Scope] = &[
     Scope::MessagesRead,
     Scope::MessagesWrite,
     Scope::ChannelsRead,
     Scope::ChannelsWrite,
     Scope::UsersRead,
+    Scope::UsersWrite,
     Scope::FilesRead,
     Scope::FilesWrite,
 ];
@@ -176,6 +180,7 @@ pub fn is_self_mintable(scope: &Scope) -> bool {
             | Scope::ChannelsRead
             | Scope::ChannelsWrite
             | Scope::UsersRead
+            | Scope::UsersWrite
             | Scope::FilesRead
             | Scope::FilesWrite
     )
