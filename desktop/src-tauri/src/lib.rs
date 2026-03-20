@@ -5,7 +5,7 @@ mod models;
 mod relay;
 mod util;
 
-use app_state::{build_app_state, AppState};
+use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use commands::*;
 use managed_agents::{
     find_managed_agent_mut, load_managed_agents, save_managed_agents, start_managed_agent_process,
@@ -97,6 +97,15 @@ pub fn run() {
         .manage(build_app_state())
         .setup(|app| {
             let app_handle = app.handle().clone();
+
+            // Resolve persisted identity key (env var → file → generate+save).
+            // This is fatal — the app should not start with an ephemeral identity
+            // that will be lost on restart, as that silently breaks channel
+            // memberships, DMs, and relay identity.
+            let state = app_handle.state::<AppState>();
+            resolve_persisted_identity(&app_handle, &state)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
             if let Err(error) = restore_managed_agents_on_launch(&app_handle) {
                 eprintln!("sprout-desktop: failed to restore managed agents: {error}");
             }
