@@ -48,6 +48,10 @@ const MODELS_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install the ring crypto provider for rustls (required for wss:// connections).
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
     // ── Subcommand dispatch — before Config::from_cli() or any harness setup ──
     if is_subcommand("models") {
         // Strip the "models" token so clap doesn't reject it as a positional.

@@ -4,7 +4,7 @@ use tauri::{AppHandle, State};
 use crate::{
     app_state::AppState,
     managed_agents::{
-        admin_command, command_availability, discover_local_acp_providers, AcpProviderInfo,
+        command_availability, discover_local_acp_providers, AcpProviderInfo,
         DiscoverManagedAgentPrereqsRequest, ManagedAgentPrereqsInfo, RelayAgentInfo,
         DEFAULT_ACP_COMMAND, DEFAULT_MCP_COMMAND,
     },
@@ -33,10 +33,8 @@ pub fn discover_managed_agent_prereqs(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(DEFAULT_MCP_COMMAND);
-    let admin_command = admin_command();
 
     ManagedAgentPrereqsInfo {
-        admin: command_availability(&admin_command, Some(&app)),
         acp: command_availability(acp_command, Some(&app)),
         mcp: command_availability(mcp_command, Some(&app)),
     }
