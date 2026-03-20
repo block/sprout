@@ -1,4 +1,4 @@
-import type * as React from "react";
+import * as React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -180,15 +180,35 @@ function createMarkdownComponents(
   } as Components;
 }
 
-export function Markdown({
+function shallowArrayEqual(a?: string[], b?: string[]): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function MarkdownInner({
   className,
   compact = false,
   content,
   mentionNames,
   tight = false,
 }: MarkdownProps) {
-  const variant = tight ? "tight" : compact ? "compact" : "default";
+  const variant: MarkdownVariant = tight
+    ? "tight"
+    : compact
+      ? "compact"
+      : "default";
   const { channels, onOpenChannel } = useChannelNavigation();
+
+  const components = React.useMemo(
+    () => createMarkdownComponents(variant, channels, onOpenChannel),
+    [variant, channels, onOpenChannel],
+  );
+
   let processedContent = content;
 
   if (/^(?:\s{2}\n)+/.test(content)) {
@@ -211,7 +231,7 @@ export function Markdown({
       )}
     >
       <ReactMarkdown
-        components={createMarkdownComponents(variant, channels, onOpenChannel)}
+        components={components}
         remarkPlugins={[
           remarkGfm,
           remarkBreaks,
@@ -224,3 +244,15 @@ export function Markdown({
     </div>
   );
 }
+
+export const Markdown = React.memo(
+  MarkdownInner,
+  (prev, next) =>
+    prev.content === next.content &&
+    prev.className === next.className &&
+    prev.compact === next.compact &&
+    prev.tight === next.tight &&
+    shallowArrayEqual(prev.mentionNames, next.mentionNames),
+);
+
+Markdown.displayName = "Markdown";

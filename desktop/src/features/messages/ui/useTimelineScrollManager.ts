@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import type { Virtualizer } from "@tanstack/react-virtual";
 import type { TimelineMessage } from "@/features/messages/types";
 import { isNearBottom } from "./messageTimelineUtils";
 
@@ -9,12 +10,14 @@ export function useTimelineScrollManager({
   messages,
   onTargetReached,
   targetMessageId,
+  virtualizer,
 }: {
   channelId?: string | null;
   isLoading: boolean;
   messages: TimelineMessage[];
   onTargetReached?: (messageId: string) => void;
   targetMessageId?: string | null;
+  virtualizer?: Virtualizer<HTMLDivElement, Element>;
 }) {
   const timelineRef = React.useRef<HTMLDivElement>(null);
   const contentRef = React.useRef<HTMLDivElement>(null);
@@ -34,6 +37,10 @@ export function useTimelineScrollManager({
     string | null
   >(null);
   const [newMessageCount, setNewMessageCount] = React.useState(0);
+
+  // Keep a ref to the virtualizer so callbacks don't need it as a dependency
+  const virtualizerRef = React.useRef(virtualizer);
+  virtualizerRef.current = virtualizer;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is intentionally the sole trigger — we reset all scroll state when the channel changes
   React.useLayoutEffect(() => {
@@ -144,6 +151,11 @@ export function useTimelineScrollManager({
       }
 
       isProgrammaticBottomScrollRef.current = true;
+
+      const virt = virtualizerRef.current;
+      if (virt && virt.options.count > 0) {
+        virt.scrollToIndex(virt.options.count - 1, { align: "end" });
+      }
 
       const alignToBottom = (nextBehavior: ScrollBehavior) => {
         bottomAnchorRef.current?.scrollIntoView({

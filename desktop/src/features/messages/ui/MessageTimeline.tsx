@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ArrowDown } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
@@ -30,6 +31,9 @@ type MessageTimelineProps = {
   onTargetReached?: (messageId: string) => void;
 };
 
+const ESTIMATED_ROW_HEIGHT = 60;
+const OVERSCAN = 5;
+
 export const MessageTimeline = React.memo(function MessageTimeline({
   channelId,
   messages,
@@ -44,6 +48,16 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   targetMessageId = null,
   onTargetReached,
 }: MessageTimelineProps) {
+  const scrollElementRef = React.useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollElementRef.current,
+    estimateSize: () => ESTIMATED_ROW_HEIGHT,
+    overscan: OVERSCAN,
+    measureElement: (element) => element.getBoundingClientRect().height,
+  });
+
   const {
     bottomAnchorRef,
     contentRef,
@@ -59,7 +73,23 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     messages,
     onTargetReached,
     targetMessageId,
+    virtualizer,
   });
+
+  // Merge the two refs onto the same scroll container element
+  const setScrollRef = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      (
+        scrollElementRef as React.MutableRefObject<HTMLDivElement | null>
+      ).current = node;
+      (timelineRef as React.MutableRefObject<HTMLDivElement | null>).current =
+        node;
+    },
+    [timelineRef],
+  );
+
+  const virtualItems = virtualizer.getVirtualItems();
+  const totalSize = virtualizer.getTotalSize();
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -67,7 +97,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 [overflow-anchor:none] sm:px-6"
         data-testid="message-timeline"
         onScroll={syncScrollState}
-        ref={timelineRef}
+        ref={setScrollRef}
       >
         <div
           className="mx-auto flex w-full max-w-4xl flex-col gap-2"
@@ -100,29 +130,52 @@ export const MessageTimeline = React.memo(function MessageTimeline({
             </div>
           ) : null}
 
-          {!isLoading
-            ? messages.map((message) =>
-                message.kind === KIND_SYSTEM_MESSAGE ? (
-                  <SystemMessageRow
-                    body={message.body}
-                    currentPubkey={currentPubkey}
-                    key={message.id}
-                    profiles={profiles}
-                    time={message.time}
-                  />
-                ) : (
-                  <MessageRow
-                    activeReplyTargetId={activeReplyTargetId}
-                    highlighted={message.id === highlightedMessageId}
-                    key={message.id}
-                    message={message}
-                    onToggleReaction={onToggleReaction}
-                    onReply={onReply}
-                    profiles={profiles}
-                  />
-                ),
-              )
-            : null}
+          {!isLoading && messages.length > 0 ? (
+            <div
+              style={{
+                height: `${totalSize}px`,
+                width: "100%",
+                position: "relative",
+              }}
+            >
+              {virtualItems.map((virtualRow) => {
+                const message = messages[virtualRow.index];
+                return (
+                  <div
+                    key={virtualRow.key}
+                    data-index={virtualRow.index}
+                    ref={virtualizer.measureElement}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    {message.kind === KIND_SYSTEM_MESSAGE ? (
+                      <SystemMessageRow
+                        body={message.body}
+                        currentPubkey={currentPubkey}
+                        profiles={profiles}
+                        time={message.time}
+                      />
+                    ) : (
+                      <MessageRow
+                        activeReplyTargetId={activeReplyTargetId}
+                        highlighted={message.id === highlightedMessageId}
+                        message={message}
+                        onToggleReaction={onToggleReaction}
+                        onReply={onReply}
+                        profiles={profiles}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+
           <div aria-hidden className="h-px" ref={bottomAnchorRef} />
         </div>
       </div>
