@@ -6,6 +6,7 @@ import {
   listManagedAgents,
   startManagedAgent,
   stopManagedAgent,
+  uploadMediaBytes,
 } from "@/shared/api/tauri";
 import type {
   AcpProvider,
@@ -278,6 +279,22 @@ export async function createChannelManagedAgent(
     throw new Error("Agent name is required.");
   }
 
+  // If the avatar is a data URI (e.g. from a persona PNG card import),
+  // upload it to get a hosted URL the relay can serve.
+  let resolvedAvatarUrl = input.avatarUrl?.trim() || undefined;
+  if (resolvedAvatarUrl?.startsWith("data:image/")) {
+    try {
+      const [, b64] = resolvedAvatarUrl.split(",", 2);
+      if (!b64) throw new Error("empty data URI payload");
+      const bytes = Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const blob = await uploadMediaBytes(bytes);
+      resolvedAvatarUrl = blob.url;
+    } catch (err) {
+      console.warn("Avatar upload failed, proceeding without avatar:", err);
+      resolvedAvatarUrl = undefined;
+    }
+  }
+
   const created = await createManagedAgent({
     name: trimmedName,
     acpCommand: "sprout-acp",
@@ -289,7 +306,7 @@ export async function createChannelManagedAgent(
     tokenScopes: DEFAULT_MANAGED_AGENT_SCOPES,
     personaId: input.personaId ?? undefined,
     systemPrompt: input.systemPrompt?.trim() || undefined,
-    avatarUrl: input.avatarUrl?.trim() || undefined,
+    avatarUrl: resolvedAvatarUrl,
     spawnAfterCreate: false,
   });
   const attached = await attachManagedAgentToChannel(channelId, {

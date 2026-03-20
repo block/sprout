@@ -14,10 +14,24 @@ concurrency:
 permissions: {}
 
 jobs:
-  build:
+  resolve:
     if: |
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve commit SHA
+        id: resolve
+        env:
+          WF_SHA: ${{ github.event.workflow_run.head_sha }}
+          FALLBACK_SHA: ${{ github.sha }}
+        run: echo "sha=${WF_SHA:-$FALLBACK_SHA}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
     permissions:
       contents: read
     timeout-minutes: 30
@@ -31,17 +45,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Resolve commit SHA
-        id: resolve
-        env:
-          WF_SHA: ${{ github.event.workflow_run.head_sha }}
-          FALLBACK_SHA: ${{ github.sha }}
-        run: echo "sha=${WF_SHA:-$FALLBACK_SHA}" >> "$GITHUB_OUTPUT"
-
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ steps.resolve.outputs.sha }}
+          ref: ${{ needs.resolve.outputs.sha }}
 
       - name: Activate Hermit
         uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
@@ -84,25 +91,31 @@ jobs:
           path: sprout-*-canary-${{ matrix.target }}.tar.gz
           retention-days: 1
 
+  bundle-desktop-macos:
+    needs: resolve
+    uses: ./.github/workflows/bundle-desktop-macos.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+      signing: true
+    secrets:
+      OSX_CODESIGN_ROLE: ${{ secrets.OSX_CODESIGN_ROLE }}
+      CODESIGN_S3_BUCKET: ${{ secrets.CODESIGN_S3_BUCKET }}
+
   release:
-    needs: build
+    needs: [resolve, build, bundle-desktop-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
 
     steps:
-      - name: Resolve commit SHA
-        id: resolve
-        env:
-          WF_SHA: ${{ github.event.workflow_run.head_sha }}
-          FALLBACK_SHA: ${{ github.sha }}
-        run: echo "sha=${WF_SHA:-$FALLBACK_SHA}" >> "$GITHUB_OUTPUT"
-
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ steps.resolve.outputs.sha }}
+          ref: ${{ needs.resolve.outputs.sha }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -116,7 +129,7 @@ jobs:
 
       - name: Force-move canary tag
         env:
-          COMMIT_SHA: ${{ steps.resolve.outputs.sha }}
+          COMMIT_SHA: ${{ needs.resolve.outputs.sha }}
         run: |
           git tag -f canary "$COMMIT_SHA"
           git push origin canary --force
@@ -129,12 +142,13 @@ jobs:
           body: |
             Pre-alpha canary build. Not for production.
 
-            Built from commit `${{ steps.resolve.outputs.sha }}` at ${{ steps.timestamp.outputs.ts }}.
+            Built from commit `${{ needs.resolve.outputs.sha }}` at ${{ steps.timestamp.outputs.ts }}.
 
             **Relay**: `sprout-relay-canary-<target>.tar.gz`
             **Agent tooling** (ACP harness + MCP server): `sprout-agent-canary-<target>.tar.gz`
+            **Desktop** (macOS arm64): `Sprout-darwin-arm64.zip`
           prerelease: true
           allowUpdates: true
           removeArtifacts: true
-          artifacts: "dist/*.tar.gz"
+          artifacts: "dist/*.tar.gz,dist/*.zip"
           token: ${{ secrets.GITHUB_TOKEN }}

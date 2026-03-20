@@ -64,10 +64,15 @@ export function MessageComposer({
   replyTarget = null,
 }: MessageComposerProps) {
   const [content, setContent] = React.useState("");
+  const contentRef = React.useRef(content);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const pendingSelectionRef = React.useRef<number | null>(null);
   const draftSelectionRef = React.useRef({ end: 0, start: 0 });
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
+  const lineHeightRef = React.useRef<number | null>(null);
+
+  // Keep contentRef in sync — no extra re-render, just a ref assignment.
+  contentRef.current = content;
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
@@ -78,9 +83,21 @@ export function MessageComposer({
   }>({ status: "idle" });
   const [pendingImeta, setPendingImeta] = React.useState<BlobDescriptor[]>([]);
 
+  // Stable refs for values read inside callbacks that should not cause
+  // callback identity changes when they update.
+  const pendingImetaRef = React.useRef(pendingImeta);
+  const disabledRef = React.useRef(disabled);
+  const isSendingRef = React.useRef(isSending);
+  const onSendRef = React.useRef(onSend);
+  pendingImetaRef.current = pendingImeta;
+  disabledRef.current = disabled;
+  isSendingRef.current = isSending;
+  onSendRef.current = onSend;
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger — reset all composer state on channel switch to prevent draft/upload/autocomplete leaks
   React.useEffect(() => {
     setContent("");
+    contentRef.current = "";
     setPendingImeta([]);
     setUploadState({ status: "idle" });
     setIsEmojiPickerOpen(false);
@@ -88,14 +105,17 @@ export function MessageComposer({
     channelLinks.clearChannels();
     draftSelectionRef.current = { end: 0, start: 0 };
     pendingSelectionRef.current = null;
+    lineHeightRef.current = null;
   }, [channelId]);
+
   const applyMentionInsert = React.useCallback(
     (suggestion: MentionSuggestion) => {
       const textarea = textareaRef.current;
+      const currentContent = contentRef.current;
       const result = mentions.insertMention(
         suggestion,
-        content,
-        textarea?.selectionEnd ?? content.length,
+        currentContent,
+        textarea?.selectionEnd ?? currentContent.length,
       );
       draftSelectionRef.current = {
         end: result.nextCursor,
@@ -104,16 +124,17 @@ export function MessageComposer({
       pendingSelectionRef.current = result.nextCursor;
       setContent(result.nextContent);
     },
-    [content, mentions.insertMention],
+    [mentions.insertMention],
   );
 
   const applyChannelInsert = React.useCallback(
     (suggestion: ChannelSuggestion) => {
       const textarea = textareaRef.current;
+      const currentContent = contentRef.current;
       const result = channelLinks.insertChannel(
         suggestion,
-        content,
-        textarea?.selectionEnd ?? content.length,
+        currentContent,
+        textarea?.selectionEnd ?? currentContent.length,
       );
       draftSelectionRef.current = {
         end: result.nextCursor,
@@ -122,7 +143,7 @@ export function MessageComposer({
       pendingSelectionRef.current = result.nextCursor;
       setContent(result.nextContent);
     },
-    [content, channelLinks.insertChannel],
+    [channelLinks.insertChannel],
   );
 
   const updateDraftSelection = React.useCallback(
@@ -141,11 +162,12 @@ export function MessageComposer({
 
   const insertEmoji = React.useCallback(
     (emoji: string) => {
+      const currentContent = contentRef.current;
       const { end, start } = draftSelectionRef.current;
-      const nextStart = Math.min(start, content.length);
-      const nextEnd = Math.min(end, content.length);
+      const nextStart = Math.min(start, currentContent.length);
+      const nextEnd = Math.min(end, currentContent.length);
       const nextCursor = nextStart + emoji.length;
-      const nextContent = `${content.slice(0, nextStart)}${emoji}${content.slice(nextEnd)}`;
+      const nextContent = `${currentContent.slice(0, nextStart)}${emoji}${currentContent.slice(nextEnd)}`;
 
       draftSelectionRef.current = {
         end: nextCursor,
@@ -156,7 +178,7 @@ export function MessageComposer({
       setIsEmojiPickerOpen(false);
       mentions.clearMentions();
     },
-    [content, mentions.clearMentions],
+    [mentions.clearMentions],
   );
 
   const openMentionPicker = React.useCallback(() => {
@@ -165,23 +187,24 @@ export function MessageComposer({
       return;
     }
 
-    const cursorPosition = textarea.selectionStart ?? content.length;
-    const existingMention = detectMentionQuery(content, cursorPosition);
+    const currentContent = contentRef.current;
+    const cursorPosition = textarea.selectionStart ?? currentContent.length;
+    const existingMention = detectMentionQuery(currentContent, cursorPosition);
     if (existingMention) {
-      mentions.updateMentionQuery(content, cursorPosition);
+      mentions.updateMentionQuery(currentContent, cursorPosition);
       textarea.focus();
       return;
     }
 
     const { end, start } = draftSelectionRef.current;
-    const nextStart = Math.min(start, content.length);
-    const nextEnd = Math.min(end, content.length);
-    const previousCharacter = content.slice(0, nextStart).slice(-1);
+    const nextStart = Math.min(start, currentContent.length);
+    const nextEnd = Math.min(end, currentContent.length);
+    const previousCharacter = currentContent.slice(0, nextStart).slice(-1);
     const prefix =
       nextStart > 0 && previousCharacter && !/\s/.test(previousCharacter)
         ? " @"
         : "@";
-    const nextContent = `${content.slice(0, nextStart)}${prefix}${content.slice(nextEnd)}`;
+    const nextContent = `${currentContent.slice(0, nextStart)}${prefix}${currentContent.slice(nextEnd)}`;
     const mentionIndex = nextStart + (prefix.startsWith(" ") ? 1 : 0);
     const nextCursor = mentionIndex + 1;
 
@@ -193,7 +216,7 @@ export function MessageComposer({
     setContent(nextContent);
     setIsEmojiPickerOpen(false);
     mentions.updateMentionQuery(nextContent, nextCursor);
-  }, [content, mentions.updateMentionQuery]);
+  }, [mentions.updateMentionQuery]);
 
   const onUploaded = React.useCallback((descriptor: BlobDescriptor) => {
     const markdown = `\n![image](${descriptor.url})\n`;
@@ -287,17 +310,22 @@ export function MessageComposer({
   );
 
   const submitMessage = React.useCallback(async () => {
-    const trimmed = content.trim();
-    const hasMedia = pendingImeta.length > 0;
-    if ((!trimmed && !hasMedia) || disabled || isSending) {
+    const trimmed = contentRef.current.trim();
+    const currentPendingImeta = pendingImetaRef.current;
+    const hasMedia = currentPendingImeta.length > 0;
+    if (
+      (!trimmed && !hasMedia) ||
+      disabledRef.current ||
+      isSendingRef.current
+    ) {
       return;
     }
 
     const pubkeys = mentions.extractMentionPubkeys(trimmed);
 
     const mediaTags =
-      pendingImeta.length > 0
-        ? pendingImeta.map((d) => [
+      currentPendingImeta.length > 0
+        ? currentPendingImeta.map((d) => [
             "imeta",
             `url ${d.url}`,
             `m ${d.type}`,
@@ -310,7 +338,7 @@ export function MessageComposer({
         : undefined;
 
     const savedContent = trimmed;
-    const savedImeta = [...pendingImeta];
+    const savedImeta = [...currentPendingImeta];
 
     setContent("");
     draftSelectionRef.current = { end: 0, start: 0 };
@@ -320,20 +348,15 @@ export function MessageComposer({
     setIsEmojiPickerOpen(false);
 
     try {
-      await onSend(trimmed, pubkeys, mediaTags);
+      await onSendRef.current(trimmed, pubkeys, mediaTags);
     } catch {
       setContent(savedContent);
       setPendingImeta(savedImeta);
     }
   }, [
-    content,
-    disabled,
-    isSending,
-    onSend,
     mentions.extractMentionPubkeys,
     mentions.clearMentions,
     channelLinks.clearChannels,
-    pendingImeta,
   ]);
 
   const handleSubmit = React.useCallback(
@@ -420,8 +443,11 @@ export function MessageComposer({
       return;
     }
 
-    const lineHeight =
-      Number.parseFloat(window.getComputedStyle(textarea).lineHeight) || 24;
+    if (lineHeightRef.current === null) {
+      lineHeightRef.current =
+        Number.parseFloat(window.getComputedStyle(textarea).lineHeight) || 24;
+    }
+    const lineHeight = lineHeightRef.current;
     const maxHeight = lineHeight * MAX_TEXTAREA_ROWS;
 
     textarea.style.height = "auto";
@@ -450,6 +476,20 @@ export function MessageComposer({
   }, [disabled, replyTarget]);
 
   const isUploading = uploadState.status === "uploading";
+
+  const sendDisabled = React.useMemo(
+    () =>
+      disabled || (content.trim().length === 0 && pendingImeta.length === 0),
+    [disabled, content, pendingImeta.length],
+  );
+
+  const handleCaptureSelection = React.useCallback(() => {
+    updateDraftSelection(textareaRef.current);
+  }, [updateDraftSelection]);
+
+  const handlePaperclipClick = React.useCallback(() => {
+    void handlePaperclip();
+  }, [handlePaperclip]);
 
   return (
     <footer className="border-t border-border/80 bg-background p-4">
@@ -545,19 +585,12 @@ export function MessageComposer({
             isEmojiPickerOpen={isEmojiPickerOpen}
             isSending={isSending}
             isUploading={isUploading}
-            onCaptureSelection={() => {
-              updateDraftSelection(textareaRef.current);
-            }}
+            onCaptureSelection={handleCaptureSelection}
             onEmojiPickerOpenChange={setIsEmojiPickerOpen}
             onEmojiSelect={insertEmoji}
             onOpenMentionPicker={openMentionPicker}
-            onPaperclip={() => {
-              void handlePaperclip();
-            }}
-            sendDisabled={
-              disabled ||
-              (content.trim().length === 0 && pendingImeta.length === 0)
-            }
+            onPaperclip={handlePaperclipClick}
+            sendDisabled={sendDisabled}
           />
         </form>
       </div>

@@ -1,0 +1,77 @@
+# Reusable workflow to bundle the Sprout desktop app for macOS (arm64).
+# Called from release.yml — not triggered directly.
+on:
+  workflow_call:
+    inputs:
+      signing:
+        description: 'Whether to perform signing and notarization'
+        required: false
+        default: false
+        type: boolean
+      ref:
+        description: 'Git ref to checkout'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      OSX_CODESIGN_ROLE:
+        required: false
+      CODESIGN_S3_BUCKET:
+        required: false
+
+name: Reusable workflow to bundle desktop app for macOS
+
+jobs:
+  bundle-desktop-macos:
+    runs-on: macos-latest
+    name: Bundle Desktop App (macOS arm64)
+    timeout-minutes: 45
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || '' }}
+
+      - name: Activate Hermit
+        uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+
+      - name: Build Tauri app
+        run: cd desktop && pnpm tauri build
+
+      - name: Codesign and Notarize
+        if: ${{ inputs.signing }}
+        id: codesign
+        uses: block/apple-codesign-action@v1.1.0
+        with:
+          osx-codesign-role: ${{ secrets.OSX_CODESIGN_ROLE }}
+          codesign-s3-bucket: ${{ secrets.CODESIGN_S3_BUCKET }}
+          unsigned-artifact-path: desktop/src-tauri/target/release/bundle/macos/Sprout.app
+          artifact-name: sprout-${{ github.sha }}-${{ github.run_id }}-arm64
+
+      - name: Package signed app
+        if: ${{ inputs.signing }}
+        env:
+          SIGNED_PATH: ${{ steps.codesign.outputs.signed-artifact-path }}
+        run: cp "$SIGNED_PATH" Sprout-darwin-arm64.zip
+
+      - name: Package unsigned app
+        if: ${{ !inputs.signing }}
+        run: ditto -c -k --keepParent desktop/src-tauri/target/release/bundle/macos/Sprout.app Sprout-darwin-arm64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Sprout-darwin-arm64
+          path: Sprout-darwin-arm64.zip
+          retention-days: 1

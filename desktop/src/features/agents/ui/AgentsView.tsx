@@ -1,10 +1,13 @@
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import {
   type AttachManagedAgentToChannelResult,
+  personasQueryKey,
   useCreatePersonaMutation,
   useDeletePersonaMutation,
   useDeleteManagedAgentMutation,
+  useExportPersonaPngMutation,
   useManagedAgentLogQuery,
   useManagedAgentsQuery,
   useMintManagedAgentTokenMutation,
@@ -18,6 +21,7 @@ import {
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { sendChannelMessage } from "@/shared/api/tauri";
+import type { ParsePersonaFilesResult } from "@/shared/api/tauriPersonas";
 import type {
   AgentPersona,
   Channel,
@@ -28,6 +32,7 @@ import type {
 } from "@/shared/api/types";
 import { AddAgentToChannelDialog } from "./AddAgentToChannelDialog";
 import { AddTeamToChannelDialog } from "./AddTeamToChannelDialog";
+import { BatchImportDialog } from "./BatchImportDialog";
 import { CreateAgentDialog } from "./CreateAgentDialog";
 import { ManagedAgentLogPanel } from "./ManagedAgentLogPanel";
 import { ManagedAgentsSection } from "./ManagedAgentsSection";
@@ -44,12 +49,14 @@ import { useTeamActions } from "./useTeamActions";
 
 type PersonaDialogState = {
   description: string;
+  enableImportDrop: boolean;
   initialValues: CreatePersonaInput | UpdatePersonaInput;
   submitLabel: string;
   title: string;
 } | null;
 
 export function AgentsView() {
+  const queryClient = useQueryClient();
   const relayAgentsQuery = useRelayAgentsQuery();
   const managedAgentsQuery = useManagedAgentsQuery();
   const channelsQuery = useChannelsQuery();
@@ -62,6 +69,7 @@ export function AgentsView() {
   const createPersonaMutation = useCreatePersonaMutation();
   const updatePersonaMutation = useUpdatePersonaMutation();
   const deletePersonaMutation = useDeletePersonaMutation();
+  const exportPersonaPngMutation = useExportPersonaPngMutation();
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
   const [personaDialogState, setPersonaDialogState] =
     React.useState<PersonaDialogState>(null);
@@ -89,7 +97,9 @@ export function AgentsView() {
       refetchRelayAgents: () => void relayAgentsQuery.refetch(),
     },
   );
-
+  const [batchImportResult, setBatchImportResult] =
+    React.useState<ParsePersonaFilesResult | null>(null);
+  const [batchImportFileName, setBatchImportFileName] = React.useState("");
   const managedAgents = React.useMemo(
     () =>
       [...(managedAgentsQuery.data ?? [])].sort((left, right) => {
@@ -415,6 +425,7 @@ export function AgentsView() {
                   title: "Create persona",
                   description:
                     "Save a reusable role, prompt, and optional avatar for future agent deployments.",
+                  enableImportDrop: true,
                   submitLabel: "Create persona",
                   initialValues: {
                     displayName: "",
@@ -431,6 +442,7 @@ export function AgentsView() {
                   title: `Duplicate ${persona.displayName}`,
                   description:
                     "Create a new persona by copying this template and adjusting it as needed.",
+                  enableImportDrop: false,
                   submitLabel: "Create persona",
                   initialValues: {
                     displayName: `${persona.displayName} copy`,
@@ -446,12 +458,31 @@ export function AgentsView() {
                   title: `Edit ${persona.displayName}`,
                   description:
                     "Update this saved persona. New deployments will use the updated values.",
+                  enableImportDrop: false,
                   submitLabel: "Save changes",
                   initialValues: {
                     id: persona.id,
                     displayName: persona.displayName,
                     avatarUrl: persona.avatarUrl ?? "",
                     systemPrompt: persona.systemPrompt,
+                  },
+                });
+              }}
+              onExport={(persona) => {
+                exportPersonaPngMutation.mutate(persona.id, {
+                  onSuccess: (saved) => {
+                    if (saved) {
+                      setActionNoticeMessage(
+                        `Exported ${persona.displayName}.`,
+                      );
+                    }
+                  },
+                  onError: (error) => {
+                    setActionErrorMessage(
+                      error instanceof Error
+                        ? error.message
+                        : "Failed to export persona.",
+                    );
                   },
                 });
               }}
@@ -580,6 +611,7 @@ export function AgentsView() {
       />
       <PersonaDialog
         description={personaDialogState?.description ?? ""}
+        enableImportDrop={personaDialogState?.enableImportDrop ?? false}
         error={
           updatePersonaMutation.error instanceof Error
             ? updatePersonaMutation.error
@@ -591,6 +623,11 @@ export function AgentsView() {
         isPending={
           createPersonaMutation.isPending || updatePersonaMutation.isPending
         }
+        onBatchImport={(result, fileName) => {
+          setBatchImportResult(result);
+          setBatchImportFileName(fileName);
+          setPersonaDialogState(null);
+        }}
         onOpenChange={(open) => {
           if (!open) {
             setPersonaDialogState(null);
@@ -660,6 +697,23 @@ export function AgentsView() {
         open={teamActions.teamToAddToChannel !== null}
         personas={personas}
         team={teamActions.teamToAddToChannel}
+      />
+      <BatchImportDialog
+        fileName={batchImportFileName}
+        onComplete={(count) => {
+          setBatchImportResult(null);
+          setActionNoticeMessage(
+            `Imported ${count} persona${count !== 1 ? "s" : ""}.`,
+          );
+          void queryClient.invalidateQueries({ queryKey: personasQueryKey });
+        }}
+        onOpenChange={(open) => {
+          if (!open) {
+            setBatchImportResult(null);
+          }
+        }}
+        open={batchImportResult !== null}
+        result={batchImportResult}
       />
     </>
   );

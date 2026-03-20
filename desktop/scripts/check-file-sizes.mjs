@@ -30,8 +30,9 @@ const rules = [
 
 // Exceptions should stay rare and temporary. Prefer splitting files instead.
 const overrides = new Map([
+  ["src-tauri/src/managed_agents/persona_card.rs", 700], // PNG/ZIP persona card codec + 21 unit tests (~300 lines of tests)
   ["src/app/AppShell.tsx", 750],
-  ["src/features/agents/ui/AgentsView.tsx", 575], // persona + team dialog orchestration (team state extracted to useTeamActions)
+  ["src/features/agents/ui/AgentsView.tsx", 625], // persona/team orchestration plus import/export wiring
   ["src/features/channels/hooks.ts", 525], // canvas query + mutation hooks
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
   ["src/features/messages/ui/MessageComposer.tsx", 665], // media upload handlers (paste, drop, dialog) + channelId reset effect
@@ -41,7 +42,7 @@ const overrides = new Map([
   ["src/shared/api/relayClientSession.ts", 725], // durable websocket session manager with reconnect/replay/recovery state
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
   ["src-tauri/src/commands/agents.rs", 800], // remote agent lifecycle routing (local + provider branches)
-  ["src/features/agents/ui/AgentsView.tsx", 675], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard
+  ["src/features/agents/ui/AgentsView.tsx", 730], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard + persona import
   ["src/features/agents/ui/CreateAgentDialog.tsx", 660], // provider selector + config form + schema-typed config coercion + required field validation
 ]);
 

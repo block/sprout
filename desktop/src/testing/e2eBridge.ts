@@ -2404,6 +2404,41 @@ async function handleDeletePersona(args: { id: string }): Promise<void> {
   }
 }
 
+async function handleParsePersonaFiles(args: {
+  fileBytes: number[];
+  fileName: string;
+}): Promise<{
+  personas: {
+    display_name: string;
+    system_prompt: string;
+    avatar_data_url: string | null;
+    source_file: string;
+  }[];
+  skipped: { source_file: string; reason: string }[];
+}> {
+  // In test mode, return canned data — we can't actually parse PNG chunks in JS
+  return {
+    personas: [
+      {
+        display_name: "Imported Persona",
+        system_prompt: "You are an imported test persona.",
+        avatar_data_url: null,
+        source_file: args.fileName,
+      },
+    ],
+    skipped: [],
+  };
+}
+
+async function handleExportPersonaToPng(args: {
+  id: string;
+}): Promise<boolean> {
+  // In test mode, just verify the persona exists
+  const persona = mockPersonas.find((p) => p.id === args.id);
+  if (!persona) throw new Error(`Persona ${args.id} not found.`);
+  return true; // Simulate successful save
+}
+
 async function handleCreateManagedAgent(args: {
   input: {
     name: string;
@@ -3190,6 +3225,12 @@ export function maybeInstallE2eTauriMocks() {
         return handleDeletePersona(
           payload as Parameters<typeof handleDeletePersona>[0],
         );
+      case "parse_persona_files":
+        return handleParsePersonaFiles(
+          payload as { fileBytes: number[]; fileName: string },
+        );
+      case "export_persona_to_png":
+        return handleExportPersonaToPng(payload as { id: string });
       case "list_managed_agents":
         return handleListManagedAgents();
       case "create_managed_agent":

@@ -23,6 +23,7 @@ import {
 import {
   createPersona,
   deletePersona,
+  exportPersonaToPng,
   listPersonas,
   updatePersona,
 } from "@/shared/api/tauriPersonas";
@@ -420,6 +421,12 @@ export function useEnsureGooseInChannelMutation(channelId: string | null) {
     onSettled: async () => {
       await invalidateAgentQueries(queryClient, channelId);
     },
+  });
+}
+
+export function useExportPersonaPngMutation() {
+  return useMutation({
+    mutationFn: (id: string) => exportPersonaToPng(id),
   });
 }
 
