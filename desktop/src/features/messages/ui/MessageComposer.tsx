@@ -11,6 +11,7 @@ import {
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
+import { ComposerMentionOverlay } from "./ComposerMentionOverlay";
 import {
   MentionAutocomplete,
   type MentionSuggestion,
@@ -69,6 +70,7 @@ export function MessageComposer({
   const pendingSelectionRef = React.useRef<number | null>(null);
   const draftSelectionRef = React.useRef({ end: 0, start: 0 });
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
+  const [composerScrollTop, setComposerScrollTop] = React.useState(0);
   const lineHeightRef = React.useRef<number | null>(null);
 
   // Keep contentRef in sync — no extra re-render, just a ref assignment.
@@ -101,6 +103,7 @@ export function MessageComposer({
     setPendingImeta([]);
     setUploadState({ status: "idle" });
     setIsEmojiPickerOpen(false);
+    setComposerScrollTop(0);
     mentions.clearMentions();
     channelLinks.clearChannels();
     draftSelectionRef.current = { end: 0, start: 0 };
@@ -307,6 +310,13 @@ export function MessageComposer({
       }
     },
     [onUploaded],
+  );
+
+  const handleScroll = React.useCallback(
+    (event: React.UIEvent<HTMLTextAreaElement>) => {
+      setComposerScrollTop(event.currentTarget.scrollTop);
+    },
+    [],
   );
 
   const submitMessage = React.useCallback(async () => {
@@ -556,29 +566,41 @@ export function MessageComposer({
             </div>
           ) : null}
 
-          <Textarea
-            aria-label="Message channel"
-            className="min-h-0 resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 text-sm leading-6 shadow-none focus-visible:ring-0"
-            data-testid="message-input"
-            disabled={disabled}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            onPaste={(e) => {
-              void handlePaste(e);
-            }}
-            onSelect={(event) => {
-              updateDraftSelection(event.currentTarget);
-            }}
-            placeholder={
-              placeholder ??
-              (replyTarget
-                ? `Reply to ${replyTarget.author} in #${channelName}`
-                : `Message #${channelName}`)
-            }
-            ref={textareaRef}
-            rows={1}
-            value={content}
-          />
+          <div className="relative">
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 overflow-hidden"
+            >
+              <ComposerMentionOverlay
+                content={content}
+                scrollTop={composerScrollTop}
+              />
+            </div>
+            <Textarea
+              aria-label="Message channel"
+              className="min-h-0 resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 text-sm leading-6 shadow-none focus-visible:ring-0 caret-foreground text-transparent selection:bg-primary/20 selection:text-transparent"
+              data-testid="message-input"
+              disabled={disabled}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              onPaste={(e) => {
+                void handlePaste(e);
+              }}
+              onScroll={handleScroll}
+              onSelect={(event) => {
+                updateDraftSelection(event.currentTarget);
+              }}
+              placeholder={
+                placeholder ??
+                (replyTarget
+                  ? `Reply to ${replyTarget.author} in #${channelName}`
+                  : `Message #${channelName}`)
+              }
+              ref={textareaRef}
+              rows={1}
+              value={content}
+            />
+          </div>
 
           <MessageComposerToolbar
             composerDisabled={disabled}
