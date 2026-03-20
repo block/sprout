@@ -33,7 +33,7 @@ const overrides = new Map([
   ["src/app/AppShell.tsx", 750],
   ["src/features/channels/hooks.ts", 525], // canvas query + mutation hooks
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
-  ["src/features/messages/ui/MessageComposer.tsx", 650], // media upload handlers (paste, drop, dialog)
+  ["src/features/messages/ui/MessageComposer.tsx", 665], // media upload handlers (paste, drop, dialog) + channelId reset effect
   ["src/features/settings/ui/SettingsView.tsx", 600],
   ["src/features/sidebar/ui/AppSidebar.tsx", 850], // channels + forums creation forms
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],

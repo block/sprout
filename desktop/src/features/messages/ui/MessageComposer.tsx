@@ -78,6 +78,20 @@ export function MessageComposer({
   }>({ status: "idle" });
   const [pendingImeta, setPendingImeta] = React.useState<BlobDescriptor[]>([]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger — reset all composer state on channel switch to prevent draft/upload/mention leaks
+  React.useEffect(() => {
+    setContent("");
+    setPendingImeta([]);
+    setUploadState({ status: "idle" });
+    setMentionQuery(null);
+    setMentionStartIndex(0);
+    setMentionSelectedIndex(0);
+    setIsEmojiPickerOpen(false);
+    mentionMapRef.current.clear();
+    draftSelectionRef.current = { end: 0, start: 0 };
+    pendingSelectionRef.current = null;
+  }, [channelId]);
+
   const membersQuery = useChannelMembersQuery(channelId);
   const members = membersQuery.data ?? [];
   const managedAgentsQuery = useManagedAgentsQuery();

@@ -217,14 +217,6 @@ export function AppShell() {
         .filter((value) => value && value.trim().length > 0)
         .join(" ") || "Channel details and activity."
     : "Connect to the relay to browse channels and read messages.";
-  const contentPaneKey =
-    selectedView === "home"
-      ? "home"
-      : selectedView === "agents"
-        ? "agents"
-        : selectedView === "settings"
-          ? "settings"
-          : `channel:${activeChannel?.id ?? "none"}`;
   const shouldLoadTimeline =
     activeChannel !== null && activeChannel.channelType !== "forum";
   const isTimelineLoading =
@@ -589,10 +581,7 @@ export function AppShell() {
             unreadChannelIds={unreadChannelIds}
           />
 
-          <SidebarInset
-            className="min-h-0 min-w-0 overflow-hidden"
-            key={contentPaneKey}
-          >
+          <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
             {selectedView === "home" ? (
               <ChatHeader
                 description="Personalized feed for mentions, reminders, channel activity, and agent work."

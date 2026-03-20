@@ -51,8 +51,9 @@ export function ChannelPane({
   typingPubkeys,
 }: ChannelPaneProps) {
   return (
-    <React.Fragment key={activeChannel?.id ?? "no-channel"}>
+    <React.Fragment>
       <MessageTimeline
+        channelId={activeChannel?.id}
         activeReplyTargetId={replyTargetId}
         currentPubkey={currentPubkey}
         profiles={profiles}
