@@ -19,7 +19,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 chrono = { workspace = true }
 axum = { workspace = true }
-s3 = { version = "0.35", package = "rust-s3" }
+s3 = { version = "0.35", package = "rust-s3", default-features = false, features = ["tokio-rustls-tls", "fail-on-err", "tags"] }
 infer = "0.16"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 blurhash = "0.2"
