@@ -267,6 +267,7 @@ export type RelayAgent = {
   name: string;
   agentType: string;
   channels: string[];
+  channelIds: string[];
   capabilities: string[];
   status: "online" | "away" | "offline";
 };

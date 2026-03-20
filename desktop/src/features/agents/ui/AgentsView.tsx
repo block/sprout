@@ -15,7 +15,6 @@ import {
   useStopManagedAgentMutation,
   useUpdatePersonaMutation,
 } from "@/features/agents/hooks";
-import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { sendChannelMessage } from "@/shared/api/tauri";
 import type {
@@ -47,7 +46,6 @@ type PersonaDialogState = {
 export function AgentsView() {
   const relayAgentsQuery = useRelayAgentsQuery();
   const managedAgentsQuery = useManagedAgentsQuery();
-  const channelsQuery = useChannelsQuery();
   const personasQuery = usePersonasQuery();
   const startMutation = useStartManagedAgentMutation();
   const stopMutation = useStopManagedAgentMutation();
@@ -113,27 +111,11 @@ export function AgentsView() {
   );
   const managedPresenceQuery = usePresenceQuery(managedPubkeyList);
 
-  // Build channel name → UUID lookup for sending !shutdown to remote agents.
-  // The relay agents endpoint returns channel *names*, but sendChannelMessage
-  // needs channel *UUIDs*. Channel names are not guaranteed unique in the DB
-  // schema, but are unique in practice. If duplicates exist, last-write-wins
-  // here — acceptable since the agent is a member of that channel either way.
-  // TODO: have the relay return channel UUIDs in the agents endpoint.
-  const channelIdByName = React.useMemo(() => {
-    const map = new Map<string, string>();
-    for (const ch of channelsQuery.data ?? []) {
-      map.set(ch.name, ch.id);
-    }
-    return map;
-  }, [channelsQuery.data]);
-
-  /** Resolve a relay-agent's first channel name to a channel UUID. */
+  /** Resolve a relay-agent's first channel UUID for sending !shutdown. */
   function resolveAgentChannelId(pubkey: string): string | null {
     const relayAgents = relayAgentsQuery.data ?? [];
     const relayAgent = relayAgents.find((ra) => ra.pubkey === pubkey);
-    const channelName = relayAgent?.channels?.[0];
-    if (!channelName) return null;
-    return channelIdByName.get(channelName) ?? null;
+    return relayAgent?.channelIds?.[0] ?? null;
   }
 
   // Clear log selection if the agent was removed

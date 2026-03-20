@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Invoke a provider binary: write JSON to stdin, read JSON from stdout.
@@ -7,6 +8,8 @@ use std::time::Duration;
 /// Uses `wait_with_output` on a dedicated thread with a timeout to avoid pipe
 /// deadlocks — stdout and stderr are drained concurrently by the OS while the
 /// child runs, so a chatty provider won't block on a full pipe buffer.
+///
+/// On timeout the child is killed via `Child::kill()` (no raw PIDs, no unsafe).
 pub fn invoke_provider(
     binary: &Path,
     request: &serde_json::Value,
@@ -29,30 +32,38 @@ pub fn invoke_provider(
             .map_err(|e| format!("stdin write failed: {e}"))?;
     }
 
-    // wait_with_output drains stdout+stderr concurrently, preventing pipe deadlocks.
-    // We run it on a thread so we can enforce a timeout. On timeout we kill the
-    // child by PID to avoid orphaning a provider process that may mutate remote state.
+    // Share the child between the worker thread and the timeout path so we can
+    // call child.kill() safely (no raw PIDs, no unsafe, no PID-reuse risk).
+    // We use Option<Child> so the worker thread can take() ownership for
+    // wait_with_output (which consumes self), while the timeout path can still
+    // call kill()+wait() on the original handle if the take hasn't happened yet.
+    let child = Arc::new(Mutex::new(Some(child)));
+    let child_for_thread = Arc::clone(&child);
     let timeout_secs = timeout.as_secs();
-    let child_pid = child.id();
+
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(child.wait_with_output());
+        let result = child_for_thread
+            .lock()
+            .map_err(|e| format!("lock poisoned: {e}"))
+            .and_then(|mut guard| {
+                guard
+                    .take()
+                    .ok_or_else(|| "child already taken".to_string())
+            })
+            .and_then(|c| c.wait_with_output().map_err(|e| format!("wait failed: {e}")));
+        let _ = tx.send(result);
     });
 
     let output = match rx.recv_timeout(timeout) {
-        Ok(result) => result.map_err(|e| format!("wait failed: {e}"))?,
+        Ok(result) => result?,
         Err(_) => {
-            // Timeout — kill the child process so it doesn't keep running.
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(child_pid as i32, libc::SIGKILL);
-            }
-            #[cfg(not(unix))]
-            {
-                // On non-Unix, try to terminate via taskkill (best effort).
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/F", "/PID", &child_pid.to_string()])
-                    .output();
+            // Timeout — kill via the Child handle (safe, no PID reuse risk).
+            if let Ok(mut guard) = child.lock() {
+                if let Some(ref mut c) = *guard {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
             }
             return Err(format!("provider timed out after {timeout_secs}s"));
         }
@@ -81,20 +92,32 @@ pub fn invoke_provider(
 }
 
 /// Split a config key into lowercase words on `_`, `-`, `.`, and camelCase boundaries.
-/// "apiKey" → ["api", "key"], "access_token" → ["access", "token"],
-/// "keyboard" → ["keyboard"], "clientSecret" → ["client", "secret"].
+///
+/// Handles acronyms: consecutive uppercase runs stay together until a lowercase follows.
+/// "apiKey" → ["api", "key"], "apiKEY" → ["api", "key"], "APIKey" → ["api", "key"],
+/// "access_token" → ["access", "token"], "keyboard" → ["keyboard"],
+/// "clientSecret" → ["client", "secret"].
 fn split_config_key(key: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut current = String::new();
-    for ch in key.chars() {
+    let chars: Vec<char> = key.chars().collect();
+    for (i, &ch) in chars.iter().enumerate() {
         if ch == '_' || ch == '-' || ch == '.' {
             if !current.is_empty() {
                 words.push(current.to_lowercase());
                 current.clear();
             }
-        } else if ch.is_uppercase() && !current.is_empty() {
-            words.push(current.to_lowercase());
-            current.clear();
+        } else if ch.is_uppercase() {
+            // Start a new word on: (a) transition from lowercase to uppercase, or
+            // (b) uppercase followed by lowercase (end of acronym run, e.g. "APIKey" → "API" + "Key").
+            let prev_lower = !current.is_empty() && current.chars().last().map_or(false, |c| c.is_lowercase());
+            let acronym_end = !current.is_empty()
+                && current.chars().last().map_or(false, |c| c.is_uppercase())
+                && chars.get(i + 1).map_or(false, |c| c.is_lowercase());
+            if prev_lower || acronym_end {
+                words.push(current.to_lowercase());
+                current.clear();
+            }
             current.push(ch);
         } else {
             current.push(ch);
@@ -254,6 +277,9 @@ mod tests {
         assert!(validate_provider_config(&serde_json::json!({"apiKey": "val"})).is_err());
         assert!(validate_provider_config(&serde_json::json!({"accessToken": "val"})).is_err());
         assert!(validate_provider_config(&serde_json::json!({"clientSecret": "val"})).is_err());
+        // ALL-CAPS variants
+        assert!(validate_provider_config(&serde_json::json!({"apiKEY": "val"})).is_err());
+        assert!(validate_provider_config(&serde_json::json!({"accessTOKEN": "val"})).is_err());
     }
 
     #[test]
@@ -262,6 +288,10 @@ mod tests {
         assert_eq!(split_config_key("access_token"), vec!["access", "token"]);
         assert_eq!(split_config_key("keyboard"), vec!["keyboard"]);
         assert_eq!(split_config_key("client-secret"), vec!["client", "secret"]);
-        assert_eq!(split_config_key("MyAPIKey"), vec!["my", "a", "p", "i", "key"]);
+        // Acronym runs stay together
+        assert_eq!(split_config_key("APIKey"), vec!["api", "key"]);
+        assert_eq!(split_config_key("apiKEY"), vec!["api", "key"]);
+        assert_eq!(split_config_key("accessTOKEN"), vec!["access", "token"]);
+        assert_eq!(split_config_key("MyAPIKey"), vec!["my", "api", "key"]);
     }
 }

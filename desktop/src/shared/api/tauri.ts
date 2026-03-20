@@ -218,6 +218,7 @@ type RawRelayAgent = {
   name: string;
   agent_type: string;
   channels: string[];
+  channel_ids: string[];
   capabilities: string[];
   status: RelayAgent["status"];
 };
@@ -780,6 +781,7 @@ function fromRawRelayAgent(agent: RawRelayAgent): RelayAgent {
     name: agent.name,
     agentType: agent.agent_type,
     channels: agent.channels,
+    channelIds: agent.channel_ids ?? [],
     capabilities: agent.capabilities,
     status: agent.status,
   };

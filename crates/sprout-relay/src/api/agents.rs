@@ -97,12 +97,24 @@ pub async fn agents_handler(
                 format!("agent-{}", &hex[..end])
             });
 
-        let channels: Vec<&str> = bot
+        // Build parallel name/id lists, then filter by accessible names.
+        let names: Vec<&str> = bot
             .channel_names
             .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty() && accessible_names.contains(*s))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
             .collect();
+        let ids: Vec<&str> = bot
+            .channel_ids
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        let (channels, channel_ids): (Vec<&str>, Vec<&str>) = names
+            .into_iter()
+            .zip(ids.into_iter())
+            .filter(|(name, _)| accessible_names.contains(*name))
+            .unzip();
 
         let capabilities: Vec<String> = bot
             .capabilities
@@ -126,6 +138,7 @@ pub async fn agents_handler(
             "name": name,
             "agent_type": bot.agent_type.clone().unwrap_or_default(),
             "channels": channels,
+            "channel_ids": channel_ids,
             "capabilities": capabilities,
             "status": status,
         }));
