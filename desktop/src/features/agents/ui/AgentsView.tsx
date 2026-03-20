@@ -205,15 +205,30 @@ export function AgentsView() {
       // For remote agents, send !shutdown before deleting to avoid orphaning.
       const agent = managedAgents.find((a) => a.pubkey === pubkey);
       if (agent?.backend.type === "provider" && agent.backendAgentId) {
+        const presence = (managedPresenceQuery.data ?? {})[
+          pubkey.trim().toLowerCase()
+        ];
         const channelId = resolveAgentChannelId(pubkey);
         if (channelId) {
-          await sendChannelMessage(
-            channelId,
-            "!shutdown",
-            undefined,
-            undefined,
-            [pubkey],
-          );
+          // If the agent is still online, send !shutdown and warn that
+          // deletion proceeds without waiting for confirmed exit.
+          if (presence === "online" || presence === "away") {
+            await sendChannelMessage(
+              channelId,
+              "!shutdown",
+              undefined,
+              undefined,
+              [pubkey],
+            );
+            // eslint-disable-next-line no-alert
+            const confirmed = window.confirm(
+              "Shutdown command sent, but the agent may still be running. " +
+                "Deleting now removes the local record — the remote deployment " +
+                "will be orphaned if shutdown hasn't completed. Continue?",
+            );
+            if (!confirmed) return;
+          }
+          // Already offline — safe to delete without shutdown.
         } else {
           // Can't send shutdown — warn user about orphaning.
           // eslint-disable-next-line no-alert

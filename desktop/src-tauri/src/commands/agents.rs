@@ -212,6 +212,15 @@ pub async fn create_managed_agent(
 
     // ── Pre-Phase 2: validate provider config BEFORE any side effects ────────
     if let BackendKind::Provider { ref config, ref id } = input.backend {
+        // Provider agents MUST mint a token so the relay establishes ownership.
+        // Without ownership the harness ignores !shutdown — the agent becomes
+        // uncontrollable. Reject early rather than deploy an unstoppable agent.
+        if !mint_token {
+            return Err(
+                "provider-backed agents require a minted token (ownership is established during mint)"
+                    .to_string(),
+            );
+        }
         validate_provider_config(config)?;
         let bin_name = format!("sprout-backend-{id}");
         if resolve_command(&bin_name, Some(&app)).is_none() {

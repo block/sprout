@@ -7,6 +7,9 @@ use std::time::Duration;
 /// Stdout and stderr are drained on dedicated threads to prevent pipe deadlocks.
 /// The child stays on the calling thread — `try_wait()` polls with a deadline,
 /// and `kill()` is called directly on timeout. No mutex, no unsafe, no raw PIDs.
+///
+/// All error paths go through cleanup: the child is killed/waited and drain
+/// threads are joined before returning, preventing zombie processes.
 pub fn invoke_provider(
     binary: &Path,
     request: &serde_json::Value,
@@ -23,11 +26,11 @@ pub fn invoke_provider(
         .map_err(|e| format!("failed to spawn {}: {e}", binary.display()))?;
 
     // Write request and close stdin immediately so the provider sees EOF.
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(request_bytes.as_bytes())
-            .map_err(|e| format!("stdin write failed: {e}"))?;
-    }
+    let stdin_result = if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(request_bytes.as_bytes())
+    } else {
+        Ok(())
+    };
 
     // Drain stdout and stderr on separate threads to prevent pipe deadlocks.
     // These threads own the pipe handles and run to completion independently.
@@ -48,6 +51,23 @@ pub fn invoke_provider(
         buf
     });
 
+    // Cleanup helper: kill/wait the child and join drain threads. Called on
+    // every exit path to prevent zombie processes and leaked threads.
+    let cleanup = |child: &mut std::process::Child,
+                   stdout_thread: std::thread::JoinHandle<Vec<u8>>,
+                   stderr_thread: std::thread::JoinHandle<Vec<u8>>| {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = stdout_thread.join();
+        let _ = stderr_thread.join();
+    };
+
+    // Bail early if stdin write failed — child may be in a bad state.
+    if let Err(e) = stdin_result {
+        cleanup(&mut child, stdout_thread, stderr_thread);
+        return Err(format!("stdin write failed: {e}"));
+    }
+
     // Poll try_wait with a deadline. This is safe from pipe deadlocks because
     // stdout/stderr are already being drained on background threads above.
     // The child stays on this thread — kill() is always reachable on timeout.
@@ -62,13 +82,15 @@ pub fn invoke_provider(
             }
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    cleanup(&mut child, stdout_thread, stderr_thread);
                     return Err(format!("provider timed out after {timeout_secs}s"));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(e) => return Err(format!("wait error: {e}")),
+            Err(e) => {
+                cleanup(&mut child, stdout_thread, stderr_thread);
+                return Err(format!("wait error: {e}"));
+            }
         }
     }
 

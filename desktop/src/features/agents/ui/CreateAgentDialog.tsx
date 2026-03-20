@@ -329,7 +329,7 @@ export function CreateAgentDialog({
                 ? Number.parseInt(parallelism, 10)
                 : undefined,
             systemPrompt: systemPrompt.trim() || undefined,
-            mintToken,
+            mintToken: true, // Required: ownership established during mint
             tokenName: tokenName.trim() || undefined,
             tokenScopes: [...selectedScopes],
             spawnAfterCreate: true,
@@ -458,8 +458,8 @@ export function CreateAgentDialog({
             <CreateAgentOptionToggles
               isMintSupported={isMintSupported}
               isSpawnSupported={isSpawnSupported}
-              mintToken={mintToken}
-              mintToggleDisabled={mintToggleDisabled}
+              mintToken={isProviderMode ? true : mintToken}
+              mintToggleDisabled={isProviderMode || mintToggleDisabled}
               onToggleMintToken={() => {
                 if (!mintToggleDisabled) {
                   setMintToken((current) => !current);
