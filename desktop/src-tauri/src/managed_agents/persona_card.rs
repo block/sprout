@@ -229,6 +229,11 @@ pub fn parse_zip_personas(zip_bytes: &[u8]) -> Result<ParsePersonaFilesResult, S
             continue;
         }
 
+        // Skip macOS resource fork metadata (e.g. __MACOSX/._file.json)
+        if name.starts_with("__MACOSX/") || name.contains("/._") || name.starts_with("._") {
+            continue;
+        }
+
         let lower = name.to_ascii_lowercase();
         let is_png = lower.ends_with(".png");
         let is_json = lower.ends_with(".json");
@@ -639,5 +644,21 @@ mod tests {
         // readme.txt should be skipped
         assert_eq!(result.skipped.len(), 1);
         assert!(result.skipped[0].reason.contains("Not a PNG or JSON file"));
+    }
+
+    #[test]
+    fn parse_zip_ignores_macos_resource_forks() {
+        let j1 = encode_persona_json("Frank", "You are Frank.", None).unwrap();
+        let j2 = encode_persona_json("Jackie", "You are Jackie.", None).unwrap();
+        let zip = make_test_zip(&[
+            ("frank-costanza.persona.json", &j1),
+            ("jackie-chiles.persona.json", &j2),
+            ("__MACOSX/._frank-costanza.persona.json", b"\x00\x05\x16"),
+            ("__MACOSX/._jackie-chiles.persona.json", b"\x00\x05\x16"),
+        ]);
+        let result = parse_zip_personas(&zip).unwrap();
+        assert_eq!(result.personas.len(), 2);
+        // macOS resource forks should be silently ignored, not skipped with errors
+        assert!(result.skipped.is_empty());
     }
 }
