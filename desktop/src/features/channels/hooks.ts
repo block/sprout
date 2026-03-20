@@ -11,6 +11,7 @@ import {
   archiveChannel,
   createChannel,
   deleteChannel,
+  getCanvas,
   getChannelDetails,
   getChannelMembers,
   getChannels,
@@ -18,6 +19,7 @@ import {
   leaveChannel,
   openDm,
   removeChannelMember,
+  setCanvas,
   setChannelPurpose,
   setChannelTopic,
   unarchiveChannel,
@@ -473,4 +475,39 @@ export function useSelectedChannel(
     selectedChannelId,
     setSelectedChannelId,
   };
+}
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+
+export function useCanvasQuery(channelId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: ["channel-canvas", channelId],
+    queryFn: () => {
+      if (!channelId) {
+        return Promise.reject(new Error("No channel selected"));
+      }
+      return getCanvas(channelId);
+    },
+    enabled: enabled && channelId !== null,
+  });
+}
+
+export function useSetCanvasMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (content: string) => {
+      if (!channelId) {
+        return Promise.reject(new Error("No channel selected"));
+      }
+      return setCanvas({ channelId, content });
+    },
+    onSuccess: () => {
+      if (channelId) {
+        void queryClient.invalidateQueries({
+          queryKey: ["channel-canvas", channelId],
+        });
+      }
+    },
+  });
 }

@@ -5,6 +5,7 @@ import type {
   AddChannelMembersResult,
   BackendProviderCandidate,
   BackendProviderProbeResult,
+  CanvasResponse,
   Channel,
   ChannelDetail,
   ChannelMember,
@@ -26,6 +27,8 @@ import type {
   SearchMessagesInput,
   SearchMessagesResponse,
   SendChannelMessageResult,
+  SetCanvasInput,
+  SetCanvasResult,
   SetPresenceResult,
   SetChannelPurposeInput,
   SetChannelTopicInput,
@@ -283,6 +286,17 @@ type RawManagedAgentPrereqs = {
   admin: RawCommandAvailability;
   acp: RawCommandAvailability;
   mcp: RawCommandAvailability;
+};
+
+type RawCanvasResponse = {
+  content: string | null;
+  updated_at: number | null;
+  author: string | null;
+};
+
+type RawSetCanvasResult = {
+  ok: boolean;
+  event_id: string;
 };
 
 function toTauriError(error: unknown): Error {
@@ -591,6 +605,30 @@ export async function joinChannel(channelId: string): Promise<void> {
 
 export async function leaveChannel(channelId: string): Promise<void> {
   await invokeTauri("leave_channel", { channelId });
+}
+
+export async function getCanvas(channelId: string): Promise<CanvasResponse> {
+  const response = await invokeTauri<RawCanvasResponse>("get_canvas", {
+    channelId,
+  });
+  return {
+    content: response.content,
+    updatedAt: response.updated_at,
+    author: response.author,
+  };
+}
+
+export async function setCanvas(
+  input: SetCanvasInput,
+): Promise<SetCanvasResult> {
+  const response = await invokeTauri<RawSetCanvasResult>("set_canvas", {
+    channelId: input.channelId,
+    content: input.content,
+  });
+  return {
+    ok: response.ok,
+    eventId: response.event_id,
+  };
 }
 
 export async function getHomeFeed(
