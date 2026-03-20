@@ -42,7 +42,7 @@ const overrides = new Map([
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
   ["src-tauri/src/commands/agents.rs", 800], // remote agent lifecycle routing (local + provider branches)
   ["src/features/agents/ui/AgentsView.tsx", 675], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard
-  ["src/features/agents/ui/CreateAgentDialog.tsx", 650], // provider selector + config form + schema-typed config coercion
+  ["src/features/agents/ui/CreateAgentDialog.tsx", 660], // provider selector + config form + schema-typed config coercion + required field validation
 ]);
 
 async function walkFiles(directory) {

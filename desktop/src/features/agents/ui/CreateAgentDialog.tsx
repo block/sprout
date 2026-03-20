@@ -352,6 +352,17 @@ export function CreateAgentDialog({
     setProbeError(null);
   }
 
+  // Check provider config required fields are filled.
+  const providerConfigComplete = React.useMemo(() => {
+    if (!isProviderMode || !probedProvider?.config_schema) return true;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const schema = probedProvider.config_schema as any;
+    const required: string[] = schema?.required ?? [];
+    return required.every(
+      (key) => (providerConfig[key] ?? "").trim().length > 0,
+    );
+  }, [isProviderMode, probedProvider, providerConfig]);
+
   const canSubmit =
     name.trim().length > 0 &&
     (!effectiveMintToken || selectedScopes.size > 0) &&
@@ -363,6 +374,7 @@ export function CreateAgentDialog({
       prereqs !== null &&
       !isSpawnSupported
     ) &&
+    providerConfigComplete &&
     !createMutation.isPending;
 
   async function handleSubmit() {

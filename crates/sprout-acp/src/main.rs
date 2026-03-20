@@ -127,38 +127,26 @@ async fn main() -> Result<()> {
     // Owner lookup is critical for !shutdown — a transient failure here would
     // permanently disable remote shutdown for this process. Retry a few times
     // with backoff so a brief relay hiccup doesn't leave us uncontrollable.
-    let owner_pubkey: Option<String> = {
-        let mut result = None;
+    // Owner lookup: try at startup, but if it fails the shutdown handler will
+    // retry lazily when a candidate !shutdown message arrives. This means a
+    // relay outage during startup doesn't permanently disable remote shutdown.
+    let mut owner_pubkey: Option<String> = {
         let profile_url = format!("/api/users/{pubkey_hex}/profile");
-        for attempt in 0..3u32 {
-            if attempt > 0 {
-                let delay = std::time::Duration::from_secs(2u64.pow(attempt));
-                tracing::info!(
-                    "retrying owner lookup in {}s (attempt {})",
-                    delay.as_secs(),
-                    attempt + 1
-                );
-                tokio::time::sleep(delay).await;
-            }
-            match rest_client_for_presence.get_json(&profile_url).await {
-                Ok(v) => {
-                    result = v
-                        .get("agent_owner_pubkey")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    break;
-                }
-                Err(e) => {
-                    tracing::warn!("owner lookup attempt {} failed: {e}", attempt + 1);
-                }
+        match rest_client_for_presence.get_json(&profile_url).await {
+            Ok(v) => v
+                .get("agent_owner_pubkey")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            Err(e) => {
+                tracing::warn!("startup owner lookup failed (will retry lazily): {e}");
+                None
             }
         }
-        result
     };
     if let Some(ref owner) = owner_pubkey {
         tracing::info!("agent owner: {owner}");
     } else {
-        tracing::info!("no agent owner set — shutdown command disabled");
+        tracing::info!("no agent owner set at startup — will resolve lazily on !shutdown");
     }
 
     // ── Step 3: Discover channels and build subscription rules ────────────────
@@ -480,6 +468,27 @@ async fn main() -> Result<()> {
                                         && t.as_slice().get(1).map(|s| s.as_str()) == Some(pubkey_hex.as_str())
                                 });
                             if is_shutdown {
+                                // Lazy owner resolution: if we don't have the owner
+                                // yet (startup lookup failed), try now. This ensures
+                                // a relay outage during startup doesn't permanently
+                                // disable remote shutdown.
+                                if owner_pubkey.is_none() {
+                                    let profile_url = format!("/api/users/{pubkey_hex}/profile");
+                                    match rest_client_for_presence.get_json(&profile_url).await {
+                                        Ok(v) => {
+                                            owner_pubkey = v
+                                                .get("agent_owner_pubkey")
+                                                .and_then(|v| v.as_str())
+                                                .map(String::from);
+                                            if let Some(ref o) = owner_pubkey {
+                                                tracing::info!("lazy owner resolution succeeded: {o}");
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("lazy owner lookup failed: {e}");
+                                        }
+                                    }
+                                }
                                 if let Some(ref owner) = owner_pubkey {
                                     if sprout_event.event.pubkey.to_hex() == *owner {
                                         tracing::info!(
