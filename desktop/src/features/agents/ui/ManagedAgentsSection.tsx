@@ -6,7 +6,6 @@ import {
   Play,
   Plus,
   Power,
-  RefreshCcw,
   Square,
   Trash2,
   UserPlus,
@@ -23,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { ModelPicker } from "./ModelPicker";
 import { truncatePubkey } from "./agentUi";
 
@@ -38,7 +38,6 @@ export function ManagedAgentsSection({
   onCreate,
   onDelete,
   onMintToken,
-  onRefresh,
   onStart,
   onStop,
   onToggleStartOnAppLaunch,
@@ -55,7 +54,6 @@ export function ManagedAgentsSection({
   onCreate: () => void;
   onDelete: (pubkey: string) => void;
   onMintToken: (pubkey: string, name: string) => void;
-  onRefresh: () => void;
   onStart: (pubkey: string) => void;
   onStop: (pubkey: string) => void;
   onToggleStartOnAppLaunch: (pubkey: string, startOnAppLaunch: boolean) => void;
@@ -72,16 +70,20 @@ export function ManagedAgentsSection({
             Saved agent profiles and local ACP process state.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={onCreate} type="button">
-            <Plus className="h-4 w-4" />
-            Create agent
-          </Button>
-          <Button onClick={onRefresh} type="button" variant="outline">
-            <RefreshCcw className="h-4 w-4" />
-            Refresh
-          </Button>
-        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label="Create agent"
+              onClick={onCreate}
+              type="button"
+              variant="ghost"
+              size="icon"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Create agent</TooltipContent>
+        </Tooltip>
       </div>
 
       {isLoading ? (
@@ -138,7 +140,6 @@ export function ManagedAgentsSection({
                     onAddToChannel={onAddToChannel}
                     onDelete={onDelete}
                     onMintToken={onMintToken}
-                    onModelChanged={onRefresh}
                     onStart={onStart}
                     onStop={onStop}
                     onToggleStartOnAppLaunch={onToggleStartOnAppLaunch}
@@ -179,7 +180,6 @@ function ManagedAgentRow({
   onAddToChannel,
   onDelete,
   onMintToken,
-  onModelChanged,
   onStart,
   onStop,
   onToggleStartOnAppLaunch,
@@ -191,7 +191,6 @@ function ManagedAgentRow({
   onAddToChannel: (agent: ManagedAgent) => void;
   onDelete: (pubkey: string) => void;
   onMintToken: (pubkey: string, name: string) => void;
-  onModelChanged?: () => void;
   onStart: (pubkey: string) => void;
   onStop: (pubkey: string) => void;
   onToggleStartOnAppLaunch: (pubkey: string, startOnAppLaunch: boolean) => void;
@@ -233,7 +232,7 @@ function ManagedAgentRow({
         </span>
       </td>
       <td className="px-4 py-3">
-        <ModelPicker agent={agent} onModelChanged={onModelChanged} />
+        <ModelPicker agent={agent} />
       </td>
       <td className="px-4 py-3 text-muted-foreground">{agent.agentCommand}</td>
       <td className="px-3 py-3">

@@ -261,12 +261,6 @@ export function AgentsView() {
     void relayAgentsQuery.refetch();
   }
 
-  function handleRefresh() {
-    void managedAgentsQuery.refetch();
-    void relayAgentsQuery.refetch();
-    void managedAgentLogQuery.refetch();
-  }
-
   const isActionPending =
     startMutation.isPending ||
     stopMutation.isPending ||
@@ -341,9 +335,6 @@ export function AgentsView() {
                   },
                 });
               }}
-              onRefresh={() => {
-                void personasQuery.refetch();
-              }}
               personas={personas}
             />
 
@@ -373,7 +364,6 @@ export function AgentsView() {
               onMintToken={(pubkey, name) => {
                 void handleMintToken(pubkey, name);
               }}
-              onRefresh={handleRefresh}
               onStart={(pubkey) => {
                 void handleStart(pubkey);
               }}
