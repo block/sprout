@@ -10,6 +10,7 @@ mod media;
 mod messages;
 mod personas;
 mod profile;
+mod teams;
 mod tokens;
 
 pub use agent_discovery::*;
@@ -24,4 +25,5 @@ pub use media::*;
 pub use messages::*;
 pub use personas::*;
 pub use profile::*;
+pub use teams::*;
 pub use tokens::*;

@@ -238,6 +238,35 @@ pub struct AgentModelInfo {
     pub description: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamRecord {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub persona_ids: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTeamRequest {
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub persona_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTeamRequest {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub persona_ids: Vec<String>,
+}
+
 pub const DEFAULT_ACP_COMMAND: &str = "sprout-acp";
 pub const DEFAULT_AGENT_COMMAND: &str = "goose";
 pub const DEFAULT_MCP_COMMAND: &str = "sprout-mcp-server";

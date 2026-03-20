@@ -26,13 +26,22 @@ import {
   updatePersona,
 } from "@/shared/api/tauriPersonas";
 import { setManagedAgentStartOnAppLaunch } from "@/shared/api/tauriManagedAgents";
+import {
+  createTeam,
+  deleteTeam,
+  listTeams,
+  updateTeam,
+} from "@/shared/api/tauriTeams";
 import type {
   AgentPersona,
+  AgentTeam,
   CreateManagedAgentInput,
   CreatePersonaInput,
+  CreateTeamInput,
   ManagedAgent,
   MintManagedAgentTokenInput,
   UpdatePersonaInput,
+  UpdateTeamInput,
 } from "@/shared/api/types";
 import type {
   AttachManagedAgentToChannelInput,
@@ -57,6 +66,7 @@ export type {
 export const relayAgentsQueryKey = ["relay-agents"] as const;
 export const managedAgentsQueryKey = ["managed-agents"] as const;
 export const personasQueryKey = ["personas"] as const;
+export const teamsQueryKey = ["teams"] as const;
 export const acpProvidersQueryKey = ["acp-providers"] as const;
 export const managedAgentPrereqsQueryKey = ["managed-agent-prereqs"] as const;
 
@@ -406,5 +416,53 @@ export function useManagedAgentLogQuery(
     retry: false,
     staleTime: 1_000,
     refetchInterval: pubkey ? 2_000 : false,
+  });
+}
+
+export function useTeamsQuery() {
+  return useQuery({
+    queryKey: teamsQueryKey,
+    queryFn: listTeams,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useCreateTeamMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: CreateTeamInput) => createTeam(input),
+    onSuccess: (created) => {
+      queryClient.setQueryData<AgentTeam[]>(teamsQueryKey, (current) => {
+        const next = current ?? [];
+        return [created, ...next.filter((team) => team.id !== created.id)];
+      });
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: teamsQueryKey });
+    },
+  });
+}
+
+export function useUpdateTeamMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: UpdateTeamInput) => updateTeam(input),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: teamsQueryKey });
+    },
+  });
+}
+
+export function useDeleteTeamMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => deleteTeam(id),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: teamsQueryKey });
+    },
   });
 }

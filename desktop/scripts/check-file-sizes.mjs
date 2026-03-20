@@ -31,6 +31,7 @@ const rules = [
 // Exceptions should stay rare and temporary. Prefer splitting files instead.
 const overrides = new Map([
   ["src/app/AppShell.tsx", 750],
+  ["src/features/agents/ui/AgentsView.tsx", 575], // persona + team dialog orchestration (team state extracted to useTeamActions)
   ["src/features/channels/hooks.ts", 525], // canvas query + mutation hooks
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
   ["src/features/messages/ui/MessageComposer.tsx", 650], // media upload handlers (paste, drop, dialog)
