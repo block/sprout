@@ -99,7 +99,10 @@ async fn mint_token(
         }
         // Ensure owner's user row exists (FK constraint requires it)
         db.ensure_user(&owner_bytes).await?;
-        db.set_agent_owner(&pubkey_bytes, &owner_bytes).await?;
+        let was_set = db.set_agent_owner(&pubkey_bytes, &owner_bytes).await?;
+        if !was_set {
+            eprintln!("warning: agent already has an owner — ownership not changed");
+        }
     }
 
     let raw_token = generate_token();

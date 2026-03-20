@@ -491,8 +491,9 @@ impl Db {
         user::search_users(&self.pool, query, limit).await
     }
 
-    /// Set the owner pubkey for an agent user.
-    pub async fn set_agent_owner(&self, agent_pubkey: &[u8], owner_pubkey: &[u8]) -> Result<()> {
+    /// Atomically set agent owner — only if no owner is currently assigned.
+    /// Returns Ok(true) if set, Ok(false) if an owner already exists.
+    pub async fn set_agent_owner(&self, agent_pubkey: &[u8], owner_pubkey: &[u8]) -> Result<bool> {
         user::set_agent_owner(&self.pool, agent_pubkey, owner_pubkey).await
     }
 

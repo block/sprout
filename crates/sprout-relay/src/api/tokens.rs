@@ -553,65 +553,62 @@ pub async fn post_tokens(
         }
     };
 
-    // ── Set agent owner ─────────────────────────────────────────────────────
+    // ── Set agent owner (atomic, first-mint-wins) ─────────────────────────
     // Use pre-validated owner_pubkey if provided, otherwise default to self.
+    // set_agent_owner is atomic: UPDATE ... WHERE agent_owner_pubkey IS NULL.
+    // No TOCTOU race — concurrent bootstrap mints are serialized by the DB.
     let owner_bytes = validated_owner_bytes.unwrap_or_else(|| ctx.pubkey_bytes.clone());
 
-    // Only set owner if no owner is currently assigned. This prevents token
-    // remints from silently overwriting a previously assigned external owner.
-    let existing_owner = state
-        .db
-        .get_agent_channel_policy(&ctx.pubkey_bytes)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|(_, owner)| owner);
+    // Ensure the owner's user row exists (FK constraint requires it).
+    if let Err(e) = state.db.ensure_user(&owner_bytes).await {
+        tracing::warn!("ensure_user for owner failed: {e}");
+    }
 
-    if existing_owner.is_none() {
-        // Ensure the owner's user row exists (FK constraint requires it).
-        // Same pattern as sprout-admin mint-token --owner-pubkey.
-        if let Err(e) = state.db.ensure_user(&owner_bytes).await {
-            tracing::warn!("ensure_user for owner failed: {e}");
+    match state
+        .db
+        .set_agent_owner(&ctx.pubkey_bytes, &owner_bytes)
+        .await
+    {
+        Ok(true) => {
+            tracing::debug!("agent owner set successfully");
         }
-        // If owner_pubkey was explicitly provided, failure is fatal — we must not
-        // leave a token without the requested ownership assignment.
-        if let Err(e) = state
-            .db
-            .set_agent_owner(&ctx.pubkey_bytes, &owner_bytes)
-            .await
-        {
+        Ok(false) => {
+            // Owner already assigned. If an explicit owner was requested, verify
+            // it matches — otherwise a different user already claimed this agent.
             if req.owner_pubkey.is_some() {
-                // Explicit owner requested but failed — revoke the orphaned token
-                // and return a hard error. Without ownership the shutdown mechanism
-                // won't work, so we must not leave a live token behind.
+                let existing = state
+                    .db
+                    .get_agent_channel_policy(&ctx.pubkey_bytes)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|(_, owner)| owner);
+                if existing.as_deref() != Some(owner_bytes.as_slice()) {
+                    let _ = state
+                        .db
+                        .revoke_token(token_id, &ctx.pubkey_bytes, &ctx.pubkey_bytes)
+                        .await;
+                    return Err(api_error(
+                        StatusCode::CONFLICT,
+                        "agent already has a different owner",
+                    ));
+                }
+                tracing::debug!("agent already owned by the requested pubkey — no change needed");
+            } else {
+                tracing::debug!("agent already has an owner — skipping self-ownership");
+            }
+        }
+        Err(e) => {
+            if req.owner_pubkey.is_some() {
+                // Explicit owner requested but failed — revoke the orphaned token.
                 let _ = state
                     .db
                     .revoke_token(token_id, &ctx.pubkey_bytes, &ctx.pubkey_bytes)
                     .await;
-                return Err(internal_error(&format!(
-                    "failed to set agent owner (owner pubkey may not exist in users table): {e}"
-                )));
+                return Err(internal_error(&format!("failed to set agent owner: {e}")));
             }
-            // Self-ownership fallback — non-fatal, log and continue.
             tracing::warn!("set_agent_owner failed for self-mint: {e}");
         }
-    } else if req.owner_pubkey.is_some() {
-        // Agent already has an owner. If the requested owner matches, that's fine.
-        // If it doesn't match, that's an error — someone else already claimed this agent.
-        if existing_owner.as_deref() != Some(owner_bytes.as_slice()) {
-            // Revoke the just-minted token — don't leave an orphan.
-            let _ = state
-                .db
-                .revoke_token(token_id, &ctx.pubkey_bytes, &ctx.pubkey_bytes)
-                .await;
-            return Err(api_error(
-                StatusCode::CONFLICT,
-                "agent already has a different owner",
-            ));
-        }
-        tracing::debug!("agent already owned by the requested pubkey — no change needed");
-    } else {
-        tracing::debug!("agent already has an owner — skipping self-ownership assignment");
     }
 
     // ── Build response ────────────────────────────────────────────────────────
