@@ -53,9 +53,13 @@ pub fn invoke_provider(
     // The child stays on this thread — kill() is always reachable on timeout.
     let timeout_secs = timeout.as_secs();
     let deadline = std::time::Instant::now() + timeout;
+    let mut exit_status = None;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => {
+                exit_status = Some(status);
+                break;
+            }
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
                     let _ = child.kill();
@@ -75,14 +79,24 @@ pub fn invoke_provider(
     let stderr_redacted = redact_secrets(&stderr);
 
     let stdout = String::from_utf8_lossy(&stdout_bytes);
+    let exit_info = exit_status
+        .map(|s| {
+            s.code()
+                .map(|c| format!("exit code {c}"))
+                .unwrap_or_else(|| "killed by signal".to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
     let response: serde_json::Value = stdout
         .lines()
         .find_map(|line| serde_json::from_str(line).ok())
         .ok_or_else(|| {
-            format!(
-                "no JSON response. stderr: {}",
-                &stderr_redacted[..stderr_redacted.len().min(4096)]
-            )
+            let stderr_snippet = &stderr_redacted[..stderr_redacted.len().min(4096)];
+            if stderr_snippet.is_empty() {
+                format!("provider produced no JSON response ({exit_info}, empty stderr)")
+            } else {
+                format!("provider produced no JSON response ({exit_info}). stderr: {stderr_snippet}")
+            }
         })?;
 
     if response.get("ok").and_then(|v| v.as_bool()) == Some(false) {
