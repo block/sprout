@@ -15,6 +15,7 @@ import {
   useStopManagedAgentMutation,
   useUpdatePersonaMutation,
 } from "@/features/agents/hooks";
+import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { sendChannelMessage } from "@/shared/api/tauri";
 import type {
@@ -46,6 +47,7 @@ type PersonaDialogState = {
 export function AgentsView() {
   const relayAgentsQuery = useRelayAgentsQuery();
   const managedAgentsQuery = useManagedAgentsQuery();
+  const channelsQuery = useChannelsQuery();
   const personasQuery = usePersonasQuery();
   const startMutation = useStartManagedAgentMutation();
   const stopMutation = useStopManagedAgentMutation();
@@ -111,6 +113,26 @@ export function AgentsView() {
   );
   const managedPresenceQuery = usePresenceQuery(managedPubkeyList);
 
+  // Build channel name → UUID lookup for sending !shutdown to remote agents.
+  // The relay agents endpoint returns channel *names*, but sendChannelMessage
+  // needs channel *UUIDs*.
+  const channelIdByName = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const ch of channelsQuery.data ?? []) {
+      map.set(ch.name, ch.id);
+    }
+    return map;
+  }, [channelsQuery.data]);
+
+  /** Resolve a relay-agent's first channel name to a channel UUID. */
+  function resolveAgentChannelId(pubkey: string): string | null {
+    const relayAgents = relayAgentsQuery.data ?? [];
+    const relayAgent = relayAgents.find((ra) => ra.pubkey === pubkey);
+    const channelName = relayAgent?.channels?.[0];
+    if (!channelName) return null;
+    return channelIdByName.get(channelName) ?? null;
+  }
+
   // Clear log selection if the agent was removed
   React.useEffect(() => {
     if (
@@ -143,10 +165,8 @@ export function AgentsView() {
       if (!agent) return;
 
       if (agent.backend.type === "provider") {
-        // Remote agent: send !shutdown mention via WebSocket relay
-        const relayAgents = relayAgentsQuery.data ?? [];
-        const relayAgent = relayAgents.find((ra) => ra.pubkey === pubkey);
-        const channelId = relayAgent?.channels?.[0];
+        // Remote agent: send !shutdown mention via relay REST API.
+        const channelId = resolveAgentChannelId(pubkey);
         if (!channelId) {
           setActionErrorMessage("Cannot stop: agent is not in any channel");
           return;
@@ -175,10 +195,8 @@ export function AgentsView() {
     try {
       // For remote agents, send !shutdown before deleting to avoid orphaning.
       const agent = managedAgents.find((a) => a.pubkey === pubkey);
-      if (agent?.backend.type === "provider" && agent.backend_agent_id) {
-        const relayAgents = relayAgentsQuery.data ?? [];
-        const relayAgent = relayAgents.find((ra) => ra.pubkey === pubkey);
-        const channelId = relayAgent?.channels?.[0];
+      if (agent?.backend.type === "provider" && agent.backendAgentId) {
+        const channelId = resolveAgentChannelId(pubkey);
         if (channelId) {
           await sendChannelMessage(
             channelId,

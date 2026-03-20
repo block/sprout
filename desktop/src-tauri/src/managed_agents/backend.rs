@@ -1,10 +1,14 @@
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Invoke a provider binary: write JSON to stdin, read JSON from stdout.
+///
+/// Uses `wait_with_output` on a dedicated thread with a timeout to avoid pipe
+/// deadlocks — stdout and stderr are drained concurrently by the OS while the
+/// child runs, so a chatty provider won't block on a full pipe buffer.
 pub fn invoke_provider(
-    binary: &PathBuf,
+    binary: &Path,
     request: &serde_json::Value,
     timeout: Duration,
 ) -> Result<serde_json::Value, String> {
@@ -18,33 +22,24 @@ pub fn invoke_provider(
         .spawn()
         .map_err(|e| format!("failed to spawn {}: {e}", binary.display()))?;
 
+    // Write request and close stdin immediately so the provider sees EOF.
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(request_bytes.as_bytes())
             .map_err(|e| format!("stdin write failed: {e}"))?;
     }
 
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if std::time::Instant::now() > deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!(
-                        "provider timed out after {}s",
-                        timeout.as_secs()
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(e) => return Err(format!("wait error: {e}")),
-        }
-    }
+    // wait_with_output drains stdout+stderr concurrently, preventing pipe deadlocks.
+    // We run it on a thread so we can enforce a timeout.
+    let timeout_secs = timeout.as_secs();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
 
-    let output = child
-        .wait_with_output()
+    let output = rx
+        .recv_timeout(timeout)
+        .map_err(|_| format!("provider timed out after {timeout_secs}s"))?
         .map_err(|e| format!("wait failed: {e}"))?;
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -85,7 +80,7 @@ fn redact_secrets(s: &str) -> String {
 
 /// Deploy an agent via provider binary. Returns the provider-assigned agent_id.
 pub fn provider_deploy(
-    binary: &PathBuf,
+    binary: &Path,
     agent: &serde_json::Value,
     provider_config: &serde_json::Value,
 ) -> Result<String, String> {
@@ -114,11 +109,14 @@ pub fn validate_provider_config(config: &serde_json::Value) -> Result<(), String
     if json_str.len() > 65536 {
         return Err("provider_config: max 64KB".to_string());
     }
+    // Split on common separators and check each word against forbidden terms.
+    // This avoids false positives like "keyboard" or "monkey_wrench".
     let forbidden = ["secret", "password", "token", "key", "credential"];
     for (k, v) in obj {
         let k_lower = k.to_lowercase();
+        let words: Vec<&str> = k_lower.split(|c: char| c == '_' || c == '-' || c == '.').collect();
         for f in &forbidden {
-            if k_lower.contains(f) {
+            if words.iter().any(|w| *w == *f) {
                 return Err(format!("provider_config: key '{}' looks like a secret", k));
             }
         }
@@ -199,6 +197,13 @@ mod tests {
     #[test]
     fn validate_provider_config_accepts_scalars() {
         let cfg = serde_json::json!({"region": "us-east-1", "tier": "standard"});
+        assert!(validate_provider_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn validate_provider_config_allows_key_as_substring() {
+        // "keyboard", "monkey" contain "key" as substring but not as a word segment.
+        let cfg = serde_json::json!({"keyboard_layout": "us", "monkey_wrench": "tight"});
         assert!(validate_provider_config(&cfg).is_ok());
     }
 }
