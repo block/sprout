@@ -1,4 +1,12 @@
-import { CopyPlus, Ellipsis, Info, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  CopyPlus,
+  Download,
+  Ellipsis,
+  Info,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { AgentPersona } from "@/shared/api/types";
@@ -32,6 +40,7 @@ type PersonasSectionProps = {
   onCreate: () => void;
   onDuplicate: (persona: AgentPersona) => void;
   onEdit: (persona: AgentPersona) => void;
+  onExport: (persona: AgentPersona) => void;
   onDelete: (persona: AgentPersona) => void;
 };
 
@@ -43,6 +52,7 @@ export function PersonasSection({
   onCreate,
   onDuplicate,
   onEdit,
+  onExport,
   onDelete,
 }: PersonasSectionProps) {
   return (
@@ -164,6 +174,13 @@ export function PersonasSection({
                       >
                         <CopyPlus className="h-4 w-4" />
                         Duplicate
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={isPending}
+                        onClick={() => onExport(persona)}
+                      >
+                        <Download className="h-4 w-4" />
+                        Export PNG
                       </DropdownMenuItem>
                       {!persona.isBuiltIn ? (
                         <DropdownMenuItem

@@ -178,6 +178,8 @@ pub fn run() {
             create_team,
             update_team,
             delete_team,
+            parse_persona_files,
+            export_persona_to_png,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
