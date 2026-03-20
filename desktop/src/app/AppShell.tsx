@@ -531,22 +531,22 @@ export function AppShell() {
             isLoading={channelsQuery.isLoading}
             isOpeningDm={openDmMutation.isPending}
             selfPresenceStatus={presenceSession.currentStatus}
-            onCreateChannel={async ({ description, name }) => {
+            onCreateChannel={async ({ description, name, visibility }) => {
               const createdChannel = await createChannelMutation.mutateAsync({
                 name,
                 description,
                 channelType: "stream",
-                visibility: "open",
+                visibility,
               });
 
               openChannelView(createdChannel.id);
             }}
-            onCreateForum={async ({ description, name }) => {
+            onCreateForum={async ({ description, name, visibility }) => {
               const createdForum = await createForumMutation.mutateAsync({
                 name,
                 description,
                 channelType: "forum",
-                visibility: "open",
+                visibility,
               });
 
               openChannelView(createdForum.id);

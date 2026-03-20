@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Bot, Home, PenSquare, Plus, Search } from "lucide-react";
+import { Bot, Hash, Home, Lock, PenSquare, Plus, Search } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
@@ -12,7 +12,12 @@ import {
   SidebarSection,
 } from "@/features/sidebar/ui/SidebarSection";
 import { NewDirectMessageDialog } from "@/features/sidebar/ui/NewDirectMessageDialog";
-import type { Channel, PresenceStatus, Profile } from "@/shared/api/types";
+import type {
+  Channel,
+  ChannelVisibility,
+  PresenceStatus,
+  Profile,
+} from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import {
@@ -61,10 +66,12 @@ type AppSidebarProps = {
   onCreateChannel: (input: {
     name: string;
     description?: string;
+    visibility: ChannelVisibility;
   }) => Promise<void>;
   onCreateForum: (input: {
     name: string;
     description?: string;
+    visibility: ChannelVisibility;
   }) => Promise<void>;
   onOpenBrowseChannels: () => void;
   onOpenBrowseForums: () => void;
@@ -81,12 +88,18 @@ type AppSidebarProps = {
 // ---------------------------------------------------------------------------
 
 function useCreateForm(
-  onCreate: (input: { name: string; description?: string }) => Promise<void>,
+  onCreate: (input: {
+    name: string;
+    description?: string;
+    visibility: ChannelVisibility;
+  }) => Promise<void>,
   entityLabel: string,
 ) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [draftName, setDraftName] = React.useState("");
   const [draftDescription, setDraftDescription] = React.useState("");
+  const [draftVisibility, setDraftVisibility] =
+    React.useState<ChannelVisibility>("open");
   const [errorMessage, setErrorMessage] = React.useState<string | undefined>();
   const inputRef = React.useRef<HTMLInputElement>(null);
 
@@ -105,6 +118,7 @@ function useCreateForm(
     setErrorMessage(undefined);
     setDraftName("");
     setDraftDescription("");
+    setDraftVisibility("open");
     setIsOpen(false);
   }
 
@@ -116,6 +130,11 @@ function useCreateForm(
   function changeDescription(value: string) {
     setErrorMessage(undefined);
     setDraftDescription(value);
+  }
+
+  function changeVisibility(value: ChannelVisibility) {
+    setErrorMessage(undefined);
+    setDraftVisibility(value);
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -133,10 +152,12 @@ function useCreateForm(
       await onCreate({
         name,
         description: description || undefined,
+        visibility: draftVisibility,
       });
 
       setDraftName("");
       setDraftDescription("");
+      setDraftVisibility("open");
       setIsOpen(false);
     } catch (error) {
       setErrorMessage(
@@ -151,12 +172,14 @@ function useCreateForm(
     isOpen,
     draftName,
     draftDescription,
+    draftVisibility,
     errorMessage,
     inputRef,
     toggle,
     cancel,
     changeName,
     changeDescription,
+    changeVisibility,
     handleSubmit,
   };
 }
@@ -213,6 +236,61 @@ function SectionHeaderActions({
 }
 
 // ---------------------------------------------------------------------------
+// VisibilityToggle — open vs private segmented control for creation forms
+// ---------------------------------------------------------------------------
+
+const VISIBILITY_OPTIONS: Array<{
+  value: ChannelVisibility;
+  label: string;
+  icon: typeof Hash;
+}> = [
+  { value: "open", label: "Open", icon: Hash },
+  { value: "private", label: "Private", icon: Lock },
+];
+
+function VisibilityToggle({
+  disabled,
+  onChange,
+  testId,
+  value,
+}: {
+  disabled: boolean;
+  onChange: (value: ChannelVisibility) => void;
+  testId: string;
+  value: ChannelVisibility;
+}) {
+  return (
+    <div
+      className="inline-flex h-8 items-center rounded-md border border-sidebar-border/70 bg-background/80 p-0.5"
+      data-testid={testId}
+    >
+      {VISIBILITY_OPTIONS.map((option) => {
+        const Icon = option.icon;
+        const isSelected = value === option.value;
+
+        return (
+          <button
+            aria-pressed={isSelected}
+            className={`inline-flex h-6 flex-1 items-center justify-center gap-1 rounded px-2 text-xs font-medium transition-colors ${
+              isSelected
+                ? "bg-sidebar-accent text-sidebar-foreground shadow-sm"
+                : "text-sidebar-foreground/50 hover:text-sidebar-foreground/70"
+            }`}
+            disabled={disabled}
+            key={option.value}
+            onClick={() => onChange(option.value)}
+            type="button"
+          >
+            <Icon className="h-3 w-3" />
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ChannelGroupSection — unified Channels / Forums section
 // ---------------------------------------------------------------------------
 
@@ -224,6 +302,7 @@ function ChannelGroupSection({
   createFormTestId,
   createNameTestId,
   createDescriptionTestId,
+  createVisibilityTestId,
   groupClassName,
   isActiveChannel,
   isCreating,
@@ -245,6 +324,7 @@ function ChannelGroupSection({
   createFormTestId: string;
   createNameTestId: string;
   createDescriptionTestId: string;
+  createVisibilityTestId: string;
   groupClassName?: string;
   isActiveChannel: boolean;
   isCreating: boolean;
@@ -301,6 +381,12 @@ function ChannelGroupSection({
               onChange={(event) => form.changeDescription(event.target.value)}
               placeholder={descriptionPlaceholder}
               value={form.draftDescription}
+            />
+            <VisibilityToggle
+              disabled={isCreating}
+              onChange={form.changeVisibility}
+              testId={createVisibilityTestId}
+              value={form.draftVisibility}
             />
             <div className="flex items-center gap-2">
               <Button
@@ -513,6 +599,7 @@ export function AppSidebar({
               createFormTestId="create-stream-form"
               createNameTestId="create-stream-name"
               createDescriptionTestId="create-stream-description"
+              createVisibilityTestId="create-stream-visibility"
               descriptionPlaceholder="What this stream is for"
               form={streamForm}
               groupClassName="pt-1"
@@ -535,6 +622,7 @@ export function AppSidebar({
               createFormTestId="create-forum-form"
               createNameTestId="create-forum-name"
               createDescriptionTestId="create-forum-description"
+              createVisibilityTestId="create-forum-visibility"
               descriptionPlaceholder="What this forum is for"
               form={forumForm}
               isActiveChannel={selectedView === "channel"}
