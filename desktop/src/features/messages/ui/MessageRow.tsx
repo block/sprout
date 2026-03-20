@@ -6,6 +6,7 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
+import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
 import { MessageActionBar } from "./MessageActionBar";
 
@@ -40,28 +41,10 @@ export const MessageRow = React.memo(
       string | null
     >(null);
     const [reactionPending, setReactionPending] = React.useState(false);
-    const mentionNames = React.useMemo(() => {
-      if (!profiles || !message.tags) {
-        return undefined;
-      }
-
-      const names = new Set<string>();
-
-      for (const tag of message.tags) {
-        if (tag[0] !== "p" || !tag[1]) {
-          continue;
-        }
-
-        const profile = profiles[tag[1].toLowerCase()];
-        const displayName = profile?.displayName?.trim();
-
-        if (displayName) {
-          names.add(displayName);
-        }
-      }
-
-      return names.size > 0 ? [...names] : undefined;
-    }, [profiles, message.tags]);
+    const mentionNames = React.useMemo(
+      () => resolveMentionNames(message.tags, profiles),
+      [profiles, message.tags],
+    );
 
     const visibleDepth = Math.min(message.depth, 6);
     const indentPx = visibleDepth * 28;

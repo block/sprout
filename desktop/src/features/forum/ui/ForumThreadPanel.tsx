@@ -8,6 +8,7 @@ import {
 } from "@/features/profile/lib/identity";
 import type { ForumThreadResponse, ThreadReply } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -112,6 +113,7 @@ function ReplyRow({
   const replyAvatarUrl =
     profiles?.[reply.pubkey.toLowerCase()]?.avatarUrl ?? null;
   const showDelete = onDelete && canDeleteReply(reply, currentPubkey);
+  const replyMentionNames = resolveMentionNames(reply.tags, profiles);
 
   return (
     <div className="group px-4 py-3">
@@ -160,7 +162,11 @@ function ReplyRow({
         ) : null}
       </div>
       <div className="mt-1.5 pl-8">
-        <Markdown compact content={reply.content} />
+        <Markdown
+          compact
+          content={reply.content}
+          mentionNames={replyMentionNames}
+        />
       </div>
     </div>
   );
@@ -207,6 +213,7 @@ export function ForumThreadPanel({
   }
 
   const { post, replies } = thread;
+  const postMentionNames = resolveMentionNames(post.tags, profiles);
   const postAuthorLabel = resolveUserLabel({
     pubkey: post.pubkey,
     currentPubkey,
@@ -285,7 +292,7 @@ export function ForumThreadPanel({
             ) : null}
           </div>
           <div className="mt-3">
-            <Markdown content={post.content} />
+            <Markdown content={post.content} mentionNames={postMentionNames} />
           </div>
         </div>
 

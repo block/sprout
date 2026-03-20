@@ -5,6 +5,7 @@ import {
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
 import type { FeedItem } from "@/shared/api/types";
+import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
 
@@ -152,6 +153,7 @@ export function FeedSection({
             const canOpenChannel =
               channelId !== null && availableChannelIds.has(channelId);
             const isDone = doneSet.has(item.id);
+            const mentionNames = resolveMentionNames(item.tags, profiles);
 
             return (
               <div
@@ -199,6 +201,7 @@ export function FeedSection({
                   className="pointer-events-none relative mt-0.5 max-w-none text-[13px] leading-snug text-muted-foreground"
                   compact
                   content={feedContent(item)}
+                  mentionNames={mentionNames}
                 />
 
                 {showDoneAction ? (
