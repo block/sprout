@@ -154,10 +154,17 @@ pub fn parse_json_persona(json_bytes: &[u8]) -> Result<ParsedPersonaPreview, Str
         serde_json::from_slice(json_bytes).map_err(|e| format!("Invalid JSON: {e}"))?;
     let (name, prompt) = extract_sprout_fields(&v)?;
 
+    let avatar_data_url = v
+        .get("avatarUrl")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
     Ok(ParsedPersonaPreview {
         display_name: name,
         system_prompt: prompt,
-        avatar_data_url: None,
+        avatar_data_url,
         source_file: String::new(),
     })
 }
@@ -543,8 +550,29 @@ mod tests {
         let result = parse_json_persona(&bytes).unwrap();
         assert_eq!(result.display_name, "Ada Lovelace");
         assert_eq!(result.system_prompt, "You are Ada.");
-        assert!(result.avatar_data_url.is_none());
+        assert_eq!(
+            result.avatar_data_url.as_deref(),
+            Some("https://example.com/ada.png")
+        );
         assert!(result.source_file.is_empty());
+    }
+
+    #[test]
+    fn parse_json_round_trip_no_avatar() {
+        let bytes = encode_persona_json("Bob", "You are Bob.", None).unwrap();
+        let result = parse_json_persona(&bytes).unwrap();
+        assert_eq!(result.display_name, "Bob");
+        assert_eq!(result.system_prompt, "You are Bob.");
+        assert!(result.avatar_data_url.is_none());
+    }
+
+    #[test]
+    fn parse_json_round_trip_data_uri_avatar() {
+        let data_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+        let bytes = encode_persona_json("Carol", "You are Carol.", Some(data_uri)).unwrap();
+        let result = parse_json_persona(&bytes).unwrap();
+        assert_eq!(result.display_name, "Carol");
+        assert_eq!(result.avatar_data_url.as_deref(), Some(data_uri));
     }
 
     #[test]
