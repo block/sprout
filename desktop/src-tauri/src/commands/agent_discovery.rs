@@ -6,7 +6,7 @@ use crate::{
     managed_agents::{
         command_availability, discover_local_acp_providers, AcpProviderInfo,
         DiscoverManagedAgentPrereqsRequest, ManagedAgentPrereqsInfo, RelayAgentInfo,
-        DEFAULT_ACP_COMMAND, DEFAULT_MCP_COMMAND,
+        DEFAULT_ADMIN_COMMAND, DEFAULT_ACP_COMMAND, DEFAULT_MCP_COMMAND,
     },
     relay::{build_authed_request, send_json_request},
 };
@@ -37,6 +37,7 @@ pub fn discover_managed_agent_prereqs(
     ManagedAgentPrereqsInfo {
         acp: command_availability(acp_command, Some(&app)),
         mcp: command_availability(mcp_command, Some(&app)),
+        admin: command_availability(DEFAULT_ADMIN_COMMAND, Some(&app)),
     }
 }
 
