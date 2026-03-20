@@ -646,6 +646,15 @@ async fn get_channel_tx(
     row_to_channel_record(row)
 }
 
+/// A channel entry returned as part of a bot member record.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct BotChannelEntry {
+    /// Channel display name.
+    pub name: String,
+    /// Channel UUID (as string from the DB).
+    pub id: String,
+}
+
 /// Bot member record — a user with role=bot, with their channel memberships aggregated.
 #[derive(Debug, Clone)]
 pub struct BotMemberRecord {
@@ -657,8 +666,8 @@ pub struct BotMemberRecord {
     pub agent_type: Option<String>,
     /// Optional JSON capabilities descriptor.
     pub capabilities: Option<serde_json::Value>,
-    /// Comma-separated channel names (from string_agg).
-    pub channel_names: String,
+    /// Channel entries with both name and UUID, from json_agg.
+    pub channels: Vec<BotChannelEntry>,
 }
 
 /// User record for bulk lookup.
@@ -747,15 +756,16 @@ pub async fn get_accessible_channels(
         .collect()
 }
 
-/// Returns all bot-role members with their aggregated channel names.
+/// Returns all bot-role members with their channel memberships.
 ///
-/// Channel names are returned as a comma-separated string from string_agg.
+/// Channels are returned as a JSON array of `{name, id}` objects via `json_agg`,
+/// preserving the 1:1 name↔UUID pairing. No separate string_agg ordering issues.
 /// Members with no active channel memberships are excluded (INNER JOIN on channels).
 pub async fn get_bot_members(pool: &PgPool) -> Result<Vec<BotMemberRecord>> {
     let rows = sqlx::query(
         r#"
         SELECT cm.pubkey, u.display_name, u.agent_type, u.capabilities,
-               string_agg(DISTINCT c.name, ',' ORDER BY c.name) AS channel_names
+               COALESCE(json_agg(DISTINCT jsonb_build_object('name', c.name, 'id', c.id::text)), '[]') AS channels_json
         FROM channel_members cm
         LEFT JOIN users u ON cm.pubkey = u.pubkey
         JOIN channels c ON cm.channel_id = c.id AND c.deleted_at IS NULL
@@ -770,14 +780,17 @@ pub async fn get_bot_members(pool: &PgPool) -> Result<Vec<BotMemberRecord>> {
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         let capabilities: Option<serde_json::Value> = row.try_get("capabilities")?;
+        let channels_json: serde_json::Value = row
+            .try_get::<serde_json::Value, _>("channels_json")
+            .unwrap_or(serde_json::Value::Array(vec![]));
+        let channels: Vec<BotChannelEntry> =
+            serde_json::from_value(channels_json).unwrap_or_default();
         out.push(BotMemberRecord {
             pubkey: row.try_get("pubkey")?,
             display_name: row.try_get("display_name")?,
             agent_type: row.try_get("agent_type")?,
             capabilities,
-            channel_names: row
-                .try_get::<Option<String>, _>("channel_names")?
-                .unwrap_or_default(),
+            channels,
         });
     }
     Ok(out)

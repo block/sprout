@@ -580,8 +580,7 @@ pub async fn post_tokens(
                     .db
                     .get_agent_channel_policy(&ctx.pubkey_bytes)
                     .await
-                    .ok()
-                    .flatten()
+                    .map_err(|e| internal_error(&format!("db error checking owner: {e}")))?
                     .and_then(|(_, owner)| owner);
                 if existing.as_deref() != Some(owner_bytes.as_slice()) {
                     let _ = state

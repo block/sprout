@@ -4,10 +4,9 @@ use std::time::Duration;
 
 /// Invoke a provider binary: write JSON to stdin, read JSON from stdout.
 ///
-/// Stdout and stderr are drained on dedicated threads to prevent pipe deadlocks
-/// (a chatty provider won't block on a full pipe buffer). The child is held in
-/// an `Arc<Mutex<Child>>` so the timeout path can always call `kill()` — no raw
-/// PIDs, no unsafe, no PID-reuse risk.
+/// Stdout and stderr are drained on dedicated threads to prevent pipe deadlocks.
+/// The child stays on the calling thread — `try_wait()` polls with a deadline,
+/// and `kill()` is called directly on timeout. No mutex, no unsafe, no raw PIDs.
 pub fn invoke_provider(
     binary: &Path,
     request: &serde_json::Value,

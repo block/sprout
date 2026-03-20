@@ -36,14 +36,9 @@ pub async fn agents_handler(
             tracing::error!("agents: failed to load accessible channels: {e}");
             internal_error("presence lookup failed")
         })?;
-    let accessible_names: std::collections::HashSet<String> = accessible_channels
+    let accessible_ids: std::collections::HashSet<String> = accessible_channels
         .iter()
-        .map(|ac| ac.channel.name.clone())
-        .collect();
-    // Map channel name → UUID string for the channel_ids response field.
-    let name_to_id: HashMap<String, String> = accessible_channels
-        .iter()
-        .map(|ac| (ac.channel.name.clone(), ac.channel.id.to_string()))
+        .map(|ac| ac.channel.id.to_string())
         .collect();
 
     let bots = state
@@ -102,17 +97,14 @@ pub async fn agents_handler(
                 format!("agent-{}", &hex[..end])
             });
 
-        // Filter channel names by accessibility, resolve UUIDs via the map.
-        let channels: Vec<&str> = bot
-            .channel_names
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty() && accessible_names.contains(*s))
-            .collect();
-        let channel_ids: Vec<String> = channels
+        // Filter by accessible channel IDs — each entry has a paired name+UUID.
+        let visible: Vec<&sprout_db::channel::BotChannelEntry> = bot
+            .channels
             .iter()
-            .filter_map(|name| name_to_id.get(*name).cloned())
+            .filter(|entry| accessible_ids.contains(&entry.id))
             .collect();
+        let channels: Vec<&str> = visible.iter().map(|e| e.name.as_str()).collect();
+        let channel_ids: Vec<&str> = visible.iter().map(|e| e.id.as_str()).collect();
 
         let capabilities: Vec<String> = bot
             .capabilities
