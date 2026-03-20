@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     app_state::AppState,
-    models::{MintTokenBody, MintTokenResponse, UpdateProfileBody},
+    models::UpdateProfileBody,
 };
 
 pub fn relay_ws_url() -> String {
@@ -169,38 +169,6 @@ pub fn build_nip98_auth_header_for_keys(
         "Nostr {}",
         BASE64.encode(event.as_json().as_bytes())
     ))
-}
-
-pub async fn mint_managed_agent_api_token(
-    client: &reqwest::Client,
-    relay_url: &str,
-    keys: &Keys,
-    name: &str,
-    scopes: &[String],
-) -> Result<MintTokenResponse, String> {
-    let url = format!("{}{}", relay_http_base_url(relay_url), "/api/tokens");
-    let body = MintTokenBody {
-        name,
-        scopes,
-        channel_ids: None,
-        expires_in_days: None,
-    };
-    let body_bytes =
-        serde_json::to_vec(&body).map_err(|error| format!("serialize failed: {error}"))?;
-    let auth_header = build_nip98_auth_header_for_keys(keys, &Method::POST, &url, &body_bytes)?;
-    let forwarded_proto = if url.starts_with("http://") {
-        "http"
-    } else {
-        "https"
-    };
-    let request = client
-        .request(Method::POST, url)
-        .header("Authorization", auth_header)
-        .header("Content-Type", "application/json")
-        .header("X-Forwarded-Proto", forwarded_proto)
-        .body(body_bytes);
-
-    send_json_request(request).await
 }
 
 pub async fn relay_error_message(response: reqwest::Response) -> String {
