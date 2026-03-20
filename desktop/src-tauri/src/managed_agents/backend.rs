@@ -1,27 +1,16 @@
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::Duration;
-
-/// Join a thread with a timeout. Returns the thread's output if it completes
-/// within `timeout`, or an empty Vec if it doesn't (e.g. a provider descendant
-/// is holding the pipe open). Uses a channel to avoid blocking the caller.
-fn join_with_timeout(handle: std::thread::JoinHandle<Vec<u8>>, timeout: Duration) -> Vec<u8> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let result = handle.join().unwrap_or_default();
-        let _ = tx.send(result);
-    });
-    rx.recv_timeout(timeout).unwrap_or_default()
-}
 
 /// Invoke a provider binary: write JSON to stdin, read JSON from stdout.
 ///
-/// Stdout and stderr are drained on dedicated threads to prevent pipe deadlocks.
-/// The child stays on the calling thread — `try_wait()` polls with a deadline,
-/// and `kill()` is called directly on timeout. No mutex, no unsafe, no raw PIDs.
-///
-/// All error paths go through cleanup: the child is killed/waited and drain
-/// threads are joined before returning, preventing zombie processes.
+/// Reader threads stream lines/chunks over channels so the caller can receive
+/// data as it arrives and time-box the wait. No `read_to_end` — if a provider
+/// daemonizes or leaves descendants holding pipes open, the caller still gets
+/// all data written before the child exited and returns without leaking threads
+/// (the readers drop naturally when the sender is gone and the pipe closes or
+/// the desktop process exits).
 pub fn invoke_provider(
     binary: &Path,
     request: &serde_json::Value,
@@ -44,50 +33,70 @@ pub fn invoke_provider(
         Ok(())
     };
 
-    // Drain stdout and stderr on separate threads to prevent pipe deadlocks.
-    // These threads own the pipe handles and run to completion independently.
-    let stdout_handle = child.stdout.take();
-    let stderr_handle = child.stderr.take();
-    let stdout_thread = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut r) = stdout_handle {
-            let _ = r.read_to_end(&mut buf);
-        }
-        buf
-    });
-    let stderr_thread = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut r) = stderr_handle {
-            let _ = r.read_to_end(&mut buf);
-        }
-        buf
-    });
+    // Stream stdout lines over a channel. The reader thread sends each line
+    // as it arrives, so the caller can capture the JSON response without
+    // waiting for EOF. If a descendant holds the pipe open after the provider
+    // exits, the thread blocks on the next read — but the caller already has
+    // the response and proceeds. The thread is not joined; it terminates when
+    // the pipe eventually closes or the process exits.
+    let (stdout_tx, stdout_rx) = mpsc::channel::<String>();
+    if let Some(stdout) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                match line {
+                    Ok(l) => {
+                        if stdout_tx.send(l).is_err() {
+                            break; // receiver dropped
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
 
-    // Cleanup helper: kill/wait the child and join drain threads. Called on
-    // every exit path to prevent zombie processes and leaked threads.
-    let cleanup = |child: &mut std::process::Child,
-                   stdout_thread: std::thread::JoinHandle<Vec<u8>>,
-                   stderr_thread: std::thread::JoinHandle<Vec<u8>>| {
-        let _ = child.kill();
-        let _ = child.wait();
-        // Bounded join — don't hang if descendants hold pipes open.
-        let _ = join_with_timeout(stdout_thread, Duration::from_secs(2));
-        let _ = join_with_timeout(stderr_thread, Duration::from_secs(2));
-    };
+    // Drain stderr into a bounded buffer via channel. Same non-blocking
+    // pattern — the thread is not joined; it dies when the pipe closes.
+    let (stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>();
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            let mut buf = vec![0u8; 8192];
+            let mut reader = BufReader::new(stderr);
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if stderr_tx.send(buf[..n].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
 
     // Bail early if stdin write failed — child may be in a bad state.
     if let Err(e) = stdin_result {
-        cleanup(&mut child, stdout_thread, stderr_thread);
+        let _ = child.kill();
+        let _ = child.wait();
         return Err(format!("stdin write failed: {e}"));
     }
 
-    // Poll try_wait with a deadline. This is safe from pipe deadlocks because
-    // stdout/stderr are already being drained on background threads above.
-    // The child stays on this thread — kill() is always reachable on timeout.
+    // Poll try_wait with a deadline, collecting stdout lines as they arrive.
+    // Once the child exits we drain any remaining buffered lines.
     let timeout_secs = timeout.as_secs();
     let deadline = std::time::Instant::now() + timeout;
+    let mut stdout_lines: Vec<String> = Vec::new();
     let mut exit_status = None;
+
     loop {
+        // Drain any stdout lines available right now (non-blocking).
+        while let Ok(line) = stdout_rx.try_recv() {
+            stdout_lines.push(line);
+        }
+
         match child.try_wait() {
             Ok(Some(status)) => {
                 exit_status = Some(status);
@@ -95,29 +104,44 @@ pub fn invoke_provider(
             }
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
-                    cleanup(&mut child, stdout_thread, stderr_thread);
+                    let _ = child.kill();
+                    let _ = child.wait();
                     return Err(format!("provider timed out after {timeout_secs}s"));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
-                cleanup(&mut child, stdout_thread, stderr_thread);
+                let _ = child.kill();
+                let _ = child.wait();
                 return Err(format!("wait error: {e}"));
             }
         }
     }
 
-    // Bounded join: if a provider daemonizes or leaves descendants holding
-    // stdout/stderr open, read_to_end never returns and join() hangs forever.
-    // Use channels so we can time-box the wait after the child has exited.
-    let join_deadline = Duration::from_secs(5);
-    let stdout_bytes = join_with_timeout(stdout_thread, join_deadline);
-    let stderr_bytes = join_with_timeout(stderr_thread, join_deadline);
+    // Drain remaining stdout lines buffered between last poll and child exit.
+    // Brief timeout: the child has exited, so the reader should finish quickly
+    // unless a descendant holds the pipe. 2s is generous.
+    let drain_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::time::Instant::now() < drain_deadline {
+        match stdout_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(line) => stdout_lines.push(line),
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    // Collect stderr (non-blocking drain of whatever arrived).
+    let mut stderr_bytes = Vec::new();
+    while let Ok(chunk) = stderr_rx.try_recv() {
+        stderr_bytes.extend_from_slice(&chunk);
+        if stderr_bytes.len() > 65536 {
+            break; // cap stderr capture
+        }
+    }
 
     let stderr = String::from_utf8_lossy(&stderr_bytes);
     let stderr_redacted = redact_secrets(&stderr);
 
-    let stdout = String::from_utf8_lossy(&stdout_bytes);
     let exit_info = exit_status
         .map(|s| {
             s.code()
@@ -135,19 +159,23 @@ pub fn invoke_provider(
         if stderr_snippet.is_empty() {
             return Err(format!("provider failed ({exit_info}, empty stderr)"));
         } else {
-            return Err(format!("provider failed ({exit_info}). stderr: {stderr_snippet}"));
+            return Err(format!(
+                "provider failed ({exit_info}). stderr: {stderr_snippet}"
+            ));
         }
     }
 
-    let response: serde_json::Value = stdout
-        .lines()
+    let response: serde_json::Value = stdout_lines
+        .iter()
         .find_map(|line| serde_json::from_str(line).ok())
         .ok_or_else(|| {
             let stderr_snippet = &stderr_redacted[..stderr_redacted.len().min(4096)];
             if stderr_snippet.is_empty() {
                 format!("provider produced no JSON response ({exit_info}, empty stderr)")
             } else {
-                format!("provider produced no JSON response ({exit_info}). stderr: {stderr_snippet}")
+                format!(
+                    "provider produced no JSON response ({exit_info}). stderr: {stderr_snippet}"
+                )
             }
         })?;
 
