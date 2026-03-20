@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { ChannelPane } from "@/app/ChannelPane";
 import { useActiveChannelHeader } from "@/app/useActiveChannelHeader";
+import { useChannelPaneHandlers } from "@/app/useChannelPaneHandlers";
 import { AgentsView } from "@/features/agents/ui/AgentsView";
 import { ForumView } from "@/features/forum/ui/ForumView";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
@@ -201,6 +202,26 @@ export function AppShell() {
     () =>
       timelineMessages.find((message) => message.id === replyTargetId) ?? null,
     [replyTargetId, timelineMessages],
+  );
+
+  const { handleCancelReply, handleReply, handleSend, handleToggleReaction } =
+    useChannelPaneHandlers({
+      replyTargetId,
+      sendMessageMutation,
+      setReplyTargetId,
+      toggleReactionMutation,
+    });
+
+  const handleTargetReached = React.useCallback((messageId: string) => {
+    setSearchAnchor((current) =>
+      current?.eventId === messageId ? null : current,
+    );
+  }, []);
+
+  const canReact = activeChannel !== null && activeChannel.archivedAt === null;
+  const effectiveToggleReaction = React.useMemo(
+    () => (canReact ? handleToggleReaction : undefined),
+    [canReact, handleToggleReaction],
   );
 
   const channelDescription = activeChannel
@@ -664,39 +685,11 @@ export function AppShell() {
                     isSending={sendMessageMutation.isPending}
                     isTimelineLoading={isTimelineLoading}
                     messages={timelineMessages}
-                    onCancelReply={() => {
-                      setReplyTargetId(null);
-                    }}
-                    onReply={(message) => {
-                      setReplyTargetId((current) =>
-                        current === message.id ? null : message.id,
-                      );
-                    }}
-                    onSend={async (content, mentionPubkeys, mediaTags) => {
-                      await sendMessageMutation.mutateAsync({
-                        content,
-                        mentionPubkeys,
-                        parentEventId: replyTargetId,
-                        mediaTags,
-                      });
-                      setReplyTargetId(null);
-                    }}
-                    onTargetReached={(messageId) => {
-                      setSearchAnchor((current) =>
-                        current?.eventId === messageId ? null : current,
-                      );
-                    }}
-                    onToggleReaction={
-                      activeChannel && activeChannel.archivedAt === null
-                        ? async (message, emoji, remove) => {
-                            await toggleReactionMutation.mutateAsync({
-                              emoji,
-                              eventId: message.id,
-                              remove,
-                            });
-                          }
-                        : undefined
-                    }
+                    onCancelReply={handleCancelReply}
+                    onReply={handleReply}
+                    onSend={handleSend}
+                    onTargetReached={handleTargetReached}
+                    onToggleReaction={effectiveToggleReaction}
                     profiles={messageProfiles}
                     replyTargetId={replyTargetId}
                     replyTargetMessage={replyTargetMessage}

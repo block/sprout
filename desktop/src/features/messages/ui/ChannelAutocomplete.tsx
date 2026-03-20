@@ -9,7 +9,7 @@ type ChannelAutocompleteProps = {
   onSelect: (suggestion: ChannelSuggestion) => void;
 };
 
-export function ChannelAutocomplete({
+export const ChannelAutocomplete = React.memo(function ChannelAutocomplete({
   suggestions,
   selectedIndex,
   onSelect,
@@ -58,4 +58,4 @@ export function ChannelAutocomplete({
       </div>
     </div>
   );
-}
+});

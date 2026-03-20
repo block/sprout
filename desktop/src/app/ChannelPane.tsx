@@ -33,7 +33,7 @@ type ChannelPaneProps = {
   typingPubkeys: string[];
 };
 
-export function ChannelPane({
+export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
   currentPubkey,
   isSending,
@@ -118,4 +118,4 @@ export function ChannelPane({
       />
     </React.Fragment>
   );
-}
+});
