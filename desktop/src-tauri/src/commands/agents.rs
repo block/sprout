@@ -221,6 +221,17 @@ pub async fn create_managed_agent(
                     .to_string(),
             );
         }
+        // Enforce minimum scopes for remote agents. The harness needs users:read
+        // to query its owner (for !shutdown). Without it, the agent is unstoppable.
+        const REQUIRED_PROVIDER_SCOPES: &[&str] =
+            &["messages:read", "messages:write", "channels:read", "users:read"];
+        for required in REQUIRED_PROVIDER_SCOPES {
+            if !token_scopes.iter().any(|s| s == required) {
+                return Err(format!(
+                    "provider-backed agents require the '{required}' scope"
+                ));
+            }
+        }
         validate_provider_config(config)?;
         let bin_name = format!("sprout-backend-{id}");
         if resolve_command(&bin_name, Some(&app)).is_none() {

@@ -205,9 +205,8 @@ export function AgentsView() {
       // For remote agents, send !shutdown before deleting to avoid orphaning.
       const agent = managedAgents.find((a) => a.pubkey === pubkey);
       if (agent?.backend.type === "provider" && agent.backendAgentId) {
-        const presence = (managedPresenceQuery.data ?? {})[
-          pubkey.trim().toLowerCase()
-        ];
+        const presence =
+          managedPresenceQuery.data?.[pubkey.trim().toLowerCase()];
         const channelId = resolveAgentChannelId(pubkey);
         if (channelId) {
           // If the agent is still online, send !shutdown and warn that

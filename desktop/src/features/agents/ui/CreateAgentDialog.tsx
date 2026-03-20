@@ -32,6 +32,32 @@ import {
   CreateAgentTokenSection,
 } from "./CreateAgentDialogSections";
 
+/// Coerce string config values to their schema-declared types (number, boolean).
+/// Providers receive JSON — sending "3" instead of 3 for an integer field breaks
+/// typed config parsing on the provider side.
+function coerceConfigValues(
+  config: Record<string, string>,
+  schema: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!schema) return { ...config };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const properties = (schema as any)?.properties ?? {};
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config)) {
+    const prop = properties[key] as Record<string, unknown> | undefined;
+    const schemaType = prop?.type;
+    if ((schemaType === "integer" || schemaType === "number") && value !== "") {
+      const num = Number(value);
+      result[key] = Number.isNaN(num) ? value : num;
+    } else if (schemaType === "boolean") {
+      result[key] = value === "true";
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 // ── Provider config form ──────────────────────────────────────────────────────
 
 function ProviderConfigFields({
@@ -149,6 +175,9 @@ export function CreateAgentDialog({
     [backendProviders, runOn],
   );
   const isProviderMode = runOn !== "local";
+  // Provider agents always mint — ownership is established during mint.
+  // Use this everywhere instead of raw `mintToken` for validation/rendering.
+  const effectiveMintToken = isProviderMode || mintToken;
 
   const isMintSupported = prereqs?.admin.available ?? false;
   const isSpawnSupported =
@@ -178,12 +207,13 @@ export function CreateAgentDialog({
   ]);
 
   React.useEffect(() => {
-    if (!prereqs || prereqs.admin.available || !mintToken) {
+    // Don't auto-disable minting in provider mode — it's required.
+    if (!prereqs || prereqs.admin.available || !mintToken || isProviderMode) {
       return;
     }
 
     setMintToken(false);
-  }, [mintToken, prereqs]);
+  }, [mintToken, prereqs, isProviderMode]);
 
   React.useEffect(() => {
     if (
@@ -222,6 +252,22 @@ export function CreateAgentDialog({
       .then((result) => {
         if (!cancelled) {
           setProbedProvider(result);
+          // Initialize config from schema defaults so unchanged defaults
+          // are included in the submit payload (not silently dropped).
+          if (result.config_schema) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const props = (result.config_schema as any)?.properties ?? {};
+            const defaults: Record<string, string> = {};
+            for (const [key, prop] of Object.entries(props) as [
+              string,
+              Record<string, unknown>,
+            ][]) {
+              if (prop.default != null) {
+                defaults[key] = String(prop.default);
+              }
+            }
+            setProviderConfig(defaults);
+          }
         }
       })
       .catch((err: unknown) => {
@@ -308,9 +354,9 @@ export function CreateAgentDialog({
 
   const canSubmit =
     name.trim().length > 0 &&
-    (!mintToken || selectedScopes.size > 0) &&
+    (!effectiveMintToken || selectedScopes.size > 0) &&
     !isDiscoveryPending &&
-    !(mintToken && prereqs !== null && !isMintSupported) &&
+    !(effectiveMintToken && prereqs !== null && !isMintSupported) &&
     !(spawnAfterCreate && prereqs !== null && !isSpawnSupported) &&
     !createMutation.isPending;
 
@@ -337,7 +383,10 @@ export function CreateAgentDialog({
             backend: {
               type: "provider",
               id: runOn,
-              config: providerConfig,
+              config: coerceConfigValues(
+                providerConfig,
+                probedProvider?.config_schema,
+              ),
             },
           }
         : {
@@ -359,7 +408,7 @@ export function CreateAgentDialog({
                 ? Number.parseInt(parallelism, 10)
                 : undefined,
             systemPrompt: systemPrompt.trim() || undefined,
-            mintToken,
+            mintToken: effectiveMintToken,
             tokenName: tokenName.trim() || undefined,
             tokenScopes: [...selectedScopes],
             spawnAfterCreate,
@@ -458,7 +507,7 @@ export function CreateAgentDialog({
             <CreateAgentOptionToggles
               isMintSupported={isMintSupported}
               isSpawnSupported={isSpawnSupported}
-              mintToken={isProviderMode ? true : mintToken}
+              mintToken={effectiveMintToken}
               mintToggleDisabled={isProviderMode || mintToggleDisabled}
               onToggleMintToken={() => {
                 if (!mintToggleDisabled) {
@@ -479,7 +528,7 @@ export function CreateAgentDialog({
               spawnToggleDisabled={isProviderMode || spawnToggleDisabled}
             />
 
-            {mintToken ? (
+            {effectiveMintToken ? (
               <CreateAgentTokenSection
                 onScopeToggle={toggleScope}
                 onTokenNameChange={setTokenName}
