@@ -2,6 +2,7 @@ import * as React from "react";
 
 import type { TimelineMessage } from "@/features/messages/types";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
@@ -18,6 +19,7 @@ export const MessageRow = React.memo(
     message,
     onToggleReaction,
     onReply,
+    profiles,
   }: {
     activeReplyTargetId?: string | null;
     highlighted?: boolean;
@@ -28,6 +30,7 @@ export const MessageRow = React.memo(
       remove: boolean,
     ) => Promise<void>;
     onReply?: (message: TimelineMessage) => void;
+    profiles?: UserProfileLookup;
   }) {
     const [hasAvatarError, setHasAvatarError] = React.useState(false);
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
@@ -37,6 +40,29 @@ export const MessageRow = React.memo(
       string | null
     >(null);
     const [reactionPending, setReactionPending] = React.useState(false);
+    const mentionNames = React.useMemo(() => {
+      if (!profiles || !message.tags) {
+        return undefined;
+      }
+
+      const names = new Set<string>();
+
+      for (const tag of message.tags) {
+        if (tag[0] !== "p" || !tag[1]) {
+          continue;
+        }
+
+        const profile = profiles[tag[1].toLowerCase()];
+        const displayName = profile?.displayName?.trim();
+
+        if (displayName) {
+          names.add(displayName);
+        }
+      }
+
+      return names.size > 0 ? [...names] : undefined;
+    }, [profiles, message.tags]);
+
     const visibleDepth = Math.min(message.depth, 6);
     const indentPx = visibleDepth * 28;
     const initials = message.author
@@ -75,7 +101,12 @@ export const MessageRow = React.memo(
           );
         default:
           return (
-            <Markdown className="max-w-3xl" content={message.body} tight />
+            <Markdown
+              className="max-w-3xl"
+              content={message.body}
+              mentionNames={mentionNames}
+              tight
+            />
           );
       }
     };
@@ -297,7 +328,8 @@ export const MessageRow = React.memo(
     prev.message.tags === next.message.tags &&
     prev.message.role === next.message.role &&
     prev.highlighted === next.highlighted &&
-    prev.activeReplyTargetId === next.activeReplyTargetId,
+    prev.activeReplyTargetId === next.activeReplyTargetId &&
+    prev.profiles === next.profiles,
 );
 
 MessageRow.displayName = "MessageRow";

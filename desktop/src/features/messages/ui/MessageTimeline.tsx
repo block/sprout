@@ -117,6 +117,7 @@ export function MessageTimeline({
                     message={message}
                     onToggleReaction={onToggleReaction}
                     onReply={onReply}
+                    profiles={profiles}
                   />
                 ),
               )

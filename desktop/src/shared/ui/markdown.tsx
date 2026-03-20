@@ -13,6 +13,7 @@ type MarkdownProps = {
   className?: string;
   compact?: boolean;
   content: string;
+  mentionNames?: string[];
   tight?: boolean;
 };
 
@@ -183,6 +184,7 @@ export function Markdown({
   className,
   compact = false,
   content,
+  mentionNames,
   tight = false,
 }: MarkdownProps) {
   const variant = tight ? "tight" : compact ? "compact" : "default";
@@ -213,7 +215,7 @@ export function Markdown({
         remarkPlugins={[
           remarkGfm,
           remarkBreaks,
-          remarkMentions,
+          [remarkMentions, { mentionNames }],
           remarkChannelLinks,
         ]}
       >
