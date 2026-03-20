@@ -8,6 +8,7 @@ import {
 } from "@/features/profile/lib/identity";
 import type { ForumPost } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -58,6 +59,7 @@ export function ForumPostCard({
     preferResolvedSelfLabel: true,
   });
   const avatarUrl = profiles?.[post.pubkey.toLowerCase()]?.avatarUrl ?? null;
+  const mentionNames = resolveMentionNames(post.tags, profiles);
   const summary = post.threadSummary;
   const previewContent =
     post.content.length > 200
@@ -149,7 +151,11 @@ export function ForumPostCard({
       </div>
 
       <div className="mt-2">
-        <Markdown compact content={previewContent} />
+        <Markdown
+          compact
+          content={previewContent}
+          mentionNames={mentionNames}
+        />
       </div>
 
       {summary && summary.replyCount > 0 ? (

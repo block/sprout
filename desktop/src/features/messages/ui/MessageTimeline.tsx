@@ -118,6 +118,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                     message={message}
                     onToggleReaction={onToggleReaction}
                     onReply={onReply}
+                    profiles={profiles}
                   />
                 ),
               )
