@@ -392,6 +392,11 @@ pub struct GetForumThreadQuery {
     pub cursor: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct SetCanvasBody<'a> {
+    pub content: &'a str,
+}
+
 fn deserialize_null_string_as_empty<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: Deserializer<'de>,

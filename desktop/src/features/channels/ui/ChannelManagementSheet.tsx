@@ -53,6 +53,7 @@ import {
   SheetTitle,
 } from "@/shared/ui/sheet";
 import { Textarea } from "@/shared/ui/textarea";
+import { ChannelCanvas } from "./ChannelCanvas";
 import { ChannelMemberInviteCard } from "./ChannelMemberInviteCard";
 
 type ChannelManagementSheetProps = {
@@ -512,6 +513,19 @@ export function ChannelManagementSheet({
                 </p>
               ) : null}
             </form>
+          </Section>
+
+          <Separator />
+
+          <Section
+            description="A shared Markdown document for the channel."
+            title="Canvas"
+          >
+            <ChannelCanvas
+              canEdit={canEditNarrative}
+              channelId={channelId}
+              isArchived={isArchived}
+            />
           </Section>
 
           <Separator />
