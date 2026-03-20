@@ -2537,6 +2537,19 @@ async function handleDeleteManagedAgent(args: {
   pubkey: string;
   forceRemoteDelete?: boolean | null;
 }): Promise<void> {
+  // Model the backend invariant: reject deletion of deployed remote agents
+  // unless force_remote_delete is true.
+  const agent = mockManagedAgents.find((a) => a.pubkey === args.pubkey);
+  if (
+    agent &&
+    agent.backend.type === "provider" &&
+    agent.backend_agent_id != null &&
+    !args.forceRemoteDelete
+  ) {
+    throw new Error(
+      "cannot delete a deployed remote agent without force_remote_delete: true",
+    );
+  }
   mockManagedAgents = mockManagedAgents.filter(
     (candidate) => candidate.pubkey !== args.pubkey,
   );

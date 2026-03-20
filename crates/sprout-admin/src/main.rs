@@ -101,7 +101,19 @@ async fn mint_token(
         db.ensure_user(&owner_bytes).await?;
         let was_set = db.set_agent_owner(&pubkey_bytes, &owner_bytes).await?;
         if !was_set {
-            eprintln!("warning: agent already has an owner — ownership not changed");
+            // Verify the existing owner matches the requested one. If not,
+            // fail — minting a token for an operator who isn't the persisted
+            // owner creates a broken control relationship (shutdown won't work).
+            let existing = db
+                .get_agent_channel_policy(&pubkey_bytes)
+                .await?
+                .and_then(|(_, owner)| owner);
+            if existing.as_deref() != Some(owner_bytes.as_slice()) {
+                anyhow::bail!(
+                    "agent already has a different owner — refusing to mint token for non-owner"
+                );
+            }
+            eprintln!("note: agent already owned by the requested pubkey — proceeding");
         }
     }
 

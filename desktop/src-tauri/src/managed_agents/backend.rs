@@ -4,6 +4,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 const STDERR_CAP: usize = 65536;
+/// Provider responses should be small JSON objects. Cap stdout to prevent a
+/// buggy or malicious provider from OOM-ing the desktop process.
+const STDOUT_CAP: usize = 1_048_576; // 1 MB
 
 /// Invoke a provider binary: write JSON to stdin, read JSON from stdout.
 ///
@@ -101,9 +104,12 @@ pub fn invoke_provider(
     let mut exit_status = None;
 
     loop {
-        // Drain stdout chunks (non-blocking).
-        while let Ok(chunk) = stdout_rx.try_recv() {
-            stdout_buf.extend_from_slice(&chunk);
+        // Drain stdout chunks (non-blocking), enforce byte cap.
+        while stdout_buf.len() < STDOUT_CAP {
+            match stdout_rx.try_recv() {
+                Ok(chunk) => stdout_buf.extend_from_slice(&chunk),
+                Err(_) => break,
+            }
         }
         // Drain stderr chunks (non-blocking), enforce byte cap.
         while stderr_bytes.len() < STDERR_CAP {
@@ -140,6 +146,9 @@ pub fn invoke_provider(
     // first timeout — a slightly delayed final chunk should still be captured.
     let drain_deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
+        if stdout_buf.len() >= STDOUT_CAP {
+            break;
+        }
         let remaining = drain_deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
             break;
@@ -164,6 +173,7 @@ pub fn invoke_provider(
         }
     }
     stderr_bytes.truncate(STDERR_CAP);
+    stdout_buf.truncate(STDOUT_CAP);
 
     let stderr = String::from_utf8_lossy(&stderr_bytes);
     let stderr_redacted = redact_secrets(&stderr);
