@@ -1,3 +1,4 @@
+import * as React from "react";
 import { ArrowDown } from "lucide-react";
 
 import type { TimelineMessage } from "@/features/messages/types";
@@ -29,7 +30,7 @@ type MessageTimelineProps = {
   onTargetReached?: (messageId: string) => void;
 };
 
-export function MessageTimeline({
+export const MessageTimeline = React.memo(function MessageTimeline({
   channelId,
   messages,
   isLoading = false,
@@ -145,4 +146,4 @@ export function MessageTimeline({
       ) : null}
     </div>
   );
-}
+});

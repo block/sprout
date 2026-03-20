@@ -14,7 +14,7 @@ type MentionAutocompleteProps = {
   onSelect: (suggestion: MentionSuggestion) => void;
 };
 
-export function MentionAutocomplete({
+export const MentionAutocomplete = React.memo(function MentionAutocomplete({
   suggestions,
   selectedIndex,
   onSelect,
@@ -67,4 +67,4 @@ export function MentionAutocomplete({
       </div>
     </div>
   );
-}
+});

@@ -1,3 +1,4 @@
+import * as React from "react";
 import Picker from "@emoji-mart/react";
 import data from "@emoji-mart/data";
 import { SmilePlus } from "lucide-react";
@@ -13,7 +14,7 @@ type ComposerEmojiPickerProps = {
   open: boolean;
 };
 
-export function ComposerEmojiPicker({
+export const ComposerEmojiPicker = React.memo(function ComposerEmojiPicker({
   disabled = false,
   onEmojiSelect,
   onOpenChange,
@@ -55,4 +56,4 @@ export function ComposerEmojiPicker({
       </PopoverContent>
     </Popover>
   );
-}
+});
