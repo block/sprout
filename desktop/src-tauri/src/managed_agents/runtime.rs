@@ -140,10 +140,21 @@ pub fn build_managed_agent_summary(
     use crate::managed_agents::BackendKind;
 
     let (status, pid, log_path) = if record.backend != BackendKind::Local {
-        // Provider-backed (remote) agents: no local process to check.
-        // Status is "deployed" if we have a backend_agent_id, "not_deployed" otherwise.
-        // Actual online/offline comes from relay presence (polled separately by the
-        // frontend). The desktop does NOT track remote stop state — presence is truth.
+        // Two-axis status model for remote agents:
+        //
+        //   Control-plane (this field): "deployed" = provider has been invoked and
+        //   returned a backend_agent_id. "not_deployed" = no deploy call yet (or it
+        //   failed). This axis tracks whether infrastructure *exists*, not whether
+        //   the process is currently running.
+        //
+        //   Live axis (relay presence, polled by frontend): online/away/offline.
+        //   Shown as a PresenceDot next to the agent name. This is the real-time
+        //   signal for whether the harness is connected.
+        //
+        // After !shutdown the agent goes offline (presence) but stays "deployed"
+        // (infrastructure still exists). This is intentional — the provider may
+        // have allocated a VM/container that persists across process restarts.
+        // A future provider `undeploy` operation (v2) will handle teardown.
         let status = if record.backend_agent_id.is_some() {
             "deployed".to_string()
         } else {

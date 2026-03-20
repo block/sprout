@@ -228,7 +228,7 @@ pub fn validate_provider_config(config: &serde_json::Value) -> Result<(), String
 }
 
 /// Enumerate PATH for sprout-backend-* executables. Returns (id, path) pairs.
-/// Does NOT execute any binaries.
+/// Only includes files that are executable. Does NOT execute any binaries.
 pub fn discover_provider_candidates() -> Vec<(String, PathBuf)> {
     let prefix = "sprout-backend-";
     let mut seen = std::collections::HashSet::new();
@@ -242,7 +242,7 @@ pub fn discover_provider_candidates() -> Vec<(String, PathBuf)> {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if let Some(id) = name.strip_prefix(prefix) {
-                if !id.is_empty() && !seen.contains(&name) {
+                if !id.is_empty() && !seen.contains(&name) && is_executable(&entry.path()) {
                     seen.insert(name.clone());
                     results.push((id.to_string(), entry.path()));
                 }
@@ -250,6 +250,22 @@ pub fn discover_provider_candidates() -> Vec<(String, PathBuf)> {
         }
     }
     results
+}
+
+/// Check if a file is executable (Unix: mode bits; other platforms: always true).
+fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        true
+    }
 }
 
 #[derive(Debug, serde::Serialize)]

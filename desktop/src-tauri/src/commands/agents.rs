@@ -38,6 +38,10 @@ fn build_deploy_payload(record: &ManagedAgentRecord) -> serde_json::Value {
 /// Deploy an agent to a provider backend. Resolves the binary, calls deploy via
 /// spawn_blocking, and persists the result (backend_agent_id or last_error).
 ///
+/// Idempotency: calling deploy on an already-deployed agent sends the same payload
+/// again. Providers are expected to handle this as an update-in-place or no-op —
+/// the protocol does not include an explicit `undeploy` operation (deferred to v2).
+///
 /// Returns Ok(()) on success, Err(message) on failure. Either way the record is
 /// updated and saved before returning.
 async fn deploy_to_provider(

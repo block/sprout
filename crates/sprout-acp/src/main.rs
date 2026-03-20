@@ -123,21 +123,37 @@ async fn main() -> Result<()> {
         }
     }
 
-    // ── Step 2d: Query agent owner ────────────────────────────────────────────
+    // ── Step 2d: Query agent owner (with retry) ─────────────────────────────
+    // Owner lookup is critical for !shutdown — a transient failure here would
+    // permanently disable remote shutdown for this process. Retry a few times
+    // with backoff so a brief relay hiccup doesn't leave us uncontrollable.
     let owner_pubkey: Option<String> = {
-        match rest_client_for_presence
-            .get_json(&format!("/api/users/{pubkey_hex}/profile"))
-            .await
-        {
-            Ok(v) => v
-                .get("agent_owner_pubkey")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            Err(e) => {
-                tracing::warn!("failed to query agent owner: {e}");
-                None
+        let mut result = None;
+        let profile_url = format!("/api/users/{pubkey_hex}/profile");
+        for attempt in 0..3u32 {
+            if attempt > 0 {
+                let delay = std::time::Duration::from_secs(2u64.pow(attempt));
+                tracing::info!(
+                    "retrying owner lookup in {}s (attempt {})",
+                    delay.as_secs(),
+                    attempt + 1
+                );
+                tokio::time::sleep(delay).await;
+            }
+            match rest_client_for_presence.get_json(&profile_url).await {
+                Ok(v) => {
+                    result = v
+                        .get("agent_owner_pubkey")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!("owner lookup attempt {} failed: {e}", attempt + 1);
+                }
             }
         }
+        result
     };
     if let Some(ref owner) = owner_pubkey {
         tracing::info!("agent owner: {owner}");
