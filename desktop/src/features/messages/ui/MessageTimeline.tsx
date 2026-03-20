@@ -11,6 +11,7 @@ import { TimelineSkeleton } from "./TimelineSkeleton";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
 type MessageTimelineProps = {
+  channelId?: string | null;
   messages: TimelineMessage[];
   isLoading?: boolean;
   emptyTitle?: string;
@@ -29,6 +30,7 @@ type MessageTimelineProps = {
 };
 
 export function MessageTimeline({
+  channelId,
   messages,
   isLoading = false,
   emptyTitle = "No messages yet",
@@ -51,6 +53,7 @@ export function MessageTimeline({
     syncScrollState,
     timelineRef,
   } = useTimelineScrollManager({
+    channelId,
     isLoading,
     messages,
     onTargetReached,

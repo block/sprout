@@ -4,11 +4,13 @@ import type { TimelineMessage } from "@/features/messages/types";
 import { isNearBottom } from "./messageTimelineUtils";
 
 export function useTimelineScrollManager({
+  channelId,
   isLoading,
   messages,
   onTargetReached,
   targetMessageId,
 }: {
+  channelId?: string | null;
   isLoading: boolean;
   messages: TimelineMessage[];
   onTargetReached?: (messageId: string) => void;
@@ -32,6 +34,24 @@ export function useTimelineScrollManager({
     string | null
   >(null);
   const [newMessageCount, setNewMessageCount] = React.useState(0);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is intentionally the sole trigger — we reset all scroll state when the channel changes
+  React.useLayoutEffect(() => {
+    hasInitializedRef.current = false;
+    shouldStickToBottomRef.current = true;
+    isAtBottomRef.current = true;
+    isProgrammaticBottomScrollRef.current = false;
+    previousTimelineHeightRef.current = null;
+    previousScrollTopRef.current = 0;
+    lockedScrollTopRef.current = null;
+    previousLastMessageIdRef.current = undefined;
+    previousMessageCountRef.current = 0;
+    handledTargetMessageIdRef.current = null;
+    setIsAtBottom(true);
+    setHighlightedMessageId(null);
+    setNewMessageCount(0);
+  }, [channelId]);
+
   const latestMessage =
     messages.length > 0 ? messages[messages.length - 1] : undefined;
 
