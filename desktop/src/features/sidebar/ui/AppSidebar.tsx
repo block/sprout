@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Bot, Home, PenSquare, Plus, Search } from "lucide-react";
+import { Bot, Home, Lock, PenSquare, Plus, Search } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
@@ -12,8 +12,14 @@ import {
   SidebarSection,
 } from "@/features/sidebar/ui/SidebarSection";
 import { NewDirectMessageDialog } from "@/features/sidebar/ui/NewDirectMessageDialog";
-import type { Channel, PresenceStatus, Profile } from "@/shared/api/types";
+import type {
+  Channel,
+  ChannelVisibility,
+  PresenceStatus,
+  Profile,
+} from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
+import { Checkbox } from "@/shared/ui/checkbox";
 import { Input } from "@/shared/ui/input";
 import {
   Sidebar,
@@ -61,10 +67,12 @@ type AppSidebarProps = {
   onCreateChannel: (input: {
     name: string;
     description?: string;
+    visibility: ChannelVisibility;
   }) => Promise<void>;
   onCreateForum: (input: {
     name: string;
     description?: string;
+    visibility: ChannelVisibility;
   }) => Promise<void>;
   onOpenBrowseChannels: () => void;
   onOpenBrowseForums: () => void;
@@ -81,12 +89,18 @@ type AppSidebarProps = {
 // ---------------------------------------------------------------------------
 
 function useCreateForm(
-  onCreate: (input: { name: string; description?: string }) => Promise<void>,
+  onCreate: (input: {
+    name: string;
+    description?: string;
+    visibility: ChannelVisibility;
+  }) => Promise<void>,
   entityLabel: string,
 ) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [draftName, setDraftName] = React.useState("");
   const [draftDescription, setDraftDescription] = React.useState("");
+  const [draftVisibility, setDraftVisibility] =
+    React.useState<ChannelVisibility>("open");
   const [errorMessage, setErrorMessage] = React.useState<string | undefined>();
   const inputRef = React.useRef<HTMLInputElement>(null);
 
@@ -105,6 +119,7 @@ function useCreateForm(
     setErrorMessage(undefined);
     setDraftName("");
     setDraftDescription("");
+    setDraftVisibility("open");
     setIsOpen(false);
   }
 
@@ -116,6 +131,11 @@ function useCreateForm(
   function changeDescription(value: string) {
     setErrorMessage(undefined);
     setDraftDescription(value);
+  }
+
+  function changeVisibility(value: ChannelVisibility) {
+    setErrorMessage(undefined);
+    setDraftVisibility(value);
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -133,10 +153,12 @@ function useCreateForm(
       await onCreate({
         name,
         description: description || undefined,
+        visibility: draftVisibility,
       });
 
       setDraftName("");
       setDraftDescription("");
+      setDraftVisibility("open");
       setIsOpen(false);
     } catch (error) {
       setErrorMessage(
@@ -151,12 +173,14 @@ function useCreateForm(
     isOpen,
     draftName,
     draftDescription,
+    draftVisibility,
     errorMessage,
     inputRef,
     toggle,
     cancel,
     changeName,
     changeDescription,
+    changeVisibility,
     handleSubmit,
   };
 }
@@ -213,6 +237,43 @@ function SectionHeaderActions({
 }
 
 // ---------------------------------------------------------------------------
+// PrivateCheckbox — checkbox toggle for channel visibility
+// ---------------------------------------------------------------------------
+
+function PrivateCheckbox({
+  disabled,
+  isPrivate,
+  onChange,
+  testId,
+}: {
+  disabled: boolean;
+  isPrivate: boolean;
+  onChange: (isPrivate: boolean) => void;
+  testId: string;
+}) {
+  const id = React.useId();
+
+  return (
+    <div className="flex items-center gap-2">
+      <Checkbox
+        checked={isPrivate}
+        data-testid={testId}
+        disabled={disabled}
+        id={id}
+        onCheckedChange={(checked) => onChange(checked === true)}
+      />
+      <label
+        className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-sidebar-foreground/70 select-none peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
+        htmlFor={id}
+      >
+        <Lock className="h-3 w-3" />
+        Private channel
+      </label>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ChannelGroupSection — unified Channels / Forums section
 // ---------------------------------------------------------------------------
 
@@ -224,6 +285,7 @@ function ChannelGroupSection({
   createFormTestId,
   createNameTestId,
   createDescriptionTestId,
+  createVisibilityTestId,
   groupClassName,
   isActiveChannel,
   isCreating,
@@ -245,6 +307,7 @@ function ChannelGroupSection({
   createFormTestId: string;
   createNameTestId: string;
   createDescriptionTestId: string;
+  createVisibilityTestId: string;
   groupClassName?: string;
   isActiveChannel: boolean;
   isCreating: boolean;
@@ -301,6 +364,14 @@ function ChannelGroupSection({
               onChange={(event) => form.changeDescription(event.target.value)}
               placeholder={descriptionPlaceholder}
               value={form.draftDescription}
+            />
+            <PrivateCheckbox
+              disabled={isCreating}
+              isPrivate={form.draftVisibility === "private"}
+              onChange={(isPrivate) =>
+                form.changeVisibility(isPrivate ? "private" : "open")
+              }
+              testId={createVisibilityTestId}
             />
             <div className="flex items-center gap-2">
               <Button
@@ -513,6 +584,7 @@ export function AppSidebar({
               createFormTestId="create-stream-form"
               createNameTestId="create-stream-name"
               createDescriptionTestId="create-stream-description"
+              createVisibilityTestId="create-stream-visibility"
               descriptionPlaceholder="What this stream is for"
               form={streamForm}
               groupClassName="pt-1"
@@ -535,6 +607,7 @@ export function AppSidebar({
               createFormTestId="create-forum-form"
               createNameTestId="create-forum-name"
               createDescriptionTestId="create-forum-description"
+              createVisibilityTestId="create-forum-visibility"
               descriptionPlaceholder="What this forum is for"
               form={forumForm}
               isActiveChannel={selectedView === "channel"}

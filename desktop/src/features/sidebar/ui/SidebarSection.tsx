@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { CircleDot, FileText, Hash } from "lucide-react";
+import { CircleDot, FileText, Hash, Lock } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { Channel, PresenceStatus } from "@/shared/api/types";
@@ -107,6 +107,10 @@ function SidebarChannelIcon({
         }
       />
     );
+  }
+
+  if (channel.visibility === "private") {
+    return <Lock className="h-4 w-4" />;
   }
 
   if (channel.channelType === "forum") {
