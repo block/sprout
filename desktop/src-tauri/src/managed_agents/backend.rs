@@ -1,7 +1,9 @@
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
+
+const STDERR_CAP: usize = 65536;
 
 /// Invoke a provider binary: write JSON to stdin, read JSON from stdout.
 ///
@@ -33,20 +35,22 @@ pub fn invoke_provider(
         Ok(())
     };
 
-    // Stream stdout lines over a channel. The reader thread sends each line
-    // as it arrives, so the caller can capture the JSON response without
-    // waiting for EOF. If a descendant holds the pipe open after the provider
+    // Stream stdout as raw chunks over a channel. The caller appends chunks
+    // to a buffer and attempts incremental JSON parsing — no dependency on
+    // newlines or EOF. If a descendant holds the pipe open after the provider
     // exits, the thread blocks on the next read — but the caller already has
-    // the response and proceeds. The thread is not joined; it terminates when
-    // the pipe eventually closes or the process exits.
-    let (stdout_tx, stdout_rx) = mpsc::channel::<String>();
+    // the response data and proceeds. The thread is not joined; it terminates
+    // when the pipe eventually closes or the process exits.
+    let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>();
     if let Some(stdout) = child.stdout.take() {
         std::thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                match line {
-                    Ok(l) => {
-                        if stdout_tx.send(l).is_err() {
+            let mut buf = vec![0u8; 8192];
+            let mut reader = BufReader::new(stdout);
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if stdout_tx.send(buf[..n].to_vec()).is_err() {
                             break; // receiver dropped
                         }
                     }
@@ -56,9 +60,12 @@ pub fn invoke_provider(
         });
     }
 
-    // Drain stderr into a bounded buffer via channel. Same non-blocking
-    // pattern — the thread is not joined; it dies when the pipe closes.
-    let (stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>();
+    // Drain stderr into a bounded channel. sync_channel(8) caps in-flight
+    // chunks — the producer blocks when the buffer is full, applying natural
+    // backpressure. The consumer drains during the try_wait loop and caps
+    // total bytes at STDERR_CAP, so memory is bounded even for long-running
+    // or malicious providers.
+    let (stderr_tx, stderr_rx) = mpsc::sync_channel::<Vec<u8>>(8);
     if let Some(stderr) = child.stderr.take() {
         std::thread::spawn(move || {
             let mut buf = vec![0u8; 8192];
@@ -84,17 +91,26 @@ pub fn invoke_provider(
         return Err(format!("stdin write failed: {e}"));
     }
 
-    // Poll try_wait with a deadline, collecting stdout lines as they arrive.
-    // Once the child exits we drain any remaining buffered lines.
+    // Poll try_wait with a deadline, collecting stdout chunks and draining
+    // stderr as data arrives. Incremental JSON parsing on stdout means we
+    // capture the response even without a trailing newline or EOF.
     let timeout_secs = timeout.as_secs();
     let deadline = std::time::Instant::now() + timeout;
-    let mut stdout_lines: Vec<String> = Vec::new();
+    let mut stdout_buf = Vec::new();
+    let mut stderr_bytes = Vec::new();
     let mut exit_status = None;
 
     loop {
-        // Drain any stdout lines available right now (non-blocking).
-        while let Ok(line) = stdout_rx.try_recv() {
-            stdout_lines.push(line);
+        // Drain stdout chunks (non-blocking).
+        while let Ok(chunk) = stdout_rx.try_recv() {
+            stdout_buf.extend_from_slice(&chunk);
+        }
+        // Drain stderr chunks (non-blocking), enforce byte cap.
+        while stderr_bytes.len() < STDERR_CAP {
+            match stderr_rx.try_recv() {
+                Ok(chunk) => stderr_bytes.extend_from_slice(&chunk),
+                Err(_) => break,
+            }
         }
 
         match child.try_wait() {
@@ -118,26 +134,36 @@ pub fn invoke_provider(
         }
     }
 
-    // Drain remaining stdout lines buffered between last poll and child exit.
-    // Brief timeout: the child has exited, so the reader should finish quickly
-    // unless a descendant holds the pipe. 2s is generous.
+    // Drain remaining stdout chunks buffered between last poll and child exit.
+    // Keep draining until the channel disconnects (reader finished) or the
+    // 2s deadline expires (descendant holding pipe open). Do NOT break on the
+    // first timeout — a slightly delayed final chunk should still be captured.
     let drain_deadline = std::time::Instant::now() + Duration::from_secs(2);
-    while std::time::Instant::now() < drain_deadline {
-        match stdout_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(line) => stdout_lines.push(line),
-            Err(mpsc::RecvTimeoutError::Timeout) => break,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+    loop {
+        let remaining = drain_deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match stdout_rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
+            Ok(chunk) => stdout_buf.extend_from_slice(&chunk),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break, // reader done
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Keep waiting until the full drain deadline expires.
+                if std::time::Instant::now() >= drain_deadline {
+                    break;
+                }
+            }
         }
     }
 
-    // Collect stderr (non-blocking drain of whatever arrived).
-    let mut stderr_bytes = Vec::new();
-    while let Ok(chunk) = stderr_rx.try_recv() {
-        stderr_bytes.extend_from_slice(&chunk);
-        if stderr_bytes.len() > 65536 {
-            break; // cap stderr capture
+    // Final stderr drain (non-blocking, cap already enforced).
+    while stderr_bytes.len() < STDERR_CAP {
+        match stderr_rx.try_recv() {
+            Ok(chunk) => stderr_bytes.extend_from_slice(&chunk),
+            Err(_) => break,
         }
     }
+    stderr_bytes.truncate(STDERR_CAP);
 
     let stderr = String::from_utf8_lossy(&stderr_bytes);
     let stderr_redacted = redact_secrets(&stderr);
@@ -165,9 +191,14 @@ pub fn invoke_provider(
         }
     }
 
-    let response: serde_json::Value = stdout_lines
-        .iter()
+    // Incremental JSON parse: try each line, then try the entire buffer.
+    // Handles providers that emit JSON on a single line (common) as well as
+    // providers that write JSON without a trailing newline.
+    let stdout_str = String::from_utf8_lossy(&stdout_buf);
+    let response: serde_json::Value = stdout_str
+        .lines()
         .find_map(|line| serde_json::from_str(line).ok())
+        .or_else(|| serde_json::from_str(stdout_str.trim()).ok())
         .ok_or_else(|| {
             let stderr_snippet = &stderr_redacted[..stderr_redacted.len().min(4096)];
             if stderr_snippet.is_empty() {
