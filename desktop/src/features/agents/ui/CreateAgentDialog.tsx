@@ -357,7 +357,12 @@ export function CreateAgentDialog({
     (!effectiveMintToken || selectedScopes.size > 0) &&
     !isDiscoveryPending &&
     !(effectiveMintToken && prereqs !== null && !isMintSupported) &&
-    !(spawnAfterCreate && prereqs !== null && !isSpawnSupported) &&
+    !(
+      !isProviderMode &&
+      spawnAfterCreate &&
+      prereqs !== null &&
+      !isSpawnSupported
+    ) &&
     !createMutation.isPending;
 
   async function handleSubmit() {

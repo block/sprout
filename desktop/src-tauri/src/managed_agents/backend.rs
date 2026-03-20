@@ -2,6 +2,18 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// Join a thread with a timeout. Returns the thread's output if it completes
+/// within `timeout`, or an empty Vec if it doesn't (e.g. a provider descendant
+/// is holding the pipe open). Uses a channel to avoid blocking the caller.
+fn join_with_timeout(handle: std::thread::JoinHandle<Vec<u8>>, timeout: Duration) -> Vec<u8> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = handle.join().unwrap_or_default();
+        let _ = tx.send(result);
+    });
+    rx.recv_timeout(timeout).unwrap_or_default()
+}
+
 /// Invoke a provider binary: write JSON to stdin, read JSON from stdout.
 ///
 /// Stdout and stderr are drained on dedicated threads to prevent pipe deadlocks.
@@ -58,8 +70,9 @@ pub fn invoke_provider(
                    stderr_thread: std::thread::JoinHandle<Vec<u8>>| {
         let _ = child.kill();
         let _ = child.wait();
-        let _ = stdout_thread.join();
-        let _ = stderr_thread.join();
+        // Bounded join — don't hang if descendants hold pipes open.
+        let _ = join_with_timeout(stdout_thread, Duration::from_secs(2));
+        let _ = join_with_timeout(stderr_thread, Duration::from_secs(2));
     };
 
     // Bail early if stdin write failed — child may be in a bad state.
@@ -94,8 +107,12 @@ pub fn invoke_provider(
         }
     }
 
-    let stdout_bytes = stdout_thread.join().unwrap_or_default();
-    let stderr_bytes = stderr_thread.join().unwrap_or_default();
+    // Bounded join: if a provider daemonizes or leaves descendants holding
+    // stdout/stderr open, read_to_end never returns and join() hangs forever.
+    // Use channels so we can time-box the wait after the child has exited.
+    let join_deadline = Duration::from_secs(5);
+    let stdout_bytes = join_with_timeout(stdout_thread, join_deadline);
+    let stderr_bytes = join_with_timeout(stderr_thread, join_deadline);
 
     let stderr = String::from_utf8_lossy(&stderr_bytes);
     let stderr_redacted = redact_secrets(&stderr);

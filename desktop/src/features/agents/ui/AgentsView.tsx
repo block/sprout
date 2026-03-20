@@ -136,10 +136,16 @@ export function AgentsView() {
     if (relayAgent?.channelIds?.length) {
       return relayAgent.channelIds[0];
     }
+    // Fallback: resolve channel name → UUID via the channels query.
+    // Only use this when the match is unambiguous — if multiple channels
+    // share the same name (e.g. across teams), we can't be sure which one
+    // the agent is in, and sending !shutdown to the wrong channel would
+    // silently miss the agent. Return null to surface the error to the user.
     const channelName = relayAgent?.channels?.[0];
     if (!channelName) return null;
     const channels = channelsQuery.data ?? [];
-    return channels.find((ch) => ch.name === channelName)?.id ?? null;
+    const matches = channels.filter((ch) => ch.name === channelName);
+    return matches.length === 1 ? matches[0].id : null;
   }
 
   // Clear log selection if the agent was removed
