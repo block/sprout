@@ -520,7 +520,80 @@ pub async fn post_tokens(
         .expires_in_days
         .map(|days| Utc::now() + chrono::Duration::days(days as i64));
 
-    // ── Generate token ────────────────────────────────────────────────────────
+    // ── Set agent owner BEFORE token creation ────────────────────────────────
+    // Ownership must be settled before the token is inserted. This eliminates
+    // the orphaned-token failure mode: if ownership fails, no token exists to
+    // revoke. set_agent_owner is atomic (UPDATE ... WHERE agent_owner_pubkey
+    // IS NULL) — concurrent bootstrap mints are serialized by the DB.
+    let owner_bytes = validated_owner_bytes.unwrap_or_else(|| ctx.pubkey_bytes.clone());
+
+    // Ensure the owner's user row exists (FK constraint requires it).
+    state
+        .db
+        .ensure_user(&owner_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("ensure_user for owner failed: {e}")))?;
+
+    match state
+        .db
+        .set_agent_owner(&ctx.pubkey_bytes, &owner_bytes)
+        .await
+    {
+        Ok(true) => {
+            tracing::debug!("agent owner set successfully");
+        }
+        Ok(false) => {
+            // Owner already assigned. If an explicit owner was requested, verify
+            // it matches — otherwise a different user already claimed this agent.
+            if req.owner_pubkey.is_some() {
+                let existing = state
+                    .db
+                    .get_agent_channel_policy(&ctx.pubkey_bytes)
+                    .await
+                    .map_err(|e| internal_error(&format!("db error checking owner: {e}")))?
+                    .and_then(|(_, owner)| owner);
+                if existing.as_deref() != Some(owner_bytes.as_slice()) {
+                    return Err(api_error(
+                        StatusCode::CONFLICT,
+                        "agent already has a different owner",
+                    ));
+                }
+                tracing::debug!("agent already owned by the requested pubkey — no change needed");
+            } else {
+                tracing::debug!("agent already has an owner — skipping self-ownership");
+            }
+        }
+        Err(e) => {
+            if req.owner_pubkey.is_some() {
+                return Err(internal_error(&format!("failed to set agent owner: {e}")));
+            }
+            tracing::warn!("set_agent_owner failed for self-mint: {e}");
+        }
+    }
+
+    // ── Enforce shutdown-required scopes when ownership is established ────────
+    // If owner_pubkey is set, the agent needs these scopes for the harness to
+    // query its owner and receive !shutdown. Reject the mint if they're missing
+    // — a token without these scopes creates an uncontrollable agent.
+    if req.owner_pubkey.is_some() {
+        let required = [
+            "users:read",
+            "messages:read",
+            "messages:write",
+            "channels:read",
+        ];
+        let scope_strs: Vec<String> = parsed_scopes.iter().map(|s| s.to_string()).collect();
+        for r in &required {
+            if !scope_strs.iter().any(|s| s == r) {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!("owner_pubkey requires the '{r}' scope for agent controllability"),
+                ));
+            }
+        }
+    }
+
+    // ── Generate token (after ownership is settled) ───────────────────────────
     let raw_token = sprout_auth::generate_token();
     let token_hash: Vec<u8> = Sha256::digest(raw_token.as_bytes()).to_vec();
     let scope_strings: Vec<String> = parsed_scopes.iter().map(|s| s.to_string()).collect();
@@ -552,69 +625,6 @@ pub async fn post_tokens(
             ));
         }
     };
-
-    // ── Set agent owner (atomic, first-mint-wins) ─────────────────────────
-    // Use pre-validated owner_pubkey if provided, otherwise default to self.
-    // set_agent_owner is atomic: UPDATE ... WHERE agent_owner_pubkey IS NULL.
-    // No TOCTOU race — concurrent bootstrap mints are serialized by the DB.
-    let owner_bytes = validated_owner_bytes.unwrap_or_else(|| ctx.pubkey_bytes.clone());
-
-    // Ensure the owner's user row exists (FK constraint requires it).
-    if let Err(e) = state.db.ensure_user(&owner_bytes).await {
-        tracing::warn!("ensure_user for owner failed: {e}");
-    }
-
-    match state
-        .db
-        .set_agent_owner(&ctx.pubkey_bytes, &owner_bytes)
-        .await
-    {
-        Ok(true) => {
-            tracing::debug!("agent owner set successfully");
-        }
-        Ok(false) => {
-            // Owner already assigned. If an explicit owner was requested, verify
-            // it matches — otherwise a different user already claimed this agent.
-            if req.owner_pubkey.is_some() {
-                let existing = state
-                    .db
-                    .get_agent_channel_policy(&ctx.pubkey_bytes)
-                    .await
-                    .map_err(|e| internal_error(&format!("db error checking owner: {e}")))?
-                    .and_then(|(_, owner)| owner);
-                if existing.as_deref() != Some(owner_bytes.as_slice()) {
-                    if let Err(revoke_err) = state
-                        .db
-                        .revoke_token(token_id, &ctx.pubkey_bytes, &ctx.pubkey_bytes)
-                        .await
-                    {
-                        tracing::error!("failed to revoke orphaned token {token_id} after owner conflict: {revoke_err}");
-                    }
-                    return Err(api_error(
-                        StatusCode::CONFLICT,
-                        "agent already has a different owner",
-                    ));
-                }
-                tracing::debug!("agent already owned by the requested pubkey — no change needed");
-            } else {
-                tracing::debug!("agent already has an owner — skipping self-ownership");
-            }
-        }
-        Err(e) => {
-            if req.owner_pubkey.is_some() {
-                // Explicit owner requested but failed — revoke the orphaned token.
-                if let Err(revoke_err) = state
-                    .db
-                    .revoke_token(token_id, &ctx.pubkey_bytes, &ctx.pubkey_bytes)
-                    .await
-                {
-                    tracing::error!("failed to revoke orphaned token {token_id} after set_agent_owner error: {revoke_err}");
-                }
-                return Err(internal_error(&format!("failed to set agent owner: {e}")));
-            }
-            tracing::warn!("set_agent_owner failed for self-mint: {e}");
-        }
-    }
 
     // ── Build response ────────────────────────────────────────────────────────
     let channel_ids_response: Vec<String> = validated_channel_ids

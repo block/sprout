@@ -314,7 +314,24 @@ export function CreateAgentDialog({
     onOpenChange(next);
   }
 
+  // Scopes required for remote agent controllability (!shutdown path).
+  // These cannot be removed in provider mode.
+  const PROVIDER_REQUIRED_SCOPES: TokenScope[] = [
+    "users:read" as TokenScope,
+    "messages:read" as TokenScope,
+    "messages:write" as TokenScope,
+    "channels:read" as TokenScope,
+  ];
+
   function toggleScope(scope: TokenScope) {
+    // Prevent removing required scopes in provider mode.
+    if (
+      isProviderMode &&
+      PROVIDER_REQUIRED_SCOPES.includes(scope) &&
+      selectedScopes.has(scope)
+    ) {
+      return; // locked — required for remote agent controllability
+    }
     setSelectedScopes((previous) => {
       const next = new Set(previous);
       if (next.has(scope)) {
@@ -396,7 +413,7 @@ export function CreateAgentDialog({
             tokenName: tokenName.trim() || undefined,
             tokenScopes: [...selectedScopes],
             spawnAfterCreate: true,
-            startOnAppLaunch,
+            startOnAppLaunch: false, // Remote agents don't auto-start with the desktop
             backend: {
               type: "provider",
               id: runOn,
@@ -540,13 +557,19 @@ export function CreateAgentDialog({
                 }
               }}
               prereqs={prereqs}
-              startOnAppLaunch={startOnAppLaunch}
+              startOnAppLaunch={isProviderMode ? false : startOnAppLaunch}
+              startOnAppLaunchDisabled={isProviderMode}
               spawnAfterCreate={isProviderMode ? true : spawnAfterCreate}
               spawnToggleDisabled={isProviderMode || spawnToggleDisabled}
             />
 
             {effectiveMintToken ? (
               <CreateAgentTokenSection
+                lockedScopes={
+                  isProviderMode
+                    ? new Set<TokenScope>(PROVIDER_REQUIRED_SCOPES)
+                    : undefined
+                }
                 onScopeToggle={toggleScope}
                 onTokenNameChange={setTokenName}
                 selectedScopes={selectedScopes}

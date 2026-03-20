@@ -489,4 +489,34 @@ mod tests {
         assert_eq!(split_config_key("accessTOKEN"), vec!["access", "token"]);
         assert_eq!(split_config_key("MyAPIKey"), vec!["my", "api", "key"]);
     }
+
+    #[test]
+    fn resolve_provider_binary_rejects_invalid_ids() {
+        // Path traversal
+        assert!(resolve_provider_binary("../evil").is_err());
+        // Empty
+        assert!(resolve_provider_binary("").is_err());
+        // Uppercase
+        assert!(resolve_provider_binary("MyProvider").is_err());
+        // Spaces
+        assert!(resolve_provider_binary("my provider").is_err());
+        // Shell metacharacters
+        assert!(resolve_provider_binary("foo;rm -rf /").is_err());
+        // Valid format but not on PATH — should fail with "not found"
+        assert!(resolve_provider_binary("nonexistent-test-id-12345").is_err());
+    }
+
+    #[test]
+    fn resolve_provider_binary_accepts_valid_id_format() {
+        // Valid ID format should pass validation. If the binary happens to
+        // exist on PATH, Ok is returned; otherwise Err contains "not found"
+        // (not "invalid provider ID"). Either outcome proves validation passed.
+        match resolve_provider_binary("zzz-nonexistent-test-provider") {
+            Ok(_) => {} // unlikely but fine — binary exists
+            Err(e) => assert!(
+                e.contains("not found"),
+                "expected 'not found' error, got: {e}"
+            ),
+        }
+    }
 }

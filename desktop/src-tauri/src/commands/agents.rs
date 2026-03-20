@@ -353,7 +353,14 @@ pub async fn create_managed_agent(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
-            start_on_app_launch: input.start_on_app_launch,
+            // Provider agents don't auto-start with the desktop — they're
+            // managed externally. Force false to avoid persisting a flag the
+            // app will never honor.
+            start_on_app_launch: if input.backend != BackendKind::Local {
+                false
+            } else {
+                input.start_on_app_launch
+            },
             runtime_pid: None,
             backend: input.backend.clone(),
             backend_agent_id: None,

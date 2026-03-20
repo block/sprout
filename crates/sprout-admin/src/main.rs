@@ -117,6 +117,22 @@ async fn mint_token(
         }
     }
 
+    // Enforce shutdown-required scopes when ownership is being established.
+    // Without these the harness can't resolve its owner or receive !shutdown.
+    if owner_pubkey.is_some() {
+        let required = [
+            "users:read",
+            "messages:read",
+            "messages:write",
+            "channels:read",
+        ];
+        for r in &required {
+            if !scopes.iter().any(|s| s == r) {
+                anyhow::bail!("owner_pubkey requires the '{r}' scope for agent controllability");
+            }
+        }
+    }
+
     let raw_token = generate_token();
     let token_hash = hash_token(&raw_token);
 
