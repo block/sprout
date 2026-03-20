@@ -180,7 +180,7 @@ export function PersonasSection({
                         onClick={() => onExport(persona)}
                       >
                         <Download className="h-4 w-4" />
-                        Export PNG
+                        Export
                       </DropdownMenuItem>
                       {!persona.isBuiltIn ? (
                         <DropdownMenuItem

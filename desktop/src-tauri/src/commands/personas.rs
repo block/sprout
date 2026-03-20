@@ -1,4 +1,3 @@
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
@@ -6,7 +5,7 @@ use uuid::Uuid;
 use crate::{
     app_state::AppState,
     managed_agents::{
-        encode_persona_png, generate_placeholder_png, load_managed_agents, load_personas,
+        encode_persona_json, load_managed_agents, load_personas, parse_json_persona,
         parse_png_persona, parse_zip_personas, save_managed_agents, save_personas,
         CreatePersonaRequest, ParsePersonaFilesResult, PersonaRecord, UpdatePersonaRequest,
     },
@@ -151,10 +150,12 @@ pub fn delete_persona(
 // ---------------------------------------------------------------------------
 
 const MAX_PNG_BYTES: usize = 10 * 1024 * 1024;
+const MAX_JSON_BYTES: usize = 5 * 1024 * 1024;
 const MAX_ZIP_BYTES: usize = 100 * 1024 * 1024;
 
 const PNG_MAGIC: [u8; 4] = [0x89, 0x50, 0x4E, 0x47];
 const ZIP_MAGIC: [u8; 4] = [0x50, 0x4B, 0x03, 0x04];
+const JSON_MAGIC: [u8; 1] = [0x7B];
 
 #[tauri::command]
 pub fn parse_persona_files(
@@ -164,33 +165,51 @@ pub fn parse_persona_files(
     if file_bytes.len() > MAX_ZIP_BYTES {
         return Err("File is too large (max 100 MB).".to_string());
     }
-    if file_bytes.len() < 4 {
-        return Err("File is too small to be a valid PNG or ZIP.".to_string());
+    if file_bytes.is_empty() {
+        return Err("File is empty.".to_string());
     }
 
-    let magic: [u8; 4] = file_bytes[..4]
-        .try_into()
-        .map_err(|_| "Failed to read file header".to_string())?;
+    let first_byte = file_bytes[0];
 
-    if magic == PNG_MAGIC {
-        if file_bytes.len() > MAX_PNG_BYTES {
-            return Err("PNG file is too large (max 10 MB).".to_string());
+    if file_bytes.len() >= 4 {
+        let magic: [u8; 4] = file_bytes[..4]
+            .try_into()
+            .map_err(|_| "Failed to read file header".to_string())?;
+
+        if magic == PNG_MAGIC {
+            if file_bytes.len() > MAX_PNG_BYTES {
+                return Err("PNG file is too large (max 10 MB).".to_string());
+            }
+            let mut preview = parse_png_persona(&file_bytes)?;
+            preview.source_file = file_name;
+            return Ok(ParsePersonaFilesResult {
+                personas: vec![preview],
+                skipped: vec![],
+            });
         }
-        let mut preview = parse_png_persona(&file_bytes)?;
+
+        if magic == ZIP_MAGIC {
+            return parse_zip_personas(&file_bytes);
+        }
+    }
+
+    if first_byte == JSON_MAGIC[0] {
+        if file_bytes.len() > MAX_JSON_BYTES {
+            return Err("JSON file is too large (max 5 MB).".to_string());
+        }
+        let mut preview = parse_json_persona(&file_bytes)?;
         preview.source_file = file_name;
-        Ok(ParsePersonaFilesResult {
+        return Ok(ParsePersonaFilesResult {
             personas: vec![preview],
             skipped: vec![],
-        })
-    } else if magic == ZIP_MAGIC {
-        parse_zip_personas(&file_bytes)
-    } else {
-        Err("Unsupported file format. Expected .persona.png or .zip".to_string())
+        });
     }
+
+    Err("Unsupported file format. Expected .persona.png, .persona.json, or .zip".to_string())
 }
 
 #[tauri::command]
-pub async fn export_persona_to_png(
+pub async fn export_persona_to_json(
     id: String,
     app: AppHandle,
     state: State<'_, AppState>,
@@ -213,18 +232,8 @@ pub async fn export_persona_to_png(
         )
     };
 
-    // Build avatar PNG bytes.
-    let avatar_png = match avatar_url.as_deref() {
-        Some(url) if url.starts_with("data:image/png;base64,") => {
-            let b64 = &url["data:image/png;base64,".len()..];
-            STANDARD
-                .decode(b64)
-                .map_err(|e| format!("Invalid avatar data URL: {e}"))?
-        }
-        _ => generate_placeholder_png(&display_name)?,
-    };
-
-    let png_bytes = encode_persona_png(&display_name, &system_prompt, &avatar_png)?;
+    let json_bytes =
+        encode_persona_json(&display_name, &system_prompt, avatar_url.as_deref())?;
 
     // Slugify display name for filename.
     let slug: String = display_name
@@ -241,8 +250,8 @@ pub async fn export_persona_to_png(
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
-        .add_filter("PNG Image", &["png"])
-        .set_file_name(&format!("{slug}.persona.png"))
+        .add_filter("JSON", &["json"])
+        .set_file_name(&format!("{slug}.persona.json"))
         .save_file(move |path| {
             let _ = tx.send(path);
         });
@@ -256,7 +265,7 @@ pub async fn export_persona_to_png(
     let dest = file_path
         .as_path()
         .ok_or_else(|| "Save dialog returned an invalid path".to_string())?;
-    std::fs::write(dest, &png_bytes)
+    std::fs::write(dest, &json_bytes)
         .map_err(|e| format!("Failed to write file: {e}"))?;
 
     Ok(true)
