@@ -95,6 +95,7 @@ export function usePersonasQuery() {
     queryKey: personasQueryKey,
     queryFn: listPersonas,
     staleTime: 30_000,
+    refetchInterval: 30_000,
   });
 }
 
@@ -125,6 +126,7 @@ export function useRelayAgentsQuery() {
     queryKey: relayAgentsQueryKey,
     queryFn: listRelayAgents,
     staleTime: 15_000,
+    refetchInterval: 15_000,
   });
 }
 

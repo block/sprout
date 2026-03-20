@@ -296,7 +296,7 @@ export function CreateAgentOptionToggles({
         type="button"
       >
         <p className="text-sm font-semibold tracking-tight">Mint token</p>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="mt-1 text-sm text-foreground/70">
           {prereqs !== null && !isMintSupported
             ? `Unavailable until ${prereqs.admin.command} is installed.`
             : "Use `sprout-admin` to create a bearer token for this agent."}
@@ -317,7 +317,7 @@ export function CreateAgentOptionToggles({
         <p className="text-sm font-semibold tracking-tight">
           Start on app launch
         </p>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="mt-1 text-sm text-foreground/70">
           Reopen this local ACP harness automatically when the desktop app
           starts.
         </p>
@@ -339,7 +339,7 @@ export function CreateAgentOptionToggles({
         <p className="text-sm font-semibold tracking-tight">
           Spawn after create
         </p>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="mt-1 text-sm text-foreground/70">
           {prereqs !== null && !isSpawnSupported
             ? "Requires both the ACP harness and MCP server binaries."
             : "Start the local ACP harness immediately after the profile is saved."}
@@ -392,6 +392,9 @@ export function CreateAgentTokenSection({
                 type="button"
               >
                 {scope.label}
+                <span className="block text-xs text-foreground/60">
+                  {scope.description}
+                </span>
               </button>
             );
           })}
