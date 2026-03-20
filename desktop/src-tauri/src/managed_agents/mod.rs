@@ -1,4 +1,5 @@
 mod discovery;
+mod persona_card;
 mod personas;
 mod runtime;
 mod storage;
@@ -6,6 +7,7 @@ mod teams;
 mod types;
 
 pub use discovery::*;
+pub use persona_card::*;
 pub use personas::*;
 pub use runtime::*;
 pub use storage::*;
