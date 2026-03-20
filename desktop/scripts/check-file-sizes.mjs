@@ -40,7 +40,7 @@ const overrides = new Map([
   ["src/shared/api/relayClientSession.ts", 725], // durable websocket session manager with reconnect/replay/recovery state
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
   ["src-tauri/src/commands/agents.rs", 800], // remote agent lifecycle routing (local + provider branches)
-  ["src/features/agents/ui/AgentsView.tsx", 550], // remote agent stop/delete via relay message
+  ["src/features/agents/ui/AgentsView.tsx", 560], // remote agent stop/delete via relay message + channel name→UUID resolution
   ["src/features/agents/ui/CreateAgentDialog.tsx", 600], // provider selector + config form
 ]);
 

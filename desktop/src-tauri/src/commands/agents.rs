@@ -4,20 +4,92 @@ use tauri::{AppHandle, State};
 use crate::{
     app_state::AppState,
     managed_agents::{
-        build_managed_agent_summary, default_token_scopes, discover_provider_candidates, validate_provider_config,
+        build_managed_agent_summary, default_token_scopes, discover_provider_candidates,
         find_managed_agent_mut, invoke_provider, load_managed_agents, load_personas,
-        managed_agent_avatar_url, managed_agent_log_path, mint_token_via_api,
-        provider_deploy, read_log_tail, resolve_command, save_managed_agents,
-        start_managed_agent_process, stop_managed_agent_process, sync_managed_agent_processes,
+        managed_agent_avatar_url, managed_agent_log_path, mint_token_via_api, provider_deploy,
+        read_log_tail, resolve_command, save_managed_agents, start_managed_agent_process,
+        stop_managed_agent_process, sync_managed_agent_processes, validate_provider_config,
         BackendKind, BackendProviderInfo, CreateManagedAgentRequest, CreateManagedAgentResponse,
-        ManagedAgentLogResponse, ManagedAgentSummary, MintManagedAgentTokenRequest,
-        MintManagedAgentTokenResponse, DEFAULT_AGENT_ARG, DEFAULT_ACP_COMMAND,
-        DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
-        DEFAULT_MCP_COMMAND,
+        ManagedAgentLogResponse, ManagedAgentRecord, ManagedAgentSummary,
+        MintManagedAgentTokenRequest, MintManagedAgentTokenResponse, DEFAULT_AGENT_ARG,
+        DEFAULT_ACP_COMMAND, DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM,
+        DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
     },
     relay::{relay_ws_url, sync_managed_agent_profile},
     util::now_iso,
 };
+
+/// Build the standard agent JSON payload for provider deploy calls.
+fn build_deploy_payload(record: &ManagedAgentRecord) -> serde_json::Value {
+    serde_json::json!({
+        "name": &record.name,
+        "relay_url": &record.relay_url,
+        "private_key_nsec": &record.private_key_nsec,
+        "api_token": &record.api_token,
+        "agent_command": &record.agent_command,
+        "agent_args": &record.agent_args,
+        "system_prompt": &record.system_prompt,
+        "model": &record.model,
+        "turn_timeout_seconds": record.turn_timeout_seconds,
+        "parallelism": record.parallelism,
+    })
+}
+
+/// Deploy an agent to a provider backend. Resolves the binary, calls deploy via
+/// spawn_blocking, and persists the result (backend_agent_id or last_error).
+///
+/// Returns Ok(()) on success, Err(message) on failure. Either way the record is
+/// updated and saved before returning.
+async fn deploy_to_provider(
+    app: &AppHandle,
+    state: &AppState,
+    pubkey: &str,
+    provider_id: &str,
+    config: &serde_json::Value,
+    agent_json: serde_json::Value,
+    cached_binary_path: Option<&str>,
+) -> Result<(), String> {
+    let bin_path = cached_binary_path
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.exists())
+        .or_else(|| resolve_command(&format!("sprout-backend-{provider_id}"), Some(app)))
+        .ok_or_else(|| format!("provider binary 'sprout-backend-{provider_id}' not found"))?;
+
+    let config_clone = config.clone();
+    let deploy_result = tokio::task::spawn_blocking(move || {
+        provider_deploy(&bin_path, &agent_json, &config_clone)
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking failed: {e}"))?;
+
+    // Persist result under lock.
+    let _store_guard = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let mut records = load_managed_agents(app)?;
+    let rec = records
+        .iter_mut()
+        .find(|r| r.pubkey == pubkey)
+        .ok_or_else(|| format!("agent {pubkey} not found"))?;
+
+    match deploy_result {
+        Ok(backend_agent_id) => {
+            rec.backend_agent_id = Some(backend_agent_id);
+            rec.last_started_at = Some(now_iso());
+            rec.updated_at = now_iso();
+            rec.last_error = None;
+        }
+        Err(ref e) => {
+            rec.last_error = Some(e.clone());
+            rec.updated_at = now_iso();
+            save_managed_agents(app, &records)?;
+            return Err(e.clone());
+        }
+    }
+    save_managed_agents(app, &records)?;
+    Ok(())
+}
 
 #[tauri::command]
 pub fn list_managed_agents(
@@ -167,14 +239,6 @@ pub async fn create_managed_agent(
 
     // Agent ownership is set atomically during token mint via owner_pubkey
     // in the request body — no separate API call needed.
-
-    // Extract deploy-relevant fields before Phase 3 moves `input`.
-    let deploy_agent_command = input.agent_command.as_deref().unwrap_or(DEFAULT_AGENT_COMMAND).to_string();
-    let deploy_agent_args: Vec<String> = input.agent_args.iter().map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
-    let deploy_system_prompt = input.system_prompt.as_deref().map(str::trim).filter(|v| !v.is_empty()).map(String::from);
-    let deploy_model = input.model.as_deref().map(str::trim).filter(|v| !v.is_empty()).map(String::from);
-    let deploy_turn_timeout = input.turn_timeout_seconds.filter(|s| *s > 0).unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_SECONDS);
-    let deploy_parallelism = input.parallelism.filter(|p| (1..=32).contains(p)).unwrap_or(DEFAULT_AGENT_PARALLELISM);
 
     // ── Phase 3: save record and optionally spawn (sync lock) ─────────────────
     let (agent, spawn_error) = {
@@ -328,60 +392,18 @@ pub async fn create_managed_agent(
     // ── Phase 5: provider deploy (async, outside lock) ───────────────────────
     let spawn_error = if input.spawn_after_create && input.backend != BackendKind::Local {
         if let BackendKind::Provider { ref id, ref config } = input.backend {
-            let provider_bin_name = format!("sprout-backend-{id}");
-            let binary = resolve_command(&provider_bin_name, Some(&app));
-            match binary {
-                None => Some(format!("provider binary '{provider_bin_name}' not found")),
-                Some(bin_path) => {
-                    let agent_json = serde_json::json!({
-                        "name": &name,
-                        "relay_url": &resolved_relay_url,
-                        "private_key_nsec": &private_key_nsec,
-                        "api_token": &api_token,
-                        "agent_command": &deploy_agent_command,
-                        "agent_args": &deploy_agent_args,
-                        "system_prompt": &deploy_system_prompt,
-                        "model": &deploy_model,
-                        "turn_timeout_seconds": deploy_turn_timeout,
-                        "parallelism": deploy_parallelism,
-                    });
-                    let config_clone = config.clone();
-                    match tokio::task::spawn_blocking(move || {
-                        provider_deploy(&bin_path, &agent_json, &config_clone)
-                    })
-                    .await
-                    {
-                        Ok(Ok(backend_agent_id)) => {
-                            // Persist the backend_agent_id back to the record.
-                            let _store_guard = state
-                                .managed_agents_store_lock
-                                .lock()
-                                .map_err(|e| e.to_string())?;
-                            let mut records = load_managed_agents(&app)?;
-                            if let Some(rec) = records.iter_mut().find(|r| r.pubkey == pubkey) {
-                                rec.backend_agent_id = Some(backend_agent_id);
-                                rec.last_started_at = Some(now_iso());
-                                rec.updated_at = now_iso();
-                            }
-                            save_managed_agents(&app, &records)?;
-                            spawn_error
-                        }
-                        Ok(Err(e)) => {
-                            // Persist last_error so the table shows the failure.
-                            if let Ok(_guard) = state.managed_agents_store_lock.lock() {
-                                if let Ok(mut records) = load_managed_agents(&app) {
-                                    if let Some(rec) = records.iter_mut().find(|r| r.pubkey == pubkey) {
-                                        rec.last_error = Some(e.clone());
-                                        rec.updated_at = now_iso();
-                                    }
-                                    let _ = save_managed_agents(&app, &records);
-                                }
-                            }
-                            Some(e)
-                        }
-                        Err(e) => Some(format!("spawn_blocking failed: {e}")),
-                    }
-                }
+            // Read the saved record to build the deploy payload (record has the
+            // canonical field values after Phase 3 normalization).
+            let agent_json = {
+                let _g = state.managed_agents_store_lock.lock().map_err(|e| e.to_string())?;
+                let records = load_managed_agents(&app)?;
+                let rec = records.iter().find(|r| r.pubkey == pubkey)
+                    .ok_or_else(|| "agent disappeared".to_string())?;
+                build_deploy_payload(rec)
+            };
+            match deploy_to_provider(&app, &state, &pubkey, id, config, agent_json, None).await {
+                Ok(()) => spawn_error,
+                Err(e) => Some(e),
             }
         } else {
             spawn_error
@@ -417,8 +439,8 @@ pub async fn start_managed_agent(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ManagedAgentSummary, String> {
-    // Collect what we need before releasing the lock for async work.
-    let (backend, provider_binary_path, agent_json, relay_url) = {
+    // Collect backend info and handle local vs provider under lock.
+    let (backend, cached_binary_path, agent_json) = {
         let _store_guard = state
             .managed_agents_store_lock
             .lock()
@@ -446,79 +468,37 @@ pub async fn start_managed_agent(
             return build_managed_agent_summary(&app, record, &runtimes);
         }
 
-        // No guard on backend_agent_id — deploy is idempotent.
-        // The provider must handle stale state (kill old process, redeploy).
-        // backend_agent_id is overwritten with the new deploy response.
-
-        let agent_json = serde_json::json!({
-            "name": &record.name,
-            "relay_url": &record.relay_url,
-            "private_key_nsec": &record.private_key_nsec,
-            "api_token": &record.api_token,
-            "agent_command": &record.agent_command,
-            "agent_args": &record.agent_args,
-            "system_prompt": &record.system_prompt,
-            "model": &record.model,
-            "turn_timeout_seconds": record.turn_timeout_seconds,
-            "parallelism": record.parallelism,
-        });
+        let payload = build_deploy_payload(record);
         (
             record.backend.clone(),
             record.provider_binary_path.clone(),
-            agent_json,
-            record.relay_url.clone(),
+            payload,
         )
     };
 
-    // Provider backend: deploy via binary (async, outside lock).
+    // Provider backend: deploy via shared helper (async, outside lock).
     if let BackendKind::Provider { ref id, ref config } = backend {
-        let bin_path = match provider_binary_path
-            .as_deref()
-            .and_then(|p| Some(std::path::PathBuf::from(p)))
-            .filter(|p| p.exists())
-            .or_else(|| resolve_command(&format!("sprout-backend-{id}"), Some(&app)))
-        {
-            Some(p) => p,
-            None => return Err(format!("provider binary 'sprout-backend-{id}' not found")),
-        };
+        deploy_to_provider(
+            &app,
+            &state,
+            &pubkey,
+            id,
+            config,
+            agent_json,
+            cached_binary_path.as_deref(),
+        )
+        .await?;
 
-        let config_clone = config.clone();
-        let deploy_result = tokio::task::spawn_blocking(move || {
-            provider_deploy(&bin_path, &agent_json, &config_clone)
-        })
-        .await
-        .map_err(|e| format!("spawn_blocking failed: {e}"))?;
-
+        // Return updated summary.
         let _store_guard = state
             .managed_agents_store_lock
             .lock()
             .map_err(|e| e.to_string())?;
-        let mut records = load_managed_agents(&app)?;
+        let records = load_managed_agents(&app)?;
         let runtimes = state
             .managed_agent_processes
             .lock()
             .map_err(|e| e.to_string())?;
-        match deploy_result {
-            Ok(backend_agent_id) => {
-                if let Some(rec) = records.iter_mut().find(|r| r.pubkey == pubkey) {
-                    rec.backend_agent_id = Some(backend_agent_id);
-                    rec.last_started_at = Some(now_iso());
-                    rec.updated_at = now_iso();
-                    rec.last_error = None;
-                }
-            }
-            Err(ref e) => {
-                // Redeploy failed — persist the error but keep backend_agent_id
-                // (the previous deployment may still be running).
-                if let Some(rec) = records.iter_mut().find(|r| r.pubkey == pubkey) {
-                    rec.last_error = Some(e.clone());
-                    rec.updated_at = now_iso();
-                }
-                save_managed_agents(&app, &records)?;
-                return Err(e.clone());
-            }
-        }
-        save_managed_agents(&app, &records)?;
         let record = records
             .iter()
             .find(|r| r.pubkey == pubkey)
@@ -526,7 +506,6 @@ pub async fn start_managed_agent(
         return build_managed_agent_summary(&app, record, &runtimes);
     }
 
-    let _ = relay_url; // suppress unused warning if Provider arm not reached
     Err(format!("agent {pubkey} has unsupported backend kind"))
 }
 

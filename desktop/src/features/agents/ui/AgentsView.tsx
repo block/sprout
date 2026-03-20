@@ -115,7 +115,10 @@ export function AgentsView() {
 
   // Build channel name → UUID lookup for sending !shutdown to remote agents.
   // The relay agents endpoint returns channel *names*, but sendChannelMessage
-  // needs channel *UUIDs*.
+  // needs channel *UUIDs*. Channel names are not guaranteed unique in the DB
+  // schema, but are unique in practice. If duplicates exist, last-write-wins
+  // here — acceptable since the agent is a member of that channel either way.
+  // TODO: have the relay return channel UUIDs in the agents endpoint.
   const channelIdByName = React.useMemo(() => {
     const map = new Map<string, string>();
     for (const ch of channelsQuery.data ?? []) {

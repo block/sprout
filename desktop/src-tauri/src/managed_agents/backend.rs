@@ -30,17 +30,33 @@ pub fn invoke_provider(
     }
 
     // wait_with_output drains stdout+stderr concurrently, preventing pipe deadlocks.
-    // We run it on a thread so we can enforce a timeout.
+    // We run it on a thread so we can enforce a timeout. On timeout we kill the
+    // child by PID to avoid orphaning a provider process that may mutate remote state.
     let timeout_secs = timeout.as_secs();
+    let child_pid = child.id();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(child.wait_with_output());
     });
 
-    let output = rx
-        .recv_timeout(timeout)
-        .map_err(|_| format!("provider timed out after {timeout_secs}s"))?
-        .map_err(|e| format!("wait failed: {e}"))?;
+    let output = match rx.recv_timeout(timeout) {
+        Ok(result) => result.map_err(|e| format!("wait failed: {e}"))?,
+        Err(_) => {
+            // Timeout — kill the child process so it doesn't keep running.
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(child_pid as i32, libc::SIGKILL);
+            }
+            #[cfg(not(unix))]
+            {
+                // On non-Unix, try to terminate via taskkill (best effort).
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/PID", &child_pid.to_string()])
+                    .output();
+            }
+            return Err(format!("provider timed out after {timeout_secs}s"));
+        }
+    };
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr_redacted = redact_secrets(&stderr);
@@ -62,6 +78,32 @@ pub fn invoke_provider(
     }
 
     Ok(response)
+}
+
+/// Split a config key into lowercase words on `_`, `-`, `.`, and camelCase boundaries.
+/// "apiKey" → ["api", "key"], "access_token" → ["access", "token"],
+/// "keyboard" → ["keyboard"], "clientSecret" → ["client", "secret"].
+fn split_config_key(key: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    for ch in key.chars() {
+        if ch == '_' || ch == '-' || ch == '.' {
+            if !current.is_empty() {
+                words.push(current.to_lowercase());
+                current.clear();
+            }
+        } else if ch.is_uppercase() && !current.is_empty() {
+            words.push(current.to_lowercase());
+            current.clear();
+            current.push(ch);
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        words.push(current.to_lowercase());
+    }
+    words
 }
 
 fn redact_secrets(s: &str) -> String {
@@ -109,14 +151,14 @@ pub fn validate_provider_config(config: &serde_json::Value) -> Result<(), String
     if json_str.len() > 65536 {
         return Err("provider_config: max 64KB".to_string());
     }
-    // Split on common separators and check each word against forbidden terms.
-    // This avoids false positives like "keyboard" or "monkey_wrench".
+    // Split on separators AND camelCase boundaries, then check each word.
+    // Catches: api_key, apiKey, access-token, clientSecret, etc.
+    // Allows: keyboard, monkey_wrench (no forbidden word as a segment).
     let forbidden = ["secret", "password", "token", "key", "credential"];
     for (k, v) in obj {
-        let k_lower = k.to_lowercase();
-        let words: Vec<&str> = k_lower.split(|c: char| c == '_' || c == '-' || c == '.').collect();
+        let words = split_config_key(k);
         for f in &forbidden {
-            if words.iter().any(|w| *w == *f) {
+            if words.iter().any(|w| w == f) {
                 return Err(format!("provider_config: key '{}' looks like a secret", k));
             }
         }
@@ -205,5 +247,21 @@ mod tests {
         // "keyboard", "monkey" contain "key" as substring but not as a word segment.
         let cfg = serde_json::json!({"keyboard_layout": "us", "monkey_wrench": "tight"});
         assert!(validate_provider_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn validate_provider_config_rejects_camel_case_secrets() {
+        assert!(validate_provider_config(&serde_json::json!({"apiKey": "val"})).is_err());
+        assert!(validate_provider_config(&serde_json::json!({"accessToken": "val"})).is_err());
+        assert!(validate_provider_config(&serde_json::json!({"clientSecret": "val"})).is_err());
+    }
+
+    #[test]
+    fn split_config_key_handles_all_styles() {
+        assert_eq!(split_config_key("apiKey"), vec!["api", "key"]);
+        assert_eq!(split_config_key("access_token"), vec!["access", "token"]);
+        assert_eq!(split_config_key("keyboard"), vec!["keyboard"]);
+        assert_eq!(split_config_key("client-secret"), vec!["client", "secret"]);
+        assert_eq!(split_config_key("MyAPIKey"), vec!["my", "a", "p", "i", "key"]);
     }
 }
