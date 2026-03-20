@@ -1,9 +1,7 @@
 import * as React from "react";
 
-import type {
-  TimelineMessage,
-  TimelineReaction,
-} from "@/features/messages/types";
+import type { TimelineMessage } from "@/features/messages/types";
+import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
@@ -244,42 +242,17 @@ export const MessageRow = React.memo(
               </div>
             </div>
             {renderBody()}
-            {reactions.length > 0 ? (
-              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pt-1">
-                {reactions.map((reaction: TimelineReaction) => (
-                  <button
-                    aria-label={`Toggle ${reaction.emoji} reaction`}
-                    aria-pressed={reaction.reactedByCurrentUser}
-                    className={cn(
-                      "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium transition-colors",
-                      reaction.reactedByCurrentUser
-                        ? "border-primary/40 bg-primary/10 text-primary"
-                        : "border-border/70 bg-muted/70 text-foreground/90",
-                      canToggleReactions
-                        ? "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        : "cursor-default",
-                    )}
-                    disabled={!canToggleReactions || reactionPending}
-                    key={`${message.id}-${reaction.emoji}`}
-                    onClick={() => {
-                      if (!canToggleReactions) {
-                        return;
-                      }
-
-                      void handleReactionSelect(reaction.emoji).catch(() => {
-                        return;
-                      });
-                    }}
-                    type="button"
-                  >
-                    <span>{reaction.emoji}</span>
-                    <span className="text-muted-foreground">
-                      {reaction.count}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
+            <MessageReactions
+              messageId={message.id}
+              reactions={reactions}
+              canToggle={canToggleReactions}
+              pending={reactionPending}
+              onSelect={(emoji) => {
+                void handleReactionSelect(emoji).catch(() => {
+                  return;
+                });
+              }}
+            />
             {reactionErrorMessage ? (
               <p className="mt-1.5 text-xs text-destructive">
                 {reactionErrorMessage}

@@ -275,6 +275,7 @@ pub fn default_token_scopes() -> Vec<String> {
         "messages:read".to_string(),
         "messages:write".to_string(),
         "channels:read".to_string(),
+        "users:write".to_string(),
     ]
 }
 

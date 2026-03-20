@@ -203,8 +203,9 @@ function ManagedAgentRow({
 
   return (
     <tr
-      className="border-b border-border/60 last:border-b-0 hover:bg-muted/30"
+      className="cursor-pointer border-b border-border/60 last:border-b-0 hover:bg-muted/30"
       data-testid={`managed-agent-${agent.pubkey}`}
+      onClick={() => onViewLogs(agent.pubkey)}
     >
       <td className="px-4 py-3">
         <p className="truncate font-medium text-foreground">{agent.name}</p>
@@ -231,11 +232,19 @@ function ManagedAgentRow({
           {agent.status}
         </span>
       </td>
-      <td className="px-4 py-3">
+      <td
+        className="px-4 py-3"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
         <ModelPicker agent={agent} />
       </td>
       <td className="px-4 py-3 text-muted-foreground">{agent.agentCommand}</td>
-      <td className="px-3 py-3">
+      <td
+        className="px-3 py-3"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
         <AgentActionsMenu
           agent={agent}
           isActionPending={isActionPending}
