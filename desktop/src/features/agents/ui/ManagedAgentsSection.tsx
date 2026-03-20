@@ -202,7 +202,7 @@ function ManagedAgentRow({
   onToggleStartOnAppLaunch: (pubkey: string, startOnAppLaunch: boolean) => void;
   onViewLogs: (pubkey: string) => void;
 }) {
-  const isRunning = agent.status === "running" || agent.status === "deployed";
+  const isActive = agent.status === "running" || agent.status === "deployed";
   const personaLabel = agent.personaId
     ? (personaLabelsById[agent.personaId] ?? null)
     : null;
@@ -243,7 +243,7 @@ function ManagedAgentRow({
         <span
           className={cn(
             "inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]",
-            isRunning
+            isActive
               ? "bg-primary text-primary-foreground"
               : "bg-muted text-muted-foreground",
           )}
@@ -267,7 +267,7 @@ function ManagedAgentRow({
         <AgentActionsMenu
           agent={agent}
           isActionPending={isActionPending}
-          isRunning={isRunning}
+          isActive={isActive}
           onAddToChannel={onAddToChannel}
           onDelete={onDelete}
           onMintToken={onMintToken}
@@ -284,7 +284,7 @@ function ManagedAgentRow({
 function AgentActionsMenu({
   agent,
   isActionPending,
-  isRunning,
+  isActive,
   onAddToChannel,
   onDelete,
   onMintToken,
@@ -295,7 +295,7 @@ function AgentActionsMenu({
 }: {
   agent: ManagedAgent;
   isActionPending: boolean;
-  isRunning: boolean;
+  isActive: boolean;
   onAddToChannel: (agent: ManagedAgent) => void;
   onDelete: (pubkey: string) => void;
   onMintToken: (pubkey: string, name: string) => void;
@@ -325,7 +325,7 @@ function AgentActionsMenu({
               onClick={() => onStart(agent.pubkey)}
             >
               <Play className="h-4 w-4" />
-              {isRunning ? "Redeploy" : "Deploy"}
+              {isActive ? "Redeploy" : "Deploy"}
             </DropdownMenuItem>
             <DropdownMenuItem
               disabled={isActionPending}
@@ -335,7 +335,7 @@ function AgentActionsMenu({
               Shutdown
             </DropdownMenuItem>
           </>
-        ) : isRunning ? (
+        ) : isActive ? (
           <DropdownMenuItem
             disabled={isActionPending}
             onClick={() => onStop(agent.pubkey)}

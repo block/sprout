@@ -232,8 +232,17 @@ export function AgentsView() {
                 "will be orphaned if shutdown hasn't completed. Continue?",
             );
             if (!confirmed) return;
+          } else {
+            // Offline presence means the process isn't connected, but the
+            // remote infrastructure (VM/container) may still exist. Confirm
+            // before removing the local record — it's the only management handle.
+            // eslint-disable-next-line no-alert
+            const confirmed = window.confirm(
+              "This agent is offline but the remote deployment may still exist. " +
+                "Deleting removes the local management record. Continue?",
+            );
+            if (!confirmed) return;
           }
-          // Already offline — safe to delete without shutdown.
         } else {
           // Can't send shutdown — warn user about orphaning.
           // eslint-disable-next-line no-alert

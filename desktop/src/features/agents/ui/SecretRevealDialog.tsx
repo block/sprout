@@ -84,10 +84,11 @@ export function SecretRevealDialog({
                 ) : (
                   <p className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-primary">
                     {created.agent.name} is ready
-                    {created.agent.status === "running" ||
-                    created.agent.status === "deployed"
+                    {created.agent.status === "running"
                       ? " and running."
-                      : "."}
+                      : created.agent.status === "deployed"
+                        ? " and deployed."
+                        : "."}
                   </p>
                 )}
               </>
