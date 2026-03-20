@@ -2535,6 +2535,7 @@ async function handleStopManagedAgent(args: {
 
 async function handleDeleteManagedAgent(args: {
   pubkey: string;
+  forceRemoteDelete?: boolean | null;
 }): Promise<void> {
   mockManagedAgents = mockManagedAgents.filter(
     (candidate) => candidate.pubkey !== args.pubkey,

@@ -244,7 +244,14 @@ export function AgentsView() {
           if (!confirmed) return;
         }
       }
-      await deleteMutation.mutateAsync(pubkey);
+      // Pass forceRemoteDelete for deployed provider agents — the backend
+      // rejects deletion of deployed remote agents without this flag.
+      const isDeployedRemote =
+        agent?.backend.type === "provider" && agent?.backendAgentId;
+      await deleteMutation.mutateAsync({
+        pubkey,
+        forceRemoteDelete: isDeployedRemote ? true : undefined,
+      });
       if (logAgentPubkey === pubkey) {
         setLogAgentPubkey(null);
       }

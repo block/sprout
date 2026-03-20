@@ -577,6 +577,7 @@ pub fn stop_managed_agent(
 #[tauri::command]
 pub fn delete_managed_agent(
     pubkey: String,
+    force_remote_delete: Option<bool>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -593,6 +594,24 @@ pub fn delete_managed_agent(
     if sync_managed_agent_processes(&mut records, &mut runtimes) {
         save_managed_agents(&app, &records)?;
     }
+
+    // Guard: reject deletion of deployed remote agents unless explicitly forced.
+    // This turns "don't orphan remote infra" from a UI convention into a backend
+    // invariant — a buggy or compromised IPC caller cannot silently orphan a live
+    // remote deployment. The frontend sends force_remote_delete: true only after
+    // the user confirms the orphan warning.
+    if let Some(record) = records.iter().find(|r| r.pubkey == pubkey) {
+        if record.backend != BackendKind::Local
+            && record.backend_agent_id.is_some()
+            && !force_remote_delete.unwrap_or(false)
+        {
+            return Err(
+                "cannot delete a deployed remote agent without force_remote_delete: true"
+                    .to_string(),
+            );
+        }
+    }
+
     if let Some(record) = records.iter_mut().find(|record| record.pubkey == pubkey) {
         // For local agents: kills the process. For remote agents: no-op (the frontend
         // sends !shutdown via WebSocket before calling delete). Either way, safe.

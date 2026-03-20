@@ -935,8 +935,14 @@ export async function stopManagedAgent(pubkey: string): Promise<ManagedAgent> {
   return fromRawManagedAgent(response);
 }
 
-export async function deleteManagedAgent(pubkey: string): Promise<void> {
-  await invokeTauri("delete_managed_agent", { pubkey });
+export async function deleteManagedAgent(
+  pubkey: string,
+  forceRemoteDelete?: boolean,
+): Promise<void> {
+  await invokeTauri("delete_managed_agent", {
+    pubkey,
+    forceRemoteDelete: forceRemoteDelete ?? null,
+  });
 }
 
 export async function mintManagedAgentToken(input: MintManagedAgentTokenInput) {
