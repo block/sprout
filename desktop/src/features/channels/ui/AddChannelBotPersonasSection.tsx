@@ -150,13 +150,13 @@ export function AddChannelBotPersonasSection({
                       <div className="flex items-center gap-2">
                         <ProfileAvatar
                           avatarUrl={persona.avatarUrl}
-                          className="h-7 w-7 rounded-full text-[10px]"
+                          className="h-7 w-7 rounded-full text-[10px] bg-primary-foreground/20 text-primary-foreground"
                           iconClassName="h-3.5 w-3.5"
                           label={persona.displayName}
                         />
                         <p className="font-medium">{persona.displayName}</p>
                       </div>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-[11px] text-primary-foreground">
                         {promptPreview(persona.systemPrompt)}
                       </p>
                     </div>
