@@ -1,6 +1,5 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Invoke a provider binary: write JSON to stdin, read JSON from stdout.
@@ -50,32 +49,23 @@ pub fn invoke_provider(
         buf
     });
 
-    // The child stays in the mutex — wait() borrows &mut, doesn't consume self.
-    // On timeout we can always call kill() because nobody takes ownership.
-    let child = Arc::new(Mutex::new(child));
-    let child_for_thread = Arc::clone(&child);
+    // Poll try_wait with a deadline. This is safe from pipe deadlocks because
+    // stdout/stderr are already being drained on background threads above.
+    // The child stays on this thread — kill() is always reachable on timeout.
     let timeout_secs = timeout.as_secs();
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let result = child_for_thread
-            .lock()
-            .map_err(|e| format!("lock poisoned: {e}"))
-            .and_then(|mut c| c.wait().map_err(|e| format!("wait failed: {e}")));
-        let _ = tx.send(result);
-    });
-
-    match rx.recv_timeout(timeout) {
-        Ok(result) => {
-            result?;
-        }
-        Err(_) => {
-            // Timeout — kill the child. The mutex always holds the Child handle.
-            if let Ok(mut c) = child.lock() {
-                let _ = c.kill();
-                let _ = c.wait();
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("provider timed out after {timeout_secs}s"));
+                }
+                std::thread::sleep(Duration::from_millis(50));
             }
-            return Err(format!("provider timed out after {timeout_secs}s"));
+            Err(e) => return Err(format!("wait error: {e}")),
         }
     }
 
