@@ -55,6 +55,7 @@ pub fn build_app_state() -> AppState {
         session_token: Mutex::new(None),
         managed_agents_store_lock: Mutex::new(()),
         managed_agent_processes: Mutex::new(HashMap::new()),
+
     }
 }
 

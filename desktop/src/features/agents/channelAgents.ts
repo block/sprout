@@ -123,11 +123,22 @@ export async function attachManagedAgentToChannel(
   let restarted = false;
 
   if (ensureRunning) {
-    if (membershipAdded && input.agent.status === "running") {
+    // Remote (provider-backed) agents don't need restart — the harness
+    // auto-discovers new channels via membership notifications.
+    const isRemote = input.agent.backend.type === "provider";
+    if (isRemote) {
+      // No-op: remote agents pick up channel membership changes automatically.
+    } else if (
+      membershipAdded &&
+      (input.agent.status === "running" || input.agent.status === "deployed")
+    ) {
       await stopManagedAgent(input.agent.pubkey);
       agent = await startManagedAgent(input.agent.pubkey);
       restarted = true;
-    } else if (input.agent.status !== "running") {
+    } else if (
+      input.agent.status !== "running" &&
+      input.agent.status !== "deployed"
+    ) {
       agent = await startManagedAgent(input.agent.pubkey);
       started = true;
     }
@@ -143,8 +154,10 @@ export async function attachManagedAgentToChannel(
 
 function pickPreferredManagedAgent(agents: ManagedAgent[]) {
   return [...agents].sort((left, right) => {
-    const leftRunningScore = left.status === "running" ? 1 : 0;
-    const rightRunningScore = right.status === "running" ? 1 : 0;
+    const leftRunningScore =
+      left.status === "running" || left.status === "deployed" ? 1 : 0;
+    const rightRunningScore =
+      right.status === "running" || right.status === "deployed" ? 1 : 0;
     if (leftRunningScore !== rightRunningScore) {
       return rightRunningScore - leftRunningScore;
     }

@@ -37,7 +37,10 @@ const overrides = new Map([
   ["src/features/sidebar/ui/AppSidebar.tsx", 850], // channels + forums creation forms
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
   ["src/shared/api/relayClientSession.ts", 725], // durable websocket session manager with reconnect/replay/recovery state
-  ["src/shared/api/tauri.ts", 975],
+  ["src/shared/api/tauri.ts", 1000], // remote agent provider API bindings
+  ["src-tauri/src/commands/agents.rs", 800], // remote agent lifecycle routing (local + provider branches)
+  ["src/features/agents/ui/AgentsView.tsx", 550], // remote agent stop/delete via relay message
+  ["src/features/agents/ui/CreateAgentDialog.tsx", 600], // provider selector + config form
 ]);
 
 async function walkFiles(directory) {

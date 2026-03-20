@@ -11,6 +11,7 @@ import {
   createManagedAgent,
   deleteManagedAgent,
   discoverAcpProviders,
+  discoverBackendProviders,
   discoverManagedAgentPrereqs,
   getManagedAgentLog,
   listManagedAgents,
@@ -59,6 +60,7 @@ export const managedAgentsQueryKey = ["managed-agents"] as const;
 export const personasQueryKey = ["personas"] as const;
 export const acpProvidersQueryKey = ["acp-providers"] as const;
 export const managedAgentPrereqsQueryKey = ["managed-agent-prereqs"] as const;
+export const backendProvidersQueryKey = ["backend-providers"] as const;
 
 export type EnsureGooseInChannelResult = AttachManagedAgentToChannelResult & {
   created: boolean;
@@ -87,6 +89,14 @@ export function useAcpProvidersQuery() {
     queryKey: acpProvidersQueryKey,
     queryFn: discoverAcpProviders,
     staleTime: 60_000,
+  });
+}
+
+export function useBackendProvidersQuery() {
+  return useQuery({
+    queryKey: backendProvidersQueryKey,
+    queryFn: discoverBackendProviders,
+    staleTime: 30_000,
   });
 }
 
@@ -137,7 +147,9 @@ export function useManagedAgentsQuery() {
     staleTime: 1_000,
     refetchInterval: (query) => {
       const agents = query.state.data as ManagedAgent[] | undefined;
-      return agents?.some((agent) => agent.status === "running")
+      return agents?.some(
+        (agent) => agent.status === "running" || agent.status === "deployed",
+      )
         ? 2_000
         : 10_000;
     },

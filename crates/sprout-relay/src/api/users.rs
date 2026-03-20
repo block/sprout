@@ -122,13 +122,23 @@ pub async fn get_profile(
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
     match profile {
-        Some(p) => Ok(Json(serde_json::json!({
-            "pubkey": nostr_hex::encode(&p.pubkey),
-            "display_name": p.display_name,
-            "avatar_url": p.avatar_url,
-            "about": p.about,
-            "nip05_handle": p.nip05_handle,
-        }))),
+        Some(p) => {
+            let (_, owner_pk) = state
+                .db
+                .get_agent_channel_policy(&pubkey_bytes)
+                .await
+                .map_err(|e| internal_error(&format!("db error: {e}")))?
+                .unwrap_or_else(|| ("anyone".to_string(), None));
+
+            Ok(Json(serde_json::json!({
+                "pubkey": nostr_hex::encode(&p.pubkey),
+                "display_name": p.display_name,
+                "avatar_url": p.avatar_url,
+                "about": p.about,
+                "nip05_handle": p.nip05_handle,
+                "agent_owner_pubkey": owner_pk.map(|b| nostr_hex::encode(&b)),
+            })))
+        }
         None => Err(api_error(StatusCode::NOT_FOUND, "user not found")),
     }
 }
@@ -158,12 +168,20 @@ pub async fn get_user_profile(
         .map_err(|e| internal_error(&format!("db error: {e}")))?
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "user not found"))?;
 
+    let (_, owner_pk) = state
+        .db
+        .get_agent_channel_policy(&pubkey_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?
+        .unwrap_or_else(|| ("anyone".to_string(), None));
+
     Ok(Json(serde_json::json!({
         "pubkey": nostr_hex::encode(&profile.pubkey),
         "display_name": profile.display_name,
         "avatar_url": profile.avatar_url,
         "about": profile.about,
         "nip05_handle": profile.nip05_handle,
+        "agent_owner_pubkey": owner_pk.map(|b| nostr_hex::encode(&b)),
     })))
 }
 

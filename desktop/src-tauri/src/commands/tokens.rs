@@ -30,6 +30,7 @@ pub async fn mint_token(
         scopes: &scopes,
         channel_ids: channel_ids.as_deref(),
         expires_in_days,
+        owner_pubkey: None, // User-minted tokens don't set agent owner
     };
     let request = if state.configured_api_token.is_some() {
         build_authed_request(&state.http_client, Method::POST, "/api/tokens", &state)?.json(&body)

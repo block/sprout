@@ -15,6 +15,8 @@ import {
   useStopManagedAgentMutation,
   useUpdatePersonaMutation,
 } from "@/features/agents/hooks";
+import { usePresenceQuery } from "@/features/presence/hooks";
+import { sendChannelMessage } from "@/shared/api/tauri";
 import type {
   AgentPersona,
   Channel,
@@ -76,7 +78,9 @@ export function AgentsView() {
     () =>
       [...(managedAgentsQuery.data ?? [])].sort((left, right) => {
         if (left.status !== right.status) {
-          return left.status === "running" ? -1 : 1;
+          return left.status === "running" || left.status === "deployed"
+            ? -1
+            : 1;
         }
 
         return left.name.localeCompare(right.name);
@@ -101,6 +105,11 @@ export function AgentsView() {
     () => new Set(managedAgents.map((agent) => agent.pubkey)),
     [managedAgents],
   );
+  const managedPubkeyList = React.useMemo(
+    () => managedAgents.map((agent) => agent.pubkey),
+    [managedAgents],
+  );
+  const managedPresenceQuery = usePresenceQuery(managedPubkeyList);
 
   // Clear log selection if the agent was removed
   React.useEffect(() => {
@@ -130,7 +139,28 @@ export function AgentsView() {
     setActionErrorMessage(null);
 
     try {
-      await stopMutation.mutateAsync(pubkey);
+      const agent = managedAgents.find((a) => a.pubkey === pubkey);
+      if (!agent) return;
+
+      if (agent.backend.type === "provider") {
+        // Remote agent: send !shutdown mention via WebSocket relay
+        const relayAgents = relayAgentsQuery.data ?? [];
+        const relayAgent = relayAgents.find((ra) => ra.pubkey === pubkey);
+        const channelId = relayAgent?.channels?.[0];
+        if (!channelId) {
+          setActionErrorMessage("Cannot stop: agent is not in any channel");
+          return;
+        }
+        await sendChannelMessage(channelId, "!shutdown", undefined, undefined, [
+          pubkey,
+        ]);
+        setActionNoticeMessage(
+          "Shutdown command sent. Agent will stop shortly.",
+        );
+      } else {
+        // Local agent: existing stop flow
+        await stopMutation.mutateAsync(pubkey);
+      }
     } catch (error) {
       setActionErrorMessage(
         error instanceof Error ? error.message : "Failed to stop agent.",
@@ -143,6 +173,30 @@ export function AgentsView() {
     setActionErrorMessage(null);
 
     try {
+      // For remote agents, send !shutdown before deleting to avoid orphaning.
+      const agent = managedAgents.find((a) => a.pubkey === pubkey);
+      if (agent?.backend.type === "provider" && agent.backend_agent_id) {
+        const relayAgents = relayAgentsQuery.data ?? [];
+        const relayAgent = relayAgents.find((ra) => ra.pubkey === pubkey);
+        const channelId = relayAgent?.channels?.[0];
+        if (channelId) {
+          await sendChannelMessage(
+            channelId,
+            "!shutdown",
+            undefined,
+            undefined,
+            [pubkey],
+          );
+        } else {
+          // Can't send shutdown — warn user about orphaning.
+          // eslint-disable-next-line no-alert
+          const confirmed = window.confirm(
+            "This agent is deployed but not in any channel. " +
+              "Deleting will orphan the remote deployment (it will keep running). Continue?",
+          );
+          if (!confirmed) return;
+        }
+      }
       await deleteMutation.mutateAsync(pubkey);
       if (logAgentPubkey === pubkey) {
         setLogAgentPubkey(null);
@@ -350,6 +404,7 @@ export function AgentsView() {
               isActionPending={isActionPending}
               isLoading={managedAgentsQuery.isLoading}
               personaLabelsById={personaLabelsById}
+              presenceLookup={managedPresenceQuery.data ?? {}}
               onAddToChannel={(agent) => {
                 setActionNoticeMessage(null);
                 setActionErrorMessage(null);

@@ -123,6 +123,28 @@ async fn main() -> Result<()> {
         }
     }
 
+    // ── Step 2d: Query agent owner ────────────────────────────────────────────
+    let owner_pubkey: Option<String> = {
+        match rest_client_for_presence
+            .get_json(&format!("/api/users/{pubkey_hex}/profile"))
+            .await
+        {
+            Ok(v) => v
+                .get("agent_owner_pubkey")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            Err(e) => {
+                tracing::warn!("failed to query agent owner: {e}");
+                None
+            }
+        }
+    };
+    if let Some(ref owner) = owner_pubkey {
+        tracing::info!("agent owner: {owner}");
+    } else {
+        tracing::info!("no agent owner set — shutdown command disabled");
+    }
+
     // ── Step 3: Discover channels and build subscription rules ────────────────
     let channel_info_map = relay
         .discover_channels()
@@ -432,6 +454,33 @@ async fn main() -> Result<()> {
                                 tracing::debug!(channel_id = %sprout_event.channel_id, "dropping self-authored event");
                                 continue;
                             }
+
+                            // ── Shutdown command handling ─────────────────────
+                            // Check: kind:9, content "!shutdown", from owner, mentions THIS agent.
+                            let is_shutdown = kind_u32 == KIND_STREAM_MESSAGE
+                                && sprout_event.event.content.trim() == "!shutdown"
+                                && sprout_event.event.tags.iter().any(|t| {
+                                    t.as_slice().first().map(|s| s.as_str()) == Some("p")
+                                        && t.as_slice().get(1).map(|s| s.as_str()) == Some(pubkey_hex.as_str())
+                                });
+                            if is_shutdown {
+                                if let Some(ref owner) = owner_pubkey {
+                                    if sprout_event.event.pubkey.to_hex() == *owner {
+                                        tracing::info!(
+                                            channel_id = %sprout_event.channel_id,
+                                            sender = %sprout_event.event.pubkey.to_hex(),
+                                            "shutdown command from owner — exiting gracefully"
+                                        );
+                                        let _ = shutdown_tx.send(());
+                                        continue;
+                                    }
+                                }
+                                // Not from owner — fall through to normal prompt handling.
+                                // Don't drop it — it's a regular message that happens to
+                                // contain "!shutdown" from a non-owner.
+                            }
+                            // ── End shutdown command handling ──────────────────
+
                             let matched = filter::match_event(&sprout_event.event, sprout_event.channel_id, &rules, &pubkey_hex).await;
                             let prompt_tag = match matched {
                                 Some(m) => m.prompt_tag,
