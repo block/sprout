@@ -1,7 +1,8 @@
 import * as React from "react";
 
-import { useManagedAgentsQuery } from "@/features/agents/hooks";
-import { useChannelMembersQuery } from "@/features/channels/hooks";
+import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
+import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
+import { useMentions } from "@/features/messages/lib/useMentions";
 import {
   type BlobDescriptor,
   pickAndUploadMedia,
@@ -9,6 +10,7 @@ import {
 } from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
+import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import {
   MentionAutocomplete,
   type MentionSuggestion,
@@ -67,10 +69,8 @@ export function MessageComposer({
   const draftSelectionRef = React.useRef({ end: 0, start: 0 });
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
 
-  const [mentionQuery, setMentionQuery] = React.useState<string | null>(null);
-  const [mentionStartIndex, setMentionStartIndex] = React.useState(0);
-  const [mentionSelectedIndex, setMentionSelectedIndex] = React.useState(0);
-  const mentionMapRef = React.useRef<Map<string, string>>(new Map());
+  const mentions = useMentions(channelId);
+  const channelLinks = useChannelLinks();
 
   const [uploadState, setUploadState] = React.useState<{
     status: "idle" | "uploading" | "error";
@@ -78,127 +78,51 @@ export function MessageComposer({
   }>({ status: "idle" });
   const [pendingImeta, setPendingImeta] = React.useState<BlobDescriptor[]>([]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger — reset all composer state on channel switch to prevent draft/upload/mention leaks
+  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger — reset all composer state on channel switch to prevent draft/upload/autocomplete leaks
   React.useEffect(() => {
     setContent("");
     setPendingImeta([]);
     setUploadState({ status: "idle" });
-    setMentionQuery(null);
-    setMentionStartIndex(0);
-    setMentionSelectedIndex(0);
     setIsEmojiPickerOpen(false);
-    mentionMapRef.current.clear();
+    mentions.clearMentions();
+    channelLinks.clearChannels();
     draftSelectionRef.current = { end: 0, start: 0 };
     pendingSelectionRef.current = null;
   }, [channelId]);
-
-  const membersQuery = useChannelMembersQuery(channelId);
-  const members = membersQuery.data ?? [];
-  const managedAgentsQuery = useManagedAgentsQuery();
-  const managedAgentNamesByPubkey = React.useMemo(
-    () =>
-      new Map(
-        (managedAgentsQuery.data ?? []).map((agent) => [
-          agent.pubkey.toLowerCase(),
-          agent.name,
-        ]),
-      ),
-    [managedAgentsQuery.data],
-  );
-
-  const suggestions = React.useMemo<MentionSuggestion[]>(() => {
-    if (mentionQuery === null) {
-      return [];
-    }
-
-    const lowerQuery = mentionQuery.toLowerCase();
-    return members
-      .map((member) => {
-        const fallbackName =
-          managedAgentNamesByPubkey.get(member.pubkey.toLowerCase()) ??
-          member.pubkey.slice(0, 8);
-
-        return {
-          member,
-          label: member.displayName ?? fallbackName,
-        };
-      })
-      .filter(
-        ({ label, member }) =>
-          label.toLowerCase().includes(lowerQuery) ||
-          member.pubkey.toLowerCase().includes(lowerQuery),
-      )
-      .slice(0, 8)
-      .map(({ member, label }) => ({
-        pubkey: member.pubkey,
-        displayName: label,
-        role: member.role === "admin" ? "admin" : null,
-      }));
-  }, [managedAgentNamesByPubkey, members, mentionQuery]);
-
-  const isMentionOpen = mentionQuery !== null && suggestions.length > 0;
-
-  const insertMention = React.useCallback(
+  const applyMentionInsert = React.useCallback(
     (suggestion: MentionSuggestion) => {
       const textarea = textareaRef.current;
-      if (!textarea) {
-        return;
-      }
-
-      const displayName = suggestion.displayName;
-      const before = content.slice(0, mentionStartIndex);
-      const after = content.slice(textarea.selectionEnd);
-      const inserted = `@${displayName} `;
-      const nextContent = `${before}${inserted}${after}`;
-      const nextCursor = before.length + inserted.length;
-
-      mentionMapRef.current.set(displayName, suggestion.pubkey);
+      const result = mentions.insertMention(
+        suggestion,
+        content,
+        textarea?.selectionEnd ?? content.length,
+      );
       draftSelectionRef.current = {
-        end: nextCursor,
-        start: nextCursor,
+        end: result.nextCursor,
+        start: result.nextCursor,
       };
-      pendingSelectionRef.current = nextCursor;
-      setContent(nextContent);
-      setMentionQuery(null);
-      setMentionSelectedIndex(0);
+      pendingSelectionRef.current = result.nextCursor;
+      setContent(result.nextContent);
     },
-    [content, mentionStartIndex],
+    [content, mentions.insertMention],
   );
 
-  const extractMentionPubkeys = React.useCallback(
-    (text: string): string[] => {
-      const pubkeys: string[] = [];
-
-      const hasMention = (name: string): boolean => {
-        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const pattern = new RegExp(
-          `(?:^|\\s)@${escaped}(?=[\\s,;.!?:)\\]}]|$)`,
-          "i",
-        );
-        return pattern.test(text);
+  const applyChannelInsert = React.useCallback(
+    (suggestion: ChannelSuggestion) => {
+      const textarea = textareaRef.current;
+      const result = channelLinks.insertChannel(
+        suggestion,
+        content,
+        textarea?.selectionEnd ?? content.length,
+      );
+      draftSelectionRef.current = {
+        end: result.nextCursor,
+        start: result.nextCursor,
       };
-
-      for (const [displayName, pubkey] of mentionMapRef.current) {
-        if (hasMention(displayName)) {
-          pubkeys.push(pubkey);
-        }
-      }
-
-      for (const member of members) {
-        if (pubkeys.includes(member.pubkey)) {
-          continue;
-        }
-        const name =
-          member.displayName ??
-          managedAgentNamesByPubkey.get(member.pubkey.toLowerCase());
-        if (name && hasMention(name)) {
-          pubkeys.push(member.pubkey);
-        }
-      }
-
-      return [...new Set(pubkeys)];
+      pendingSelectionRef.current = result.nextCursor;
+      setContent(result.nextContent);
     },
-    [members, managedAgentNamesByPubkey],
+    [content, channelLinks.insertChannel],
   );
 
   const updateDraftSelection = React.useCallback(
@@ -230,10 +154,9 @@ export function MessageComposer({
       pendingSelectionRef.current = nextCursor;
       setContent(nextContent);
       setIsEmojiPickerOpen(false);
-      setMentionQuery(null);
-      setMentionSelectedIndex(0);
+      mentions.clearMentions();
     },
-    [content],
+    [content, mentions.clearMentions],
   );
 
   const openMentionPicker = React.useCallback(() => {
@@ -245,9 +168,7 @@ export function MessageComposer({
     const cursorPosition = textarea.selectionStart ?? content.length;
     const existingMention = detectMentionQuery(content, cursorPosition);
     if (existingMention) {
-      setMentionStartIndex(existingMention.startIndex);
-      setMentionQuery(existingMention.query);
-      setMentionSelectedIndex(0);
+      mentions.updateMentionQuery(content, cursorPosition);
       textarea.focus();
       return;
     }
@@ -271,10 +192,8 @@ export function MessageComposer({
     pendingSelectionRef.current = nextCursor;
     setContent(nextContent);
     setIsEmojiPickerOpen(false);
-    setMentionStartIndex(mentionIndex);
-    setMentionQuery("");
-    setMentionSelectedIndex(0);
-  }, [content]);
+    mentions.updateMentionQuery(nextContent, nextCursor);
+  }, [content, mentions.updateMentionQuery]);
 
   const onUploaded = React.useCallback((descriptor: BlobDescriptor) => {
     const markdown = `\n![image](${descriptor.url})\n`;
@@ -374,7 +293,7 @@ export function MessageComposer({
       return;
     }
 
-    const pubkeys = extractMentionPubkeys(trimmed);
+    const pubkeys = mentions.extractMentionPubkeys(trimmed);
 
     const mediaTags =
       pendingImeta.length > 0
@@ -396,8 +315,8 @@ export function MessageComposer({
     setContent("");
     draftSelectionRef.current = { end: 0, start: 0 };
     setPendingImeta([]);
-    mentionMapRef.current.clear();
-    setMentionQuery(null);
+    mentions.clearMentions();
+    channelLinks.clearChannels();
     setIsEmojiPickerOpen(false);
 
     try {
@@ -411,7 +330,9 @@ export function MessageComposer({
     disabled,
     isSending,
     onSend,
-    extractMentionPubkeys,
+    mentions.extractMentionPubkeys,
+    mentions.clearMentions,
+    channelLinks.clearChannels,
     pendingImeta,
   ]);
 
@@ -429,56 +350,32 @@ export function MessageComposer({
       const cursorPos = event.target.selectionStart;
       setContent(nextContent);
       updateDraftSelection(event.target);
-
-      const mention = detectMentionQuery(nextContent, cursorPos);
-      if (mention) {
-        setMentionQuery(mention.query);
-        setMentionStartIndex(mention.startIndex);
-        setMentionSelectedIndex(0);
-      } else {
-        setMentionQuery(null);
-      }
+      mentions.updateMentionQuery(nextContent, cursorPos);
+      channelLinks.updateChannelQuery(nextContent, cursorPos);
     },
-    [updateDraftSelection],
+    [
+      updateDraftSelection,
+      mentions.updateMentionQuery,
+      channelLinks.updateChannelQuery,
+    ],
   );
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (isMentionOpen) {
-        if (event.key === "ArrowDown") {
-          event.preventDefault();
-          setMentionSelectedIndex((current) =>
-            current < suggestions.length - 1 ? current + 1 : 0,
-          );
-          return;
+      const channelResult = channelLinks.handleChannelKeyDown(event);
+      if (channelResult.handled) {
+        if (channelResult.suggestion) {
+          applyChannelInsert(channelResult.suggestion);
         }
+        return;
+      }
 
-        if (event.key === "ArrowUp") {
-          event.preventDefault();
-          setMentionSelectedIndex((current) =>
-            current > 0 ? current - 1 : suggestions.length - 1,
-          );
-          return;
+      const { handled, suggestion } = mentions.handleMentionKeyDown(event);
+      if (handled) {
+        if (suggestion) {
+          applyMentionInsert(suggestion);
         }
-
-        if (
-          event.key === "Tab" ||
-          (event.key === "Enter" &&
-            !event.ctrlKey &&
-            !event.metaKey &&
-            !event.altKey &&
-            !event.shiftKey)
-        ) {
-          event.preventDefault();
-          insertMention(suggestions[mentionSelectedIndex]);
-          return;
-        }
-
-        if (event.key === "Escape") {
-          event.preventDefault();
-          setMentionQuery(null);
-          return;
-        }
+        return;
       }
 
       if (event.key !== "Enter" || event.nativeEvent.isComposing) {
@@ -508,10 +405,10 @@ export function MessageComposer({
       void submitMessage();
     },
     [
-      isMentionOpen,
-      suggestions,
-      mentionSelectedIndex,
-      insertMention,
+      channelLinks.handleChannelKeyDown,
+      applyChannelInsert,
+      mentions.handleMentionKeyDown,
+      applyMentionInsert,
       submitMessage,
     ],
   );
@@ -568,10 +465,17 @@ export function MessageComposer({
             handleSubmit(event);
           }}
         >
+          <ChannelAutocomplete
+            onSelect={applyChannelInsert}
+            selectedIndex={channelLinks.channelSelectedIndex}
+            suggestions={
+              channelLinks.isChannelOpen ? channelLinks.channelSuggestions : []
+            }
+          />
           <MentionAutocomplete
-            onSelect={insertMention}
-            selectedIndex={mentionSelectedIndex}
-            suggestions={isMentionOpen ? suggestions : []}
+            onSelect={applyMentionInsert}
+            selectedIndex={mentions.mentionSelectedIndex}
+            suggestions={mentions.isMentionOpen ? mentions.suggestions : []}
           />
 
           {replyTarget ? (
