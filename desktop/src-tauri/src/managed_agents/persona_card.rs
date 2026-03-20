@@ -80,8 +80,9 @@ fn decode_b64_json(b64: &str) -> Result<Value, String> {
     serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON: {e}"))
 }
 
-fn parse_sprout_payload(b64: &str) -> Result<(String, String), String> {
-    let v = decode_b64_json(b64)?;
+/// Extract and validate `displayName` + `systemPrompt` from a Sprout persona
+/// JSON value (shared by both the PNG tEXt-chunk path and the standalone JSON path).
+fn extract_sprout_fields(v: &Value) -> Result<(String, String), String> {
     let version = v.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
     if version != 1 {
         return Err(format!("Unsupported persona version: {version}"));
@@ -105,6 +106,11 @@ fn parse_sprout_payload(b64: &str) -> Result<(String, String), String> {
         return Err("systemPrompt is empty".to_string());
     }
     Ok((name, prompt))
+}
+
+fn parse_sprout_payload(b64: &str) -> Result<(String, String), String> {
+    let v = decode_b64_json(b64)?;
+    extract_sprout_fields(&v)
 }
 
 fn parse_chara_payload(b64: &str) -> Result<(String, String), String> {
@@ -146,31 +152,7 @@ fn parse_chara_payload(b64: &str) -> Result<(String, String), String> {
 pub fn parse_json_persona(json_bytes: &[u8]) -> Result<ParsedPersonaPreview, String> {
     let v: Value =
         serde_json::from_slice(json_bytes).map_err(|e| format!("Invalid JSON: {e}"))?;
-
-    let version = v.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
-    if version != 1 {
-        return Err(format!("Unsupported persona version: {version}"));
-    }
-
-    let name = v
-        .get("displayName")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let prompt = v
-        .get("systemPrompt")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-
-    if name.is_empty() {
-        return Err("displayName is empty".to_string());
-    }
-    if prompt.is_empty() {
-        return Err("systemPrompt is empty".to_string());
-    }
+    let (name, prompt) = extract_sprout_fields(&v)?;
 
     Ok(ParsedPersonaPreview {
         display_name: name,

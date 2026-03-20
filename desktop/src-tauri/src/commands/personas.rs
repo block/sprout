@@ -155,7 +155,7 @@ const MAX_ZIP_BYTES: usize = 100 * 1024 * 1024;
 
 const PNG_MAGIC: [u8; 4] = [0x89, 0x50, 0x4E, 0x47];
 const ZIP_MAGIC: [u8; 4] = [0x50, 0x4B, 0x03, 0x04];
-const JSON_MAGIC: [u8; 1] = [0x7B];
+const JSON_OPEN_BRACE: u8 = 0x7B;
 
 #[tauri::command]
 pub fn parse_persona_files(
@@ -193,7 +193,7 @@ pub fn parse_persona_files(
         }
     }
 
-    if first_byte == JSON_MAGIC[0] {
+    if first_byte == JSON_OPEN_BRACE {
         if file_bytes.len() > MAX_JSON_BYTES {
             return Err("JSON file is too large (max 5 MB).".to_string());
         }
