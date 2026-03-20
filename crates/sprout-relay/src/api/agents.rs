@@ -40,6 +40,11 @@ pub async fn agents_handler(
         .iter()
         .map(|ac| ac.channel.name.clone())
         .collect();
+    // Map channel name → UUID string for the channel_ids response field.
+    let name_to_id: HashMap<String, String> = accessible_channels
+        .iter()
+        .map(|ac| (ac.channel.name.clone(), ac.channel.id.to_string()))
+        .collect();
 
     let bots = state
         .db
@@ -97,24 +102,17 @@ pub async fn agents_handler(
                 format!("agent-{}", &hex[..end])
             });
 
-        // Build parallel name/id lists, then filter by accessible names.
-        let names: Vec<&str> = bot
+        // Filter channel names by accessibility, resolve UUIDs via the map.
+        let channels: Vec<&str> = bot
             .channel_names
             .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty() && accessible_names.contains(*s))
             .collect();
-        let ids: Vec<&str> = bot
-            .channel_ids
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
+        let channel_ids: Vec<String> = channels
+            .iter()
+            .filter_map(|name| name_to_id.get(*name).cloned())
             .collect();
-        let (channels, channel_ids): (Vec<&str>, Vec<&str>) = names
-            .into_iter()
-            .zip(ids.into_iter())
-            .filter(|(name, _)| accessible_names.contains(*name))
-            .unzip();
 
         let capabilities: Vec<String> = bot
             .capabilities

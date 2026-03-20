@@ -1,15 +1,14 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Invoke a provider binary: write JSON to stdin, read JSON from stdout.
 ///
-/// Uses `wait_with_output` on a dedicated thread with a timeout to avoid pipe
-/// deadlocks — stdout and stderr are drained concurrently by the OS while the
-/// child runs, so a chatty provider won't block on a full pipe buffer.
-///
-/// On timeout the child is killed via `Child::kill()` (no raw PIDs, no unsafe).
+/// Stdout and stderr are drained on dedicated threads to prevent pipe deadlocks
+/// (a chatty provider won't block on a full pipe buffer). The child is held in
+/// an `Arc<Mutex<Child>>` so the timeout path can always call `kill()` — no raw
+/// PIDs, no unsafe, no PID-reuse risk.
 pub fn invoke_provider(
     binary: &Path,
     request: &serde_json::Value,
@@ -32,12 +31,28 @@ pub fn invoke_provider(
             .map_err(|e| format!("stdin write failed: {e}"))?;
     }
 
-    // Share the child between the worker thread and the timeout path so we can
-    // call child.kill() safely (no raw PIDs, no unsafe, no PID-reuse risk).
-    // We use Option<Child> so the worker thread can take() ownership for
-    // wait_with_output (which consumes self), while the timeout path can still
-    // call kill()+wait() on the original handle if the take hasn't happened yet.
-    let child = Arc::new(Mutex::new(Some(child)));
+    // Drain stdout and stderr on separate threads to prevent pipe deadlocks.
+    // These threads own the pipe handles and run to completion independently.
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
+    let stdout_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut r) = stdout_handle {
+            let _ = r.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut r) = stderr_handle {
+            let _ = r.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    // The child stays in the mutex — wait() borrows &mut, doesn't consume self.
+    // On timeout we can always call kill() because nobody takes ownership.
+    let child = Arc::new(Mutex::new(child));
     let child_for_thread = Arc::clone(&child);
     let timeout_secs = timeout.as_secs();
 
@@ -46,33 +61,31 @@ pub fn invoke_provider(
         let result = child_for_thread
             .lock()
             .map_err(|e| format!("lock poisoned: {e}"))
-            .and_then(|mut guard| {
-                guard
-                    .take()
-                    .ok_or_else(|| "child already taken".to_string())
-            })
-            .and_then(|c| c.wait_with_output().map_err(|e| format!("wait failed: {e}")));
+            .and_then(|mut c| c.wait().map_err(|e| format!("wait failed: {e}")));
         let _ = tx.send(result);
     });
 
-    let output = match rx.recv_timeout(timeout) {
-        Ok(result) => result?,
+    match rx.recv_timeout(timeout) {
+        Ok(result) => {
+            result?;
+        }
         Err(_) => {
-            // Timeout — kill via the Child handle (safe, no PID reuse risk).
-            if let Ok(mut guard) = child.lock() {
-                if let Some(ref mut c) = *guard {
-                    let _ = c.kill();
-                    let _ = c.wait();
-                }
+            // Timeout — kill the child. The mutex always holds the Child handle.
+            if let Ok(mut c) = child.lock() {
+                let _ = c.kill();
+                let _ = c.wait();
             }
             return Err(format!("provider timed out after {timeout_secs}s"));
         }
-    };
+    }
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout_bytes = stdout_thread.join().unwrap_or_default();
+    let stderr_bytes = stderr_thread.join().unwrap_or_default();
+
+    let stderr = String::from_utf8_lossy(&stderr_bytes);
     let stderr_redacted = redact_secrets(&stderr);
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&stdout_bytes);
     let response: serde_json::Value = stdout
         .lines()
         .find_map(|line| serde_json::from_str(line).ok())

@@ -659,8 +659,6 @@ pub struct BotMemberRecord {
     pub capabilities: Option<serde_json::Value>,
     /// Comma-separated channel names (from string_agg).
     pub channel_names: String,
-    /// Comma-separated channel UUIDs (from string_agg).
-    pub channel_ids: String,
 }
 
 /// User record for bulk lookup.
@@ -757,8 +755,7 @@ pub async fn get_bot_members(pool: &PgPool) -> Result<Vec<BotMemberRecord>> {
     let rows = sqlx::query(
         r#"
         SELECT cm.pubkey, u.display_name, u.agent_type, u.capabilities,
-               string_agg(DISTINCT c.name, ',' ORDER BY c.name) AS channel_names,
-               string_agg(DISTINCT c.id::text, ',' ORDER BY c.id::text) AS channel_ids
+               string_agg(DISTINCT c.name, ',' ORDER BY c.name) AS channel_names
         FROM channel_members cm
         LEFT JOIN users u ON cm.pubkey = u.pubkey
         JOIN channels c ON cm.channel_id = c.id AND c.deleted_at IS NULL
@@ -780,9 +777,6 @@ pub async fn get_bot_members(pool: &PgPool) -> Result<Vec<BotMemberRecord>> {
             capabilities,
             channel_names: row
                 .try_get::<Option<String>, _>("channel_names")?
-                .unwrap_or_default(),
-            channel_ids: row
-                .try_get::<Option<String>, _>("channel_ids")?
                 .unwrap_or_default(),
         });
     }
