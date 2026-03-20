@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Bot, Hash, Home, Lock, PenSquare, Plus, Search } from "lucide-react";
+import { Bot, Home, Lock, PenSquare, Plus, Search } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
@@ -19,6 +19,7 @@ import type {
   Profile,
 } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
+import { Checkbox } from "@/shared/ui/checkbox";
 import { Input } from "@/shared/ui/input";
 import {
   Sidebar,
@@ -236,56 +237,38 @@ function SectionHeaderActions({
 }
 
 // ---------------------------------------------------------------------------
-// VisibilityToggle — open vs private segmented control for creation forms
+// PrivateCheckbox — checkbox toggle for channel visibility
 // ---------------------------------------------------------------------------
 
-const VISIBILITY_OPTIONS: Array<{
-  value: ChannelVisibility;
-  label: string;
-  icon: typeof Hash;
-}> = [
-  { value: "open", label: "Open", icon: Hash },
-  { value: "private", label: "Private", icon: Lock },
-];
-
-function VisibilityToggle({
+function PrivateCheckbox({
   disabled,
+  isPrivate,
   onChange,
   testId,
-  value,
 }: {
   disabled: boolean;
-  onChange: (value: ChannelVisibility) => void;
+  isPrivate: boolean;
+  onChange: (isPrivate: boolean) => void;
   testId: string;
-  value: ChannelVisibility;
 }) {
-  return (
-    <div
-      className="inline-flex h-8 items-center rounded-md border border-sidebar-border/70 bg-background/80 p-0.5"
-      data-testid={testId}
-    >
-      {VISIBILITY_OPTIONS.map((option) => {
-        const Icon = option.icon;
-        const isSelected = value === option.value;
+  const id = React.useId();
 
-        return (
-          <button
-            aria-pressed={isSelected}
-            className={`inline-flex h-6 flex-1 items-center justify-center gap-1 rounded px-2 text-xs font-medium transition-colors ${
-              isSelected
-                ? "bg-sidebar-accent text-sidebar-foreground shadow-sm"
-                : "text-sidebar-foreground/50 hover:text-sidebar-foreground/70"
-            }`}
-            disabled={disabled}
-            key={option.value}
-            onClick={() => onChange(option.value)}
-            type="button"
-          >
-            <Icon className="h-3 w-3" />
-            {option.label}
-          </button>
-        );
-      })}
+  return (
+    <div className="flex items-center gap-2">
+      <Checkbox
+        checked={isPrivate}
+        data-testid={testId}
+        disabled={disabled}
+        id={id}
+        onCheckedChange={(checked) => onChange(checked === true)}
+      />
+      <label
+        className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-sidebar-foreground/70 select-none peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
+        htmlFor={id}
+      >
+        <Lock className="h-3 w-3" />
+        Private channel
+      </label>
     </div>
   );
 }
@@ -382,11 +365,13 @@ function ChannelGroupSection({
               placeholder={descriptionPlaceholder}
               value={form.draftDescription}
             />
-            <VisibilityToggle
+            <PrivateCheckbox
               disabled={isCreating}
-              onChange={form.changeVisibility}
+              isPrivate={form.draftVisibility === "private"}
+              onChange={(isPrivate) =>
+                form.changeVisibility(isPrivate ? "private" : "open")
+              }
               testId={createVisibilityTestId}
-              value={form.draftVisibility}
             />
             <div className="flex items-center gap-2">
               <Button
