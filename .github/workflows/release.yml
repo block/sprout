@@ -1,0 +1,140 @@
+name: Canary Release
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  build:
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve commit SHA
+        id: resolve
+        env:
+          WF_SHA: ${{ github.event.workflow_run.head_sha }}
+          FALLBACK_SHA: ${{ github.sha }}
+        run: echo "sha=${WF_SHA:-$FALLBACK_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+
+      - name: Activate Hermit
+        uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        uses: taiki-e/install-action@c12d62a803cbdfe2e7263af15f5a9548065cb4f2 # v2
+        with:
+          tool: cross@0.2.5
+
+      - name: Build binaries
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cross build --release --target "$TARGET" \
+            -p sprout-relay \
+            -p sprout-acp \
+            -p sprout-mcp
+
+      - name: Package tarballs
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          BIN="target/${TARGET}/release"
+
+          mkdir sprout-relay && cp "${BIN}/sprout-relay" sprout-relay/
+          tar czf "sprout-relay-canary-${TARGET}.tar.gz" sprout-relay
+
+          mkdir sprout-agent && cp "${BIN}/sprout-acp" "${BIN}/sprout-mcp-server" sprout-agent/
+          tar czf "sprout-agent-canary-${TARGET}.tar.gz" sprout-agent
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sprout-${{ matrix.target }}
+          path: sprout-*-canary-${{ matrix.target }}.tar.gz
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Resolve commit SHA
+        id: resolve
+        env:
+          WF_SHA: ${{ github.event.workflow_run.head_sha }}
+          FALLBACK_SHA: ${{ github.sha }}
+        run: echo "sha=${WF_SHA:-$FALLBACK_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Get build timestamp
+        id: timestamp
+        run: echo "ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Force-move canary tag
+        env:
+          COMMIT_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          git tag -f canary "$COMMIT_SHA"
+          git push origin canary --force
+
+      - name: Create or update canary release
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1
+        with:
+          tag: canary
+          name: "Canary (latest main)"
+          body: |
+            Pre-alpha canary build. Not for production.
+
+            Built from commit `${{ steps.resolve.outputs.sha }}` at ${{ steps.timestamp.outputs.ts }}.
+
+            **Relay**: `sprout-relay-canary-<target>.tar.gz`
+            **Agent tooling** (ACP harness + MCP server): `sprout-agent-canary-<target>.tar.gz`
+          prerelease: true
+          allowUpdates: true
+          removeArtifacts: true
+          artifacts: "dist/*.tar.gz"
+          token: ${{ secrets.GITHUB_TOKEN }}
