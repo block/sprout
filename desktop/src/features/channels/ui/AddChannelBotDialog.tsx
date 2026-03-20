@@ -4,10 +4,12 @@ import * as React from "react";
 import {
   useCreateChannelManagedAgentsMutation,
   usePersonasQuery,
+  useTeamsQuery,
   type CreateChannelManagedAgentResult,
 } from "@/features/agents/hooks";
 import { AddChannelBotGenericSection } from "@/features/channels/ui/AddChannelBotGenericSection";
 import { AddChannelBotPersonasSection } from "@/features/channels/ui/AddChannelBotPersonasSection";
+import { AddChannelBotTeamsSection } from "@/features/channels/ui/AddChannelBotTeamsSection";
 import type { AcpProvider } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import {
@@ -81,8 +83,10 @@ export function AddChannelBotDialog({
   onOpenChange,
 }: AddChannelBotDialogProps) {
   const personasQuery = usePersonasQuery();
+  const teamsQuery = useTeamsQuery();
   const createBotsMutation = useCreateChannelManagedAgentsMutation(channelId);
   const personas = personasQuery.data ?? [];
+  const teams = teamsQuery.data ?? [];
   const [selectedProviderId, setSelectedProviderId] = React.useState("");
   const [selectedPersonaIds, setSelectedPersonaIds] = React.useState<string[]>(
     [],
@@ -153,6 +157,19 @@ export function AddChannelBotDialog({
     }
 
     onOpenChange(next);
+  }
+
+  function handleToggleTeam(personaIds: string[]) {
+    setSelectedPersonaIds((current) => {
+      const allSelected = personaIds.every((id) => current.includes(id));
+      if (allSelected) {
+        return current.filter((id) => !personaIds.includes(id));
+      }
+      const merged = new Set([...current, ...personaIds]);
+      return [...merged];
+    });
+    setSubmissionNotice(null);
+    setSubmissionError(null);
   }
 
   async function handleSubmit() {
@@ -290,6 +307,17 @@ export function AddChannelBotDialog({
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
+
+            {teams.length > 0 ? (
+              <AddChannelBotTeamsSection
+                canToggleSelections={canToggleSelections}
+                isLoading={teamsQuery.isLoading}
+                onToggleTeam={handleToggleTeam}
+                personas={personas}
+                selectedPersonaIds={selectedPersonaIds}
+                teams={teams}
+              />
+            ) : null}
 
             <AddChannelBotPersonasSection
               canToggleSelections={canToggleSelections}

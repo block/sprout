@@ -428,6 +428,30 @@ export type UpdatePersonaInput = {
   systemPrompt: string;
 };
 
+// ── Team types ────────────────────────────────────────────────────────────────
+
+export type AgentTeam = {
+  id: string;
+  name: string;
+  description: string | null;
+  personaIds: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateTeamInput = {
+  name: string;
+  description?: string;
+  personaIds: string[];
+};
+
+export type UpdateTeamInput = {
+  id: string;
+  name: string;
+  description?: string;
+  personaIds: string[];
+};
+
 // ── Forum types ───────────────────────────────────────────────────────────────
 
 export type ThreadSummary = {
