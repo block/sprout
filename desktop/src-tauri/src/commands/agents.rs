@@ -7,7 +7,7 @@ use crate::{
         build_managed_agent_summary, default_token_scopes, discover_provider_candidates,
         find_managed_agent_mut, invoke_provider, load_managed_agents, load_personas,
         managed_agent_avatar_url, managed_agent_log_path, mint_token_via_api, provider_deploy,
-        read_log_tail, resolve_command, save_managed_agents, start_managed_agent_process,
+        read_log_tail, resolve_provider_binary, save_managed_agents, start_managed_agent_process,
         stop_managed_agent_process, sync_managed_agent_processes, validate_provider_config,
         BackendKind, BackendProviderInfo, CreateManagedAgentRequest, CreateManagedAgentResponse,
         ManagedAgentLogResponse, ManagedAgentRecord, ManagedAgentSummary,
@@ -53,11 +53,18 @@ async fn deploy_to_provider(
     agent_json: serde_json::Value,
     cached_binary_path: Option<&str>,
 ) -> Result<(), String> {
+    // Resolve via discovered candidates only — never raw resolve_command on
+    // untrusted provider_id. Cached path is validated against candidates too.
     let bin_path = cached_binary_path
         .map(std::path::PathBuf::from)
         .filter(|p| p.exists())
-        .or_else(|| resolve_command(&format!("sprout-backend-{provider_id}"), Some(app)))
-        .ok_or_else(|| format!("provider binary 'sprout-backend-{provider_id}' not found"))?;
+        .map(|p| p.canonicalize().unwrap_or(p))
+        .filter(|canonical| {
+            discover_provider_candidates()
+                .iter()
+                .any(|(_, cp)| cp.canonicalize().ok().as_ref() == Some(canonical))
+        })
+        .map_or_else(|| resolve_provider_binary(provider_id), Ok)?;
 
     let config_clone = config.clone();
     let deploy_result = tokio::task::spawn_blocking(move || {
@@ -233,10 +240,8 @@ pub async fn create_managed_agent(
             }
         }
         validate_provider_config(config)?;
-        let bin_name = format!("sprout-backend-{id}");
-        if resolve_command(&bin_name, Some(&app)).is_none() {
-            return Err(format!("provider binary '{bin_name}' not found in PATH"));
-        }
+        // Validate via discovered candidates — not raw resolve_command.
+        resolve_provider_binary(id)?;
     }
 
     // ── Phase 2: mint token via REST API (async, outside lock) ───────────────
@@ -286,10 +291,10 @@ pub async fn create_managed_agent(
             return Err(format!("agent {pubkey} already exists"));
         }
         // Provider config was already validated in Pre-Phase 2.
-        // Resolve provider binary path if backend is Provider.
+        // Cache the discovered binary path for deploy_to_provider.
         let provider_binary_path = if let BackendKind::Provider { ref id, .. } = input.backend {
-            let bin_name = format!("sprout-backend-{id}");
-            resolve_command(&bin_name, Some(&app)).map(|p| p.display().to_string())
+            // Use resolve_provider_binary (discovered candidates only).
+            resolve_provider_binary(id).ok().map(|p| p.display().to_string())
         } else {
             None
         };

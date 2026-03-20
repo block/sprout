@@ -350,6 +350,45 @@ pub fn discover_provider_candidates() -> Vec<(String, PathBuf)> {
     results
 }
 
+/// Resolve a provider ID to a discovered, executable binary path.
+///
+/// This is the ONLY way to resolve provider binaries for execution. It:
+/// 1. Validates the ID against `^[a-z0-9][a-z0-9_-]*$` (no path traversal)
+/// 2. Looks up the ID in `discover_provider_candidates()` (PATH-discovered only)
+/// 3. Returns the canonical path of the discovered binary
+///
+/// All deploy, start, and create paths MUST use this instead of raw
+/// `resolve_command(format!("sprout-backend-{id}"))` to prevent a compromised
+/// frontend/IPC caller from steering execution to an arbitrary binary.
+pub fn resolve_provider_binary(provider_id: &str) -> Result<PathBuf, String> {
+    // Reject IDs that could be path components or shell metacharacters.
+    let valid_id = provider_id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+        && !provider_id.is_empty()
+        && provider_id.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if !valid_id {
+        return Err(format!(
+            "invalid provider ID '{provider_id}': must match [a-z0-9][a-z0-9_-]*"
+        ));
+    }
+
+    let candidates = discover_provider_candidates();
+    let found = candidates
+        .into_iter()
+        .find(|(id, _)| id == provider_id)
+        .map(|(_, path)| path);
+
+    match found {
+        Some(path) => path
+            .canonicalize()
+            .map_err(|e| format!("provider binary not accessible: {e}")),
+        None => Err(format!(
+            "provider 'sprout-backend-{provider_id}' not found on PATH"
+        )),
+    }
+}
+
 /// Check if a file is executable (Unix: mode bits; other platforms: always true).
 fn is_executable(path: &Path) -> bool {
     #[cfg(unix)]
