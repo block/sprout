@@ -300,7 +300,7 @@ export type ManagedAgent = {
   logPath: string;
   startOnAppLaunch: boolean;
   backend: ManagedAgentBackend;
-  backend_agent_id: string | null;
+  backendAgentId: string | null;
 };
 
 export type BackendProviderCandidate = {

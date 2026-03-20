@@ -811,7 +811,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     logPath: agent.log_path,
     startOnAppLaunch: agent.start_on_app_launch,
     backend: agent.backend,
-    backend_agent_id: agent.backend_agent_id,
+    backendAgentId: agent.backend_agent_id,
   };
 }
 
