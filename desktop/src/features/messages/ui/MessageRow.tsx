@@ -136,7 +136,7 @@ export const MessageRow = React.memo(
 
         <article
           className={cn(
-            "group/message flex gap-2.5 rounded-2xl px-2 py-1 transition-colors",
+            "group/message flex items-start gap-2.5 rounded-2xl px-2 py-1 transition-colors",
             highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
             activeReplyTargetId === message.id
               ? "bg-muted/60 ring-1 ring-border"
