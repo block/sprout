@@ -84,7 +84,7 @@ export function MessageActionBar({
             </PopoverTrigger>
             <PopoverContent
               align="end"
-              className="w-[352px] p-0 rounded-2xl overflow-hidden"
+              className="w-auto p-0 rounded-2xl overflow-hidden border-0 bg-transparent shadow-none"
               side="top"
               sideOffset={10}
             >
