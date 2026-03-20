@@ -75,7 +75,13 @@ test("emoji picker inserts emoji into the draft and keeps focus in the composer"
   await input.fill("Ship");
 
   await page.getByTestId("composer-emoji-button").click();
-  await page.getByRole("button", { name: "Insert 🚀" }).click();
+
+  // emoji-mart renders inside a Shadow DOM web component — use the search
+  // input to find the rocket emoji, then click it.
+  const pickerEl = page.locator("em-emoji-picker");
+  const searchInput = pickerEl.locator("input[type='search']");
+  await searchInput.fill("rocket");
+  await pickerEl.locator("button[aria-label='🚀']").first().click();
 
   await expect(input).toHaveValue("Ship🚀");
   await expect(input).toBeFocused();
