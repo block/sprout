@@ -423,6 +423,11 @@ impl Db {
         channel::soft_delete_channel(&self.pool, channel_id).await
     }
 
+    /// Soft-remove all active members of a channel (used during channel deletion).
+    pub async fn remove_all_members_on_delete(&self, channel_id: Uuid) -> Result<u64> {
+        channel::remove_all_members_on_delete(&self.pool, channel_id).await
+    }
+
     /// Returns the count of active members in a channel.
     pub async fn get_member_count(&self, channel_id: Uuid) -> Result<i64> {
         channel::get_member_count(&self.pool, channel_id).await

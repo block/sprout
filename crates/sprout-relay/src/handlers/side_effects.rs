@@ -921,6 +921,14 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         warn!(channel = %channel_id, "channel already deleted or not found");
     }
 
+    // Clean up lingering memberships so agents/bots don't appear as orphaned members.
+    match state.db.remove_all_members_on_delete(channel_id).await {
+        Ok(count) => info!(channel = %channel_id, count, "removed members on channel delete"),
+        Err(e) => {
+            warn!(channel = %channel_id, error = %e, "failed to remove members on channel delete")
+        }
+    }
+
     // Clean up NIP-29 discovery events for the deleted group.
     if let Err(e) = state
         .db

@@ -495,6 +495,14 @@ pub async fn delete_channel_handler(
         return Err(api_error(StatusCode::CONFLICT, "channel already deleted"));
     }
 
+    // Clean up lingering memberships so agents/bots don't appear as orphaned members.
+    match state.db.remove_all_members_on_delete(channel_id).await {
+        Ok(count) => tracing::info!(%channel_id, count, "removed members on channel delete"),
+        Err(e) => {
+            tracing::warn!(%channel_id, error = %e, "failed to remove members on channel delete")
+        }
+    }
+
     let actor_hex = nostr_hex::encode(&pubkey_bytes);
     if let Err(e) = emit_system_message(
         &state,

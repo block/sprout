@@ -1048,6 +1048,21 @@ pub async fn soft_delete_channel(pool: &PgPool, channel_id: Uuid) -> Result<bool
     Ok(result.rows_affected() > 0)
 }
 
+/// Soft-remove all active members of a channel.
+///
+/// Called during channel deletion to clean up lingering memberships.
+/// Sets `removed_at = NOW()` on all rows where `removed_at IS NULL`.
+/// Returns the number of members removed.
+pub async fn remove_all_members_on_delete(pool: &PgPool, channel_id: Uuid) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE channel_members SET removed_at = NOW() WHERE channel_id = $1 AND removed_at IS NULL",
+    )
+    .bind(channel_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Returns the count of active (non-removed) members in a channel.
 pub async fn get_member_count(pool: &PgPool, channel_id: Uuid) -> Result<i64> {
     let row = sqlx::query(
