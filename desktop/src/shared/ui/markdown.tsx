@@ -4,7 +4,10 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
 import { cn } from "@/shared/lib/cn";
+import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
 import remarkMentions from "@/shared/lib/remarkMentions";
+import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
+import type { Channel } from "@/shared/api/types";
 
 type MarkdownProps = {
   className?: string;
@@ -15,7 +18,11 @@ type MarkdownProps = {
 
 type MarkdownVariant = "default" | "compact" | "tight";
 
-function createMarkdownComponents(variant: MarkdownVariant): Components {
+function createMarkdownComponents(
+  variant: MarkdownVariant,
+  channels: Channel[],
+  onOpenChannel: (channelId: string) => void,
+): Components {
   const paragraphClassName =
     variant === "tight"
       ? "leading-5"
@@ -139,6 +146,36 @@ function createMarkdownComponents(variant: MarkdownVariant): Components {
         {children}
       </span>
     ),
+    "channel-link": ({ children }: { children?: React.ReactNode }) => {
+      const text = String(children ?? "");
+      const channelName = text.startsWith("#") ? text.slice(1) : text;
+      const channel = channels.find(
+        (c) =>
+          c.channelType !== "dm" &&
+          c.name.toLowerCase() === channelName.toLowerCase(),
+      );
+
+      if (channel) {
+        return (
+          <button
+            type="button"
+            aria-label={`Open channel ${channelName}`}
+            className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary cursor-pointer hover:bg-primary/25 transition-colors"
+            onClick={() => {
+              onOpenChannel(channel.id);
+            }}
+          >
+            {children}
+          </button>
+        );
+      }
+
+      return (
+        <span className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary">
+          {children}
+        </span>
+      );
+    },
   } as Components;
 }
 
@@ -149,6 +186,7 @@ export function Markdown({
   tight = false,
 }: MarkdownProps) {
   const variant = tight ? "tight" : compact ? "compact" : "default";
+  const { channels, onOpenChannel } = useChannelNavigation();
   let processedContent = content;
 
   if (/^(?:\s{2}\n)+/.test(content)) {
@@ -171,8 +209,13 @@ export function Markdown({
       )}
     >
       <ReactMarkdown
-        components={createMarkdownComponents(variant)}
-        remarkPlugins={[remarkGfm, remarkBreaks, remarkMentions]}
+        components={createMarkdownComponents(variant, channels, onOpenChannel)}
+        remarkPlugins={[
+          remarkGfm,
+          remarkBreaks,
+          remarkMentions,
+          remarkChannelLinks,
+        ]}
       >
         {processedContent}
       </ReactMarkdown>
