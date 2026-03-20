@@ -1,3 +1,5 @@
+import Picker from "@emoji-mart/react";
+import data from "@emoji-mart/data";
 import { CornerUpLeft, LoaderCircle, SmilePlus } from "lucide-react";
 import * as React from "react";
 
@@ -8,7 +10,6 @@ import type {
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
-import { getReactionOptions } from "./messageTimelineUtils";
 
 export function MessageActionBar({
   activeReplyTargetId = null,
@@ -39,7 +40,6 @@ export function MessageActionBar({
   const selectedReactionCount = reactions.filter(
     (reaction) => reaction.reactedByCurrentUser,
   ).length;
-  const reactionOptions = getReactionOptions(reactions);
 
   return (
     <div
@@ -84,70 +84,39 @@ export function MessageActionBar({
             </PopoverTrigger>
             <PopoverContent
               align="end"
-              className="w-56 rounded-2xl p-3"
+              className="w-[352px] p-0 rounded-2xl overflow-hidden"
               side="top"
               sideOffset={10}
             >
-              <div className="space-y-3">
-                <div className="space-y-1">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                    React
-                  </p>
-                  <p
-                    className={cn(
-                      "text-xs",
-                      reactionErrorMessage
-                        ? "text-destructive"
-                        : "text-muted-foreground",
-                    )}
-                  >
-                    {reactionErrorMessage ??
-                      "Click any emoji. Click it again to remove your own reaction."}
+              {reactionErrorMessage ? (
+                <div className="px-3 pt-3 pb-0">
+                  <p className="text-xs text-destructive">
+                    {reactionErrorMessage}
                   </p>
                 </div>
-                <div className="grid grid-cols-4 gap-1">
-                  {reactionOptions.map((emoji) => {
-                    const isActive = reactions.some(
-                      (reaction) =>
-                        reaction.emoji === emoji &&
-                        reaction.reactedByCurrentUser,
-                    );
+              ) : null}
+              <Picker
+                data={data}
+                onEmojiSelect={(emoji: any) => {
+                  if (!onReactionSelect) {
+                    return;
+                  }
 
-                    return (
-                      <button
-                        aria-label={`React with ${emoji}`}
-                        aria-pressed={isActive}
-                        className={cn(
-                          "flex h-10 items-center justify-center rounded-xl border text-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                          isActive
-                            ? "border-primary/40 bg-primary/10"
-                            : "border-border/70 bg-muted/40 hover:bg-accent",
-                        )}
-                        data-emoji={emoji}
-                        data-testid={`react-option-${message.id}`}
-                        disabled={reactionPending}
-                        key={`${message.id}-${emoji}`}
-                        onClick={() => {
-                          if (!onReactionSelect) {
-                            return;
-                          }
-
-                          void onReactionSelect(emoji)
-                            .then(() => {
-                              setIsReactionPickerOpen(false);
-                            })
-                            .catch(() => {
-                              return;
-                            });
-                        }}
-                        type="button"
-                      >
-                        {emoji}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+                  void onReactionSelect(emoji.native)
+                    .then(() => {
+                      setIsReactionPickerOpen(false);
+                    })
+                    .catch(() => {
+                      return;
+                    });
+                }}
+                theme="auto"
+                previewPosition="none"
+                skinTonePosition="search"
+                set="native"
+                maxFrequentRows={2}
+                perLine={8}
+              />
             </PopoverContent>
           </Popover>
         ) : null}

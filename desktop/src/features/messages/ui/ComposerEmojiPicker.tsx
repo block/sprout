@@ -1,8 +1,9 @@
+import Picker from "@emoji-mart/react";
+import data from "@emoji-mart/data";
 import { SmilePlus } from "lucide-react";
 
 import { Button } from "@/shared/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
-import { DEFAULT_EMOJI_OPTIONS } from "./messageTimelineUtils";
 
 type ComposerEmojiPickerProps = {
   disabled?: boolean;
@@ -37,36 +38,20 @@ export function ComposerEmojiPicker({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-56 rounded-2xl p-3"
+        className="w-[352px] p-0 rounded-2xl overflow-hidden"
         side="top"
         sideOffset={10}
       >
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              Emoji
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Insert an emoji into your message.
-            </p>
-          </div>
-          <div className="grid grid-cols-4 gap-1">
-            {DEFAULT_EMOJI_OPTIONS.map((emoji) => (
-              <button
-                aria-label={`Insert ${emoji}`}
-                className="flex h-10 items-center justify-center rounded-xl border border-border/70 bg-muted/40 text-lg transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                data-testid="composer-emoji-option"
-                key={emoji}
-                onClick={() => {
-                  onEmojiSelect(emoji);
-                }}
-                type="button"
-              >
-                {emoji}
-              </button>
-            ))}
-          </div>
-        </div>
+        <Picker
+          data={data}
+          onEmojiSelect={(emoji: any) => onEmojiSelect(emoji.native)}
+          theme="auto"
+          previewPosition="none"
+          skinTonePosition="search"
+          set="native"
+          maxFrequentRows={2}
+          perLine={8}
+        />
       </PopoverContent>
     </Popover>
   );
