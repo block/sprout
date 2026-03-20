@@ -24,6 +24,7 @@ import type {
   UpdatePersonaInput,
 } from "@/shared/api/types";
 import { AddAgentToChannelDialog } from "./AddAgentToChannelDialog";
+import { AddTeamToChannelDialog } from "./AddTeamToChannelDialog";
 import { CreateAgentDialog } from "./CreateAgentDialog";
 import { ManagedAgentLogPanel } from "./ManagedAgentLogPanel";
 import { ManagedAgentsSection } from "./ManagedAgentsSection";
@@ -32,7 +33,11 @@ import { PersonaDeleteDialog } from "./PersonaDeleteDialog";
 import { PersonasSection } from "./PersonasSection";
 import { RelayDirectorySection } from "./RelayDirectorySection";
 import { SecretRevealDialog } from "./SecretRevealDialog";
+import { TeamDeleteDialog } from "./TeamDeleteDialog";
+import { TeamDialog } from "./TeamDialog";
+import { TeamsSection } from "./TeamsSection";
 import { TokenRevealDialog } from "./TokenRevealDialog";
+import { useTeamActions } from "./useTeamActions";
 
 type PersonaDialogState = {
   description: string;
@@ -72,6 +77,15 @@ export function AgentsView() {
   const [actionErrorMessage, setActionErrorMessage] = React.useState<
     string | null
   >(null);
+
+  const teamActions = useTeamActions(
+    { setActionNoticeMessage, setActionErrorMessage },
+    {
+      refetchManagedAgents: () => void managedAgentsQuery.refetch(),
+      refetchRelayAgents: () => void relayAgentsQuery.refetch(),
+    },
+  );
+
   const managedAgents = React.useMemo(
     () =>
       [...(managedAgentsQuery.data ?? [])].sort((left, right) => {
@@ -269,7 +283,10 @@ export function AgentsView() {
     mintTokenMutation.isPending ||
     createPersonaMutation.isPending ||
     updatePersonaMutation.isPending ||
-    deletePersonaMutation.isPending;
+    deletePersonaMutation.isPending ||
+    teamActions.createTeamMutation.isPending ||
+    teamActions.updateTeamMutation.isPending ||
+    teamActions.deleteTeamMutation.isPending;
 
   return (
     <>
@@ -336,6 +353,27 @@ export function AgentsView() {
                 });
               }}
               personas={personas}
+            />
+
+            <TeamsSection
+              error={
+                teamActions.teamsQuery.error instanceof Error
+                  ? teamActions.teamsQuery.error
+                  : null
+              }
+              isLoading={teamActions.teamsQuery.isLoading}
+              isPending={
+                teamActions.createTeamMutation.isPending ||
+                teamActions.updateTeamMutation.isPending ||
+                teamActions.deleteTeamMutation.isPending
+              }
+              onCreate={teamActions.openCreateDialog}
+              onDelete={teamActions.setTeamToDelete}
+              onDuplicate={teamActions.openDuplicateDialog}
+              onEdit={teamActions.openEditDialog}
+              onAddToChannel={teamActions.setTeamToAddToChannel}
+              personas={personas}
+              teams={teamActions.teams}
             />
 
             <ManagedAgentsSection
@@ -470,6 +508,54 @@ export function AgentsView() {
         }}
         open={personaToDelete !== null}
         persona={personaToDelete}
+      />
+      <TeamDialog
+        description={teamActions.teamDialogState?.description ?? ""}
+        error={
+          teamActions.updateTeamMutation.error instanceof Error
+            ? teamActions.updateTeamMutation.error
+            : teamActions.createTeamMutation.error instanceof Error
+              ? teamActions.createTeamMutation.error
+              : null
+        }
+        initialValues={teamActions.teamDialogState?.initialValues ?? null}
+        isPending={
+          teamActions.createTeamMutation.isPending ||
+          teamActions.updateTeamMutation.isPending
+        }
+        onOpenChange={(open) => {
+          if (!open) {
+            teamActions.setTeamDialogState(null);
+          }
+        }}
+        onSubmit={teamActions.handleTeamSubmit}
+        open={teamActions.teamDialogState !== null}
+        personas={personas}
+        submitLabel={teamActions.teamDialogState?.submitLabel ?? "Save"}
+        title={teamActions.teamDialogState?.title ?? "Team"}
+      />
+      <TeamDeleteDialog
+        onConfirm={(team) => {
+          void teamActions.handleDeleteTeam(team);
+        }}
+        onOpenChange={(open) => {
+          if (!open) {
+            teamActions.setTeamToDelete(null);
+          }
+        }}
+        open={teamActions.teamToDelete !== null}
+        team={teamActions.teamToDelete}
+      />
+      <AddTeamToChannelDialog
+        onDeployed={teamActions.handleTeamDeployed}
+        onOpenChange={(open) => {
+          if (!open) {
+            teamActions.setTeamToAddToChannel(null);
+          }
+        }}
+        open={teamActions.teamToAddToChannel !== null}
+        personas={personas}
+        team={teamActions.teamToAddToChannel}
       />
     </>
   );
