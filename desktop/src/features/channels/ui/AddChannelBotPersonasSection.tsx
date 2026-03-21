@@ -2,6 +2,7 @@ import { Bot, Check } from "lucide-react";
 
 import type { AgentPersona } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { promptPreview } from "@/shared/lib/promptPreview";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import {
   Tooltip,
@@ -9,15 +10,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/shared/ui/tooltip";
-
-function promptPreview(prompt: string) {
-  const [firstLine] = prompt
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-
-  return firstLine ?? prompt.trim();
-}
 
 type SelectionChipButtonProps = {
   avatarUrl?: string | null;

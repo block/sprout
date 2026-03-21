@@ -10,6 +10,7 @@ import {
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { AgentPersona } from "@/shared/api/types";
+import { promptPreview } from "@/shared/lib/promptPreview";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -19,18 +20,6 @@ import {
 } from "@/shared/ui/dropdown-menu";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
-
-function promptPreview(systemPrompt: string) {
-  const trimmed = systemPrompt.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const [firstLine] = trimmed
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  return firstLine ?? trimmed;
-}
 
 type PersonasSectionProps = {
   personas: AgentPersona[];

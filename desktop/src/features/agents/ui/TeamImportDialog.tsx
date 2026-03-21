@@ -1,9 +1,14 @@
 import * as React from "react";
-import { Check, Loader2, Users, X } from "lucide-react";
+import { Users } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { ParsedTeamPreview } from "@/shared/api/tauriTeams";
 import { createPersona } from "@/shared/api/tauriPersonas";
+import { promptPreview } from "@/shared/lib/promptPreview";
+import {
+  ImportStatusIcon,
+  type ImportItemStatus,
+} from "@/shared/ui/import-status-icon";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -25,14 +30,6 @@ type TeamImportDialogProps = {
   ) => void;
 };
 
-function promptPreview(prompt: string) {
-  const [firstLine] = prompt
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  return firstLine ?? prompt.trim();
-}
-
 export function TeamImportDialog({
   fileName,
   open,
@@ -45,7 +42,7 @@ export function TeamImportDialog({
   >("idle");
   const [importedCount, setImportedCount] = React.useState(0);
   const [itemStatuses, setItemStatuses] = React.useState<
-    Map<number, "pending" | "importing" | "done" | "error">
+    Map<number, ImportItemStatus>
   >(new Map());
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
 
@@ -69,10 +66,7 @@ export function TeamImportDialog({
     setStatus("importing");
     setErrorMessage(null);
 
-    const initialStatuses = new Map<
-      number,
-      "pending" | "importing" | "done" | "error"
-    >();
+    const initialStatuses = new Map<number, ImportItemStatus>();
     for (let i = 0; i < personas.length; i++) {
       initialStatuses.set(i, "pending");
     }
@@ -181,13 +175,7 @@ export function TeamImportDialog({
                           {promptPreview(persona.system_prompt)}
                         </p>
                       </div>
-                      {itemStatuses.get(index) === "importing" ? (
-                        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-                      ) : itemStatuses.get(index) === "done" ? (
-                        <Check className="h-4 w-4 shrink-0 text-green-500" />
-                      ) : itemStatuses.get(index) === "error" ? (
-                        <X className="h-4 w-4 shrink-0 text-destructive" />
-                      ) : null}
+                      <ImportStatusIcon status={itemStatuses.get(index)} />
                     </div>
                   ))}
                 </div>

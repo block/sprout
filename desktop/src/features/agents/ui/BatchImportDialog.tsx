@@ -1,12 +1,10 @@
 import * as React from "react";
+import { AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
+
 import {
-  AlertTriangle,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Loader2,
-  X,
-} from "lucide-react";
+  ImportStatusIcon,
+  type ImportItemStatus,
+} from "@/shared/ui/import-status-icon";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { ParsePersonaFilesResult } from "@/shared/api/tauriPersonas";
@@ -42,7 +40,7 @@ export function BatchImportDialog({
   >("idle");
   const [importedCount, setImportedCount] = React.useState(0);
   const [itemStatuses, setItemStatuses] = React.useState<
-    Map<number, "pending" | "importing" | "done" | "error">
+    Map<number, ImportItemStatus>
   >(new Map());
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [expandedIndex, setExpandedIndex] = React.useState<number | null>(null);
@@ -72,10 +70,7 @@ export function BatchImportDialog({
     setErrorMessage(null);
 
     // Initialize all selected items as pending
-    const initialStatuses = new Map<
-      number,
-      "pending" | "importing" | "done" | "error"
-    >();
+    const initialStatuses = new Map<number, ImportItemStatus>();
     for (const index of selected) {
       initialStatuses.set(index, "pending");
     }
@@ -195,13 +190,7 @@ export function BatchImportDialog({
                           </p>
                         ) : null}
                       </div>
-                      {itemStatuses.get(index) === "importing" ? (
-                        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-                      ) : itemStatuses.get(index) === "done" ? (
-                        <Check className="h-4 w-4 shrink-0 text-green-500" />
-                      ) : itemStatuses.get(index) === "error" ? (
-                        <X className="h-4 w-4 shrink-0 text-destructive" />
-                      ) : null}
+                      <ImportStatusIcon status={itemStatuses.get(index)} />
                     </button>
                     {isExpanded ? (
                       <div className="border-t border-border/40 px-3 py-2.5">
