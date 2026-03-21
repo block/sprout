@@ -6,6 +6,7 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
+import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
 import { MessageActionBar } from "./MessageActionBar";
@@ -172,7 +173,7 @@ export const MessageRow = React.memo(
                       setHasAvatarError(true);
                     }}
                     referrerPolicy="no-referrer"
-                    src={message.avatarUrl}
+                    src={rewriteRelayUrl(message.avatarUrl)}
                   />
                 ) : (
                   <div
@@ -198,7 +199,7 @@ export const MessageRow = React.memo(
                 setHasAvatarError(true);
               }}
               referrerPolicy="no-referrer"
-              src={message.avatarUrl}
+              src={rewriteRelayUrl(message.avatarUrl)}
             />
           ) : (
             <div

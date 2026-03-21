@@ -4,6 +4,7 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
 import { cn } from "@/shared/lib/cn";
+import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
 import remarkMentions from "@/shared/lib/remarkMentions";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
@@ -106,7 +107,7 @@ function createMarkdownComponents(
       <img
         alt={alt}
         className="max-h-96 rounded-2xl border border-border/70 object-cover"
-        src={src}
+        src={src ? rewriteRelayUrl(src) : src}
       />
     ),
     li: ({ children }) => <li className={listItemClassName}>{children}</li>,

@@ -2,6 +2,7 @@ import { UserRound } from "lucide-react";
 import * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
+import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 
 type ProfileAvatarProps = {
   avatarUrl: string | null;
@@ -44,7 +45,7 @@ export function ProfileAvatar({
           setFailedAvatarUrl(avatarUrl);
         }}
         referrerPolicy="no-referrer"
-        src={avatarUrl}
+        src={rewriteRelayUrl(avatarUrl)}
       />
     );
   }

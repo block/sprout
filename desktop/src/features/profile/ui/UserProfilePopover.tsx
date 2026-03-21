@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { useUserProfileQuery } from "@/features/profile/hooks";
+import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
@@ -42,7 +43,7 @@ export function UserProfilePopover({
                 alt={profile.displayName ?? "User avatar"}
                 className="h-10 w-10 shrink-0 rounded-xl object-cover shadow-sm"
                 referrerPolicy="no-referrer"
-                src={profile.avatarUrl}
+                src={rewriteRelayUrl(profile.avatarUrl)}
               />
             ) : (
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-secondary text-xs font-semibold text-secondary-foreground shadow-sm">

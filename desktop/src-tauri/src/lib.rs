@@ -11,7 +11,7 @@ use managed_agents::{
     find_managed_agent_mut, load_managed_agents, save_managed_agents, start_managed_agent_process,
     stop_managed_agent_process, sync_managed_agent_processes, BackendKind,
 };
-use tauri::{Manager, RunEvent};
+use tauri::{http, Manager, RunEvent};
 use tauri_plugin_window_state::StateFlags;
 
 fn restore_managed_agents_on_launch(app: &tauri::AppHandle) -> Result<(), String> {
@@ -86,6 +86,75 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Proxy media requests through the Rust backend so they traverse the WARP tunnel.
+///
+/// WKWebView's networking stack bypasses WARP, causing 403s from Cloudflare Access.
+/// This handler routes `sprout-media://localhost/{path}` through reqwest, which
+/// runs in the Tauri process and goes through WARP.
+async fn handle_sprout_media(
+    app: &tauri::AppHandle,
+    request: &http::Request<Vec<u8>>,
+) -> http::Response<Vec<u8>> {
+    let state = app.state::<AppState>();
+    let base = relay::relay_api_base_url();
+
+    // Preserve path + query (thumbnails may have query params).
+    // Only proxy /media/ paths — reject anything else.
+    let path_and_query = request
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
+
+    if !path_and_query.starts_with("/media/") {
+        return error_response(404, "not found");
+    }
+
+    let upstream_url = format!("{base}{path_and_query}");
+
+    let result = state
+        .http_client
+        .get(&upstream_url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await;
+
+    match result {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let content_type = resp
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+
+            match resp.bytes().await {
+                Ok(bytes) => http::Response::builder()
+                    .status(status)
+                    .header("content-type", &content_type)
+                    .body(bytes.to_vec())
+                    .unwrap_or_else(|_| error_response(500, "response build failed")),
+                Err(_) => error_response(502, "failed to read upstream body"),
+            }
+        }
+        Err(_) => error_response(502, "upstream request failed"),
+    }
+}
+
+fn error_response(status: u16, msg: &str) -> http::Response<Vec<u8>> {
+    http::Response::builder()
+        .status(status)
+        .header("content-type", "text/plain")
+        .body(msg.as_bytes().to_vec())
+        .unwrap_or_else(|_| {
+            http::Response::builder()
+                .status(500)
+                .body(Vec::new())
+                .unwrap()
+        })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -98,6 +167,13 @@ pub fn run() {
         )
         .plugin(tauri_plugin_websocket::init())
         .plugin(tauri_plugin_dialog::init())
+        .register_asynchronous_uri_scheme_protocol("sprout-media", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let response = handle_sprout_media(&app, &request).await;
+                responder.respond(response);
+            });
+        })
         .manage(build_app_state())
         .setup(|app| {
             let app_handle = app.handle().clone();
