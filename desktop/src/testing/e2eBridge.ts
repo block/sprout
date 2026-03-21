@@ -2424,7 +2424,7 @@ async function handleParsePersonaFiles(args: {
   };
 }
 
-async function handleExportPersonaToPng(args: {
+async function handleExportPersonaToJson(args: {
   id: string;
 }): Promise<boolean> {
   // In test mode, just verify the persona exists
@@ -3200,8 +3200,8 @@ export function maybeInstallE2eTauriMocks() {
         return handleParsePersonaFiles(
           payload as { fileBytes: number[]; fileName: string },
         );
-      case "export_persona_to_png":
-        return handleExportPersonaToPng(payload as { id: string });
+      case "export_persona_to_json":
+        return handleExportPersonaToJson(payload as { id: string });
       case "list_managed_agents":
         return handleListManagedAgents();
       case "create_managed_agent":

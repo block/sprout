@@ -7,7 +7,7 @@ import {
   useCreatePersonaMutation,
   useDeletePersonaMutation,
   useDeleteManagedAgentMutation,
-  useExportPersonaPngMutation,
+  useExportPersonaJsonMutation,
   useManagedAgentLogQuery,
   useManagedAgentsQuery,
   useMintManagedAgentTokenMutation,
@@ -65,7 +65,7 @@ export function AgentsView() {
   const createPersonaMutation = useCreatePersonaMutation();
   const updatePersonaMutation = useUpdatePersonaMutation();
   const deletePersonaMutation = useDeletePersonaMutation();
-  const exportPersonaPngMutation = useExportPersonaPngMutation();
+  const exportPersonaJsonMutation = useExportPersonaJsonMutation();
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
   const [personaDialogState, setPersonaDialogState] =
     React.useState<PersonaDialogState>(null);
@@ -294,6 +294,7 @@ export function AgentsView() {
     createPersonaMutation.isPending ||
     updatePersonaMutation.isPending ||
     deletePersonaMutation.isPending ||
+    exportPersonaJsonMutation.isPending ||
     teamActions.createTeamMutation.isPending ||
     teamActions.updateTeamMutation.isPending ||
     teamActions.deleteTeamMutation.isPending;
@@ -366,7 +367,7 @@ export function AgentsView() {
                 });
               }}
               onExport={(persona) => {
-                exportPersonaPngMutation.mutate(persona.id, {
+                exportPersonaJsonMutation.mutate(persona.id, {
                   onSuccess: (saved) => {
                     if (saved) {
                       setActionNoticeMessage(

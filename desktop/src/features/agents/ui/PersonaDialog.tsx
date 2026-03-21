@@ -17,9 +17,10 @@ import {
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
 
-const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB (ZIP ceiling; PNG is smaller)
+const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB (ZIP ceiling)
 const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47];
 const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04];
+const JSON_FIRST_BYTE = 0x7b; // '{'
 
 function matchesMagic(bytes: number[], magic: number[]) {
   return magic.every((b, i) => bytes[i] === b);
@@ -107,8 +108,9 @@ export function PersonaDialog({
 
       const isPng = matchesMagic(bytes, PNG_MAGIC);
       const isZip = matchesMagic(bytes, ZIP_MAGIC);
+      const isJson = bytes.length > 0 && bytes[0] === JSON_FIRST_BYTE;
 
-      if (isPng && result.personas.length === 1) {
+      if ((isPng || isJson) && result.personas.length === 1) {
         const persona = result.personas[0];
         setDisplayName(persona.displayName);
         setSystemPrompt(persona.systemPrompt);
@@ -126,7 +128,9 @@ export function PersonaDialog({
         return;
       }
 
-      setImportError("Unsupported file format. Drop a .persona.png or .zip.");
+      setImportError(
+        "Unsupported file format. Drop a .persona.json, .persona.png, or .zip.",
+      );
     } catch (err) {
       setImportError(
         err instanceof Error ? err.message : "Failed to parse file.",
@@ -173,7 +177,7 @@ export function PersonaDialog({
           {isDragOver && enableImportDrop ? (
             <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-primary/50 bg-primary/5">
               <p className="text-sm font-medium text-primary">
-                Drop .persona.png or .zip
+                Drop .persona.json, .persona.png, or .zip
               </p>
             </div>
           ) : null}
@@ -184,7 +188,8 @@ export function PersonaDialog({
               {description}
               {enableImportDrop ? (
                 <span className="mt-1 block text-xs text-muted-foreground/70">
-                  Or drag a .persona.png or .zip onto this dialog to import.
+                  Or drag a .persona.json, .persona.png, or .zip onto this
+                  dialog to import.
                 </span>
               ) : null}
             </DialogDescription>

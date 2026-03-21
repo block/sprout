@@ -22,7 +22,7 @@ import {
 import {
   createPersona,
   deletePersona,
-  exportPersonaToPng,
+  exportPersonaToJson,
   listPersonas,
   updatePersona,
 } from "@/shared/api/tauriPersonas";
@@ -406,9 +406,9 @@ export function useEnsureGooseInChannelMutation(channelId: string | null) {
   });
 }
 
-export function useExportPersonaPngMutation() {
+export function useExportPersonaJsonMutation() {
   return useMutation({
-    mutationFn: (id: string) => exportPersonaToPng(id),
+    mutationFn: (id: string) => exportPersonaToJson(id),
   });
 }
 
