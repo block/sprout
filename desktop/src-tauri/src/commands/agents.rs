@@ -53,8 +53,9 @@ async fn deploy_to_provider(
     agent_json: serde_json::Value,
     cached_binary_path: Option<&str>,
 ) -> Result<(), String> {
-    // Resolve via discovered candidates only — never raw resolve_command on
-    // untrusted provider_id. Cached path is validated against candidates too.
+    // Resolve via discovered candidates only. Cached path must match BOTH
+    // "is a discovered candidate" AND "belongs to this provider_id". A tampered
+    // record cannot redirect deploys to a different provider's binary.
     let bin_path = cached_binary_path
         .map(std::path::PathBuf::from)
         .filter(|p| p.exists())
@@ -62,7 +63,7 @@ async fn deploy_to_provider(
         .filter(|canonical| {
             discover_provider_candidates()
                 .iter()
-                .any(|(_, cp)| cp.canonicalize().ok().as_ref() == Some(canonical))
+                .any(|(id, cp)| id == provider_id && cp.canonicalize().ok().as_ref() == Some(canonical))
         })
         .map_or_else(|| resolve_provider_binary(provider_id), Ok)?;
 

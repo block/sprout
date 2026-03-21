@@ -531,14 +531,17 @@ pub async fn post_tokens(
     // Check BEFORE any side effects (ownership, token creation). Two triggers:
     // 1. Explicit owner_pubkey in request (bootstrap mint)
     // 2. Agent already has an owner in the DB (re-mint must preserve controllability)
-    let needs_scope_check = req.owner_pubkey.is_some()
-        || state
-            .db
-            .get_agent_channel_policy(&ctx.pubkey_bytes)
-            .await
-            .ok()
-            .and_then(|opt| opt.and_then(|(_, owner)| owner))
-            .is_some();
+    // Fail closed: if the DB lookup errors, assume owned and enforce scopes.
+    // A transient DB error must not open a bypass for stripping shutdown scopes.
+    let has_existing_owner = match state.db.get_agent_channel_policy(&ctx.pubkey_bytes).await {
+        Ok(Some((_, Some(_)))) => true,
+        Ok(_) => false,
+        Err(e) => {
+            tracing::warn!("owner lookup failed (assuming owned, enforcing scopes): {e}");
+            true // fail closed
+        }
+    };
+    let needs_scope_check = req.owner_pubkey.is_some() || has_existing_owner;
     if needs_scope_check {
         let required = [
             "users:read",
