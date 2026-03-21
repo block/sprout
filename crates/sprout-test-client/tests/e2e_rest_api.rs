@@ -95,6 +95,16 @@ async fn authed_put(
         .unwrap_or_else(|e| panic!("HTTP PUT {url} failed: {e}"))
 }
 
+/// Make an authenticated DELETE request using the `X-Pubkey` dev-mode header.
+async fn authed_delete(client: &Client, url: &str, pubkey_hex: &str) -> reqwest::Response {
+    client
+        .delete(url)
+        .header("X-Pubkey", pubkey_hex)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("HTTP DELETE {url} failed: {e}"))
+}
+
 // ── Channel tests ─────────────────────────────────────────────────────────────
 
 /// GET /api/channels returns a non-empty list with the expected fields.
@@ -2361,4 +2371,101 @@ async fn test_rest_mention_pubkeys_normalization_in_emitted_event() {
     }
 
     sub.disconnect().await.expect("disconnect");
+}
+
+/// Deleting a channel should clean up all member records (including bots).
+///
+/// Verifies that after DELETE /api/channels/{id}, the member list for that
+/// channel is empty (or the channel returns 404).
+#[tokio::test]
+#[ignore]
+async fn test_delete_channel_cleans_up_members() {
+    let client = http_client();
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    let bot_keys = Keys::generate();
+    let bot_hex = bot_keys.public_key().to_hex();
+
+    // 1. Create a private channel.
+    let create_resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels", relay_http_url()),
+        &owner_hex,
+        serde_json::json!({
+            "name": format!("cleanup-test-{}", uuid::Uuid::new_v4()),
+            "channel_type": "stream",
+            "visibility": "private",
+        }),
+    )
+    .await;
+    assert_eq!(create_resp.status(), 201);
+    let channel: serde_json::Value = create_resp.json().await.expect("json");
+    let channel_id = channel["id"].as_str().expect("channel id");
+
+    // 2. Add a bot member.
+    let add_resp = authed_post_json(
+        &client,
+        &format!("{}/api/channels/{}/members", relay_http_url(), channel_id),
+        &owner_hex,
+        serde_json::json!({
+            "pubkeys": [bot_hex],
+            "role": "bot",
+        }),
+    )
+    .await;
+    assert_eq!(add_resp.status(), 201, "adding bot member should succeed");
+
+    // 3. Verify bot is in the member list.
+    let members_resp = authed_get(
+        &client,
+        &format!("{}/api/channels/{}/members", relay_http_url(), channel_id),
+        &owner_hex,
+    )
+    .await;
+    assert_eq!(members_resp.status(), 200);
+    let members_body: serde_json::Value = members_resp.json().await.expect("json");
+    let members = members_body["members"].as_array().expect("members array");
+    assert!(
+        members
+            .iter()
+            .any(|m| m["pubkey"].as_str() == Some(&bot_hex)),
+        "bot should be in the member list before deletion"
+    );
+
+    // 4. Delete the channel.
+    let delete_resp = authed_delete(
+        &client,
+        &format!("{}/api/channels/{}", relay_http_url(), channel_id),
+        &owner_hex,
+    )
+    .await;
+    assert_eq!(delete_resp.status(), 200, "channel deletion should succeed");
+
+    // 5. Verify members are cleaned up.
+    // After deletion, get_members returns empty because the channel JOIN
+    // filters on deleted_at IS NULL, and all memberships have removed_at set.
+    let members_after = authed_get(
+        &client,
+        &format!("{}/api/channels/{}/members", relay_http_url(), channel_id),
+        &owner_hex,
+    )
+    .await;
+    // The endpoint may return 404 (channel not found) or 200 with empty members.
+    // Either is acceptable — the key assertion is that no members are returned.
+    let status = members_after.status().as_u16();
+    if status == 200 {
+        let body: serde_json::Value = members_after.json().await.expect("json");
+        let empty = vec![];
+        let members = body["members"].as_array().unwrap_or(&empty);
+        assert!(
+            members.is_empty(),
+            "member list should be empty after channel deletion, got: {members:?}"
+        );
+    } else {
+        // 404 or 403 is also acceptable — channel is gone.
+        assert!(
+            status == 404 || status == 403,
+            "expected 200/404/403 after deletion, got {status}"
+        );
+    }
 }

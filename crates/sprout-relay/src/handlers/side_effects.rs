@@ -910,23 +910,17 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
     let actor_bytes = event.pubkey.serialize().to_vec();
 
-    // Soft-delete the channel.
-    let deleted = state
+    // Atomically soft-delete the channel and clean up all memberships.
+    let (deleted, removed_members) = state
         .db
-        .soft_delete_channel(channel_id)
+        .delete_channel_and_members(channel_id)
         .await
-        .map_err(|e| anyhow::anyhow!("soft_delete_channel failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("delete_channel_and_members failed: {e}"))?;
 
     if !deleted {
         warn!(channel = %channel_id, "channel already deleted or not found");
-    }
-
-    // Clean up lingering memberships so agents/bots don't appear as orphaned members.
-    match state.db.remove_all_members_on_delete(channel_id).await {
-        Ok(count) => info!(channel = %channel_id, count, "removed members on channel delete"),
-        Err(e) => {
-            warn!(channel = %channel_id, error = %e, "failed to remove members on channel delete")
-        }
+    } else {
+        info!(channel = %channel_id, removed_members, "channel deleted with member cleanup");
     }
 
     // Clean up NIP-29 discovery events for the deleted group.

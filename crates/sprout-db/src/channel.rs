@@ -1034,33 +1034,36 @@ pub async fn unarchive_channel(pool: &PgPool, channel_id: Uuid) -> Result<()> {
     Ok(())
 }
 
-/// Soft-delete a channel by setting `deleted_at = NOW()`.
+/// Atomically soft-delete a channel and remove all its active members.
 ///
-/// Returns `Ok(true)` if the channel was deleted, `Ok(false)` if already
-/// deleted or not found.
-pub async fn soft_delete_channel(pool: &PgPool, channel_id: Uuid) -> Result<bool> {
-    let result =
+/// Sets `deleted_at = NOW()` on the channel and `removed_at = NOW()` on all
+/// active memberships in a single transaction, so there is no window where
+/// the channel is deleted but members are still active.
+///
+/// Returns `Ok((true, removed_count))` if the channel was deleted, or
+/// `Ok((false, 0))` if it was already deleted / not found.
+pub async fn delete_channel_and_members(pool: &PgPool, channel_id: Uuid) -> Result<(bool, u64)> {
+    let mut tx = pool.begin().await?;
+
+    let del =
         sqlx::query("UPDATE channels SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL")
             .bind(channel_id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
 
-    Ok(result.rows_affected() > 0)
-}
+    if del.rows_affected() == 0 {
+        return Ok((false, 0));
+    }
 
-/// Soft-remove all active members of a channel.
-///
-/// Called during channel deletion to clean up lingering memberships.
-/// Sets `removed_at = NOW()` on all rows where `removed_at IS NULL`.
-/// Returns the number of members removed.
-pub async fn remove_all_members_on_delete(pool: &PgPool, channel_id: Uuid) -> Result<u64> {
-    let result = sqlx::query(
+    let members = sqlx::query(
         "UPDATE channel_members SET removed_at = NOW() WHERE channel_id = $1 AND removed_at IS NULL",
     )
     .bind(channel_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    Ok(result.rows_affected())
+
+    tx.commit().await?;
+    Ok((true, members.rows_affected()))
 }
 
 /// Returns the count of active (non-removed) members in a channel.
