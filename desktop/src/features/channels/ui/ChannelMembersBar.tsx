@@ -3,6 +3,7 @@ import * as React from "react";
 
 import {
   useAcpProvidersQuery,
+  useBackendProvidersQuery,
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
@@ -51,6 +52,7 @@ export function ChannelMembersBar({
   const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
   const membersQuery = useChannelMembersQuery(channel.id);
   const providersQuery = useAcpProvidersQuery();
+  const backendProvidersQuery = useBackendProvidersQuery();
   const managedAgentsQuery = useManagedAgentsQuery();
   const relayAgentsQuery = useRelayAgentsQuery();
   const members = membersQuery.data ?? [];
@@ -167,6 +169,8 @@ export function ChannelMembersBar({
       </div>
 
       <AddChannelBotDialog
+        backendProviders={backendProvidersQuery.data ?? []}
+        backendProvidersLoading={backendProvidersQuery.isLoading}
         channelId={channel.id}
         onOpenChange={setIsAddBotOpen}
         open={isAddBotOpen}
