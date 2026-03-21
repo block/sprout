@@ -391,6 +391,9 @@ export function CreateAgentDialog({
       prereqs !== null &&
       !isSpawnSupported
     ) &&
+    // Block submission until probe succeeds in provider mode — required
+    // fields and config schema are only known after a successful probe.
+    !(isProviderMode && !probedProvider) &&
     providerConfigComplete &&
     !createMutation.isPending;
 
