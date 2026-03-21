@@ -2,7 +2,7 @@ import type React from "react";
 
 type Segment = { type: "text" | "mention" | "channel"; value: string };
 
-const MENTION_OR_CHANNEL_RE = /@\S+|#\w[\w-]*/g;
+const MENTION_OR_CHANNEL_RE = /@\S+|#[a-zA-Z0-9][\w-]*/g;
 
 function parseSegments(text: string): Segment[] {
   const segments: Segment[] = [];
