@@ -323,26 +323,60 @@ export function useTimelineScrollManager({
       return;
     }
 
-    const targetElement = timeline.querySelector<HTMLElement>(
-      `[data-message-id="${targetMessageId}"]`,
-    );
-    if (!targetElement) {
-      return;
-    }
+    // With virtualization the target row may not be in the DOM yet.
+    // Use scrollToIndex to bring it into view first, then highlight.
+    const virt = virtualizerRef.current;
+    const targetIndex = messages.findIndex((m) => m.id === targetMessageId);
 
-    handledTargetMessageIdRef.current = targetMessageId;
-    shouldStickToBottomRef.current = false;
-    isAtBottomRef.current = false;
-    isProgrammaticBottomScrollRef.current = false;
-    targetElement.scrollIntoView({
-      block: "center",
-      behavior: "smooth",
-    });
-    previousScrollTopRef.current = timeline.scrollTop;
-    setIsAtBottom(false);
-    setHighlightedMessageId(targetMessageId);
-    setNewMessageCount(0);
-    onTargetReached?.(targetMessageId);
+    if (virt && targetIndex >= 0) {
+      virt.scrollToIndex(targetIndex, { align: "center" });
+
+      // Give the virtualizer a frame to render the row before querying the DOM.
+      requestAnimationFrame(() => {
+        const targetElement = timeline.querySelector<HTMLElement>(
+          `[data-message-id="${targetMessageId}"]`,
+        );
+
+        if (targetElement) {
+          targetElement.scrollIntoView({
+            block: "center",
+            behavior: "smooth",
+          });
+        }
+
+        handledTargetMessageIdRef.current = targetMessageId;
+        shouldStickToBottomRef.current = false;
+        isAtBottomRef.current = false;
+        isProgrammaticBottomScrollRef.current = false;
+        previousScrollTopRef.current = timeline.scrollTop;
+        setIsAtBottom(false);
+        setHighlightedMessageId(targetMessageId);
+        setNewMessageCount(0);
+        onTargetReached?.(targetMessageId);
+      });
+    } else {
+      // Fallback for non-virtualized usage or unknown target
+      const targetElement = timeline.querySelector<HTMLElement>(
+        `[data-message-id="${targetMessageId}"]`,
+      );
+      if (!targetElement) {
+        return;
+      }
+
+      handledTargetMessageIdRef.current = targetMessageId;
+      shouldStickToBottomRef.current = false;
+      isAtBottomRef.current = false;
+      isProgrammaticBottomScrollRef.current = false;
+      targetElement.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      });
+      previousScrollTopRef.current = timeline.scrollTop;
+      setIsAtBottom(false);
+      setHighlightedMessageId(targetMessageId);
+      setNewMessageCount(0);
+      onTargetReached?.(targetMessageId);
+    }
 
     const timeout = window.setTimeout(() => {
       setHighlightedMessageId((current) =>
@@ -353,7 +387,7 @@ export function useTimelineScrollManager({
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [isLoading, onTargetReached, targetMessageId]);
+  }, [isLoading, messages, onTargetReached, targetMessageId]);
 
   return {
     bottomAnchorRef,

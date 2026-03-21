@@ -12,6 +12,9 @@ import { SystemMessageRow } from "./SystemMessageRow";
 import { TimelineSkeleton } from "./TimelineSkeleton";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
+const ESTIMATED_ROW_HEIGHT = 60;
+const OVERSCAN_COUNT = 10;
+
 type MessageTimelineProps = {
   channelId?: string | null;
   messages: TimelineMessage[];
@@ -31,9 +34,6 @@ type MessageTimelineProps = {
   onTargetReached?: (messageId: string) => void;
 };
 
-const ESTIMATED_ROW_HEIGHT = 60;
-const OVERSCAN = 5;
-
 export const MessageTimeline = React.memo(function MessageTimeline({
   channelId,
   messages,
@@ -48,14 +48,13 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   targetMessageId = null,
   onTargetReached,
 }: MessageTimelineProps) {
-  const scrollElementRef = React.useRef<HTMLDivElement>(null);
+  const scrollContainerRef = React.useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({
     count: messages.length,
-    getScrollElement: () => scrollElementRef.current,
+    getScrollElement: () => scrollContainerRef.current,
     estimateSize: () => ESTIMATED_ROW_HEIGHT,
-    overscan: OVERSCAN,
-    measureElement: (element) => element.getBoundingClientRect().height,
+    overscan: OVERSCAN_COUNT,
   });
 
   const {
@@ -76,11 +75,11 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     virtualizer,
   });
 
-  // Merge the two refs onto the same scroll container element
-  const setScrollRef = React.useCallback(
+  // Merge the scroll container ref with the timeline ref from the scroll manager
+  const mergedScrollRef = React.useCallback(
     (node: HTMLDivElement | null) => {
       (
-        scrollElementRef as React.MutableRefObject<HTMLDivElement | null>
+        scrollContainerRef as React.MutableRefObject<HTMLDivElement | null>
       ).current = node;
       (timelineRef as React.MutableRefObject<HTMLDivElement | null>).current =
         node;
@@ -97,7 +96,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 [overflow-anchor:none] sm:px-6"
         data-testid="message-timeline"
         onScroll={syncScrollState}
-        ref={setScrollRef}
+        ref={mergedScrollRef}
       >
         <div
           className="mx-auto flex w-full max-w-4xl flex-col gap-2"
@@ -132,24 +131,18 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
           {!isLoading && messages.length > 0 ? (
             <div
-              style={{
-                height: `${totalSize}px`,
-                width: "100%",
-                position: "relative",
-              }}
+              className="relative w-full"
+              style={{ height: `${totalSize}px` }}
             >
               {virtualItems.map((virtualRow) => {
                 const message = messages[virtualRow.index];
                 return (
                   <div
-                    key={virtualRow.key}
+                    key={message.id}
                     data-index={virtualRow.index}
                     ref={virtualizer.measureElement}
+                    className="absolute left-0 top-0 w-full"
                     style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: "100%",
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
                   >
