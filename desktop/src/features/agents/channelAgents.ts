@@ -12,6 +12,7 @@ import type {
   AcpProvider,
   ChannelRole,
   ManagedAgent,
+  ManagedAgentBackend,
 } from "@/shared/api/types";
 
 type ChannelAgentProvider = Pick<
@@ -52,6 +53,7 @@ export type CreateChannelManagedAgentInput = {
   personaId?: string | null;
   role?: Exclude<ChannelRole, "owner">;
   ensureRunning?: boolean;
+  backend?: ManagedAgentBackend;
 };
 
 export type CreateChannelManagedAgentResult =
@@ -295,6 +297,8 @@ export async function createChannelManagedAgent(
     }
   }
 
+  const isProviderMode = input.backend?.type === "provider";
+
   const created = await createManagedAgent({
     name: trimmedName,
     acpCommand: "sprout-acp",
@@ -307,8 +311,16 @@ export async function createChannelManagedAgent(
     personaId: input.personaId ?? undefined,
     systemPrompt: input.systemPrompt?.trim() || undefined,
     avatarUrl: resolvedAvatarUrl,
-    spawnAfterCreate: false,
+    spawnAfterCreate: isProviderMode,
+    startOnAppLaunch: isProviderMode ? false : undefined,
+    backend: input.backend,
   });
+
+  // Tauri returns Ok() even on deploy failure — spawnError carries the message.
+  if (created.spawnError) {
+    throw new Error(created.spawnError);
+  }
+
   const attached = await attachManagedAgentToChannel(channelId, {
     agent: created.agent,
     role,

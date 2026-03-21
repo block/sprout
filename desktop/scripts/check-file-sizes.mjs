@@ -45,6 +45,7 @@ const overrides = new Map([
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests
   ["src/features/agents/ui/AgentsView.tsx", 730], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard + persona import
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
+  ["src/features/channels/ui/AddChannelBotDialog.tsx", 600], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement
 ]);
 
 async function walkFiles(directory) {

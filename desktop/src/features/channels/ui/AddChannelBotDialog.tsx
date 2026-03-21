@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { AlertTriangle, ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -10,7 +10,13 @@ import {
 import { AddChannelBotGenericSection } from "@/features/channels/ui/AddChannelBotGenericSection";
 import { AddChannelBotPersonasSection } from "@/features/channels/ui/AddChannelBotPersonasSection";
 import { AddChannelBotTeamsSection } from "@/features/channels/ui/AddChannelBotTeamsSection";
-import type { AcpProvider } from "@/shared/api/types";
+import { probeBackendProvider } from "@/shared/api/tauri";
+import type {
+  AcpProvider,
+  BackendProviderCandidate,
+  BackendProviderProbeResult,
+  ManagedAgentBackend,
+} from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -26,8 +32,14 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
+import {
+  coerceConfigValues,
+  ProviderConfigFields,
+} from "@/features/agents/ui/ProviderConfigFields";
 
 type AddChannelBotDialogProps = {
+  backendProviders?: BackendProviderCandidate[];
+  backendProvidersLoading?: boolean;
   channelId: string | null;
   open: boolean;
   providers: AcpProvider[];
@@ -74,6 +86,8 @@ function formatBatchFailureSummary(
 }
 
 export function AddChannelBotDialog({
+  backendProviders,
+  backendProvidersLoading,
   channelId,
   open,
   providers,
@@ -102,6 +116,17 @@ export function AddChannelBotDialog({
     null,
   );
 
+  const resolvedBackendProviders = backendProviders ?? [];
+  const resolvedBackendProvidersLoading = backendProvidersLoading ?? false;
+
+  const [runOn, setRunOn] = React.useState<"local" | string>("local");
+  const [providerConfig, setProviderConfig] = React.useState<
+    Record<string, string>
+  >({});
+  const [probedProvider, setProbedProvider] =
+    React.useState<BackendProviderProbeResult | null>(null);
+  const [probeError, setProbeError] = React.useState<string | null>(null);
+
   const selectedProvider = React.useMemo(
     () =>
       providers.find((provider) => provider.id === selectedProviderId) ??
@@ -114,6 +139,21 @@ export function AddChannelBotDialog({
     [personas, selectedPersonaIds],
   );
   const selectedCount = selectedPersonas.length + (includeGeneric ? 1 : 0);
+
+  const isProviderMode = runOn !== "local";
+  const selectedBackendProvider = React.useMemo(
+    () => resolvedBackendProviders.find((p) => p.id === runOn) ?? null,
+    [resolvedBackendProviders, runOn],
+  );
+  const providerConfigComplete = React.useMemo(() => {
+    if (!isProviderMode || !probedProvider?.config_schema) return true;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const schema = probedProvider.config_schema as any;
+    const required: string[] = schema?.required ?? [];
+    return required.every(
+      (key) => (providerConfig[key] ?? "").trim().length > 0,
+    );
+  }, [isProviderMode, probedProvider, providerConfig]);
 
   React.useEffect(() => {
     if (!open) {
@@ -139,6 +179,48 @@ export function AddChannelBotDialog({
     );
   }, [personas]);
 
+  React.useEffect(() => {
+    if (!isProviderMode || !selectedBackendProvider) {
+      setProbedProvider(null);
+      setProbeError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setProbeError(null);
+    setProbedProvider(null);
+
+    probeBackendProvider(selectedBackendProvider.binaryPath)
+      .then((result) => {
+        if (!cancelled) {
+          setProbedProvider(result);
+          if (result.config_schema) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const props = (result.config_schema as any)?.properties ?? {};
+            const defaults: Record<string, string> = {};
+            for (const [key, prop] of Object.entries(props) as [
+              string,
+              Record<string, unknown>,
+            ][]) {
+              if (prop.default != null) {
+                defaults[key] = String(prop.default);
+              }
+            }
+            setProviderConfig(defaults);
+          }
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setProbeError(err instanceof Error ? err.message : String(err));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isProviderMode, selectedBackendProvider]);
+
   function reset() {
     setSelectedProviderId(providers[0]?.id ?? "");
     setSelectedPersonaIds([]);
@@ -148,6 +230,10 @@ export function AddChannelBotDialog({
     setHasEditedCustomName(false);
     setSubmissionNotice(null);
     setSubmissionError(null);
+    setRunOn("local");
+    setProviderConfig({});
+    setProbedProvider(null);
+    setProbeError(null);
     createBotsMutation.reset();
   }
 
@@ -172,10 +258,30 @@ export function AddChannelBotDialog({
     setSubmissionError(null);
   }
 
+  function handleRunOnChange(value: string) {
+    setRunOn(value);
+    setProviderConfig({});
+    setProbedProvider(null);
+    setProbeError(null);
+    setSubmissionNotice(null);
+    setSubmissionError(null);
+  }
+
   async function handleSubmit() {
     if (!selectedProvider || selectedCount === 0) {
       return;
     }
+
+    const backend: ManagedAgentBackend = isProviderMode
+      ? {
+          type: "provider",
+          id: runOn,
+          config: coerceConfigValues(
+            providerConfig,
+            probedProvider?.config_schema,
+          ),
+        }
+      : { type: "local" };
 
     const inputs = [
       ...(includeGeneric
@@ -185,6 +291,7 @@ export function AddChannelBotDialog({
               name: customName,
               systemPrompt: customPrompt,
               role: "bot" as const,
+              backend,
             },
           ]
         : []),
@@ -195,6 +302,7 @@ export function AddChannelBotDialog({
         systemPrompt: persona.systemPrompt,
         avatarUrl: persona.avatarUrl ?? undefined,
         role: "bot" as const,
+        backend,
       })),
     ];
 
@@ -242,7 +350,10 @@ export function AddChannelBotDialog({
     selectedProvider !== null &&
     selectedCount > 0 &&
     (!includeGeneric || customName.trim().length > 0) &&
+    !(isProviderMode && !probedProvider) &&
+    providerConfigComplete &&
     !providersLoading &&
+    !(isProviderMode && resolvedBackendProvidersLoading) &&
     !createBotsMutation.isPending;
   const canChooseProvider =
     providers.length > 0 && !providersLoading && !createBotsMutation.isPending;
@@ -271,6 +382,53 @@ export function AddChannelBotDialog({
           </DialogHeader>
 
           <div className="space-y-5 px-6 py-5">
+            {resolvedBackendProviders.length > 0 ? (
+              <div className="space-y-1.5">
+                <div className="text-sm font-medium">Run on</div>
+                <select
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+                  disabled={createBotsMutation.isPending}
+                  onChange={(e) => handleRunOnChange(e.target.value)}
+                  value={runOn}
+                >
+                  <option value="local">This computer</option>
+                  {resolvedBackendProviders.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+
+            {isProviderMode && selectedBackendProvider ? (
+              <div className="flex gap-3 rounded-2xl border border-amber-400/60 bg-amber-50/60 px-4 py-3 dark:border-amber-500/40 dark:bg-amber-950/30">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <p className="text-sm text-amber-800 dark:text-amber-300">
+                  This provider at{" "}
+                  <span className="font-mono font-medium">
+                    {selectedBackendProvider.binaryPath}
+                  </span>{" "}
+                  will receive your agent&apos;s private key. Only use providers
+                  from trusted sources.
+                </p>
+              </div>
+            ) : null}
+
+            {probeError ? (
+              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                Could not probe provider: {probeError}
+              </p>
+            ) : null}
+
+            {isProviderMode && probedProvider?.config_schema ? (
+              <ProviderConfigFields
+                config={providerConfig}
+                onChange={setProviderConfig}
+                schema={probedProvider.config_schema}
+              />
+            ) : null}
+
             <div className="space-y-1.5">
               <div className="text-sm font-medium">Runtime</div>
               <DropdownMenu modal={false}>
