@@ -68,10 +68,39 @@ pub struct OwnedAgent {
     /// channel_id → session_id
     pub sessions: HashMap<Uuid, String>,
     pub heartbeat_session: Option<String>,
+    /// Per-channel turn counters for proactive session rotation.
+    /// Incremented on each successful prompt; reset when the session is rotated.
+    pub turn_counts: HashMap<Uuid, u32>,
+    /// Turn counter for the heartbeat session.
+    pub heartbeat_turn_count: u32,
     /// Model catalog from first session/new. None until first session created.
     pub model_capabilities: Option<AgentModelCapabilities>,
     /// Desired model ID (from `Config.model`). Applied after every `session_new_full()`.
     pub desired_model: Option<String>,
+}
+
+impl OwnedAgent {
+    /// Invalidate the session (and turn counter) for a specific prompt source.
+    pub fn invalidate_session(&mut self, source: &PromptSource) {
+        match source {
+            PromptSource::Channel(cid) => {
+                self.sessions.remove(cid);
+                self.turn_counts.remove(cid);
+            }
+            PromptSource::Heartbeat => {
+                self.heartbeat_session = None;
+                self.heartbeat_turn_count = 0;
+            }
+        }
+    }
+
+    /// Invalidate all sessions and turn counters (e.g. after agent exit).
+    pub fn invalidate_all_sessions(&mut self) {
+        self.sessions.clear();
+        self.turn_counts.clear();
+        self.heartbeat_session = None;
+        self.heartbeat_turn_count = 0;
+    }
 }
 
 /// Pool of agents with take-and-return ownership semantics.
@@ -97,6 +126,7 @@ pub struct PromptResult {
 }
 
 /// Whether the prompt came from a channel event or a heartbeat.
+#[derive(Debug)]
 pub enum PromptSource {
     Channel(Uuid),
     Heartbeat,
@@ -129,6 +159,8 @@ pub struct PromptContext {
     pub channel_info: std::collections::HashMap<Uuid, ChannelInfo>,
     /// Max messages to include in thread/DM context. 0 = disabled.
     pub context_message_limit: u32,
+    /// Max turns per session before proactive rotation. 0 = disabled.
+    pub max_turns_per_session: u32,
 }
 
 // ── AgentPool impl ────────────────────────────────────────────────────────────
@@ -248,6 +280,7 @@ impl AgentPool {
         for slot in &mut self.agents {
             if let Some(agent) = slot.as_mut() {
                 if agent.sessions.remove(&channel_id).is_some() {
+                    agent.turn_counts.remove(&channel_id);
                     count += 1;
                 }
             }
@@ -415,8 +448,7 @@ pub async fn run_prompt_task(
                         (sid, true)
                     }
                     Err(AcpError::AgentExited) => {
-                        agent.sessions.clear();
-                        agent.heartbeat_session = None;
+                        agent.invalidate_all_sessions();
                         let _ = result_tx.send(PromptResult {
                             agent,
                             source,
@@ -452,8 +484,7 @@ pub async fn run_prompt_task(
                         (sid, true)
                     }
                     Err(AcpError::AgentExited) => {
-                        agent.sessions.clear();
-                        agent.heartbeat_session = None;
+                        agent.invalidate_all_sessions();
                         let _ = result_tx.send(PromptResult {
                             agent,
                             source,
@@ -499,8 +530,7 @@ pub async fn run_prompt_task(
                     );
                 }
                 Ok(Err(AcpError::AgentExited)) => {
-                    agent.sessions.clear();
-                    agent.heartbeat_session = None;
+                    agent.invalidate_all_sessions();
                     let _ = result_tx.send(PromptResult {
                         agent,
                         source,
@@ -514,7 +544,7 @@ pub async fn run_prompt_task(
                         target: "pool::session",
                         "initial_message failed for channel {cid}: {e} — invalidating session"
                     );
-                    agent.sessions.remove(cid);
+                    agent.invalidate_session(&source);
                     let _ = result_tx.send(PromptResult {
                         agent,
                         source,
@@ -530,11 +560,10 @@ pub async fn run_prompt_task(
                     );
                     match agent.acp.cancel_with_cleanup(&session_id).await {
                         Ok(_) => {
-                            agent.sessions.remove(cid);
+                            agent.invalidate_session(&source);
                         }
                         Err(AcpError::AgentExited) => {
-                            agent.sessions.clear();
-                            agent.heartbeat_session = None;
+                            agent.invalidate_all_sessions();
                             let _ = result_tx.send(PromptResult {
                                 agent,
                                 source,
@@ -548,7 +577,7 @@ pub async fn run_prompt_task(
                                 target: "pool::session",
                                 "cancel_with_cleanup failed during initial_message timeout: {e}"
                             );
-                            agent.sessions.remove(cid);
+                            agent.invalidate_session(&source);
                         }
                     }
                     let _ = result_tx.send(PromptResult {
@@ -626,6 +655,41 @@ pub async fn run_prompt_task(
     match prompt_result {
         Ok(Ok(stop_reason)) => {
             log_stop_reason(&source, &stop_reason);
+
+            // ── Session rotation on context exhaustion ────────────────
+            let should_rotate = matches!(
+                stop_reason,
+                StopReason::MaxTokens | StopReason::MaxTurnRequests
+            );
+
+            // ── Proactive turn-based rotation ─────────────────────────
+            let should_rotate = should_rotate || {
+                let limit = ctx.max_turns_per_session;
+                if limit > 0 {
+                    match &source {
+                        PromptSource::Channel(cid) => {
+                            let count = agent.turn_counts.entry(*cid).or_insert(0);
+                            *count += 1;
+                            *count >= limit
+                        }
+                        PromptSource::Heartbeat => {
+                            agent.heartbeat_turn_count += 1;
+                            agent.heartbeat_turn_count >= limit
+                        }
+                    }
+                } else {
+                    false
+                }
+            };
+
+            if should_rotate {
+                tracing::info!(
+                    target: "pool::session",
+                    "rotating session for {source:?} after {stop_reason:?}",
+                );
+                agent.invalidate_session(&source);
+            }
+
             let _ = result_tx.send(PromptResult {
                 agent,
                 source,
@@ -1005,10 +1069,10 @@ fn log_stop_reason(source: &PromptSource, stop_reason: &StopReason) {
             tracing::warn!(target: "pool::prompt", "turn cancelled for {label}");
         }
         StopReason::MaxTokens => {
-            tracing::warn!(target: "pool::prompt", "turn hit max_tokens for {label}");
+            tracing::warn!(target: "pool::prompt", "turn hit max_tokens for {label} — session will be rotated");
         }
         StopReason::MaxTurnRequests => {
-            tracing::warn!(target: "pool::prompt", "turn hit max_turn_requests for {label}");
+            tracing::warn!(target: "pool::prompt", "turn hit max_turn_requests for {label} — session will be rotated");
         }
         StopReason::Refusal => {
             tracing::warn!(target: "pool::prompt", "turn refused for {label}");

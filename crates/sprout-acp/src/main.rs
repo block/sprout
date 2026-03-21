@@ -84,6 +84,8 @@ async fn main() -> Result<()> {
             acp,
             sessions: HashMap::new(),
             heartbeat_session: None,
+            turn_counts: HashMap::new(),
+            heartbeat_turn_count: 0,
             model_capabilities: None,
             desired_model: config.model.clone(),
         });
@@ -228,6 +230,7 @@ async fn main() -> Result<()> {
         rest_client: relay.rest_client(),
         channel_info: channel_info_map,
         context_message_limit: config.context_message_limit,
+        max_turns_per_session: config.max_turns_per_session,
     });
 
     // ── Step 6: Heartbeat timer ───────────────────────────────────────────────
@@ -901,6 +904,8 @@ async fn recover_panicked_agent(
                 acp,
                 sessions: HashMap::new(),
                 heartbeat_session: None,
+                turn_counts: HashMap::new(),
+                heartbeat_turn_count: 0,
                 model_capabilities: None,
                 desired_model: config.model.clone(),
             });
@@ -1013,6 +1018,8 @@ async fn respawn_agent_into(old_agent: OwnedAgent, config: &Config) -> Result<Ow
         acp,
         sessions: HashMap::new(),
         heartbeat_session: None,
+        turn_counts: HashMap::new(),
+        heartbeat_turn_count: 0,
         model_capabilities: None,
         desired_model: config.model.clone(),
     })
