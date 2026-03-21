@@ -158,9 +158,10 @@ export function useManagedAgentsQuery() {
     staleTime: 1_000,
     refetchInterval: (query) => {
       const agents = query.state.data as ManagedAgent[] | undefined;
-      return agents?.some(
-        (agent) => agent.status === "running" || agent.status === "deployed",
-      )
+      // Only local "running" agents need fast polling (process state can
+      // change). "deployed" is static control-plane state — presence polling
+      // handles the live signal for remote agents separately.
+      return agents?.some((agent) => agent.status === "running")
         ? 2_000
         : 10_000;
     },

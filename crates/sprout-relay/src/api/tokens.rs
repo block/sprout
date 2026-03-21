@@ -560,23 +560,28 @@ pub async fn post_tokens(
         }
     }
 
-    // ── Set agent owner (after scope validation, before token creation) ───────
-    state
-        .db
-        .ensure_user(&owner_bytes)
-        .await
-        .map_err(|e| internal_error(&format!("ensure_user for owner failed: {e}")))?;
+    // ── Set agent owner (only when explicitly requested) ─────────────────────
+    // Self-mints without owner_pubkey do NOT assign ownership. Only bootstrap
+    // mints with an explicit owner_pubkey write the ownership relationship.
+    // This preserves the semantics that omitting owner_pubkey means "don't
+    // set agent owner" — important because self-ownership would force
+    // controllability scopes on all future re-mints.
+    if req.owner_pubkey.is_some() {
+        state
+            .db
+            .ensure_user(&owner_bytes)
+            .await
+            .map_err(|e| internal_error(&format!("ensure_user for owner failed: {e}")))?;
 
-    match state
-        .db
-        .set_agent_owner(&ctx.pubkey_bytes, &owner_bytes)
-        .await
-    {
-        Ok(true) => {
-            tracing::debug!("agent owner set successfully");
-        }
-        Ok(false) => {
-            if req.owner_pubkey.is_some() {
+        match state
+            .db
+            .set_agent_owner(&ctx.pubkey_bytes, &owner_bytes)
+            .await
+        {
+            Ok(true) => {
+                tracing::debug!("agent owner set successfully");
+            }
+            Ok(false) => {
                 let existing = state
                     .db
                     .get_agent_channel_policy(&ctx.pubkey_bytes)
@@ -590,15 +595,10 @@ pub async fn post_tokens(
                     ));
                 }
                 tracing::debug!("agent already owned by the requested pubkey — no change needed");
-            } else {
-                tracing::debug!("agent already has an owner — skipping self-ownership");
             }
-        }
-        Err(e) => {
-            if req.owner_pubkey.is_some() {
+            Err(e) => {
                 return Err(internal_error(&format!("failed to set agent owner: {e}")));
             }
-            tracing::warn!("set_agent_owner failed for self-mint: {e}");
         }
     }
 
