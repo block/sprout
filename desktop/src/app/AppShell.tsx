@@ -603,19 +603,27 @@ export function AppShell() {
             />
 
             <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
-              {selectedView === "home" ? (
+              <div className={selectedView === "home" ? undefined : "hidden"}>
                 <ChatHeader
                   description="Personalized feed for mentions, reminders, channel activity, and agent work."
                   mode="home"
                   title="Home"
                 />
-              ) : selectedView === "agents" ? (
+              </div>
+              <div className={selectedView === "agents" ? undefined : "hidden"}>
                 <ChatHeader
                   description="Create local ACP workers, mint agent tokens, and monitor the relay-visible agent directory."
                   mode="agents"
                   title="Agents"
                 />
-              ) : (
+              </div>
+              <div
+                className={
+                  selectedView !== "home" && selectedView !== "agents"
+                    ? undefined
+                    : "hidden"
+                }
+              >
                 <ChatHeader
                   actions={
                     activeChannel ? (
@@ -641,10 +649,16 @@ export function AppShell() {
                   }
                   title={activeChannelTitle}
                 />
-              )}
+              </div>
 
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                {selectedView === "home" ? (
+                <div
+                  className={
+                    selectedView === "home"
+                      ? "flex min-h-0 flex-1 flex-col"
+                      : "hidden"
+                  }
+                >
                   <HomeView
                     availableChannelIds={availableChannelIds}
                     currentPubkey={identityQuery.data?.pubkey}
@@ -660,37 +674,53 @@ export function AppShell() {
                       void homeFeedQuery.refetch();
                     }}
                   />
-                ) : selectedView === "agents" ? (
+                </div>
+                <div
+                  className={
+                    selectedView === "agents"
+                      ? "flex min-h-0 flex-1 flex-col"
+                      : "hidden"
+                  }
+                >
                   <AgentsView />
-                ) : activeChannel?.channelType === "forum" ? (
-                  <ForumView
-                    channel={activeChannel}
-                    currentPubkey={identityQuery.data?.pubkey}
-                  />
-                ) : (
-                  <ChannelPane
-                    activeChannel={activeChannel}
-                    currentPubkey={identityQuery.data?.pubkey}
-                    isSending={sendMessageMutation.isPending}
-                    isTimelineLoading={isTimelineLoading}
-                    messages={timelineMessages}
-                    onCancelReply={handleCancelReply}
-                    onReply={handleReply}
-                    onSend={handleSend}
-                    onTargetReached={handleTargetReached}
-                    onToggleReaction={effectiveToggleReaction}
-                    profiles={messageProfiles}
-                    replyTargetId={replyTargetId}
-                    replyTargetMessage={replyTargetMessage}
-                    targetMessageId={
-                      activeChannel &&
-                      searchAnchor?.channelId === activeChannel.id
-                        ? searchAnchor.eventId
-                        : null
-                    }
-                    typingPubkeys={typingPubkeys}
-                  />
-                )}
+                </div>
+                <div
+                  className={
+                    selectedView !== "home" && selectedView !== "agents"
+                      ? "flex min-h-0 flex-1 flex-col overflow-hidden"
+                      : "hidden"
+                  }
+                >
+                  {activeChannel?.channelType === "forum" ? (
+                    <ForumView
+                      channel={activeChannel}
+                      currentPubkey={identityQuery.data?.pubkey}
+                    />
+                  ) : (
+                    <ChannelPane
+                      activeChannel={activeChannel}
+                      currentPubkey={identityQuery.data?.pubkey}
+                      isSending={sendMessageMutation.isPending}
+                      isTimelineLoading={isTimelineLoading}
+                      messages={timelineMessages}
+                      onCancelReply={handleCancelReply}
+                      onReply={handleReply}
+                      onSend={handleSend}
+                      onTargetReached={handleTargetReached}
+                      onToggleReaction={effectiveToggleReaction}
+                      profiles={messageProfiles}
+                      replyTargetId={replyTargetId}
+                      replyTargetMessage={replyTargetMessage}
+                      targetMessageId={
+                        activeChannel &&
+                        searchAnchor?.channelId === activeChannel.id
+                          ? searchAnchor.eventId
+                          : null
+                      }
+                      typingPubkeys={typingPubkeys}
+                    />
+                  )}
+                </div>
               </div>
             </SidebarInset>
           </React.Fragment>
