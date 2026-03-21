@@ -9,7 +9,7 @@ use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use commands::*;
 use managed_agents::{
     find_managed_agent_mut, load_managed_agents, save_managed_agents, start_managed_agent_process,
-    stop_managed_agent_process, sync_managed_agent_processes,
+    stop_managed_agent_process, sync_managed_agent_processes, BackendKind,
 };
 use tauri::{http, Manager, RunEvent};
 use tauri_plugin_window_state::StateFlags;
@@ -28,7 +28,7 @@ fn restore_managed_agents_on_launch(app: &tauri::AppHandle) -> Result<(), String
     let mut changed = sync_managed_agent_processes(&mut records, &mut runtimes);
     let pubkeys_to_restore = records
         .iter()
-        .filter(|record| record.start_on_app_launch)
+        .filter(|record| record.start_on_app_launch && record.backend == BackendKind::Local)
         .map(|record| record.pubkey.clone())
         .collect::<Vec<_>>();
 
@@ -67,6 +67,10 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     let mut changed = sync_managed_agent_processes(&mut records, &mut runtimes);
 
     for record in records.iter_mut() {
+        // Only stop Local agents — Provider agents are managed externally.
+        if record.backend != BackendKind::Local {
+            continue;
+        }
         if record.runtime_pid.is_none() && !runtimes.contains_key(&record.pubkey) {
             continue;
         }
@@ -246,6 +250,9 @@ pub fn run() {
             get_managed_agent_log,
             get_agent_models,
             update_managed_agent,
+            discover_backend_providers,
+            probe_backend_provider,
+
             list_personas,
             create_persona,
             update_persona,
@@ -255,7 +262,7 @@ pub fn run() {
             update_team,
             delete_team,
             parse_persona_files,
-            export_persona_to_png,
+            export_persona_to_json,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -137,29 +137,55 @@ pub fn build_managed_agent_summary(
     record: &ManagedAgentRecord,
     runtimes: &HashMap<String, ManagedAgentProcess>,
 ) -> Result<ManagedAgentSummary, String> {
-    let persisted_pid = record.runtime_pid.filter(|pid| process_is_running(*pid));
-    let (status, pid, log_path) = if let Some(runtime) = runtimes.get(&record.pubkey) {
-        (
-            "running".to_string(),
-            Some(runtime.child.id()),
-            runtime.log_path.display().to_string(),
-        )
-    } else if let Some(pid) = persisted_pid {
-        (
-            "running".to_string(),
-            Some(pid),
-            managed_agent_log_path(app, &record.pubkey)?
-                .display()
-                .to_string(),
-        )
+    use crate::managed_agents::BackendKind;
+
+    let (status, pid, log_path) = if record.backend != BackendKind::Local {
+        // Two-axis status model for remote agents:
+        //
+        //   Control-plane (this field): "deployed" = provider has been invoked and
+        //   returned a backend_agent_id. "not_deployed" = no deploy call yet (or it
+        //   failed). This axis tracks whether infrastructure *exists*, not whether
+        //   the process is currently running.
+        //
+        //   Live axis (relay presence, polled by frontend): online/away/offline.
+        //   Shown as a PresenceDot next to the agent name. This is the real-time
+        //   signal for whether the harness is connected.
+        //
+        // After !shutdown the agent goes offline (presence) but stays "deployed"
+        // (infrastructure still exists). This is intentional — the provider may
+        // have allocated a VM/container that persists across process restarts.
+        // A future provider `undeploy` operation (v2) will handle teardown.
+        let status = if record.backend_agent_id.is_some() {
+            "deployed".to_string()
+        } else {
+            "not_deployed".to_string()
+        };
+        (status, None, String::new())
     } else {
-        (
-            "stopped".to_string(),
-            None,
-            managed_agent_log_path(app, &record.pubkey)?
-                .display()
-                .to_string(),
-        )
+        let persisted_pid = record.runtime_pid.filter(|pid| process_is_running(*pid));
+        if let Some(runtime) = runtimes.get(&record.pubkey) {
+            (
+                "running".to_string(),
+                Some(runtime.child.id()),
+                runtime.log_path.display().to_string(),
+            )
+        } else if let Some(pid) = persisted_pid {
+            (
+                "running".to_string(),
+                Some(pid),
+                managed_agent_log_path(app, &record.pubkey)?
+                    .display()
+                    .to_string(),
+            )
+        } else {
+            (
+                "stopped".to_string(),
+                None,
+                managed_agent_log_path(app, &record.pubkey)?
+                    .display()
+                    .to_string(),
+            )
+        }
     };
 
     Ok(ManagedAgentSummary {
@@ -176,6 +202,8 @@ pub fn build_managed_agent_summary(
         system_prompt: record.system_prompt.clone(),
         model: record.model.clone(),
         has_api_token: record.api_token.is_some(),
+        backend: record.backend.clone(),
+        backend_agent_id: record.backend_agent_id.clone(),
         status,
         pid,
         created_at: record.created_at.clone(),

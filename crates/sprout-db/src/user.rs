@@ -251,22 +251,42 @@ pub async fn search_users(
 /// Set the owner pubkey for an agent user.
 /// The owner pubkey must already exist in the users table (FK constraint).
 /// Returns an error if the agent pubkey is not found (rows_affected == 0).
+/// Atomically set agent owner — only if no owner is currently assigned.
+///
+/// Returns Ok(true) if ownership was set, Ok(false) if an owner already exists
+/// (caller should check whether the existing owner matches). Returns Err if the
+/// agent pubkey doesn't exist in the users table.
 pub async fn set_agent_owner(
     pool: &PgPool,
     agent_pubkey: &[u8],
     owner_pubkey: &[u8],
-) -> Result<()> {
-    let result = sqlx::query(r#"UPDATE users SET agent_owner_pubkey = $1 WHERE pubkey = $2"#)
-        .bind(owner_pubkey)
-        .bind(agent_pubkey)
-        .execute(pool)
-        .await?;
+) -> Result<bool> {
+    // Conditional UPDATE: only set owner if currently NULL. This makes
+    // "first mint wins" atomic — no TOCTOU race between concurrent mints.
+    let result = sqlx::query(
+        r#"UPDATE users SET agent_owner_pubkey = $1 WHERE pubkey = $2 AND agent_owner_pubkey IS NULL"#,
+    )
+    .bind(owner_pubkey)
+    .bind(agent_pubkey)
+    .execute(pool)
+    .await?;
+
     if result.rows_affected() == 0 {
-        return Err(crate::error::DbError::NotFound(
-            "agent pubkey not found in users table".into(),
-        ));
+        // Could be: (a) pubkey not found, or (b) owner already set.
+        // Check which case by querying the row.
+        let exists = sqlx::query(r#"SELECT 1 FROM users WHERE pubkey = $1"#)
+            .bind(agent_pubkey)
+            .fetch_optional(pool)
+            .await?;
+        if exists.is_none() {
+            return Err(crate::error::DbError::NotFound(
+                "agent pubkey not found in users table".into(),
+            ));
+        }
+        // Row exists but owner already set — return false (not an error).
+        return Ok(false);
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Get the channel_add_policy and agent_owner_pubkey for a user.
@@ -350,9 +370,10 @@ mod tests {
             .await
             .expect("ensure owner");
 
-        set_agent_owner(&db.pool, &agent_pk, &owner_pk)
+        let was_set = set_agent_owner(&db.pool, &agent_pk, &owner_pk)
             .await
             .expect("set_agent_owner");
+        assert!(was_set, "first set_agent_owner should return true");
 
         let result = get_agent_channel_policy(&db.pool, &agent_pk)
             .await
@@ -425,7 +446,7 @@ mod tests {
     }
 
     /// set_agent_owner should return Err when the agent pubkey does not exist
-    /// in the users table (0 rows affected -> NotFound).
+    /// in the users table.
     #[tokio::test]
     #[ignore = "requires Postgres"]
     async fn test_set_agent_owner_nonexistent_agent() {
@@ -443,6 +464,39 @@ mod tests {
             result.is_err(),
             "should error when agent pubkey is not in users table"
         );
+    }
+
+    /// set_agent_owner should return Ok(false) when the agent already has an owner.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn test_set_agent_owner_already_owned() {
+        let db = setup_db().await;
+        let agent_pk = random_pubkey();
+        let owner1 = random_pubkey();
+        let owner2 = random_pubkey();
+
+        ensure_user(&db.pool, &agent_pk)
+            .await
+            .expect("ensure agent");
+        ensure_user(&db.pool, &owner1).await.expect("ensure owner1");
+        ensure_user(&db.pool, &owner2).await.expect("ensure owner2");
+
+        let first = set_agent_owner(&db.pool, &agent_pk, &owner1)
+            .await
+            .expect("first set");
+        assert!(first, "first set should succeed");
+
+        let second = set_agent_owner(&db.pool, &agent_pk, &owner2)
+            .await
+            .expect("second set should not error");
+        assert!(!second, "second set should return false (already owned)");
+
+        // Verify original owner is preserved.
+        let (_, owner) = get_agent_channel_policy(&db.pool, &agent_pk)
+            .await
+            .expect("get policy")
+            .expect("should be Some");
+        assert_eq!(owner, Some(owner1), "original owner should be preserved");
     }
 
     /// set_channel_add_policy should return Err when the pubkey does not exist

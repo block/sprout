@@ -123,6 +123,32 @@ async fn main() -> Result<()> {
         }
     }
 
+    // ── Step 2d: Query agent owner (with retry) ─────────────────────────────
+    // Owner lookup is critical for !shutdown — a transient failure here would
+    // permanently disable remote shutdown for this process. Retry a few times
+    // with backoff so a brief relay hiccup doesn't leave us uncontrollable.
+    // Owner lookup: try at startup, but if it fails the shutdown handler will
+    // retry lazily when a candidate !shutdown message arrives. This means a
+    // relay outage during startup doesn't permanently disable remote shutdown.
+    let mut owner_pubkey: Option<String> = {
+        let profile_url = format!("/api/users/{pubkey_hex}/profile");
+        match rest_client_for_presence.get_json(&profile_url).await {
+            Ok(v) => v
+                .get("agent_owner_pubkey")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            Err(e) => {
+                tracing::warn!("startup owner lookup failed (will retry lazily): {e}");
+                None
+            }
+        }
+    };
+    if let Some(ref owner) = owner_pubkey {
+        tracing::info!("agent owner: {owner}");
+    } else {
+        tracing::info!("no agent owner set at startup — will resolve lazily on !shutdown");
+    }
+
     // ── Step 3: Discover channels and build subscription rules ────────────────
     let channel_info_map = relay
         .discover_channels()
@@ -432,6 +458,54 @@ async fn main() -> Result<()> {
                                 tracing::debug!(channel_id = %sprout_event.channel_id, "dropping self-authored event");
                                 continue;
                             }
+
+                            // ── Shutdown command handling ─────────────────────
+                            // Check: kind:9, content "!shutdown", from owner, mentions THIS agent.
+                            let is_shutdown = kind_u32 == KIND_STREAM_MESSAGE
+                                && sprout_event.event.content.trim() == "!shutdown"
+                                && sprout_event.event.tags.iter().any(|t| {
+                                    t.as_slice().first().map(|s| s.as_str()) == Some("p")
+                                        && t.as_slice().get(1).map(|s| s.as_str()) == Some(pubkey_hex.as_str())
+                                });
+                            if is_shutdown {
+                                // Lazy owner resolution: if we don't have the owner
+                                // yet (startup lookup failed), try now. This ensures
+                                // a relay outage during startup doesn't permanently
+                                // disable remote shutdown.
+                                if owner_pubkey.is_none() {
+                                    let profile_url = format!("/api/users/{pubkey_hex}/profile");
+                                    match rest_client_for_presence.get_json(&profile_url).await {
+                                        Ok(v) => {
+                                            owner_pubkey = v
+                                                .get("agent_owner_pubkey")
+                                                .and_then(|v| v.as_str())
+                                                .map(String::from);
+                                            if let Some(ref o) = owner_pubkey {
+                                                tracing::info!("lazy owner resolution succeeded: {o}");
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("lazy owner lookup failed: {e}");
+                                        }
+                                    }
+                                }
+                                if let Some(ref owner) = owner_pubkey {
+                                    if sprout_event.event.pubkey.to_hex() == *owner {
+                                        tracing::info!(
+                                            channel_id = %sprout_event.channel_id,
+                                            sender = %sprout_event.event.pubkey.to_hex(),
+                                            "shutdown command from owner — exiting gracefully"
+                                        );
+                                        let _ = shutdown_tx.send(());
+                                        continue;
+                                    }
+                                }
+                                // Not from owner — fall through to normal prompt handling.
+                                // Don't drop it — it's a regular message that happens to
+                                // contain "!shutdown" from a non-owner.
+                            }
+                            // ── End shutdown command handling ──────────────────
+
                             let matched = filter::match_event(&sprout_event.event, sprout_event.channel_id, &rules, &pubkey_hex).await;
                             let prompt_tag = match matched {
                                 Some(m) => m.prompt_tag,

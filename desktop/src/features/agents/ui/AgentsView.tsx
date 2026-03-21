@@ -7,7 +7,7 @@ import {
   useCreatePersonaMutation,
   useDeletePersonaMutation,
   useDeleteManagedAgentMutation,
-  useExportPersonaPngMutation,
+  useExportPersonaJsonMutation,
   useManagedAgentLogQuery,
   useManagedAgentsQuery,
   useMintManagedAgentTokenMutation,
@@ -18,6 +18,9 @@ import {
   useStopManagedAgentMutation,
   useUpdatePersonaMutation,
 } from "@/features/agents/hooks";
+import { useChannelsQuery } from "@/features/channels/hooks";
+import { usePresenceQuery } from "@/features/presence/hooks";
+import { sendChannelMessage } from "@/shared/api/tauri";
 import type { ParsePersonaFilesResult } from "@/shared/api/tauriPersonas";
 import type {
   AgentPersona,
@@ -56,6 +59,7 @@ export function AgentsView() {
   const queryClient = useQueryClient();
   const relayAgentsQuery = useRelayAgentsQuery();
   const managedAgentsQuery = useManagedAgentsQuery();
+  const channelsQuery = useChannelsQuery();
   const personasQuery = usePersonasQuery();
   const startMutation = useStartManagedAgentMutation();
   const stopMutation = useStopManagedAgentMutation();
@@ -65,7 +69,7 @@ export function AgentsView() {
   const createPersonaMutation = useCreatePersonaMutation();
   const updatePersonaMutation = useUpdatePersonaMutation();
   const deletePersonaMutation = useDeletePersonaMutation();
-  const exportPersonaPngMutation = useExportPersonaPngMutation();
+  const exportPersonaJsonMutation = useExportPersonaJsonMutation();
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
   const [personaDialogState, setPersonaDialogState] =
     React.useState<PersonaDialogState>(null);
@@ -99,9 +103,12 @@ export function AgentsView() {
   const managedAgents = React.useMemo(
     () =>
       [...(managedAgentsQuery.data ?? [])].sort((left, right) => {
-        if (left.status !== right.status) {
-          return left.status === "running" ? -1 : 1;
-        }
+        // Active agents (running or deployed) sort before inactive ones.
+        // Both "running" and "deployed" are equivalent for sorting purposes.
+        const activeScore = (s: string) =>
+          s === "running" || s === "deployed" ? 1 : 0;
+        const diff = activeScore(right.status) - activeScore(left.status);
+        if (diff !== 0) return diff;
 
         return left.name.localeCompare(right.name);
       }),
@@ -125,6 +132,32 @@ export function AgentsView() {
     () => new Set(managedAgents.map((agent) => agent.pubkey)),
     [managedAgents],
   );
+  const managedPubkeyList = React.useMemo(
+    () => managedAgents.map((agent) => agent.pubkey),
+    [managedAgents],
+  );
+  const managedPresenceQuery = usePresenceQuery(managedPubkeyList);
+
+  /** Resolve a relay-agent's first channel UUID for sending !shutdown. */
+  function resolveAgentChannelId(pubkey: string): string | null {
+    const relayAgents = relayAgentsQuery.data ?? [];
+    const relayAgent = relayAgents.find((ra) => ra.pubkey === pubkey);
+    // Prefer channelIds (new relay with json_agg). Fall back to resolving
+    // channel names via the channels query (old relay without channel_ids).
+    if (relayAgent?.channelIds?.length) {
+      return relayAgent.channelIds[0];
+    }
+    // Fallback: resolve channel name → UUID via the channels query.
+    // Only use this when the match is unambiguous — if multiple channels
+    // share the same name (e.g. across teams), we can't be sure which one
+    // the agent is in, and sending !shutdown to the wrong channel would
+    // silently miss the agent. Return null to surface the error to the user.
+    const channelName = relayAgent?.channels?.[0];
+    if (!channelName) return null;
+    const channels = channelsQuery.data ?? [];
+    const matches = channels.filter((ch) => ch.name === channelName);
+    return matches.length === 1 ? matches[0].id : null;
+  }
 
   // Clear log selection if the agent was removed
   React.useEffect(() => {
@@ -154,7 +187,26 @@ export function AgentsView() {
     setActionErrorMessage(null);
 
     try {
-      await stopMutation.mutateAsync(pubkey);
+      const agent = managedAgents.find((a) => a.pubkey === pubkey);
+      if (!agent) return;
+
+      if (agent.backend.type === "provider") {
+        // Remote agent: send !shutdown mention via relay REST API.
+        const channelId = resolveAgentChannelId(pubkey);
+        if (!channelId) {
+          setActionErrorMessage("Cannot stop: agent is not in any channel");
+          return;
+        }
+        await sendChannelMessage(channelId, "!shutdown", undefined, undefined, [
+          pubkey,
+        ]);
+        setActionNoticeMessage(
+          "Shutdown command sent. Agent will stop shortly.",
+        );
+      } else {
+        // Local agent: existing stop flow
+        await stopMutation.mutateAsync(pubkey);
+      }
     } catch (error) {
       setActionErrorMessage(
         error instanceof Error ? error.message : "Failed to stop agent.",
@@ -167,7 +219,59 @@ export function AgentsView() {
     setActionErrorMessage(null);
 
     try {
-      await deleteMutation.mutateAsync(pubkey);
+      // For remote agents, send !shutdown before deleting to avoid orphaning.
+      const agent = managedAgents.find((a) => a.pubkey === pubkey);
+      if (agent?.backend.type === "provider" && agent.backendAgentId) {
+        const presence =
+          managedPresenceQuery.data?.[pubkey.trim().toLowerCase()];
+        const channelId = resolveAgentChannelId(pubkey);
+        if (channelId) {
+          // If the agent is still online, send !shutdown and warn that
+          // deletion proceeds without waiting for confirmed exit.
+          if (presence === "online" || presence === "away") {
+            await sendChannelMessage(
+              channelId,
+              "!shutdown",
+              undefined,
+              undefined,
+              [pubkey],
+            );
+            // eslint-disable-next-line no-alert
+            const confirmed = window.confirm(
+              "Shutdown command sent, but the agent may still be running. " +
+                "Deleting now removes the local record — the remote deployment " +
+                "will be orphaned if shutdown hasn't completed. Continue?",
+            );
+            if (!confirmed) return;
+          } else {
+            // Offline presence means the process isn't connected, but the
+            // remote infrastructure (VM/container) may still exist. Confirm
+            // before removing the local record — it's the only management handle.
+            // eslint-disable-next-line no-alert
+            const confirmed = window.confirm(
+              "This agent is offline but the remote deployment may still exist. " +
+                "Deleting removes the local management record. Continue?",
+            );
+            if (!confirmed) return;
+          }
+        } else {
+          // Can't send shutdown — warn user about orphaning.
+          // eslint-disable-next-line no-alert
+          const confirmed = window.confirm(
+            "This agent is deployed but not in any channel. " +
+              "Deleting will orphan the remote deployment (it will keep running). Continue?",
+          );
+          if (!confirmed) return;
+        }
+      }
+      // Pass forceRemoteDelete for deployed provider agents — the backend
+      // rejects deletion of deployed remote agents without this flag.
+      const isDeployedRemote =
+        agent?.backend.type === "provider" && agent?.backendAgentId;
+      await deleteMutation.mutateAsync({
+        pubkey,
+        forceRemoteDelete: isDeployedRemote ? true : undefined,
+      });
       if (logAgentPubkey === pubkey) {
         setLogAgentPubkey(null);
       }
@@ -294,6 +398,7 @@ export function AgentsView() {
     createPersonaMutation.isPending ||
     updatePersonaMutation.isPending ||
     deletePersonaMutation.isPending ||
+    exportPersonaJsonMutation.isPending ||
     teamActions.createTeamMutation.isPending ||
     teamActions.updateTeamMutation.isPending ||
     teamActions.deleteTeamMutation.isPending;
@@ -366,7 +471,7 @@ export function AgentsView() {
                 });
               }}
               onExport={(persona) => {
-                exportPersonaPngMutation.mutate(persona.id, {
+                exportPersonaJsonMutation.mutate(persona.id, {
                   onSuccess: (saved) => {
                     if (saved) {
                       setActionNoticeMessage(
@@ -419,6 +524,7 @@ export function AgentsView() {
               isActionPending={isActionPending}
               isLoading={managedAgentsQuery.isLoading}
               personaLabelsById={personaLabelsById}
+              presenceLookup={managedPresenceQuery.data ?? {}}
               onAddToChannel={(agent) => {
                 setActionNoticeMessage(null);
                 setActionErrorMessage(null);

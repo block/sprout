@@ -68,7 +68,7 @@ export function ModelPicker({
         pubkey: agent.pubkey,
         model: modelId === modelsData?.agentDefaultModel ? null : modelId,
       });
-      if (agent.status === "running") {
+      if (agent.status === "running" || agent.status === "deployed") {
         setNeedsRestart(true);
       }
       onModelChanged?.();

@@ -128,6 +128,11 @@ pub struct MintTokenRequest {
     pub channel_ids: Option<Vec<String>>,
     /// Optional expiry in days (1–365). Omit for no expiry.
     pub expires_in_days: Option<u32>,
+    /// Optional owner pubkey (hex). Only accepted via NIP-98 auth (bootstrap mint).
+    /// Sets `agent_owner_pubkey` on the agent's user record. This proves the caller
+    /// holds the agent's private key and is designating another pubkey as the owner.
+    /// Rejected if auth is Bearer (child token minting cannot reassign ownership).
+    pub owner_pubkey: Option<String>,
 }
 
 /// Response body for `POST /api/tokens` (token shown once only).
@@ -480,6 +485,27 @@ pub async fn post_tokens(
         None
     };
 
+    // ── Validate owner_pubkey (before token insert) ─────────────────────────
+    let validated_owner_bytes: Option<Vec<u8>> = if let Some(ref owner_hex) = req.owner_pubkey {
+        if ctx.auth_method != super::RestAuthMethod::Nip98 {
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "owner_pubkey can only be set via NIP-98 auth (bootstrap mint)",
+            ));
+        }
+        let bytes = nostr::util::hex::decode(owner_hex)
+            .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid owner_pubkey hex"))?;
+        if bytes.len() != 32 {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "owner_pubkey must be 32 bytes (64 hex chars)",
+            ));
+        }
+        Some(bytes)
+    } else {
+        None
+    };
+
     // ── Validate expires_in_days ──────────────────────────────────────────────
     if let Some(days) = req.expires_in_days {
         if days == 0 || days > 365 {
@@ -494,7 +520,89 @@ pub async fn post_tokens(
         .expires_in_days
         .map(|days| Utc::now() + chrono::Duration::days(days as i64));
 
-    // ── Generate token ────────────────────────────────────────────────────────
+    // ── Set agent owner BEFORE token creation ────────────────────────────────
+    // Ownership must be settled before the token is inserted. This eliminates
+    // the orphaned-token failure mode: if ownership fails, no token exists to
+    // revoke. set_agent_owner is atomic (UPDATE ... WHERE agent_owner_pubkey
+    // IS NULL) — concurrent bootstrap mints are serialized by the DB.
+    let owner_bytes = validated_owner_bytes.unwrap_or_else(|| ctx.pubkey_bytes.clone());
+
+    // ── Enforce shutdown-required scopes ─────────────────────────────────────
+    // Check BEFORE any side effects (ownership, token creation). Two triggers:
+    // 1. Explicit owner_pubkey in request (bootstrap mint)
+    // 2. Agent already has an owner in the DB (re-mint must preserve controllability)
+    // Fail closed: if the DB lookup errors, assume owned and enforce scopes.
+    // A transient DB error must not open a bypass for stripping shutdown scopes.
+    let has_existing_owner = match state.db.get_agent_channel_policy(&ctx.pubkey_bytes).await {
+        Ok(Some((_, Some(_)))) => true,
+        Ok(_) => false,
+        Err(e) => {
+            tracing::warn!("owner lookup failed (assuming owned, enforcing scopes): {e}");
+            true // fail closed
+        }
+    };
+    let needs_scope_check = req.owner_pubkey.is_some() || has_existing_owner;
+    if needs_scope_check {
+        let required = [
+            "users:read",
+            "messages:read",
+            "messages:write",
+            "channels:read",
+        ];
+        let scope_strs: Vec<String> = parsed_scopes.iter().map(|s| s.to_string()).collect();
+        for r in &required {
+            if !scope_strs.iter().any(|s| s == r) {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!("owned agents require the '{r}' scope for controllability"),
+                ));
+            }
+        }
+    }
+
+    // ── Set agent owner (only when explicitly requested) ─────────────────────
+    // Self-mints without owner_pubkey do NOT assign ownership. Only bootstrap
+    // mints with an explicit owner_pubkey write the ownership relationship.
+    // This preserves the semantics that omitting owner_pubkey means "don't
+    // set agent owner" — important because self-ownership would force
+    // controllability scopes on all future re-mints.
+    if req.owner_pubkey.is_some() {
+        state
+            .db
+            .ensure_user(&owner_bytes)
+            .await
+            .map_err(|e| internal_error(&format!("ensure_user for owner failed: {e}")))?;
+
+        match state
+            .db
+            .set_agent_owner(&ctx.pubkey_bytes, &owner_bytes)
+            .await
+        {
+            Ok(true) => {
+                tracing::debug!("agent owner set successfully");
+            }
+            Ok(false) => {
+                let existing = state
+                    .db
+                    .get_agent_channel_policy(&ctx.pubkey_bytes)
+                    .await
+                    .map_err(|e| internal_error(&format!("db error checking owner: {e}")))?
+                    .and_then(|(_, owner)| owner);
+                if existing.as_deref() != Some(owner_bytes.as_slice()) {
+                    return Err(api_error(
+                        StatusCode::CONFLICT,
+                        "agent already has a different owner",
+                    ));
+                }
+                tracing::debug!("agent already owned by the requested pubkey — no change needed");
+            }
+            Err(e) => {
+                return Err(internal_error(&format!("failed to set agent owner: {e}")));
+            }
+        }
+    }
+
+    // ── Generate token (after scope validation + ownership settled) ───────────
     let raw_token = sprout_auth::generate_token();
     let token_hash: Vec<u8> = Sha256::digest(raw_token.as_bytes()).to_vec();
     let scope_strings: Vec<String> = parsed_scopes.iter().map(|s| s.to_string()).collect();
@@ -526,20 +634,6 @@ pub async fn post_tokens(
             ));
         }
     };
-
-    // ── Set agent owner ─────────────────────────────────────────────────────
-    // Self-minted tokens always set the caller as the agent owner. This is the
-    // same field that `sprout-admin mint-token --owner-pubkey` sets, ensuring
-    // self-minted agents have the same ownership semantics as admin-minted ones.
-    if let Err(e) = state
-        .db
-        .set_agent_owner(&ctx.pubkey_bytes, &ctx.pubkey_bytes)
-        .await
-    {
-        tracing::warn!("set_agent_owner failed for self-mint: {e}");
-        // Non-fatal — token was already created. Owner field is a convenience,
-        // not a security gate. Log and continue.
-    }
 
     // ── Build response ────────────────────────────────────────────────────────
     let channel_ids_response: Vec<String> = validated_channel_ids

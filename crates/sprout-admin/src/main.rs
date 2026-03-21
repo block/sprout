@@ -88,18 +88,63 @@ async fn mint_token(
 
     let pubkey_bytes = pubkey.serialize().to_vec();
 
-    db.ensure_user(&pubkey_bytes).await?;
+    // ── Enforce shutdown-required scopes (before any DB writes) ─────────────
+    // Two triggers, same as the relay path:
+    // 1. Explicit --owner-pubkey (bootstrap mint)
+    // 2. Agent already has an owner in the DB (re-mint must preserve controllability)
+    // Fail closed: DB lookup error → assume owned → enforce scopes.
+    let has_existing_owner = match db.get_agent_channel_policy(&pubkey_bytes).await {
+        Ok(Some((_, Some(_)))) => true,
+        Ok(_) => false,
+        Err(e) => {
+            eprintln!("warning: owner lookup failed (assuming owned): {e}");
+            true // fail closed
+        }
+    };
+    if owner_pubkey.is_some() || has_existing_owner {
+        let required = [
+            "users:read",
+            "messages:read",
+            "messages:write",
+            "channels:read",
+        ];
+        for r in &required {
+            if !scopes.iter().any(|s| s == r) {
+                anyhow::bail!("owned agents require the '{r}' scope for agent controllability");
+            }
+        }
+    }
 
-    // Set agent owner if --owner-pubkey was provided
-    if let Some(ref owner_hex) = owner_pubkey {
+    // ── Validate owner_pubkey (before any DB writes) ─────────────────────────
+    let validated_owner = if let Some(ref owner_hex) = owner_pubkey {
         let owner_bytes =
             hex::decode(owner_hex).map_err(|e| anyhow::anyhow!("invalid owner pubkey hex: {e}"))?;
         if owner_bytes.len() != 32 {
             anyhow::bail!("owner pubkey must be 32 bytes (64 hex chars)");
         }
-        // Ensure owner's user row exists (FK constraint requires it)
+        Some(owner_bytes)
+    } else {
+        None
+    };
+
+    // ── DB writes (all validation passed) ────────────────────────────────────
+    db.ensure_user(&pubkey_bytes).await?;
+
+    if let Some(owner_bytes) = validated_owner {
         db.ensure_user(&owner_bytes).await?;
-        db.set_agent_owner(&pubkey_bytes, &owner_bytes).await?;
+        let was_set = db.set_agent_owner(&pubkey_bytes, &owner_bytes).await?;
+        if !was_set {
+            let existing = db
+                .get_agent_channel_policy(&pubkey_bytes)
+                .await?
+                .and_then(|(_, owner)| owner);
+            if existing.as_deref() != Some(owner_bytes.as_slice()) {
+                anyhow::bail!(
+                    "agent already has a different owner — refusing to mint token for non-owner"
+                );
+            }
+            eprintln!("note: agent already owned by the requested pubkey — proceeding");
+        }
     }
 
     let raw_token = generate_token();

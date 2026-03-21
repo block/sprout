@@ -3,6 +3,8 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type {
   AddChannelMembersInput,
   AddChannelMembersResult,
+  BackendProviderCandidate,
+  BackendProviderProbeResult,
   CanvasResponse,
   Channel,
   ChannelDetail,
@@ -16,6 +18,7 @@ import type {
   MintTokenResponse,
   MintManagedAgentTokenInput,
   ManagedAgent,
+  ManagedAgentBackend,
   RelayAgent,
   PresenceLookup,
   PresenceStatus,
@@ -215,6 +218,7 @@ type RawRelayAgent = {
   name: string;
   agent_type: string;
   channels: string[];
+  channel_ids: string[];
   capabilities: string[];
   status: RelayAgent["status"];
 };
@@ -243,6 +247,8 @@ export type RawManagedAgent = {
   last_error: string | null;
   log_path: string;
   start_on_app_launch: boolean;
+  backend: ManagedAgentBackend;
+  backend_agent_id: string | null;
 };
 
 type RawCreateManagedAgentResponse = {
@@ -775,6 +781,7 @@ function fromRawRelayAgent(agent: RawRelayAgent): RelayAgent {
     name: agent.name,
     agentType: agent.agent_type,
     channels: agent.channels,
+    channelIds: agent.channel_ids ?? [],
     capabilities: agent.capabilities,
     status: agent.status,
   };
@@ -805,6 +812,8 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     lastError: agent.last_error,
     logPath: agent.log_path,
     startOnAppLaunch: agent.start_on_app_launch,
+    backend: agent.backend,
+    backendAgentId: agent.backend_agent_id,
   };
 }
 
@@ -898,6 +907,7 @@ export async function createManagedAgent(input: CreateManagedAgentInput) {
         tokenName: input.tokenName,
         spawnAfterCreate: input.spawnAfterCreate,
         startOnAppLaunch: input.startOnAppLaunch,
+        backend: input.backend,
       },
     },
   );
@@ -925,8 +935,14 @@ export async function stopManagedAgent(pubkey: string): Promise<ManagedAgent> {
   return fromRawManagedAgent(response);
 }
 
-export async function deleteManagedAgent(pubkey: string): Promise<void> {
-  await invokeTauri("delete_managed_agent", { pubkey });
+export async function deleteManagedAgent(
+  pubkey: string,
+  forceRemoteDelete?: boolean,
+): Promise<void> {
+  await invokeTauri("delete_managed_agent", {
+    pubkey,
+    forceRemoteDelete: forceRemoteDelete ?? null,
+  });
 }
 
 export async function mintManagedAgentToken(input: MintManagedAgentTokenInput) {
@@ -1002,4 +1018,20 @@ export async function updateManagedAgent(
     input,
   });
   return fromRawManagedAgent(response);
+}
+
+// ── Backend provider discovery ────────────────────────────────────────────────
+
+export async function discoverBackendProviders(): Promise<
+  BackendProviderCandidate[]
+> {
+  return invokeTauri<BackendProviderCandidate[]>("discover_backend_providers");
+}
+
+export async function probeBackendProvider(
+  binaryPath: string,
+): Promise<BackendProviderProbeResult> {
+  return invokeTauri<BackendProviderProbeResult>("probe_backend_provider", {
+    binaryPath,
+  });
 }

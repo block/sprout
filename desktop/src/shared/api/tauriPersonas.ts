@@ -122,6 +122,6 @@ export async function parsePersonaFiles(
   };
 }
 
-export async function exportPersonaToPng(id: string): Promise<boolean> {
-  return invokeTauri<boolean>("export_persona_to_png", { id });
+export async function exportPersonaToJson(id: string): Promise<boolean> {
+  return invokeTauri<boolean>("export_persona_to_json", { id });
 }

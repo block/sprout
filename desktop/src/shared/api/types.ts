@@ -267,9 +267,14 @@ export type RelayAgent = {
   name: string;
   agentType: string;
   channels: string[];
+  channelIds: string[];
   capabilities: string[];
   status: "online" | "away" | "offline";
 };
+
+export type ManagedAgentBackend =
+  | { type: "local" }
+  | { type: "provider"; id: string; config: Record<string, unknown> };
 
 export type ManagedAgent = {
   pubkey: string;
@@ -285,7 +290,7 @@ export type ManagedAgent = {
   systemPrompt: string | null;
   model: string | null;
   hasApiToken: boolean;
-  status: "running" | "stopped";
+  status: "running" | "stopped" | "deployed" | "not_deployed";
   pid: number | null;
   createdAt: string;
   updatedAt: string;
@@ -295,6 +300,21 @@ export type ManagedAgent = {
   lastError: string | null;
   logPath: string;
   startOnAppLaunch: boolean;
+  backend: ManagedAgentBackend;
+  backendAgentId: string | null;
+};
+
+export type BackendProviderCandidate = {
+  id: string;
+  binaryPath: string;
+};
+
+export type BackendProviderProbeResult = {
+  ok: boolean;
+  name?: string;
+  version?: string;
+  description?: string;
+  config_schema?: Record<string, unknown>;
 };
 
 export type CreateManagedAgentInput = {
@@ -315,6 +335,7 @@ export type CreateManagedAgentInput = {
   tokenName?: string;
   spawnAfterCreate?: boolean;
   startOnAppLaunch?: boolean;
+  backend?: ManagedAgentBackend;
 };
 
 export type CreateManagedAgentResponse = {

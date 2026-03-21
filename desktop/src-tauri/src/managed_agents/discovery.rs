@@ -275,6 +275,7 @@ pub fn default_token_scopes() -> Vec<String> {
         "messages:read".to_string(),
         "messages:write".to_string(),
         "channels:read".to_string(),
+        "users:read".to_string(),
         "users:write".to_string(),
     ]
 }
@@ -291,6 +292,7 @@ pub async fn mint_token_via_api(
     relay_url: &str,
     name: &str,
     scopes: &[String],
+    owner_pubkey: Option<&str>,
 ) -> Result<String, String> {
     let http_base = relay_http_base_url(relay_url);
     let url = format!("{http_base}/api/tokens");
@@ -300,6 +302,7 @@ pub async fn mint_token_via_api(
         scopes,
         channel_ids: None,
         expires_in_days: None,
+        owner_pubkey,
     };
     let body_bytes =
         serde_json::to_vec(&body).map_err(|e| format!("serialize mint body failed: {e}"))?;

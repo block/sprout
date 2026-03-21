@@ -220,6 +220,10 @@ pub struct MintTokenBody<'a> {
     pub channel_ids: Option<&'a [String]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_in_days: Option<u32>,
+    /// Owner pubkey (hex). Only accepted via NIP-98 auth.
+    /// Sets agent_owner_pubkey on the agent's user record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_pubkey: Option<&'a str>,
 }
 
 #[derive(Serialize, Deserialize)]
