@@ -262,6 +262,8 @@ pub fn run() {
             create_team,
             update_team,
             delete_team,
+            export_team_to_json,
+            parse_team_file,
             parse_persona_files,
             export_persona_to_json,
         ])

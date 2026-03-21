@@ -1,4 +1,4 @@
-import { Bot } from "lucide-react";
+import { Bot, Check } from "lucide-react";
 
 import type { AgentPersona } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
@@ -73,6 +73,7 @@ function SelectionChipButton({
 
 type AddChannelBotPersonasSectionProps = {
   canToggleSelections: boolean;
+  inChannelPersonaIds?: ReadonlySet<string>;
   includeGeneric: boolean;
   isLoading: boolean;
   onToggleGeneric: () => void;
@@ -83,6 +84,7 @@ type AddChannelBotPersonasSectionProps = {
 
 export function AddChannelBotPersonasSection({
   canToggleSelections,
+  inChannelPersonaIds,
   includeGeneric,
   isLoading,
   onToggleGeneric,
@@ -130,6 +132,7 @@ export function AddChannelBotPersonasSection({
             </Tooltip>
             {personas.map((persona) => {
               const isSelected = selectedPersonaIds.includes(persona.id);
+              const isInChannel = inChannelPersonaIds?.has(persona.id) ?? false;
               return (
                 <Tooltip key={persona.id}>
                   <TooltipTrigger asChild>
@@ -142,6 +145,19 @@ export function AddChannelBotPersonasSection({
                         selected={isSelected}
                       >
                         {persona.displayName}
+                        {isInChannel ? (
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none",
+                              isSelected
+                                ? "bg-background/20 text-background/80"
+                                : "bg-muted/60 text-muted-foreground",
+                            )}
+                          >
+                            <Check className="h-2.5 w-2.5" />
+                            In channel
+                          </span>
+                        ) : null}
                       </SelectionChipButton>
                     </div>
                   </TooltipTrigger>
@@ -156,6 +172,11 @@ export function AddChannelBotPersonasSection({
                         />
                         <p className="font-medium">{persona.displayName}</p>
                       </div>
+                      {isInChannel ? (
+                        <p className="text-[11px] font-medium text-emerald-300">
+                          ✓ Already in this channel
+                        </p>
+                      ) : null}
                       <p className="text-[11px] text-primary-foreground">
                         {promptPreview(persona.systemPrompt)}
                       </p>

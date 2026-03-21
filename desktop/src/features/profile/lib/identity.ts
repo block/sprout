@@ -1,13 +1,10 @@
 import type { Profile, UserProfileSummary } from "@/shared/api/types";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 
 export type UserProfileLookup = Record<string, UserProfileSummary>;
 
 export function truncatePubkey(pubkey: string) {
   return `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`;
-}
-
-function normalizePubkey(pubkey: string) {
-  return pubkey.toLowerCase();
 }
 
 function getResolvedProfile(

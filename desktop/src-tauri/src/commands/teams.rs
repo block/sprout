@@ -1,9 +1,13 @@
 use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 use crate::{
     app_state::AppState,
-    managed_agents::{load_teams, save_teams, CreateTeamRequest, TeamRecord, UpdateTeamRequest},
+    managed_agents::{
+        encode_team_json, load_personas, load_teams, parse_team_json, save_teams,
+        CreateTeamRequest, ParsedTeamPreview, TeamRecord, UpdateTeamRequest,
+    },
     util::now_iso,
 };
 
@@ -105,4 +109,82 @@ pub fn delete_team(
         return Err(format!("team {id} not found"));
     }
     save_teams(&app, &teams)
+}
+
+// ---------------------------------------------------------------------------
+// Import / Export
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn export_team_to_json(
+    id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    // Load team and personas under lock, then drop lock before dialog.
+    let (team, personas) = {
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let teams = load_teams(&app)?;
+        let team = teams
+            .into_iter()
+            .find(|t| t.id == id)
+            .ok_or_else(|| format!("team {id} not found"))?;
+        let personas = load_personas(&app)?;
+        (team, personas)
+    };
+
+    let json_bytes = encode_team_json(&team, &personas)?;
+
+    // Slugify team name for filename.
+    let slug: String = team
+        .name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    let slug = if slug.is_empty() { "team" } else { &slug };
+    let slug = if slug.len() > 50 { &slug[..50] } else { slug };
+    let slug = slug.trim_end_matches('-');
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .set_file_name(&format!("{slug}.team.json"))
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+
+    let selected = rx.await.map_err(|_| "dialog cancelled".to_string())?;
+    let file_path = match selected {
+        Some(p) => p,
+        None => return Ok(false),
+    };
+
+    let dest = file_path
+        .as_path()
+        .ok_or_else(|| "Save dialog returned an invalid path".to_string())?;
+    std::fs::write(dest, &json_bytes)
+        .map_err(|e| format!("Failed to write file: {e}"))?;
+
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn parse_team_file(
+    file_bytes: Vec<u8>,
+    _file_name: String,
+) -> Result<ParsedTeamPreview, String> {
+    if file_bytes.is_empty() {
+        return Err("File is empty.".to_string());
+    }
+    if file_bytes.len() > 5 * 1024 * 1024 {
+        return Err("File is too large (max 5 MB).".to_string());
+    }
+    parse_team_json(&file_bytes)
 }

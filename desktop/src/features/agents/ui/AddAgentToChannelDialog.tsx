@@ -4,8 +4,12 @@ import {
   type AttachManagedAgentToChannelResult,
   useAttachManagedAgentToChannelMutation,
 } from "@/features/agents/hooks";
-import { useChannelsQuery } from "@/features/channels/hooks";
+import {
+  useChannelMembersQuery,
+  useChannelsQuery,
+} from "@/features/channels/hooks";
 import type { Channel, ChannelRole, ManagedAgent } from "@/shared/api/types";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -67,6 +71,21 @@ export function AddAgentToChannelDialog({
       setChannelId(channels[0].id);
     }
   }, [channelId, channels, open]);
+
+  const membersQuery = useChannelMembersQuery(
+    channelId || null,
+    open && !!channelId,
+  );
+
+  const isAlreadyMember = React.useMemo(() => {
+    if (!agent?.pubkey || !membersQuery.data) {
+      return false;
+    }
+    const normalized = normalizePubkey(agent.pubkey);
+    return membersQuery.data.some(
+      (member) => normalizePubkey(member.pubkey) === normalized,
+    );
+  }, [agent?.pubkey, membersQuery.data]);
 
   const selectedChannel =
     channels.find((channel) => channel.id === channelId) ?? null;
@@ -131,6 +150,13 @@ export function AddAgentToChannelDialog({
                 here.
               </p>
             </div>
+
+            {isAlreadyMember ? (
+              <div className="flex items-center gap-2 rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+                <span>✓</span>
+                <span>Already a member of this channel</span>
+              </div>
+            ) : null}
 
             <div className="space-y-1.5">
               <label
@@ -202,7 +228,11 @@ export function AddAgentToChannelDialog({
               size="sm"
               type="button"
             >
-              {attachAgentMutation.isPending ? "Adding..." : "Add to channel"}
+              {attachAgentMutation.isPending
+                ? "Adding..."
+                : isAlreadyMember
+                  ? "Re-add to channel"
+                  : "Add to channel"}
             </Button>
           </div>
         </div>
