@@ -101,9 +101,7 @@ pub fn invoke_provider(
     let deadline = std::time::Instant::now() + timeout;
     let mut stdout_buf = Vec::new();
     let mut stderr_bytes = Vec::new();
-    let mut exit_status = None;
-
-    loop {
+    let exit_status = loop {
         // Drain stdout chunks (non-blocking), enforce byte cap.
         while stdout_buf.len() < STDOUT_CAP {
             match stdout_rx.try_recv() {
@@ -121,8 +119,7 @@ pub fn invoke_provider(
 
         match child.try_wait() {
             Ok(Some(status)) => {
-                exit_status = Some(status);
-                break;
+                break status;
             }
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
@@ -138,7 +135,7 @@ pub fn invoke_provider(
                 return Err(format!("wait error: {e}"));
             }
         }
-    }
+    };
 
     // Drain remaining stdout chunks buffered between last poll and child exit.
     // Keep draining until the channel disconnects (reader finished) or the
@@ -179,17 +176,14 @@ pub fn invoke_provider(
     let stderr_redacted = redact_secrets(&stderr);
 
     let exit_info = exit_status
-        .map(|s| {
-            s.code()
-                .map(|c| format!("exit code {c}"))
-                .unwrap_or_else(|| "killed by signal".to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+        .code()
+        .map(|c| format!("exit code {c}"))
+        .unwrap_or_else(|| "killed by signal".to_string());
 
     // Fail on non-zero exit regardless of stdout content. A provider that
     // crashes mid-deploy may flush partial JSON before dying — trusting that
     // output would be worse than surfacing the failure.
-    let exited_ok = exit_status.map_or(false, |s| s.success());
+    let exited_ok = exit_status.success();
     if !exited_ok {
         let stderr_snippet = &stderr_redacted[..stderr_redacted.len().min(4096)];
         if stderr_snippet.is_empty() {
