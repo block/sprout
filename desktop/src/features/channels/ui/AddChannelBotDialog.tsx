@@ -263,11 +263,6 @@ export function AddChannelBotDialog({
     setProviderConfig({});
     setProbedProvider(null);
     setProbeError(null);
-    // Clear multi-selection when switching to provider mode
-    if (value !== "local") {
-      setSelectedPersonaIds([]);
-      setIncludeGeneric(false);
-    }
     setSubmissionNotice(null);
     setSubmissionError(null);
   }
@@ -354,7 +349,6 @@ export function AddChannelBotDialog({
   const canSubmit =
     selectedProvider !== null &&
     selectedCount > 0 &&
-    (!isProviderMode || selectedCount === 1) &&
     (!includeGeneric || customName.trim().length > 0) &&
     !(isProviderMode && !probedProvider) &&
     providerConfigComplete &&
@@ -368,12 +362,12 @@ export function AddChannelBotDialog({
     ? "Loading runtimes..."
     : (selectedProvider?.label ?? "No runtimes found");
   const addButtonLabel = createBotsMutation.isPending
-    ? "Adding..."
-    : isProviderMode
-      ? "Add agent"
-      : selectedCount > 1
-        ? `Add ${selectedCount} agents`
-        : "Add agent";
+    ? selectedCount > 1
+      ? `Adding ${selectedCount}...`
+      : "Adding..."
+    : selectedCount > 1
+      ? `Add ${selectedCount} agents`
+      : "Add agent";
 
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
@@ -382,9 +376,8 @@ export function AddChannelBotDialog({
           <DialogHeader className="border-b border-border/60 px-6 py-5 pr-14">
             <DialogTitle>Add agents</DialogTitle>
             <DialogDescription>
-              {isProviderMode
-                ? "Select a persona or turn on Generic to deploy a remote agent."
-                : "Select any combination of saved personas, or turn on Generic for a one-off custom agent."}
+              Select any combination of saved personas, or turn on Generic for a
+              one-off custom agent.
             </DialogDescription>
           </DialogHeader>
 
@@ -473,7 +466,7 @@ export function AddChannelBotDialog({
               </DropdownMenu>
             </div>
 
-            {!isProviderMode && teams.length > 0 ? (
+            {teams.length > 0 ? (
               <AddChannelBotTeamsSection
                 canToggleSelections={canToggleSelections}
                 isLoading={teamsQuery.isLoading}
@@ -490,23 +483,13 @@ export function AddChannelBotDialog({
               isLoading={personasQuery.isLoading}
               onToggleGeneric={() => {
                 setIncludeGeneric((current) => !current);
-                if (isProviderMode) {
-                  setSelectedPersonaIds([]);
-                }
                 setSubmissionNotice(null);
                 setSubmissionError(null);
               }}
               onTogglePersona={(personaId) => {
-                if (isProviderMode) {
-                  setSelectedPersonaIds((current) =>
-                    current.includes(personaId) ? [] : [personaId],
-                  );
-                  setIncludeGeneric(false);
-                } else {
-                  setSelectedPersonaIds((current) =>
-                    toggleValue(current, personaId),
-                  );
-                }
+                setSelectedPersonaIds((current) =>
+                  toggleValue(current, personaId),
+                );
                 setSubmissionNotice(null);
                 setSubmissionError(null);
               }}
@@ -529,9 +512,8 @@ export function AddChannelBotDialog({
 
             {selectedCount === 0 ? (
               <div className="rounded-2xl border border-dashed border-border/70 bg-muted/15 px-4 py-4 text-sm text-muted-foreground">
-                {isProviderMode
-                  ? "Select a persona or enable Generic to add a remote agent."
-                  : "Pick one or more personas, or enable Generic to add a custom agent."}
+                Pick one or more personas, or enable Generic to add a custom
+                agent.
               </div>
             ) : null}
 
