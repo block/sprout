@@ -1,7 +1,7 @@
 use tauri::{AppHandle, State};
-use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
+use super::export_util::save_json_with_dialog;
 use crate::{
     app_state::AppState,
     managed_agents::{
@@ -115,6 +115,8 @@ pub fn delete_team(
 // Import / Export
 // ---------------------------------------------------------------------------
 
+const MAX_TEAM_JSON_BYTES: usize = 5 * 1024 * 1024;
+
 #[tauri::command]
 pub async fn export_team_to_json(
     id: String,
@@ -138,41 +140,9 @@ pub async fn export_team_to_json(
 
     let json_bytes = encode_team_json(&team, &personas)?;
 
-    // Slugify team name for filename.
-    let slug: String = team
-        .name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string();
-    let slug = if slug.is_empty() { "team" } else { &slug };
-    let slug = if slug.len() > 50 { &slug[..50] } else { slug };
-    let slug = slug.trim_end_matches('-');
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .add_filter("JSON", &["json"])
-        .set_file_name(&format!("{slug}.team.json"))
-        .save_file(move |path| {
-            let _ = tx.send(path);
-        });
-
-    let selected = rx.await.map_err(|_| "dialog cancelled".to_string())?;
-    let file_path = match selected {
-        Some(p) => p,
-        None => return Ok(false),
-    };
-
-    let dest = file_path
-        .as_path()
-        .ok_or_else(|| "Save dialog returned an invalid path".to_string())?;
-    std::fs::write(dest, &json_bytes)
-        .map_err(|e| format!("Failed to write file: {e}"))?;
-
-    Ok(true)
+    let slug = crate::util::slugify(&team.name, "team", 50);
+    let filename = format!("{slug}.team.json");
+    save_json_with_dialog(&app, &filename, &json_bytes).await
 }
 
 #[tauri::command]
@@ -183,7 +153,7 @@ pub fn parse_team_file(
     if file_bytes.is_empty() {
         return Err("File is empty.".to_string());
     }
-    if file_bytes.len() > 5 * 1024 * 1024 {
+    if file_bytes.len() > MAX_TEAM_JSON_BYTES {
         return Err("File is too large (max 5 MB).".to_string());
     }
     parse_team_json(&file_bytes)

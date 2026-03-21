@@ -5,6 +5,7 @@ mod agents;
 mod canvas;
 mod channels;
 mod dms;
+mod export_util;
 mod identity;
 mod media;
 mod messages;

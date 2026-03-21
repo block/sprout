@@ -22,6 +22,7 @@ import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { sendChannelMessage } from "@/shared/api/tauri";
 import type { ParsePersonaFilesResult } from "@/shared/api/tauriPersonas";
+
 import type {
   AgentPersona,
   Channel,
@@ -43,6 +44,7 @@ import { RelayDirectorySection } from "./RelayDirectorySection";
 import { SecretRevealDialog } from "./SecretRevealDialog";
 import { TeamDeleteDialog } from "./TeamDeleteDialog";
 import { TeamDialog } from "./TeamDialog";
+import { TeamImportDialog } from "./TeamImportDialog";
 import { TeamsSection } from "./TeamsSection";
 import { TokenRevealDialog } from "./TokenRevealDialog";
 import { useTeamActions } from "./useTeamActions";
@@ -399,6 +401,7 @@ export function AgentsView() {
     updatePersonaMutation.isPending ||
     deletePersonaMutation.isPending ||
     exportPersonaJsonMutation.isPending ||
+    teamActions.exportTeamJsonMutation.isPending ||
     teamActions.createTeamMutation.isPending ||
     teamActions.updateTeamMutation.isPending ||
     teamActions.deleteTeamMutation.isPending;
@@ -507,6 +510,8 @@ export function AgentsView() {
               onDelete={teamActions.setTeamToDelete}
               onDuplicate={teamActions.openDuplicateDialog}
               onEdit={teamActions.openEditDialog}
+              onExport={teamActions.handleExportTeam}
+              onImportFile={teamActions.handleImportFile}
               onAddToChannel={teamActions.setTeamToAddToChannel}
               personas={personas}
               teams={teamActions.teams}
@@ -716,6 +721,17 @@ export function AgentsView() {
         }}
         open={batchImportResult !== null}
         result={batchImportResult}
+      />
+      <TeamImportDialog
+        fileName={teamActions.teamImportPreview?.fileName ?? ""}
+        onComplete={teamActions.handleTeamImportComplete}
+        onOpenChange={(open) => {
+          if (!open) {
+            teamActions.setTeamImportPreview(null);
+          }
+        }}
+        open={teamActions.teamImportPreview !== null}
+        preview={teamActions.teamImportPreview?.preview ?? null}
       />
     </>
   );

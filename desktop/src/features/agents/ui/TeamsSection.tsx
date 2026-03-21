@@ -1,11 +1,14 @@
+import * as React from "react";
 import {
   CopyPlus,
+  Download,
   Ellipsis,
   Info,
   Pencil,
   Plus,
   Rocket,
   Trash2,
+  Upload,
   Users,
 } from "lucide-react";
 
@@ -33,8 +36,10 @@ type TeamsSectionProps = {
   onCreate: () => void;
   onDuplicate: (team: AgentTeam) => void;
   onEdit: (team: AgentTeam) => void;
+  onExport: (team: AgentTeam) => void;
   onDelete: (team: AgentTeam) => void;
   onAddToChannel: (team: AgentTeam) => void;
+  onImportFile: (fileBytes: number[], fileName: string) => void;
 };
 
 function resolvePersonas(
@@ -55,9 +60,27 @@ export function TeamsSection({
   onCreate,
   onDuplicate,
   onEdit,
+  onExport,
   onDelete,
   onAddToChannel,
+  onImportFile,
 }: TeamsSectionProps) {
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    void (async () => {
+      const buffer = await file.arrayBuffer();
+      const bytes = Array.from(new Uint8Array(buffer));
+      onImportFile(bytes, file.name);
+    })();
+
+    // Reset so the same file can be re-selected
+    e.target.value = "";
+  }
+
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-3">
@@ -67,20 +90,43 @@ export function TeamsSection({
             Named groups of personas you can deploy to a channel together.
           </p>
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label="Create team"
-              onClick={onCreate}
-              type="button"
-              variant="ghost"
-              size="icon"
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Create team</TooltipContent>
-        </Tooltip>
+        <div className="flex items-center gap-1">
+          <input
+            accept=".json"
+            className="hidden"
+            onChange={handleFileChange}
+            ref={fileInputRef}
+            type="file"
+          />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Import team"
+                onClick={() => fileInputRef.current?.click()}
+                type="button"
+                variant="ghost"
+                size="icon"
+              >
+                <Upload className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Import team</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Create team"
+                onClick={onCreate}
+                type="button"
+                variant="ghost"
+                size="icon"
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Create team</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
 
       {isLoading ? (
@@ -196,6 +242,13 @@ export function TeamsSection({
                       >
                         <CopyPlus className="h-4 w-4" />
                         Duplicate
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={isPending}
+                        onClick={() => onExport(team)}
+                      >
+                        <Download className="h-4 w-4" />
+                        Export
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem

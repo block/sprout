@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Loader2 } from "lucide-react";
 
 import type { ParsePersonaFilesResult } from "@/shared/api/tauriPersonas";
 import { parsePersonaFiles } from "@/shared/api/tauriPersonas";
@@ -57,6 +58,7 @@ export function PersonaDialog({
   const [avatarUrl, setAvatarUrl] = React.useState("");
   const [systemPrompt, setSystemPrompt] = React.useState("");
   const [isDragOver, setIsDragOver] = React.useState(false);
+  const [isParsing, setIsParsing] = React.useState(false);
   const [importError, setImportError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -75,6 +77,7 @@ export function PersonaDialog({
       setAvatarUrl("");
       setSystemPrompt("");
       setIsDragOver(false);
+      setIsParsing(false);
       setImportError(null);
     }
 
@@ -100,6 +103,7 @@ export function PersonaDialog({
     }
 
     setImportError(null);
+    setIsParsing(true);
 
     try {
       const buffer = await file.arrayBuffer();
@@ -135,6 +139,8 @@ export function PersonaDialog({
       setImportError(
         err instanceof Error ? err.message : "Failed to parse file.",
       );
+    } finally {
+      setIsParsing(false);
     }
   }
 
@@ -174,7 +180,16 @@ export function PersonaDialog({
         onDrop={(e: React.DragEvent) => void handleDrop(e)}
       >
         <div className="relative flex max-h-[85vh] flex-col">
-          {isDragOver && enableImportDrop ? (
+          {isParsing ? (
+            <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-lg bg-background/80">
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                <p className="text-sm font-medium text-primary">
+                  Parsing file...
+                </p>
+              </div>
+            </div>
+          ) : isDragOver && enableImportDrop ? (
             <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-primary/50 bg-primary/5">
               <p className="text-sm font-medium text-primary">
                 Drop .persona.json, .persona.png, or .zip
@@ -279,7 +294,8 @@ export function PersonaDialog({
               disabled={
                 displayName.trim().length === 0 ||
                 systemPrompt.trim().length === 0 ||
-                isPending
+                isPending ||
+                isParsing
               }
               onClick={() => void handleSubmit()}
               size="sm"

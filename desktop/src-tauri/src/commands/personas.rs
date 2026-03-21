@@ -1,7 +1,7 @@
 use tauri::{AppHandle, State};
-use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
+use super::export_util::save_json_with_dialog;
 use crate::{
     app_state::AppState,
     managed_agents::{
@@ -235,38 +235,7 @@ pub async fn export_persona_to_json(
     let json_bytes =
         encode_persona_json(&display_name, &system_prompt, avatar_url.as_deref())?;
 
-    // Slugify display name for filename.
-    let slug: String = display_name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string();
-    let slug = if slug.is_empty() { "persona" } else { &slug };
-    let slug = if slug.len() > 50 { &slug[..50] } else { slug };
-    let slug = slug.trim_end_matches('-');
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .add_filter("JSON", &["json"])
-        .set_file_name(&format!("{slug}.persona.json"))
-        .save_file(move |path| {
-            let _ = tx.send(path);
-        });
-
-    let selected = rx.await.map_err(|_| "dialog cancelled".to_string())?;
-    let file_path = match selected {
-        Some(p) => p,
-        None => return Ok(false),
-    };
-
-    let dest = file_path
-        .as_path()
-        .ok_or_else(|| "Save dialog returned an invalid path".to_string())?;
-    std::fs::write(dest, &json_bytes)
-        .map_err(|e| format!("Failed to write file: {e}"))?;
-
-    Ok(true)
+    let slug = crate::util::slugify(&display_name, "persona", 50);
+    let filename = format!("{slug}.persona.json");
+    save_json_with_dialog(&app, &filename, &json_bytes).await
 }

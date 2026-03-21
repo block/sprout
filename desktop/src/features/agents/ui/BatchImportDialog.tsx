@@ -1,5 +1,12 @@
 import * as React from "react";
-import { AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  X,
+} from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { ParsePersonaFilesResult } from "@/shared/api/tauriPersonas";
@@ -34,6 +41,9 @@ export function BatchImportDialog({
     "idle" | "importing" | "done" | "error"
   >("idle");
   const [importedCount, setImportedCount] = React.useState(0);
+  const [itemStatuses, setItemStatuses] = React.useState<
+    Map<number, "pending" | "importing" | "done" | "error">
+  >(new Map());
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [expandedIndex, setExpandedIndex] = React.useState<number | null>(null);
   const [skippedExpanded, setSkippedExpanded] = React.useState(false);
@@ -47,6 +57,7 @@ export function BatchImportDialog({
     setSelected(new Set(Array.from({ length: count }, (_, i) => i)));
     setStatus("idle");
     setImportedCount(0);
+    setItemStatuses(new Map());
     setErrorMessage(null);
     setExpandedIndex(null);
     setSkippedExpanded(false);
@@ -60,6 +71,16 @@ export function BatchImportDialog({
     setStatus("importing");
     setErrorMessage(null);
 
+    // Initialize all selected items as pending
+    const initialStatuses = new Map<
+      number,
+      "pending" | "importing" | "done" | "error"
+    >();
+    for (const index of selected) {
+      initialStatuses.set(index, "pending");
+    }
+    setItemStatuses(new Map(initialStatuses));
+
     let completed = 0;
 
     for (const index of selected) {
@@ -67,6 +88,12 @@ export function BatchImportDialog({
       if (!persona) {
         continue;
       }
+
+      setItemStatuses((prev) => {
+        const next = new Map(prev);
+        next.set(index, "importing");
+        return next;
+      });
 
       try {
         await createPersona({
@@ -76,7 +103,17 @@ export function BatchImportDialog({
         });
         completed += 1;
         setImportedCount(completed);
+        setItemStatuses((prev) => {
+          const next = new Map(prev);
+          next.set(index, "done");
+          return next;
+        });
       } catch (error) {
+        setItemStatuses((prev) => {
+          const next = new Map(prev);
+          next.set(index, "error");
+          return next;
+        });
         setStatus("error");
         setErrorMessage(
           `Imported ${completed} of ${selected.size}. Failed on '${persona.displayName}': ${error instanceof Error ? error.message : String(error)}. Already-imported personas are saved.`,
@@ -158,6 +195,13 @@ export function BatchImportDialog({
                           </p>
                         ) : null}
                       </div>
+                      {itemStatuses.get(index) === "importing" ? (
+                        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                      ) : itemStatuses.get(index) === "done" ? (
+                        <Check className="h-4 w-4 shrink-0 text-green-500" />
+                      ) : itemStatuses.get(index) === "error" ? (
+                        <X className="h-4 w-4 shrink-0 text-destructive" />
+                      ) : null}
                     </button>
                     {isExpanded ? (
                       <div className="border-t border-border/40 px-3 py-2.5">
