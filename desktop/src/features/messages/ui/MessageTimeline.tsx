@@ -65,27 +65,15 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     newMessageCount,
     scrollToBottom,
     syncScrollState,
-    timelineRef,
   } = useTimelineScrollManager({
     channelId,
     isLoading,
     messages,
     onTargetReached,
+    scrollContainerRef,
     targetMessageId,
     virtualizer,
   });
-
-  // Merge the scroll container ref with the timeline ref from the scroll manager
-  const mergedScrollRef = React.useCallback(
-    (node: HTMLDivElement | null) => {
-      (
-        scrollContainerRef as React.MutableRefObject<HTMLDivElement | null>
-      ).current = node;
-      (timelineRef as React.MutableRefObject<HTMLDivElement | null>).current =
-        node;
-    },
-    [timelineRef],
-  );
 
   const virtualItems = virtualizer.getVirtualItems();
   const totalSize = virtualizer.getTotalSize();
@@ -96,7 +84,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 [overflow-anchor:none] sm:px-6"
         data-testid="message-timeline"
         onScroll={syncScrollState}
-        ref={mergedScrollRef}
+        ref={scrollContainerRef}
       >
         <div
           className="mx-auto flex w-full max-w-4xl flex-col gap-2"
