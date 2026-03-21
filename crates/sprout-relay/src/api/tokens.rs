@@ -527,7 +527,37 @@ pub async fn post_tokens(
     // IS NULL) — concurrent bootstrap mints are serialized by the DB.
     let owner_bytes = validated_owner_bytes.unwrap_or_else(|| ctx.pubkey_bytes.clone());
 
-    // Ensure the owner's user row exists (FK constraint requires it).
+    // ── Enforce shutdown-required scopes ─────────────────────────────────────
+    // Check BEFORE any side effects (ownership, token creation). Two triggers:
+    // 1. Explicit owner_pubkey in request (bootstrap mint)
+    // 2. Agent already has an owner in the DB (re-mint must preserve controllability)
+    let needs_scope_check = req.owner_pubkey.is_some()
+        || state
+            .db
+            .get_agent_channel_policy(&ctx.pubkey_bytes)
+            .await
+            .ok()
+            .and_then(|opt| opt.and_then(|(_, owner)| owner))
+            .is_some();
+    if needs_scope_check {
+        let required = [
+            "users:read",
+            "messages:read",
+            "messages:write",
+            "channels:read",
+        ];
+        let scope_strs: Vec<String> = parsed_scopes.iter().map(|s| s.to_string()).collect();
+        for r in &required {
+            if !scope_strs.iter().any(|s| s == r) {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!("owned agents require the '{r}' scope for controllability"),
+                ));
+            }
+        }
+    }
+
+    // ── Set agent owner (after scope validation, before token creation) ───────
     state
         .db
         .ensure_user(&owner_bytes)
@@ -543,8 +573,6 @@ pub async fn post_tokens(
             tracing::debug!("agent owner set successfully");
         }
         Ok(false) => {
-            // Owner already assigned. If an explicit owner was requested, verify
-            // it matches — otherwise a different user already claimed this agent.
             if req.owner_pubkey.is_some() {
                 let existing = state
                     .db
@@ -571,29 +599,7 @@ pub async fn post_tokens(
         }
     }
 
-    // ── Enforce shutdown-required scopes when ownership is established ────────
-    // If owner_pubkey is set, the agent needs these scopes for the harness to
-    // query its owner and receive !shutdown. Reject the mint if they're missing
-    // — a token without these scopes creates an uncontrollable agent.
-    if req.owner_pubkey.is_some() {
-        let required = [
-            "users:read",
-            "messages:read",
-            "messages:write",
-            "channels:read",
-        ];
-        let scope_strs: Vec<String> = parsed_scopes.iter().map(|s| s.to_string()).collect();
-        for r in &required {
-            if !scope_strs.iter().any(|s| s == r) {
-                return Err(api_error(
-                    StatusCode::BAD_REQUEST,
-                    &format!("owner_pubkey requires the '{r}' scope for agent controllability"),
-                ));
-            }
-        }
-    }
-
-    // ── Generate token (after ownership is settled) ───────────────────────────
+    // ── Generate token (after scope validation + ownership settled) ───────────
     let raw_token = sprout_auth::generate_token();
     let token_hash: Vec<u8> = Sha256::digest(raw_token.as_bytes()).to_vec();
     let scope_strings: Vec<String> = parsed_scopes.iter().map(|s| s.to_string()).collect();

@@ -103,11 +103,12 @@ export function AgentsView() {
   const managedAgents = React.useMemo(
     () =>
       [...(managedAgentsQuery.data ?? [])].sort((left, right) => {
-        if (left.status !== right.status) {
-          return left.status === "running" || left.status === "deployed"
-            ? -1
-            : 1;
-        }
+        // Active agents (running or deployed) sort before inactive ones.
+        // Both "running" and "deployed" are equivalent for sorting purposes.
+        const activeScore = (s: string) =>
+          s === "running" || s === "deployed" ? 1 : 0;
+        const diff = activeScore(right.status) - activeScore(left.status);
+        if (diff !== 0) return diff;
 
         return left.name.localeCompare(right.name);
       }),

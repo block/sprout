@@ -90,36 +90,17 @@ async fn mint_token(
 
     db.ensure_user(&pubkey_bytes).await?;
 
-    // Set agent owner if --owner-pubkey was provided
+    // Set agent owner if --owner-pubkey was provided.
+    // Order: validate scopes → ensure user → set owner → mint token.
+    // All validation happens before any side effects.
     if let Some(ref owner_hex) = owner_pubkey {
         let owner_bytes =
             hex::decode(owner_hex).map_err(|e| anyhow::anyhow!("invalid owner pubkey hex: {e}"))?;
         if owner_bytes.len() != 32 {
             anyhow::bail!("owner pubkey must be 32 bytes (64 hex chars)");
         }
-        // Ensure owner's user row exists (FK constraint requires it)
-        db.ensure_user(&owner_bytes).await?;
-        let was_set = db.set_agent_owner(&pubkey_bytes, &owner_bytes).await?;
-        if !was_set {
-            // Verify the existing owner matches the requested one. If not,
-            // fail — minting a token for an operator who isn't the persisted
-            // owner creates a broken control relationship (shutdown won't work).
-            let existing = db
-                .get_agent_channel_policy(&pubkey_bytes)
-                .await?
-                .and_then(|(_, owner)| owner);
-            if existing.as_deref() != Some(owner_bytes.as_slice()) {
-                anyhow::bail!(
-                    "agent already has a different owner — refusing to mint token for non-owner"
-                );
-            }
-            eprintln!("note: agent already owned by the requested pubkey — proceeding");
-        }
-    }
 
-    // Enforce shutdown-required scopes when ownership is being established.
-    // Without these the harness can't resolve its owner or receive !shutdown.
-    if owner_pubkey.is_some() {
+        // Enforce shutdown-required scopes BEFORE any side effects.
         let required = [
             "users:read",
             "messages:read",
@@ -130,6 +111,22 @@ async fn mint_token(
             if !scopes.iter().any(|s| s == r) {
                 anyhow::bail!("owner_pubkey requires the '{r}' scope for agent controllability");
             }
+        }
+
+        // Now safe to write — scopes are validated.
+        db.ensure_user(&owner_bytes).await?;
+        let was_set = db.set_agent_owner(&pubkey_bytes, &owner_bytes).await?;
+        if !was_set {
+            let existing = db
+                .get_agent_channel_policy(&pubkey_bytes)
+                .await?
+                .and_then(|(_, owner)| owner);
+            if existing.as_deref() != Some(owner_bytes.as_slice()) {
+                anyhow::bail!(
+                    "agent already has a different owner — refusing to mint token for non-owner"
+                );
+            }
+            eprintln!("note: agent already owned by the requested pubkey — proceeding");
         }
     }
 
