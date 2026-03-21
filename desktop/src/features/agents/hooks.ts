@@ -146,8 +146,8 @@ export function useRelayAgentsQuery() {
   return useQuery({
     queryKey: relayAgentsQueryKey,
     queryFn: listRelayAgents,
-    staleTime: 15_000,
-    refetchInterval: 15_000,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
   });
 }
 
@@ -155,15 +155,15 @@ export function useManagedAgentsQuery() {
   return useQuery({
     queryKey: managedAgentsQueryKey,
     queryFn: listManagedAgents,
-    staleTime: 1_000,
+    staleTime: 5_000,
     refetchInterval: (query) => {
       const agents = query.state.data as ManagedAgent[] | undefined;
       // Only local "running" agents need fast polling (process state can
       // change). "deployed" is static control-plane state — presence polling
       // handles the live signal for remote agents separately.
       return agents?.some((agent) => agent.status === "running")
-        ? 2_000
-        : 10_000;
+        ? 5_000
+        : 30_000;
     },
   });
 }
@@ -440,8 +440,8 @@ export function useManagedAgentLogQuery(
     queryFn: () => getManagedAgentLog(pubkey!, lineCount),
     enabled: pubkey !== null,
     retry: false,
-    staleTime: 1_000,
-    refetchInterval: pubkey ? 2_000 : false,
+    staleTime: 3_000,
+    refetchInterval: pubkey ? 5_000 : false,
   });
 }
 

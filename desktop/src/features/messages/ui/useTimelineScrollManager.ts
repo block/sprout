@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { Virtualizer } from "@tanstack/react-virtual";
 
 import type { TimelineMessage } from "@/features/messages/types";
 import { isNearBottom } from "./messageTimelineUtils";
@@ -8,15 +9,19 @@ export function useTimelineScrollManager({
   isLoading,
   messages,
   onTargetReached,
+  scrollContainerRef,
   targetMessageId,
+  virtualizer,
 }: {
   channelId?: string | null;
   isLoading: boolean;
   messages: TimelineMessage[];
   onTargetReached?: (messageId: string) => void;
+  scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   targetMessageId?: string | null;
+  virtualizer?: Virtualizer<HTMLDivElement, Element>;
 }) {
-  const timelineRef = React.useRef<HTMLDivElement>(null);
+  const timelineRef = scrollContainerRef;
   const contentRef = React.useRef<HTMLDivElement>(null);
   const bottomAnchorRef = React.useRef<HTMLDivElement>(null);
   const hasInitializedRef = React.useRef(false);
@@ -34,6 +39,10 @@ export function useTimelineScrollManager({
     string | null
   >(null);
   const [newMessageCount, setNewMessageCount] = React.useState(0);
+
+  // Keep a ref to the virtualizer so callbacks don't need it as a dependency
+  const virtualizerRef = React.useRef(virtualizer);
+  virtualizerRef.current = virtualizer;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is intentionally the sole trigger — we reset all scroll state when the channel changes
   React.useLayoutEffect(() => {
@@ -55,6 +64,7 @@ export function useTimelineScrollManager({
   const latestMessage =
     messages.length > 0 ? messages[messages.length - 1] : undefined;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref passed from the parent — its identity never changes
   const syncScrollState = React.useCallback(() => {
     const timeline = timelineRef.current;
     if (!timeline) {
@@ -104,6 +114,7 @@ export function useTimelineScrollManager({
     }
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref — its identity never changes
   const restoreScrollPosition = React.useCallback(
     (scrollTop: number) => {
       const timeline = timelineRef.current;
@@ -135,6 +146,7 @@ export function useTimelineScrollManager({
     [syncScrollState],
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref — its identity never changes
   const scrollToBottom = React.useCallback(
     (behavior: ScrollBehavior) => {
       const timeline = timelineRef.current;
@@ -144,6 +156,11 @@ export function useTimelineScrollManager({
       }
 
       isProgrammaticBottomScrollRef.current = true;
+
+      const virt = virtualizerRef.current;
+      if (virt && virt.options.count > 0) {
+        virt.scrollToIndex(virt.options.count - 1, { align: "end" });
+      }
 
       const alignToBottom = (nextBehavior: ScrollBehavior) => {
         bottomAnchorRef.current?.scrollIntoView({
@@ -191,6 +208,7 @@ export function useTimelineScrollManager({
     [syncScrollState],
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref — its identity never changes
   React.useEffect(() => {
     const timeline = timelineRef.current;
 
@@ -295,6 +313,7 @@ export function useTimelineScrollManager({
     previousMessageCountRef.current = messages.length;
   }, [isLoading, latestMessage, messages.length, scrollToBottom]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref — its identity never changes
   React.useEffect(() => {
     if (!targetMessageId) {
       handledTargetMessageIdRef.current = null;
@@ -311,26 +330,56 @@ export function useTimelineScrollManager({
       return;
     }
 
-    const targetElement = timeline.querySelector<HTMLElement>(
-      `[data-message-id="${targetMessageId}"]`,
-    );
-    if (!targetElement) {
-      return;
-    }
+    const settleOnTarget = () => {
+      handledTargetMessageIdRef.current = targetMessageId;
+      shouldStickToBottomRef.current = false;
+      isAtBottomRef.current = false;
+      isProgrammaticBottomScrollRef.current = false;
+      previousScrollTopRef.current = timeline.scrollTop;
+      setIsAtBottom(false);
+      setHighlightedMessageId(targetMessageId);
+      setNewMessageCount(0);
+      onTargetReached?.(targetMessageId);
+    };
 
-    handledTargetMessageIdRef.current = targetMessageId;
-    shouldStickToBottomRef.current = false;
-    isAtBottomRef.current = false;
-    isProgrammaticBottomScrollRef.current = false;
-    targetElement.scrollIntoView({
-      block: "center",
-      behavior: "smooth",
-    });
-    previousScrollTopRef.current = timeline.scrollTop;
-    setIsAtBottom(false);
-    setHighlightedMessageId(targetMessageId);
-    setNewMessageCount(0);
-    onTargetReached?.(targetMessageId);
+    // With virtualization the target row may not be in the DOM yet.
+    // Use scrollToIndex to bring it into view first, then highlight.
+    const virt = virtualizerRef.current;
+    const targetIndex = messages.findIndex((m) => m.id === targetMessageId);
+
+    if (virt && targetIndex >= 0) {
+      virt.scrollToIndex(targetIndex, { align: "center" });
+
+      // Give the virtualizer a frame to render the row before querying the DOM.
+      requestAnimationFrame(() => {
+        const targetElement = timeline.querySelector<HTMLElement>(
+          `[data-message-id="${targetMessageId}"]`,
+        );
+
+        if (targetElement) {
+          targetElement.scrollIntoView({
+            block: "center",
+            behavior: "smooth",
+          });
+        }
+
+        settleOnTarget();
+      });
+    } else {
+      // Fallback for non-virtualized usage or unknown target
+      const targetElement = timeline.querySelector<HTMLElement>(
+        `[data-message-id="${targetMessageId}"]`,
+      );
+      if (!targetElement) {
+        return;
+      }
+
+      targetElement.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      });
+      settleOnTarget();
+    }
 
     const timeout = window.setTimeout(() => {
       setHighlightedMessageId((current) =>
@@ -341,7 +390,7 @@ export function useTimelineScrollManager({
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [isLoading, onTargetReached, targetMessageId]);
+  }, [isLoading, messages, onTargetReached, targetMessageId]);
 
   return {
     bottomAnchorRef,
@@ -351,6 +400,5 @@ export function useTimelineScrollManager({
     newMessageCount,
     scrollToBottom,
     syncScrollState,
-    timelineRef,
   };
 }

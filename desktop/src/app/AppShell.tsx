@@ -238,14 +238,6 @@ export function AppShell() {
         .filter((value) => value && value.trim().length > 0)
         .join(" ") || "Channel details and activity."
     : "Connect to the relay to browse channels and read messages.";
-  const contentPaneKey =
-    selectedView === "home"
-      ? "home"
-      : selectedView === "agents"
-        ? "agents"
-        : selectedView === "settings"
-          ? "settings"
-          : `channel:${activeChannel?.id ?? "none"}`;
   const shouldLoadTimeline =
     activeChannel !== null && activeChannel.channelType !== "forum";
   const isTimelineLoading =
@@ -610,10 +602,7 @@ export function AppShell() {
               unreadChannelIds={unreadChannelIds}
             />
 
-            <SidebarInset
-              className="min-h-0 min-w-0 overflow-hidden"
-              key={contentPaneKey}
-            >
+            <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
               {selectedView === "home" ? (
                 <ChatHeader
                   description="Personalized feed for mentions, reminders, channel activity, and agent work."
@@ -655,7 +644,13 @@ export function AppShell() {
               )}
 
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                {selectedView === "home" ? (
+                <div
+                  className={
+                    selectedView === "home"
+                      ? "flex min-h-0 flex-1 flex-col"
+                      : "hidden"
+                  }
+                >
                   <HomeView
                     availableChannelIds={availableChannelIds}
                     currentPubkey={identityQuery.data?.pubkey}
@@ -671,37 +666,53 @@ export function AppShell() {
                       void homeFeedQuery.refetch();
                     }}
                   />
-                ) : selectedView === "agents" ? (
+                </div>
+                <div
+                  className={
+                    selectedView === "agents"
+                      ? "flex min-h-0 flex-1 flex-col"
+                      : "hidden"
+                  }
+                >
                   <AgentsView />
-                ) : activeChannel?.channelType === "forum" ? (
-                  <ForumView
-                    channel={activeChannel}
-                    currentPubkey={identityQuery.data?.pubkey}
-                  />
-                ) : (
-                  <ChannelPane
-                    activeChannel={activeChannel}
-                    currentPubkey={identityQuery.data?.pubkey}
-                    isSending={sendMessageMutation.isPending}
-                    isTimelineLoading={isTimelineLoading}
-                    messages={timelineMessages}
-                    onCancelReply={handleCancelReply}
-                    onReply={handleReply}
-                    onSend={handleSend}
-                    onTargetReached={handleTargetReached}
-                    onToggleReaction={effectiveToggleReaction}
-                    profiles={messageProfiles}
-                    replyTargetId={replyTargetId}
-                    replyTargetMessage={replyTargetMessage}
-                    targetMessageId={
-                      activeChannel &&
-                      searchAnchor?.channelId === activeChannel.id
-                        ? searchAnchor.eventId
-                        : null
-                    }
-                    typingPubkeys={typingPubkeys}
-                  />
-                )}
+                </div>
+                <div
+                  className={
+                    selectedView !== "home" && selectedView !== "agents"
+                      ? "flex min-h-0 flex-1 flex-col overflow-hidden"
+                      : "hidden"
+                  }
+                >
+                  {activeChannel?.channelType === "forum" ? (
+                    <ForumView
+                      channel={activeChannel}
+                      currentPubkey={identityQuery.data?.pubkey}
+                    />
+                  ) : (
+                    <ChannelPane
+                      activeChannel={activeChannel}
+                      currentPubkey={identityQuery.data?.pubkey}
+                      isSending={sendMessageMutation.isPending}
+                      isTimelineLoading={isTimelineLoading}
+                      messages={timelineMessages}
+                      onCancelReply={handleCancelReply}
+                      onReply={handleReply}
+                      onSend={handleSend}
+                      onTargetReached={handleTargetReached}
+                      onToggleReaction={effectiveToggleReaction}
+                      profiles={messageProfiles}
+                      replyTargetId={replyTargetId}
+                      replyTargetMessage={replyTargetMessage}
+                      targetMessageId={
+                        activeChannel &&
+                        searchAnchor?.channelId === activeChannel.id
+                          ? searchAnchor.eventId
+                          : null
+                      }
+                      typingPubkeys={typingPubkeys}
+                    />
+                  )}
+                </div>
               </div>
             </SidebarInset>
           </React.Fragment>
