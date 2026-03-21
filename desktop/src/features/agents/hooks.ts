@@ -145,12 +145,12 @@ export function useManagedAgentsQuery() {
   return useQuery({
     queryKey: managedAgentsQueryKey,
     queryFn: listManagedAgents,
-    staleTime: 1_000,
+    staleTime: 5_000,
     refetchInterval: (query) => {
       const agents = query.state.data as ManagedAgent[] | undefined;
       return agents?.some((agent) => agent.status === "running")
-        ? 2_000
-        : 10_000;
+        ? 5_000
+        : 30_000;
     },
   });
 }
