@@ -548,6 +548,19 @@ impl Db {
         dm::open_dm(&self.pool, pubkeys, created_by).await
     }
 
+    /// Hide a DM channel for a specific user.
+    ///
+    /// The DM is not deleted — it can be restored by opening a new DM with
+    /// the same participants.
+    pub async fn hide_dm(&self, channel_id: Uuid, pubkey: &[u8]) -> Result<()> {
+        dm::hide_dm(&self.pool, channel_id, pubkey).await
+    }
+
+    /// Unhide a DM channel for a specific user.
+    pub async fn unhide_dm(&self, channel_id: Uuid, pubkey: &[u8]) -> Result<()> {
+        dm::unhide_dm(&self.pool, channel_id, pubkey).await
+    }
+
     // ── Threads ──────────────────────────────────────────────────────────────
 
     /// Insert thread metadata.

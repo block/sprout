@@ -10,6 +10,7 @@ import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
   channelsQueryKey,
   useCreateChannelMutation,
+  useHideDmMutation,
   useOpenDmMutation,
   useChannelsQuery,
   useSelectedChannel,
@@ -107,6 +108,7 @@ export function AppShell() {
   const createChannelMutation = useCreateChannelMutation();
   const createForumMutation = useCreateChannelMutation();
   const openDmMutation = useOpenDmMutation();
+  const hideDmMutation = useHideDmMutation();
   const activeChannel = selectedView === "channel" ? selectedChannel : null;
   const activeChannelId = activeChannel?.id ?? null;
   const messagesQuery = useChannelMessagesQuery(activeChannel);
@@ -303,6 +305,18 @@ export function AppShell() {
       await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
     },
     [queryClient],
+  );
+
+  const handleHideDm = React.useCallback(
+    (channelId: string) => {
+      void hideDmMutation.mutateAsync(channelId);
+      if (selectedChannel?.id === channelId) {
+        React.startTransition(() => {
+          setSelectedView("home");
+        });
+      }
+    },
+    [hideDmMutation, selectedChannel?.id],
   );
 
   const handleOpenSettings = React.useCallback(
@@ -576,6 +590,7 @@ export function AppShell() {
                 setIsSearchOpen(true);
                 void refetchChannels();
               }}
+              onHideDm={handleHideDm}
               onOpenDm={async ({ pubkeys }) => {
                 const directMessage = await openDmMutation.mutateAsync({
                   pubkeys,

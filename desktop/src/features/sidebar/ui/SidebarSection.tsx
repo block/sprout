@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { CircleDot, FileText, Hash, Lock } from "lucide-react";
+import { CircleDot, FileText, Hash, Lock, X } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { Channel, PresenceStatus } from "@/shared/api/types";
@@ -127,6 +127,7 @@ export function ChannelMenuButton({
   hasUnread,
   dmParticipants,
   presenceStatus,
+  onHideDm,
   onSelectChannel,
 }: {
   channel: Channel;
@@ -135,6 +136,7 @@ export function ChannelMenuButton({
   hasUnread: boolean;
   dmParticipants?: SidebarDmParticipant[];
   presenceStatus?: PresenceStatus;
+  onHideDm?: (channelId: string) => void;
   onSelectChannel: (channelId: string) => void;
 }) {
   const resolvedLabel = label ?? channel.name;
@@ -165,6 +167,20 @@ export function ChannelMenuButton({
           data-testid={`channel-unread-${channel.name}`}
         />
       ) : null}
+      {channel.channelType === "dm" && onHideDm ? (
+        <button
+          aria-label="Close direct message"
+          className="ml-auto hidden h-5 w-5 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground group-hover/menu-item:flex"
+          data-testid={`hide-dm-${channel.name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onHideDm(channel.id);
+          }}
+          type="button"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      ) : null}
     </SidebarMenuButton>
   );
 }
@@ -181,6 +197,7 @@ export function SidebarSection({
   title,
   testId,
   unreadChannelIds,
+  onHideDm,
   onSelectChannel,
 }: {
   action?: React.ReactNode;
@@ -194,6 +211,7 @@ export function SidebarSection({
   title: string;
   testId: string;
   unreadChannelIds: Set<string>;
+  onHideDm?: (channelId: string) => void;
   onSelectChannel: (channelId: string) => void;
 }) {
   if (items.length === 0 && !action && !emptyState) {
@@ -208,7 +226,7 @@ export function SidebarSection({
         {items.length > 0 ? (
           <SidebarMenu data-testid={testId}>
             {items.map((channel) => (
-              <SidebarMenuItem key={channel.id}>
+              <SidebarMenuItem className="group/menu-item" key={channel.id}>
                 <ChannelMenuButton
                   channel={channel}
                   dmParticipants={dmParticipantsByChannelId?.[channel.id]}
@@ -216,6 +234,7 @@ export function SidebarSection({
                   isActive={isActiveChannel && selectedChannelId === channel.id}
                   label={channelLabels?.[channel.id] ?? channel.name}
                   presenceStatus={presenceByChannelId?.[channel.id]}
+                  onHideDm={onHideDm}
                   onSelectChannel={onSelectChannel}
                 />
               </SidebarMenuItem>

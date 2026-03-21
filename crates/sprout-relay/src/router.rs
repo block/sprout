@@ -146,6 +146,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/dms/{channel_id}/members",
             post(api::add_dm_member_handler),
         )
+        .route("/api/dms/{channel_id}/hide", post(api::hide_dm_handler))
         // Message delete route
         .route("/api/messages/{event_id}", delete(api::delete_message))
         // Reaction routes

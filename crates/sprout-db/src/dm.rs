@@ -243,6 +243,7 @@ pub async fn list_dms_for_user(
                 ON c.id = cm.channel_id
                AND cm.pubkey = $1
                AND cm.removed_at IS NULL
+               AND cm.hidden_at IS NULL
             WHERE c.channel_type = 'dm'
               AND c.deleted_at IS NULL
               AND c.updated_at < $2
@@ -264,6 +265,7 @@ pub async fn list_dms_for_user(
                 ON c.id = cm.channel_id
                AND cm.pubkey = $1
                AND cm.removed_at IS NULL
+               AND cm.hidden_at IS NULL
             WHERE c.channel_type = 'dm'
               AND c.deleted_at IS NULL
             ORDER BY c.updated_at DESC
@@ -350,6 +352,8 @@ pub async fn open_dm(
 
     // Check for existing DM first (fast path, no transaction).
     if let Some(existing) = find_dm_by_participants(pool, &hash).await? {
+        // Clear hidden_at for the caller so the DM reappears in their sidebar.
+        unhide_dm(pool, existing.id, created_by).await?;
         return Ok((existing, false));
     }
 
@@ -357,6 +361,55 @@ pub async fn open_dm(
     let channel = create_dm(pool, &all, created_by).await?;
 
     Ok((channel, true))
+}
+
+// -- Hide / unhide ------------------------------------------------------------
+
+/// Hide a DM for a specific user by setting `hidden_at = NOW()`.
+///
+/// The DM is not deleted — it can be restored by opening a new DM with the
+/// same participants (which clears `hidden_at`). Returns an error if the user
+/// is not an active member of the channel.
+pub async fn hide_dm(pool: &PgPool, channel_id: Uuid, pubkey: &[u8]) -> Result<()> {
+    let result = sqlx::query(
+        r#"
+        UPDATE channel_members
+        SET hidden_at = NOW()
+        WHERE channel_id = $1 AND pubkey = $2 AND removed_at IS NULL
+        "#,
+    )
+    .bind(channel_id)
+    .bind(pubkey)
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(DbError::NotFound(format!(
+            "no active membership for channel {channel_id}"
+        )));
+    }
+
+    Ok(())
+}
+
+/// Unhide a DM for a specific user by clearing `hidden_at`.
+///
+/// This is called automatically when a user re-opens a DM via [`open_dm`].
+/// It is a no-op if the membership is not currently hidden.
+pub async fn unhide_dm(pool: &PgPool, channel_id: Uuid, pubkey: &[u8]) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE channel_members
+        SET hidden_at = NULL
+        WHERE channel_id = $1 AND pubkey = $2 AND removed_at IS NULL
+        "#,
+    )
+    .bind(channel_id)
+    .bind(pubkey)
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
 
 // -- Row mapping --------------------------------------------------------------

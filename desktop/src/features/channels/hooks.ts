@@ -15,6 +15,7 @@ import {
   getChannelDetails,
   getChannelMembers,
   getChannels,
+  hideDm,
   joinChannel,
   leaveChannel,
   openDm,
@@ -190,6 +191,30 @@ export function useOpenDmMutation() {
           openedChannel,
         ]),
       );
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+    },
+  });
+}
+
+export function useHideDmMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (channelId: string) => hideDm(channelId),
+    onMutate: async (channelId) => {
+      await queryClient.cancelQueries({ queryKey: channelsQueryKey });
+      const previous = queryClient.getQueryData<Channel[]>(channelsQueryKey);
+      queryClient.setQueryData<Channel[]>(channelsQueryKey, (current = []) =>
+        current.filter((channel) => channel.id !== channelId),
+      );
+      return { previous };
+    },
+    onError: (_error, _channelId, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(channelsQueryKey, context.previous);
+      }
     },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
