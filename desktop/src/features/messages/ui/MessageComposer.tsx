@@ -578,7 +578,7 @@ export function MessageComposer({
             </div>
             <Textarea
               aria-label="Message channel"
-              className="min-h-0 resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 text-sm leading-6 shadow-none focus-visible:ring-0 caret-foreground text-transparent selection:bg-primary/20 selection:text-transparent"
+              className="min-h-0 resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 text-sm leading-6 md:leading-6 shadow-none focus-visible:ring-0 caret-foreground text-transparent selection:bg-primary/20 selection:text-transparent"
               data-testid="message-input"
               disabled={disabled}
               onChange={handleChange}
