@@ -603,27 +603,19 @@ export function AppShell() {
             />
 
             <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
-              <div className={selectedView === "home" ? undefined : "hidden"}>
+              {selectedView === "home" ? (
                 <ChatHeader
                   description="Personalized feed for mentions, reminders, channel activity, and agent work."
                   mode="home"
                   title="Home"
                 />
-              </div>
-              <div className={selectedView === "agents" ? undefined : "hidden"}>
+              ) : selectedView === "agents" ? (
                 <ChatHeader
                   description="Create local ACP workers, mint agent tokens, and monitor the relay-visible agent directory."
                   mode="agents"
                   title="Agents"
                 />
-              </div>
-              <div
-                className={
-                  selectedView !== "home" && selectedView !== "agents"
-                    ? undefined
-                    : "hidden"
-                }
-              >
+              ) : (
                 <ChatHeader
                   actions={
                     activeChannel ? (
@@ -649,7 +641,7 @@ export function AppShell() {
                   }
                   title={activeChannelTitle}
                 />
-              </div>
+              )}
 
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                 <div
