@@ -480,14 +480,19 @@ pub async fn get_thread_summary(pool: &PgPool, event_id: &[u8]) -> Result<Option
 /// - At depth 0 (root messages), OR
 /// - At depth 1 with `broadcast = true` (replies surfaced to the channel)
 ///
-/// Results are ordered newest-first for a standard channel view.
-/// `before_cursor` enables keyset pagination (pass the `created_at` of the
-/// last item from the previous page).
+/// Default ordering is newest-first (DESC). When `since_cursor` is provided
+/// without `before_cursor`, ordering flips to oldest-first (ASC) for
+/// chronological polling.
+///
+/// `before_cursor` enables backward keyset pagination (pass the `created_at`
+/// of the last item from the previous page). `since_cursor` enables forward
+/// polling (returns only messages created after the given timestamp).
 pub async fn get_channel_messages_top_level(
     pool: &PgPool,
     channel_id: Uuid,
     limit: u32,
     before_cursor: Option<DateTime<Utc>>,
+    since_cursor: Option<DateTime<Utc>>,
     kind_filter: Option<&[u32]>,
 ) -> Result<Vec<TopLevelMessage>> {
     let mut param_idx = 2u32; // $1 is channel_id
@@ -520,6 +525,11 @@ pub async fn get_channel_messages_top_level(
         param_idx += 1;
     }
 
+    if since_cursor.is_some() {
+        sql.push_str(&format!(" AND e.created_at > ${param_idx}"));
+        param_idx += 1;
+    }
+
     if let Some(kinds) = kind_filter {
         if !kinds.is_empty() {
             let list = kinds
@@ -531,11 +541,21 @@ pub async fn get_channel_messages_top_level(
         }
     }
 
-    sql.push_str(&format!(" ORDER BY e.created_at DESC LIMIT ${param_idx}"));
+    let order = if since_cursor.is_some() && before_cursor.is_none() {
+        "ASC"
+    } else {
+        "DESC"
+    };
+    sql.push_str(&format!(
+        " ORDER BY e.created_at {order} LIMIT ${param_idx}"
+    ));
 
     let mut q = sqlx::query(&sql).bind(channel_id);
 
     if let Some(cursor) = before_cursor {
+        q = q.bind(cursor);
+    }
+    if let Some(cursor) = since_cursor {
         q = q.bind(cursor);
     }
     q = q.bind(limit as i32);

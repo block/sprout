@@ -604,6 +604,7 @@ impl Db {
         channel_id: Uuid,
         limit: u32,
         before_cursor: Option<DateTime<Utc>>,
+        since_cursor: Option<DateTime<Utc>>,
         kind_filter: Option<&[u32]>,
     ) -> Result<Vec<thread::TopLevelMessage>> {
         thread::get_channel_messages_top_level(
@@ -611,6 +612,7 @@ impl Db {
             channel_id,
             limit,
             before_cursor,
+            since_cursor,
             kind_filter,
         )
         .await

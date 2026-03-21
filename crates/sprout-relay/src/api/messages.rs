@@ -10,7 +10,7 @@
 //!   - `state.db.insert_thread_metadata(...)` → thread::insert_thread_metadata
 //!   - `state.db.get_thread_replies(root_id, depth_limit, limit, cursor)` → thread::get_thread_replies
 //!   - `state.db.get_thread_summary(event_id)` → thread::get_thread_summary
-//!   - `state.db.get_channel_messages_top_level(channel_id, limit, before, kind_filter)` → thread::get_channel_messages_top_level
+//!   - `state.db.get_channel_messages_top_level(channel_id, limit, before, since, kind_filter)` → thread::get_channel_messages_top_level
 //!   - `state.db.get_thread_metadata_by_event(event_id)` → thread::get_thread_metadata_by_event
 //!   - `state.db.get_event_by_id(id_bytes)` → event::get_event_by_id  (already exists)
 //!   - `state.db.insert_event(event, channel_id)` → event::insert_event  (already exists)
@@ -949,6 +949,10 @@ pub struct ListMessagesParams {
     /// Pagination cursor — Unix timestamp (seconds). Returns messages created
     /// strictly before this time.
     pub before: Option<i64>,
+    /// Pagination cursor — Unix timestamp (seconds). Returns messages created
+    /// strictly after this time. Results are ordered oldest-first when `since`
+    /// is provided without `before`.
+    pub since: Option<i64>,
     /// Legacy parameter (thread summaries are now always included). Kept for backward compatibility.
     #[serde(default)]
     pub with_threads: bool,
@@ -957,7 +961,10 @@ pub struct ListMessagesParams {
     pub kinds: Option<String>,
 }
 
-/// List top-level messages in a channel (newest first).
+/// List top-level messages in a channel.
+///
+/// Default ordering is newest-first (DESC). When `since` is provided without
+/// `before`, ordering flips to oldest-first (ASC) for chronological polling.
 ///
 /// Returns root messages and broadcast replies. Thread summaries (reply counts,
 /// participant pubkeys) are always included. Thread replies themselves are excluded —
@@ -985,6 +992,10 @@ pub async fn list_messages(
         .before
         .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
 
+    let since_cursor: Option<chrono::DateTime<Utc>> = params
+        .since
+        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
+
     let kind_filter: Option<Vec<u32>> = params
         .kinds
         .as_deref()
@@ -1003,7 +1014,13 @@ pub async fn list_messages(
 
     let mut messages = state
         .db
-        .get_channel_messages_top_level(channel_id, limit, before_cursor, kind_filter.as_deref())
+        .get_channel_messages_top_level(
+            channel_id,
+            limit,
+            before_cursor,
+            since_cursor,
+            kind_filter.as_deref(),
+        )
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
