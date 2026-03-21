@@ -2,6 +2,22 @@ use std::{path::PathBuf, process::Child};
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BackendKind {
+    Local,
+    Provider {
+        id: String,
+        config: serde_json::Value,
+    },
+}
+
+impl Default for BackendKind {
+    fn default() -> Self {
+        Self::Local
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersonaRecord {
     pub id: String,
@@ -50,6 +66,12 @@ pub struct ManagedAgentRecord {
     pub start_on_app_launch: bool,
     #[serde(default)]
     pub runtime_pid: Option<u32>,
+    #[serde(default)]
+    pub backend: BackendKind,
+    #[serde(default)]
+    pub backend_agent_id: Option<String>,
+    #[serde(default)]
+    pub provider_binary_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub last_started_at: Option<String>,
@@ -79,6 +101,8 @@ pub struct ManagedAgentSummary {
     pub system_prompt: Option<String>,
     pub model: Option<String>,
     pub has_api_token: bool,
+    pub backend: BackendKind,
+    pub backend_agent_id: Option<String>,
     pub status: String,
     pub pid: Option<u32>,
     pub created_at: String,
@@ -117,6 +141,8 @@ pub struct CreateManagedAgentRequest {
     pub spawn_after_create: bool,
     #[serde(default = "default_start_on_app_launch")]
     pub start_on_app_launch: bool,
+    #[serde(default)]
+    pub backend: BackendKind,
 }
 
 #[derive(Debug, Serialize)]

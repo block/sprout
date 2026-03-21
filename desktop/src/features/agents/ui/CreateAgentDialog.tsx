@@ -1,13 +1,16 @@
-import { ChevronDown } from "lucide-react";
+import { AlertTriangle, ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import {
   useAcpProvidersQuery,
+  useBackendProvidersQuery,
   useCreateManagedAgentMutation,
   useManagedAgentPrereqsQuery,
 } from "@/features/agents/hooks";
 import { DEFAULT_MANAGED_AGENT_SCOPES } from "@/features/tokens/lib/scopeOptions";
+import { probeBackendProvider } from "@/shared/api/tauri";
 import type {
+  BackendProviderProbeResult,
   CreateManagedAgentInput,
   CreateManagedAgentResponse,
   TokenScope,
@@ -20,6 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { Input } from "@/shared/ui/input";
 import {
   CreateAgentBasicsFields,
   CreateAgentOptionToggles,
@@ -27,6 +31,92 @@ import {
   CreateAgentRuntimeFields,
   CreateAgentTokenSection,
 } from "./CreateAgentDialogSections";
+
+/// Coerce string config values to their schema-declared types (number, boolean).
+/// Providers receive JSON — sending "3" instead of 3 for an integer field breaks
+/// typed config parsing on the provider side.
+function coerceConfigValues(
+  config: Record<string, string>,
+  schema: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!schema) return { ...config };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const properties = (schema as any)?.properties ?? {};
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config)) {
+    const prop = properties[key] as Record<string, unknown> | undefined;
+    const schemaType = prop?.type;
+    if ((schemaType === "integer" || schemaType === "number") && value !== "") {
+      const num = Number(value);
+      result[key] = Number.isNaN(num) ? value : num;
+    } else if (schemaType === "boolean") {
+      result[key] = value === "true";
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+// ── Provider config form ──────────────────────────────────────────────────────
+
+function ProviderConfigFields({
+  schema,
+  config,
+  onChange,
+}: {
+  schema: Record<string, unknown>;
+  config: Record<string, string>;
+  onChange: (config: Record<string, string>) => void;
+}) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const properties = (schema as any)?.properties ?? {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const required = new Set<string>((schema as any)?.required ?? []);
+
+  const entries = Object.entries(properties) as [
+    string,
+    Record<string, unknown>,
+  ][];
+
+  if (entries.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-3">
+      {entries.map(([key, prop]) => (
+        <div key={key} className="space-y-1.5">
+          <label
+            className="text-sm font-medium"
+            htmlFor={`provider-cfg-${key}`}
+          >
+            {typeof prop.title === "string" ? prop.title : key}
+            {required.has(key) ? (
+              <span className="ml-1 text-destructive">*</span>
+            ) : null}
+          </label>
+          <Input
+            id={`provider-cfg-${key}`}
+            onChange={(e) => onChange({ ...config, [key]: e.target.value })}
+            placeholder={
+              typeof prop.description === "string" ? prop.description : ""
+            }
+            value={
+              config[key] ??
+              (typeof prop.default === "string" ? prop.default : "")
+            }
+          />
+          {typeof prop.description === "string" ? (
+            <p className="text-xs text-muted-foreground">{prop.description}</p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Dialog ────────────────────────────────────────────────────────────────────
 
 export function CreateAgentDialog({
   open,
@@ -39,6 +129,7 @@ export function CreateAgentDialog({
 }) {
   const createMutation = useCreateManagedAgentMutation();
   const providersQuery = useAcpProvidersQuery();
+  const backendProvidersQuery = useBackendProvidersQuery();
   const [acpCommand, setAcpCommand] = React.useState("sprout-acp");
   const [agentCommand, setAgentCommand] = React.useState("goose");
   const [agentArgs, setAgentArgs] = React.useState("acp");
@@ -61,13 +152,33 @@ export function CreateAgentDialog({
   const [hasSyncedProviderSelection, setHasSyncedProviderSelection] =
     React.useState(false);
   const [showAdvanced, setShowAdvanced] = React.useState(false);
+
+  // ── Backend provider ("Run on") state ──────────────────────────────────────
+  const [runOn, setRunOn] = React.useState<"local" | string>("local");
+  const [providerConfig, setProviderConfig] = React.useState<
+    Record<string, string>
+  >({});
+  const [probedProvider, setProbedProvider] =
+    React.useState<BackendProviderProbeResult | null>(null);
+  const [probeError, setProbeError] = React.useState<string | null>(null);
+
   const providers = providersQuery.data ?? [];
+  const backendProviders = backendProvidersQuery.data ?? [];
   const prereqs = prereqsQuery.data ?? null;
   const selectedProvider = React.useMemo(
     () =>
       providers.find((provider) => provider.id === selectedProviderId) ?? null,
     [providers, selectedProviderId],
   );
+  const selectedBackendProvider = React.useMemo(
+    () => backendProviders.find((p) => p.id === runOn) ?? null,
+    [backendProviders, runOn],
+  );
+  const isProviderMode = runOn !== "local";
+  // Provider agents always mint — ownership is established during mint.
+  // Use this everywhere instead of raw `mintToken` for validation/rendering.
+  const effectiveMintToken = isProviderMode || mintToken;
+
   const isMintSupported = prereqs?.admin.available ?? false;
   const isSpawnSupported =
     prereqs?.acp.available === true && prereqs?.mcp.available === true;
@@ -96,12 +207,13 @@ export function CreateAgentDialog({
   ]);
 
   React.useEffect(() => {
-    if (!prereqs || prereqs.admin.available || !mintToken) {
+    // Don't auto-disable minting in provider mode — it's required.
+    if (!prereqs || prereqs.admin.available || !mintToken || isProviderMode) {
       return;
     }
 
     setMintToken(false);
-  }, [mintToken, prereqs]);
+  }, [mintToken, prereqs, isProviderMode]);
 
   React.useEffect(() => {
     if (
@@ -124,6 +236,51 @@ export function CreateAgentDialog({
     }
   }, [prereqsQuery.error, providersQuery.error]);
 
+  // Probe the backend provider when runOn changes to a non-local value
+  React.useEffect(() => {
+    if (!isProviderMode || !selectedBackendProvider) {
+      setProbedProvider(null);
+      setProbeError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setProbeError(null);
+    setProbedProvider(null);
+
+    probeBackendProvider(selectedBackendProvider.binaryPath)
+      .then((result) => {
+        if (!cancelled) {
+          setProbedProvider(result);
+          // Initialize config from schema defaults so unchanged defaults
+          // are included in the submit payload (not silently dropped).
+          if (result.config_schema) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const props = (result.config_schema as any)?.properties ?? {};
+            const defaults: Record<string, string> = {};
+            for (const [key, prop] of Object.entries(props) as [
+              string,
+              Record<string, unknown>,
+            ][]) {
+              if (prop.default != null) {
+                defaults[key] = String(prop.default);
+              }
+            }
+            setProviderConfig(defaults);
+          }
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setProbeError(err instanceof Error ? err.message : String(err));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isProviderMode, selectedBackendProvider]);
+
   function reset() {
     setName("");
     setRelayUrl("");
@@ -142,6 +299,10 @@ export function CreateAgentDialog({
     setSelectedProviderId("custom");
     setHasSyncedProviderSelection(false);
     setShowAdvanced(false);
+    setRunOn("local");
+    setProviderConfig({});
+    setProbedProvider(null);
+    setProbeError(null);
     createMutation.reset();
   }
 
@@ -153,7 +314,24 @@ export function CreateAgentDialog({
     onOpenChange(next);
   }
 
+  // Scopes required for remote agent controllability (!shutdown path).
+  // These cannot be removed in provider mode.
+  const PROVIDER_REQUIRED_SCOPES: TokenScope[] = [
+    "users:read" as TokenScope,
+    "messages:read" as TokenScope,
+    "messages:write" as TokenScope,
+    "channels:read" as TokenScope,
+  ];
+
   function toggleScope(scope: TokenScope) {
+    // Prevent removing required scopes in provider mode.
+    if (
+      isProviderMode &&
+      PROVIDER_REQUIRED_SCOPES.includes(scope) &&
+      selectedScopes.has(scope)
+    ) {
+      return; // locked — required for remote agent controllability
+    }
     setSelectedScopes((previous) => {
       const next = new Set(previous);
       if (next.has(scope)) {
@@ -184,41 +362,97 @@ export function CreateAgentDialog({
     setAgentArgs(provider.defaultArgs.join(","));
   }
 
+  function handleRunOnChange(value: string) {
+    setRunOn(value);
+    setProviderConfig({});
+    setProbedProvider(null);
+    setProbeError(null);
+  }
+
+  // Check provider config required fields are filled.
+  const providerConfigComplete = React.useMemo(() => {
+    if (!isProviderMode || !probedProvider?.config_schema) return true;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const schema = probedProvider.config_schema as any;
+    const required: string[] = schema?.required ?? [];
+    return required.every(
+      (key) => (providerConfig[key] ?? "").trim().length > 0,
+    );
+  }, [isProviderMode, probedProvider, providerConfig]);
+
   const canSubmit =
     name.trim().length > 0 &&
-    (!mintToken || selectedScopes.size > 0) &&
+    (!effectiveMintToken || selectedScopes.size > 0) &&
     !isDiscoveryPending &&
-    !(mintToken && prereqs !== null && !isMintSupported) &&
-    !(spawnAfterCreate && prereqs !== null && !isSpawnSupported) &&
+    !(effectiveMintToken && prereqs !== null && !isMintSupported) &&
+    !(
+      !isProviderMode &&
+      spawnAfterCreate &&
+      prereqs !== null &&
+      !isSpawnSupported
+    ) &&
+    // Block submission until probe succeeds in provider mode — required
+    // fields and config schema are only known after a successful probe.
+    !(isProviderMode && !probedProvider) &&
+    providerConfigComplete &&
     !createMutation.isPending;
 
   async function handleSubmit() {
     try {
-      const input: CreateManagedAgentInput = {
-        name: name.trim(),
-        relayUrl: relayUrl.trim() || undefined,
-        acpCommand: acpCommand.trim() || undefined,
-        agentCommand: agentCommand.trim() || undefined,
-        agentArgs: agentArgs
-          .split(",")
-          .map((value) => value.trim())
-          .filter((value) => value.length > 0),
-        mcpCommand: mcpCommand.trim() || undefined,
-        turnTimeoutSeconds:
-          Number.parseInt(turnTimeoutSeconds, 10) > 0
-            ? Number.parseInt(turnTimeoutSeconds, 10)
-            : undefined,
-        parallelism:
-          Number.parseInt(parallelism, 10) > 0
-            ? Number.parseInt(parallelism, 10)
-            : undefined,
-        systemPrompt: systemPrompt.trim() || undefined,
-        mintToken,
-        tokenName: tokenName.trim() || undefined,
-        tokenScopes: [...selectedScopes],
-        spawnAfterCreate,
-        startOnAppLaunch,
-      };
+      const input: CreateManagedAgentInput = isProviderMode
+        ? {
+            name: name.trim(),
+            relayUrl: relayUrl.trim() || undefined,
+            turnTimeoutSeconds:
+              Number.parseInt(turnTimeoutSeconds, 10) > 0
+                ? Number.parseInt(turnTimeoutSeconds, 10)
+                : undefined,
+            parallelism:
+              Number.parseInt(parallelism, 10) > 0
+                ? Number.parseInt(parallelism, 10)
+                : undefined,
+            systemPrompt: systemPrompt.trim() || undefined,
+            mintToken: true, // Required: ownership established during mint
+            tokenName: tokenName.trim() || undefined,
+            tokenScopes: [...selectedScopes],
+            spawnAfterCreate: true,
+            startOnAppLaunch: false, // Remote agents don't auto-start with the desktop
+            backend: {
+              type: "provider",
+              id: runOn,
+              config: coerceConfigValues(
+                providerConfig,
+                probedProvider?.config_schema,
+              ),
+            },
+          }
+        : {
+            name: name.trim(),
+            relayUrl: relayUrl.trim() || undefined,
+            acpCommand: acpCommand.trim() || undefined,
+            agentCommand: agentCommand.trim() || undefined,
+            agentArgs: agentArgs
+              .split(",")
+              .map((value) => value.trim())
+              .filter((value) => value.length > 0),
+            mcpCommand: mcpCommand.trim() || undefined,
+            turnTimeoutSeconds:
+              Number.parseInt(turnTimeoutSeconds, 10) > 0
+                ? Number.parseInt(turnTimeoutSeconds, 10)
+                : undefined,
+            parallelism:
+              Number.parseInt(parallelism, 10) > 0
+                ? Number.parseInt(parallelism, 10)
+                : undefined,
+            systemPrompt: systemPrompt.trim() || undefined,
+            mintToken: effectiveMintToken,
+            tokenName: tokenName.trim() || undefined,
+            tokenScopes: [...selectedScopes],
+            spawnAfterCreate,
+            startOnAppLaunch,
+            backend: { type: "local" },
+          };
+
       const created = await createMutation.mutateAsync(input);
       handleOpenChange(false);
       onCreated(created);
@@ -243,19 +477,75 @@ export function CreateAgentDialog({
           <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
             <CreateAgentBasicsFields name={name} onNameChange={setName} />
 
-            <CreateAgentRuntimeProviderField
-              onProviderChange={handleProviderChange}
-              providers={providers}
-              providersLoading={providersQuery.isLoading}
-              selectedProvider={selectedProvider}
-              selectedProviderId={selectedProviderId}
-            />
+            {/* Run on selector — only shown when backend providers are discovered */}
+            {backendProviders.length > 0 ? (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" htmlFor="agent-run-on">
+                  Run on
+                </label>
+                <select
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+                  id="agent-run-on"
+                  onChange={(e) => handleRunOnChange(e.target.value)}
+                  value={runOn}
+                >
+                  <option value="local">This computer</option>
+                  {backendProviders.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+
+            {/* Provider mode: trust warning + config fields */}
+            {isProviderMode && selectedBackendProvider ? (
+              <div className="space-y-4">
+                <div className="flex gap-3 rounded-2xl border border-amber-400/60 bg-amber-50/60 px-4 py-3 dark:border-amber-500/40 dark:bg-amber-950/30">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <p className="text-sm text-amber-800 dark:text-amber-300">
+                    This provider at{" "}
+                    <span className="font-mono font-medium">
+                      {selectedBackendProvider.binaryPath}
+                    </span>{" "}
+                    will receive your agent&apos;s private key. Only use
+                    providers from trusted sources.
+                  </p>
+                </div>
+
+                {probeError ? (
+                  <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                    Could not probe provider: {probeError}
+                  </p>
+                ) : null}
+
+                {probedProvider?.config_schema ? (
+                  <ProviderConfigFields
+                    config={providerConfig}
+                    onChange={setProviderConfig}
+                    schema={probedProvider.config_schema}
+                  />
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* Local mode: show the ACP runtime selector */}
+            {!isProviderMode ? (
+              <CreateAgentRuntimeProviderField
+                onProviderChange={handleProviderChange}
+                providers={providers}
+                providersLoading={providersQuery.isLoading}
+                selectedProvider={selectedProvider}
+                selectedProviderId={selectedProviderId}
+              />
+            ) : null}
 
             <CreateAgentOptionToggles
               isMintSupported={isMintSupported}
               isSpawnSupported={isSpawnSupported}
-              mintToken={mintToken}
-              mintToggleDisabled={mintToggleDisabled}
+              mintToken={effectiveMintToken}
+              mintToggleDisabled={isProviderMode || mintToggleDisabled}
               onToggleMintToken={() => {
                 if (!mintToggleDisabled) {
                   setMintToken((current) => !current);
@@ -270,13 +560,19 @@ export function CreateAgentDialog({
                 }
               }}
               prereqs={prereqs}
-              startOnAppLaunch={startOnAppLaunch}
-              spawnAfterCreate={spawnAfterCreate}
-              spawnToggleDisabled={spawnToggleDisabled}
+              startOnAppLaunch={isProviderMode ? false : startOnAppLaunch}
+              startOnAppLaunchDisabled={isProviderMode}
+              spawnAfterCreate={isProviderMode ? true : spawnAfterCreate}
+              spawnToggleDisabled={isProviderMode || spawnToggleDisabled}
             />
 
-            {mintToken ? (
+            {effectiveMintToken ? (
               <CreateAgentTokenSection
+                lockedScopes={
+                  isProviderMode
+                    ? new Set<TokenScope>(PROVIDER_REQUIRED_SCOPES)
+                    : undefined
+                }
                 onScopeToggle={toggleScope}
                 onTokenNameChange={setTokenName}
                 selectedScopes={selectedScopes}

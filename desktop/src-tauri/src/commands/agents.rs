@@ -4,11 +4,13 @@ use tauri::{AppHandle, State};
 use crate::{
     app_state::AppState,
     managed_agents::{
-        build_managed_agent_summary, default_token_scopes, find_managed_agent_mut,
-        load_managed_agents, load_personas, managed_agent_avatar_url, managed_agent_log_path,
-        mint_token_via_api, read_log_tail, save_managed_agents, start_managed_agent_process,
-        stop_managed_agent_process, sync_managed_agent_processes, CreateManagedAgentRequest,
-        CreateManagedAgentResponse, ManagedAgentLogResponse, ManagedAgentSummary,
+        build_managed_agent_summary, default_token_scopes, discover_provider_candidates,
+        find_managed_agent_mut, invoke_provider, load_managed_agents, load_personas,
+        managed_agent_avatar_url, managed_agent_log_path, mint_token_via_api, provider_deploy,
+        read_log_tail, resolve_provider_binary, save_managed_agents, start_managed_agent_process,
+        stop_managed_agent_process, sync_managed_agent_processes, validate_provider_config,
+        BackendKind, BackendProviderInfo, CreateManagedAgentRequest, CreateManagedAgentResponse,
+        ManagedAgentLogResponse, ManagedAgentRecord, ManagedAgentSummary,
         MintManagedAgentTokenRequest, MintManagedAgentTokenResponse, DEFAULT_AGENT_ARG,
         DEFAULT_ACP_COMMAND, DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM,
         DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
@@ -16,6 +18,90 @@ use crate::{
     relay::{relay_ws_url, sync_managed_agent_profile},
     util::now_iso,
 };
+
+/// Build the standard agent JSON payload for provider deploy calls.
+fn build_deploy_payload(record: &ManagedAgentRecord) -> serde_json::Value {
+    serde_json::json!({
+        "name": &record.name,
+        "relay_url": &record.relay_url,
+        "private_key_nsec": &record.private_key_nsec,
+        "api_token": &record.api_token,
+        "agent_command": &record.agent_command,
+        "agent_args": &record.agent_args,
+        "system_prompt": &record.system_prompt,
+        "model": &record.model,
+        "turn_timeout_seconds": record.turn_timeout_seconds,
+        "parallelism": record.parallelism,
+    })
+}
+
+/// Deploy an agent to a provider backend. Resolves the binary, calls deploy via
+/// spawn_blocking, and persists the result (backend_agent_id or last_error).
+///
+/// Idempotency: calling deploy on an already-deployed agent sends the same payload
+/// again. Providers are expected to handle this as an update-in-place or no-op —
+/// the protocol does not include an explicit `undeploy` operation (deferred to v2).
+///
+/// Returns Ok(()) on success, Err(message) on failure. Either way the record is
+/// updated and saved before returning.
+async fn deploy_to_provider(
+    app: &AppHandle,
+    state: &AppState,
+    pubkey: &str,
+    provider_id: &str,
+    config: &serde_json::Value,
+    agent_json: serde_json::Value,
+    cached_binary_path: Option<&str>,
+) -> Result<(), String> {
+    // Resolve via discovered candidates only. Cached path must match BOTH
+    // "is a discovered candidate" AND "belongs to this provider_id". A tampered
+    // record cannot redirect deploys to a different provider's binary.
+    let bin_path = cached_binary_path
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.exists())
+        .map(|p| p.canonicalize().unwrap_or(p))
+        .filter(|canonical| {
+            discover_provider_candidates()
+                .iter()
+                .any(|(id, cp)| id == provider_id && cp.canonicalize().ok().as_ref() == Some(canonical))
+        })
+        .map_or_else(|| resolve_provider_binary(provider_id), Ok)?;
+
+    let config_clone = config.clone();
+    let deploy_result = tokio::task::spawn_blocking(move || {
+        provider_deploy(&bin_path, &agent_json, &config_clone)
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking failed: {e}"))?;
+
+    // Persist result under lock.
+    let _store_guard = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let mut records = load_managed_agents(app)?;
+    let rec = records
+        .iter_mut()
+        .find(|r| r.pubkey == pubkey)
+        .ok_or_else(|| format!("agent {pubkey} not found"))?;
+
+    match deploy_result {
+        Ok(backend_agent_id) => {
+            rec.backend_agent_id = Some(backend_agent_id);
+            rec.last_started_at = Some(now_iso());
+            rec.updated_at = now_iso();
+            rec.last_error = None;
+        }
+        Err(ref e) => {
+            rec.last_error = Some(e.clone());
+            rec.updated_at = now_iso();
+            save_managed_agents(app, &records)?;
+            return Err(e.clone());
+        }
+    }
+    save_managed_agents(app, &records)?;
+    Ok(())
+}
 
 #[tauri::command]
 pub fn list_managed_agents(
@@ -132,7 +218,40 @@ pub async fn create_managed_agent(
         (keys, private_key_nsec, pubkey, resolved_relay_url, token_scopes, token_name, mint_token, input)
     };
 
+    // ── Pre-Phase 2: validate provider config BEFORE any side effects ────────
+    if let BackendKind::Provider { ref config, ref id } = input.backend {
+        // Provider agents MUST mint a token so the relay establishes ownership.
+        // Without ownership the harness ignores !shutdown — the agent becomes
+        // uncontrollable. Reject early rather than deploy an unstoppable agent.
+        if !mint_token {
+            return Err(
+                "provider-backed agents require a minted token (ownership is established during mint)"
+                    .to_string(),
+            );
+        }
+        // Enforce minimum scopes for remote agents. The harness needs users:read
+        // to query its owner (for !shutdown). Without it, the agent is unstoppable.
+        const REQUIRED_PROVIDER_SCOPES: &[&str] =
+            &["messages:read", "messages:write", "channels:read", "users:read"];
+        for required in REQUIRED_PROVIDER_SCOPES {
+            if !token_scopes.iter().any(|s| s == required) {
+                return Err(format!(
+                    "provider-backed agents require the '{required}' scope"
+                ));
+            }
+        }
+        validate_provider_config(config)?;
+        // Validate via discovered candidates — not raw resolve_command.
+        resolve_provider_binary(id)?;
+    }
+
     // ── Phase 2: mint token via REST API (async, outside lock) ───────────────
+    // Pass the desktop user's pubkey as the agent owner so the relay records
+    // the ownership chain. Only NIP-98 bootstrap mints can set owner_pubkey.
+    let user_pubkey_hex = {
+        let keys = state.keys.lock().map_err(|e| e.to_string())?;
+        keys.public_key().to_hex()
+    };
     let api_token: Option<String> = if mint_token {
         let token = mint_token_via_api(
             &state,
@@ -140,12 +259,16 @@ pub async fn create_managed_agent(
             &resolved_relay_url,
             &token_name,
             &token_scopes,
+            Some(&user_pubkey_hex),
         )
         .await?;
         Some(token)
     } else {
         None
     };
+
+    // Agent ownership is set atomically during token mint via owner_pubkey
+    // in the request body — no separate API call needed.
 
     // ── Phase 3: save record and optionally spawn (sync lock) ─────────────────
     let (agent, spawn_error) = {
@@ -168,6 +291,15 @@ pub async fn create_managed_agent(
         if records.iter().any(|record| record.pubkey == pubkey) {
             return Err(format!("agent {pubkey} already exists"));
         }
+        // Provider config was already validated in Pre-Phase 2.
+        // Cache the discovered binary path for deploy_to_provider.
+        let provider_binary_path = if let BackendKind::Provider { ref id, .. } = input.backend {
+            // Use resolve_provider_binary (discovered candidates only).
+            resolve_provider_binary(id).ok().map(|p| p.display().to_string())
+        } else {
+            None
+        };
+
         let mut record = crate::managed_agents::ManagedAgentRecord {
             pubkey: pubkey.clone(),
             name: name.clone(),
@@ -222,8 +354,18 @@ pub async fn create_managed_agent(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
-            start_on_app_launch: input.start_on_app_launch,
+            // Provider agents don't auto-start with the desktop — they're
+            // managed externally. Force false to avoid persisting a flag the
+            // app will never honor.
+            start_on_app_launch: if input.backend != BackendKind::Local {
+                false
+            } else {
+                input.start_on_app_launch
+            },
             runtime_pid: None,
+            backend: input.backend.clone(),
+            backend_agent_id: None,
+            provider_binary_path,
             created_at: now_iso(),
             updated_at: now_iso(),
             last_started_at: None,
@@ -239,7 +381,7 @@ pub async fn create_managed_agent(
         records.push(record);
 
         let mut spawn_error = None;
-        if input.spawn_after_create {
+        if input.spawn_after_create && input.backend == BackendKind::Local {
             let record = find_managed_agent_mut(&mut records, &pubkey)?;
             if let Err(error) = start_managed_agent_process(&app, record, &mut runtimes) {
                 record.updated_at = now_iso();
@@ -281,8 +423,43 @@ pub async fn create_managed_agent(
         Err(error) => Some(error),
     };
 
+    // ── Phase 5: provider deploy (async, outside lock) ───────────────────────
+    let spawn_error = if input.spawn_after_create && input.backend != BackendKind::Local {
+        if let BackendKind::Provider { ref id, ref config } = input.backend {
+            // Read the saved record to build the deploy payload (record has the
+            // canonical field values after Phase 3 normalization).
+            let agent_json = {
+                let _g = state.managed_agents_store_lock.lock().map_err(|e| e.to_string())?;
+                let records = load_managed_agents(&app)?;
+                let rec = records.iter().find(|r| r.pubkey == pubkey)
+                    .ok_or_else(|| "agent disappeared".to_string())?;
+                build_deploy_payload(rec)
+            };
+            match deploy_to_provider(&app, &state, &pubkey, id, config, agent_json, None).await {
+                Ok(()) => spawn_error,
+                Err(e) => Some(e),
+            }
+        } else {
+            spawn_error
+        }
+    } else {
+        spawn_error
+    };
+
+    // Rebuild summary if provider deploy may have updated backend_agent_id.
+    let final_agent = if input.backend != BackendKind::Local && spawn_error.is_none() {
+        let _store_guard = state.managed_agents_store_lock.lock().map_err(|e| e.to_string())?;
+        let records = load_managed_agents(&app)?;
+        let runtimes = state.managed_agent_processes.lock().map_err(|e| e.to_string())?;
+        let record = records.iter().find(|r| r.pubkey == pubkey)
+            .ok_or_else(|| "agent disappeared".to_string())?;
+        build_managed_agent_summary(&app, record, &runtimes)?
+    } else {
+        agent
+    };
+
     Ok(CreateManagedAgentResponse {
-        agent,
+        agent: final_agent,
         private_key_nsec,
         api_token,
         profile_sync_error,
@@ -291,35 +468,79 @@ pub async fn create_managed_agent(
 }
 
 #[tauri::command]
-pub fn start_managed_agent(
+pub async fn start_managed_agent(
     pubkey: String,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ManagedAgentSummary, String> {
-    let _store_guard = state
-        .managed_agents_store_lock
-        .lock()
-        .map_err(|error| error.to_string())?;
-    let mut records = load_managed_agents(&app)?;
-    let mut runtimes = state
-        .managed_agent_processes
-        .lock()
-        .map_err(|error| error.to_string())?;
+    // Collect backend info and handle local vs provider under lock.
+    let (backend, cached_binary_path, agent_json) = {
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let mut records = load_managed_agents(&app)?;
+        let mut runtimes = state
+            .managed_agent_processes
+            .lock()
+            .map_err(|error| error.to_string())?;
 
-    if sync_managed_agent_processes(&mut records, &mut runtimes) {
-        save_managed_agents(&app, &records)?;
-    }
+        if sync_managed_agent_processes(&mut records, &mut runtimes) {
+            save_managed_agents(&app, &records)?;
+        }
 
-    {
         let record = find_managed_agent_mut(&mut records, &pubkey)?;
-        start_managed_agent_process(&app, record, &mut runtimes)?;
+
+        if record.backend == BackendKind::Local {
+            // Local: spawn in-process and return immediately.
+            start_managed_agent_process(&app, record, &mut runtimes)?;
+            save_managed_agents(&app, &records)?;
+            let record = records
+                .iter()
+                .find(|r| r.pubkey == pubkey)
+                .ok_or_else(|| format!("agent {pubkey} not found"))?;
+            return build_managed_agent_summary(&app, record, &runtimes);
+        }
+
+        let payload = build_deploy_payload(record);
+        (
+            record.backend.clone(),
+            record.provider_binary_path.clone(),
+            payload,
+        )
+    };
+
+    // Provider backend: deploy via shared helper (async, outside lock).
+    if let BackendKind::Provider { ref id, ref config } = backend {
+        deploy_to_provider(
+            &app,
+            &state,
+            &pubkey,
+            id,
+            config,
+            agent_json,
+            cached_binary_path.as_deref(),
+        )
+        .await?;
+
+        // Return updated summary.
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let records = load_managed_agents(&app)?;
+        let runtimes = state
+            .managed_agent_processes
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let record = records
+            .iter()
+            .find(|r| r.pubkey == pubkey)
+            .ok_or_else(|| format!("agent {pubkey} not found"))?;
+        return build_managed_agent_summary(&app, record, &runtimes);
     }
-    save_managed_agents(&app, &records)?;
-    let record = records
-        .iter()
-        .find(|record| record.pubkey == pubkey)
-        .ok_or_else(|| format!("agent {pubkey} not found"))?;
-    build_managed_agent_summary(&app, record, &runtimes)
+
+    Err(format!("agent {pubkey} has unsupported backend kind"))
 }
 
 #[tauri::command]
@@ -344,6 +565,13 @@ pub fn stop_managed_agent(
 
     {
         let record = find_managed_agent_mut(&mut records, &pubkey)?;
+        // Remote agents are stopped via !shutdown @mention from the frontend,
+        // not via this backend command. Reject the call.
+        if record.backend != BackendKind::Local {
+            return Err(
+                "remote agents are stopped via !shutdown message, not this command".to_string(),
+            );
+        }
         stop_managed_agent_process(record, &mut runtimes)?;
     }
     save_managed_agents(&app, &records)?;
@@ -357,6 +585,7 @@ pub fn stop_managed_agent(
 #[tauri::command]
 pub fn delete_managed_agent(
     pubkey: String,
+    force_remote_delete: Option<bool>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -373,7 +602,27 @@ pub fn delete_managed_agent(
     if sync_managed_agent_processes(&mut records, &mut runtimes) {
         save_managed_agents(&app, &records)?;
     }
+
+    // Guard: reject deletion of deployed remote agents unless explicitly forced.
+    // This turns "don't orphan remote infra" from a UI convention into a backend
+    // invariant — a buggy or compromised IPC caller cannot silently orphan a live
+    // remote deployment. The frontend sends force_remote_delete: true only after
+    // the user confirms the orphan warning.
+    if let Some(record) = records.iter().find(|r| r.pubkey == pubkey) {
+        if record.backend != BackendKind::Local
+            && record.backend_agent_id.is_some()
+            && !force_remote_delete.unwrap_or(false)
+        {
+            return Err(
+                "cannot delete a deployed remote agent without force_remote_delete: true"
+                    .to_string(),
+            );
+        }
+    }
+
     if let Some(record) = records.iter_mut().find(|record| record.pubkey == pubkey) {
+        // For local agents: kills the process. For remote agents: no-op (the frontend
+        // sends !shutdown via WebSocket before calling delete). Either way, safe.
         stop_managed_agent_process(record, &mut runtimes)?;
     }
     let initial_len = records.len();
@@ -438,7 +687,10 @@ pub async fn mint_managed_agent_token(
     };
 
     // ── Phase 2: mint token via REST API (async, outside lock) ───────────────
-    let minted_token = mint_token_via_api(&state, &agent_keys, &relay_url, &token_name, &scopes).await?;
+    // Re-minting: do NOT send owner_pubkey. Ownership was established during
+    // the first mint (create flow). Sending it again would be rejected by the
+    // relay if the owner is already set to a different pubkey.
+    let minted_token = mint_token_via_api(&state, &agent_keys, &relay_url, &token_name, &scopes, None).await?;
 
     // ── Phase 3: persist new token to agent record (sync lock) ───────────────
     let (agent, api_token) = {
@@ -487,8 +739,10 @@ pub fn get_managed_agent_log(
         .lock()
         .map_err(|error| error.to_string())?;
     let records = load_managed_agents(&app)?;
-    if !records.iter().any(|record| record.pubkey == pubkey) {
-        return Err(format!("agent {pubkey} not found"));
+    let record = records.iter().find(|record| record.pubkey == pubkey)
+        .ok_or_else(|| format!("agent {pubkey} not found"))?;
+    if record.backend != BackendKind::Local {
+        return Err("logs are not available for remote agents".to_string());
     }
 
     let log_path = managed_agent_log_path(&app, &pubkey)?;
@@ -497,3 +751,52 @@ pub fn get_managed_agent_log(
         log_path: log_path.display().to_string(),
     })
 }
+
+// ── New backend-provider commands ────────────────────────────────────────────
+
+#[tauri::command]
+pub fn discover_backend_providers() -> Vec<BackendProviderInfo> {
+    discover_provider_candidates()
+        .into_iter()
+        .map(|(id, path)| BackendProviderInfo {
+            id,
+            binary_path: path.display().to_string(),
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn probe_backend_provider(binary_path: String) -> Result<serde_json::Value, String> {
+    // Validate that the requested path is actually a discovered sprout-backend-* binary.
+    // This prevents arbitrary binary execution via a compromised frontend or IPC.
+    let candidates = discover_provider_candidates();
+    let path = std::path::PathBuf::from(&binary_path);
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("binary not found: {binary_path}: {e}"))?;
+    let is_known = candidates
+        .iter()
+        .any(|(_, p)| p.canonicalize().ok().as_ref() == Some(&canonical));
+    if !is_known {
+        return Err(format!(
+            "binary '{binary_path}' is not a discovered sprout-backend-* provider"
+        ));
+    }
+    // request_id is for provider-side logging — not validated in the response
+    // (stdin→stdout is 1:1 per process invocation).
+    let request = serde_json::json!({
+        "op": "info",
+        "request_id": uuid::Uuid::new_v4().to_string(),
+    });
+    tokio::task::spawn_blocking(move || {
+        invoke_provider(&canonical, &request, std::time::Duration::from_secs(10))
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking failed: {e}"))?
+}
+
+// Remote agent shutdown is handled entirely by the frontend:
+// 1. Frontend sends "!shutdown" @mention via WebSocket (signed by user's key)
+// 2. Harness sees it, exits gracefully, sets presence to "offline"
+// 3. Desktop's existing presence polling sees "offline" — UI updates automatically
+// No backend Tauri command needed. Presence IS the status.

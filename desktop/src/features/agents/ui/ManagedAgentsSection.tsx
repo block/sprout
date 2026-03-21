@@ -11,8 +11,9 @@ import {
   UserPlus,
 } from "lucide-react";
 
-import type { ManagedAgent } from "@/shared/api/types";
+import type { ManagedAgent, PresenceLookup } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -34,6 +35,7 @@ export function ManagedAgentsSection({
   isActionPending,
   isLoading,
   personaLabelsById,
+  presenceLookup,
   onAddToChannel,
   onCreate,
   onDelete,
@@ -50,6 +52,7 @@ export function ManagedAgentsSection({
   isActionPending: boolean;
   isLoading: boolean;
   personaLabelsById: Record<string, string>;
+  presenceLookup: PresenceLookup;
   onAddToChannel: (agent: ManagedAgent) => void;
   onCreate: () => void;
   onDelete: (pubkey: string) => void;
@@ -64,10 +67,10 @@ export function ManagedAgentsSection({
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold tracking-tight">
-            Managed locally
+            Managed agents
           </h3>
           <p className="text-sm text-muted-foreground">
-            Saved agent profiles and local ACP process state.
+            Agent profiles and process state — local and remote.
           </p>
         </div>
         <Tooltip>
@@ -137,6 +140,7 @@ export function ManagedAgentsSection({
                     isActionPending={isActionPending}
                     key={agent.pubkey}
                     personaLabelsById={personaLabelsById}
+                    presenceLookup={presenceLookup}
                     onAddToChannel={onAddToChannel}
                     onDelete={onDelete}
                     onMintToken={onMintToken}
@@ -177,6 +181,7 @@ function ManagedAgentRow({
   agent,
   isActionPending,
   personaLabelsById,
+  presenceLookup,
   onAddToChannel,
   onDelete,
   onMintToken,
@@ -188,6 +193,7 @@ function ManagedAgentRow({
   agent: ManagedAgent;
   isActionPending: boolean;
   personaLabelsById: Record<string, string>;
+  presenceLookup: PresenceLookup;
   onAddToChannel: (agent: ManagedAgent) => void;
   onDelete: (pubkey: string) => void;
   onMintToken: (pubkey: string, name: string) => void;
@@ -196,19 +202,32 @@ function ManagedAgentRow({
   onToggleStartOnAppLaunch: (pubkey: string, startOnAppLaunch: boolean) => void;
   onViewLogs: (pubkey: string) => void;
 }) {
-  const isRunning = agent.status === "running";
+  const isActive = agent.status === "running" || agent.status === "deployed";
   const personaLabel = agent.personaId
     ? (personaLabelsById[agent.personaId] ?? null)
     : null;
+  const presenceStatus = presenceLookup[agent.pubkey.trim().toLowerCase()];
 
   return (
     <tr
-      className="cursor-pointer border-b border-border/60 last:border-b-0 hover:bg-muted/30"
+      className={cn(
+        "border-b border-border/60 last:border-b-0 hover:bg-muted/30",
+        agent.backend.type === "local" && "cursor-pointer",
+      )}
       data-testid={`managed-agent-${agent.pubkey}`}
-      onClick={() => onViewLogs(agent.pubkey)}
+      onClick={() => {
+        if (agent.backend.type === "local") {
+          onViewLogs(agent.pubkey);
+        }
+      }}
     >
       <td className="px-4 py-3">
-        <p className="truncate font-medium text-foreground">{agent.name}</p>
+        <div className="flex items-center gap-1.5">
+          {presenceStatus ? (
+            <PresenceDot className="shrink-0" status={presenceStatus} />
+          ) : null}
+          <p className="truncate font-medium text-foreground">{agent.name}</p>
+        </div>
         {personaLabel ? (
           <p className="mt-1">
             <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
@@ -224,7 +243,7 @@ function ManagedAgentRow({
         <span
           className={cn(
             "inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]",
-            isRunning
+            isActive
               ? "bg-primary text-primary-foreground"
               : "bg-muted text-muted-foreground",
           )}
@@ -248,7 +267,7 @@ function ManagedAgentRow({
         <AgentActionsMenu
           agent={agent}
           isActionPending={isActionPending}
-          isRunning={isRunning}
+          isActive={isActive}
           onAddToChannel={onAddToChannel}
           onDelete={onDelete}
           onMintToken={onMintToken}
@@ -265,7 +284,7 @@ function ManagedAgentRow({
 function AgentActionsMenu({
   agent,
   isActionPending,
-  isRunning,
+  isActive,
   onAddToChannel,
   onDelete,
   onMintToken,
@@ -276,7 +295,7 @@ function AgentActionsMenu({
 }: {
   agent: ManagedAgent;
   isActionPending: boolean;
-  isRunning: boolean;
+  isActive: boolean;
   onAddToChannel: (agent: ManagedAgent) => void;
   onDelete: (pubkey: string) => void;
   onMintToken: (pubkey: string, name: string) => void;
@@ -299,7 +318,24 @@ function AgentActionsMenu({
         align="end"
         onCloseAutoFocus={(event) => event.preventDefault()}
       >
-        {isRunning ? (
+        {agent.backend.type === "provider" ? (
+          <>
+            <DropdownMenuItem
+              disabled={isActionPending}
+              onClick={() => onStart(agent.pubkey)}
+            >
+              <Play className="h-4 w-4" />
+              {isActive ? "Redeploy" : "Deploy"}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={isActionPending}
+              onClick={() => onStop(agent.pubkey)}
+            >
+              <Square className="h-4 w-4" />
+              Shutdown
+            </DropdownMenuItem>
+          </>
+        ) : isActive ? (
           <DropdownMenuItem
             disabled={isActionPending}
             onClick={() => onStop(agent.pubkey)}
@@ -340,20 +376,26 @@ function AgentActionsMenu({
           Copy pubkey
         </DropdownMenuItem>
 
-        <DropdownMenuItem onClick={() => onViewLogs(agent.pubkey)}>
-          <FileText className="h-4 w-4" />
-          View logs
-        </DropdownMenuItem>
+        {agent.backend.type === "local" ? (
+          <DropdownMenuItem onClick={() => onViewLogs(agent.pubkey)}>
+            <FileText className="h-4 w-4" />
+            View logs
+          </DropdownMenuItem>
+        ) : null}
 
-        <DropdownMenuItem
-          disabled={isActionPending}
-          onClick={() =>
-            onToggleStartOnAppLaunch(agent.pubkey, !agent.startOnAppLaunch)
-          }
-        >
-          <Power className="h-4 w-4" />
-          {agent.startOnAppLaunch ? "Disable auto-start" : "Enable auto-start"}
-        </DropdownMenuItem>
+        {agent.backend.type === "local" ? (
+          <DropdownMenuItem
+            disabled={isActionPending}
+            onClick={() =>
+              onToggleStartOnAppLaunch(agent.pubkey, !agent.startOnAppLaunch)
+            }
+          >
+            <Power className="h-4 w-4" />
+            {agent.startOnAppLaunch
+              ? "Disable auto-start"
+              : "Enable auto-start"}
+          </DropdownMenuItem>
+        ) : null}
 
         <DropdownMenuSeparator />
 

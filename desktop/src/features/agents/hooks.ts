@@ -11,6 +11,7 @@ import {
   createManagedAgent,
   deleteManagedAgent,
   discoverAcpProviders,
+  discoverBackendProviders,
   discoverManagedAgentPrereqs,
   getManagedAgentLog,
   listManagedAgents,
@@ -70,6 +71,7 @@ export const personasQueryKey = ["personas"] as const;
 export const teamsQueryKey = ["teams"] as const;
 export const acpProvidersQueryKey = ["acp-providers"] as const;
 export const managedAgentPrereqsQueryKey = ["managed-agent-prereqs"] as const;
+export const backendProvidersQueryKey = ["backend-providers"] as const;
 
 export type EnsureGooseInChannelResult = AttachManagedAgentToChannelResult & {
   created: boolean;
@@ -98,6 +100,14 @@ export function useAcpProvidersQuery() {
     queryKey: acpProvidersQueryKey,
     queryFn: discoverAcpProviders,
     staleTime: 60_000,
+  });
+}
+
+export function useBackendProvidersQuery() {
+  return useQuery({
+    queryKey: backendProvidersQueryKey,
+    queryFn: discoverBackendProviders,
+    staleTime: 30_000,
   });
 }
 
@@ -148,6 +158,9 @@ export function useManagedAgentsQuery() {
     staleTime: 1_000,
     refetchInterval: (query) => {
       const agents = query.state.data as ManagedAgent[] | undefined;
+      // Only local "running" agents need fast polling (process state can
+      // change). "deployed" is static control-plane state — presence polling
+      // handles the live signal for remote agents separately.
       return agents?.some((agent) => agent.status === "running")
         ? 2_000
         : 10_000;
@@ -274,7 +287,13 @@ export function useDeleteManagedAgentMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (pubkey: string) => deleteManagedAgent(pubkey),
+    mutationFn: ({
+      pubkey,
+      forceRemoteDelete,
+    }: {
+      pubkey: string;
+      forceRemoteDelete?: boolean;
+    }) => deleteManagedAgent(pubkey, forceRemoteDelete),
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
       await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });

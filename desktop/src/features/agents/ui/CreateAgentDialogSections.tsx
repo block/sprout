@@ -262,6 +262,7 @@ export function CreateAgentOptionToggles({
   mintToggleDisabled,
   prereqs,
   startOnAppLaunch,
+  startOnAppLaunchDisabled,
   spawnAfterCreate,
   spawnToggleDisabled,
   onToggleMintToken,
@@ -274,6 +275,8 @@ export function CreateAgentOptionToggles({
   mintToggleDisabled: boolean;
   prereqs: ManagedAgentPrereqs | null;
   startOnAppLaunch: boolean;
+  /** When true, the toggle is disabled (e.g. remote agents don't support auto-start). */
+  startOnAppLaunchDisabled?: boolean;
   spawnAfterCreate: boolean;
   spawnToggleDisabled: boolean;
   onToggleMintToken: () => void;
@@ -307,10 +310,12 @@ export function CreateAgentOptionToggles({
         aria-pressed={startOnAppLaunch}
         className={cn(
           "rounded-2xl border px-4 py-3 text-left transition-colors",
+          startOnAppLaunchDisabled && "cursor-not-allowed opacity-60",
           startOnAppLaunch
             ? "border-primary bg-primary/10"
             : "border-border/70 bg-background/70",
         )}
+        disabled={startOnAppLaunchDisabled}
         onClick={onToggleStartOnAppLaunch}
         type="button"
       >
@@ -318,8 +323,9 @@ export function CreateAgentOptionToggles({
           Start on app launch
         </p>
         <p className="mt-1 text-sm text-foreground/70">
-          Reopen this local ACP harness automatically when the desktop app
-          starts.
+          {startOnAppLaunchDisabled
+            ? "Remote agents are managed by their provider and don\u2019t auto-start with the desktop app."
+            : "Reopen this local ACP harness automatically when the desktop app starts."}
         </p>
       </button>
 
@@ -352,11 +358,14 @@ export function CreateAgentOptionToggles({
 export function CreateAgentTokenSection({
   selectedScopes,
   tokenName,
+  lockedScopes,
   onScopeToggle,
   onTokenNameChange,
 }: {
   selectedScopes: Set<TokenScope>;
   tokenName: string;
+  /** Scopes that cannot be removed (e.g. required for remote agent controllability). */
+  lockedScopes?: Set<TokenScope>;
   onScopeToggle: (scope: TokenScope) => void;
   onTokenNameChange: (value: string) => void;
 }) {
@@ -379,6 +388,7 @@ export function CreateAgentTokenSection({
         <div className="grid grid-cols-2 gap-2">
           {MANAGED_AGENT_SCOPE_OPTIONS.map((scope) => {
             const selected = selectedScopes.has(scope.value);
+            const locked = lockedScopes?.has(scope.value) && selected;
             return (
               <button
                 className={cn(
@@ -386,12 +396,24 @@ export function CreateAgentTokenSection({
                   selected
                     ? "border-primary bg-primary/10 text-foreground"
                     : "border-border/60 text-muted-foreground hover:bg-accent",
+                  locked && "cursor-not-allowed opacity-70",
                 )}
+                disabled={locked}
                 key={scope.value}
                 onClick={() => onScopeToggle(scope.value)}
+                title={
+                  locked
+                    ? "Required for remote agent controllability"
+                    : undefined
+                }
                 type="button"
               >
                 {scope.label}
+                {locked ? (
+                  <span className="ml-1 text-xs text-muted-foreground">
+                    (required)
+                  </span>
+                ) : null}
                 <span className="block text-xs text-foreground/60">
                   {scope.description}
                 </span>
