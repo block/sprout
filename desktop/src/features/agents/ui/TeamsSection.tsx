@@ -87,47 +87,30 @@ export function TeamsSection({
         <div>
           <h3 className="text-sm font-semibold tracking-tight">Teams</h3>
           <p className="text-sm text-muted-foreground">
-            Named groups of personas you can deploy to a channel together. Drop
-            a .team.json file to import.
+            Named groups of personas you can deploy to a channel together.
           </p>
         </div>
-        <div className="flex items-center gap-1">
-          <input
-            accept=".json"
-            className="hidden"
-            onChange={handleFileChange}
-            ref={fileInputRef}
-            type="file"
-          />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label="Import team"
-                onClick={openFilePicker}
-                type="button"
-                variant="ghost"
-                size="icon"
-              >
-                <Upload className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Import team</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label="Create team"
-                onClick={onCreate}
-                type="button"
-                variant="ghost"
-                size="icon"
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Create team</TooltipContent>
-          </Tooltip>
-        </div>
+        <input
+          accept=".json"
+          className="hidden"
+          onChange={handleFileChange}
+          ref={fileInputRef}
+          type="file"
+        />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label="Create team"
+              onClick={onCreate}
+              type="button"
+              variant="ghost"
+              size="icon"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Create team</TooltipContent>
+        </Tooltip>
       </div>
 
       {isLoading ? (
@@ -266,11 +249,23 @@ export function TeamsSection({
               </div>
             );
           })}
+          <button
+            className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-border/80 bg-card/70 p-3 text-muted-foreground transition-colors hover:border-border hover:bg-muted/30"
+            onClick={openFilePicker}
+            type="button"
+          >
+            <Upload className="h-4 w-4" />
+            <span className="text-xs">Import</span>
+          </button>
         </div>
       ) : null}
 
       {!isLoading && teams.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center">
+        <button
+          className="w-full cursor-pointer rounded-xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center transition-colors hover:border-border hover:bg-muted/30"
+          onClick={openFilePicker}
+          type="button"
+        >
           <p className="text-sm font-semibold tracking-tight">No teams yet</p>
           <p className="mt-2 text-sm text-muted-foreground">
             Create a team to group personas for quick deployment to channels.
@@ -278,7 +273,7 @@ export function TeamsSection({
           <p className="mt-1 text-xs text-muted-foreground/70">
             Or drop a .team.json file here to import.
           </p>
-        </div>
+        </button>
       ) : null}
 
       {error ? (

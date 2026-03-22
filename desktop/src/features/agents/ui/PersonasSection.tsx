@@ -70,47 +70,30 @@ export function PersonasSection({
         <div>
           <h3 className="text-sm font-semibold tracking-tight">Personas</h3>
           <p className="text-sm text-muted-foreground">
-            Reusable agent templates for common roles and prompts. Drop a file
-            to import.
+            Reusable agent templates for common roles and prompts.
           </p>
         </div>
-        <div className="flex items-center gap-1">
-          <input
-            accept=".json,.png,.zip"
-            className="hidden"
-            onChange={handleFileChange}
-            ref={fileInputRef}
-            type="file"
-          />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label="Import persona"
-                onClick={openFilePicker}
-                type="button"
-                variant="ghost"
-                size="icon"
-              >
-                <Upload className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Import persona</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label="Create persona"
-                onClick={onCreate}
-                type="button"
-                variant="ghost"
-                size="icon"
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Create persona</TooltipContent>
-          </Tooltip>
-        </div>
+        <input
+          accept=".json,.png,.zip"
+          className="hidden"
+          onChange={handleFileChange}
+          ref={fileInputRef}
+          type="file"
+        />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label="Create persona"
+              onClick={onCreate}
+              type="button"
+              variant="ghost"
+              size="icon"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Create persona</TooltipContent>
+        </Tooltip>
       </div>
 
       {isLoading ? (
@@ -231,11 +214,23 @@ export function PersonasSection({
               </div>
             );
           })}
+          <button
+            className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-border/80 bg-card/70 p-2 text-muted-foreground transition-colors hover:border-border hover:bg-muted/30"
+            onClick={openFilePicker}
+            type="button"
+          >
+            <Upload className="h-4 w-4" />
+            <span className="text-xs">Import</span>
+          </button>
         </div>
       ) : null}
 
       {!isLoading && personas.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center">
+        <button
+          className="w-full cursor-pointer rounded-xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center transition-colors hover:border-border hover:bg-muted/30"
+          onClick={openFilePicker}
+          type="button"
+        >
           <p className="text-sm font-semibold tracking-tight">
             No personas yet
           </p>
@@ -245,7 +240,7 @@ export function PersonasSection({
           <p className="mt-1 text-xs text-muted-foreground/70">
             Or drop a .persona.json, .persona.png, or .zip file here to import.
           </p>
-        </div>
+        </button>
       ) : null}
 
       {error ? (
