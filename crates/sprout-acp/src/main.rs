@@ -18,7 +18,9 @@ use config::{Config, DedupMode, ModelsArgs, SubscribeMode};
 use filter::SubscriptionRule;
 use futures_util::FutureExt;
 use nostr::ToBech32;
-use pool::{AgentPool, OwnedAgent, PromptContext, PromptOutcome, PromptResult, PromptSource};
+use pool::{
+    AgentPool, OwnedAgent, PromptContext, PromptOutcome, PromptResult, PromptSource, SessionState,
+};
 use queue::{EventQueue, QueuedEvent};
 use relay::HarnessRelay;
 use sprout_core::kind::{
@@ -82,8 +84,7 @@ async fn main() -> Result<()> {
         agents.push(OwnedAgent {
             index: i,
             acp,
-            sessions: HashMap::new(),
-            heartbeat_session: None,
+            state: SessionState::default(),
             model_capabilities: None,
             desired_model: config.model.clone(),
         });
@@ -228,6 +229,7 @@ async fn main() -> Result<()> {
         rest_client: relay.rest_client(),
         channel_info: channel_info_map,
         context_message_limit: config.context_message_limit,
+        max_turns_per_session: config.max_turns_per_session,
     });
 
     // ── Step 6: Heartbeat timer ───────────────────────────────────────────────
@@ -808,11 +810,8 @@ async fn handle_prompt_result(
     // Strip sessions for channels the agent was removed from while this
     // agent was checked out. This covers the gap where invalidate_channel_sessions
     // only touches idle agents.
-    if !removed_channels.is_empty() {
-        result
-            .agent
-            .sessions
-            .retain(|ch, _| !removed_channels.contains(ch));
+    for ch in removed_channels {
+        result.agent.state.invalidate_channel(ch);
     }
 
     let outcome_label = match &result.outcome {
@@ -899,8 +898,7 @@ async fn recover_panicked_agent(
             pool.agents_mut()[i] = Some(OwnedAgent {
                 index: i,
                 acp,
-                sessions: HashMap::new(),
-                heartbeat_session: None,
+                state: SessionState::default(),
                 model_capabilities: None,
                 desired_model: config.model.clone(),
             });
@@ -1011,8 +1009,7 @@ async fn respawn_agent_into(old_agent: OwnedAgent, config: &Config) -> Result<Ow
     Ok(OwnedAgent {
         index,
         acp,
-        sessions: HashMap::new(),
-        heartbeat_session: None,
+        state: SessionState::default(),
         model_capabilities: None,
         desired_model: config.model.clone(),
     })
