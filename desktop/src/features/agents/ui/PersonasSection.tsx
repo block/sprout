@@ -70,8 +70,8 @@ export function PersonasSection({
       </div>
 
       {isLoading ? (
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
-          {["first", "second", "third", "fourth", "fifth"].map((key) => (
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
+          {["first", "second", "third", "fourth"].map((key) => (
             <div
               className="rounded-xl border border-border/70 bg-card/80 p-2 shadow-sm"
               key={key}
@@ -89,7 +89,7 @@ export function PersonasSection({
       ) : null}
 
       {!isLoading && personas.length > 0 ? (
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
           {personas.map((persona) => {
             const preview = promptPreview(persona.systemPrompt);
 
@@ -111,7 +111,7 @@ export function PersonasSection({
                           {persona.displayName}
                         </p>
                         {persona.isBuiltIn ? (
-                          <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                          <span className="whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                             Built-in
                           </span>
                         ) : null}
