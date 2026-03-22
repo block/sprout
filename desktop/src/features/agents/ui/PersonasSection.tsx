@@ -59,7 +59,7 @@ export function PersonasSection({
   return (
     <section className="relative space-y-4" {...dropHandlers}>
       {isDragOver ? (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/50 bg-primary/5">
+        <div className="pointer-events-none absolute -inset-2 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/50 bg-primary/5">
           <p className="text-sm font-medium text-primary">
             Drop .persona.json, .persona.png, or .zip to import
           </p>
@@ -215,7 +215,7 @@ export function PersonasSection({
             );
           })}
           <button
-            className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-border/80 bg-card/70 p-2 text-muted-foreground transition-colors hover:border-border hover:bg-muted/30"
+            className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-primary/30 bg-primary/[0.02] p-2 text-primary/50 transition-colors hover:border-primary/50 hover:bg-primary/5 hover:text-primary/70"
             onClick={openFilePicker}
             type="button"
           >
@@ -227,7 +227,7 @@ export function PersonasSection({
 
       {!isLoading && personas.length === 0 ? (
         <button
-          className="w-full cursor-pointer rounded-xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center transition-colors hover:border-border hover:bg-muted/30"
+          className="w-full cursor-pointer rounded-xl border border-dashed border-primary/20 bg-primary/[0.02] px-6 py-10 text-center transition-colors hover:border-primary/40 hover:bg-primary/5"
           onClick={openFilePicker}
           type="button"
         >
