@@ -76,7 +76,7 @@ export function TeamsSection({
   return (
     <section className="relative space-y-4" {...dropHandlers}>
       {isDragOver ? (
-        <div className="pointer-events-none absolute -inset-2 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/50 bg-primary/5">
+        <div className="pointer-events-none absolute -inset-1 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/50 bg-background/80 backdrop-blur-sm">
           <p className="text-sm font-medium text-primary">
             Drop .team.json to import
           </p>
@@ -250,7 +250,7 @@ export function TeamsSection({
             );
           })}
           <button
-            className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-primary/30 bg-primary/[0.02] p-3 text-primary/50 transition-colors hover:border-primary/50 hover:bg-primary/5 hover:text-primary/70"
+            className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-primary p-3 text-primary transition-colors hover:bg-primary/5"
             onClick={openFilePicker}
             type="button"
           >
@@ -262,7 +262,7 @@ export function TeamsSection({
 
       {!isLoading && teams.length === 0 ? (
         <button
-          className="w-full cursor-pointer rounded-xl border border-dashed border-primary/20 bg-primary/[0.02] px-6 py-10 text-center transition-colors hover:border-primary/40 hover:bg-primary/5"
+          className="w-full cursor-pointer rounded-xl border border-dashed border-primary/40 px-6 py-10 text-center transition-colors hover:border-primary hover:bg-primary/5"
           onClick={openFilePicker}
           type="button"
         >

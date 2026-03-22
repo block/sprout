@@ -55,7 +55,6 @@ import { useTeamActions } from "./useTeamActions";
 
 type PersonaDialogState = {
   description: string;
-  enableImportDrop: boolean;
   initialValues: CreatePersonaInput | UpdatePersonaInput;
   submitLabel: string;
   title: string;
@@ -408,7 +407,6 @@ export function AgentsView() {
         setPersonaDialogState({
           title: `Import ${p.displayName}`,
           description: "Review and save this imported persona.",
-          enableImportDrop: false,
           submitLabel: "Create persona",
           initialValues: {
             displayName: p.displayName,
@@ -468,7 +466,6 @@ export function AgentsView() {
                   title: "Create persona",
                   description:
                     "Save a reusable role, prompt, and optional avatar for future agent deployments.",
-                  enableImportDrop: true,
                   submitLabel: "Create persona",
                   initialValues: {
                     displayName: "",
@@ -485,7 +482,6 @@ export function AgentsView() {
                   title: `Duplicate ${persona.displayName}`,
                   description:
                     "Create a new persona by copying this template and adjusting it as needed.",
-                  enableImportDrop: false,
                   submitLabel: "Create persona",
                   initialValues: {
                     displayName: `${persona.displayName} copy`,
@@ -501,7 +497,6 @@ export function AgentsView() {
                   title: `Edit ${persona.displayName}`,
                   description:
                     "Update this saved persona. New deployments will use the updated values.",
-                  enableImportDrop: false,
                   submitLabel: "Save changes",
                   initialValues: {
                     id: persona.id,
@@ -659,7 +654,6 @@ export function AgentsView() {
       />
       <PersonaDialog
         description={personaDialogState?.description ?? ""}
-        enableImportDrop={personaDialogState?.enableImportDrop ?? false}
         error={
           updatePersonaMutation.error instanceof Error
             ? updatePersonaMutation.error
@@ -671,11 +665,6 @@ export function AgentsView() {
         isPending={
           createPersonaMutation.isPending || updatePersonaMutation.isPending
         }
-        onBatchImport={(result, fileName) => {
-          setBatchImportResult(result);
-          setBatchImportFileName(fileName);
-          setPersonaDialogState(null);
-        }}
         onOpenChange={(open) => {
           if (!open) {
             setPersonaDialogState(null);
