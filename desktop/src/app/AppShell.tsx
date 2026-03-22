@@ -308,8 +308,13 @@ export function AppShell() {
   );
 
   const handleHideDm = React.useCallback(
-    (channelId: string) => {
-      void hideDmMutation.mutateAsync(channelId);
+    async (channelId: string) => {
+      try {
+        await hideDmMutation.mutateAsync(channelId);
+      } catch {
+        // Optimistic rollback handled by onError in the mutation hook.
+        return;
+      }
       if (selectedChannel?.id === channelId) {
         React.startTransition(() => {
           setSelectedView("home");

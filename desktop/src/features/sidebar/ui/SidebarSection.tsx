@@ -9,6 +9,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/shared/ui/sidebar";
@@ -127,7 +128,6 @@ export function ChannelMenuButton({
   hasUnread,
   dmParticipants,
   presenceStatus,
-  onHideDm,
   onSelectChannel,
 }: {
   channel: Channel;
@@ -136,7 +136,6 @@ export function ChannelMenuButton({
   hasUnread: boolean;
   dmParticipants?: SidebarDmParticipant[];
   presenceStatus?: PresenceStatus;
-  onHideDm?: (channelId: string) => void;
   onSelectChannel: (channelId: string) => void;
 }) {
   const resolvedLabel = label ?? channel.name;
@@ -163,23 +162,9 @@ export function ChannelMenuButton({
       {hasUnread && !isActive ? (
         <span
           aria-hidden="true"
-          className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-primary"
+          className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-primary group-hover/menu-item:hidden"
           data-testid={`channel-unread-${channel.name}`}
         />
-      ) : null}
-      {channel.channelType === "dm" && onHideDm ? (
-        <button
-          aria-label="Close direct message"
-          className="ml-auto hidden h-5 w-5 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground group-hover/menu-item:flex"
-          data-testid={`hide-dm-${channel.name}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onHideDm(channel.id);
-          }}
-          type="button"
-        >
-          <X className="h-3 w-3" />
-        </button>
       ) : null}
     </SidebarMenuButton>
   );
@@ -234,9 +219,18 @@ export function SidebarSection({
                   isActive={isActiveChannel && selectedChannelId === channel.id}
                   label={channelLabels?.[channel.id] ?? channel.name}
                   presenceStatus={presenceByChannelId?.[channel.id]}
-                  onHideDm={onHideDm}
                   onSelectChannel={onSelectChannel}
                 />
+                {channel.channelType === "dm" && onHideDm ? (
+                  <SidebarMenuAction
+                    aria-label="Close direct message"
+                    data-testid={`hide-dm-${channel.name}`}
+                    onClick={() => onHideDm(channel.id)}
+                    showOnHover
+                  >
+                    <X />
+                  </SidebarMenuAction>
+                ) : null}
               </SidebarMenuItem>
             ))}
           </SidebarMenu>

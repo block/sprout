@@ -102,7 +102,7 @@ fn spawn_mcp_server(keys: &Keys) -> Child {
         ])
         .env("SPROUT_RELAY_URL", relay_ws_url())
         .env("SPROUT_PRIVATE_KEY", &nsec)
-        // Tests exercise all 42 tools — enable every toolset.
+        // Tests exercise all 43 tools — enable every toolset.
         .env("SPROUT_TOOLSETS", "all")
         // Prevent a stale SPROUT_API_TOKEN from the host .env leaking into
         // the subprocess and causing NIP-42 auth failures against a fresh DB.
@@ -251,7 +251,7 @@ impl McpSession {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// Spawn the MCP server, complete the initialize handshake, and verify that
-/// all 42 expected tools are listed by `tools/list`.
+/// all 43 expected tools are listed by `tools/list`.
 #[tokio::test]
 #[ignore]
 async fn test_mcp_initialize_and_list_tools() {
@@ -300,8 +300,8 @@ async fn test_mcp_initialize_and_list_tools() {
 
     assert_eq!(
         tools.len(),
-        42,
-        "expected exactly 42 tools, got {}. Tools: {:?}",
+        43,
+        "expected exactly 43 tools, got {}. Tools: {:?}",
         tools.len(),
         tools
             .iter()
@@ -332,6 +332,7 @@ async fn test_mcp_initialize_and_list_tools() {
         "get_thread",
         "get_users",
         "get_workflow_runs",
+        "hide_dm",
         "join_channel",
         "leave_channel",
         "list_channel_members",
