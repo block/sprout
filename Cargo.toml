@@ -15,6 +15,7 @@ members = [
     "crates/sprout-admin",
     "crates/sprout-workflow",
     "crates/sprout-media",
+    "crates/sprout-cli",
 ]
 exclude = ["desktop/src-tauri"]
 resolver = "2"
