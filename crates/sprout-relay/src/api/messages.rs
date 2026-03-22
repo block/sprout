@@ -1269,6 +1269,220 @@ pub async fn get_thread(
     })))
 }
 
+// ── PUT /api/messages/:event_id ───────────────────────────────────────────────
+
+/// Request body for editing a message.
+#[derive(Debug, Deserialize)]
+pub struct EditMessageBody {
+    /// The new text content for the message.
+    pub content: String,
+}
+
+/// Edit a channel message by event ID.
+///
+/// Produces a kind:40003 (stream message edit) event referencing the original.
+/// The caller must be the original author of the message.
+/// The event is signed with the relay keypair; the authenticated user is
+/// attributed via a `p` tag.
+pub async fn edit_message(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(event_id_hex): Path<String>,
+    Json(body): Json<EditMessageBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
+
+    if body.content.trim().is_empty() {
+        return Err(api_error(StatusCode::BAD_REQUEST, "content is required"));
+    }
+
+    let event_id_bytes = nostr_hex::decode(&event_id_hex)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid event_id hex"))?;
+
+    // Look up the original event.
+    let stored = state
+        .db
+        .get_event_by_id(&event_id_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?
+        .ok_or_else(|| not_found("event not found"))?;
+
+    let channel_id = stored
+        .channel_id
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "event has no channel"))?;
+
+    // Token-level channel restriction check.
+    check_token_channel_access(&ctx, &channel_id)?;
+
+    // Verify the caller is the original author.
+    let author_bytes = effective_author(&stored.event, &state.relay_keypair.public_key());
+    if author_bytes != pubkey_bytes {
+        return Err(forbidden("must be the original message author to edit"));
+    }
+
+    // Verify channel membership.
+    check_channel_access(&state, channel_id, &pubkey_bytes).await?;
+
+    let channel = state
+        .db
+        .get_channel(channel_id)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+    if channel.archived_at.is_some() {
+        return Err(api_error(StatusCode::FORBIDDEN, "channel is archived"));
+    }
+
+    // Build the kind:40003 edit event.
+    let user_pubkey_hex = nostr_hex::encode(&pubkey_bytes);
+    let kind = Kind::from(sprout_core::kind::KIND_STREAM_MESSAGE_EDIT as u16);
+
+    let tags = vec![
+        Tag::parse(&["h", &channel_id.to_string()])
+            .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        Tag::parse(&["e", &event_id_hex])
+            .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        Tag::parse(&["p", &user_pubkey_hex])
+            .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+    ];
+
+    let event = EventBuilder::new(kind, &body.content, tags)
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| internal_error(&format!("event signing error: {e}")))?;
+
+    let edit_event_id_hex = event.id.to_hex();
+
+    let (stored_edit, was_inserted) = state
+        .db
+        .insert_event(&event, Some(channel_id))
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    if was_inserted {
+        let kind_u32 = u32::from(event.kind.as_u16());
+        let _ = dispatch_persistent_event(&state, &stored_edit, kind_u32, &user_pubkey_hex).await;
+    }
+
+    Ok(Json(serde_json::json!({
+        "event_id":        edit_event_id_hex,
+        "edited_event_id": event_id_hex,
+    })))
+}
+
+// ── POST /api/messages/:event_id/votes ───────────────────────────────────────
+
+/// Request body for voting on a forum post or comment.
+#[derive(Debug, Deserialize)]
+pub struct VoteOnPostBody {
+    /// Vote direction: "up" or "down".
+    pub direction: String,
+}
+
+/// Vote on a forum post (kind:45001) or forum comment (kind:45003).
+///
+/// Produces a kind:45002 (forum vote) event referencing the target.
+/// The caller must be a member of the channel the target event belongs to.
+/// The event is signed with the relay keypair; the authenticated user is
+/// attributed via a `p` tag.
+pub async fn vote_on_post(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(event_id_hex): Path<String>,
+    Json(body): Json<VoteOnPostBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
+        .map_err(super::scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
+
+    let direction = body.direction.trim().to_lowercase();
+    if direction != "up" && direction != "down" {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "direction must be \"up\" or \"down\"",
+        ));
+    }
+
+    let event_id_bytes = nostr_hex::decode(&event_id_hex)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid event_id hex"))?;
+
+    // Look up the target event.
+    let stored = state
+        .db
+        .get_event_by_id(&event_id_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?
+        .ok_or_else(|| not_found("event not found"))?;
+
+    // Verify the target is a forum post or comment.
+    let target_kind = u32::from(stored.event.kind.as_u16());
+    if target_kind != sprout_core::kind::KIND_FORUM_POST
+        && target_kind != sprout_core::kind::KIND_FORUM_COMMENT
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "can only vote on forum posts (kind:45001) or forum comments (kind:45003)",
+        ));
+    }
+
+    let channel_id = stored
+        .channel_id
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "event has no channel"))?;
+
+    // Token-level channel restriction check.
+    check_token_channel_access(&ctx, &channel_id)?;
+
+    // Verify channel membership.
+    check_channel_access(&state, channel_id, &pubkey_bytes).await?;
+
+    let channel = state
+        .db
+        .get_channel(channel_id)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+    if channel.archived_at.is_some() {
+        return Err(api_error(StatusCode::FORBIDDEN, "channel is archived"));
+    }
+
+    // Build the kind:45002 vote event.
+    let user_pubkey_hex = nostr_hex::encode(&pubkey_bytes);
+    let kind = Kind::from(sprout_core::kind::KIND_FORUM_VOTE as u16);
+
+    let tags = vec![
+        Tag::parse(&["h", &channel_id.to_string()])
+            .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        Tag::parse(&["e", &event_id_hex])
+            .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+        Tag::parse(&["p", &user_pubkey_hex])
+            .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
+    ];
+
+    let event = EventBuilder::new(kind, &direction, tags)
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| internal_error(&format!("event signing error: {e}")))?;
+
+    let vote_event_id_hex = event.id.to_hex();
+
+    let (stored_vote, was_inserted) = state
+        .db
+        .insert_event(&event, Some(channel_id))
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    if was_inserted {
+        let kind_u32 = u32::from(event.kind.as_u16());
+        let _ = dispatch_persistent_event(&state, &stored_vote, kind_u32, &user_pubkey_hex).await;
+    }
+
+    Ok(Json(serde_json::json!({
+        "event_id":        vote_event_id_hex,
+        "target_event_id": event_id_hex,
+        "direction":       direction,
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
