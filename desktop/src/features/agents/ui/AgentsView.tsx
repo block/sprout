@@ -21,7 +21,10 @@ import {
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { sendChannelMessage } from "@/shared/api/tauri";
-import type { ParsePersonaFilesResult } from "@/shared/api/tauriPersonas";
+import {
+  parsePersonaFiles,
+  type ParsePersonaFilesResult,
+} from "@/shared/api/tauriPersonas";
 
 import type {
   AgentPersona,
@@ -391,6 +394,43 @@ export function AgentsView() {
     void relayAgentsQuery.refetch();
   }
 
+  async function handlePersonaImportFile(
+    fileBytes: number[],
+    fileName: string,
+  ) {
+    setActionNoticeMessage(null);
+    setActionErrorMessage(null);
+    try {
+      const result = await parsePersonaFiles(fileBytes, fileName);
+      const isPng =
+        fileBytes.length >= 4 && fileBytes[0] === 0x89 && fileBytes[1] === 0x50;
+      const isJson = fileBytes.length > 0 && fileBytes[0] === 0x7b;
+      if ((isPng || isJson) && result.personas.length === 1) {
+        const p = result.personas[0];
+        setPersonaDialogState({
+          title: `Import ${p.displayName}`,
+          description: "Review and save this imported persona.",
+          enableImportDrop: false,
+          submitLabel: "Create persona",
+          initialValues: {
+            displayName: p.displayName,
+            avatarUrl: p.avatarDataUrl ?? "",
+            systemPrompt: p.systemPrompt,
+          },
+        });
+      } else if (result.personas.length > 0) {
+        setBatchImportResult(result);
+        setBatchImportFileName(fileName);
+      } else {
+        setActionErrorMessage("No valid personas found in file.");
+      }
+    } catch (err) {
+      setActionErrorMessage(
+        err instanceof Error ? err.message : "Failed to parse persona file.",
+      );
+    }
+  }
+
   const isActionPending =
     startMutation.isPending ||
     stopMutation.isPending ||
@@ -472,6 +512,9 @@ export function AgentsView() {
                     systemPrompt: persona.systemPrompt,
                   },
                 });
+              }}
+              onImportFile={(fileBytes, fileName) => {
+                void handlePersonaImportFile(fileBytes, fileName);
               }}
               onExport={(persona) => {
                 exportPersonaJsonMutation.mutate(persona.id, {

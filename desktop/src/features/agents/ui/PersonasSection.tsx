@@ -1,3 +1,4 @@
+import * as React from "react";
 import {
   CopyPlus,
   Download,
@@ -6,6 +7,7 @@ import {
   Pencil,
   Plus,
   Trash2,
+  Upload,
 } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -31,6 +33,7 @@ type PersonasSectionProps = {
   onEdit: (persona: AgentPersona) => void;
   onExport: (persona: AgentPersona) => void;
   onDelete: (persona: AgentPersona) => void;
+  onImportFile: (fileBytes: number[], fileName: string) => void;
 };
 
 export function PersonasSection({
@@ -43,30 +46,101 @@ export function PersonasSection({
   onEdit,
   onExport,
   onDelete,
+  onImportFile,
 }: PersonasSectionProps) {
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [isDragOver, setIsDragOver] = React.useState(false);
+
+  async function importFile(file: File) {
+    const buffer = await file.arrayBuffer();
+    const bytes = Array.from(new Uint8Array(buffer));
+    onImportFile(bytes, file.name);
+  }
+
+  async function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragOver(false);
+
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+
+    await importFile(file);
+  }
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    void importFile(file);
+
+    // Reset so the same file can be re-selected
+    e.target.value = "";
+  }
+
   return (
-    <section className="space-y-4">
+    // biome-ignore lint/a11y/noStaticElementInteractions: drop zone for persona file import
+    <section
+      className="relative space-y-4"
+      onDragLeave={() => setIsDragOver(false)}
+      onDragOver={(e: React.DragEvent) => {
+        e.preventDefault();
+        setIsDragOver(true);
+      }}
+      onDrop={(e: React.DragEvent) => void handleDrop(e)}
+    >
+      {isDragOver ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/50 bg-primary/5">
+          <p className="text-sm font-medium text-primary">
+            Drop .persona.json, .persona.png, or .zip to import
+          </p>
+        </div>
+      ) : null}
+
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold tracking-tight">Personas</h3>
           <p className="text-sm text-muted-foreground">
-            Reusable agent templates for common roles and prompts.
+            Reusable agent templates for common roles and prompts. Drop a file
+            to import.
           </p>
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label="Create persona"
-              onClick={onCreate}
-              type="button"
-              variant="ghost"
-              size="icon"
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Create persona</TooltipContent>
-        </Tooltip>
+        <div className="flex items-center gap-1">
+          <input
+            accept=".json,.png,.zip"
+            className="hidden"
+            onChange={handleFileChange}
+            ref={fileInputRef}
+            type="file"
+          />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Import persona"
+                onClick={() => fileInputRef.current?.click()}
+                type="button"
+                variant="ghost"
+                size="icon"
+              >
+                <Upload className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Import persona</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Create persona"
+                onClick={onCreate}
+                type="button"
+                variant="ghost"
+                size="icon"
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Create persona</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
 
       {isLoading ? (
@@ -197,6 +271,9 @@ export function PersonasSection({
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
             Create one to save a role, prompt, and optional avatar for reuse.
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground/70">
+            Or drop a .persona.json, .persona.png, or .zip file here to import.
           </p>
         </div>
       ) : null}
