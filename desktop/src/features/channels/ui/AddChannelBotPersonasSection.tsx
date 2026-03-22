@@ -131,7 +131,7 @@ export function AddChannelBotPersonasSection({
                     <div>
                       <SelectionChipButton
                         avatarUrl={persona.avatarUrl}
-                        disabled={!canToggleSelections}
+                        disabled={!canToggleSelections || isInChannel}
                         label={persona.displayName}
                         onClick={() => onTogglePersona(persona.id)}
                         selected={isSelected}

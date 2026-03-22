@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Upload } from "lucide-react";
 
 import type { ParsePersonaFilesResult } from "@/shared/api/tauriPersonas";
 import { parsePersonaFiles } from "@/shared/api/tauriPersonas";
@@ -267,6 +267,16 @@ export function PersonaDialog({
                 value={systemPrompt}
               />
             </div>
+
+            {enableImportDrop ? (
+              <div className="flex items-center gap-3 rounded-xl border border-dashed border-border/80 bg-muted/15 px-4 py-3">
+                <Upload className="h-4 w-4 shrink-0 text-muted-foreground/60" />
+                <p className="text-xs text-muted-foreground">
+                  Drag a .persona.json, .persona.png, or .zip onto this dialog
+                  to import.
+                </p>
+              </div>
+            ) : null}
 
             {error ? (
               <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

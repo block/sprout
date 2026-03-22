@@ -66,28 +66,59 @@ export function TeamsSection({
   onImportFile,
 }: TeamsSectionProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [isDragOver, setIsDragOver] = React.useState(false);
+
+  async function importFile(file: File) {
+    const buffer = await file.arrayBuffer();
+    const bytes = Array.from(new Uint8Array(buffer));
+    onImportFile(bytes, file.name);
+  }
+
+  async function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragOver(false);
+
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+
+    await importFile(file);
+  }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    void (async () => {
-      const buffer = await file.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buffer));
-      onImportFile(bytes, file.name);
-    })();
+    void importFile(file);
 
     // Reset so the same file can be re-selected
     e.target.value = "";
   }
 
   return (
-    <section className="space-y-4">
+    // biome-ignore lint/a11y/noStaticElementInteractions: drop zone for .team.json import
+    <section
+      className="relative space-y-4"
+      onDragLeave={() => setIsDragOver(false)}
+      onDragOver={(e: React.DragEvent) => {
+        e.preventDefault();
+        setIsDragOver(true);
+      }}
+      onDrop={(e: React.DragEvent) => void handleDrop(e)}
+    >
+      {isDragOver ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/50 bg-primary/5">
+          <p className="text-sm font-medium text-primary">
+            Drop .team.json to import
+          </p>
+        </div>
+      ) : null}
+
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold tracking-tight">Teams</h3>
           <p className="text-sm text-muted-foreground">
-            Named groups of personas you can deploy to a channel together.
+            Named groups of personas you can deploy to a channel together. Drop
+            a .team.json file to import.
           </p>
         </div>
         <div className="flex items-center gap-1">
@@ -273,6 +304,9 @@ export function TeamsSection({
           <p className="text-sm font-semibold tracking-tight">No teams yet</p>
           <p className="mt-2 text-sm text-muted-foreground">
             Create a team to group personas for quick deployment to channels.
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground/70">
+            Or drop a .team.json file here to import.
           </p>
         </div>
       ) : null}

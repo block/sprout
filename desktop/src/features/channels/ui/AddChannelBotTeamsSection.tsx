@@ -105,7 +105,11 @@ export function AddChannelBotTeamsSection({
                 <TooltipTrigger asChild>
                   <div>
                     <SelectionChipButton
-                      disabled={!canToggleSelections || validIds.length === 0}
+                      disabled={
+                        !canToggleSelections ||
+                        validIds.length === 0 ||
+                        allInChannel
+                      }
                       label={team.name}
                       onClick={() => onToggleTeam(validIds)}
                       selected={allSelected}
