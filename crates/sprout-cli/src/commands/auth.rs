@@ -72,6 +72,14 @@ pub async fn cmd_auth(relay_url: &str, private_key: Option<&str>) -> Result<(), 
     let resp = http
         .post(&token_url)
         .header("Authorization", auth_header)
+        .header(
+            "x-forwarded-proto",
+            if token_url.starts_with("https://") {
+                "https"
+            } else {
+                "http"
+            },
+        )
         .json(&body)
         .send()
         .await

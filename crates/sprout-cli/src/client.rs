@@ -197,9 +197,19 @@ pub async fn auto_mint_token(relay_url: &str, private_key_str: &str) -> Result<S
         .build()
         .map_err(|e| CliError::Other(e.to_string()))?;
 
+    // Tell the relay which scheme we signed so the canonical URL matches.
+    // The relay defaults x-forwarded-proto to "https"; without this header,
+    // http:// URLs fail NIP-98 verification on localhost.
+    let proto = if token_url.starts_with("https://") {
+        "https"
+    } else {
+        "http"
+    };
+
     let resp = http
         .post(&token_url)
         .header("Authorization", auth_header)
+        .header("x-forwarded-proto", proto)
         .json(&body)
         .send()
         .await?;
