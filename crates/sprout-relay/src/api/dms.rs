@@ -3,6 +3,7 @@
 //! Endpoints:
 //!   POST /api/dms                      — Open or create a DM (idempotent)
 //!   POST /api/dms/{channel_id}/members — Add member to group DM (creates new DM)
+//!   POST /api/dms/{channel_id}/hide    — Hide a DM from the user's sidebar
 //!   GET  /api/dms                      — List user's DM conversations
 
 use std::sync::Arc;
@@ -360,6 +361,54 @@ pub async fn list_dms_handler(
         "dms": dm_json,
         "next_cursor": next_cursor,
     })))
+}
+
+/// `POST /api/dms/{channel_id}/hide` — Hide a DM from the caller's sidebar.
+///
+/// The DM is not deleted — it can be restored by opening a new DM with the
+/// same participants. Returns 204 No Content on success.
+pub async fn hide_dm_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(channel_id_str): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
+        .map_err(super::scope_error)?;
+
+    let channel_id: Uuid = channel_id_str
+        .parse()
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel_id format"))?;
+
+    // Verify the channel exists and is a DM.
+    let channel = state
+        .db
+        .get_channel(channel_id)
+        .await
+        .map_err(|_| super::not_found("DM not found"))?;
+
+    if channel.channel_type != "dm" {
+        return Err(api_error(StatusCode::BAD_REQUEST, "channel is not a DM"));
+    }
+
+    // Verify caller is a member.
+    let is_member = state
+        .db
+        .is_member(channel_id, &ctx.pubkey_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    if !is_member {
+        return Err(super::forbidden("not a member of this DM"));
+    }
+
+    state
+        .db
+        .hide_dm(channel_id, &ctx.pubkey_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -535,6 +535,10 @@ export async function openDm(input: OpenDmInput): Promise<Channel> {
   return fromRawChannel(await invokeTauri<RawChannel>("open_dm", input));
 }
 
+export async function hideDm(channelId: string): Promise<void> {
+  await invokeTauri<void>("hide_dm", { channelId });
+}
+
 export async function getChannelDetails(
   channelId: string,
 ): Promise<ChannelDetail> {

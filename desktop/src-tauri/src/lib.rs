@@ -209,6 +209,7 @@ pub fn run() {
             get_channels,
             create_channel,
             open_dm,
+            hide_dm,
             get_channel_details,
             get_channel_members,
             update_channel,

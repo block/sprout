@@ -33,7 +33,7 @@ const overrides = new Map([
   ["src-tauri/src/managed_agents/persona_card.rs", 700], // PNG/ZIP persona card codec + 21 unit tests (~300 lines of tests)
   ["src/app/AppShell.tsx", 775],
   ["src/features/agents/ui/AgentsView.tsx", 625], // persona/team orchestration plus import/export wiring
-  ["src/features/channels/hooks.ts", 525], // canvas query + mutation hooks
+  ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
   ["src/features/messages/ui/MessageComposer.tsx", 665], // media upload handlers (paste, drop, dialog) + channelId reset effect
   ["src/features/settings/ui/SettingsView.tsx", 600],

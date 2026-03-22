@@ -730,6 +730,7 @@ pub async fn get_accessible_channels(
             ON c.id = cm.channel_id AND cm.pubkey = $1 AND cm.removed_at IS NULL
         WHERE c.deleted_at IS NULL
           {membership_clause}
+          AND (c.channel_type != 'dm' OR cm.hidden_at IS NULL)
     "#
     );
 

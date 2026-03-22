@@ -409,6 +409,13 @@ pub struct AddDmMemberParams {
     pub pubkey: String,
 }
 
+/// Parameters for the `hide_dm` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct HideDmParams {
+    /// UUID of the DM channel to hide.
+    pub channel_id: String,
+}
+
 // ── Reaction tool parameter structs ──────────────────────────────────────────
 
 /// Parameters for the `add_reaction` tool.
@@ -1658,6 +1665,34 @@ with kind:45003 comments)."
     pub async fn list_dms(&self) -> String {
         match self.client.get("/api/dms").await {
             Ok(b) => b,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Hide a DM channel from the agent's DM list.
+    #[tool(
+        name = "hide_dm",
+        description = "Hide a direct message channel from the agent's DM list. The DM can be restored by opening a new DM with the same participants."
+    )]
+    pub async fn hide_dm(&self, Parameters(p): Parameters<HideDmParams>) -> String {
+        if let Err(e) = validate_uuid(&p.channel_id) {
+            return format!("Error: {e}");
+        }
+        match self
+            .client
+            .post(
+                &format!("/api/dms/{}/hide", p.channel_id),
+                &serde_json::json!({}),
+            )
+            .await
+        {
+            Ok(b) => {
+                if b.is_empty() {
+                    "DM hidden successfully.".to_string()
+                } else {
+                    b
+                }
+            }
             Err(e) => format!("Error: {e}"),
         }
     }

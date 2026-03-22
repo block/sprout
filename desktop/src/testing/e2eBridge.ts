@@ -1715,6 +1715,28 @@ async function handleOpenDm(
   );
 }
 
+async function handleHideDm(
+  args: { channelId: string },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const index = mockChannels.findIndex(
+      (channel) => channel.id === args.channelId,
+    );
+    if (index === -1) {
+      throw new Error(`DM ${args.channelId} not found.`);
+    }
+    // Remove from mock list (simulates hiding from sidebar).
+    mockChannels.splice(index, 1);
+    return;
+  }
+
+  await relayEmptyRequest(config, `/api/dms/${args.channelId}/hide`, {
+    method: "POST",
+  });
+}
+
 async function handleGetChannelDetails(
   args: { channelId: string },
   config: E2eConfig | undefined,
@@ -3284,6 +3306,11 @@ export function maybeInstallE2eTauriMocks() {
       case "open_dm":
         return handleOpenDm(
           payload as Parameters<typeof handleOpenDm>[0],
+          activeConfig,
+        );
+      case "hide_dm":
+        return handleHideDm(
+          payload as Parameters<typeof handleHideDm>[0],
           activeConfig,
         );
       case "get_channel_details":
