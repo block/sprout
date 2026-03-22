@@ -25,6 +25,7 @@ import {
   parsePersonaFiles,
   type ParsePersonaFilesResult,
 } from "@/shared/api/tauriPersonas";
+import { isSingleItemFile } from "@/shared/lib/fileMagic";
 
 import type {
   AgentPersona,
@@ -402,10 +403,7 @@ export function AgentsView() {
     setActionErrorMessage(null);
     try {
       const result = await parsePersonaFiles(fileBytes, fileName);
-      const isPng =
-        fileBytes.length >= 4 && fileBytes[0] === 0x89 && fileBytes[1] === 0x50;
-      const isJson = fileBytes.length > 0 && fileBytes[0] === 0x7b;
-      if ((isPng || isJson) && result.personas.length === 1) {
+      if (isSingleItemFile(fileBytes) && result.personas.length === 1) {
         const p = result.personas[0];
         setPersonaDialogState({
           title: `Import ${p.displayName}`,

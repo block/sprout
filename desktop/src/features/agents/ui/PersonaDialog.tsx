@@ -15,17 +15,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import {
+  JSON_FIRST_BYTE,
+  PNG_MAGIC,
+  ZIP_MAGIC,
+  matchesMagic,
+} from "@/shared/lib/fileMagic";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB (ZIP ceiling)
-const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47];
-const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04];
-const JSON_FIRST_BYTE = 0x7b; // '{'
-
-function matchesMagic(bytes: number[], magic: number[]) {
-  return magic.every((b, i) => bytes[i] === b);
-}
 
 type PersonaDialogProps = {
   open: boolean;

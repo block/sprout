@@ -1,4 +1,3 @@
-import * as React from "react";
 import {
   CopyPlus,
   Download,
@@ -12,6 +11,7 @@ import {
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { AgentPersona } from "@/shared/api/types";
+import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
 import { promptPreview } from "@/shared/lib/promptPreview";
 import { Button } from "@/shared/ui/button";
 import {
@@ -48,46 +48,16 @@ export function PersonasSection({
   onDelete,
   onImportFile,
 }: PersonasSectionProps) {
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const [isDragOver, setIsDragOver] = React.useState(false);
-
-  async function importFile(file: File) {
-    const buffer = await file.arrayBuffer();
-    const bytes = Array.from(new Uint8Array(buffer));
-    onImportFile(bytes, file.name);
-  }
-
-  async function handleDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setIsDragOver(false);
-
-    const file = e.dataTransfer.files[0];
-    if (!file) return;
-
-    await importFile(file);
-  }
-
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    void importFile(file);
-
-    // Reset so the same file can be re-selected
-    e.target.value = "";
-  }
+  const {
+    fileInputRef,
+    isDragOver,
+    dropHandlers,
+    handleFileChange,
+    openFilePicker,
+  } = useFileImportZone({ onImportFile });
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: drop zone for persona file import
-    <section
-      className="relative space-y-4"
-      onDragLeave={() => setIsDragOver(false)}
-      onDragOver={(e: React.DragEvent) => {
-        e.preventDefault();
-        setIsDragOver(true);
-      }}
-      onDrop={(e: React.DragEvent) => void handleDrop(e)}
-    >
+    <section className="relative space-y-4" {...dropHandlers}>
       {isDragOver ? (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/50 bg-primary/5">
           <p className="text-sm font-medium text-primary">
@@ -116,7 +86,7 @@ export function PersonasSection({
             <TooltipTrigger asChild>
               <Button
                 aria-label="Import persona"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={openFilePicker}
                 type="button"
                 variant="ghost"
                 size="icon"
