@@ -1,12 +1,21 @@
 import * as React from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
+  personasQueryKey,
+  teamsQueryKey,
   useCreateTeamMutation,
   useDeleteTeamMutation,
   useTeamsQuery,
   useUpdateTeamMutation,
 } from "@/features/agents/hooks";
 import type { CreateChannelManagedAgentsResult } from "@/features/agents/channelAgents";
+import {
+  type ParsedTeamPreview,
+  createTeam as createTeamApi,
+  exportTeamToJson,
+  parseTeamFile,
+} from "@/shared/api/tauriTeams";
 import type {
   AgentTeam,
   Channel,
@@ -35,10 +44,15 @@ export function useTeamActions(
   actions: ActionMessages,
   refetch: RefetchCallbacks,
 ) {
+  const queryClient = useQueryClient();
   const teamsQuery = useTeamsQuery();
   const createTeamMutation = useCreateTeamMutation();
   const updateTeamMutation = useUpdateTeamMutation();
   const deleteTeamMutation = useDeleteTeamMutation();
+
+  const exportTeamJsonMutation = useMutation({
+    mutationFn: (id: string) => exportTeamToJson(id),
+  });
 
   const [teamDialogState, setTeamDialogState] =
     React.useState<TeamDialogState>(null);
@@ -47,6 +61,10 @@ export function useTeamActions(
   );
   const [teamToAddToChannel, setTeamToAddToChannel] =
     React.useState<AgentTeam | null>(null);
+  const [teamImportPreview, setTeamImportPreview] = React.useState<{
+    preview: ParsedTeamPreview;
+    fileName: string;
+  } | null>(null);
 
   const teams = teamsQuery.data ?? [];
 
@@ -136,6 +154,72 @@ export function useTeamActions(
     });
   }
 
+  function handleExportTeam(team: AgentTeam) {
+    exportTeamJsonMutation.mutate(team.id, {
+      onSuccess: (saved) => {
+        if (saved) {
+          actions.setActionNoticeMessage(`Exported team "${team.name}".`);
+        }
+      },
+      onError: (err) => {
+        actions.setActionErrorMessage(
+          err instanceof Error ? err.message : "Failed to export team.",
+        );
+      },
+    });
+  }
+
+  function handleImportFile(fileBytes: number[], fileName: string) {
+    actions.setActionNoticeMessage(null);
+    actions.setActionErrorMessage(null);
+    void (async () => {
+      try {
+        const preview = await parseTeamFile(fileBytes, fileName);
+        setTeamImportPreview({ preview, fileName });
+      } catch (err) {
+        actions.setActionErrorMessage(
+          err instanceof Error ? err.message : "Failed to parse team file.",
+        );
+      }
+    })();
+  }
+
+  function handleTeamImportComplete(
+    teamName: string,
+    teamDescription: string | null,
+    personaIds: string[],
+  ) {
+    setTeamImportPreview(null);
+    void (async () => {
+      const teamInput = {
+        name: teamName,
+        description: teamDescription ?? undefined,
+        personaIds,
+      };
+
+      // Try creating the team, retry once on failure.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await createTeamApi(teamInput);
+          actions.setActionNoticeMessage(
+            `Imported team "${teamName}" with ${personaIds.length} persona${personaIds.length !== 1 ? "s" : ""}.`,
+          );
+          void queryClient.invalidateQueries({ queryKey: personasQueryKey });
+          void queryClient.invalidateQueries({ queryKey: teamsQueryKey });
+          return;
+        } catch {
+          if (attempt === 0) continue;
+        }
+      }
+
+      // Both attempts failed — personas exist but team doesn't.
+      actions.setActionErrorMessage(
+        `Imported ${personaIds.length} persona${personaIds.length !== 1 ? "s" : ""} but failed to create team "${teamName}". The personas are saved — create a team manually to group them.`,
+      );
+      void queryClient.invalidateQueries({ queryKey: personasQueryKey });
+    })();
+  }
+
   function openEditDialog(team: AgentTeam) {
     actions.setActionNoticeMessage(null);
     actions.setActionErrorMessage(null);
@@ -158,15 +242,21 @@ export function useTeamActions(
     createTeamMutation,
     updateTeamMutation,
     deleteTeamMutation,
+    exportTeamJsonMutation,
     teamDialogState,
     setTeamDialogState,
     teamToDelete,
     setTeamToDelete,
     teamToAddToChannel,
     setTeamToAddToChannel,
+    teamImportPreview,
+    setTeamImportPreview,
     handleTeamSubmit,
     handleDeleteTeam,
     handleTeamDeployed,
+    handleExportTeam,
+    handleImportFile,
+    handleTeamImportComplete,
     openCreateDialog,
     openDuplicateDialog,
     openEditDialog,

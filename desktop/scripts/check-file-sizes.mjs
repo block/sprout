@@ -32,7 +32,6 @@ const rules = [
 const overrides = new Map([
   ["src-tauri/src/managed_agents/persona_card.rs", 700], // PNG/ZIP persona card codec + 21 unit tests (~300 lines of tests)
   ["src/app/AppShell.tsx", 775],
-  ["src/features/agents/ui/AgentsView.tsx", 625], // persona/team orchestration plus import/export wiring
   ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
   ["src/features/messages/ui/MessageComposer.tsx", 665], // media upload handlers (paste, drop, dialog) + channelId reset effect
@@ -43,7 +42,7 @@ const overrides = new Map([
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
   ["src-tauri/src/commands/agents.rs", 820], // remote agent lifecycle routing (local + provider branches) + scope enforcement
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests
-  ["src/features/agents/ui/AgentsView.tsx", 730], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard + persona import
+  ["src/features/agents/ui/AgentsView.tsx", 775], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard + persona/team import
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 600], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement
 ]);

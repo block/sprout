@@ -57,3 +57,27 @@ export async function updateTeam(input: UpdateTeamInput): Promise<AgentTeam> {
 export async function deleteTeam(id: string): Promise<void> {
   await invokeTauri("delete_team", { id });
 }
+
+export type ParsedTeamPreview = {
+  name: string;
+  description: string | null;
+  personas: Array<{
+    display_name: string;
+    system_prompt: string;
+    avatar_url: string | null;
+  }>;
+};
+
+export async function exportTeamToJson(id: string): Promise<boolean> {
+  return invokeTauri<boolean>("export_team_to_json", { id });
+}
+
+export async function parseTeamFile(
+  fileBytes: number[],
+  fileName: string,
+): Promise<ParsedTeamPreview> {
+  return invokeTauri<ParsedTeamPreview>("parse_team_file", {
+    fileBytes,
+    fileName,
+  });
+}

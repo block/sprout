@@ -1,8 +1,6 @@
-const PUBKEY_HEX_RE = /^[0-9a-f]{64}$/i;
+import { normalizePubkey } from "@/shared/lib/pubkey";
 
-function normalizePubkey(pubkey: string) {
-  return pubkey.toLowerCase();
-}
+const PUBKEY_HEX_RE = /^[0-9a-f]{64}$/i;
 
 function getTaggedPubkey(
   tags: string[][],

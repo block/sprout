@@ -7,6 +7,7 @@ import {
   useTeamsQuery,
   type CreateChannelManagedAgentResult,
 } from "@/features/agents/hooks";
+import { useInChannelPersonaIds } from "@/features/channels/ui/useInChannelPersonaIds";
 import { AddChannelBotGenericSection } from "@/features/channels/ui/AddChannelBotGenericSection";
 import { AddChannelBotPersonasSection } from "@/features/channels/ui/AddChannelBotPersonasSection";
 import { AddChannelBotTeamsSection } from "@/features/channels/ui/AddChannelBotTeamsSection";
@@ -98,6 +99,10 @@ export function AddChannelBotDialog({
 }: AddChannelBotDialogProps) {
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
+  const inChannelPersonaIds = useInChannelPersonaIds(
+    channelId,
+    open && channelId !== null,
+  );
   const createBotsMutation = useCreateChannelManagedAgentsMutation(channelId);
   const personas = personasQuery.data ?? [];
   const teams = teamsQuery.data ?? [];
@@ -469,6 +474,7 @@ export function AddChannelBotDialog({
             {teams.length > 0 ? (
               <AddChannelBotTeamsSection
                 canToggleSelections={canToggleSelections}
+                inChannelPersonaIds={inChannelPersonaIds}
                 isLoading={teamsQuery.isLoading}
                 onToggleTeam={handleToggleTeam}
                 personas={personas}
@@ -479,6 +485,7 @@ export function AddChannelBotDialog({
 
             <AddChannelBotPersonasSection
               canToggleSelections={canToggleSelections}
+              inChannelPersonaIds={inChannelPersonaIds}
               includeGeneric={includeGeneric}
               isLoading={personasQuery.isLoading}
               onToggleGeneric={() => {

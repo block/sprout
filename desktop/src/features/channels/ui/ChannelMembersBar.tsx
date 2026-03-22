@@ -9,6 +9,7 @@ import {
 } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { Channel } from "@/shared/api/types";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import { AddChannelBotDialog } from "./AddChannelBotDialog";
 
@@ -17,10 +18,6 @@ type ChannelMembersBarProps = {
   currentPubkey?: string;
   onManageChannel: () => void;
 };
-
-function normalizePubkey(pubkey: string) {
-  return pubkey.trim().toLowerCase();
-}
 
 function CountStat({
   count,

@@ -1,9 +1,13 @@
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
+use super::export_util::save_json_with_dialog;
 use crate::{
     app_state::AppState,
-    managed_agents::{load_teams, save_teams, CreateTeamRequest, TeamRecord, UpdateTeamRequest},
+    managed_agents::{
+        encode_team_json, load_personas, load_teams, parse_team_json, save_teams,
+        CreateTeamRequest, ParsedTeamPreview, TeamRecord, UpdateTeamRequest,
+    },
     util::now_iso,
 };
 
@@ -105,4 +109,52 @@ pub fn delete_team(
         return Err(format!("team {id} not found"));
     }
     save_teams(&app, &teams)
+}
+
+// ---------------------------------------------------------------------------
+// Import / Export
+// ---------------------------------------------------------------------------
+
+const MAX_TEAM_JSON_BYTES: usize = 5 * 1024 * 1024;
+
+#[tauri::command]
+pub async fn export_team_to_json(
+    id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    // Load team and personas under lock, then drop lock before dialog.
+    let (team, personas) = {
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let teams = load_teams(&app)?;
+        let team = teams
+            .into_iter()
+            .find(|t| t.id == id)
+            .ok_or_else(|| format!("team {id} not found"))?;
+        let personas = load_personas(&app)?;
+        (team, personas)
+    };
+
+    let json_bytes = encode_team_json(&team, &personas)?;
+
+    let slug = crate::util::slugify(&team.name, "team", 50);
+    let filename = format!("{slug}.team.json");
+    save_json_with_dialog(&app, &filename, &json_bytes).await
+}
+
+#[tauri::command]
+pub fn parse_team_file(
+    file_bytes: Vec<u8>,
+    _file_name: String,
+) -> Result<ParsedTeamPreview, String> {
+    if file_bytes.is_empty() {
+        return Err("File is empty.".to_string());
+    }
+    if file_bytes.len() > MAX_TEAM_JSON_BYTES {
+        return Err("File is too large (max 5 MB).".to_string());
+    }
+    parse_team_json(&file_bytes)
 }
