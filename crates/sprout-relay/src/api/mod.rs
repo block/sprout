@@ -63,8 +63,8 @@ pub use events::get_event;
 pub use feed::feed_handler;
 pub use members::{add_members, join_channel, leave_channel, list_members, remove_member};
 pub use messages::{
-    delete_message, get_thread, list_messages, send_message, validate_imeta_tags,
-    verify_imeta_blobs,
+    delete_message, edit_message, get_thread, list_messages, send_message, validate_imeta_tags,
+    verify_imeta_blobs, vote_on_post,
 };
 pub use presence::{presence_handler, set_presence_handler};
 pub use reactions::{add_reaction_handler, list_reactions_handler, remove_reaction_handler};
