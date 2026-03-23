@@ -350,5 +350,3 @@ pub async fn get_reactions_bulk(
 
     Ok(entries)
 }
-
-

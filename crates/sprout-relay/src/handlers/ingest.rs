@@ -16,10 +16,10 @@ use sprout_core::kind::{
     KIND_FORUM_VOTE, KIND_GIFT_WRAP, KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT,
     KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST,
-    KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_PROFILE,
-    KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
-    KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
-    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
+    KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_PRESENCE_UPDATE,
+    KIND_PROFILE, KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
+    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
+    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
 };
 use sprout_core::verification::verify_event;
 
@@ -104,6 +104,11 @@ impl IngestAuth {
             } => Some(ids),
             _ => None,
         }
+    }
+
+    /// Whether this auth context is an HTTP request (not WebSocket).
+    pub fn is_http(&self) -> bool {
+        matches!(self, Self::Http { .. })
     }
 }
 
@@ -687,6 +692,13 @@ pub async fn ingest_event(
         ));
     }
 
+    // ── 1b. HTTP-only kind gate ─────────────────────────────────────────
+    if auth.is_http() && (kind_u32 == KIND_GIFT_WRAP || kind_u32 == KIND_PRESENCE_UPDATE) {
+        return Err(IngestError::Rejected(format!(
+            "invalid: kind {kind_u32} is only accepted via WebSocket"
+        )));
+    }
+
     // ── 2. Signature verification ────────────────────────────────────────
     let event_clone = event.clone();
     let verify_result = tokio::task::spawn_blocking(move || verify_event(&event_clone)).await;
@@ -701,6 +713,16 @@ pub async fn ingest_event(
                 "error: internal verification error".into(),
             ));
         }
+    }
+
+    // ── 2b. Content size guard ───────────────────────────────────────────
+    const MAX_EVENT_CONTENT_BYTES: usize = 256 * 1024; // 256 KB
+    if event.content.len() > MAX_EVENT_CONTENT_BYTES {
+        return Err(IngestError::Rejected(format!(
+            "invalid: content exceeds maximum size of {} bytes (got {})",
+            MAX_EVENT_CONTENT_BYTES,
+            event.content.len()
+        )));
     }
 
     // ── 3. Pubkey match ──────────────────────────────────────────────────
@@ -887,12 +909,14 @@ pub async fn ingest_event(
                 })
                 .unwrap_or_else(|| "stream".to_string());
 
-            let visibility: sprout_db::channel::ChannelVisibility = visibility_str
-                .parse()
-                .unwrap_or(sprout_db::channel::ChannelVisibility::Open);
-            let channel_type: sprout_db::channel::ChannelType = channel_type_str
-                .parse()
-                .unwrap_or(sprout_db::channel::ChannelType::Stream);
+            let visibility: sprout_db::channel::ChannelVisibility =
+                visibility_str.parse().map_err(|_| {
+                    IngestError::Rejected(format!("invalid visibility: {visibility_str}"))
+                })?;
+            let channel_type: sprout_db::channel::ChannelType =
+                channel_type_str.parse().map_err(|_| {
+                    IngestError::Rejected(format!("invalid channel_type: {channel_type_str}"))
+                })?;
 
             let description = event.tags.iter().find_map(|t| {
                 if t.kind().to_string() == "about" {
@@ -1272,6 +1296,59 @@ mod tests {
     fn unknown_kind_rejected() {
         let dummy = make_dummy_event();
         assert!(required_scope_for_kind(99999, &dummy).is_err());
+    }
+
+    #[test]
+    fn gift_wrap_is_in_scope_allowlist() {
+        // KIND_GIFT_WRAP is still in the per-kind scope allowlist.
+        // The HTTP block is transport-level (is_http gate), not scope-level.
+        let dummy = make_dummy_event();
+        assert!(
+            required_scope_for_kind(KIND_GIFT_WRAP, &dummy).is_ok(),
+            "KIND_GIFT_WRAP should be in the scope allowlist"
+        );
+    }
+
+    #[test]
+    fn ingest_auth_is_http_returns_true_for_http_variant() {
+        use crate::handlers::ingest::{HttpAuthMethod, IngestAuth};
+        let keys = nostr::Keys::generate();
+        let http_auth = IngestAuth::Http {
+            pubkey: keys.public_key(),
+            scopes: vec![],
+            auth_method: HttpAuthMethod::ApiToken,
+            token_id: None,
+            channel_ids: None,
+        };
+        assert!(
+            http_auth.is_http(),
+            "Http variant should return true for is_http()"
+        );
+    }
+
+    #[test]
+    fn ingest_auth_is_http_returns_false_for_nip42_variant() {
+        use crate::handlers::ingest::IngestAuth;
+        let keys = nostr::Keys::generate();
+        let ws_auth = IngestAuth::Nip42 {
+            pubkey: keys.public_key(),
+            scopes: vec![],
+            conn_id: uuid::Uuid::new_v4(),
+        };
+        assert!(
+            !ws_auth.is_http(),
+            "Nip42 variant should return false for is_http()"
+        );
+    }
+
+    #[test]
+    fn presence_update_not_in_scope_allowlist() {
+        // KIND_PRESENCE_UPDATE is ephemeral — not in the allowlist regardless of transport.
+        let dummy = make_dummy_event();
+        assert!(
+            required_scope_for_kind(KIND_PRESENCE_UPDATE, &dummy).is_err(),
+            "KIND_PRESENCE_UPDATE should not be in the scope allowlist"
+        );
     }
 
     #[test]

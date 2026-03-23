@@ -124,6 +124,12 @@ pub async fn validate_admin_event(
 
     match kind {
         9000 => {
+            // Validate role tag if present
+            let role_str = extract_tag_value(event, "role").unwrap_or_else(|| "member".to_string());
+            if role_str.parse::<sprout_db::channel::MemberRole>().is_err() {
+                return Err(anyhow::anyhow!("invalid role: {role_str}"));
+            }
+
             // PUT_USER: open channels allow any authenticated user; private requires owner/admin.
             // Policy check applies to both open and private channels.
             if channel.visibility == "private" {
