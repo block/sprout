@@ -278,31 +278,33 @@ pub async fn validate_admin_event(
                 })
                 .ok_or_else(|| anyhow::anyhow!("missing e tag for target event"))?;
 
-            // Verify the target event belongs to the h-tag channel BEFORE storage.
-            // Without this, an admin of channel A could craft h=A, e=<event-in-B>
-            // and the relay would store the invalid admin event.
-            if let Ok(Some(target_event)) = state.db.get_event_by_id(&target_id).await {
-                match target_event.channel_id {
-                    Some(target_ch) if target_ch != channel_id => {
-                        return Err(anyhow::anyhow!(
-                            "target event belongs to a different channel"
-                        ));
-                    }
-                    None => {
-                        return Err(anyhow::anyhow!("target event has no channel"));
-                    }
-                    _ => {} // Same channel — OK
-                }
+            // Verify the target event exists and belongs to the h-tag channel
+            // BEFORE storage. Fail closed: missing target → reject.
+            let target_event = state
+                .db
+                .get_event_by_id(&target_id)
+                .await
+                .map_err(|e| anyhow::anyhow!("db error looking up target: {e}"))?
+                .ok_or_else(|| anyhow::anyhow!("target event not found"))?;
 
-                // Check if actor is the event author.
-                // For relay-signed REST messages, the real author is in the p tag.
-                let author = effective_message_author(
-                    &target_event.event,
-                    &state.relay_keypair.public_key(),
-                );
-                if author == actor_bytes {
-                    return Ok(()); // Author can always delete their own messages
+            match target_event.channel_id {
+                Some(target_ch) if target_ch != channel_id => {
+                    return Err(anyhow::anyhow!(
+                        "target event belongs to a different channel"
+                    ));
                 }
+                None => {
+                    return Err(anyhow::anyhow!("target event has no channel"));
+                }
+                _ => {} // Same channel — OK
+            }
+
+            // Check if actor is the event author.
+            // For relay-signed REST messages, the real author is in the p tag.
+            let author =
+                effective_message_author(&target_event.event, &state.relay_keypair.public_key());
+            if author == actor_bytes {
+                return Ok(()); // Author can always delete their own messages
             }
 
             // Not the author — must be owner/admin.

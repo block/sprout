@@ -836,6 +836,13 @@ pub async fn ingest_event(
     // ── 7. Token channel access ──────────────────────────────────────────
     if let Some(ch_id) = channel_id {
         check_token_channel_access(&auth, ch_id).map_err(IngestError::AuthFailed)?;
+    } else if kind_u32 == KIND_NIP29_CREATE_GROUP && auth.channel_ids().is_some() {
+        // Channel-scoped tokens cannot create channels outside their scope.
+        // kind:9007 without an h-tag would auto-create a server-assigned UUID,
+        // bypassing the token's channel restriction.
+        return Err(IngestError::AuthFailed(
+            "restricted: channel-scoped tokens must include an h tag for create-group".into(),
+        ));
     }
 
     // ── 8. Membership check ──────────────────────────────────────────────
