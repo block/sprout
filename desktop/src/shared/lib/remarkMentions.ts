@@ -7,6 +7,8 @@
  * falls back to the generic `@\S+` pattern for unknown mentions.
  */
 
+import { buildMentionPattern } from "./mentionPattern";
+
 type RemarkMentionsOptions = {
   mentionNames?: string[];
 };
@@ -40,25 +42,6 @@ function walkChildren(node: any, mentionPattern: RegExp) {
       walkChildren(child, mentionPattern);
     }
   }
-}
-
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function buildMentionPattern(mentionNames: string[]): RegExp {
-  // Deduplicate and sort longest-first so "John Doe" is matched before "John"
-  const sorted = [...new Set(mentionNames)]
-    .filter((name) => name.trim().length > 0)
-    .sort((a, b) => b.length - a.length);
-
-  if (sorted.length === 0) {
-    return /@\S+/g;
-  }
-
-  // Build alternation: try known names first, then fall back to @\S+
-  const nameAlternatives = sorted.map((name) => escapeRegExp(name)).join("|");
-  return new RegExp(`@(?:${nameAlternatives}|\\S+)`, "g");
 }
 
 function splitMentions(text: string, mentionPattern: RegExp) {

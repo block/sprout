@@ -39,21 +39,6 @@ type MessageComposerProps = {
 
 const MAX_TEXTAREA_ROWS = 4;
 
-function detectMentionQuery(
-  value: string,
-  cursorPosition: number,
-): { query: string; startIndex: number } | null {
-  const beforeCursor = value.slice(0, cursorPosition);
-  const match = beforeCursor.match(/(?:^|[\s])@([^\s]*)$/);
-  if (!match) {
-    return null;
-  }
-
-  const query = match[1];
-  const startIndex = beforeCursor.length - query.length - 1; // -1 for @
-  return { query, startIndex };
-}
-
 export function MessageComposer({
   channelId = null,
   channelName,
@@ -192,8 +177,9 @@ export function MessageComposer({
 
     const currentContent = contentRef.current;
     const cursorPosition = textarea.selectionStart ?? currentContent.length;
-    const existingMention = detectMentionQuery(currentContent, cursorPosition);
-    if (existingMention) {
+    // Quick check: is there already an @-query in progress?
+    const beforeCursor = currentContent.slice(0, cursorPosition);
+    if (/(?:^|[\s])@[^\s]*$/.test(beforeCursor)) {
       mentions.updateMentionQuery(currentContent, cursorPosition);
       textarea.focus();
       return;
@@ -573,6 +559,7 @@ export function MessageComposer({
             >
               <ComposerMentionOverlay
                 content={content}
+                mentionNames={mentions.knownNames}
                 scrollTop={composerScrollTop}
               />
             </div>
