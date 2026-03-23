@@ -378,6 +378,11 @@ pub fn build_update_channel(
     name: Option<&str>,
     about: Option<&str>,
 ) -> Result<EventBuilder, SdkError> {
+    if name.is_none() && about.is_none() {
+        return Err(SdkError::InvalidTag(
+            "at least one of name or about must be provided".into(),
+        ));
+    }
     let mut tags = vec![tag(&["h", &channel_id.to_string()])?];
     if let Some(n) = name {
         tags.push(tag(&["name", n])?);
@@ -1001,12 +1006,12 @@ mod tests {
     }
 
     #[test]
-    fn update_channel_no_fields() {
+    fn update_channel_no_fields_rejected() {
         let cid = uuid();
-        let ev = sign(build_update_channel(cid, None, None).unwrap());
-        assert_eq!(ev.kind.as_u16(), 9002);
-        // Only h-tag
-        assert_eq!(ev.tags.len(), 1);
+        assert!(matches!(
+            build_update_channel(cid, None, None),
+            Err(SdkError::InvalidTag(_))
+        ));
     }
 
     // ── build_set_topic ──────────────────────────────────────────────────────
