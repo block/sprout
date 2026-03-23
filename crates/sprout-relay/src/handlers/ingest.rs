@@ -483,17 +483,12 @@ pub(crate) async fn resolve_nip10_thread_meta(
 
 // ── New validations (Phase 0a additions) ─────────────────────────────────────
 
-/// Count `e` tags that contain valid 64-hex event IDs.
+/// Count all `e` tags regardless of content validity.
 fn count_e_tags(event: &Event) -> usize {
     event
         .tags
         .iter()
-        .filter(|t| {
-            t.kind().to_string() == "e"
-                && t.content()
-                    .map(|v| v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()))
-                    .unwrap_or(false)
-        })
+        .filter(|t| t.kind().to_string() == "e")
         .count()
 }
 
@@ -558,6 +553,18 @@ async fn validate_edit_ownership(event: &Event, state: &AppState) -> Result<(), 
         .map_err(|e| format!("db error: {e}"))?
         .ok_or_else(|| "edit target event not found".to_string())?;
 
+    // Verify target belongs to the same channel as the edit event.
+    let edit_channel_id = extract_channel_id(event);
+    match (edit_channel_id, target_event.channel_id) {
+        (Some(edit_ch), Some(target_ch)) if edit_ch != target_ch => {
+            return Err("target event belongs to a different channel".to_string());
+        }
+        (Some(_), None) => {
+            return Err("target event has no channel".to_string());
+        }
+        _ => {} // Same channel or no channel context — OK
+    }
+
     let author = effective_message_author(&target_event.event, &state.relay_keypair.public_key());
     let actor = event.pubkey.serialize().to_vec();
     if author != actor {
@@ -598,6 +605,18 @@ async fn validate_forum_vote_target(event: &Event, state: &AppState) -> Result<(
     let target_kind = event_kind_u32(&target_event.event);
     if target_kind != KIND_FORUM_POST && target_kind != KIND_FORUM_COMMENT {
         return Err("vote target must be a forum post or comment".to_string());
+    }
+
+    // Verify target belongs to the same channel as the vote event.
+    let vote_channel_id = extract_channel_id(event);
+    match (vote_channel_id, target_event.channel_id) {
+        (Some(vote_ch), Some(target_ch)) if vote_ch != target_ch => {
+            return Err("target event belongs to a different channel".to_string());
+        }
+        (Some(_), None) => {
+            return Err("target event has no channel".to_string());
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -1414,5 +1433,23 @@ mod tests {
         nostr::EventBuilder::new(nostr::Kind::Custom(kind as u16), content, nostr_tags)
             .sign_with_keys(&keys)
             .unwrap()
+    }
+
+    #[test]
+    fn count_e_tags_includes_malformed() {
+        // A deletion event with one valid e-tag and one malformed e-tag
+        // should count as 2 e-tags (and be rejected by the "exactly 1" check).
+        let event = make_event_with_tags(
+            5, // kind:5 deletion
+            "",
+            &[&["e", "a".repeat(64).as_str()], &["e", "not-valid-hex"]],
+        );
+        assert_eq!(count_e_tags(&event), 2);
+    }
+
+    #[test]
+    fn count_e_tags_single_valid() {
+        let event = make_event_with_tags(5, "", &[&["e", "a".repeat(64).as_str()]]);
+        assert_eq!(count_e_tags(&event), 1);
     }
 }
