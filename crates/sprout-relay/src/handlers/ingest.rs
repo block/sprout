@@ -937,40 +937,41 @@ pub async fn ingest_event(
             ));
         }
 
+        // Validate visibility/channel_type for ALL kind:9007 events (with or without h-tag).
+        // This runs pre-storage so invalid enums are rejected before the event is persisted.
+        let visibility_str = event
+            .tags
+            .iter()
+            .find_map(|t| {
+                if t.kind().to_string() == "visibility" {
+                    t.content().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "open".to_string());
+        let channel_type_str = event
+            .tags
+            .iter()
+            .find_map(|t| {
+                if t.kind().to_string() == "channel_type" {
+                    t.content().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "stream".to_string());
+
+        let visibility: sprout_db::channel::ChannelVisibility = visibility_str
+            .parse()
+            .map_err(|_| IngestError::Rejected(format!("invalid visibility: {visibility_str}")))?;
+        let channel_type: sprout_db::channel::ChannelType =
+            channel_type_str.parse().map_err(|_| {
+                IngestError::Rejected(format!("invalid channel_type: {channel_type_str}"))
+            })?;
+
         if let Some(client_uuid) = channel_id {
             let name = create_name.unwrap_or_default();
-
-            let visibility_str = event
-                .tags
-                .iter()
-                .find_map(|t| {
-                    if t.kind().to_string() == "visibility" {
-                        t.content().map(|s| s.to_string())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| "open".to_string());
-            let channel_type_str = event
-                .tags
-                .iter()
-                .find_map(|t| {
-                    if t.kind().to_string() == "channel_type" {
-                        t.content().map(|s| s.to_string())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| "stream".to_string());
-
-            let visibility: sprout_db::channel::ChannelVisibility =
-                visibility_str.parse().map_err(|_| {
-                    IngestError::Rejected(format!("invalid visibility: {visibility_str}"))
-                })?;
-            let channel_type: sprout_db::channel::ChannelType =
-                channel_type_str.parse().map_err(|_| {
-                    IngestError::Rejected(format!("invalid channel_type: {channel_type_str}"))
-                })?;
 
             let description = event.tags.iter().find_map(|t| {
                 if t.kind().to_string() == "about" {
