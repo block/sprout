@@ -44,13 +44,14 @@ pub async fn handle_side_effects(
         9005 => handle_delete_event_side_effect(event, state).await,
         9007 => handle_create_group(event, state).await,
         9008 => handle_delete_group(event, state).await,
-        9009 | 9021 => {
+        9009 => {
             warn!(
                 kind = kind,
-                "NIP-29 kind {kind} handler deferred to future phase"
+                "NIP-29 kind 9009 handler deferred to future phase"
             );
             Ok(())
         }
+        9021 => handle_join_request(event, state).await,
         9022 => handle_leave_request(event, state).await,
         // kind:7 (reaction) handled inline in ingest_event() before storage.
         _ => Ok(()),
@@ -907,10 +908,10 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
 
     let visibility: sprout_db::channel::ChannelVisibility = visibility_str
         .parse()
-        .unwrap_or(sprout_db::channel::ChannelVisibility::Open);
+        .map_err(|_| anyhow::anyhow!("invalid visibility: {visibility_str}"))?;
     let channel_type: sprout_db::channel::ChannelType = channel_type_str
         .parse()
-        .unwrap_or(sprout_db::channel::ChannelType::Stream);
+        .map_err(|_| anyhow::anyhow!("invalid channel_type: {channel_type_str}"))?;
 
     let actor_bytes = event.pubkey.serialize().to_vec();
     let description = extract_tag_value(event, "about");
@@ -1015,6 +1016,66 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
     .await?;
 
     info!(channel = %channel_id, "NIP-29 DELETE_GROUP processed");
+    Ok(())
+}
+
+async fn handle_join_request(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
+    let channel_id =
+        extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
+    let actor_bytes = event.pubkey.serialize().to_vec();
+
+    // Only open channels allow self-join via kind:9021.
+    let channel = state
+        .db
+        .get_channel(channel_id)
+        .await
+        .map_err(|_| anyhow::anyhow!("channel not found"))?;
+    if channel.visibility != "open" {
+        return Err(anyhow::anyhow!(
+            "channel is private — request an invitation"
+        ));
+    }
+
+    // Add as member (idempotent — add_member handles duplicates).
+    state
+        .db
+        .add_member(
+            channel_id,
+            &actor_bytes,
+            sprout_db::channel::MemberRole::Member,
+            None,
+        )
+        .await?;
+
+    let actor_hex = nostr::util::hex::encode(&actor_bytes);
+    emit_system_message(
+        state,
+        channel_id,
+        serde_json::json!({
+            "type": "member_joined",
+            "actor": actor_hex,
+            "target": actor_hex,
+        }),
+    )
+    .await?;
+
+    if let Err(e) = emit_group_discovery_events(state, channel_id).await {
+        warn!(channel = %channel_id, error = %e, "NIP-29 group discovery emission failed");
+    }
+
+    if let Err(e) = emit_membership_notification(
+        state,
+        channel_id,
+        &actor_bytes,
+        &actor_bytes,
+        sprout_core::kind::KIND_MEMBER_ADDED_NOTIFICATION,
+    )
+    .await
+    {
+        warn!("membership notification for join failed: {e}");
+    }
+
+    info!(channel = %channel_id, "kind:9021 join processed");
     Ok(())
 }
 
