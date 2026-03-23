@@ -195,6 +195,17 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         return;
     }
 
+    // ── Blocked kinds (both ephemeral and persistent) ─────────────────
+    if kind_u32 == sprout_core::kind::KIND_AUTH {
+        reject("invalid");
+        conn.send(RelayMessage::ok(
+            &event_id_hex,
+            false,
+            "invalid: AUTH events cannot be submitted via EVENT",
+        ));
+        return;
+    }
+
     // ── Ephemeral events are WS-only (never stored) ──────────────────────
     // Scope enforcement for ephemeral kinds: require MessagesWrite or
     // ProxySubmit. Persistent events skip this gate and rely on

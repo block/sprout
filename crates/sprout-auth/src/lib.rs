@@ -167,11 +167,13 @@ impl AuthService {
                     ));
                 }
                 // Default-open: no token present and require_token=false.
-                // Grant baseline read+write scopes so the connection is usable.
-                // This is intentional for dev/open-relay deployments — not a bug.
+                // Grant all non-admin scopes so the connection is fully usable.
+                // The ingest pipeline enforces per-kind scope checks, so NIP-42
+                // pubkey-only connections need the full non-admin set — not just
+                // MessagesRead/Write — to submit profiles, channel metadata, etc.
                 (
                     auth_event.pubkey,
-                    vec![Scope::MessagesRead, Scope::MessagesWrite],
+                    Scope::all_non_admin(),
                     AuthMethod::Nip42PubkeyOnly,
                 )
             }
