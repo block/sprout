@@ -1200,14 +1200,94 @@ pub(crate) async fn reaction_add(rest: &crate::relay::RestClient, event_id: &str
     }
 }
 
-/// Best-effort: remove a reaction. Returns immediately on timeout or error.
+/// Best-effort: remove a reaction via a signed kind:5 (NIP-09) deletion event.
+///
+/// Looks up our kind:7 reaction event ID via GET /api/messages/{event_id}/reactions,
+/// then submits a signed kind:5 deletion via POST /api/events.
+/// Returns immediately on timeout or any error — reactions are cosmetic.
 pub(crate) async fn reaction_remove(rest: &crate::relay::RestClient, event_id: &str, emoji: &str) {
-    let path = format!(
-        "/api/messages/{}/reactions/{}",
-        pct_encode(event_id),
-        pct_encode(emoji),
-    );
-    match tokio::time::timeout(REACTION_TIMEOUT, rest.delete(&path)).await {
+    // Step 1: look up the reaction event ID we own for this emoji.
+    let path = format!("/api/messages/{}/reactions", pct_encode(event_id));
+    let resp = match tokio::time::timeout(Duration::from_millis(1_000), rest.get_json(&path)).await
+    {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            tracing::debug!(event_id, emoji, "reaction remove: fetch failed: {e}");
+            return;
+        }
+        Err(_) => {
+            tracing::debug!(event_id, emoji, "reaction remove: fetch timed out");
+            return;
+        }
+    };
+
+    let my_pubkey = rest.keys.public_key().to_hex();
+    let reid = resp
+        .get("reactions")
+        .and_then(|r| r.as_array())
+        .and_then(|groups| {
+            groups.iter().find_map(|group| {
+                if group.get("emoji")?.as_str()? != emoji {
+                    return None;
+                }
+                group.get("users")?.as_array()?.iter().find_map(|user| {
+                    if user.get("pubkey")?.as_str()? != my_pubkey {
+                        return None;
+                    }
+                    user.get("reaction_event_id")?
+                        .as_str()
+                        .map(|s| s.to_string())
+                })
+            })
+        });
+
+    let reid = match reid {
+        Some(id) => id,
+        None => {
+            tracing::debug!(event_id, emoji, "reaction remove: no reaction event found");
+            return;
+        }
+    };
+
+    // Step 2: build and submit a signed kind:5 deletion for the reaction event.
+    let target_id = match nostr::EventId::from_hex(&reid) {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::debug!(
+                event_id,
+                emoji,
+                "reaction remove: invalid reaction event ID: {e}"
+            );
+            return;
+        }
+    };
+    let builder = match sprout_sdk::build_remove_reaction(target_id) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction remove: build failed: {e}");
+            return;
+        }
+    };
+    let event = match builder.sign_with_keys(&rest.keys) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction remove: sign failed: {e}");
+            return;
+        }
+    };
+    let body = match serde_json::to_value(&event) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction remove: serialize failed: {e}");
+            return;
+        }
+    };
+    match tokio::time::timeout(
+        Duration::from_millis(1_000),
+        rest.post_json("/api/events", &body),
+    )
+    .await
+    {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => tracing::debug!(event_id, emoji, "reaction remove failed: {e}"),
         Err(_) => tracing::debug!(event_id, emoji, "reaction remove timed out"),
