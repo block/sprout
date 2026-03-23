@@ -1066,12 +1066,8 @@ async fn handle_join_request(event: &Event, state: &Arc<AppState>) -> anyhow::Re
     }
 
     // Skip if already an active member — prevents duplicate join notifications.
-    if state
-        .db
-        .is_member(channel_id, &actor_bytes)
-        .await
-        .unwrap_or(false)
-    {
+    // Fail closed on DB errors rather than falling through to add_member.
+    if state.db.is_member(channel_id, &actor_bytes).await? {
         info!(channel = %channel_id, "kind:9021 join — already a member, skipping");
         return Ok(());
     }
