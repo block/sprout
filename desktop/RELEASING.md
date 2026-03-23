@@ -15,12 +15,8 @@ release:
 | `SPROUT_UPDATER_PUBLIC_KEY`        | Tauri updater public key (generate with `pnpm tauri signer generate`) |
 | `TAURI_SIGNING_PRIVATE_KEY`        | Tauri updater private key                                          |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the private key                                     |
-| `APPLE_CERTIFICATE`               | Base64-encoded `.p12` Apple Developer certificate                  |
-| `APPLE_CERTIFICATE_PASSWORD`      | Password for the `.p12` certificate                                |
-| `APPLE_SIGNING_IDENTITY`          | e.g. `"Developer ID Application: Block, Inc. (XXXXXXXXXX)"`       |
-| `APPLE_ID`                        | Apple ID email for notarization                                    |
-| `APPLE_PASSWORD`                  | App-specific password for notarization                             |
-| `APPLE_TEAM_ID`                   | Apple Developer Team ID                                            |
+| `OSX_CODESIGN_ROLE`               | IAM role ARN for Block's Apple codesigning service                 |
+| `CODESIGN_S3_BUCKET`              | S3 bucket for codesigning artifacts                                |
 
 ---
 
@@ -90,29 +86,32 @@ The `sprout-desktop-release.yml` workflow:
    `tauri.conf.json`, and `Cargo.toml`.
 2. **Validates** all required secrets are present.
 3. **Builds** the release config with signing and updater settings.
-4. **Builds and signs** the app via `tauri-action`.
-5. **Notarizes** the macOS bundle with Apple.
-6. **Publishes** the updater manifest (`latest.json`) to the rolling
+4. **Builds** the Tauri app (unsigned).
+5. **Signs and notarizes** the macOS bundle via `block/apple-codesign-action`.
+6. **Re-packages** the signed app into a DMG and updater archive.
+7. **Signs** the updater archive with the Tauri updater key.
+8. **Publishes** the updater manifest (`latest.json`) to the rolling
    `sprout-desktop-latest` release.
-7. **Publishes** the DMG to both the versioned and rolling releases.
+9. **Publishes** the DMG to both the versioned and rolling releases.
 
 ---
 
 ## Local Release Build (Testing)
 
-To test a release build locally:
+Local builds will not be codesigned or notarized — that only happens in CI
+via `block/apple-codesign-action`. Local builds are useful for testing the
+updater config and DMG packaging.
 
 ```bash
-# Set required env vars
+# Set updater env vars
 export SPROUT_UPDATER_PUBLIC_KEY="your-public-key"
 export SPROUT_UPDATER_ENDPOINT="https://github.com/block/sprout/releases/download/sprout-desktop-latest/latest.json"
-export APPLE_SIGNING_IDENTITY="Developer ID Application: ..."
 
 # Generate release config
 cd desktop
 pnpm run tauri:release:config
 
-# Build
+# Build (unsigned)
 just desktop-release-build
 ```
 
@@ -149,11 +148,9 @@ The app connects to the relay via the `SPROUT_RELAY_URL` environment variable.
   [Prerequisites](#prerequisites--secrets-setup) are configured in GitHub repo
   settings.
 
-- **Notarization failures**: Verify `APPLE_ID`, `APPLE_PASSWORD` (must be an
-  app-specific password), and `APPLE_TEAM_ID` are correct.
-
-- **Signing failures**: Verify the `.p12` certificate is valid and not expired,
-  and that `APPLE_CERTIFICATE_PASSWORD` is correct.
+- **Codesigning failures**: Verify `OSX_CODESIGN_ROLE` and
+  `CODESIGN_S3_BUCKET` are configured correctly. Check the
+  `block/apple-codesign-action` step logs for details.
 
 - **Version mismatch**: The tag version must exactly match all three version
   files (`package.json`, `tauri.conf.json`, `Cargo.toml`). Use

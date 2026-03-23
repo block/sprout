@@ -11,10 +11,20 @@ const dryRun = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
 
 const dmgName = `Sprout_${version}_aarch64.dmg`;
 const latestAssetName = "Sprout-latest-aarch64.dmg";
-const dmgPath = resolve(
+
+const defaultDmgDirs = [
+  "src-tauri/target/aarch64-apple-darwin/release/bundle/dmg",
+  "src-tauri/target/release/bundle/dmg",
+];
+const dmgDir = resolve(
   process.cwd(),
-  `src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/${dmgName}`,
+  process.env.DMG_BUNDLE_DIR ??
+    defaultDmgDirs.find((dir) =>
+      existsSync(resolve(process.cwd(), dir, dmgName)),
+    ) ??
+    defaultDmgDirs[0],
 );
+const dmgPath = join(dmgDir, dmgName);
 
 function readVersionFromConfig() {
   const configPath = resolve(process.cwd(), "src-tauri/tauri.conf.json");

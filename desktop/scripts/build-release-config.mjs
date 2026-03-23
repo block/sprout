@@ -3,9 +3,6 @@ import { resolve } from "node:path";
 
 const publicKey = process.env.SPROUT_UPDATER_PUBLIC_KEY;
 const endpoint = process.env.SPROUT_UPDATER_ENDPOINT;
-const signingIdentity =
-  process.env.SPROUT_APPLE_SIGNING_IDENTITY ??
-  process.env.APPLE_SIGNING_IDENTITY;
 
 const baseConfigPath = resolve(process.cwd(), "src-tauri/tauri.conf.json");
 const outputConfigPath = resolve(
@@ -25,15 +22,6 @@ releaseConfig.bundle.macOS = {
   ...(releaseConfig.bundle?.macOS ?? baseConfig.bundle?.macOS ?? {}),
   minimumSystemVersion: "10.15",
 };
-
-if (signingIdentity) {
-  releaseConfig.bundle.macOS.signingIdentity = signingIdentity;
-  console.log(`macOS signing identity configured (${signingIdentity})`);
-} else {
-  console.log(
-    "macOS signing identity skipped (missing: SPROUT_APPLE_SIGNING_IDENTITY or APPLE_SIGNING_IDENTITY)",
-  );
-}
 
 if (publicKey && endpoint) {
   releaseConfig.plugins = {
