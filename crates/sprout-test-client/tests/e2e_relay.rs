@@ -39,25 +39,47 @@ fn relay_http_url() -> String {
         .to_string()
 }
 
-/// Create a real channel in the DB via REST so the relay accepts events for it.
+/// Create a real channel via a signed kind:9007 event submitted to POST /api/events.
 async fn create_test_channel(keys: &Keys) -> String {
     let client = reqwest::Client::new();
-    let url = format!("{}/api/channels", relay_http_url());
     let pubkey_hex = keys.public_key().to_hex();
+    let channel_uuid = uuid::Uuid::new_v4();
+    let channel_name = format!("relay-e2e-{}", channel_uuid);
+
+    let event = EventBuilder::new(
+        Kind::Custom(9007),
+        "",
+        vec![
+            Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
+            Tag::parse(&["name", &channel_name]).unwrap(),
+            Tag::parse(&["channel_type", "stream"]).unwrap(),
+            Tag::parse(&["visibility", "open"]).unwrap(),
+        ],
+    )
+    .sign_with_keys(keys)
+    .unwrap();
+
     let resp = client
-        .post(&url)
+        .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
-        .json(&serde_json::json!({
-            "name": format!("relay-e2e-{}", uuid::Uuid::new_v4()),
-            "channel_type": "stream",
-            "visibility": "open",
-        }))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).unwrap())
         .send()
         .await
-        .expect("create channel request");
-    assert_eq!(resp.status(), 201, "channel creation failed");
-    let body: serde_json::Value = resp.json().await.expect("parse channel response");
-    body["id"].as_str().expect("channel id").to_string()
+        .expect("submit create-channel event");
+    assert!(
+        resp.status().is_success(),
+        "channel creation event failed: {}",
+        resp.status()
+    );
+    let body: serde_json::Value = resp.json().await.expect("parse event response");
+    assert!(
+        body["accepted"].as_bool().unwrap_or(false),
+        "channel creation not accepted: {}",
+        body
+    );
+
+    channel_uuid.to_string()
 }
 
 #[tokio::test]
