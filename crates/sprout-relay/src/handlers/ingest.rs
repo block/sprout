@@ -787,6 +787,41 @@ pub async fn ingest_event(
         }
     } else if is_gift_wrap {
         None
+    } else if kind_u32 == KIND_DELETION {
+        // Standard deletion (kind:5): derive channel from the target event.
+        // kind:5 events don't carry an h-tag, so we look up the target event
+        // and use its channel_id. This ensures token-channel, membership, and
+        // archived checks run against the correct channel.
+        let target_hex = event.tags.iter().find_map(|t| {
+            if t.kind().to_string() == "e" {
+                t.content().and_then(|v| {
+                    if v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()) {
+                        Some(v.to_string())
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        });
+        match target_hex {
+            Some(hex) => {
+                let target_bytes = hex::decode(&hex).map_err(|_| {
+                    IngestError::Rejected("invalid: malformed deletion target id".into())
+                })?;
+                match state.db.get_event_by_id(&target_bytes).await {
+                    Ok(Some(target)) => target.channel_id,
+                    Ok(None) => None, // target not found — validate_standard_deletion will catch this
+                    Err(e) => {
+                        return Err(IngestError::Internal(format!(
+                            "error: looking up deletion target: {e}"
+                        )));
+                    }
+                }
+            }
+            None => None, // no e-tag — will be caught by single-target enforcement (step 12)
+        }
     } else {
         extract_channel_id(&event)
     };
