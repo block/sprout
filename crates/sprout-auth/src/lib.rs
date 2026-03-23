@@ -167,13 +167,14 @@ impl AuthService {
                     ));
                 }
                 // Default-open: no token present and require_token=false.
-                // Grant all non-admin scopes so the connection is fully usable.
+                // Grant all scopes so the connection is fully usable in dev mode.
                 // The ingest pipeline enforces per-kind scope checks, so NIP-42
-                // pubkey-only connections need the full non-admin set — not just
-                // MessagesRead/Write — to submit profiles, channel metadata, etc.
+                // pubkey-only connections need the full set — including admin
+                // scopes for kind:9000 (add member), kind:9001 (remove member),
+                // kind:9008 (delete group), etc.
                 (
                     auth_event.pubkey,
-                    Scope::all_non_admin(),
+                    Scope::all_known(),
                     AuthMethod::Nip42PubkeyOnly,
                 )
             }
