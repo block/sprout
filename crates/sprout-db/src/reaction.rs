@@ -242,15 +242,27 @@ pub async fn get_reactions(
     limit: u32,
     _cursor: Option<&str>,
 ) -> Result<Vec<ReactionGroup>> {
+    // Two-step query: first get the limited set of distinct emoji groups,
+    // then fetch all rows for those groups. This ensures `limit` applies to
+    // emoji groups (the API contract), not raw rows — so one busy emoji
+    // cannot consume the entire page and hide other groups.
     let rows = sqlx::query(
         r#"
-        SELECT emoji, pubkey, reaction_event_id
-        FROM reactions
-        WHERE event_id = $1
-          AND event_created_at = $2
-          AND removed_at IS NULL
-        ORDER BY emoji, created_at
-        LIMIT $3
+        SELECT r.emoji, r.pubkey, r.reaction_event_id
+        FROM reactions r
+        INNER JOIN (
+            SELECT DISTINCT emoji
+            FROM reactions
+            WHERE event_id = $1
+              AND event_created_at = $2
+              AND removed_at IS NULL
+            ORDER BY emoji
+            LIMIT $3
+        ) g ON g.emoji = r.emoji
+        WHERE r.event_id = $1
+          AND r.event_created_at = $2
+          AND r.removed_at IS NULL
+        ORDER BY r.emoji, r.created_at
         "#,
     )
     .bind(event_id)

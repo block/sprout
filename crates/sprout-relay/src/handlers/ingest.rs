@@ -1123,14 +1123,14 @@ pub async fn ingest_event(
         };
 
         // Mirror the SDK's 64-character emoji limit server-side so raw clients
-        // cannot bypass it. The SDK rejects at build time; the pipeline rejects
-        // at ingest time.
-        const MAX_REACTION_EMOJI_LEN: usize = 64;
-        if emoji.len() > MAX_REACTION_EMOJI_LEN {
+        // cannot bypass it. Uses chars().count() (not byte len) to match the
+        // SDK's check_emoji_len, which also counts Unicode characters.
+        const MAX_REACTION_EMOJI_CHARS: usize = 64;
+        let emoji_char_count = emoji.chars().count();
+        if emoji_char_count > MAX_REACTION_EMOJI_CHARS {
             return Err(IngestError::Rejected(format!(
                 "invalid: reaction emoji exceeds {} characters (got {})",
-                MAX_REACTION_EMOJI_LEN,
-                emoji.len()
+                MAX_REACTION_EMOJI_CHARS, emoji_char_count
             )));
         }
 
