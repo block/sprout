@@ -2,10 +2,10 @@
 //!
 //! Endpoints:
 //!   GET /api/users/me/profile      — get own profile
-//!   PUT /api/users/me/profile      — update own profile (display_name, avatar_url, about, nip05_handle)
 //!   GET /api/users/{pubkey}/profile — get any user's profile by pubkey hex
 //!   POST /api/users/batch          — resolve display names for multiple pubkeys
 //!   GET /api/users/search          — search users by display name, NIP-05, or pubkey
+//!   PUT /api/users/me/channel-add-policy — set channel add policy (DB-native setting)
 
 use std::sync::Arc;
 
@@ -20,89 +20,6 @@ use serde::Deserialize;
 use crate::state::AppState;
 
 use super::{api_error, extract_auth_context, internal_error, scope_error};
-
-/// Request body for updating a user's profile.
-/// All fields are optional — at least one must be present.
-#[derive(Debug, Deserialize)]
-pub struct UpdateProfileBody {
-    /// New display name for the user, or `None` to leave unchanged.
-    pub display_name: Option<String>,
-    /// New avatar URL for the user, or `None` to leave unchanged.
-    pub avatar_url: Option<String>,
-    /// Short bio or description, or `None` to leave unchanged.
-    pub about: Option<String>,
-    /// NIP-05 identifier (e.g. "alice@example.com"), or `None` to leave unchanged.
-    pub nip05_handle: Option<String>,
-}
-
-/// `PUT /api/users/me/profile` — update the authenticated user's profile.
-///
-/// Body: `{ "display_name": "Alice", "avatar_url": "https://...", "about": "...", "nip05_handle": "alice@relay.example" }` (all optional, at least one required)
-/// Returns: `{ "updated": true }`
-pub async fn update_profile(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    ExtractJson(body): ExtractJson<UpdateProfileBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let ctx = extract_auth_context(&headers, &state).await?;
-    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersWrite).map_err(scope_error)?;
-    let pubkey_bytes = ctx.pubkey_bytes.clone();
-
-    let display_name = body
-        .display_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let avatar_url = body
-        .avatar_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let about = body
-        .about
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    // nip05_handle: empty string means "clear", None means "leave unchanged"
-    let nip05_handle_raw = body.nip05_handle.as_deref().map(str::trim);
-    // Don't filter empty — empty string means "clear to NULL" via empty_to_none in DB layer
-
-    // Validate and canonicalize NIP-05 handle (if non-empty)
-    let canonical_nip05: Option<String> = match nip05_handle_raw {
-        Some("") => Some(String::new()), // empty = clear to NULL
-        Some(h) => Some(
-            super::nip05::canonicalize_nip05(h, &state.config.relay_url)
-                .map_err(|msg| api_error(StatusCode::BAD_REQUEST, &msg))?,
-        ),
-        None => None,
-    };
-    let nip05_handle = canonical_nip05.as_deref();
-
-    if display_name.is_none() && avatar_url.is_none() && about.is_none() && nip05_handle.is_none() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "at least one of display_name, avatar_url, about, or nip05_handle is required",
-        ));
-    }
-
-    state
-        .db
-        .update_user_profile(&pubkey_bytes, display_name, avatar_url, about, nip05_handle)
-        .await
-        .map_err(|e| {
-            let msg = format!("{e}");
-            if msg.contains("duplicate key value") || msg.contains("23505") {
-                api_error(
-                    StatusCode::CONFLICT,
-                    "nip05_handle is already claimed by another user",
-                )
-            } else {
-                internal_error(&format!("db error: {e}"))
-            }
-        })?;
-
-    Ok(Json(serde_json::json!({ "updated": true })))
-}
 
 /// `GET /api/users/me/profile` — get the authenticated user's profile.
 ///

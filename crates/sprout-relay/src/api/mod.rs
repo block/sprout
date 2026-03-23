@@ -52,26 +52,19 @@ pub mod workflows;
 // Re-export all public handlers so router.rs can use `api::*_handler` unchanged.
 pub use agents::agents_handler;
 pub use approvals::{deny_approval, grant_approval};
-pub use canvas::{get_canvas, set_canvas};
-pub use channels::{channels_handler, create_channel};
-pub use channels_metadata::{
-    archive_channel_handler, delete_channel_handler, get_channel_handler, set_purpose_handler,
-    set_topic_handler, unarchive_channel_handler, update_channel_handler,
-};
+pub use canvas::get_canvas;
+pub use channels::channels_handler;
+pub use channels_metadata::get_channel_handler;
 pub use dms::{add_dm_member_handler, hide_dm_handler, list_dms_handler, open_dm_handler};
 pub use events::get_event;
 pub use feed::feed_handler;
-pub use members::{add_members, join_channel, leave_channel, list_members, remove_member};
-pub use messages::{
-    delete_message, edit_message, get_thread, list_messages, send_message, validate_imeta_tags,
-    verify_imeta_blobs, vote_on_post,
-};
+pub use members::list_members;
+pub use messages::{get_thread, list_messages, validate_imeta_tags, verify_imeta_blobs};
 pub use presence::{presence_handler, set_presence_handler};
-pub use reactions::{add_reaction_handler, list_reactions_handler, remove_reaction_handler};
+pub use reactions::list_reactions_handler;
 pub use search::search_handler;
 pub use users::{
     get_profile, get_user_profile, get_users_batch, put_channel_add_policy, search_users,
-    update_profile,
 };
 pub use workflows::{
     create_workflow, delete_workflow, get_workflow, list_channel_workflows, list_workflow_runs,
