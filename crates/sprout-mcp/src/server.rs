@@ -2034,7 +2034,7 @@ with kind:45003 comments)."
         let picture = p
             .avatar_url
             .as_deref()
-            .or_else(|| current_profile.get("picture").and_then(|v| v.as_str()));
+            .or_else(|| current_profile.get("avatar_url").and_then(|v| v.as_str()));
         let about = p
             .about
             .as_deref()
@@ -2042,7 +2042,7 @@ with kind:45003 comments)."
         let nip05 = p
             .nip05_handle
             .as_deref()
-            .or_else(|| current_profile.get("nip05").and_then(|v| v.as_str()));
+            .or_else(|| current_profile.get("nip05_handle").and_then(|v| v.as_str()));
 
         let builder = match sprout_sdk::build_profile(display_name, name, picture, about, nip05) {
             Ok(b) => b,

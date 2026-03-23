@@ -210,7 +210,36 @@ pub async fn validate_admin_event(
             }
         }
         9002 => {
-            // EDIT_METADATA: name/about/archived require owner/admin; topic/purpose allow any member
+            // EDIT_METADATA: require at least one recognized metadata tag.
+            const RECOGNIZED_TAGS: &[&str] = &["name", "about", "archived", "topic", "purpose"];
+            let has_recognized = event
+                .tags
+                .iter()
+                .any(|t| RECOGNIZED_TAGS.contains(&t.kind().to_string().as_str()));
+            if !has_recognized {
+                return Err(anyhow::anyhow!(
+                    "kind:9002 must include at least one metadata tag (name, about, archived, topic, purpose)"
+                ));
+            }
+
+            // Validate archived values before storage.
+            for t in event.tags.iter() {
+                if t.kind().to_string() == "archived" {
+                    match t.content() {
+                        Some("true") | Some("false") => {}
+                        Some(v) => {
+                            return Err(anyhow::anyhow!(
+                                "invalid archived value: {v} (must be \"true\" or \"false\")"
+                            ));
+                        }
+                        None => {
+                            return Err(anyhow::anyhow!("archived tag must have a value"));
+                        }
+                    }
+                }
+            }
+
+            // name/about/archived require owner/admin; topic/purpose allow any member
             let has_privileged_tag = event.tags.iter().any(|t| {
                 let k = t.kind().to_string();
                 k == "name" || k == "about" || k == "archived"
