@@ -267,6 +267,86 @@ pub async fn create_channel(
     Ok(record)
 }
 
+/// Creates a channel with a client-supplied UUID (idempotent via ON CONFLICT DO NOTHING).
+///
+/// Returns `(record, true)` if the channel was newly created, or `(record, false)` if a
+/// channel with `channel_id` already exists (duplicate — caller should reject the event).
+pub async fn create_channel_with_id(
+    pool: &PgPool,
+    channel_id: Uuid,
+    name: &str,
+    channel_type: ChannelType,
+    visibility: ChannelVisibility,
+    description: Option<&str>,
+    created_by: &[u8],
+) -> Result<(ChannelRecord, bool)> {
+    if created_by.len() != 32 {
+        return Err(DbError::InvalidData(format!(
+            "pubkey must be 32 bytes, got {}",
+            created_by.len()
+        )));
+    }
+
+    let mut tx = pool.begin().await?;
+
+    let rows_affected = sqlx::query(
+        r#"
+        INSERT INTO channels (id, name, channel_type, visibility, description, created_by)
+        VALUES ($1, $2, $3::channel_type, $4::channel_visibility, $5, $6)
+        ON CONFLICT (id) DO NOTHING
+        "#,
+    )
+    .bind(channel_id)
+    .bind(name)
+    .bind(channel_type.as_str())
+    .bind(visibility.as_str())
+    .bind(description)
+    .bind(created_by)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    let was_created = rows_affected > 0;
+
+    if was_created {
+        // Bootstrap the creator as owner.
+        sqlx::query(
+            r#"
+            INSERT INTO channel_members (channel_id, pubkey, role, invited_by)
+            VALUES ($1, $2, 'owner', $3)
+            ON CONFLICT (channel_id, pubkey) DO UPDATE SET
+                removed_at = NULL,
+                removed_by = NULL,
+                role = EXCLUDED.role
+            "#,
+        )
+        .bind(channel_id)
+        .bind(created_by)
+        .bind(created_by)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let row = sqlx::query(
+        r#"
+        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+               description, canvas,
+               created_by, created_at, updated_at, archived_at, deleted_at,
+               nip29_group_id, topic_required, max_members,
+               topic, topic_set_by, topic_set_at,
+               purpose, purpose_set_by, purpose_set_at
+        FROM channels WHERE id = $1
+        "#,
+    )
+    .bind(channel_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let record = row_to_channel_record(row)?;
+    tx.commit().await?;
+    Ok((record, was_created))
+}
+
 /// Fetches a channel record by ID. Returns `ChannelNotFound` if missing or deleted.
 pub async fn get_channel(pool: &PgPool, channel_id: Uuid) -> Result<ChannelRecord> {
     let row = sqlx::query(

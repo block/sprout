@@ -446,20 +446,29 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     }
 
     // Auth resolution: token > private_key (auto-mint) > pubkey > error
-    let auth = if let Some(token) = cli.token {
-        Auth::Bearer(token)
+    //
+    // When SPROUT_PRIVATE_KEY is set, auto_mint_token returns (token, keys).
+    // The keys are retained on the client for signing write operations.
+    let (auth, retained_keys) = if let Some(token) = cli.token {
+        (Auth::Bearer(token), None)
     } else if let Some(key) = cli.private_key {
-        let minted = client::auto_mint_token(&relay_url, &key).await?;
-        Auth::Bearer(minted)
+        let (minted, keys) = client::auto_mint_token(&relay_url, &key).await?;
+        (Auth::Bearer(minted), Some(keys))
     } else if let Some(pk) = cli.pubkey {
-        Auth::DevMode(pk)
+        (Auth::DevMode(pk), None)
     } else {
         return Err(CliError::Auth(
             "Set SPROUT_API_TOKEN, SPROUT_PRIVATE_KEY, or SPROUT_PUBKEY".into(),
         ));
     };
 
-    let client = SproutClient::new(relay_url, auth)?;
+    let client = {
+        let c = SproutClient::new(relay_url, auth)?;
+        match retained_keys {
+            Some(k) => c.with_keys(k),
+            None => c,
+        }
+    };
 
     match cli.command {
         // ---- Messages ------------------------------------------------------

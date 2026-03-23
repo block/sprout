@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use nostr::Keys;
+
 use crate::error::CliError;
 
 // ---------------------------------------------------------------------------
@@ -19,6 +21,7 @@ pub struct SproutClient {
     http: reqwest::Client,
     relay_url: String, // base URL, no trailing slash, e.g. "https://relay.sprout.place"
     auth: Auth,
+    keys: Option<Keys>, // retained for event signing (write operations)
 }
 
 impl SproutClient {
@@ -32,7 +35,19 @@ impl SproutClient {
             http,
             relay_url,
             auth,
+            keys: None,
         })
+    }
+
+    /// Attach a keypair for signing write operations.
+    pub fn with_keys(mut self, keys: Keys) -> Self {
+        self.keys = Some(keys);
+        self
+    }
+
+    /// Get the retained keypair, if available.
+    pub fn keys(&self) -> Option<&Keys> {
+        self.keys.as_ref()
     }
 
     // -----------------------------------------------------------------------
@@ -78,11 +93,46 @@ impl SproutClient {
         Ok(resp.text().await?)
     }
 
-    fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    pub(crate) fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match &self.auth {
             Auth::Bearer(token) => builder.header("Authorization", format!("Bearer {}", token)),
             Auth::DevMode(pk) => builder.header("X-Pubkey", pk),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Signed event submission
+    // -----------------------------------------------------------------------
+
+    /// Submit a signed Nostr event via POST /api/events.
+    pub async fn submit_event(&self, event: nostr::Event) -> Result<String, CliError> {
+        let body = serde_json::to_vec(&event)
+            .map_err(|e| CliError::Other(format!("event serialization failed: {e}")))?;
+        let url = format!("{}/api/events", self.relay_url);
+        let builder = self.http.post(&url);
+        let builder = self.apply_auth(builder);
+        let resp = builder
+            .header("content-type", "application/json")
+            .body(body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            let message = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| {
+                    v.get("error")
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or(body);
+            return Err(CliError::Relay {
+                status,
+                body: message,
+            });
+        }
+        Ok(resp.text().await?)
     }
 
     // -----------------------------------------------------------------------
@@ -144,10 +194,14 @@ pub fn normalize_relay_url(url: &str) -> String {
 
 /// Mint a short-lived Bearer token using NIP-98 HTTP auth.
 /// Called at startup when SPROUT_PRIVATE_KEY is set.
-pub async fn auto_mint_token(relay_url: &str, private_key_str: &str) -> Result<String, CliError> {
+/// Returns `(token, keys)` so the caller can retain the keypair for signed writes.
+pub async fn auto_mint_token(
+    relay_url: &str,
+    private_key_str: &str,
+) -> Result<(String, Keys), CliError> {
     use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine;
-    use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
+    use nostr::{EventBuilder, JsonUtil, Kind, Tag};
     use sha2::{Digest, Sha256};
 
     let keys = Keys::parse(private_key_str)
@@ -227,8 +281,11 @@ pub async fn auto_mint_token(relay_url: &str, private_key_str: &str) -> Result<S
         .await
         .map_err(|e| CliError::Other(format!("invalid auto-mint response: {e}")))?;
 
-    json.get("token")
+    let token = json
+        .get("token")
         .and_then(|t| t.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| CliError::Other("auto-mint response missing 'token' field".into()))
+        .ok_or_else(|| CliError::Other("auto-mint response missing 'token' field".into()))?;
+
+    Ok((token, keys))
 }

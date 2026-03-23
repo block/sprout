@@ -1159,11 +1159,41 @@ fn pct_encode(s: &str) -> String {
     out
 }
 
-/// Best-effort: add a reaction. Returns immediately on timeout or error.
+/// Best-effort: add a reaction via a signed Nostr kind-7 event (NIP-25).
+///
+/// Builds a reaction event with `sprout_sdk::build_reaction`, signs it with
+/// the keys already stored in `RestClient`, and submits via POST /api/events.
+/// Returns immediately on timeout or any error — reactions are cosmetic.
 pub(crate) async fn reaction_add(rest: &crate::relay::RestClient, event_id: &str, emoji: &str) {
-    let path = format!("/api/messages/{}/reactions", pct_encode(event_id));
-    let body = serde_json::json!({ "emoji": emoji });
-    match tokio::time::timeout(REACTION_TIMEOUT, rest.post_json(&path, &body)).await {
+    let target_id = match nostr::EventId::from_hex(event_id) {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction add: invalid event ID: {e}");
+            return;
+        }
+    };
+    let builder = match sprout_sdk::build_reaction(target_id, emoji) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction add: build failed: {e}");
+            return;
+        }
+    };
+    let event = match builder.sign_with_keys(&rest.keys) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction add: sign failed: {e}");
+            return;
+        }
+    };
+    let body = match serde_json::to_value(&event) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction add: serialize failed: {e}");
+            return;
+        }
+    };
+    match tokio::time::timeout(REACTION_TIMEOUT, rest.post_json("/api/events", &body)).await {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => tracing::debug!(event_id, emoji, "reaction add failed: {e}"),
         Err(_) => tracing::debug!(event_id, emoji, "reaction add timed out"),

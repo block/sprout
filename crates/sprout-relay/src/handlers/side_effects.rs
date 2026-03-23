@@ -21,8 +21,12 @@ pub fn is_admin_kind(kind: u32) -> bool {
 }
 
 /// Check if a kind triggers side effects after storage.
+///
+/// NOTE: kind:7 (reaction) is intentionally excluded — dedup and DB writes are
+/// handled in `ingest_event()` before storage so we can short-circuit on
+/// duplicates without storing the event at all.
 pub fn is_side_effect_kind(kind: u32) -> bool {
-    matches!(kind, 0 | 5 | 7 | 9000..=9022 | 41001..=41003 | 40099)
+    matches!(kind, 0 | 5 | 9000..=9022 | 41001..=41003 | 40099)
 }
 
 /// Dispatch side effects for a stored event.
@@ -48,7 +52,7 @@ pub async fn handle_side_effects(
             Ok(())
         }
         9022 => handle_leave_request(event, state).await,
-        7 => handle_reaction(event, state).await,
+        // kind:7 (reaction) handled inline in ingest_event() before storage.
         _ => Ok(()),
     }
 }
@@ -102,13 +106,19 @@ pub async fn validate_admin_event(
 
     let actor_bytes = event.pubkey.serialize().to_vec();
 
-    // Reject mutations on archived channels.
+    // Reject mutations on archived channels — except kind:9002 with archived=false
+    // (unarchive), which must be allowed through so the channel can be restored.
     let channel = state
         .db
         .get_channel(channel_id)
         .await
         .map_err(|_| anyhow::anyhow!("channel not found"))?;
-    if channel.archived_at.is_some() {
+    let is_unarchive_request = kind == 9002
+        && event.tags.iter().any(|t| {
+            let parts = t.as_slice();
+            parts.len() >= 2 && parts[0] == "archived" && parts[1] == "false"
+        });
+    if channel.archived_at.is_some() && !is_unarchive_request {
         return Err(anyhow::anyhow!("channel is archived"));
     }
 
@@ -193,18 +203,18 @@ pub async fn validate_admin_event(
             }
         }
         9002 => {
-            // EDIT_METADATA: name/about require owner/admin; topic/purpose allow any member
-            let has_name_or_about = event.tags.iter().any(|t| {
+            // EDIT_METADATA: name/about/archived require owner/admin; topic/purpose allow any member
+            let has_privileged_tag = event.tags.iter().any(|t| {
                 let k = t.kind().to_string();
-                k == "name" || k == "about"
+                k == "name" || k == "about" || k == "archived"
             });
-            if has_name_or_about {
+            if has_privileged_tag {
                 let members = state.db.get_members(channel_id).await?;
                 let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
                 match actor_member {
                     Some(m) if m.role == "owner" || m.role == "admin" => Ok(()),
                     _ => Err(anyhow::anyhow!(
-                        "actor not authorized for name/about changes"
+                        "actor not authorized for name/about/archived changes"
                     )),
                 }
             } else {
@@ -754,6 +764,33 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                     )
                     .await?;
                 }
+                "archived" => {
+                    match val {
+                        "true" => {
+                            state.db.archive_channel(channel_id).await?;
+                            emit_system_message(
+                                state,
+                                channel_id,
+                                serde_json::json!({
+                                    "type": "channel_archived", "actor": actor_hex
+                                }),
+                            )
+                            .await?;
+                        }
+                        "false" => {
+                            state.db.unarchive_channel(channel_id).await?;
+                            emit_system_message(
+                                state,
+                                channel_id,
+                                serde_json::json!({
+                                    "type": "channel_unarchived", "actor": actor_hex
+                                }),
+                            )
+                            .await?;
+                        }
+                        _ => {} // ignore invalid values
+                    }
+                }
                 _ => {}
             }
         }
@@ -870,10 +907,41 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         .unwrap_or(sprout_db::channel::ChannelType::Stream);
 
     let actor_bytes = event.pubkey.serialize().to_vec();
-    let channel = state
-        .db
-        .create_channel(&name, channel_type, visibility, None, &actor_bytes)
-        .await?;
+    let description = extract_tag_value(event, "about");
+
+    // If the event has an h-tag UUID, ingest_event() already created the channel
+    // via create_channel_with_id(). Fetch it rather than creating a duplicate.
+    // If no h-tag, fall back to the original auto-UUID creation path.
+    let channel = if let Some(client_uuid) = extract_h_tag_channel(event) {
+        match state.db.get_channel(client_uuid).await {
+            Ok(ch) => ch,
+            Err(_) => {
+                // Channel not found — shouldn't happen (ingest_event pre-created it),
+                // but fall back to creation to stay resilient.
+                state
+                    .db
+                    .create_channel(
+                        &name,
+                        channel_type,
+                        visibility,
+                        description.as_deref(),
+                        &actor_bytes,
+                    )
+                    .await?
+            }
+        }
+    } else {
+        state
+            .db
+            .create_channel(
+                &name,
+                channel_type,
+                visibility,
+                description.as_deref(),
+                &actor_bytes,
+            )
+            .await?
+    };
 
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
     emit_system_message(
@@ -997,73 +1065,8 @@ async fn handle_leave_request(event: &Event, state: &Arc<AppState>) -> anyhow::R
     Ok(())
 }
 
-async fn handle_reaction(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
-    // Extract target event from last e tag (NIP-25)
-    let target_hex = event
-        .tags
-        .iter()
-        .rev()
-        .find_map(|tag| {
-            if tag.kind().to_string() == "e" {
-                tag.content().and_then(|v| {
-                    if v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()) {
-                        Some(v.to_string())
-                    } else {
-                        None
-                    }
-                })
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| anyhow::anyhow!("missing e tag for reaction target"))?;
-
-    let target_id = hex::decode(&target_hex)?;
-
-    // Look up target event to get created_at for partitioned table lookup
-    let target_event = state
-        .db
-        .get_event_by_id(&target_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("reaction target event not found"))?;
-
-    // Reject reactions on archived channels.
-    if let Some(channel_id) = target_event.channel_id {
-        let channel = state
-            .db
-            .get_channel(channel_id)
-            .await
-            .map_err(|_| anyhow::anyhow!("channel not found"))?;
-        if channel.archived_at.is_some() {
-            return Err(anyhow::anyhow!("channel is archived"));
-        }
-    }
-
-    let event_created_at =
-        chrono::DateTime::from_timestamp(target_event.event.created_at.as_u64() as i64, 0)
-            .unwrap_or_else(chrono::Utc::now);
-
-    let pubkey_bytes = effective_message_author(event, &state.relay_keypair.public_key());
-    let emoji = if event.content.is_empty() {
-        "+"
-    } else {
-        &event.content
-    };
-
-    state
-        .db
-        .add_reaction(
-            &target_id,
-            event_created_at,
-            &pubkey_bytes,
-            emoji,
-            Some(event.id.as_bytes()),
-        )
-        .await?;
-
-    info!(target = %target_hex, emoji = %emoji, "NIP-25 reaction processed");
-    Ok(())
-}
+// handle_reaction() removed — kind:7 reaction dedup and DB writes are now
+// handled inline in ingest_event() before storage (see ingest.rs step 20a).
 
 async fn handle_standard_deletion_event(
     event: &Event,

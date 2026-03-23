@@ -66,6 +66,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/channels",
             get(api::channels_handler).post(api::create_channel),
         )
+        .route("/api/events", post(api::events::submit_event))
         .route("/api/events/{id}", get(api::get_event))
         .route("/api/search", get(api::search_handler))
         .route("/api/agents", get(api::agents_handler))

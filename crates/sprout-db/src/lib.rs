@@ -310,6 +310,30 @@ impl Db {
         .await
     }
 
+    /// Creates a channel with a client-supplied UUID.
+    ///
+    /// Returns `(record, true)` if newly created, `(record, false)` if already exists.
+    pub async fn create_channel_with_id(
+        &self,
+        channel_id: Uuid,
+        name: &str,
+        channel_type: channel::ChannelType,
+        visibility: channel::ChannelVisibility,
+        description: Option<&str>,
+        created_by: &[u8],
+    ) -> Result<(channel::ChannelRecord, bool)> {
+        channel::create_channel_with_id(
+            &self.pool,
+            channel_id,
+            name,
+            channel_type,
+            visibility,
+            description,
+            created_by,
+        )
+        .await
+    }
+
     /// Fetches a channel record by ID.
     pub async fn get_channel(&self, channel_id: Uuid) -> Result<channel::ChannelRecord> {
         channel::get_channel(&self.pool, channel_id).await
