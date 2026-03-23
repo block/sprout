@@ -1940,23 +1940,27 @@ with kind:45003 comments)."
             Err(e) => return format!("Error: failed to parse reactions: {e}"),
         };
 
-        // Find the reaction event ID for our pubkey + emoji.
-        // Expected shape: array of { event_id, pubkey, emoji } or similar.
-        let reaction_event_id_hex = reactions.as_array().and_then(|arr| {
-            arr.iter().find_map(|r| {
-                let pubkey = r.get("pubkey")?.as_str()?;
-                let emoji = r.get("emoji")?.as_str()?;
-                let eid = r
-                    .get("event_id")
-                    .or_else(|| r.get("id"))
-                    .and_then(|v| v.as_str())?;
-                if pubkey == my_pubkey && emoji == p.emoji {
-                    Some(eid.to_string())
-                } else {
-                    None
-                }
-            })
-        });
+        // Parse the grouped response: { "reactions": [ { "emoji": "...", "users": [ { "pubkey": "...", "reaction_event_id": "..." } ] } ] }
+        let reaction_event_id_hex = reactions
+            .get("reactions")
+            .and_then(|r| r.as_array())
+            .and_then(|groups| {
+                groups.iter().find_map(|group| {
+                    let group_emoji = group.get("emoji")?.as_str()?;
+                    if group_emoji != p.emoji {
+                        return None;
+                    }
+                    group.get("users")?.as_array()?.iter().find_map(|user| {
+                        let pubkey = user.get("pubkey")?.as_str()?;
+                        if pubkey != my_pubkey {
+                            return None;
+                        }
+                        user.get("reaction_event_id")?
+                            .as_str()
+                            .map(|s| s.to_string())
+                    })
+                })
+            });
 
         match reaction_event_id_hex {
             Some(hex) => {
@@ -1982,22 +1986,9 @@ with kind:45003 comments)."
                     Err(e) => format!("Error: {e}"),
                 }
             }
-            None => {
-                // TODO: reaction_event_id not found in API response — fall back to REST delete.
-                // This handles cases where the reactions API doesn't yet expose event IDs.
-                let encoded_emoji = percent_encode(&p.emoji);
-                match self
-                    .client
-                    .delete(&format!(
-                        "/api/messages/{}/reactions/{}",
-                        encoded_event_id, encoded_emoji
-                    ))
-                    .await
-                {
-                    Ok(_) => r#"{"accepted":true,"message":"Reaction removed."}"#.to_string(),
-                    Err(e) => format!("Error: {e}"),
-                }
-            }
+            None => "Error: could not find your reaction event ID for this emoji. \
+                 The reaction may not exist or the relay has not recorded the event ID."
+                .to_string(),
         }
     }
 

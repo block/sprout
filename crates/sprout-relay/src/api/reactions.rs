@@ -148,10 +148,14 @@ pub async fn list_reactions_handler(
                         .get(&hex)
                         .cloned()
                         .unwrap_or_else(|| hex[..8.min(hex.len())].to_string());
-                    serde_json::json!({
+                    let mut obj = serde_json::json!({
                         "pubkey": hex,
                         "display_name": name,
-                    })
+                    });
+                    if let Some(ref reid) = u.reaction_event_id {
+                        obj["reaction_event_id"] = serde_json::json!(nostr_hex::encode(reid));
+                    }
+                    obj
                 })
                 .collect();
 
