@@ -81,9 +81,10 @@ pub async fn add_reaction(
         INSERT INTO reactions (event_created_at, event_id, pubkey, emoji, reaction_event_id)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (event_created_at, event_id, pubkey, emoji) DO UPDATE SET
-            created_at = CASE WHEN reactions.removed_at IS NOT NULL THEN NOW() ELSE reactions.created_at END,
+            created_at = NOW(),
             removed_at = NULL,
             reaction_event_id = COALESCE(EXCLUDED.reaction_event_id, reactions.reaction_event_id)
+        WHERE reactions.removed_at IS NOT NULL
         "#,
     )
     .bind(event_created_at)
@@ -94,8 +95,12 @@ pub async fn add_reaction(
     .execute(pool)
     .await?;
 
-    // rows_affected = 0 means the row already existed and was already active
-    // (removed_at was already NULL, so no values changed).
+    // Three cases:
+    // (a) New reaction (no existing row): INSERT succeeds → rows_affected = 1 → true.
+    // (b) Reactivating (row exists, removed_at IS NOT NULL): WHERE matches → UPDATE fires
+    //     → rows_affected = 1 → true.
+    // (c) Active duplicate (row exists, removed_at IS NULL): WHERE fails → no UPDATE
+    //     → rows_affected = 0 → false. Caller should short-circuit and not store the event.
     Ok(result.rows_affected() != 0)
 }
 
