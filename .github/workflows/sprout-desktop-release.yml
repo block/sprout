@@ -1,0 +1,120 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - 'desktop/v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Desktop Release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+
+      - run: corepack enable pnpm
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: desktop/src-tauri
+          key: desktop-release-aarch64-apple-darwin
+
+      - name: Validate tag matches desktop versions
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/desktop/v}"
+          PACKAGE_VERSION="$(node -p "require('./desktop/package.json').version")"
+          TAURI_VERSION="$(node -p "require('./desktop/src-tauri/tauri.conf.json').version")"
+          CARGO_VERSION="$(grep '^version' desktop/src-tauri/Cargo.toml | head -1 | sed 's/version = "//;s/"//')"
+
+          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ] || [ "$TAG_VERSION" != "$TAURI_VERSION" ] || [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) must match package.json ($PACKAGE_VERSION), tauri.conf.json ($TAURI_VERSION), and Cargo.toml ($CARGO_VERSION)"
+            exit 1
+          fi
+
+      - name: Validate release secrets
+        env:
+          SPROUT_UPDATER_PUBLIC_KEY: ${{ secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          for name in \
+            SPROUT_UPDATER_PUBLIC_KEY \
+            TAURI_SIGNING_PRIVATE_KEY \
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_SIGNING_IDENTITY \
+            APPLE_ID \
+            APPLE_PASSWORD \
+            APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required desktop release secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          cd desktop && pnpm install --frozen-lockfile
+          cd src-tauri && cargo fetch
+
+      - name: Build release config
+        working-directory: desktop
+        env:
+          SPROUT_UPDATER_PUBLIC_KEY: ${{ secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          SPROUT_UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/download/sprout-desktop-latest/latest.json
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: pnpm run tauri:release:config
+
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: Sprout Desktop ${{ github.ref_name }}
+          releaseBody: See the assets to download and install this version.
+          releaseDraft: false
+          prerelease: false
+          args: --target aarch64-apple-darwin --config src-tauri/tauri.release.conf.json
+
+      - name: Publish updater alias
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: pnpm run release:updater:publish
+
+      - name: Publish DMG alias
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: pnpm run release:dmg:publish

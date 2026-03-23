@@ -143,6 +143,76 @@ desktop-dev:
 desktop-app *ARGS:
     cd {{desktop_dir}} && pnpm tauri dev {{ARGS}}
 
+# ─── Desktop Release ──────────────────────────────────────────────────────────
+
+# Create a release branch, bump desktop versions, and open a release PR
+desktop-prepare version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
+    if [ "$current_branch" != "main" ]; then
+        echo "Error: desktop-prepare must be run from the main branch (currently on '$current_branch')" >&2
+        exit 1
+    fi
+
+    if [ -n "$(git status --short)" ]; then
+        echo "Error: working tree must be clean before preparing a release." >&2
+        exit 1
+    fi
+
+    branch="release/desktop-v{{version}}"
+
+    git pull --ff-only origin main
+    git switch -c "$branch"
+
+    cd desktop
+    node scripts/bump-version.mjs "{{version}}"
+    cd src-tauri && cargo generate-lockfile && cd ..
+
+    git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+    git commit -m "release: desktop v{{version}}"
+    git push --set-upstream origin "$branch"
+
+    gh pr create \
+        --title "release: desktop v{{version}}" \
+        --body "Release desktop v{{version}}. Merge this PR, then run \`just desktop-release {{version}}\` from main to tag and publish." \
+        --base main \
+        --head "$branch"
+
+    echo ""
+    echo "Release PR created. Once merged, run 'just desktop-release {{version}}' on main."
+
+# Tag and push the merged release commit to trigger the desktop release workflow
+desktop-release version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
+    if [ "$current_branch" != "main" ]; then
+        echo "Error: desktop-release must be run from the main branch (currently on '$current_branch')" >&2
+        exit 1
+    fi
+
+    git pull --ff-only origin main
+
+    expected_msg="release: desktop v{{version}}"
+    release_sha=$(git log --format="%H %s" main | grep -F "$expected_msg" | head -1 | cut -d' ' -f1 || true)
+    if [ -z "$release_sha" ]; then
+        echo "Error: could not find commit '$expected_msg' on main." >&2
+        echo "Make sure the release PR has been merged and you've pulled latest main." >&2
+        exit 1
+    fi
+
+    git tag "desktop/v{{version}}" "$release_sha"
+    git push origin "desktop/v{{version}}"
+
+    echo "Pushed tag desktop/v{{version}} — CI will build and publish the release."
+
+# Build a signed desktop release locally (for testing)
+desktop-release-build target="aarch64-apple-darwin" *args:
+    cd {{desktop_dir}} && pnpm exec tauri build --target {{target}} --config src-tauri/tauri.release.conf.json {{args}}
+
 # ─── Database ─────────────────────────────────────────────────────────────────
 
 # Apply schema migrations via pgschema

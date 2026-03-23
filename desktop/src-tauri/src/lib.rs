@@ -167,6 +167,8 @@ pub fn run() {
         )
         .plugin(tauri_plugin_websocket::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .register_asynchronous_uri_scheme_protocol("sprout-media", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             tauri::async_runtime::spawn(async move {
