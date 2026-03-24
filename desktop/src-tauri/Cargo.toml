@@ -30,6 +30,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-websocket = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 infer = "0.16"
 hex = "0.4"
 tokio = { version = "1", features = ["fs", "sync"] }
