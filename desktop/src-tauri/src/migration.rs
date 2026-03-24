@@ -1,31 +1,41 @@
-//! One-time migration from the legacy `com.wesb.sprout` app data directory
+//! Per-file migration from the legacy `com.wesb.sprout` app data directory
 //! to the current `xyz.block.sprout.app` directory.
 //!
-//! Migration runs only when:
-//! 1. The legacy directory exists, AND
-//! 2. The `.migration-complete` sentinel file has **not** been written yet.
+//! On each launch, for every known file in [`LEGACY_FILES`]:
+//!   - If the file **already exists** at the new path → skip (it's its own guard).
+//!   - If the file exists at the old path but not the new → copy it over.
 //!
-//! A sentinel file (rather than checking for `identity.key`) is used so that
-//! a partially-failed migration retries on the next launch — `copy_dir_recursive`
-//! overwrites existing files, so the retry completes the copy.
+//! Each `std::fs::copy` is atomic per-file, so there is no partial-migration
+//! problem and no sentinel file is needed.
 //!
 //! The legacy directory is intentionally **not** deleted — users can clean it
-//! up manually once they're satisfied the migration succeeded.
+//! up manually once they're satisfied everything works.
 //!
-//! Errors are logged but never fatal; the app must still start even if the
-//! migration fails.
+//! Errors are logged but never fatal; the app must still start even if
+//! individual file copies fail.
 //!
-//! **Note on dev/prod side-by-side:** Both the production build (`xyz.block.sprout.app`)
-//! and the dev build (`xyz.block.sprout.app.dev`) will attempt to migrate from
-//! the same legacy `com.wesb.sprout` directory, resulting in duplicated identity
-//! keys. To avoid this, set the `SPROUT_PRIVATE_KEY` env var when running the
-//! dev build — this bypasses file-based identity resolution entirely.
+//! **Note on dev/prod side-by-side:** Both the production build
+//! (`xyz.block.sprout.app`) and the dev build (`xyz.block.sprout.app.dev`)
+//! will attempt to migrate from the same legacy `com.wesb.sprout` directory,
+//! resulting in duplicated identity keys. To avoid this, set the
+//! `SPROUT_PRIVATE_KEY` env var when running the dev build — this bypasses
+//! file-based identity resolution entirely.
 
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 
 const LEGACY_DATA_DIR_NAME: &str = "com.wesb.sprout";
-const MIGRATION_SENTINEL: &str = ".migration-complete";
+
+/// Known files to migrate from the legacy data directory.
+///
+/// Agent logs and `.window-state.json` are excluded — logs are ephemeral and
+/// the window-state plugin recreates its file automatically.
+const LEGACY_FILES: &[&str] = &[
+    "identity.key",
+    "agents/managed-agents.json",
+    "agents/personas.json",
+    "agents/teams.json",
+];
 
 /// Compute the legacy `com.wesb.sprout` data directory path by replacing the
 /// last component of the current app data directory.
@@ -33,36 +43,45 @@ fn legacy_data_dir(current: &Path) -> Option<PathBuf> {
     current.parent().map(|p| p.join(LEGACY_DATA_DIR_NAME))
 }
 
-/// Recursively copy all files and directories from `src` into `dst`.
+/// Copy a single file from `old_dir/rel` to `new_dir/rel`, creating parent
+/// directories as needed. Skips the file if it already exists at the
+/// destination.
 ///
-/// Preserves the directory structure. Uses only `std::fs` — no external crates.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
+/// Returns `true` if the file was copied, `false` if skipped or missing.
+fn migrate_file(old_dir: &Path, new_dir: &Path, rel: &str) -> bool {
+    let src = old_dir.join(rel);
+    let dst = new_dir.join(rel);
 
-        if file_type.is_symlink() {
-            eprintln!(
-                "sprout-desktop: migration: skipping symlink {}",
-                src_path.display()
-            );
-            continue;
-        }
+    if dst.exists() {
+        return false; // Already present — nothing to do.
+    }
 
-        if file_type.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path)?;
+    if !src.exists() {
+        return false; // Nothing to migrate.
+    }
+
+    // Ensure parent directories exist (e.g. `agents/`).
+    if let Some(parent) = dst.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("sprout-desktop: migration: failed to create {}: {e}", parent.display());
+            return false;
         }
     }
-    Ok(())
+
+    match std::fs::copy(&src, &dst) {
+        Ok(_) => {
+            eprintln!("sprout-desktop: migration: copied {rel}");
+            true
+        }
+        Err(e) => {
+            eprintln!("sprout-desktop: migration: failed to copy {rel}: {e}");
+            false
+        }
+    }
 }
 
-/// Migrate data from the legacy `com.wesb.sprout` app data directory to the
-/// current `xyz.block.sprout.app` directory.
+/// Migrate known files from the legacy `com.wesb.sprout` app data directory
+/// to the current directory.
 ///
 /// Called in `setup()` **before** `resolve_persisted_identity` so the persisted
 /// key is available at the new path on first launch after the identifier change.
@@ -87,33 +106,16 @@ pub fn migrate_legacy_data_dir(app: &tauri::AppHandle) {
         return; // Nothing to migrate.
     }
 
-    // Skip if a previous migration already completed successfully.
-    if current_dir.join(MIGRATION_SENTINEL).exists() {
-        eprintln!("sprout-desktop: migration: skipping — already completed");
-        return;
+    let mut copied = 0u32;
+    for rel in LEGACY_FILES {
+        if migrate_file(&old_dir, &current_dir, rel) {
+            copied += 1;
+        }
     }
 
-    eprintln!(
-        "sprout-desktop: migration: copying legacy data from {} → {}",
-        old_dir.display(),
-        current_dir.display()
-    );
-
-    if let Err(e) = copy_dir_recursive(&old_dir, &current_dir) {
-        eprintln!("sprout-desktop: migration: failed to copy legacy data: {e}");
-        return;
+    if copied > 0 {
+        eprintln!("sprout-desktop: migration: {copied} file(s) migrated from legacy data dir");
     }
-
-    // Write a sentinel so we don't re-run on subsequent launches.
-    // Failure here is non-fatal — worst case we re-copy (idempotently) next time.
-    if let Err(e) = std::fs::write(
-        current_dir.join(MIGRATION_SENTINEL),
-        "migrated from com.wesb.sprout",
-    ) {
-        eprintln!("sprout-desktop: migration: warning: failed to write sentinel: {e}");
-    }
-
-    eprintln!("sprout-desktop: migration: complete");
 }
 
 #[cfg(test)]
@@ -132,8 +134,6 @@ mod tests {
 
     #[test]
     fn legacy_data_dir_returns_none_for_root() {
-        // Root has no parent on some platforms; our helper should return None
-        // when `parent()` yields None (e.g. a bare root).
         let current = PathBuf::from("/");
         let _ = legacy_data_dir(&current);
     }
@@ -145,16 +145,8 @@ mod tests {
         let old_dir = parent.path().join(LEGACY_DATA_DIR_NAME);
         let new_dir = parent.path().join("xyz.block.sprout.app");
 
-        // Create old directory structure:
-        //   identity.key
-        //   .window-state.json
-        //   agents/managed-agents.json
-        //   agents/personas.json
-        //   agents/teams.json
-        //   agents/logs/agent1.log
-        std::fs::create_dir_all(old_dir.join("agents/logs")).unwrap();
+        std::fs::create_dir_all(old_dir.join("agents")).unwrap();
         std::fs::write(old_dir.join("identity.key"), "nsec1-fake-key-data").unwrap();
-        std::fs::write(old_dir.join(".window-state.json"), r#"{"x":0}"#).unwrap();
         std::fs::write(
             old_dir.join("agents/managed-agents.json"),
             r#"[{"id":"a1"}]"#,
@@ -162,25 +154,75 @@ mod tests {
         .unwrap();
         std::fs::write(old_dir.join("agents/personas.json"), "[]").unwrap();
         std::fs::write(old_dir.join("agents/teams.json"), "[]").unwrap();
-        std::fs::write(old_dir.join("agents/logs/agent1.log"), "log line 1\n").unwrap();
 
         (parent, old_dir, new_dir)
     }
 
     #[test]
-    fn copy_dir_recursive_copies_full_layout() {
+    fn migrate_file_copies_when_missing_at_dest() {
         let (_parent, old_dir, new_dir) = setup_legacy_layout();
 
-        copy_dir_recursive(&old_dir, &new_dir).unwrap();
-
-        // Verify every file was copied with correct content.
+        assert!(migrate_file(&old_dir, &new_dir, "identity.key"));
         assert_eq!(
             std::fs::read_to_string(new_dir.join("identity.key")).unwrap(),
             "nsec1-fake-key-data"
         );
+    }
+
+    #[test]
+    fn migrate_file_creates_parent_dirs() {
+        let (_parent, old_dir, new_dir) = setup_legacy_layout();
+
+        // agents/ doesn't exist in new_dir yet.
+        assert!(migrate_file(&old_dir, &new_dir, "agents/teams.json"));
         assert_eq!(
-            std::fs::read_to_string(new_dir.join(".window-state.json")).unwrap(),
-            r#"{"x":0}"#
+            std::fs::read_to_string(new_dir.join("agents/teams.json")).unwrap(),
+            "[]"
+        );
+    }
+
+    #[test]
+    fn migrate_file_skips_when_dest_exists() {
+        let (_parent, old_dir, new_dir) = setup_legacy_layout();
+
+        // Pre-create the file at the new location with different content.
+        std::fs::create_dir_all(&new_dir).unwrap();
+        std::fs::write(new_dir.join("identity.key"), "nsec1-new-key").unwrap();
+
+        // Should skip — returns false.
+        assert!(!migrate_file(&old_dir, &new_dir, "identity.key"));
+
+        // Original content preserved.
+        assert_eq!(
+            std::fs::read_to_string(new_dir.join("identity.key")).unwrap(),
+            "nsec1-new-key"
+        );
+    }
+
+    #[test]
+    fn migrate_file_skips_when_source_missing() {
+        let (_parent, old_dir, new_dir) = setup_legacy_layout();
+
+        // File that doesn't exist in old dir.
+        assert!(!migrate_file(&old_dir, &new_dir, "nonexistent.json"));
+        assert!(!new_dir.join("nonexistent.json").exists());
+    }
+
+    #[test]
+    fn migrate_all_known_files() {
+        let (_parent, old_dir, new_dir) = setup_legacy_layout();
+
+        let mut copied = 0u32;
+        for rel in LEGACY_FILES {
+            if migrate_file(&old_dir, &new_dir, rel) {
+                copied += 1;
+            }
+        }
+
+        assert_eq!(copied, 4);
+        assert_eq!(
+            std::fs::read_to_string(new_dir.join("identity.key")).unwrap(),
+            "nsec1-fake-key-data"
         );
         assert_eq!(
             std::fs::read_to_string(new_dir.join("agents/managed-agents.json")).unwrap(),
@@ -194,78 +236,48 @@ mod tests {
             std::fs::read_to_string(new_dir.join("agents/teams.json")).unwrap(),
             "[]"
         );
-        assert_eq!(
-            std::fs::read_to_string(new_dir.join("agents/logs/agent1.log")).unwrap(),
-            "log line 1\n"
-        );
 
-        // Old directory must still exist (we never delete it).
+        // Old directory must still exist.
         assert!(old_dir.exists());
     }
 
     #[test]
-    fn migration_skipped_when_sentinel_exists() {
+    fn migrate_is_idempotent() {
         let (_parent, old_dir, new_dir) = setup_legacy_layout();
 
-        // Pre-create the new dir with the sentinel file.
-        std::fs::create_dir_all(&new_dir).unwrap();
-        std::fs::write(
-            new_dir.join(MIGRATION_SENTINEL),
-            "migrated from com.wesb.sprout",
-        )
-        .unwrap();
+        // First pass: copies everything.
+        let first_pass: u32 = LEGACY_FILES
+            .iter()
+            .map(|rel| u32::from(migrate_file(&old_dir, &new_dir, rel)))
+            .sum();
+        assert_eq!(first_pass, 4);
 
-        // The sentinel is the only guard — verify it exists.
-        assert!(
-            new_dir.join(MIGRATION_SENTINEL).exists(),
-            "sentinel should block migration"
-        );
-
-        // Even though old_dir has data, the sentinel prevents re-migration.
-        // We can't call migrate_legacy_data_dir without an AppHandle, but we
-        // verify the guard condition directly: sentinel present → skip.
-        assert!(old_dir.join("identity.key").exists());
+        // Second pass: skips everything (all files already exist).
+        let second_pass: u32 = LEGACY_FILES
+            .iter()
+            .map(|rel| u32::from(migrate_file(&old_dir, &new_dir, rel)))
+            .sum();
+        assert_eq!(second_pass, 0);
     }
 
     #[test]
-    fn migration_retries_when_no_sentinel() {
-        let (_parent, _old_dir, new_dir) = setup_legacy_layout();
-
-        // New dir has identity.key but NO sentinel — migration should still
-        // run (the sentinel is the only guard, not identity.key).
-        std::fs::create_dir_all(&new_dir).unwrap();
-        std::fs::write(new_dir.join("identity.key"), "nsec1-new-key").unwrap();
-
-        // Sentinel must be absent.
-        assert!(
-            !new_dir.join(MIGRATION_SENTINEL).exists(),
-            "no sentinel means migration should retry"
-        );
-
-        // identity.key alone does NOT block migration — only the sentinel does.
-        // copy_dir_recursive would overwrite the existing identity.key with the
-        // legacy one, which is the correct behavior for a partial-migration retry.
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn copy_dir_recursive_skips_symlinks() {
+    fn migrate_partial_only_copies_missing() {
         let (_parent, old_dir, new_dir) = setup_legacy_layout();
 
-        // Add a symlink in the old directory.
-        std::os::unix::fs::symlink("/nonexistent/target", old_dir.join("dangling-link")).unwrap();
+        // Pre-create identity.key in new dir — only the other 3 should copy.
+        std::fs::create_dir_all(&new_dir).unwrap();
+        std::fs::write(new_dir.join("identity.key"), "nsec1-already-here").unwrap();
 
-        // copy_dir_recursive should succeed, skipping the symlink.
-        copy_dir_recursive(&old_dir, &new_dir).unwrap();
+        let copied: u32 = LEGACY_FILES
+            .iter()
+            .map(|rel| u32::from(migrate_file(&old_dir, &new_dir, rel)))
+            .sum();
+        assert_eq!(copied, 3);
 
-        // Regular files should still be copied.
-        assert!(new_dir.join("identity.key").exists());
-        assert!(new_dir.join(".window-state.json").exists());
-
-        // The symlink should NOT appear in the new directory.
-        assert!(
-            !new_dir.join("dangling-link").exists(),
-            "symlink should have been skipped"
+        // identity.key should be untouched.
+        assert_eq!(
+            std::fs::read_to_string(new_dir.join("identity.key")).unwrap(),
+            "nsec1-already-here"
         );
     }
 }
