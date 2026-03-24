@@ -109,14 +109,19 @@ pub async fn cmd_create_channel(
     // Generate a new UUID client-side for the channel
     let channel_uuid = Uuid::new_v4();
 
-    let builder = sprout_sdk::build_create_channel(
-        channel_uuid,
-        name,
-        Some(visibility),
-        Some(channel_type),
-        description,
-    )
-    .map_err(|e| CliError::Other(format!("build_create_channel failed: {e}")))?;
+    let vis = match visibility {
+        "open" => sprout_sdk::Visibility::Open,
+        "private" => sprout_sdk::Visibility::Private,
+        _ => unreachable!(), // validated above
+    };
+    let ct = match channel_type {
+        "stream" => sprout_sdk::ChannelKind::Stream,
+        "forum" => sprout_sdk::ChannelKind::Forum,
+        _ => unreachable!(), // validated above
+    };
+    let builder =
+        sprout_sdk::build_create_channel(channel_uuid, name, Some(vis), Some(ct), description)
+            .map_err(|e| CliError::Other(format!("build_create_channel failed: {e}")))?;
 
     let event = sign_and_submit_builder(builder, keys)?;
     let resp = client.submit_event(event).await?;
@@ -268,7 +273,20 @@ pub async fn cmd_add_channel_member(
     let keys = require_keys!(client);
     let channel_uuid = parse_uuid(channel_id)?;
 
-    let builder = sprout_sdk::build_add_member(channel_uuid, pubkey, role)
+    let typed_role = match role {
+        None => None,
+        Some("owner") => Some(sprout_sdk::MemberRole::Owner),
+        Some("admin") => Some(sprout_sdk::MemberRole::Admin),
+        Some("member") => Some(sprout_sdk::MemberRole::Member),
+        Some("guest") => Some(sprout_sdk::MemberRole::Guest),
+        Some("bot") => Some(sprout_sdk::MemberRole::Bot),
+        Some(other) => {
+            return Err(CliError::Usage(format!(
+                "--role must be owner/admin/member/guest/bot (got: {other})"
+            )))
+        }
+    };
+    let builder = sprout_sdk::build_add_member(channel_uuid, pubkey, typed_role)
         .map_err(|e| CliError::Other(format!("build_add_member failed: {e}")))?;
 
     let event = sign_and_submit_builder(builder, keys)?;

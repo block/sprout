@@ -246,15 +246,8 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
 
     match super::ingest::ingest_event(&state, event, ingest_auth).await {
         Ok(result) => {
-            metrics::counter!("sprout_events_stored_total", "kind" => kind_str).increment(1);
-            metrics::histogram!("sprout_event_processing_seconds")
-                .record(start.elapsed().as_secs_f64());
-            conn.send(RelayMessage::ok(
-                &result.event_id,
-                result.accepted,
-                &result.message,
-            ));
             if result.accepted {
+                metrics::counter!("sprout_events_stored_total", "kind" => kind_str).increment(1);
                 info!(
                     event_id = %result.event_id,
                     kind = kind_u32,
@@ -262,18 +255,22 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                     "Event ingested"
                 );
             }
+            metrics::histogram!("sprout_event_processing_seconds")
+                .record(start.elapsed().as_secs_f64());
+            conn.send(RelayMessage::ok(
+                &result.event_id,
+                result.accepted,
+                &result.message,
+            ));
         }
         Err(e) => {
-            let msg = match &e {
-                IngestError::Rejected(m)
-                | IngestError::AuthFailed(m)
-                | IngestError::Internal(m) => m.clone(),
+            // Sanitize internal errors — don't leak DB/system details over WS.
+            let (msg, reason) = match &e {
+                IngestError::Rejected(m) => (m.clone(), "invalid"),
+                IngestError::AuthFailed(m) => (m.clone(), "auth"),
+                IngestError::Internal(_) => ("error: internal server error".to_string(), "error"),
             };
-            reject(match &e {
-                IngestError::Rejected(_) => "invalid",
-                IngestError::AuthFailed(_) => "auth",
-                IngestError::Internal(_) => "error",
-            });
+            reject(reason);
             conn.send(RelayMessage::ok(&event_id_hex, false, &msg));
         }
     }

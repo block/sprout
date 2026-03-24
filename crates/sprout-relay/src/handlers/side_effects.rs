@@ -1210,10 +1210,51 @@ async fn handle_standard_deletion_event(
         }
 
         if u32::from(target_event.event.kind.as_u16()) == KIND_REACTION {
-            let _ = state
+            // Try by reaction_event_id first; fall back to tuple-based removal
+            // if the backfill was missed (set_reaction_event_id is best-effort).
+            let removed = state
                 .db
                 .remove_reaction_by_source_event_id(&target_id)
-                .await?;
+                .await
+                .unwrap_or(false);
+            if !removed {
+                // Derive (target, actor, emoji) from the reaction event itself.
+                let actor = target_event.event.pubkey.serialize().to_vec();
+                let emoji = if target_event.event.content.is_empty() {
+                    "+"
+                } else {
+                    &target_event.event.content
+                };
+                if let Some(react_target_hex) = target_event.event.tags.iter().rev().find_map(|t| {
+                    if t.kind().to_string() == "e" {
+                        t.content().and_then(|v| {
+                            if v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()) {
+                                Some(v.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    }
+                }) {
+                    if let Ok(react_target_id) = hex::decode(&react_target_hex) {
+                        if let Ok(Some(react_target_event)) =
+                            state.db.get_event_by_id(&react_target_id).await
+                        {
+                            let react_target_ts = chrono::DateTime::from_timestamp(
+                                react_target_event.event.created_at.as_u64() as i64,
+                                0,
+                            )
+                            .unwrap_or_else(chrono::Utc::now);
+                            let _ = state
+                                .db
+                                .remove_reaction(&react_target_id, react_target_ts, &actor, emoji)
+                                .await;
+                        }
+                    }
+                }
+            }
         }
     }
 

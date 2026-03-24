@@ -6,7 +6,7 @@
 use nostr::{EventBuilder, Kind, Tag};
 use uuid::Uuid;
 
-use crate::{DiffMeta, SdkError, ThreadRef, VoteDirection};
+use crate::{ChannelKind, DiffMeta, MemberRole, SdkError, ThreadRef, Visibility, VoteDirection};
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -336,14 +336,15 @@ pub fn build_profile(
 pub fn build_add_member(
     channel_id: Uuid,
     target_pubkey: &str,
-    role: Option<&str>,
+    role: Option<MemberRole>,
 ) -> Result<EventBuilder, SdkError> {
+    check_hex_len(target_pubkey, 64, "target_pubkey")?;
     let mut tags = vec![
         tag(&["h", &channel_id.to_string()])?,
         tag(&["p", &target_pubkey.to_ascii_lowercase()])?,
     ];
     if let Some(r) = role {
-        tags.push(tag(&["role", r])?);
+        tags.push(tag(&["role", r.as_str()])?);
     }
     Ok(EventBuilder::new(Kind::Custom(9000), "", tags))
 }
@@ -355,6 +356,7 @@ pub fn build_remove_member(
     channel_id: Uuid,
     target_pubkey: &str,
 ) -> Result<EventBuilder, SdkError> {
+    check_hex_len(target_pubkey, 64, "target_pubkey")?;
     let tags = vec![
         tag(&["h", &channel_id.to_string()])?,
         tag(&["p", &target_pubkey.to_ascii_lowercase()])?,
@@ -421,16 +423,16 @@ pub fn build_set_purpose(channel_id: Uuid, purpose: &str) -> Result<EventBuilder
 pub fn build_create_channel(
     channel_id: Uuid,
     name: &str,
-    visibility: Option<&str>,
-    channel_type: Option<&str>,
+    visibility: Option<Visibility>,
+    channel_type: Option<ChannelKind>,
     about: Option<&str>,
 ) -> Result<EventBuilder, SdkError> {
     let mut tags = vec![tag(&["h", &channel_id.to_string()])?, tag(&["name", name])?];
     if let Some(v) = visibility {
-        tags.push(tag(&["visibility", v])?);
+        tags.push(tag(&["visibility", v.as_str()])?);
     }
     if let Some(ct) = channel_type {
-        tags.push(tag(&["channel_type", ct])?);
+        tags.push(tag(&["channel_type", ct.as_str()])?);
     }
     if let Some(a) = about {
         tags.push(tag(&["about", a])?);
@@ -958,7 +960,7 @@ mod tests {
     fn add_member_with_role() {
         let cid = uuid();
         let pubkey = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
-        let ev = sign(build_add_member(cid, pubkey, Some("admin")).unwrap());
+        let ev = sign(build_add_member(cid, pubkey, Some(MemberRole::Admin)).unwrap());
         assert_eq!(ev.kind.as_u16(), 9000);
         assert!(has_tag(&ev, "p", pubkey));
         assert!(has_tag(&ev, "role", "admin"));
@@ -968,7 +970,7 @@ mod tests {
     fn add_member_without_role() {
         let cid = uuid();
         let pubkey = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
-        let ev = sign(build_add_member(cid, pubkey, None).unwrap());
+        let ev = sign(build_add_member(cid, pubkey, None::<MemberRole>).unwrap());
         assert_eq!(ev.kind.as_u16(), 9000);
         assert!(tag_values(&ev, "role").is_empty());
     }
@@ -1043,23 +1045,26 @@ mod tests {
             build_create_channel(
                 cid,
                 "general",
-                Some("public"),
-                Some("text"),
+                Some(Visibility::Open),
+                Some(ChannelKind::Stream),
                 Some("General chat"),
             )
             .unwrap(),
         );
         assert_eq!(ev.kind.as_u16(), 9007);
         assert!(has_tag(&ev, "name", "general"));
-        assert!(has_tag(&ev, "visibility", "public"));
-        assert!(has_tag(&ev, "channel_type", "text"));
+        assert!(has_tag(&ev, "visibility", "open"));
+        assert!(has_tag(&ev, "channel_type", "stream"));
         assert!(has_tag(&ev, "about", "General chat"));
     }
 
     #[test]
     fn create_channel_minimal() {
         let cid = uuid();
-        let ev = sign(build_create_channel(cid, "dev", None, None, None).unwrap());
+        let ev = sign(
+            build_create_channel(cid, "dev", None::<Visibility>, None::<ChannelKind>, None)
+                .unwrap(),
+        );
         assert_eq!(ev.kind.as_u16(), 9007);
         assert!(has_tag(&ev, "name", "dev"));
     }

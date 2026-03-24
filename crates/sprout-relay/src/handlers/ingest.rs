@@ -734,7 +734,17 @@ pub async fn ingest_event(
         }
     }
 
-    // ── 2b. Content size guard ───────────────────────────────────────────
+    // ── 2b. Timestamp sanity ─────────────────────────────────────────────
+    const MAX_TIMESTAMP_DRIFT_SECS: i64 = 900; // ±15 minutes
+    let now = chrono::Utc::now().timestamp();
+    let event_ts = event.created_at.as_u64() as i64;
+    if (event_ts - now).abs() > MAX_TIMESTAMP_DRIFT_SECS {
+        return Err(IngestError::Rejected(
+            "invalid: event timestamp too far from server time".into(),
+        ));
+    }
+
+    // ── 2c. Content size guard ───────────────────────────────────────────
     const MAX_EVENT_CONTENT_BYTES: usize = 256 * 1024; // 256 KB
     if event.content.len() > MAX_EVENT_CONTENT_BYTES {
         return Err(IngestError::Rejected(format!(

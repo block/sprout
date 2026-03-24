@@ -65,6 +65,74 @@ pub enum VoteDirection {
     Down,
 }
 
+// ── Channel / Member enums ───────────────────────────────────────────────────
+
+/// Channel visibility — mirrors the server-side enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    /// Searchable; anyone can join.
+    Open,
+    /// Hidden; invite-only.
+    Private,
+}
+
+impl Visibility {
+    /// Canonical string for Nostr tags.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Visibility::Open => "open",
+            Visibility::Private => "private",
+        }
+    }
+}
+
+/// Channel type — mirrors the server-side enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelKind {
+    /// Linear message stream (default).
+    Stream,
+    /// Threaded forum-style discussion.
+    Forum,
+}
+
+impl ChannelKind {
+    /// Canonical string for Nostr tags.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ChannelKind::Stream => "stream",
+            ChannelKind::Forum => "forum",
+        }
+    }
+}
+
+/// Member role for `build_add_member`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberRole {
+    /// Full control.
+    Owner,
+    /// Can manage members and settings.
+    Admin,
+    /// Standard participant.
+    Member,
+    /// Read-only external participant.
+    Guest,
+    /// Automated agent or integration.
+    Bot,
+}
+
+impl MemberRole {
+    /// Canonical string for Nostr tags.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MemberRole::Owner => "owner",
+            MemberRole::Admin => "admin",
+            MemberRole::Member => "member",
+            MemberRole::Guest => "guest",
+            MemberRole::Bot => "bot",
+        }
+    }
+}
+
 // ── Error ────────────────────────────────────────────────────────────────────
 
 /// Errors returned by SDK builder functions.

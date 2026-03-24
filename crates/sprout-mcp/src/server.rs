@@ -1137,11 +1137,29 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
     )]
     pub async fn create_channel(&self, Parameters(p): Parameters<CreateChannelParams>) -> String {
         let channel_uuid = uuid::Uuid::new_v4();
+        let visibility = match p.visibility.as_str() {
+            "open" => sprout_sdk::Visibility::Open,
+            "private" => sprout_sdk::Visibility::Private,
+            other => {
+                return format!(
+                    "Error: invalid visibility: {other:?} (must be 'open' or 'private')"
+                )
+            }
+        };
+        let channel_type = match p.channel_type.as_str() {
+            "stream" => sprout_sdk::ChannelKind::Stream,
+            "forum" => sprout_sdk::ChannelKind::Forum,
+            other => {
+                return format!(
+                    "Error: invalid channel_type: {other:?} (must be 'stream' or 'forum')"
+                )
+            }
+        };
         let builder = match sprout_sdk::build_create_channel(
             channel_uuid,
             &p.name,
-            Some(p.visibility.as_str()),
-            Some(p.channel_type.as_str()),
+            Some(visibility),
+            Some(channel_type),
             p.description.as_deref(),
         ) {
             Ok(b) => b,
@@ -1424,7 +1442,19 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Ok(u) => u,
             Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
         };
-        let role = p.role.as_deref();
+        let role = match p.role.as_deref() {
+            None => None,
+            Some("owner") => Some(sprout_sdk::MemberRole::Owner),
+            Some("admin") => Some(sprout_sdk::MemberRole::Admin),
+            Some("member") => Some(sprout_sdk::MemberRole::Member),
+            Some("guest") => Some(sprout_sdk::MemberRole::Guest),
+            Some("bot") => Some(sprout_sdk::MemberRole::Bot),
+            Some(other) => {
+                return format!(
+                    "Error: invalid role: {other:?} (must be owner/admin/member/guest/bot)"
+                )
+            }
+        };
         let builder = match sprout_sdk::build_add_member(channel_uuid, &p.pubkey, role) {
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
