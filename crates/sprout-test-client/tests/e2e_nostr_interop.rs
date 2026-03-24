@@ -85,24 +85,31 @@ async fn create_test_channel(keys: &Keys) -> String {
     channel_uuid.to_string()
 }
 
-/// Send a message via REST and return the event_id hex.
+/// Send a message via a signed kind:9 event and return the event_id hex.
 async fn send_rest_message(keys: &Keys, channel_id: &str, content: &str) -> String {
     let client = reqwest::Client::new();
-    let url = format!("{}/api/channels/{}/messages", relay_http_url(), channel_id);
     let pubkey_hex = keys.public_key().to_hex();
+    let event = EventBuilder::new(
+        Kind::Custom(9),
+        content,
+        vec![Tag::parse(&["h", channel_id]).unwrap()],
+    )
+    .sign_with_keys(keys)
+    .unwrap();
     let resp = client
-        .post(&url)
+        .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
-        .json(&serde_json::json!({ "content": content }))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).unwrap())
         .send()
         .await
-        .expect("send message request");
+        .expect("submit send-message event");
     assert!(
         resp.status().is_success(),
         "send message failed: {}",
         resp.status()
     );
-    let body: serde_json::Value = resp.json().await.expect("parse message response");
+    let body: serde_json::Value = resp.json().await.expect("parse event response");
     body["event_id"].as_str().expect("event_id").to_string()
 }
 

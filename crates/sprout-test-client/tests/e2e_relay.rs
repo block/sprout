@@ -1276,19 +1276,26 @@ async fn test_membership_notification_emitted_on_add() {
         .await
         .expect("EOSE for membership sub");
 
-    // Add agent to the channel via REST (owner's X-Pubkey header).
+    // Add agent to the channel via signed kind:9000 event.
     let http_client = reqwest::Client::new();
+    let add_event = EventBuilder::new(
+        Kind::Custom(9000),
+        "",
+        vec![
+            Tag::parse(&["h", &channel_id]).unwrap(),
+            Tag::parse(&["p", &agent_pubkey_hex]).unwrap(),
+        ],
+    )
+    .sign_with_keys(&owner_keys)
+    .unwrap();
     let resp = http_client
-        .post(format!(
-            "{}/api/channels/{}/members",
-            relay_http_url(),
-            channel_id
-        ))
+        .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &owner_keys.public_key().to_hex())
-        .json(&serde_json::json!({ "pubkeys": [agent_pubkey_hex] }))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&add_event).unwrap())
         .send()
         .await
-        .expect("add member request");
+        .expect("submit add-member event");
     assert!(
         resp.status().is_success(),
         "add member failed: {}",
@@ -1549,18 +1556,25 @@ async fn test_membership_notification_emitted_on_remove() {
     let http_client = reqwest::Client::new();
     let owner_pubkey_hex = owner_keys.public_key().to_hex();
 
-    // Add agent to the channel via REST (owner's X-Pubkey header).
+    // Add agent to the channel via signed kind:9000 event.
+    let add_event = EventBuilder::new(
+        Kind::Custom(9000),
+        "",
+        vec![
+            Tag::parse(&["h", &channel_id]).unwrap(),
+            Tag::parse(&["p", &agent_pubkey_hex]).unwrap(),
+        ],
+    )
+    .sign_with_keys(&owner_keys)
+    .unwrap();
     let resp = http_client
-        .post(format!(
-            "{}/api/channels/{}/members",
-            relay_http_url(),
-            channel_id
-        ))
+        .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &owner_pubkey_hex)
-        .json(&serde_json::json!({ "pubkeys": [agent_pubkey_hex] }))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&add_event).unwrap())
         .send()
         .await
-        .expect("add member request");
+        .expect("submit add-member event");
     assert!(
         resp.status().is_success(),
         "add member failed: {}",
@@ -1584,18 +1598,25 @@ async fn test_membership_notification_emitted_on_remove() {
         other => panic!("expected EVENT kind:44100, got {other:?}"),
     }
 
-    // Remove agent from the channel via REST DELETE.
+    // Remove agent from the channel via signed kind:9001 event.
+    let remove_event = EventBuilder::new(
+        Kind::Custom(9001),
+        "",
+        vec![
+            Tag::parse(&["h", &channel_id]).unwrap(),
+            Tag::parse(&["p", &agent_pubkey_hex]).unwrap(),
+        ],
+    )
+    .sign_with_keys(&owner_keys)
+    .unwrap();
     let resp = http_client
-        .delete(format!(
-            "{}/api/channels/{}/members/{}",
-            relay_http_url(),
-            channel_id,
-            agent_pubkey_hex
-        ))
+        .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &owner_pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&remove_event).unwrap())
         .send()
         .await
-        .expect("remove member request");
+        .expect("submit remove-member event");
     assert!(
         resp.status().is_success(),
         "remove member failed: {}",
