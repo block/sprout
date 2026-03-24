@@ -6,11 +6,12 @@ use tauri::State;
 
 use crate::{
     app_state::AppState,
+    events,
     models::{
         GetUsersBatchBody, ProfileInfo, SearchUsersResponse, SetPresenceBody, SetPresenceResponse,
-        UpdateProfileBody, UsersBatchResponse,
+        UsersBatchResponse,
     },
-    relay::{build_authed_request, send_empty_request, send_json_request},
+    relay::{build_authed_request, send_json_request, submit_event},
 };
 
 #[tauri::command]
@@ -32,20 +33,37 @@ pub async fn update_profile(
     nip05_handle: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ProfileInfo, String> {
-    let request = build_authed_request(
-        &state.http_client,
-        Method::PUT,
-        "/api/users/me/profile",
-        &state,
-    )?
-    .json(&UpdateProfileBody {
-        display_name: display_name.as_deref(),
-        avatar_url: avatar_url.as_deref(),
-        about: about.as_deref(),
-        nip05_handle: nip05_handle.as_deref(),
-    });
-    send_empty_request(request).await?;
+    // Read-merge-write: kind 0 is a full profile snapshot, so we must fetch
+    // the current profile, merge the caller's changes, then sign the complete
+    // profile as a Nostr event. Same pattern as MCP's set_profile.
+    let current: serde_json::Value = {
+        let request = build_authed_request(
+            &state.http_client,
+            Method::GET,
+            "/api/users/me/profile",
+            &state,
+        )?;
+        send_json_request(request).await.unwrap_or_default()
+    };
 
+    let dn = display_name
+        .as_deref()
+        .or_else(|| current.get("display_name").and_then(|v| v.as_str()));
+    let name = current.get("name").and_then(|v| v.as_str());
+    let picture = avatar_url
+        .as_deref()
+        .or_else(|| current.get("avatar_url").and_then(|v| v.as_str()));
+    let ab = about
+        .as_deref()
+        .or_else(|| current.get("about").and_then(|v| v.as_str()));
+    let nip05 = nip05_handle
+        .as_deref()
+        .or_else(|| current.get("nip05_handle").and_then(|v| v.as_str()));
+
+    let builder = events::build_profile(dn, name, picture, ab, nip05)?;
+    submit_event(builder, &state).await?;
+
+    // Re-fetch to return the canonical profile the frontend expects.
     let request = build_authed_request(
         &state.http_client,
         Method::GET,
@@ -54,6 +72,8 @@ pub async fn update_profile(
     )?;
     send_json_request(request).await
 }
+
+// ── Unchanged reads below ────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_user_profile(
@@ -74,11 +94,10 @@ pub async fn get_users_batch(
     state: State<'_, AppState>,
 ) -> Result<UsersBatchResponse, String> {
     let request =
-        build_authed_request(&state.http_client, Method::POST, "/api/users/batch", &state)?.json(
-            &GetUsersBatchBody {
+        build_authed_request(&state.http_client, Method::POST, "/api/users/batch", &state)?
+            .json(&GetUsersBatchBody {
                 pubkeys: pubkeys.as_slice(),
-            },
-        );
+            });
     send_json_request(request).await
 }
 

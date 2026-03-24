@@ -2,6 +2,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
 use reqwest::Method;
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -218,4 +219,66 @@ pub async fn send_empty_request(request: reqwest::RequestBuilder) -> Result<(), 
     }
 
     Ok(())
+}
+
+// ── Signed-event submission ──────────────────────────────────────────────────
+
+/// Response from `POST /api/events`.
+#[derive(Debug, Deserialize)]
+pub struct SubmitEventResponse {
+    pub event_id: String,
+    pub accepted: bool,
+    pub message: String,
+}
+
+/// Build an `EventBuilder` from the events module, sign it with the user's keys,
+/// and POST the signed event to `/api/events`.
+pub async fn submit_event(
+    builder: nostr::EventBuilder,
+    state: &AppState,
+) -> Result<SubmitEventResponse, String> {
+    // All synchronous work (signing) must complete before any .await
+    // so the MutexGuard is dropped and the future remains Send.
+    let (event_json, auth_header) = {
+        let keys = state.keys.lock().map_err(|e| e.to_string())?;
+        let event = builder
+            .sign_with_keys(&keys)
+            .map_err(|e| format!("failed to sign event: {e}"))?;
+        let json = event.as_json();
+        let auth = match state.configured_api_token.as_deref() {
+            Some(token) => format!("Bearer {token}"),
+            None => format!("X-Pubkey {}", keys.public_key().to_hex()),
+        };
+        (json, auth)
+    }; // keys lock dropped here
+
+    let url = format!("{}/api/events", relay_api_base_url());
+    let request = if auth_header.starts_with("Bearer ") {
+        state.http_client.post(&url).header("Authorization", &auth_header)
+    } else {
+        let pubkey = auth_header.strip_prefix("X-Pubkey ").unwrap_or("");
+        state.http_client.post(&url).header("X-Pubkey", pubkey)
+    }
+    .header("Content-Type", "application/json")
+    .body(event_json);
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(relay_error_message(response).await);
+    }
+
+    let result: SubmitEventResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse response: {e}"))?;
+
+    if !result.accepted {
+        return Err(format!("relay rejected event: {}", result.message));
+    }
+
+    Ok(result)
 }

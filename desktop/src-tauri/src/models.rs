@@ -110,20 +110,6 @@ pub struct ChannelMembersResponse {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct AddMembersResponse {
-    pub added: Vec<String>,
-    pub errors: Vec<serde_json::Value>,
-}
-
-#[derive(Serialize)]
-pub struct CreateChannelBody<'a> {
-    pub name: &'a str,
-    pub channel_type: &'a str,
-    pub visibility: &'a str,
-    pub description: Option<&'a str>,
-}
-
 #[derive(Serialize)]
 pub struct OpenDmBody<'a> {
     pub pubkeys: &'a [String],
@@ -132,31 +118,6 @@ pub struct OpenDmBody<'a> {
 #[derive(Deserialize)]
 pub struct OpenDmResponse {
     pub channel_id: String,
-}
-
-#[derive(Serialize)]
-pub struct UpdateChannelBody<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<&'a str>,
-}
-
-#[derive(Serialize)]
-pub struct SetTopicBody<'a> {
-    pub topic: &'a str,
-}
-
-#[derive(Serialize)]
-pub struct SetPurposeBody<'a> {
-    pub purpose: &'a str,
-}
-
-#[derive(Serialize)]
-pub struct AddMembersBody<'a> {
-    pub pubkeys: &'a [String],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -191,25 +152,6 @@ pub struct SearchQueryParams<'a> {
     pub q: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
-}
-
-#[derive(Serialize)]
-pub struct SendChannelMessageBody<'a> {
-    pub content: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_event_id: Option<&'a str>,
-    pub broadcast_to_channel: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub media_tags: Option<Vec<Vec<String>>>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub mention_pubkeys: Vec<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<u32>,
-}
-
-#[derive(Serialize)]
-pub struct AddReactionBody<'a> {
-    pub emoji: &'a str,
 }
 
 #[derive(Serialize)]
@@ -394,11 +336,6 @@ pub struct GetForumThreadQuery {
     pub limit: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct SetCanvasBody<'a> {
-    pub content: &'a str,
 }
 
 fn deserialize_null_string_as_empty<'de, D>(deserializer: D) -> Result<String, D::Error>

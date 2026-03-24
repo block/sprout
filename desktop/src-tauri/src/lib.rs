@@ -1,5 +1,6 @@
 mod app_state;
 mod commands;
+mod events;
 mod managed_agents;
 mod models;
 mod relay;
