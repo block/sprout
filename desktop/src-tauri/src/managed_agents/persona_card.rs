@@ -43,7 +43,9 @@ const MAX_ZIP_DECOMPRESSED: usize = 100 * 1024 * 1024;
 
 pub fn parse_png_persona(png_bytes: &[u8]) -> Result<ParsedPersonaPreview, String> {
     let decoder = Decoder::new(Cursor::new(png_bytes));
-    let reader = decoder.read_info().map_err(|e| format!("Invalid PNG: {e}"))?;
+    let reader = decoder
+        .read_info()
+        .map_err(|e| format!("Invalid PNG: {e}"))?;
     let info = reader.info();
 
     let mut sprout_text: Option<&str> = None;
@@ -67,7 +69,10 @@ pub fn parse_png_persona(png_bytes: &[u8]) -> Result<ParsedPersonaPreview, Strin
 
     // For PNG persona cards, the avatar is the image itself — override
     // whatever avatarUrl the embedded JSON metadata might contain.
-    let avatar_data_url = Some(format!("data:image/png;base64,{}", STANDARD.encode(png_bytes)));
+    let avatar_data_url = Some(format!(
+        "data:image/png;base64,{}",
+        STANDARD.encode(png_bytes)
+    ));
 
     Ok(ParsedPersonaPreview {
         display_name: fields.display_name,
@@ -195,8 +200,7 @@ fn parse_chara_payload(b64: &str) -> Result<SproutPersonaFields, String> {
 // ---------------------------------------------------------------------------
 
 pub fn parse_json_persona(json_bytes: &[u8]) -> Result<ParsedPersonaPreview, String> {
-    let v: Value =
-        serde_json::from_slice(json_bytes).map_err(|e| format!("Invalid JSON: {e}"))?;
+    let v: Value = serde_json::from_slice(json_bytes).map_err(|e| format!("Invalid JSON: {e}"))?;
     let fields = extract_sprout_fields(&v)?;
 
     Ok(ParsedPersonaPreview {
@@ -218,14 +222,8 @@ pub fn encode_persona_json(
 ) -> Result<Vec<u8>, String> {
     let mut map = serde_json::Map::new();
     map.insert("version".to_string(), serde_json::json!(1));
-    map.insert(
-        "displayName".to_string(),
-        serde_json::json!(display_name),
-    );
-    map.insert(
-        "systemPrompt".to_string(),
-        serde_json::json!(system_prompt),
-    );
+    map.insert("displayName".to_string(), serde_json::json!(display_name));
+    map.insert("systemPrompt".to_string(), serde_json::json!(system_prompt));
     if let Some(url) = avatar_url {
         map.insert("avatarUrl".to_string(), serde_json::json!(url));
     }
@@ -300,7 +298,9 @@ pub fn parse_zip_personas(zip_bytes: &[u8]) -> Result<ParsePersonaFilesResult, S
         let mut data = Vec::new();
         loop {
             let mut chunk = [0u8; 8192];
-            let n = entry.read(&mut chunk).map_err(|e| format!("Read error: {e}"))?;
+            let n = entry
+                .read(&mut chunk)
+                .map_err(|e| format!("Read error: {e}"))?;
             if n == 0 {
                 break;
             }
@@ -356,7 +356,8 @@ mod tests {
             let mut enc = Encoder::new(Cursor::new(&mut buf), 1, 1);
             enc.set_color(ColorType::Rgba);
             enc.set_depth(BitDepth::Eight);
-            enc.add_text_chunk(keyword.to_string(), text.to_string()).unwrap();
+            enc.add_text_chunk(keyword.to_string(), text.to_string())
+                .unwrap();
             let mut w = enc.write_header().unwrap();
             w.write_image_data(&[0, 0, 0, 255]).unwrap();
         }
@@ -406,7 +407,10 @@ mod tests {
         let result = parse_png_persona(&png).unwrap();
         assert_eq!(result.display_name, "George Costanza");
         assert_eq!(result.system_prompt, "You are George.");
-        assert!(result.avatar_data_url.unwrap().starts_with("data:image/png;base64,"));
+        assert!(result
+            .avatar_data_url
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
     }
 
     #[test]
@@ -483,7 +487,8 @@ mod tests {
             let mut enc = Encoder::new(Cursor::new(&mut buf), 1, 1);
             enc.set_color(ColorType::Rgba);
             enc.set_depth(BitDepth::Eight);
-            enc.add_text_chunk("sprout_persona".to_string(), sprout_b64).unwrap();
+            enc.add_text_chunk("sprout_persona".to_string(), sprout_b64)
+                .unwrap();
             enc.add_text_chunk("chara".to_string(), chara_b64).unwrap();
             let mut w = enc.write_header().unwrap();
             w.write_image_data(&[0, 0, 0, 255]).unwrap();
@@ -532,7 +537,9 @@ mod tests {
     #[test]
     fn parse_zip_exceeds_entry_limit() {
         let png = make_test_persona_png("X", "Y");
-        let entries: Vec<(String, &[u8])> = (0..51).map(|i| (format!("{i}.png"), png.as_slice())).collect();
+        let entries: Vec<(String, &[u8])> = (0..51)
+            .map(|i| (format!("{i}.png"), png.as_slice()))
+            .collect();
         let refs: Vec<(&str, &[u8])> = entries.iter().map(|(n, d)| (n.as_str(), *d)).collect();
         let zip = make_test_zip(&refs);
         let err = parse_zip_personas(&zip).unwrap_err();
@@ -553,8 +560,10 @@ mod tests {
     #[test]
     fn parse_png_duplicate_chunks() {
         // Two sprout_persona chunks — should use the first and ignore the second.
-        let payload1 = serde_json::json!({"version": 1, "displayName": "First", "systemPrompt": "Prompt 1"});
-        let payload2 = serde_json::json!({"version": 1, "displayName": "Second", "systemPrompt": "Prompt 2"});
+        let payload1 =
+            serde_json::json!({"version": 1, "displayName": "First", "systemPrompt": "Prompt 1"});
+        let payload2 =
+            serde_json::json!({"version": 1, "displayName": "Second", "systemPrompt": "Prompt 2"});
         let b64_1 = STANDARD.encode(payload1.to_string().as_bytes());
         let b64_2 = STANDARD.encode(payload2.to_string().as_bytes());
 
@@ -563,8 +572,10 @@ mod tests {
             let mut enc = Encoder::new(Cursor::new(&mut buf), 1, 1);
             enc.set_color(ColorType::Rgba);
             enc.set_depth(BitDepth::Eight);
-            enc.add_text_chunk("sprout_persona".to_string(), b64_1).unwrap();
-            enc.add_text_chunk("sprout_persona".to_string(), b64_2).unwrap();
+            enc.add_text_chunk("sprout_persona".to_string(), b64_1)
+                .unwrap();
+            enc.add_text_chunk("sprout_persona".to_string(), b64_2)
+                .unwrap();
             let mut w = enc.write_header().unwrap();
             w.write_image_data(&[0, 0, 0, 255]).unwrap();
         }
@@ -597,9 +608,14 @@ mod tests {
 
     #[test]
     fn parse_json_round_trip() {
-        let bytes =
-            encode_persona_json("Ada Lovelace", "You are Ada.", Some("https://example.com/ada.png"), None, None)
-                .unwrap();
+        let bytes = encode_persona_json(
+            "Ada Lovelace",
+            "You are Ada.",
+            Some("https://example.com/ada.png"),
+            None,
+            None,
+        )
+        .unwrap();
         let result = parse_json_persona(&bytes).unwrap();
         assert_eq!(result.display_name, "Ada Lovelace");
         assert_eq!(result.system_prompt, "You are Ada.");
@@ -622,7 +638,8 @@ mod tests {
     #[test]
     fn parse_json_round_trip_data_uri_avatar() {
         let data_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
-        let bytes = encode_persona_json("Carol", "You are Carol.", Some(data_uri), None, None).unwrap();
+        let bytes =
+            encode_persona_json("Carol", "You are Carol.", Some(data_uri), None, None).unwrap();
         let result = parse_json_persona(&bytes).unwrap();
         assert_eq!(result.display_name, "Carol");
         assert_eq!(result.avatar_data_url.as_deref(), Some(data_uri));
@@ -698,8 +715,7 @@ mod tests {
             "displayName": "X",
             "systemPrompt": ""
         });
-        let err =
-            parse_json_persona(&serde_json::to_vec(&json_empty_prompt).unwrap()).unwrap_err();
+        let err = parse_json_persona(&serde_json::to_vec(&json_empty_prompt).unwrap()).unwrap_err();
         assert!(err.contains("systemPrompt is empty"));
     }
 

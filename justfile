@@ -43,7 +43,7 @@ build-release:
     cargo build --workspace --release
 
 # Run repo lint and formatting checks
-check: fmt-check clippy desktop-check
+check: fmt-check clippy desktop-check desktop-tauri-fmt-check
 
 # Format all Rust code
 fmt:
@@ -77,12 +77,20 @@ desktop-typecheck:
 desktop-build:
     cd {{desktop_dir}} && pnpm build
 
+# Format desktop Tauri Rust code
+desktop-tauri-fmt:
+    cargo fmt --manifest-path {{desktop_tauri_manifest}} --all
+
+# Check desktop Tauri Rust formatting
+desktop-tauri-fmt-check:
+    cargo fmt --manifest-path {{desktop_tauri_manifest}} --all -- --check
+
 # Check the desktop Tauri Rust crate compiles
 desktop-tauri-check:
     cargo check --manifest-path {{desktop_tauri_manifest}}
 
 # Run desktop checks suitable for CI / pre-push
-desktop-ci: desktop-check desktop-build desktop-tauri-check
+desktop-ci: desktop-check desktop-tauri-fmt-check desktop-build desktop-tauri-check
 
 # Seed deterministic channel data for desktop Playwright tests
 desktop-e2e-seed:

@@ -69,13 +69,7 @@ pub async fn sync_managed_agent_profile(
     avatar_url: Option<&str>,
 ) -> Result<(), String> {
     // Build a kind:0 profile event signed by the agent's keys.
-    let builder = crate::events::build_profile(
-        Some(display_name),
-        None,
-        avatar_url,
-        None,
-        None,
-    )?;
+    let builder = crate::events::build_profile(Some(display_name), None, avatar_url, None, None)?;
 
     // Sign with the agent's keys (not the desktop user's).
     let event = builder
@@ -268,7 +262,10 @@ pub async fn submit_event(
 
     let url = format!("{}/api/events", relay_api_base_url());
     let request = if auth_header.starts_with("Bearer ") {
-        state.http_client.post(&url).header("Authorization", &auth_header)
+        state
+            .http_client
+            .post(&url)
+            .header("Authorization", &auth_header)
     } else {
         let pubkey = auth_header.strip_prefix("X-Pubkey ").unwrap_or("");
         state.http_client.post(&url).header("X-Pubkey", pubkey)

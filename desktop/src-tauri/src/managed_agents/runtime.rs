@@ -35,7 +35,9 @@ fn terminate_process(pid: u32) -> Result<(), String> {
         .status()
         .map_err(|error| format!("failed to terminate process {pid}: {error}"))?;
     if !status.success() && process_is_running(pid) {
-        return Err(format!("failed to terminate process {pid}: signal was rejected"));
+        return Err(format!(
+            "failed to terminate process {pid}: signal was rejected"
+        ));
     }
 
     for _ in 0..10 {

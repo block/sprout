@@ -52,12 +52,13 @@ pub async fn get_forum_posts(
     state: State<'_, AppState>,
 ) -> Result<ForumPostsResponse, String> {
     let path = format!("/api/channels/{channel_id}/messages");
-    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?
-        .query(&GetForumPostsQuery {
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?.query(
+        &GetForumPostsQuery {
             limit,
             before,
             with_threads: true,
-        });
+        },
+    );
 
     send_json_request(request).await
 }
@@ -108,8 +109,8 @@ async fn resolve_thread_ref(
     parent_event_id: &str,
     state: &AppState,
 ) -> Result<events::ThreadRef, String> {
-    let parent_eid = EventId::from_hex(parent_event_id)
-        .map_err(|e| format!("invalid parent event ID: {e}"))?;
+    let parent_eid =
+        EventId::from_hex(parent_event_id).map_err(|e| format!("invalid parent event ID: {e}"))?;
 
     let path = format!("/api/events/{parent_event_id}");
     let request = build_authed_request(&state.http_client, Method::GET, &path, state)?;
@@ -243,8 +244,7 @@ pub async fn add_reaction(
     emoji: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let target_eid = EventId::from_hex(&event_id)
-        .map_err(|e| format!("invalid event ID: {e}"))?;
+    let target_eid = EventId::from_hex(&event_id).map_err(|e| format!("invalid event ID: {e}"))?;
     let builder = events::build_reaction(target_eid, emoji.trim())?;
     submit_event(builder, &state).await?;
     Ok(())
@@ -296,8 +296,7 @@ pub async fn remove_reaction(
 
 #[tauri::command]
 pub async fn delete_message(event_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let target_eid = EventId::from_hex(&event_id)
-        .map_err(|e| format!("invalid event ID: {e}"))?;
+    let target_eid = EventId::from_hex(&event_id).map_err(|e| format!("invalid event ID: {e}"))?;
     let builder = events::build_delete_compat(target_eid)?;
     submit_event(builder, &state).await?;
     Ok(())

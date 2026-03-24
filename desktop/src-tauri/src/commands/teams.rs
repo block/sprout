@@ -93,11 +93,7 @@ pub fn update_team(
 }
 
 #[tauri::command]
-pub fn delete_team(
-    id: String,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub fn delete_team(id: String, app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let _store_guard = state
         .managed_agents_store_lock
         .lock()

@@ -20,6 +20,8 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Format check
         run: just fmt-check
+      - name: Desktop Tauri format check
+        run: just desktop-tauri-fmt-check
       - name: Clippy
         run: just clippy
 

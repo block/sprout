@@ -28,7 +28,10 @@ fn trim_optional(value: Option<String>) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn list_personas(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<PersonaRecord>, String> {
+pub fn list_personas(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<PersonaRecord>, String> {
     let _store_guard = state
         .managed_agents_store_lock
         .lock()

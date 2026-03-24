@@ -22,10 +22,7 @@ pub async fn open_dm(
 }
 
 #[tauri::command]
-pub async fn hide_dm(
-    channel_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn hide_dm(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let path = format!("/api/dms/{channel_id}/hide");
     let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?;
     send_empty_request(request).await
