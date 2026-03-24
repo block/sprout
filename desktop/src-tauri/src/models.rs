@@ -121,18 +121,6 @@ pub struct OpenDmResponse {
 }
 
 #[derive(Serialize)]
-pub struct UpdateProfileBody<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub avatar_url: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub about: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nip05_handle: Option<&'a str>,
-}
-
-#[derive(Serialize)]
 pub struct SetPresenceBody {
     pub status: PresenceStatus,
 }

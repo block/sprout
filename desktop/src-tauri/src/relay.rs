@@ -5,10 +5,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::{
-    app_state::AppState,
-    models::UpdateProfileBody,
-};
+use crate::app_state::AppState;
 
 pub fn relay_ws_url() -> String {
     std::env::var("SPROUT_RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
@@ -65,46 +62,63 @@ fn token_supports_scope(scopes: &[String], required_scope: &str) -> bool {
 pub async fn sync_managed_agent_profile(
     state: &AppState,
     relay_url: &str,
-    pubkey: &str,
+    agent_keys: &nostr::Keys,
     api_token: Option<&str>,
     token_scopes: &[String],
     display_name: &str,
     avatar_url: Option<&str>,
 ) -> Result<(), String> {
-    let url = format!(
-        "{}{}",
-        relay_http_base_url(relay_url),
-        "/api/users/me/profile"
-    );
+    // Build a kind:0 profile event signed by the agent's keys.
+    let builder = crate::events::build_profile(
+        Some(display_name),
+        None,
+        avatar_url,
+        None,
+        None,
+    )?;
+
+    // Sign with the agent's keys (not the desktop user's).
+    let event = builder
+        .sign_with_keys(agent_keys)
+        .map_err(|e| format!("failed to sign profile event: {e}"))?;
+    let event_json = event.as_json();
+
+    // POST to the relay's /api/events endpoint.
+    let url = format!("{}/api/events", relay_http_base_url(relay_url));
     let use_bearer_token = api_token.is_some() && token_supports_scope(token_scopes, "users:write");
-    let mut request = state.http_client.request(Method::PUT, url);
+    let mut request = state.http_client.post(&url);
 
     if let Some(token) = api_token.filter(|_| use_bearer_token) {
         request = request.header("Authorization", format!("Bearer {token}"));
     } else {
-        request = request.header("X-Pubkey", pubkey);
+        request = request.header("X-Pubkey", agent_keys.public_key().to_hex());
     }
 
-    let request = request.json(&UpdateProfileBody {
-        display_name: Some(display_name),
-        avatar_url,
-        about: None,
-        nip05_handle: None,
-    });
+    request = request
+        .header("Content-Type", "application/json")
+        .body(event_json);
 
-    send_empty_request(request).await.map_err(|error| {
-        if api_token.is_some() && !use_bearer_token {
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let msg = relay_error_message(response).await;
+        return Err(if api_token.is_some() && !use_bearer_token {
             format!(
-                "Created the agent, but could not sync its profile metadata. The minted token does not include `users:write`, and the relay rejected dev-mode pubkey auth: {error}"
+                "Created the agent, but could not sync its profile metadata. The minted token does not include `users:write`, and the relay rejected dev-mode pubkey auth: {msg}"
             )
         } else if api_token.is_some() {
-            format!("Created the agent, but could not sync its profile metadata: {error}")
+            format!("Created the agent, but could not sync its profile metadata: {msg}")
         } else {
             format!(
-                "Created the agent, but could not sync its profile metadata without a token: {error}"
+                "Created the agent, but could not sync its profile metadata without a token: {msg}"
             )
-        }
-    })
+        });
+    }
+
+    Ok(())
 }
 
 fn session_api_token(state: &AppState) -> Result<Option<String>, String> {
