@@ -139,17 +139,17 @@ proxy:
 proxy-release:
     cargo run -p sprout-proxy --release
 
-# Run the desktop Tauri app in dev mode
+# Run the desktop Tauri app in dev mode (uses dev identifier for side-by-side with production)
 dev *ARGS:
-    cd {{desktop_dir}} && pnpm tauri dev {{ARGS}}
+    cd {{desktop_dir}} && pnpm tauri dev --config src-tauri/tauri.dev.conf.json {{ARGS}}
 
 # Run the desktop frontend dev server
 desktop-dev:
     cd {{desktop_dir}} && pnpm dev
 
-# Run the desktop Tauri app
+# Run the desktop Tauri app (uses dev identifier for side-by-side with production)
 desktop-app *ARGS:
-    cd {{desktop_dir}} && pnpm tauri dev {{ARGS}}
+    cd {{desktop_dir}} && pnpm tauri dev --config src-tauri/tauri.dev.conf.json {{ARGS}}
 
 # ─── Desktop Release ──────────────────────────────────────────────────────────
 

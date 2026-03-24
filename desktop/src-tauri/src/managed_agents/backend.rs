@@ -244,10 +244,10 @@ fn split_config_key(key: &str) -> Vec<String> {
             // Start a new word on: (a) transition from lowercase to uppercase, or
             // (b) uppercase followed by lowercase (end of acronym run, e.g. "APIKey" → "API" + "Key").
             let prev_lower =
-                !current.is_empty() && current.chars().last().map_or(false, |c| c.is_lowercase());
+                !current.is_empty() && current.chars().last().is_some_and(|c| c.is_lowercase());
             let acronym_end = !current.is_empty()
-                && current.chars().last().map_or(false, |c| c.is_uppercase())
-                && chars.get(i + 1).map_or(false, |c| c.is_lowercase());
+                && current.chars().last().is_some_and(|c| c.is_uppercase())
+                && chars.get(i + 1).is_some_and(|c| c.is_lowercase());
             if prev_lower || acronym_end {
                 words.push(current.to_lowercase());
                 current.clear();
