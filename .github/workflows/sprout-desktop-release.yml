@@ -99,6 +99,7 @@ jobs:
         run: |
           VERSION="$(node -p "require('./desktop/package.json').version")"
           DMG_DIR="desktop/src-tauri/target/release/bundle/dmg"
+          mkdir -p "${DMG_DIR}"
           rm -f "${DMG_DIR}"/*.dmg
           hdiutil create -volname "Sprout" \
             -srcfolder desktop/src-tauri/target/release/bundle/macos/Sprout.app \
