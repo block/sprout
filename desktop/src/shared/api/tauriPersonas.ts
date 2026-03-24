@@ -10,6 +10,8 @@ type RawParsedPersonaPreview = {
   display_name: string;
   system_prompt: string;
   avatar_data_url: string | null;
+  provider: string | null;
+  model: string | null;
   source_file: string;
 };
 
@@ -28,6 +30,8 @@ export type ParsedPersonaPreview = {
   displayName: string;
   systemPrompt: string;
   avatarDataUrl: string | null;
+  provider: string | null;
+  model: string | null;
   sourceFile: string;
 };
 
@@ -46,6 +50,8 @@ type RawPersona = {
   display_name: string;
   avatar_url: string | null;
   system_prompt: string;
+  provider?: string | null;
+  model?: string | null;
   is_builtin: boolean;
   created_at: string;
   updated_at: string;
@@ -57,6 +63,8 @@ function fromRawPersona(persona: RawPersona): AgentPersona {
     displayName: persona.display_name,
     avatarUrl: persona.avatar_url,
     systemPrompt: persona.system_prompt,
+    provider: persona.provider ?? null,
+    model: persona.model ?? null,
     isBuiltIn: persona.is_builtin,
     createdAt: persona.created_at,
     updatedAt: persona.updated_at,
@@ -76,6 +84,8 @@ export async function createPersona(
         displayName: input.displayName,
         avatarUrl: input.avatarUrl,
         systemPrompt: input.systemPrompt,
+        provider: input.provider,
+        model: input.model,
       },
     }),
   );
@@ -91,6 +101,8 @@ export async function updatePersona(
         displayName: input.displayName,
         avatarUrl: input.avatarUrl,
         systemPrompt: input.systemPrompt,
+        provider: input.provider,
+        model: input.model,
       },
     }),
   );
@@ -113,6 +125,8 @@ export async function parsePersonaFiles(
       displayName: p.display_name,
       systemPrompt: p.system_prompt,
       avatarDataUrl: p.avatar_data_url,
+      provider: p.provider,
+      model: p.model,
       sourceFile: p.source_file,
     })),
     skipped: raw.skipped.map((s) => ({

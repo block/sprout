@@ -58,6 +58,8 @@ fn built_in_persona_records(now: &str) -> Vec<PersonaRecord> {
             display_name: persona.display_name.to_string(),
             avatar_url: None,
             system_prompt: persona.system_prompt.to_string(),
+            provider: None,
+            model: None,
             is_builtin: true,
             created_at: now.to_string(),
             updated_at: now.to_string(),
@@ -99,6 +101,8 @@ fn merge_personas(mut stored: Vec<PersonaRecord>, now: &str) -> (Vec<PersonaReco
             if existing.display_name != built_in.display_name
                 || existing.avatar_url.is_some()
                 || existing.system_prompt != built_in.system_prompt
+                || existing.provider.is_some()
+                || existing.model.is_some()
                 || !existing.is_builtin
             {
                 *existing = PersonaRecord {
@@ -160,6 +164,8 @@ mod tests {
             display_name: display_name.to_string(),
             avatar_url: Some("https://example.com/avatar.png".to_string()),
             system_prompt: "Custom prompt".to_string(),
+            provider: None,
+            model: None,
             is_builtin: false,
             created_at: "2026-03-19T00:00:00Z".to_string(),
             updated_at: "2026-03-19T00:00:00Z".to_string(),

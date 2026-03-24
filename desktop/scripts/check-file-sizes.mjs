@@ -30,7 +30,7 @@ const rules = [
 
 // Exceptions should stay rare and temporary. Prefer splitting files instead.
 const overrides = new Map([
-  ["src-tauri/src/managed_agents/persona_card.rs", 700], // PNG/ZIP persona card codec + 21 unit tests (~300 lines of tests)
+  ["src-tauri/src/managed_agents/persona_card.rs", 760], // PNG/ZIP persona card codec + provider/model fields + 27 unit tests (~350 lines of tests)
   ["src/app/AppShell.tsx", 775],
   ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
@@ -42,9 +42,10 @@ const overrides = new Map([
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
   ["src-tauri/src/commands/agents.rs", 820], // remote agent lifecycle routing (local + provider branches) + scope enforcement
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests
-  ["src/features/agents/ui/AgentsView.tsx", 775], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard + persona/team import
+  ["src/features/agents/ui/AgentsView.tsx", 790], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard + persona/team import + provider/model fields
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
-  ["src/features/channels/ui/AddChannelBotDialog.tsx", 600], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement
+  ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
+  ["src/shared/api/types.ts", 515], // persona provider/model fields + forum types
 ]);
 
 async function walkFiles(directory) {

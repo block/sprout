@@ -95,6 +95,8 @@ export function BatchImportDialog({
           displayName: persona.displayName,
           avatarUrl: persona.avatarDataUrl ?? undefined,
           systemPrompt: persona.systemPrompt,
+          provider: persona.provider ?? undefined,
+          model: persona.model ?? undefined,
         });
         completed += 1;
         setImportedCount(completed);
