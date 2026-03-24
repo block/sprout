@@ -63,7 +63,10 @@ fn migrate_file(old_dir: &Path, new_dir: &Path, rel: &str) -> bool {
     // Ensure parent directories exist (e.g. `agents/`).
     if let Some(parent) = dst.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("sprout-desktop: migration: failed to create {}: {e}", parent.display());
+            eprintln!(
+                "sprout-desktop: migration: failed to create {}: {e}",
+                parent.display()
+            );
             return false;
         }
     }
