@@ -9,7 +9,7 @@ Sprout Relay ──WS──→ sprout-acp ──stdio──→ Your Agent
                                        (send_message, etc.)
 ```
 
-Supports any agent that speaks [ACP](https://agentclientprotocol.com/) over stdio: **goose**, **codex** (via [codex-acp](https://github.com/zed-industries/codex-acp)), and **claude code** (via [claude-agent-acp](https://github.com/zed-industries/claude-agent-acp)).
+Supports any agent that speaks [ACP](https://agentclientprotocol.com/) over stdio: **goose**, **codex** (via [codex-acp](https://github.com/zed-industries/codex-acp)), and **claude code** (via [claude-code-acp](https://github.com/zed-industries/claude-code-acp)).
 
 ## Prerequisites
 
@@ -76,16 +76,16 @@ sprout-acp
 
 ## Running with Claude Code
 
-[claude-agent-acp](https://github.com/zed-industries/claude-agent-acp) wraps the Claude Agent SDK in an ACP interface.
+[claude-code-acp](https://github.com/zed-industries/claude-code-acp) wraps the Claude Agent SDK in an ACP interface.
 
 ```bash
 # Build the adapter
-cd /path/to/claude-agent-acp && npm install && npm run build
+cd /path/to/claude-code-acp && npm install && npm run build
 
 # Run
 export ANTHROPIC_API_KEY="sk-ant-..."
 export SPROUT_ACP_AGENT_COMMAND="node"   # full path if using hermit: /path/to/sprout2/bin/node
-export SPROUT_ACP_AGENT_ARGS="/path/to/claude-agent-acp/dist/index.js"
+export SPROUT_ACP_AGENT_ARGS="/path/to/claude-code-acp/dist/index.js"
 
 sprout-acp
 ```

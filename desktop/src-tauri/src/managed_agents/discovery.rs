@@ -46,8 +46,8 @@ const KNOWN_ACP_PROVIDERS: &[KnownAcpProvider] = &[
     KnownAcpProvider {
         id: "claude",
         label: "Claude Code",
-        command: "claude-agent-acp",
-        aliases: &["claude-code", "claudecode"],
+        command: "claude-code-acp",
+        aliases: &["claude-agent-acp", "claude-code", "claudecode"],
         default_args: &[],
         avatar_url: CLAUDE_CODE_AVATAR_URL,
     },
@@ -230,6 +230,29 @@ fn find_command(command: &str) -> Option<PathBuf> {
     resolve_command(command, None)
 }
 
+fn discover_provider_with<F>(provider: &KnownAcpProvider, mut find: F) -> Option<AcpProviderInfo>
+where
+    F: FnMut(&str) -> Option<PathBuf>,
+{
+    std::iter::once(provider.command)
+        .chain(provider.aliases.iter().copied())
+        .find_map(|command| {
+            find(command).map(|binary_path| AcpProviderInfo {
+                id: provider.id.to_string(),
+                label: provider.label.to_string(),
+                // Persist the command we actually found so later launches
+                // keep working for legacy installs as well.
+                command: command.to_string(),
+                binary_path: binary_path.display().to_string(),
+                default_args: provider
+                    .default_args
+                    .iter()
+                    .map(|arg| (*arg).to_string())
+                    .collect(),
+            })
+        })
+}
+
 pub fn command_availability(command: &str, app: Option<&AppHandle>) -> CommandAvailabilityInfo {
     let resolved_path = resolve_command(command, app).map(|path| path.display().to_string());
     CommandAvailabilityInfo {
@@ -252,19 +275,7 @@ pub fn missing_command_message(command: &str, role: &str) -> String {
 pub fn discover_local_acp_providers() -> Vec<AcpProviderInfo> {
     KNOWN_ACP_PROVIDERS
         .iter()
-        .filter_map(|provider| {
-            find_command(provider.command).map(|binary_path| AcpProviderInfo {
-                id: provider.id.to_string(),
-                label: provider.label.to_string(),
-                command: provider.command.to_string(),
-                binary_path: binary_path.display().to_string(),
-                default_args: provider
-                    .default_args
-                    .iter()
-                    .map(|arg| (*arg).to_string())
-                    .collect(),
-            })
-        })
+        .filter_map(|provider| discover_provider_with(provider, find_command))
         .collect()
 }
 
@@ -345,8 +356,10 @@ pub async fn mint_token_via_api(
 #[cfg(test)]
 mod tests {
     use super::{
-        managed_agent_avatar_url, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL, GOOSE_AVATAR_URL,
+        discover_provider_with, managed_agent_avatar_url, CLAUDE_CODE_AVATAR_URL,
+        CODEX_AVATAR_URL, GOOSE_AVATAR_URL, KNOWN_ACP_PROVIDERS,
     };
+    use std::path::PathBuf;
 
     #[test]
     fn resolves_known_avatar_for_bare_command() {
@@ -366,6 +379,10 @@ mod tests {
             Some(CLAUDE_CODE_AVATAR_URL.to_string())
         );
         assert_eq!(
+            managed_agent_avatar_url(r"C:\Tools\claude-code-acp.exe"),
+            Some(CLAUDE_CODE_AVATAR_URL.to_string())
+        );
+        assert_eq!(
             managed_agent_avatar_url(r"C:\Tools\claude-agent-acp.exe"),
             Some(CLAUDE_CODE_AVATAR_URL.to_string())
         );
@@ -374,5 +391,40 @@ mod tests {
     #[test]
     fn returns_none_for_unknown_commands() {
         assert!(managed_agent_avatar_url("custom-agent").is_none());
+    }
+
+    #[test]
+    fn discovery_falls_back_to_legacy_claude_alias() {
+        let provider = KNOWN_ACP_PROVIDERS
+            .iter()
+            .find(|provider| provider.id == "claude")
+            .expect("claude provider should exist");
+
+        let discovered = discover_provider_with(provider, |command| match command {
+            "claude-agent-acp" => Some(PathBuf::from("/tmp/claude-agent-acp")),
+            _ => None,
+        })
+        .expect("legacy claude binary should be discovered");
+
+        assert_eq!(discovered.command, "claude-agent-acp");
+        assert_eq!(discovered.binary_path, "/tmp/claude-agent-acp");
+    }
+
+    #[test]
+    fn discovery_prefers_canonical_command_when_present() {
+        let provider = KNOWN_ACP_PROVIDERS
+            .iter()
+            .find(|provider| provider.id == "claude")
+            .expect("claude provider should exist");
+
+        let discovered = discover_provider_with(provider, |command| match command {
+            "claude-code-acp" => Some(PathBuf::from("/tmp/claude-code-acp")),
+            "claude-agent-acp" => Some(PathBuf::from("/tmp/claude-agent-acp")),
+            _ => None,
+        })
+        .expect("canonical claude binary should be discovered");
+
+        assert_eq!(discovered.command, "claude-code-acp");
+        assert_eq!(discovered.binary_path, "/tmp/claude-code-acp");
     }
 }

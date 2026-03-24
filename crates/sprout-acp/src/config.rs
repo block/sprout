@@ -55,7 +55,7 @@ pub enum DedupMode {
     about = "Query available models from the configured agent"
 )]
 pub struct ModelsArgs {
-    /// Agent binary to spawn (e.g. "goose", "claude-agent-acp", "codex-acp").
+    /// Agent binary to spawn (e.g. "goose", "claude-code-acp", "codex-acp").
     #[arg(long, env = "SPROUT_ACP_AGENT_COMMAND", default_value = "goose")]
     pub agent_command: String,
 
@@ -268,9 +268,8 @@ fn normalize_agent_command_identity(command: &str) -> String {
 fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_agent_command_identity(command).as_str() {
         "goose" => Some(vec!["acp".to_string()]),
-        "codex" | "codex-acp" | "claude-agent-acp" | "claude-code" | "claudecode" => {
-            Some(Vec::new())
-        }
+        "codex" | "codex-acp" | "claude-code-acp" | "claude-agent-acp" | "claude-code"
+        | "claudecode" => Some(Vec::new()),
         _ => None,
     }
 }
@@ -790,6 +789,14 @@ mod tests {
             normalize_agent_args("claude-code", vec!["acp".into()]),
             Vec::<String>::new()
         );
+        assert_eq!(
+            normalize_agent_args("claude-code-acp", vec!["acp".into()]),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            normalize_agent_args("claude-agent-acp", vec!["acp".into()]),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -814,6 +821,10 @@ mod tests {
         assert_eq!(
             normalize_agent_command_identity("/usr/local/bin/codex-acp"),
             "codex-acp"
+        );
+        assert_eq!(
+            normalize_agent_command_identity("/usr/local/bin/claude-code-acp"),
+            "claude-code-acp"
         );
         assert_eq!(normalize_agent_command_identity("/usr/local/bin/"), "bin");
         assert_eq!(
