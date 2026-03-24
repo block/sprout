@@ -1,3 +1,4 @@
+import { AlertTriangle } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -71,6 +72,23 @@ export function AddTeamToChannelDialog({
 
   const resolved = team ? resolvePersonas(team.personaIds, personas) : [];
 
+  // Surface warnings when a persona's preferred provider is unavailable.
+  // This dialog has no provider selector, so the fallback is always
+  // `defaultProvider` (the first available runtime).
+  const providerWarnings = React.useMemo(() => {
+    if (!defaultProvider) return [];
+    const warnings: string[] = [];
+    for (const persona of resolved) {
+      const { warnings: w } = resolvePersonaProvider(
+        persona.provider,
+        providers,
+        defaultProvider,
+      );
+      warnings.push(...w);
+    }
+    return warnings;
+  }, [resolved, providers, defaultProvider]);
+
   function reset() {
     setChannelId("");
     setRole("bot");
@@ -102,13 +120,17 @@ export function AddTeamToChannelDialog({
     }
 
     try {
+      // Resolve each persona's preferred provider. This dialog has no
+      // provider selector, so the fallback is `defaultProvider` (first
+      // available runtime). Warnings are computed separately via the
+      // `providerWarnings` memo and rendered as inline alerts above.
       const inputs = resolved.map((persona) => {
-        const resolvedProvider = resolvePersonaProvider(
+        const { provider: personaProvider } = resolvePersonaProvider(
           persona.provider,
           providers,
           defaultProvider,
         );
-        const providerToUse = resolvedProvider.provider ?? defaultProvider;
+        const providerToUse = personaProvider ?? defaultProvider;
         return {
           provider: {
             id: providerToUse.id,
@@ -223,6 +245,20 @@ export function AddTeamToChannelDialog({
                 is installed.
               </p>
             ) : null}
+
+            {providerWarnings.length > 0
+              ? providerWarnings.map((warning) => (
+                  <div
+                    className="flex gap-3 rounded-2xl border border-amber-400/60 bg-amber-50/60 px-4 py-3 dark:border-amber-500/40 dark:bg-amber-950/30"
+                    key={warning}
+                  >
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <p className="text-sm text-amber-800 dark:text-amber-300">
+                      {warning}
+                    </p>
+                  </div>
+                ))
+              : null}
 
             {channelsQuery.error instanceof Error ? (
               <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

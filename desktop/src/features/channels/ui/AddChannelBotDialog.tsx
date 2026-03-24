@@ -146,6 +146,26 @@ export function AddChannelBotDialog({
   );
   const selectedCount = selectedPersonas.length + (includeGeneric ? 1 : 0);
 
+  // Surface warnings when a persona's preferred provider differs from the
+  // user-selected provider. In this dialog the user explicitly picks a
+  // runtime via the dropdown, so the fallback is `selectedProvider` (their
+  // choice), NOT `providers[0]`. This differs intentionally from
+  // AddTeamToChannelDialog which has no provider selector and falls back
+  // to the first available runtime.
+  const providerWarnings = React.useMemo(() => {
+    if (!selectedProvider) return [];
+    const warnings: string[] = [];
+    for (const persona of selectedPersonas) {
+      const { warnings: w } = resolvePersonaProvider(
+        persona.provider,
+        providers,
+        selectedProvider,
+      );
+      warnings.push(...w);
+    }
+    return warnings;
+  }, [selectedPersonas, providers, selectedProvider]);
+
   const isProviderMode = runOn !== "local";
   const selectedBackendProvider = React.useMemo(
     () => resolvedBackendProviders.find((p) => p.id === runOn) ?? null,
@@ -538,6 +558,20 @@ export function AddChannelBotDialog({
                 {providersErrorMessage}
               </p>
             ) : null}
+
+            {providerWarnings.length > 0
+              ? providerWarnings.map((warning) => (
+                  <div
+                    className="flex gap-3 rounded-2xl border border-amber-400/60 bg-amber-50/60 px-4 py-3 dark:border-amber-500/40 dark:bg-amber-950/30"
+                    key={warning}
+                  >
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <p className="text-sm text-amber-800 dark:text-amber-300">
+                      {warning}
+                    </p>
+                  </div>
+                ))
+              : null}
 
             {personasQuery.error instanceof Error ? (
               <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
