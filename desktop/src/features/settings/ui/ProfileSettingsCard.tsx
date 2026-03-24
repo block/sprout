@@ -176,26 +176,6 @@ export function ProfileSettingsCard({
         ) : null}
 
         <Section
-          description="Your keypair is fixed for this device. Profile fields and NIP-05 are editable below."
-          title="Identity"
-        >
-          <div className="space-y-3">
-            <ReadOnlyField
-              label="Public key"
-              testId="profile-pubkey"
-              value={resolvedPubkey}
-            />
-            <ReadOnlyField
-              label="NIP-05 handle"
-              testId="profile-nip05"
-              value={nip05Handle}
-            />
-          </div>
-        </Section>
-
-        <Separator />
-
-        <Section
           description="These values are stored on the relay for your current identity."
           title="Profile"
         >
@@ -308,6 +288,26 @@ export function ProfileSettingsCard({
               </p>
             ) : null}
           </form>
+        </Section>
+
+        <Separator />
+
+        <Section
+          description="Your keypair is fixed for this device. Profile fields and NIP-05 are editable above."
+          title="Identity"
+        >
+          <div className="space-y-3">
+            <ReadOnlyField
+              label="Public key"
+              testId="profile-pubkey"
+              value={resolvedPubkey}
+            />
+            <ReadOnlyField
+              label="NIP-05 handle"
+              testId="profile-nip05"
+              value={nip05Handle}
+            />
+          </div>
         </Section>
       </div>
     </section>
