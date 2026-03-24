@@ -13,6 +13,8 @@ pub struct ParsedPersonaPreview {
     pub display_name: String,
     pub system_prompt: String,
     pub avatar_data_url: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
     pub source_file: String,
 }
 
@@ -55,7 +57,7 @@ pub fn parse_png_persona(png_bytes: &[u8]) -> Result<ParsedPersonaPreview, Strin
         }
     }
 
-    let preview = if let Some(text) = sprout_text {
+    let fields = if let Some(text) = sprout_text {
         parse_sprout_payload(text)?
     } else if let Some(text) = chara_text {
         parse_chara_payload(text)?
@@ -66,9 +68,11 @@ pub fn parse_png_persona(png_bytes: &[u8]) -> Result<ParsedPersonaPreview, Strin
     let avatar_data_url = Some(format!("data:image/png;base64,{}", STANDARD.encode(png_bytes)));
 
     Ok(ParsedPersonaPreview {
-        display_name: preview.0,
-        system_prompt: preview.1,
+        display_name: fields.display_name,
+        system_prompt: fields.system_prompt,
         avatar_data_url,
+        provider: fields.provider,
+        model: fields.model,
         source_file: String::new(),
     })
 }
@@ -80,9 +84,17 @@ fn decode_b64_json(b64: &str) -> Result<Value, String> {
     serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON: {e}"))
 }
 
-/// Extract and validate `displayName` + `systemPrompt` from a Sprout persona
-/// JSON value (shared by both the PNG tEXt-chunk path and the standalone JSON path).
-fn extract_sprout_fields(v: &Value) -> Result<(String, String), String> {
+/// Extracted fields from a Sprout persona JSON payload.
+struct SproutPersonaFields {
+    display_name: String,
+    system_prompt: String,
+    provider: Option<String>,
+    model: Option<String>,
+}
+
+/// Extract and validate fields from a Sprout persona JSON value
+/// (shared by both the PNG tEXt-chunk path and the standalone JSON path).
+fn extract_sprout_fields(v: &Value) -> Result<SproutPersonaFields, String> {
     let version = v.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
     if version != 1 {
         return Err(format!("Unsupported persona version: {version}"));
@@ -105,15 +117,32 @@ fn extract_sprout_fields(v: &Value) -> Result<(String, String), String> {
     if prompt.is_empty() {
         return Err("systemPrompt is empty".to_string());
     }
-    Ok((name, prompt))
+    let provider = v
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let model = v
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    Ok(SproutPersonaFields {
+        display_name: name,
+        system_prompt: prompt,
+        provider,
+        model,
+    })
 }
 
-fn parse_sprout_payload(b64: &str) -> Result<(String, String), String> {
+fn parse_sprout_payload(b64: &str) -> Result<SproutPersonaFields, String> {
     let v = decode_b64_json(b64)?;
     extract_sprout_fields(&v)
 }
 
-fn parse_chara_payload(b64: &str) -> Result<(String, String), String> {
+fn parse_chara_payload(b64: &str) -> Result<SproutPersonaFields, String> {
     let v = decode_b64_json(b64)?;
     let data = v.get("data").ok_or("Missing 'data' in chara payload")?;
     let name = data
@@ -142,7 +171,12 @@ fn parse_chara_payload(b64: &str) -> Result<(String, String), String> {
     if prompt.is_empty() {
         return Err("Chara card has no system_prompt or description".to_string());
     }
-    Ok((name, prompt))
+    Ok(SproutPersonaFields {
+        display_name: name,
+        system_prompt: prompt,
+        provider: None,
+        model: None,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -152,7 +186,7 @@ fn parse_chara_payload(b64: &str) -> Result<(String, String), String> {
 pub fn parse_json_persona(json_bytes: &[u8]) -> Result<ParsedPersonaPreview, String> {
     let v: Value =
         serde_json::from_slice(json_bytes).map_err(|e| format!("Invalid JSON: {e}"))?;
-    let (name, prompt) = extract_sprout_fields(&v)?;
+    let fields = extract_sprout_fields(&v)?;
 
     let avatar_data_url = v
         .get("avatarUrl")
@@ -162,9 +196,11 @@ pub fn parse_json_persona(json_bytes: &[u8]) -> Result<ParsedPersonaPreview, Str
         .map(|s| s.to_string());
 
     Ok(ParsedPersonaPreview {
-        display_name: name,
-        system_prompt: prompt,
+        display_name: fields.display_name,
+        system_prompt: fields.system_prompt,
         avatar_data_url,
+        provider: fields.provider,
+        model: fields.model,
         source_file: String::new(),
     })
 }
@@ -173,6 +209,8 @@ pub fn encode_persona_json(
     display_name: &str,
     system_prompt: &str,
     avatar_url: Option<&str>,
+    provider: Option<&str>,
+    model: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let mut map = serde_json::Map::new();
     map.insert("version".to_string(), serde_json::json!(1));
@@ -186,6 +224,12 @@ pub fn encode_persona_json(
     );
     if let Some(url) = avatar_url {
         map.insert("avatarUrl".to_string(), serde_json::json!(url));
+    }
+    if let Some(p) = provider {
+        map.insert("provider".to_string(), serde_json::json!(p));
+    }
+    if let Some(m) = model {
+        map.insert("model".to_string(), serde_json::json!(m));
     }
 
     serde_json::to_vec_pretty(&map).map_err(|e| format!("Failed to serialize JSON: {e}"))
@@ -550,7 +594,7 @@ mod tests {
     #[test]
     fn parse_json_round_trip() {
         let bytes =
-            encode_persona_json("Ada Lovelace", "You are Ada.", Some("https://example.com/ada.png"))
+            encode_persona_json("Ada Lovelace", "You are Ada.", Some("https://example.com/ada.png"), None, None)
                 .unwrap();
         let result = parse_json_persona(&bytes).unwrap();
         assert_eq!(result.display_name, "Ada Lovelace");
@@ -564,7 +608,7 @@ mod tests {
 
     #[test]
     fn parse_json_round_trip_no_avatar() {
-        let bytes = encode_persona_json("Bob", "You are Bob.", None).unwrap();
+        let bytes = encode_persona_json("Bob", "You are Bob.", None, None, None).unwrap();
         let result = parse_json_persona(&bytes).unwrap();
         assert_eq!(result.display_name, "Bob");
         assert_eq!(result.system_prompt, "You are Bob.");
@@ -574,10 +618,53 @@ mod tests {
     #[test]
     fn parse_json_round_trip_data_uri_avatar() {
         let data_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
-        let bytes = encode_persona_json("Carol", "You are Carol.", Some(data_uri)).unwrap();
+        let bytes = encode_persona_json("Carol", "You are Carol.", Some(data_uri), None, None).unwrap();
         let result = parse_json_persona(&bytes).unwrap();
         assert_eq!(result.display_name, "Carol");
         assert_eq!(result.avatar_data_url.as_deref(), Some(data_uri));
+    }
+
+    #[test]
+    fn parse_json_round_trip_with_provider_and_model() {
+        let bytes = encode_persona_json(
+            "Agent Smith",
+            "You are an agent.",
+            None,
+            Some("goose"),
+            Some("claude-sonnet-4"),
+        )
+        .unwrap();
+        let result = parse_json_persona(&bytes).unwrap();
+        assert_eq!(result.display_name, "Agent Smith");
+        assert_eq!(result.system_prompt, "You are an agent.");
+        assert!(result.avatar_data_url.is_none());
+        assert_eq!(result.provider.as_deref(), Some("goose"));
+        assert_eq!(result.model.as_deref(), Some("claude-sonnet-4"));
+    }
+
+    #[test]
+    fn parse_json_round_trip_without_provider_and_model() {
+        let bytes = encode_persona_json("Bob", "You are Bob.", None, None, None).unwrap();
+        let result = parse_json_persona(&bytes).unwrap();
+        assert_eq!(result.display_name, "Bob");
+        assert!(result.provider.is_none());
+        assert!(result.model.is_none());
+    }
+
+    #[test]
+    fn parse_json_backward_compat_no_provider_model_fields() {
+        // Simulate a legacy persona JSON without provider/model fields
+        let json = serde_json::json!({
+            "version": 1,
+            "displayName": "Legacy Persona",
+            "systemPrompt": "Old school prompt"
+        });
+        let bytes = serde_json::to_vec(&json).unwrap();
+        let result = parse_json_persona(&bytes).unwrap();
+        assert_eq!(result.display_name, "Legacy Persona");
+        assert_eq!(result.system_prompt, "Old school prompt");
+        assert!(result.provider.is_none());
+        assert!(result.model.is_none());
     }
 
     #[test]
@@ -620,8 +707,8 @@ mod tests {
 
     #[test]
     fn parse_zip_with_json() {
-        let j1 = encode_persona_json("Alice", "Prompt A", None).unwrap();
-        let j2 = encode_persona_json("Bob", "Prompt B", None).unwrap();
+        let j1 = encode_persona_json("Alice", "Prompt A", None, None, None).unwrap();
+        let j2 = encode_persona_json("Bob", "Prompt B", None, None, None).unwrap();
         let zip = make_test_zip(&[("alice.persona.json", &j1), ("bob.persona.json", &j2)]);
         let result = parse_zip_personas(&zip).unwrap();
         assert_eq!(result.personas.len(), 2);
@@ -633,7 +720,7 @@ mod tests {
     #[test]
     fn parse_zip_mixed_png_and_json() {
         let png = make_test_persona_png("PngPersona", "PNG prompt");
-        let json = encode_persona_json("JsonPersona", "JSON prompt", None).unwrap();
+        let json = encode_persona_json("JsonPersona", "JSON prompt", None, None, None).unwrap();
         let zip = make_test_zip(&[
             ("persona.png", &png),
             ("persona.json", &json),
@@ -648,8 +735,8 @@ mod tests {
 
     #[test]
     fn parse_zip_ignores_macos_resource_forks() {
-        let j1 = encode_persona_json("Frank", "You are Frank.", None).unwrap();
-        let j2 = encode_persona_json("Jackie", "You are Jackie.", None).unwrap();
+        let j1 = encode_persona_json("Frank", "You are Frank.", None, None, None).unwrap();
+        let j2 = encode_persona_json("Jackie", "You are Jackie.", None, None, None).unwrap();
         let zip = make_test_zip(&[
             ("frank-costanza.persona.json", &j1),
             ("jackie-chiles.persona.json", &j2),

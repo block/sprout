@@ -52,6 +52,8 @@ export type CreateChannelManagedAgentInput = {
   systemPrompt?: string;
   avatarUrl?: string;
   personaId?: string | null;
+  /** Preferred model ID from the persona. Passed to createManagedAgent. */
+  model?: string;
   role?: Exclude<ChannelRole, "owner">;
   ensureRunning?: boolean;
   backend?: ManagedAgentBackend;
@@ -308,6 +310,7 @@ export async function createChannelManagedAgent(
     personaId: input.personaId ?? undefined,
     systemPrompt: input.systemPrompt?.trim() || undefined,
     avatarUrl: resolvedAvatarUrl,
+    model: input.model?.trim() || undefined,
     spawnAfterCreate: isProviderMode,
     startOnAppLaunch: isProviderMode ? false : undefined,
     backend: input.backend,

@@ -37,6 +37,7 @@ import {
   coerceConfigValues,
   ProviderConfigFields,
 } from "@/features/agents/ui/ProviderConfigFields";
+import { resolvePersonaProvider } from "@/features/agents/lib/resolvePersonaProvider";
 
 type AddChannelBotDialogProps = {
   backendProviders?: BackendProviderCandidate[];
@@ -300,15 +301,23 @@ export function AddChannelBotDialog({
             },
           ]
         : []),
-      ...selectedPersonas.map((persona) => ({
-        provider: selectedProvider,
-        name: persona.displayName,
-        personaId: persona.id,
-        systemPrompt: persona.systemPrompt,
-        avatarUrl: persona.avatarUrl ?? undefined,
-        role: "bot" as const,
-        backend,
-      })),
+      ...selectedPersonas.map((persona) => {
+        const resolved = resolvePersonaProvider(
+          persona.provider,
+          providers,
+          selectedProvider,
+        );
+        return {
+          provider: resolved.provider ?? selectedProvider,
+          name: persona.displayName,
+          personaId: persona.id,
+          systemPrompt: persona.systemPrompt,
+          avatarUrl: persona.avatarUrl ?? undefined,
+          model: persona.model ?? undefined,
+          role: "bot" as const,
+          backend,
+        };
+      }),
     ];
 
     setSubmissionNotice(null);

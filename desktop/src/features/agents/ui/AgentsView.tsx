@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   type AttachManagedAgentToChannelResult,
   personasQueryKey,
+  useAcpProvidersQuery,
   useCreatePersonaMutation,
   useDeletePersonaMutation,
   useDeleteManagedAgentMutation,
@@ -66,6 +67,7 @@ export function AgentsView() {
   const managedAgentsQuery = useManagedAgentsQuery();
   const channelsQuery = useChannelsQuery();
   const personasQuery = usePersonasQuery();
+  const acpProvidersQuery = useAcpProvidersQuery();
   const startMutation = useStartManagedAgentMutation();
   const stopMutation = useStopManagedAgentMutation();
   const startOnLaunchMutation = useSetManagedAgentStartOnAppLaunchMutation();
@@ -412,6 +414,8 @@ export function AgentsView() {
             displayName: p.displayName,
             avatarUrl: p.avatarDataUrl ?? "",
             systemPrompt: p.systemPrompt,
+            provider: p.provider ?? undefined,
+            model: p.model ?? undefined,
           },
         });
       } else if (result.personas.length > 0) {
@@ -471,6 +475,8 @@ export function AgentsView() {
                     displayName: "",
                     avatarUrl: "",
                     systemPrompt: "",
+                    provider: undefined,
+                    model: undefined,
                   },
                 });
               }}
@@ -487,6 +493,8 @@ export function AgentsView() {
                     displayName: `${persona.displayName} copy`,
                     avatarUrl: persona.avatarUrl ?? "",
                     systemPrompt: persona.systemPrompt,
+                    provider: persona.provider ?? undefined,
+                    model: persona.model ?? undefined,
                   },
                 });
               }}
@@ -503,6 +511,8 @@ export function AgentsView() {
                     displayName: persona.displayName,
                     avatarUrl: persona.avatarUrl ?? "",
                     systemPrompt: persona.systemPrompt,
+                    provider: persona.provider ?? undefined,
+                    model: persona.model ?? undefined,
                   },
                 });
               }}
@@ -665,6 +675,8 @@ export function AgentsView() {
         isPending={
           createPersonaMutation.isPending || updatePersonaMutation.isPending
         }
+        providers={acpProvidersQuery.data ?? []}
+        providersLoading={acpProvidersQuery.isLoading}
         onOpenChange={(open) => {
           if (!open) {
             setPersonaDialogState(null);

@@ -5,6 +5,7 @@ import {
   useCreateChannelManagedAgentsMutation,
 } from "@/features/agents/hooks";
 import type { CreateChannelManagedAgentsResult } from "@/features/agents/channelAgents";
+import { resolvePersonaProvider } from "@/features/agents/lib/resolvePersonaProvider";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type {
@@ -101,19 +102,28 @@ export function AddTeamToChannelDialog({
     }
 
     try {
-      const inputs = resolved.map((persona) => ({
-        provider: {
-          id: defaultProvider.id,
-          label: defaultProvider.label,
-          command: defaultProvider.command,
-          defaultArgs: defaultProvider.defaultArgs,
-        },
-        name: persona.displayName,
-        systemPrompt: persona.systemPrompt,
-        avatarUrl: persona.avatarUrl ?? undefined,
-        personaId: persona.id,
-        role,
-      }));
+      const inputs = resolved.map((persona) => {
+        const resolvedProvider = resolvePersonaProvider(
+          persona.provider,
+          providers,
+          defaultProvider,
+        );
+        const providerToUse = resolvedProvider.provider ?? defaultProvider;
+        return {
+          provider: {
+            id: providerToUse.id,
+            label: providerToUse.label,
+            command: providerToUse.command,
+            defaultArgs: providerToUse.defaultArgs,
+          },
+          name: persona.displayName,
+          systemPrompt: persona.systemPrompt,
+          avatarUrl: persona.avatarUrl ?? undefined,
+          model: persona.model ?? undefined,
+          personaId: persona.id,
+          role,
+        };
+      });
 
       const result = await deployMutation.mutateAsync(inputs);
       onDeployed(selectedChannel, result);

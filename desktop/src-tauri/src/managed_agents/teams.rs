@@ -225,6 +225,8 @@ mod tests {
             display_name: name.to_string(),
             avatar_url: None,
             system_prompt: prompt.to_string(),
+            provider: None,
+            model: None,
             is_builtin: false,
             created_at: "2026-03-20T00:00:00Z".to_string(),
             updated_at: "2026-03-20T00:00:00Z".to_string(),

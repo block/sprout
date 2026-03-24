@@ -410,6 +410,10 @@ export type AgentPersona = {
   displayName: string;
   avatarUrl: string | null;
   systemPrompt: string;
+  /** Preferred ACP provider ID (e.g. "goose", "claude"). */
+  provider: string | null;
+  /** Preferred model ID (e.g. "gpt-4o", "claude-sonnet-4-20250514"). */
+  model: string | null;
   isBuiltIn: boolean;
   createdAt: string;
   updatedAt: string;
@@ -419,6 +423,8 @@ export type CreatePersonaInput = {
   displayName: string;
   avatarUrl?: string;
   systemPrompt: string;
+  provider?: string;
+  model?: string;
 };
 
 export type UpdatePersonaInput = {
@@ -426,6 +432,8 @@ export type UpdatePersonaInput = {
   displayName: string;
   avatarUrl?: string;
   systemPrompt: string;
+  provider?: string;
+  model?: string;
 };
 
 // ── Team types ────────────────────────────────────────────────────────────────

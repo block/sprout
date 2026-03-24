@@ -24,6 +24,14 @@ pub struct PersonaRecord {
     pub display_name: String,
     pub avatar_url: Option<String>,
     pub system_prompt: String,
+    /// Preferred ACP provider ID (e.g. "goose", "claude", "codex").
+    /// When deploying an agent from this persona, this provider is pre-selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Preferred model ID (e.g. "gpt-4o", "claude-sonnet-4-20250514").
+    /// Passed to the agent at creation time when deploying from this persona.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(default)]
     pub is_builtin: bool,
     pub created_at: String,
@@ -160,6 +168,10 @@ pub struct CreatePersonaRequest {
     pub display_name: String,
     pub avatar_url: Option<String>,
     pub system_prompt: String,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,6 +181,10 @@ pub struct UpdatePersonaRequest {
     pub display_name: String,
     pub avatar_url: Option<String>,
     pub system_prompt: String,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

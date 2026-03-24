@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import type {
+  AcpProvider,
   CreatePersonaInput,
   UpdatePersonaInput,
 } from "@/shared/api/types";
@@ -23,6 +24,8 @@ type PersonaDialogProps = {
   initialValues: CreatePersonaInput | UpdatePersonaInput | null;
   error: Error | null;
   isPending: boolean;
+  providers: AcpProvider[];
+  providersLoading?: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (input: CreatePersonaInput | UpdatePersonaInput) => Promise<void>;
 };
@@ -35,12 +38,16 @@ export function PersonaDialog({
   initialValues,
   error,
   isPending,
+  providers,
+  providersLoading = false,
   onOpenChange,
   onSubmit,
 }: PersonaDialogProps) {
   const [displayName, setDisplayName] = React.useState("");
   const [avatarUrl, setAvatarUrl] = React.useState("");
   const [systemPrompt, setSystemPrompt] = React.useState("");
+  const [provider, setProvider] = React.useState("");
+  const [model, setModel] = React.useState("");
 
   React.useEffect(() => {
     if (!open || !initialValues) {
@@ -50,6 +57,8 @@ export function PersonaDialog({
     setDisplayName(initialValues.displayName);
     setAvatarUrl(initialValues.avatarUrl ?? "");
     setSystemPrompt(initialValues.systemPrompt);
+    setProvider(initialValues.provider ?? "");
+    setModel(initialValues.model ?? "");
   }, [initialValues, open]);
 
   function handleOpenChange(next: boolean) {
@@ -57,6 +66,8 @@ export function PersonaDialog({
       setDisplayName("");
       setAvatarUrl("");
       setSystemPrompt("");
+      setProvider("");
+      setModel("");
     }
 
     onOpenChange(next);
@@ -71,6 +82,8 @@ export function PersonaDialog({
       displayName,
       avatarUrl: avatarUrl.trim() || undefined,
       systemPrompt,
+      provider: provider.trim() || undefined,
+      model: model.trim() || undefined,
     };
 
     if ("id" in initialValues) {
@@ -93,7 +106,7 @@ export function PersonaDialog({
             <DialogDescription>{description}</DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-5 px-6 py-5">
+          <div className="space-y-5 overflow-y-auto px-6 py-5">
             <div className="space-y-1.5">
               <label
                 className="text-sm font-medium"
@@ -149,6 +162,54 @@ export function PersonaDialog({
                 placeholder="Describe what this persona should do."
                 value={systemPrompt}
               />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="persona-provider">
+                Preferred runtime
+              </label>
+              <select
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+                disabled={isPending || providersLoading}
+                id="persona-provider"
+                onChange={(event) => setProvider(event.target.value)}
+                value={provider}
+              >
+                <option value="">
+                  {providersLoading
+                    ? "Loading runtimes..."
+                    : "No preference (use default)"}
+                </option>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Optional. When deploying this persona, the selected runtime will
+                be pre-selected. Falls back to the default if unavailable.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="persona-model">
+                Preferred model
+              </label>
+              <Input
+                autoCapitalize="none"
+                autoCorrect="off"
+                disabled={isPending}
+                id="persona-model"
+                onChange={(event) => setModel(event.target.value)}
+                placeholder="e.g. gpt-4o, claude-sonnet-4-20250514"
+                spellCheck={false}
+                value={model}
+              />
+              <p className="text-xs text-muted-foreground">
+                Optional. Passed to the agent at creation time. Leave blank to
+                use the runtime default.
+              </p>
             </div>
 
             {error ? (
