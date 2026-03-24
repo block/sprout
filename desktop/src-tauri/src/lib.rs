@@ -2,6 +2,7 @@ mod app_state;
 mod commands;
 mod events;
 mod managed_agents;
+mod migration;
 mod models;
 mod relay;
 mod util;
@@ -188,6 +189,11 @@ pub fn run() {
         .manage(build_app_state())
         .setup(|app| {
             let app_handle = app.handle().clone();
+
+            // Migrate data from the legacy `com.wesb.sprout` directory before
+            // resolving identity, so the persisted key is available at the new
+            // path on first launch after the identifier change.
+            migration::migrate_legacy_data_dir(&app_handle);
 
             // Resolve persisted identity key (env var → file → generate+save).
             // This is fatal — the app should not start with an ephemeral identity

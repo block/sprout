@@ -147,9 +147,9 @@ dev *ARGS:
 desktop-dev:
     cd {{desktop_dir}} && pnpm dev
 
-# Run the desktop Tauri app
+# Run the desktop Tauri app (uses dev identifier for side-by-side with production)
 desktop-app *ARGS:
-    cd {{desktop_dir}} && pnpm tauri dev {{ARGS}}
+    cd {{desktop_dir}} && pnpm tauri dev --config src-tauri/tauri.dev.conf.json {{ARGS}}
 
 # ─── Desktop Release ──────────────────────────────────────────────────────────
 

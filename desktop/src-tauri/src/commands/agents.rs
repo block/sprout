@@ -431,7 +431,7 @@ pub async fn create_managed_agent(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .or_else(|| managed_agent_avatar_url(agent.agent_command.as_str()));
-    let profile_sync_error = match sync_managed_agent_profile(
+    let profile_sync_error = (sync_managed_agent_profile(
         &state,
         &resolved_relay_url,
         &agent_keys,
@@ -440,11 +440,8 @@ pub async fn create_managed_agent(
         &name,
         avatar_url.as_deref(),
     )
-    .await
-    {
-        Ok(()) => None,
-        Err(error) => Some(error),
-    };
+    .await)
+        .err();
 
     // ── Phase 5: provider deploy (async, outside lock) ───────────────────────
     let spawn_error = if input.spawn_after_create && input.backend != BackendKind::Local {

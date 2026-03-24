@@ -171,7 +171,7 @@ pub fn build_nip98_auth_header_for_keys(
 
     let event = EventBuilder::new(Kind::HttpAuth, "")
         .tags(tags)
-        .sign_with_keys(&keys)
+        .sign_with_keys(keys)
         .map_err(|error| format!("sign failed: {error}"))?;
 
     Ok(format!(
