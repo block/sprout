@@ -57,6 +57,7 @@ CREATE TABLE channel_members (
     invited_by  BYTEA,
     removed_at  TIMESTAMPTZ,
     removed_by  BYTEA,
+    hidden_at   TIMESTAMPTZ,
     PRIMARY KEY (channel_id, pubkey)
 );
 

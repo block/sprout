@@ -61,13 +61,57 @@ pub struct AgentModelCapabilities {
     pub available_models_raw: Option<serde_json::Value>,
 }
 
+/// Per-channel session IDs and turn counters.
+///
+/// Separated from `OwnedAgent` so the state machine is testable without
+/// spawning a real agent subprocess.
+#[derive(Default)]
+pub struct SessionState {
+    /// channel_id → session_id
+    pub sessions: HashMap<Uuid, String>,
+    pub heartbeat_session: Option<String>,
+    /// Per-channel turn counters for proactive session rotation.
+    /// Incremented on each successful prompt; reset when the session is rotated.
+    pub turn_counts: HashMap<Uuid, u32>,
+    /// Turn counter for the heartbeat session.
+    pub heartbeat_turn_count: u32,
+}
+
+impl SessionState {
+    /// Invalidate the session (and turn counter) for a specific prompt source.
+    pub fn invalidate(&mut self, source: &PromptSource) {
+        match source {
+            PromptSource::Channel(cid) => {
+                self.invalidate_channel(cid);
+            }
+            PromptSource::Heartbeat => {
+                self.heartbeat_session = None;
+                self.heartbeat_turn_count = 0;
+            }
+        }
+    }
+
+    /// Invalidate a single channel's session and turn counter.
+    /// Returns `true` if the channel had an active session.
+    pub fn invalidate_channel(&mut self, channel_id: &Uuid) -> bool {
+        self.turn_counts.remove(channel_id);
+        self.sessions.remove(channel_id).is_some()
+    }
+
+    /// Invalidate all sessions and turn counters (e.g. after agent exit).
+    pub fn invalidate_all(&mut self) {
+        self.sessions.clear();
+        self.turn_counts.clear();
+        self.heartbeat_session = None;
+        self.heartbeat_turn_count = 0;
+    }
+}
+
 /// An agent with its session state, owned by the pool or a running task.
 pub struct OwnedAgent {
     pub index: usize,
     pub acp: AcpClient,
-    /// channel_id → session_id
-    pub sessions: HashMap<Uuid, String>,
-    pub heartbeat_session: Option<String>,
+    pub state: SessionState,
     /// Model catalog from first session/new. None until first session created.
     pub model_capabilities: Option<AgentModelCapabilities>,
     /// Desired model ID (from `Config.model`). Applied after every `session_new_full()`.
@@ -97,6 +141,7 @@ pub struct PromptResult {
 }
 
 /// Whether the prompt came from a channel event or a heartbeat.
+#[derive(Debug)]
 pub enum PromptSource {
     Channel(Uuid),
     Heartbeat,
@@ -129,6 +174,8 @@ pub struct PromptContext {
     pub channel_info: std::collections::HashMap<Uuid, ChannelInfo>,
     /// Max messages to include in thread/DM context. 0 = disabled.
     pub context_message_limit: u32,
+    /// Max turns per session before proactive rotation. 0 = disabled.
+    pub max_turns_per_session: u32,
 }
 
 // ── AgentPool impl ────────────────────────────────────────────────────────────
@@ -161,7 +208,7 @@ impl AgentPool {
         if let Some(cid) = channel_id {
             let idx = self.agents.iter().position(|slot| {
                 slot.as_ref()
-                    .map(|a| a.sessions.contains_key(&cid))
+                    .map(|a| a.state.sessions.contains_key(&cid))
                     .unwrap_or(false)
             });
             if let Some(i) = idx {
@@ -194,7 +241,7 @@ impl AgentPool {
     pub fn has_session_for(&self, channel_id: Uuid) -> bool {
         self.agents.iter().any(|slot| {
             slot.as_ref()
-                .map(|a| a.sessions.contains_key(&channel_id))
+                .map(|a| a.state.sessions.contains_key(&channel_id))
                 .unwrap_or(false)
         })
     }
@@ -247,7 +294,7 @@ impl AgentPool {
         let mut count = 0;
         for slot in &mut self.agents {
             if let Some(agent) = slot.as_mut() {
-                if agent.sessions.remove(&channel_id).is_some() {
+                if agent.state.invalidate_channel(&channel_id) {
                     count += 1;
                 }
             }
@@ -401,7 +448,7 @@ pub async fn run_prompt_task(
 
     let (session_id, is_new_session) = match &source {
         PromptSource::Channel(cid) => {
-            if let Some(sid) = agent.sessions.get(cid) {
+            if let Some(sid) = agent.state.sessions.get(cid) {
                 (sid.clone(), false)
             } else {
                 // Create new session with model application.
@@ -411,12 +458,11 @@ pub async fn run_prompt_task(
                             target: "pool::session",
                             "created session {sid} for channel {cid}"
                         );
-                        agent.sessions.insert(*cid, sid.clone());
+                        agent.state.sessions.insert(*cid, sid.clone());
                         (sid, true)
                     }
                     Err(AcpError::AgentExited) => {
-                        agent.sessions.clear();
-                        agent.heartbeat_session = None;
+                        agent.state.invalidate_all();
                         let _ = result_tx.send(PromptResult {
                             agent,
                             source,
@@ -438,7 +484,7 @@ pub async fn run_prompt_task(
             }
         }
         PromptSource::Heartbeat => {
-            if let Some(sid) = &agent.heartbeat_session {
+            if let Some(sid) = &agent.state.heartbeat_session {
                 (sid.clone(), false)
             } else {
                 match create_session_and_apply_model(&mut agent, &ctx).await {
@@ -448,12 +494,11 @@ pub async fn run_prompt_task(
                             "created heartbeat session {sid} for agent {}",
                             agent.index
                         );
-                        agent.heartbeat_session = Some(sid.clone());
+                        agent.state.heartbeat_session = Some(sid.clone());
                         (sid, true)
                     }
                     Err(AcpError::AgentExited) => {
-                        agent.sessions.clear();
-                        agent.heartbeat_session = None;
+                        agent.state.invalidate_all();
                         let _ = result_tx.send(PromptResult {
                             agent,
                             source,
@@ -499,8 +544,7 @@ pub async fn run_prompt_task(
                     );
                 }
                 Ok(Err(AcpError::AgentExited)) => {
-                    agent.sessions.clear();
-                    agent.heartbeat_session = None;
+                    agent.state.invalidate_all();
                     let _ = result_tx.send(PromptResult {
                         agent,
                         source,
@@ -514,7 +558,7 @@ pub async fn run_prompt_task(
                         target: "pool::session",
                         "initial_message failed for channel {cid}: {e} — invalidating session"
                     );
-                    agent.sessions.remove(cid);
+                    agent.state.invalidate(&source);
                     let _ = result_tx.send(PromptResult {
                         agent,
                         source,
@@ -530,11 +574,10 @@ pub async fn run_prompt_task(
                     );
                     match agent.acp.cancel_with_cleanup(&session_id).await {
                         Ok(_) => {
-                            agent.sessions.remove(cid);
+                            agent.state.invalidate(&source);
                         }
                         Err(AcpError::AgentExited) => {
-                            agent.sessions.clear();
-                            agent.heartbeat_session = None;
+                            agent.state.invalidate_all();
                             let _ = result_tx.send(PromptResult {
                                 agent,
                                 source,
@@ -548,7 +591,7 @@ pub async fn run_prompt_task(
                                 target: "pool::session",
                                 "cancel_with_cleanup failed during initial_message timeout: {e}"
                             );
-                            agent.sessions.remove(cid);
+                            agent.state.invalidate(&source);
                         }
                     }
                     let _ = result_tx.send(PromptResult {
@@ -626,6 +669,41 @@ pub async fn run_prompt_task(
     match prompt_result {
         Ok(Ok(stop_reason)) => {
             log_stop_reason(&source, &stop_reason);
+
+            // ── Session rotation on context exhaustion ────────────────
+            let should_rotate = matches!(
+                stop_reason,
+                StopReason::MaxTokens | StopReason::MaxTurnRequests
+            );
+
+            // ── Proactive turn-based rotation ─────────────────────────
+            let should_rotate = should_rotate || {
+                let limit = ctx.max_turns_per_session;
+                if limit > 0 {
+                    match &source {
+                        PromptSource::Channel(cid) => {
+                            let count = agent.state.turn_counts.entry(*cid).or_insert(0);
+                            *count += 1;
+                            *count >= limit
+                        }
+                        PromptSource::Heartbeat => {
+                            agent.state.heartbeat_turn_count += 1;
+                            agent.state.heartbeat_turn_count >= limit
+                        }
+                    }
+                } else {
+                    false
+                }
+            };
+
+            if should_rotate {
+                tracing::info!(
+                    target: "pool::session",
+                    "rotating session for {source:?} after {stop_reason:?}",
+                );
+                agent.state.invalidate(&source);
+            }
+
             let _ = result_tx.send(PromptResult {
                 agent,
                 source,
@@ -635,8 +713,7 @@ pub async fn run_prompt_task(
         }
         Ok(Err(AcpError::AgentExited)) => {
             tracing::error!(target: "pool::prompt", "agent {} exited during prompt", agent.index);
-            agent.sessions.clear();
-            agent.heartbeat_session = None;
+            agent.state.invalidate_all();
             let _ = result_tx.send(PromptResult {
                 agent,
                 source,
@@ -647,14 +724,7 @@ pub async fn run_prompt_task(
         Ok(Err(e)) => {
             tracing::error!(target: "pool::prompt", "session_prompt error: {e}");
             // Invalidate only the affected session.
-            match &source {
-                PromptSource::Channel(cid) => {
-                    agent.sessions.remove(cid);
-                }
-                PromptSource::Heartbeat => {
-                    agent.heartbeat_session = None;
-                }
-            }
+            agent.state.invalidate(&source);
             let _ = result_tx.send(PromptResult {
                 agent,
                 source,
@@ -685,8 +755,7 @@ pub async fn run_prompt_task(
                         "agent {} exited during cancel_with_cleanup",
                         agent.index
                     );
-                    agent.sessions.clear();
-                    agent.heartbeat_session = None;
+                    agent.state.invalidate_all();
                     let _ = result_tx.send(PromptResult {
                         agent,
                         source,
@@ -699,14 +768,7 @@ pub async fn run_prompt_task(
                         target: "pool::prompt",
                         "cancel_with_cleanup error: {e} — invalidating session"
                     );
-                    match &source {
-                        PromptSource::Channel(cid) => {
-                            agent.sessions.remove(cid);
-                        }
-                        PromptSource::Heartbeat => {
-                            agent.heartbeat_session = None;
-                        }
-                    }
+                    agent.state.invalidate(&source);
                     let _ = result_tx.send(PromptResult {
                         agent,
                         source,
@@ -1005,10 +1067,10 @@ fn log_stop_reason(source: &PromptSource, stop_reason: &StopReason) {
             tracing::warn!(target: "pool::prompt", "turn cancelled for {label}");
         }
         StopReason::MaxTokens => {
-            tracing::warn!(target: "pool::prompt", "turn hit max_tokens for {label}");
+            tracing::warn!(target: "pool::prompt", "turn hit max_tokens for {label} — session will be rotated");
         }
         StopReason::MaxTurnRequests => {
-            tracing::warn!(target: "pool::prompt", "turn hit max_turn_requests for {label}");
+            tracing::warn!(target: "pool::prompt", "turn hit max_turn_requests for {label} — session will be rotated");
         }
         StopReason::Refusal => {
             tracing::warn!(target: "pool::prompt", "turn refused for {label}");
@@ -1097,25 +1159,135 @@ fn pct_encode(s: &str) -> String {
     out
 }
 
-/// Best-effort: add a reaction. Returns immediately on timeout or error.
+/// Best-effort: add a reaction via a signed Nostr kind-7 event (NIP-25).
+///
+/// Builds a reaction event with `sprout_sdk::build_reaction`, signs it with
+/// the keys already stored in `RestClient`, and submits via POST /api/events.
+/// Returns immediately on timeout or any error — reactions are cosmetic.
 pub(crate) async fn reaction_add(rest: &crate::relay::RestClient, event_id: &str, emoji: &str) {
-    let path = format!("/api/messages/{}/reactions", pct_encode(event_id));
-    let body = serde_json::json!({ "emoji": emoji });
-    match tokio::time::timeout(REACTION_TIMEOUT, rest.post_json(&path, &body)).await {
+    let target_id = match nostr::EventId::from_hex(event_id) {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction add: invalid event ID: {e}");
+            return;
+        }
+    };
+    let builder = match sprout_sdk::build_reaction(target_id, emoji) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction add: build failed: {e}");
+            return;
+        }
+    };
+    let event = match builder.sign_with_keys(&rest.keys) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction add: sign failed: {e}");
+            return;
+        }
+    };
+    let body = match serde_json::to_value(&event) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction add: serialize failed: {e}");
+            return;
+        }
+    };
+    match tokio::time::timeout(REACTION_TIMEOUT, rest.post_json("/api/events", &body)).await {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => tracing::debug!(event_id, emoji, "reaction add failed: {e}"),
         Err(_) => tracing::debug!(event_id, emoji, "reaction add timed out"),
     }
 }
 
-/// Best-effort: remove a reaction. Returns immediately on timeout or error.
+/// Best-effort: remove a reaction via a signed kind:5 (NIP-09) deletion event.
+///
+/// Looks up our kind:7 reaction event ID via GET /api/messages/{event_id}/reactions,
+/// then submits a signed kind:5 deletion via POST /api/events.
+/// Returns immediately on timeout or any error — reactions are cosmetic.
 pub(crate) async fn reaction_remove(rest: &crate::relay::RestClient, event_id: &str, emoji: &str) {
-    let path = format!(
-        "/api/messages/{}/reactions/{}",
-        pct_encode(event_id),
-        pct_encode(emoji),
-    );
-    match tokio::time::timeout(REACTION_TIMEOUT, rest.delete(&path)).await {
+    // Step 1: look up the reaction event ID we own for this emoji.
+    let path = format!("/api/messages/{}/reactions", pct_encode(event_id));
+    let resp = match tokio::time::timeout(Duration::from_millis(1_000), rest.get_json(&path)).await
+    {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            tracing::debug!(event_id, emoji, "reaction remove: fetch failed: {e}");
+            return;
+        }
+        Err(_) => {
+            tracing::debug!(event_id, emoji, "reaction remove: fetch timed out");
+            return;
+        }
+    };
+
+    let my_pubkey = rest.keys.public_key().to_hex();
+    let reid = resp
+        .get("reactions")
+        .and_then(|r| r.as_array())
+        .and_then(|groups| {
+            groups.iter().find_map(|group| {
+                if group.get("emoji")?.as_str()? != emoji {
+                    return None;
+                }
+                group.get("users")?.as_array()?.iter().find_map(|user| {
+                    if user.get("pubkey")?.as_str()? != my_pubkey {
+                        return None;
+                    }
+                    user.get("reaction_event_id")?
+                        .as_str()
+                        .map(|s| s.to_string())
+                })
+            })
+        });
+
+    let reid = match reid {
+        Some(id) => id,
+        None => {
+            tracing::debug!(event_id, emoji, "reaction remove: no reaction event found");
+            return;
+        }
+    };
+
+    // Step 2: build and submit a signed kind:5 deletion for the reaction event.
+    let target_id = match nostr::EventId::from_hex(&reid) {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::debug!(
+                event_id,
+                emoji,
+                "reaction remove: invalid reaction event ID: {e}"
+            );
+            return;
+        }
+    };
+    let builder = match sprout_sdk::build_remove_reaction(target_id) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction remove: build failed: {e}");
+            return;
+        }
+    };
+    let event = match builder.sign_with_keys(&rest.keys) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction remove: sign failed: {e}");
+            return;
+        }
+    };
+    let body = match serde_json::to_value(&event) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(event_id, emoji, "reaction remove: serialize failed: {e}");
+            return;
+        }
+    };
+    match tokio::time::timeout(
+        Duration::from_millis(1_000),
+        rest.post_json("/api/events", &body),
+    )
+    .await
+    {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => tracing::debug!(event_id, emoji, "reaction remove failed: {e}"),
         Err(_) => tracing::debug!(event_id, emoji, "reaction remove timed out"),
@@ -1430,5 +1602,119 @@ mod tests {
         assert_eq!(pct_encode("/"), "%2F");
         assert_eq!(pct_encode("+"), "%2B");
         assert_eq!(pct_encode(" "), "%20");
+    }
+
+    // ── SessionState tests ───────────────────────────────────────────────
+
+    fn make_state() -> (SessionState, Uuid, Uuid) {
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+        let mut s = SessionState::default();
+        s.sessions.insert(ch_a, "sess-a".into());
+        s.sessions.insert(ch_b, "sess-b".into());
+        s.turn_counts.insert(ch_a, 5);
+        s.turn_counts.insert(ch_b, 3);
+        s.heartbeat_session = Some("sess-hb".into());
+        s.heartbeat_turn_count = 7;
+        (s, ch_a, ch_b)
+    }
+
+    #[test]
+    fn test_invalidate_channel_clears_session_and_turn_count() {
+        let (mut s, ch_a, ch_b) = make_state();
+        s.invalidate(&PromptSource::Channel(ch_a));
+
+        assert!(!s.sessions.contains_key(&ch_a));
+        assert!(!s.turn_counts.contains_key(&ch_a));
+        // ch_b untouched
+        assert_eq!(s.sessions.get(&ch_b).unwrap(), "sess-b");
+        assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        // heartbeat untouched
+        assert_eq!(s.heartbeat_session.as_deref(), Some("sess-hb"));
+        assert_eq!(s.heartbeat_turn_count, 7);
+    }
+
+    #[test]
+    fn test_invalidate_heartbeat_clears_session_and_turn_count() {
+        let (mut s, ch_a, ch_b) = make_state();
+        s.invalidate(&PromptSource::Heartbeat);
+
+        assert!(s.heartbeat_session.is_none());
+        assert_eq!(s.heartbeat_turn_count, 0);
+        // channels untouched
+        assert_eq!(s.sessions.len(), 2);
+        assert_eq!(*s.turn_counts.get(&ch_a).unwrap(), 5);
+        assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+    }
+
+    #[test]
+    fn test_invalidate_all_clears_everything() {
+        let (mut s, _ch_a, _ch_b) = make_state();
+        s.invalidate_all();
+
+        assert!(s.sessions.is_empty());
+        assert!(s.turn_counts.is_empty());
+        assert!(s.heartbeat_session.is_none());
+        assert_eq!(s.heartbeat_turn_count, 0);
+    }
+
+    #[test]
+    fn test_invalidate_nonexistent_channel_is_noop() {
+        let (mut s, ch_a, ch_b) = make_state();
+        let ghost = Uuid::new_v4();
+        s.invalidate(&PromptSource::Channel(ghost));
+
+        // Everything still intact.
+        assert_eq!(s.sessions.len(), 2);
+        assert_eq!(s.turn_counts.len(), 2);
+        assert_eq!(*s.turn_counts.get(&ch_a).unwrap(), 5);
+        assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+    }
+
+    #[test]
+    fn test_invalidate_all_on_empty_state_is_noop() {
+        let mut s = SessionState::default();
+        s.invalidate_all(); // should not panic
+        assert!(s.sessions.is_empty());
+        assert!(s.turn_counts.is_empty());
+    }
+
+    #[test]
+    fn test_invalidate_channel_returns_true_when_session_existed() {
+        let (mut s, ch_a, ch_b) = make_state();
+        assert!(s.invalidate_channel(&ch_a));
+        assert!(!s.sessions.contains_key(&ch_a));
+        assert!(!s.turn_counts.contains_key(&ch_a));
+        // ch_b untouched
+        assert_eq!(s.sessions.get(&ch_b).unwrap(), "sess-b");
+        assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        // heartbeat untouched
+        assert_eq!(s.heartbeat_session.as_deref(), Some("sess-hb"));
+        assert_eq!(s.heartbeat_turn_count, 7);
+    }
+
+    #[test]
+    fn test_invalidate_channel_returns_false_when_no_session() {
+        let (mut s, _ch_a, _ch_b) = make_state();
+        let ghost = Uuid::new_v4();
+        assert!(!s.invalidate_channel(&ghost));
+        // Nothing changed.
+        assert_eq!(s.sessions.len(), 2);
+        assert_eq!(s.turn_counts.len(), 2);
+    }
+
+    #[test]
+    fn test_removed_channels_cleaned_via_invalidate_channel() {
+        // Simulates handle_prompt_result: channels removed while agent
+        // was checked out should have both sessions and turn_counts stripped.
+        let (mut s, ch_a, ch_b) = make_state();
+        let removed = vec![ch_a];
+        for ch in &removed {
+            s.invalidate_channel(ch);
+        }
+        assert!(!s.sessions.contains_key(&ch_a));
+        assert!(!s.turn_counts.contains_key(&ch_a));
+        assert_eq!(s.sessions.get(&ch_b).unwrap(), "sess-b");
+        assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
     }
 }

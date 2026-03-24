@@ -21,7 +21,12 @@ import {
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { sendChannelMessage } from "@/shared/api/tauri";
-import type { ParsePersonaFilesResult } from "@/shared/api/tauriPersonas";
+import {
+  parsePersonaFiles,
+  type ParsePersonaFilesResult,
+} from "@/shared/api/tauriPersonas";
+import { isSingleItemFile } from "@/shared/lib/fileMagic";
+
 import type {
   AgentPersona,
   Channel,
@@ -43,13 +48,13 @@ import { RelayDirectorySection } from "./RelayDirectorySection";
 import { SecretRevealDialog } from "./SecretRevealDialog";
 import { TeamDeleteDialog } from "./TeamDeleteDialog";
 import { TeamDialog } from "./TeamDialog";
+import { TeamImportDialog } from "./TeamImportDialog";
 import { TeamsSection } from "./TeamsSection";
 import { TokenRevealDialog } from "./TokenRevealDialog";
 import { useTeamActions } from "./useTeamActions";
 
 type PersonaDialogState = {
   description: string;
-  enableImportDrop: boolean;
   initialValues: CreatePersonaInput | UpdatePersonaInput;
   submitLabel: string;
   title: string;
@@ -389,6 +394,39 @@ export function AgentsView() {
     void relayAgentsQuery.refetch();
   }
 
+  async function handlePersonaImportFile(
+    fileBytes: number[],
+    fileName: string,
+  ) {
+    setActionNoticeMessage(null);
+    setActionErrorMessage(null);
+    try {
+      const result = await parsePersonaFiles(fileBytes, fileName);
+      if (isSingleItemFile(fileBytes) && result.personas.length === 1) {
+        const p = result.personas[0];
+        setPersonaDialogState({
+          title: `Import ${p.displayName}`,
+          description: "Review and save this imported persona.",
+          submitLabel: "Create persona",
+          initialValues: {
+            displayName: p.displayName,
+            avatarUrl: p.avatarDataUrl ?? "",
+            systemPrompt: p.systemPrompt,
+          },
+        });
+      } else if (result.personas.length > 0) {
+        setBatchImportResult(result);
+        setBatchImportFileName(fileName);
+      } else {
+        setActionErrorMessage("No valid personas found in file.");
+      }
+    } catch (err) {
+      setActionErrorMessage(
+        err instanceof Error ? err.message : "Failed to parse persona file.",
+      );
+    }
+  }
+
   const isActionPending =
     startMutation.isPending ||
     stopMutation.isPending ||
@@ -399,6 +437,7 @@ export function AgentsView() {
     updatePersonaMutation.isPending ||
     deletePersonaMutation.isPending ||
     exportPersonaJsonMutation.isPending ||
+    teamActions.exportTeamJsonMutation.isPending ||
     teamActions.createTeamMutation.isPending ||
     teamActions.updateTeamMutation.isPending ||
     teamActions.deleteTeamMutation.isPending;
@@ -427,7 +466,6 @@ export function AgentsView() {
                   title: "Create persona",
                   description:
                     "Save a reusable role, prompt, and optional avatar for future agent deployments.",
-                  enableImportDrop: true,
                   submitLabel: "Create persona",
                   initialValues: {
                     displayName: "",
@@ -444,7 +482,6 @@ export function AgentsView() {
                   title: `Duplicate ${persona.displayName}`,
                   description:
                     "Create a new persona by copying this template and adjusting it as needed.",
-                  enableImportDrop: false,
                   submitLabel: "Create persona",
                   initialValues: {
                     displayName: `${persona.displayName} copy`,
@@ -460,7 +497,6 @@ export function AgentsView() {
                   title: `Edit ${persona.displayName}`,
                   description:
                     "Update this saved persona. New deployments will use the updated values.",
-                  enableImportDrop: false,
                   submitLabel: "Save changes",
                   initialValues: {
                     id: persona.id,
@@ -469,6 +505,9 @@ export function AgentsView() {
                     systemPrompt: persona.systemPrompt,
                   },
                 });
+              }}
+              onImportFile={(fileBytes, fileName) => {
+                void handlePersonaImportFile(fileBytes, fileName);
               }}
               onExport={(persona) => {
                 exportPersonaJsonMutation.mutate(persona.id, {
@@ -507,6 +546,8 @@ export function AgentsView() {
               onDelete={teamActions.setTeamToDelete}
               onDuplicate={teamActions.openDuplicateDialog}
               onEdit={teamActions.openEditDialog}
+              onExport={teamActions.handleExportTeam}
+              onImportFile={teamActions.handleImportFile}
               onAddToChannel={teamActions.setTeamToAddToChannel}
               personas={personas}
               teams={teamActions.teams}
@@ -613,7 +654,6 @@ export function AgentsView() {
       />
       <PersonaDialog
         description={personaDialogState?.description ?? ""}
-        enableImportDrop={personaDialogState?.enableImportDrop ?? false}
         error={
           updatePersonaMutation.error instanceof Error
             ? updatePersonaMutation.error
@@ -625,11 +665,6 @@ export function AgentsView() {
         isPending={
           createPersonaMutation.isPending || updatePersonaMutation.isPending
         }
-        onBatchImport={(result, fileName) => {
-          setBatchImportResult(result);
-          setBatchImportFileName(fileName);
-          setPersonaDialogState(null);
-        }}
         onOpenChange={(open) => {
           if (!open) {
             setPersonaDialogState(null);
@@ -716,6 +751,17 @@ export function AgentsView() {
         }}
         open={batchImportResult !== null}
         result={batchImportResult}
+      />
+      <TeamImportDialog
+        fileName={teamActions.teamImportPreview?.fileName ?? ""}
+        onComplete={teamActions.handleTeamImportComplete}
+        onOpenChange={(open) => {
+          if (!open) {
+            teamActions.setTeamImportPreview(null);
+          }
+        }}
+        open={teamActions.teamImportPreview !== null}
+        preview={teamActions.teamImportPreview?.preview ?? null}
       />
     </>
   );

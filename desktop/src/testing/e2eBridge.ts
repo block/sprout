@@ -1355,6 +1355,18 @@ async function relayEmptyRequest(
   await assertOk(response);
 }
 
+async function submitSignedEvent(
+  config: E2eConfig | undefined,
+  template: { kind: number; content: string; tags: string[][] },
+): Promise<{ event_id: string; accepted: boolean; message: string }> {
+  const identity = getRelayIdentity(config);
+  const signed = await signWithIdentity(identity, template);
+  return relayJsonRequest(config, "/api/events", {
+    method: "POST",
+    body: JSON.stringify(signed),
+  });
+}
+
 async function handleGetChannels(config: E2eConfig | undefined) {
   const identity = getIdentity(config);
   if (!identity) {
@@ -1411,14 +1423,22 @@ async function handleUpdateProfile(
     return cloneProfile(profile);
   }
 
-  await relayEmptyRequest(config, "/api/users/me/profile", {
-    method: "PUT",
-    body: JSON.stringify({
-      display_name: args.displayName,
-      avatar_url: args.avatarUrl,
-      about: args.about,
-      nip05_handle: args.nip05Handle,
-    }),
+  // Read-merge-write: fetch current profile, merge, sign kind:0.
+  const current = await relayJsonRequest<RawProfile>(
+    config,
+    "/api/users/me/profile",
+  );
+  const profileContent = JSON.stringify({
+    display_name: args.displayName ?? current.display_name ?? undefined,
+    name: current.display_name ?? undefined,
+    picture: args.avatarUrl ?? current.avatar_url ?? undefined,
+    about: args.about ?? current.about ?? undefined,
+    nip05: args.nip05Handle ?? current.nip05_handle ?? undefined,
+  });
+  await submitSignedEvent(config, {
+    kind: 0,
+    content: profileContent,
+    tags: [],
   });
 
   return relayJsonRequest<RawProfile>(config, "/api/users/me/profile");
@@ -1631,15 +1651,28 @@ async function handleCreateChannel(
     return toRawChannel(channel);
   }
 
-  return relayJsonRequest<RawChannel>(config, "/api/channels", {
-    method: "POST",
-    body: JSON.stringify({
-      name: args.name,
-      channel_type: args.channelType,
-      visibility: args.visibility,
-      description: args.description,
-    }),
-  });
+  const channelId = crypto.randomUUID();
+  const tags: string[][] = [
+    ["h", channelId],
+    ["name", args.name],
+    ["channel_type", args.channelType],
+    ["visibility", args.visibility],
+  ];
+  if (args.description) {
+    tags.push(["about", args.description]);
+  }
+  await submitSignedEvent(config, { kind: 9007, content: "", tags });
+
+  // Fetch the created channel to return the expected shape.
+  const channels = await relayJsonRequest<RawChannel[]>(
+    config,
+    "/api/channels",
+  );
+  const created = channels.find((ch) => ch.name === args.name);
+  if (!created) {
+    throw new Error(`Channel "${args.name}" not found after creation`);
+  }
+  return created;
 }
 
 async function handleOpenDm(
@@ -1715,6 +1748,28 @@ async function handleOpenDm(
   );
 }
 
+async function handleHideDm(
+  args: { channelId: string },
+  config: E2eConfig | undefined,
+) {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const index = mockChannels.findIndex(
+      (channel) => channel.id === args.channelId,
+    );
+    if (index === -1) {
+      throw new Error(`DM ${args.channelId} not found.`);
+    }
+    // Remove from mock list (simulates hiding from sidebar).
+    mockChannels.splice(index, 1);
+    return;
+  }
+
+  await relayEmptyRequest(config, `/api/dms/${args.channelId}/hide`, {
+    method: "POST",
+  });
+}
+
 async function handleGetChannelDetails(
   args: { channelId: string },
   config: E2eConfig | undefined,
@@ -1770,16 +1825,18 @@ async function handleUpdateChannel(
     return toRawChannelDetail(channel);
   }
 
+  const tags: string[][] = [["h", args.channelId]];
+  if (args.name !== undefined) {
+    tags.push(["name", args.name]);
+  }
+  if (args.description !== undefined) {
+    tags.push(["about", args.description]);
+  }
+  await submitSignedEvent(config, { kind: 9002, content: "", tags });
+
   return relayJsonRequest<RawChannelDetail>(
     config,
     `/api/channels/${args.channelId}`,
-    {
-      method: "PUT",
-      body: JSON.stringify({
-        name: args.name,
-        description: args.description,
-      }),
-    },
   );
 }
 
@@ -1802,11 +1859,13 @@ async function handleSetChannelTopic(
     return;
   }
 
-  await relayEmptyRequest(config, `/api/channels/${args.channelId}/topic`, {
-    method: "PUT",
-    body: JSON.stringify({
-      topic: args.topic,
-    }),
+  await submitSignedEvent(config, {
+    kind: 9002,
+    content: "",
+    tags: [
+      ["h", args.channelId],
+      ["topic", args.topic],
+    ],
   });
 }
 
@@ -1829,11 +1888,13 @@ async function handleSetChannelPurpose(
     return;
   }
 
-  await relayEmptyRequest(config, `/api/channels/${args.channelId}/purpose`, {
-    method: "PUT",
-    body: JSON.stringify({
-      purpose: args.purpose,
-    }),
+  await submitSignedEvent(config, {
+    kind: 9002,
+    content: "",
+    tags: [
+      ["h", args.channelId],
+      ["purpose", args.purpose],
+    ],
   });
 }
 
@@ -1849,8 +1910,13 @@ async function handleArchiveChannel(
     return;
   }
 
-  await relayEmptyRequest(config, `/api/channels/${args.channelId}/archive`, {
-    method: "POST",
+  await submitSignedEvent(config, {
+    kind: 9002,
+    content: "",
+    tags: [
+      ["h", args.channelId],
+      ["archived", "true"],
+    ],
   });
 }
 
@@ -1866,8 +1932,13 @@ async function handleUnarchiveChannel(
     return;
   }
 
-  await relayEmptyRequest(config, `/api/channels/${args.channelId}/unarchive`, {
-    method: "POST",
+  await submitSignedEvent(config, {
+    kind: 9002,
+    content: "",
+    tags: [
+      ["h", args.channelId],
+      ["archived", "false"],
+    ],
   });
 }
 
@@ -1889,8 +1960,10 @@ async function handleDeleteChannel(
     return;
   }
 
-  await relayEmptyRequest(config, `/api/channels/${args.channelId}`, {
-    method: "DELETE",
+  await submitSignedEvent(config, {
+    kind: 9008,
+    content: "",
+    tags: [["h", args.channelId]],
   });
 }
 
@@ -1934,17 +2007,24 @@ async function handleAddChannelMembers(
     };
   }
 
-  return relayJsonRequest<RawAddChannelMembersResponse>(
-    config,
-    `/api/channels/${args.channelId}/members`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        pubkeys: args.pubkeys,
-        role: args.role,
-      }),
-    },
-  );
+  const added: string[] = [];
+  const errors: RawAddChannelMembersResponse["errors"] = [];
+  for (const pubkey of args.pubkeys) {
+    try {
+      const tags: string[][] = [
+        ["h", args.channelId],
+        ["p", pubkey],
+      ];
+      if (args.role) {
+        tags.push(["role", args.role]);
+      }
+      await submitSignedEvent(config, { kind: 9000, content: "", tags });
+      added.push(pubkey);
+    } catch (e) {
+      errors.push({ pubkey, error: String(e) });
+    }
+  }
+  return { added, errors };
 }
 
 async function handleRemoveChannelMember(
@@ -1965,13 +2045,14 @@ async function handleRemoveChannelMember(
     return;
   }
 
-  await relayEmptyRequest(
-    config,
-    `/api/channels/${args.channelId}/members/${args.pubkey}`,
-    {
-      method: "DELETE",
-    },
-  );
+  await submitSignedEvent(config, {
+    kind: 9001,
+    content: "",
+    tags: [
+      ["h", args.channelId],
+      ["p", args.pubkey],
+    ],
+  });
 }
 
 async function handleJoinChannel(
@@ -1995,8 +2076,10 @@ async function handleJoinChannel(
     return;
   }
 
-  await relayEmptyRequest(config, `/api/channels/${args.channelId}/join`, {
-    method: "POST",
+  await submitSignedEvent(config, {
+    kind: 9021,
+    content: "",
+    tags: [["h", args.channelId]],
   });
 }
 
@@ -2019,8 +2102,10 @@ async function handleLeaveChannel(
     return;
   }
 
-  await relayEmptyRequest(config, `/api/channels/${args.channelId}/leave`, {
-    method: "POST",
+  await submitSignedEvent(config, {
+    kind: 9022,
+    content: "",
+    tags: [["h", args.channelId]],
   });
 }
 
@@ -2852,19 +2937,44 @@ async function handleSendChannelMessage(
     };
   }
 
-  return relayJsonRequest<RawSendChannelMessageResponse>(
-    config,
-    `/api/channels/${args.channelId}/messages`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        content: args.content,
-        parent_event_id: args.parentEventId,
-        broadcast_to_channel: false,
-        mention_pubkeys: args.mentionPubkeys ?? [],
-      }),
-    },
-  );
+  const relayIdentity = getRelayIdentity(config);
+  const tags: string[][] = [
+    ["p", relayIdentity.pubkey],
+    ["h", args.channelId],
+  ];
+
+  // Add mention p-tags (deduplicated, excluding self).
+  const selfLower = relayIdentity.pubkey.toLowerCase();
+  const seen = new Set<string>([selfLower]);
+  for (const pk of args.mentionPubkeys ?? []) {
+    const lower = pk.toLowerCase();
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      tags.push(["p", lower]);
+    }
+  }
+
+  // Add thread e-tags if replying.
+  if (args.parentEventId) {
+    // Simplified: treat parent as both root and reply for direct replies.
+    // The relay's NIP-10 resolver handles ancestry validation.
+    tags.push(["e", args.parentEventId, "", "root"]);
+    tags.push(["e", args.parentEventId, "", "reply"]);
+  }
+
+  const result = await submitSignedEvent(config, {
+    kind: 9,
+    content: args.content.trim(),
+    tags,
+  });
+
+  return {
+    event_id: result.event_id,
+    parent_event_id: args.parentEventId ?? null,
+    root_event_id: args.parentEventId ?? null,
+    depth: args.parentEventId ? 1 : 0,
+    created_at: Math.floor(Date.now() / 1000),
+  };
 }
 
 async function handleGetEvent(
@@ -3284,6 +3394,11 @@ export function maybeInstallE2eTauriMocks() {
       case "open_dm":
         return handleOpenDm(
           payload as Parameters<typeof handleOpenDm>[0],
+          activeConfig,
+        );
+      case "hide_dm":
+        return handleHideDm(
+          payload as Parameters<typeof handleHideDm>[0],
           activeConfig,
         );
       case "get_channel_details":

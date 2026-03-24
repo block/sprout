@@ -3299,6 +3299,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sprout-core",
+ "sprout-sdk",
  "thiserror",
  "tokio",
  "tokio-tungstenite 0.26.2",
@@ -3360,6 +3361,23 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "sprout-cli"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "clap",
+ "nostr",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sprout-sdk",
+ "thiserror",
+ "tokio",
  "uuid",
 ]
 
@@ -3428,6 +3446,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sprout-core",
+ "sprout-sdk",
  "thiserror",
  "tokio",
  "tokio-tungstenite 0.26.2",
@@ -3546,6 +3565,18 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "sprout-sdk"
+version = "0.1.0"
+dependencies = [
+ "nostr",
+ "serde",
+ "serde_json",
+ "sprout-core",
+ "thiserror",
  "uuid",
 ]
 

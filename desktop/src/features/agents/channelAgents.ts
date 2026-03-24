@@ -1,4 +1,5 @@
 import { DEFAULT_MANAGED_AGENT_SCOPES } from "@/features/tokens/lib/scopeOptions";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   addChannelMembers,
   createManagedAgent,
@@ -73,10 +74,6 @@ export type CreateChannelManagedAgentsResult = {
   successes: CreateChannelManagedAgentResult[];
   failures: CreateChannelManagedAgentBatchFailure[];
 };
-
-function normalizePubkey(pubkey: string) {
-  return pubkey.trim().toLowerCase();
-}
 
 function commandBasename(command: string) {
   const normalized = command.trim().replace(/\\/g, "/");

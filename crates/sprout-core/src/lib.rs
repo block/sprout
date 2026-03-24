@@ -5,6 +5,8 @@
 //! Provides [`StoredEvent`], filter matching, kind constants, and event
 //! verification. All other Sprout crates depend on this one.
 
+/// Channel and membership enums shared across crates.
+pub mod channel;
 /// Relay-side error types.
 pub mod error;
 /// Relay-side event wrapper with verification tracking.

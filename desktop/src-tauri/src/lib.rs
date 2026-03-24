@@ -1,5 +1,6 @@
 mod app_state;
 mod commands;
+mod events;
 mod managed_agents;
 mod models;
 mod relay;
@@ -209,6 +210,7 @@ pub fn run() {
             get_channels,
             create_channel,
             open_dm,
+            hide_dm,
             get_channel_details,
             get_channel_members,
             update_channel,
@@ -261,6 +263,8 @@ pub fn run() {
             create_team,
             update_team,
             delete_team,
+            export_team_to_json,
+            parse_team_file,
             parse_persona_files,
             export_persona_to_json,
         ])

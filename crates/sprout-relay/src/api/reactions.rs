@@ -1,8 +1,6 @@
 //! Reaction REST API.
 //!
 //! Endpoints:
-//!   POST   /api/messages/:event_id/reactions          — add a reaction
-//!   DELETE /api/messages/:event_id/reactions/:emoji   — remove own reaction
 //!   GET    /api/messages/:event_id/reactions          — list reactions
 //!
 use std::collections::HashMap;
@@ -15,10 +13,8 @@ use axum::{
 };
 use chrono::{TimeZone, Utc};
 use nostr::util::hex as nostr_hex;
-use nostr::{EventBuilder, Kind, Tag};
 use serde::Deserialize;
 
-use crate::handlers::event::dispatch_persistent_event;
 use crate::state::AppState;
 
 use super::{
@@ -27,13 +23,6 @@ use super::{
 };
 
 // ── Request / query types ─────────────────────────────────────────────────────
-
-/// Request body for adding a reaction.
-#[derive(Debug, Deserialize)]
-pub struct AddReactionBody {
-    /// The emoji to react with (e.g. "👍", ":thumbsup:", "+1").
-    pub emoji: String,
-}
 
 /// Query parameters for listing reactions.
 #[derive(Debug, Deserialize)]
@@ -62,313 +51,6 @@ fn decode_event_id(hex: &str) -> Result<Vec<u8>, (StatusCode, Json<serde_json::V
                 ))
             }
         })
-}
-
-fn build_actor_tags(
-    user_pubkey_hex: &str,
-) -> Result<Vec<Tag>, (StatusCode, Json<serde_json::Value>)> {
-    Ok(vec![
-        Tag::parse(&["p", user_pubkey_hex])
-            .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
-        Tag::parse(&["actor", user_pubkey_hex])
-            .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
-    ])
-}
-
-// ── POST /api/messages/:event_id/reactions ────────────────────────────────────
-
-/// Add a reaction to a message.
-///
-/// The caller must be authenticated and have access to the channel the message
-/// belongs to (member or open channel). Returns 409 if the reaction already exists.
-pub async fn add_reaction_handler(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(event_id_hex): Path<String>,
-    axum::extract::Json(body): axum::extract::Json<AddReactionBody>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let ctx = extract_auth_context(&headers, &state).await?;
-    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
-        .map_err(super::scope_error)?;
-    let pubkey_bytes = ctx.pubkey_bytes.clone();
-
-    let emoji = body.emoji.trim().to_string();
-    if emoji.is_empty() {
-        return Err(api_error(StatusCode::BAD_REQUEST, "emoji is required"));
-    }
-    if emoji.chars().count() > 64 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "emoji too long (max 64 characters)",
-        ));
-    }
-
-    let event_id_bytes = decode_event_id(&event_id_hex)?;
-
-    // Look up the event to get its created_at and channel_id.
-    let stored = state
-        .db
-        .get_event_by_id(&event_id_bytes)
-        .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?
-        .ok_or_else(|| not_found("event not found"))?;
-
-    // Verify channel access if the event belongs to a channel.
-    if let Some(channel_id) = stored.channel_id {
-        // Token-level channel restriction check (channel_id from event lookup).
-        check_token_channel_access(&ctx, &channel_id)?;
-        check_channel_access(&state, channel_id, &pubkey_bytes).await?;
-        let channel = state
-            .db
-            .get_channel(channel_id)
-            .await
-            .map_err(|e| internal_error(&format!("db error: {e}")))?;
-        if channel.archived_at.is_some() {
-            return Err(api_error(StatusCode::FORBIDDEN, "channel is archived"));
-        }
-    }
-
-    // Convert nostr Timestamp → DateTime<Utc>.
-    let event_created_at = Utc
-        .timestamp_opt(stored.event.created_at.as_u64() as i64, 0)
-        .single()
-        .unwrap_or_default();
-
-    // Atomically add the reaction. ON DUPLICATE KEY UPDATE returns
-    // rows_affected=0 if the row is already active — no TOCTOU race.
-    let added = state
-        .db
-        .add_reaction(
-            &event_id_bytes,
-            event_created_at,
-            &pubkey_bytes,
-            &emoji,
-            None,
-        )
-        .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?;
-
-    if !added {
-        return Err(api_error(StatusCode::CONFLICT, "reaction already exists"));
-    }
-
-    // Reaction is now active in DB. Build and store the kind:7 source event.
-    let user_pubkey_hex = nostr_hex::encode(&pubkey_bytes);
-    let mut tags = build_actor_tags(&user_pubkey_hex)?;
-    tags.push(
-        Tag::parse(&["e", &event_id_hex])
-            .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
-    );
-    if let Some(channel_id) = stored.channel_id {
-        tags.push(
-            Tag::parse(&["h", &channel_id.to_string()])
-                .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
-        );
-    }
-
-    let event = EventBuilder::new(Kind::Reaction, &emoji, tags)
-        .sign_with_keys(&state.relay_keypair)
-        .map_err(|e| internal_error(&format!("event signing error: {e}")))?;
-
-    let reaction_event_id = event.id.to_hex();
-    let insert_result = state.db.insert_event(&event, stored.channel_id).await;
-
-    let (stored_event, was_inserted) = match insert_result {
-        Ok(pair) => pair,
-        Err(e) => {
-            // Compensate: deactivate the reaction row so the user can retry.
-            let _ = state
-                .db
-                .remove_reaction(&event_id_bytes, event_created_at, &pubkey_bytes, &emoji)
-                .await;
-            return Err(internal_error(&format!("db error: {e}")));
-        }
-    };
-
-    if !was_inserted {
-        // Event ID collision (INSERT IGNORE no-op) — e.g. rapid remove/re-add
-        // within the same second produces a deterministic event ID that already
-        // exists as a soft-deleted row. Log and continue; the reaction row is
-        // still valid, it just won't have a backfilled event ID.
-        tracing::warn!(
-            reaction_event_id,
-            "reaction source event already existed (INSERT IGNORE no-op)"
-        );
-    }
-
-    // Backfill the source event ID on the reaction row.
-    if let Err(e) = state
-        .db
-        .set_reaction_event_id(
-            &event_id_bytes,
-            event_created_at,
-            &pubkey_bytes,
-            &emoji,
-            event.id.as_bytes(),
-        )
-        .await
-    {
-        tracing::warn!(
-            reaction_event_id,
-            "failed to backfill reaction_event_id: {e}"
-        );
-    }
-
-    // Dispatch to connected clients. Skip handle_side_effects(7, ...) since
-    // we already wrote the reaction row above — calling it again would be a
-    // redundant no-op (ON DUPLICATE KEY UPDATE with same values).
-    let _ = dispatch_persistent_event(&state, &stored_event, 7, &user_pubkey_hex).await;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "added": true,
-            "event_id": reaction_event_id,
-        })),
-    ))
-}
-
-// ── DELETE /api/messages/:event_id/reactions/:emoji ───────────────────────────
-
-/// Remove the authenticated user's reaction from a message.
-///
-/// Returns 404 if the reaction was not found or already removed.
-/// axum's Path extractor URL-decodes the emoji segment automatically.
-pub async fn remove_reaction_handler(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path((event_id_hex, emoji)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let ctx = extract_auth_context(&headers, &state).await?;
-    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
-        .map_err(super::scope_error)?;
-    let pubkey_bytes = ctx.pubkey_bytes.clone();
-
-    let event_id_bytes = decode_event_id(&event_id_hex)?;
-
-    // Look up the event to get its created_at and optionally verify channel access.
-    let stored = state
-        .db
-        .get_event_by_id(&event_id_bytes)
-        .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?
-        .ok_or_else(|| not_found("event not found"))?;
-
-    // Verify channel access if the event belongs to a channel.
-    if let Some(channel_id) = stored.channel_id {
-        // Token-level channel restriction check (channel_id from event lookup).
-        check_token_channel_access(&ctx, &channel_id)?;
-        check_channel_access(&state, channel_id, &pubkey_bytes).await?;
-        let channel = state
-            .db
-            .get_channel(channel_id)
-            .await
-            .map_err(|e| internal_error(&format!("db error: {e}")))?;
-        if channel.archived_at.is_some() {
-            return Err(api_error(StatusCode::FORBIDDEN, "channel is archived"));
-        }
-    }
-
-    let event_created_at = Utc
-        .timestamp_opt(stored.event.created_at.as_u64() as i64, 0)
-        .single()
-        .unwrap_or_default();
-
-    let reaction_record = state
-        .db
-        .get_active_reaction_record(&event_id_bytes, event_created_at, &pubkey_bytes, &emoji)
-        .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?;
-
-    let Some(reaction_record) = reaction_record else {
-        return Err(not_found("reaction not found"));
-    };
-
-    if let Some(reaction_event_id) = reaction_record.reaction_event_id {
-        let reaction_event_hex = nostr_hex::encode(&reaction_event_id);
-        let reaction_event = state
-            .db
-            .get_event_by_id(&reaction_event_id)
-            .await
-            .map_err(|e| internal_error(&format!("db error: {e}")))?;
-
-        // If the source event is missing (e.g. soft-deleted from a prior
-        // remove/re-add cycle), skip kind:5 creation and fall through to
-        // direct row removal below.
-        let reaction_event = match reaction_event {
-            Some(ev) => ev,
-            None => {
-                tracing::warn!(
-                    reaction_event_id = reaction_event_hex,
-                    "reaction source event missing — falling back to direct row removal"
-                );
-                // Direct row removal — no kind:5 event needed.
-                state
-                    .db
-                    .remove_reaction(&event_id_bytes, event_created_at, &pubkey_bytes, &emoji)
-                    .await
-                    .map_err(|e| internal_error(&format!("db error: {e}")))?;
-                return Ok(Json(serde_json::json!({ "removed": true })));
-            }
-        };
-
-        let user_pubkey_hex = nostr_hex::encode(&pubkey_bytes);
-        let mut tags = build_actor_tags(&user_pubkey_hex)?;
-        tags.push(
-            Tag::parse(&["e", &reaction_event_hex])
-                .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
-        );
-        if let Some(channel_id) = reaction_event.channel_id {
-            tags.push(
-                Tag::parse(&["h", &channel_id.to_string()])
-                    .map_err(|e| internal_error(&format!("tag build error: {e}")))?,
-            );
-        }
-
-        let deletion = EventBuilder::new(Kind::EventDeletion, "", tags)
-            .sign_with_keys(&state.relay_keypair)
-            .map_err(|e| internal_error(&format!("event signing error: {e}")))?;
-
-        let deletion_event_id = deletion.id.to_hex();
-        let (stored_deletion, was_inserted) = state
-            .db
-            .insert_event(&deletion, reaction_event.channel_id)
-            .await
-            .map_err(|e| internal_error(&format!("db error: {e}")))?;
-
-        if !was_inserted {
-            return Err(api_error(
-                StatusCode::CONFLICT,
-                "reaction deletion event already exists",
-            ));
-        }
-
-        crate::handlers::side_effects::handle_side_effects(5, &deletion, &state)
-            .await
-            .map_err(|e| internal_error(&format!("reaction deletion failed: {e}")))?;
-
-        let _ = dispatch_persistent_event(&state, &stored_deletion, 5, &user_pubkey_hex).await;
-
-        return Ok(Json(serde_json::json!({
-            "removed": true,
-            "event_id": deletion_event_id,
-        })));
-    }
-
-    // Legacy fallback for reactions created before source-event tracking existed.
-    let removed = state
-        .db
-        .remove_reaction(&event_id_bytes, event_created_at, &pubkey_bytes, &emoji)
-        .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?;
-
-    if !removed {
-        return Err(not_found("reaction not found"));
-    }
-
-    Ok(Json(serde_json::json!({
-        "removed": true,
-    })))
 }
 
 // ── GET /api/messages/:event_id/reactions ────────────────────────────────────
@@ -466,10 +148,14 @@ pub async fn list_reactions_handler(
                         .get(&hex)
                         .cloned()
                         .unwrap_or_else(|| hex[..8.min(hex.len())].to_string());
-                    serde_json::json!({
+                    let mut obj = serde_json::json!({
                         "pubkey": hex,
                         "display_name": name,
-                    })
+                    });
+                    if let Some(ref reid) = u.reaction_event_id {
+                        obj["reaction_event_id"] = serde_json::json!(nostr_hex::encode(reid));
+                    }
+                    obj
                 })
                 .collect();
 

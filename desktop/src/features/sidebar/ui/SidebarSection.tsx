@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { CircleDot, FileText, Hash, Lock } from "lucide-react";
+import { CircleDot, FileText, Hash, Lock, X } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { Channel, PresenceStatus } from "@/shared/api/types";
@@ -9,6 +9,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/shared/ui/sidebar";
@@ -161,7 +162,7 @@ export function ChannelMenuButton({
       {hasUnread && !isActive ? (
         <span
           aria-hidden="true"
-          className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-primary"
+          className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-primary group-hover/menu-item:hidden"
           data-testid={`channel-unread-${channel.name}`}
         />
       ) : null}
@@ -181,6 +182,7 @@ export function SidebarSection({
   title,
   testId,
   unreadChannelIds,
+  onHideDm,
   onSelectChannel,
 }: {
   action?: React.ReactNode;
@@ -194,6 +196,7 @@ export function SidebarSection({
   title: string;
   testId: string;
   unreadChannelIds: Set<string>;
+  onHideDm?: (channelId: string) => void;
   onSelectChannel: (channelId: string) => void;
 }) {
   if (items.length === 0 && !action && !emptyState) {
@@ -208,7 +211,7 @@ export function SidebarSection({
         {items.length > 0 ? (
           <SidebarMenu data-testid={testId}>
             {items.map((channel) => (
-              <SidebarMenuItem key={channel.id}>
+              <SidebarMenuItem className="group/menu-item" key={channel.id}>
                 <ChannelMenuButton
                   channel={channel}
                   dmParticipants={dmParticipantsByChannelId?.[channel.id]}
@@ -218,6 +221,16 @@ export function SidebarSection({
                   presenceStatus={presenceByChannelId?.[channel.id]}
                   onSelectChannel={onSelectChannel}
                 />
+                {channel.channelType === "dm" && onHideDm ? (
+                  <SidebarMenuAction
+                    aria-label="Close direct message"
+                    data-testid={`hide-dm-${channel.name}`}
+                    onClick={() => onHideDm(channel.id)}
+                    showOnHover
+                  >
+                    <X />
+                  </SidebarMenuAction>
+                ) : null}
               </SidebarMenuItem>
             ))}
           </SidebarMenu>

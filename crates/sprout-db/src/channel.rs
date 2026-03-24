@@ -10,129 +10,10 @@ use uuid::Uuid;
 
 use crate::error::{DbError, Result};
 
-/// Whether a channel is publicly visible or invite-only.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ChannelVisibility {
-    /// Searchable; anyone can join without an invite.
-    Open,
-    /// Hidden; requires an invite to join.
-    Private,
-}
-
-impl ChannelVisibility {
-    /// Returns the canonical string representation stored in the database.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ChannelVisibility::Open => "open",
-            ChannelVisibility::Private => "private",
-        }
-    }
-}
-
-impl std::str::FromStr for ChannelVisibility {
-    type Err = crate::error::DbError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "open" => Ok(ChannelVisibility::Open),
-            "private" => Ok(ChannelVisibility::Private),
-            other => Err(crate::error::DbError::InvalidData(format!(
-                "unknown channel visibility: {other:?}"
-            ))),
-        }
-    }
-}
-
-/// The functional type of a channel.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ChannelType {
-    /// Linear message stream (the default channel type).
-    Stream,
-    /// Threaded forum-style discussion.
-    Forum,
-    /// Direct message conversation.
-    Dm,
-    /// Internal workflow execution channel.
-    Workflow,
-}
-
-impl ChannelType {
-    /// Returns the canonical string representation stored in the database.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ChannelType::Stream => "stream",
-            ChannelType::Forum => "forum",
-            ChannelType::Dm => "dm",
-            ChannelType::Workflow => "workflow",
-        }
-    }
-}
-
-impl std::str::FromStr for ChannelType {
-    type Err = crate::error::DbError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "stream" => Ok(ChannelType::Stream),
-            "forum" => Ok(ChannelType::Forum),
-            "dm" => Ok(ChannelType::Dm),
-            "workflow" => Ok(ChannelType::Workflow),
-            other => Err(crate::error::DbError::InvalidData(format!(
-                "unknown channel type: {other:?}"
-            ))),
-        }
-    }
-}
-
-/// A member's role within a channel.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MemberRole {
-    /// Full control — can manage members and delete the channel.
-    Owner,
-    /// Can manage members and channel settings.
-    Admin,
-    /// Standard participant.
-    Member,
-    /// Read-only external participant.
-    Guest,
-    /// Automated agent or integration.
-    Bot,
-}
-
-impl MemberRole {
-    /// Returns the canonical string representation stored in the database.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            MemberRole::Owner => "owner",
-            MemberRole::Admin => "admin",
-            MemberRole::Member => "member",
-            MemberRole::Guest => "guest",
-            MemberRole::Bot => "bot",
-        }
-    }
-
-    /// Elevated roles that only existing owners/admins may grant.
-    fn is_elevated(&self) -> bool {
-        matches!(self, MemberRole::Owner | MemberRole::Admin)
-    }
-}
-
-impl std::str::FromStr for MemberRole {
-    type Err = crate::error::DbError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "owner" => Ok(MemberRole::Owner),
-            "admin" => Ok(MemberRole::Admin),
-            "member" => Ok(MemberRole::Member),
-            "guest" => Ok(MemberRole::Guest),
-            "bot" => Ok(MemberRole::Bot),
-            other => Err(crate::error::DbError::InvalidData(format!(
-                "unknown member role: {other:?}"
-            ))),
-        }
-    }
-}
+// Re-export the canonical enum definitions from sprout-core.
+// These live in core (zero I/O deps) so the SDK can share them
+// without pulling in sqlx/tokio.
+pub use sprout_core::channel::{ChannelType, ChannelVisibility, MemberRole};
 
 /// A channel row as returned from the database.
 #[derive(Debug, Clone)]
@@ -265,6 +146,86 @@ pub async fn create_channel(
     let record = row_to_channel_record(row)?;
     tx.commit().await?;
     Ok(record)
+}
+
+/// Creates a channel with a client-supplied UUID (idempotent via ON CONFLICT DO NOTHING).
+///
+/// Returns `(record, true)` if the channel was newly created, or `(record, false)` if a
+/// channel with `channel_id` already exists (duplicate — caller should reject the event).
+pub async fn create_channel_with_id(
+    pool: &PgPool,
+    channel_id: Uuid,
+    name: &str,
+    channel_type: ChannelType,
+    visibility: ChannelVisibility,
+    description: Option<&str>,
+    created_by: &[u8],
+) -> Result<(ChannelRecord, bool)> {
+    if created_by.len() != 32 {
+        return Err(DbError::InvalidData(format!(
+            "pubkey must be 32 bytes, got {}",
+            created_by.len()
+        )));
+    }
+
+    let mut tx = pool.begin().await?;
+
+    let rows_affected = sqlx::query(
+        r#"
+        INSERT INTO channels (id, name, channel_type, visibility, description, created_by)
+        VALUES ($1, $2, $3::channel_type, $4::channel_visibility, $5, $6)
+        ON CONFLICT (id) DO NOTHING
+        "#,
+    )
+    .bind(channel_id)
+    .bind(name)
+    .bind(channel_type.as_str())
+    .bind(visibility.as_str())
+    .bind(description)
+    .bind(created_by)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    let was_created = rows_affected > 0;
+
+    if was_created {
+        // Bootstrap the creator as owner.
+        sqlx::query(
+            r#"
+            INSERT INTO channel_members (channel_id, pubkey, role, invited_by)
+            VALUES ($1, $2, 'owner', $3)
+            ON CONFLICT (channel_id, pubkey) DO UPDATE SET
+                removed_at = NULL,
+                removed_by = NULL,
+                role = EXCLUDED.role
+            "#,
+        )
+        .bind(channel_id)
+        .bind(created_by)
+        .bind(created_by)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let row = sqlx::query(
+        r#"
+        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
+               description, canvas,
+               created_by, created_at, updated_at, archived_at, deleted_at,
+               nip29_group_id, topic_required, max_members,
+               topic, topic_set_by, topic_set_at,
+               purpose, purpose_set_by, purpose_set_at
+        FROM channels WHERE id = $1
+        "#,
+    )
+    .bind(channel_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let record = row_to_channel_record(row)?;
+    tx.commit().await?;
+    Ok((record, was_created))
 }
 
 /// Fetches a channel record by ID. Returns `ChannelNotFound` if missing or deleted.
@@ -730,6 +691,7 @@ pub async fn get_accessible_channels(
             ON c.id = cm.channel_id AND cm.pubkey = $1 AND cm.removed_at IS NULL
         WHERE c.deleted_at IS NULL
           {membership_clause}
+          AND (c.channel_type != 'dm' OR cm.hidden_at IS NULL)
     "#
     );
 

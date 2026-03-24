@@ -411,7 +411,7 @@ pub async fn create_managed_agent(
     let profile_sync_error = match sync_managed_agent_profile(
         &state,
         &resolved_relay_url,
-        &pubkey,
+        &agent_keys,
         api_token.as_deref(),
         &token_scopes,
         &name,

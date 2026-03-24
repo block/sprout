@@ -1,16 +1,19 @@
 import {
   CopyPlus,
+  Download,
   Ellipsis,
   Info,
   Pencil,
   Plus,
   Rocket,
   Trash2,
+  Upload,
   Users,
 } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { AgentPersona, AgentTeam } from "@/shared/api/types";
+import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -33,8 +36,10 @@ type TeamsSectionProps = {
   onCreate: () => void;
   onDuplicate: (team: AgentTeam) => void;
   onEdit: (team: AgentTeam) => void;
+  onExport: (team: AgentTeam) => void;
   onDelete: (team: AgentTeam) => void;
   onAddToChannel: (team: AgentTeam) => void;
+  onImportFile: (fileBytes: number[], fileName: string) => void;
 };
 
 function resolvePersonas(
@@ -55,11 +60,29 @@ export function TeamsSection({
   onCreate,
   onDuplicate,
   onEdit,
+  onExport,
   onDelete,
   onAddToChannel,
+  onImportFile,
 }: TeamsSectionProps) {
+  const {
+    fileInputRef,
+    isDragOver,
+    dropHandlers,
+    handleFileChange,
+    openFilePicker,
+  } = useFileImportZone({ onImportFile });
+
   return (
-    <section className="space-y-4">
+    <section className="relative space-y-4" {...dropHandlers}>
+      {isDragOver ? (
+        <div className="pointer-events-none absolute -inset-1 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/50 bg-background/80 backdrop-blur-sm">
+          <p className="text-sm font-medium text-primary">
+            Drop .team.json to import
+          </p>
+        </div>
+      ) : null}
+
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold tracking-tight">Teams</h3>
@@ -67,6 +90,13 @@ export function TeamsSection({
             Named groups of personas you can deploy to a channel together.
           </p>
         </div>
+        <input
+          accept=".json"
+          className="hidden"
+          onChange={handleFileChange}
+          ref={fileInputRef}
+          type="file"
+        />
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -197,6 +227,13 @@ export function TeamsSection({
                         <CopyPlus className="h-4 w-4" />
                         Duplicate
                       </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={isPending}
+                        onClick={() => onExport(team)}
+                      >
+                        <Download className="h-4 w-4" />
+                        Export
+                      </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
@@ -212,16 +249,31 @@ export function TeamsSection({
               </div>
             );
           })}
+          <button
+            className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-primary p-3 text-primary transition-colors hover:bg-primary/5"
+            onClick={openFilePicker}
+            type="button"
+          >
+            <Upload className="h-4 w-4" />
+            <span className="text-xs">Import</span>
+          </button>
         </div>
       ) : null}
 
       {!isLoading && teams.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center">
+        <button
+          className="w-full cursor-pointer rounded-xl border border-dashed border-primary/40 px-6 py-10 text-center transition-colors hover:border-primary hover:bg-primary/5"
+          onClick={openFilePicker}
+          type="button"
+        >
           <p className="text-sm font-semibold tracking-tight">No teams yet</p>
           <p className="mt-2 text-sm text-muted-foreground">
             Create a team to group personas for quick deployment to channels.
           </p>
-        </div>
+          <p className="mt-1 text-xs text-muted-foreground/70">
+            Or drop a .team.json file here to import.
+          </p>
+        </button>
       ) : null}
 
       {error ? (

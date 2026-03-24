@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { relayClient } from "@/shared/api/relayClient";
 import { getPresence, setPresence } from "@/shared/api/tauri";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import type { PresenceLookup, PresenceStatus } from "@/shared/api/types";
 
 const PRESENCE_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -14,7 +15,7 @@ const PRESENCE_PREFERENCE_STORAGE_KEY = "sprout-presence-preference";
 type PresencePreference = "auto" | "away" | "offline" | null;
 
 function normalizePubkeys(pubkeys: string[]) {
-  return [...new Set(pubkeys.map((pubkey) => pubkey.trim().toLowerCase()))]
+  return [...new Set(pubkeys.map((pubkey) => normalizePubkey(pubkey)))]
     .filter((pubkey) => pubkey.length > 0)
     .sort();
 }

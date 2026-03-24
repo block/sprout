@@ -45,42 +45,71 @@ fn sub_id(name: &str) -> String {
 /// Create a real channel in the DB via REST so the relay accepts events for it.
 async fn create_test_channel(keys: &Keys) -> String {
     let client = reqwest::Client::new();
-    let url = format!("{}/api/channels", relay_http_url());
     let pubkey_hex = keys.public_key().to_hex();
+    let channel_uuid = uuid::Uuid::new_v4();
+    let channel_name = format!("interop-e2e-{}", channel_uuid);
+
+    let event = EventBuilder::new(
+        Kind::Custom(9007),
+        "",
+        vec![
+            Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
+            Tag::parse(&["name", &channel_name]).unwrap(),
+            Tag::parse(&["channel_type", "stream"]).unwrap(),
+            Tag::parse(&["visibility", "open"]).unwrap(),
+        ],
+    )
+    .sign_with_keys(keys)
+    .unwrap();
+
     let resp = client
-        .post(&url)
+        .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
-        .json(&serde_json::json!({
-            "name": format!("interop-e2e-{}", uuid::Uuid::new_v4()),
-            "channel_type": "stream",
-            "visibility": "open",
-        }))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).unwrap())
         .send()
         .await
-        .expect("create channel request");
-    assert_eq!(resp.status(), 201, "channel creation failed");
-    let body: serde_json::Value = resp.json().await.expect("parse channel response");
-    body["id"].as_str().expect("channel id").to_string()
+        .expect("submit create-channel event");
+    assert!(
+        resp.status().is_success(),
+        "channel creation event failed: {}",
+        resp.status()
+    );
+    let body: serde_json::Value = resp.json().await.expect("parse event response");
+    assert!(
+        body["accepted"].as_bool().unwrap_or(false),
+        "channel creation not accepted: {}",
+        body
+    );
+
+    channel_uuid.to_string()
 }
 
-/// Send a message via REST and return the event_id hex.
+/// Send a message via a signed kind:9 event and return the event_id hex.
 async fn send_rest_message(keys: &Keys, channel_id: &str, content: &str) -> String {
     let client = reqwest::Client::new();
-    let url = format!("{}/api/channels/{}/messages", relay_http_url(), channel_id);
     let pubkey_hex = keys.public_key().to_hex();
+    let event = EventBuilder::new(
+        Kind::Custom(9),
+        content,
+        vec![Tag::parse(&["h", channel_id]).unwrap()],
+    )
+    .sign_with_keys(keys)
+    .unwrap();
     let resp = client
-        .post(&url)
+        .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
-        .json(&serde_json::json!({ "content": content }))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).unwrap())
         .send()
         .await
-        .expect("send message request");
+        .expect("submit send-message event");
     assert!(
         resp.status().is_success(),
         "send message failed: {}",
         resp.status()
     );
-    let body: serde_json::Value = resp.json().await.expect("parse message response");
+    let body: serde_json::Value = resp.json().await.expect("parse event response");
     body["event_id"].as_str().expect("event_id").to_string()
 }
 

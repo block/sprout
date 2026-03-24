@@ -1,4 +1,4 @@
-import { Users } from "lucide-react";
+import { Check, Users } from "lucide-react";
 import type * as React from "react";
 
 import type { AgentPersona, AgentTeam } from "@/shared/api/types";
@@ -56,6 +56,7 @@ function resolveTeamPersonas(
 
 type AddChannelBotTeamsSectionProps = {
   canToggleSelections: boolean;
+  inChannelPersonaIds?: ReadonlySet<string>;
   isLoading: boolean;
   onToggleTeam: (personaIds: string[]) => void;
   personas: AgentPersona[];
@@ -65,6 +66,7 @@ type AddChannelBotTeamsSectionProps = {
 
 export function AddChannelBotTeamsSection({
   canToggleSelections,
+  inChannelPersonaIds,
   isLoading,
   onToggleTeam,
   personas,
@@ -92,13 +94,22 @@ export function AddChannelBotTeamsSection({
             const allSelected =
               validIds.length > 0 &&
               validIds.every((id) => selectedPersonaIds.includes(id));
+            const inChannelCount = inChannelPersonaIds
+              ? validIds.filter((id) => inChannelPersonaIds.has(id)).length
+              : 0;
+            const allInChannel =
+              inChannelCount > 0 && inChannelCount === validIds.length;
 
             return (
               <Tooltip key={team.id}>
                 <TooltipTrigger asChild>
                   <div>
                     <SelectionChipButton
-                      disabled={!canToggleSelections || validIds.length === 0}
+                      disabled={
+                        !canToggleSelections ||
+                        validIds.length === 0 ||
+                        allInChannel
+                      }
                       label={team.name}
                       onClick={() => onToggleTeam(validIds)}
                       selected={allSelected}
@@ -122,6 +133,21 @@ export function AddChannelBotTeamsSection({
                       >
                         ({validIds.length})
                       </span>
+                      {inChannelCount > 0 ? (
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none",
+                            allSelected
+                              ? "bg-background/20 text-background/80"
+                              : "bg-muted/60 text-muted-foreground",
+                          )}
+                        >
+                          <Check className="h-2.5 w-2.5" />
+                          {allInChannel
+                            ? "All in channel"
+                            : `${inChannelCount} in channel`}
+                        </span>
+                      ) : null}
                     </SelectionChipButton>
                   </div>
                 </TooltipTrigger>
@@ -134,21 +160,28 @@ export function AddChannelBotTeamsSection({
                       </p>
                     ) : null}
                     <div className="flex flex-wrap gap-1">
-                      {resolved.map((persona) => (
-                        <div
-                          className="flex items-center gap-1 rounded-full bg-primary-foreground/10 px-1.5 py-0.5"
-                          key={persona.id}
-                        >
-                          <ProfileAvatar
-                            avatarUrl={persona.avatarUrl}
-                            className="h-4 w-4 rounded-full text-[8px] bg-primary-foreground/20 text-primary-foreground"
-                            label={persona.displayName}
-                          />
-                          <span className="text-[10px] text-primary-foreground">
-                            {persona.displayName}
-                          </span>
-                        </div>
-                      ))}
+                      {resolved.map((persona) => {
+                        const personaInChannel =
+                          inChannelPersonaIds?.has(persona.id) ?? false;
+                        return (
+                          <div
+                            className="flex items-center gap-1 rounded-full bg-primary-foreground/10 px-1.5 py-0.5"
+                            key={persona.id}
+                          >
+                            <ProfileAvatar
+                              avatarUrl={persona.avatarUrl}
+                              className="h-4 w-4 rounded-full text-[8px] bg-primary-foreground/20 text-primary-foreground"
+                              label={persona.displayName}
+                            />
+                            <span className="text-[10px] text-primary-foreground">
+                              {persona.displayName}
+                            </span>
+                            {personaInChannel ? (
+                              <Check className="h-2.5 w-2.5 text-emerald-300" />
+                            ) : null}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 </TooltipContent>

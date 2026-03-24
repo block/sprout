@@ -15,6 +15,8 @@ members = [
     "crates/sprout-admin",
     "crates/sprout-workflow",
     "crates/sprout-media",
+    "crates/sprout-cli",
+    "crates/sprout-sdk",
 ]
 exclude = ["desktop/src-tauri"]
 resolver = "2"
@@ -86,6 +88,7 @@ moka    = { version = "0.12", features = ["sync"] }
 # JWT validation (Okta JWKS)
 jsonwebtoken = "9"
 
+
 # Async stream utilities
 futures-util = "0.3"
 
@@ -109,3 +112,4 @@ sprout-proxy = { path = "crates/sprout-proxy" }
 sprout-huddle = { path = "crates/sprout-huddle" }
 sprout-workflow = { path = "crates/sprout-workflow" }
 sprout-media = { path = "crates/sprout-media" }
+sprout-sdk = { path = "crates/sprout-sdk" }

@@ -310,6 +310,30 @@ impl Db {
         .await
     }
 
+    /// Creates a channel with a client-supplied UUID.
+    ///
+    /// Returns `(record, true)` if newly created, `(record, false)` if already exists.
+    pub async fn create_channel_with_id(
+        &self,
+        channel_id: Uuid,
+        name: &str,
+        channel_type: channel::ChannelType,
+        visibility: channel::ChannelVisibility,
+        description: Option<&str>,
+        created_by: &[u8],
+    ) -> Result<(channel::ChannelRecord, bool)> {
+        channel::create_channel_with_id(
+            &self.pool,
+            channel_id,
+            name,
+            channel_type,
+            visibility,
+            description,
+            created_by,
+        )
+        .await
+    }
+
     /// Fetches a channel record by ID.
     pub async fn get_channel(&self, channel_id: Uuid) -> Result<channel::ChannelRecord> {
         channel::get_channel(&self.pool, channel_id).await
@@ -546,6 +570,19 @@ impl Db {
         created_by: &[u8],
     ) -> Result<(channel::ChannelRecord, bool)> {
         dm::open_dm(&self.pool, pubkeys, created_by).await
+    }
+
+    /// Hide a DM channel for a specific user.
+    ///
+    /// The DM is not deleted — it can be restored by opening a new DM with
+    /// the same participants.
+    pub async fn hide_dm(&self, channel_id: Uuid, pubkey: &[u8]) -> Result<()> {
+        dm::hide_dm(&self.pool, channel_id, pubkey).await
+    }
+
+    /// Unhide a DM channel for a specific user.
+    pub async fn unhide_dm(&self, channel_id: Uuid, pubkey: &[u8]) -> Result<()> {
+        dm::unhide_dm(&self.pool, channel_id, pubkey).await
     }
 
     // ── Threads ──────────────────────────────────────────────────────────────

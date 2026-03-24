@@ -1,6 +1,4 @@
-use std::collections::HashSet;
-
-use nostr::{EventBuilder, Kind, Tag};
+use nostr::EventId;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
@@ -42,47 +40,6 @@ fn percent_encode(s: &str) -> String {
 fn validate_uuid(s: &str) -> Result<(), String> {
     uuid::Uuid::parse_str(s).map_err(|_| format!("invalid UUID: {s}"))?;
     Ok(())
-}
-
-fn normalize_mention_pubkeys(mention_pubkeys: &[String], sender_pubkey: &str) -> Vec<String> {
-    let sender_pubkey = sender_pubkey.to_ascii_lowercase();
-    let mut seen = HashSet::new();
-    let mut normalized = Vec::new();
-
-    for pubkey in mention_pubkeys {
-        let lower = pubkey.to_ascii_lowercase();
-        if lower == sender_pubkey || !seen.insert(lower.clone()) {
-            continue;
-        }
-        normalized.push(lower);
-    }
-
-    normalized
-}
-
-fn build_message_tags(
-    channel_id: &str,
-    sender_pubkey: &str,
-    mention_pubkeys: Option<&[String]>,
-) -> Result<Vec<Tag>, String> {
-    let sender_pubkey = sender_pubkey.to_ascii_lowercase();
-    let mut tags = vec![
-        Tag::parse(&["h", channel_id]).map_err(|e| format!("failed to build channel tag: {e}"))?,
-        Tag::parse(&["p", &sender_pubkey])
-            .map_err(|e| format!("failed to build sender tag: {e}"))?,
-    ];
-
-    for mention in mention_pubkeys
-        .map(|mentions| normalize_mention_pubkeys(mentions, &sender_pubkey))
-        .unwrap_or_default()
-    {
-        tags.push(
-            Tag::parse(&["p", &mention])
-                .map_err(|e| format!("failed to build mention tag: {e}"))?,
-        );
-    }
-
-    Ok(tags)
 }
 
 /// Extract the thread root event ID from a serialized Nostr tag array.
@@ -379,6 +336,13 @@ pub struct UnarchiveChannelParams {
     pub channel_id: String,
 }
 
+/// Parameters for the `delete_channel` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DeleteChannelParams {
+    /// UUID of the channel to permanently delete.
+    pub channel_id: String,
+}
+
 // ── Thread tool parameter structs ─────────────────────────────────────────────
 
 /// Parameters for the `get_thread` tool.
@@ -412,6 +376,13 @@ pub struct AddDmMemberParams {
     pub channel_id: String,
     /// Hex-encoded public key of the user to add.
     pub pubkey: String,
+}
+
+/// Parameters for the `hide_dm` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct HideDmParams {
+    /// UUID of the DM channel to hide.
+    pub channel_id: String,
 }
 
 // ── Reaction tool parameter structs ──────────────────────────────────────────
@@ -710,16 +681,16 @@ impl SproutMcpServer {
         }
     }
 
-    /// Build NIP-10 reply tags for a threaded reply.
+    /// Resolve a `ThreadRef` for SDK builders by fetching the parent event.
     ///
-    /// Fetches the parent event via `GET /api/events/{id}` to determine thread
-    /// ancestry. This requires `MessagesRead` scope — acceptable because the MCP
-    /// server's read tools (get_messages, list_channels, search, etc.) already
-    /// require it, so any usable MCP token will have it.
-    ///
-    /// - Direct reply (parent is top-level): `["e", parent, "", "reply"]`
-    /// - Nested reply (parent is a reply): `["e", root, "", "root"]` + `["e", parent, "", "reply"]`
-    async fn build_reply_tags(&self, parent_event_id: &str) -> Result<Vec<Tag>, String> {
+    /// Determines root vs. parent for NIP-10 markers:
+    /// - Direct reply: root == parent
+    /// - Nested reply: root is the thread root, parent is the immediate reply target
+    async fn resolve_thread_ref(
+        &self,
+        parent_event_id: &str,
+        parent_eid: EventId,
+    ) -> Result<sprout_sdk::ThreadRef, String> {
         let resp = self
             .client
             .get(&format!("/api/events/{}", parent_event_id))
@@ -729,21 +700,16 @@ impl SproutMcpServer {
         let event_json: serde_json::Value = serde_json::from_str(&resp)
             .map_err(|e| format!("failed to parse parent event: {e}"))?;
 
-        let reply_tag = Tag::parse(&["e", parent_event_id, "", "reply"])
-            .map_err(|e| format!("failed to build reply tag: {e}"))?;
+        let root_eid = match find_root_from_tags(&event_json["tags"]) {
+            Some(root_hex) if root_hex != parent_event_id => EventId::from_hex(&root_hex)
+                .map_err(|e| format!("failed to parse root event id: {e}"))?,
+            _ => parent_eid,
+        };
 
-        match find_root_from_tags(&event_json["tags"]) {
-            Some(root) if root != parent_event_id => {
-                // Nested reply — parent is itself a reply with a different root.
-                let root_tag = Tag::parse(&["e", &root, "", "root"])
-                    .map_err(|e| format!("failed to build root tag: {e}"))?;
-                Ok(vec![root_tag, reply_tag])
-            }
-            _ => {
-                // Direct reply — parent is the root (or has no thread ancestry).
-                Ok(vec![reply_tag])
-            }
-        }
+        Ok(sprout_sdk::ThreadRef {
+            root_event_id: root_eid,
+            parent_event_id: parent_eid,
+        })
     }
 
     /// Send a message to a Sprout channel.
@@ -758,7 +724,6 @@ Default kind is 9 (stream message)."
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-
         if p.content.len() > MAX_CONTENT_BYTES {
             return format!(
                 "Error: content exceeds maximum size of {} bytes (got {})",
@@ -766,7 +731,6 @@ Default kind is 9 (stream message)."
                 p.content.len()
             );
         }
-
         if let Some(ref parent_id) = p.parent_event_id {
             if parent_id.len() != 64 || !parent_id.chars().all(|c| c.is_ascii_hexdigit()) {
                 return format!(
@@ -786,41 +750,89 @@ Default kind is 9 (stream message)."
             }
         }
 
-        let kind = Kind::from(
-            p.kind
-                .unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE as u16),
-        );
-        let sender_pubkey = self.client.keys().public_key().to_hex();
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let kind_num = p
+            .kind
+            .unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE as u16);
+        let mention_refs: Vec<&str> = p
+            .mention_pubkeys
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let broadcast = p.broadcast_to_channel.unwrap_or(false);
 
-        // Base tags: channel + sender + mentions (same for all messages).
-        let mut tags =
-            match build_message_tags(&p.channel_id, &sender_pubkey, p.mention_pubkeys.as_deref()) {
-                Ok(tags) => tags,
-                Err(error) => return format!("Error: {error}"),
-            };
-
-        // Thread reply tags (NIP-10).
-        if let Some(ref parent_id) = p.parent_event_id {
-            match self.build_reply_tags(parent_id).await {
-                Ok(reply_tags) => tags.extend(reply_tags),
-                Err(e) => return format!("Error: {e}"),
-            }
-
-            // Surface reply in channel timeline when requested.
-            if p.broadcast_to_channel.unwrap_or(false) {
-                match Tag::parse(&["broadcast", "1"]) {
-                    Ok(tag) => tags.push(tag),
-                    Err(e) => return format!("Error: failed to build broadcast tag: {e}"),
+        // Build the event builder via SDK, routing by kind.
+        let builder = match kind_num as u32 {
+            sprout_core::kind::KIND_FORUM_POST => {
+                // kind 45001: forum post (no thread ref, no broadcast)
+                match sprout_sdk::build_forum_post(channel_uuid, &p.content, &mention_refs, &[]) {
+                    Ok(b) => b,
+                    Err(e) => return format!("Error: {e}"),
                 }
             }
-        }
+            sprout_core::kind::KIND_FORUM_COMMENT => {
+                // kind 45003: forum comment — requires parent_event_id
+                let parent_id = match p.parent_event_id.as_deref() {
+                    Some(id) => id,
+                    None => return "Error: kind 45003 requires parent_event_id".to_string(),
+                };
+                let parent_eid = match EventId::from_hex(parent_id) {
+                    Ok(id) => id,
+                    Err(e) => return format!("Error: invalid parent_event_id: {e}"),
+                };
+                // Fetch parent to resolve thread root for NIP-10 markers.
+                let thread_ref = match self.resolve_thread_ref(parent_id, parent_eid).await {
+                    Ok(tr) => tr,
+                    Err(e) => return format!("Error: {e}"),
+                };
+                match sprout_sdk::build_forum_comment(
+                    channel_uuid,
+                    &p.content,
+                    &thread_ref,
+                    &mention_refs,
+                    &[],
+                ) {
+                    Ok(b) => b,
+                    Err(e) => return format!("Error: {e}"),
+                }
+            }
+            _ => {
+                // kind 9 (default) and any other stream message kinds.
+                let thread_ref = if let Some(ref parent_id) = p.parent_event_id {
+                    let parent_eid = match EventId::from_hex(parent_id) {
+                        Ok(id) => id,
+                        Err(e) => return format!("Error: invalid parent_event_id: {e}"),
+                    };
+                    match self.resolve_thread_ref(parent_id, parent_eid).await {
+                        Ok(tr) => Some(tr),
+                        Err(e) => return format!("Error: {e}"),
+                    }
+                } else {
+                    None
+                };
+                match sprout_sdk::build_message(
+                    channel_uuid,
+                    &p.content,
+                    thread_ref.as_ref(),
+                    &mention_refs,
+                    broadcast && p.parent_event_id.is_some(),
+                    &[],
+                ) {
+                    Ok(b) => b,
+                    Err(e) => return format!("Error: {e}"),
+                }
+            }
+        };
 
-        // Sign with bot's own key and send via WebSocket.
-        let event =
-            match EventBuilder::new(kind, p.content, tags).sign_with_keys(self.client.keys()) {
-                Ok(event) => event,
-                Err(e) => return format!("Error: failed to sign message event: {e}"),
-            };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign message event: {e}"),
+        };
 
         match self.client.send_event(event).await {
             Ok(ok) => serde_json::json!({
@@ -860,6 +872,10 @@ Default kind is 9 (stream message)."
         if let Err(e) = validate_uuid(&channel_id) {
             return format!("Error: {e}");
         }
+        let channel_uuid = match uuid::Uuid::parse_str(&channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {channel_id}"),
+        };
 
         // 1. Truncate diff at 60KB (UTF-8 safe)
         let (diff_content, truncated) = truncate_diff(&diff, 60 * 1024);
@@ -867,7 +883,7 @@ Default kind is 9 (stream message)."
         // 2. Infer language from file extension if not provided
         let lang = language.or_else(|| file_path.as_deref().and_then(infer_language));
 
-        // 3. Build NIP-31 alt tag
+        // 3. Build NIP-31 alt text
         let alt_text = match &description {
             Some(desc) => format!(
                 "Diff: {} — {}",
@@ -877,55 +893,65 @@ Default kind is 9 (stream message)."
             None => format!("Diff: {}", file_path.as_deref().unwrap_or("diff")),
         };
 
-        // 4. Build JSON body for REST endpoint
-        let mut body = serde_json::json!({
-            "content": diff_content,
-            "kind": 40008_u32,
-            "broadcast_to_channel": false,
-            "diff_repo_url": repo_url,
-            "diff_commit_sha": commit_sha,
-            "diff_alt": alt_text,
-        });
-        if let Some(ref parent) = parent_event_id {
-            body["parent_event_id"] = serde_json::Value::String(parent.clone());
-        }
-        if let Some(ref file) = file_path {
-            body["diff_file_path"] = serde_json::Value::String(file.clone());
-        }
-        if let Some(ref sha) = parent_commit_sha {
-            body["diff_parent_commit_sha"] = serde_json::Value::String(sha.clone());
-        }
-        // Branch metadata — both source and target must be provided together
+        // 4. Warn on partial branch metadata (both or neither required)
         match (&source_branch, &target_branch) {
-            (Some(ref src), Some(ref tgt)) => {
-                body["diff_source_branch"] = serde_json::Value::String(src.clone());
-                body["diff_target_branch"] = serde_json::Value::String(tgt.clone());
-            }
             (Some(_), None) | (None, Some(_)) => {
-                // Warn caller that partial branch metadata is discarded
                 tracing::warn!("send_diff_message: only one of source_branch/target_branch provided — both required, branch metadata omitted");
             }
-            (None, None) => {} // Both absent — no branch tag
+            _ => {}
         }
-        if let Some(pr) = pr_number {
-            body["diff_pr_number"] = serde_json::json!(pr);
-        }
-        if let Some(ref l) = lang {
-            body["diff_language"] = serde_json::Value::String(l.clone());
-        }
-        if let Some(ref desc) = description {
-            body["diff_description"] = serde_json::Value::String(desc.clone());
-        }
-        if truncated {
-            body["diff_truncated"] = serde_json::json!(true);
-        }
+        let branch = match (source_branch, target_branch) {
+            (Some(src), Some(tgt)) => Some((src, tgt)),
+            _ => None,
+        };
 
-        match self
-            .client
-            .post(&format!("/api/channels/{}/messages", channel_id), &body)
-            .await
-        {
+        // 5. Resolve optional thread ref
+        let thread_ref = if let Some(ref parent_id) = parent_event_id {
+            let parent_eid = match EventId::from_hex(parent_id) {
+                Ok(id) => id,
+                Err(e) => return format!("Error: invalid parent_event_id: {e}"),
+            };
+            match self.resolve_thread_ref(parent_id, parent_eid).await {
+                Ok(tr) => Some(tr),
+                Err(e) => return format!("Error: {e}"),
+            }
+        } else {
+            None
+        };
+
+        // 6. Build signed event via SDK
+        let diff_meta = sprout_sdk::DiffMeta {
+            repo_url,
+            commit_sha,
+            file_path,
+            parent_commit: parent_commit_sha,
+            branch,
+            pr_number,
+            language: lang,
+            description,
+            truncated,
+            alt_text: Some(alt_text),
+        };
+        let builder = match sprout_sdk::build_diff_message(
+            channel_uuid,
+            &diff_content,
+            &diff_meta,
+            thread_ref.as_ref(),
+        ) {
             Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign diff event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -953,21 +979,23 @@ Default kind is 9 (stream message)."
             );
         }
 
-        let kind = Kind::from(sprout_core::kind::KIND_STREAM_MESSAGE_EDIT as u16);
-        let tags = match (
-            Tag::parse(&["h", &p.channel_id]),
-            Tag::parse(&["e", &p.event_id]),
-        ) {
-            (Ok(h_tag), Ok(e_tag)) => vec![h_tag, e_tag],
-            (Err(e), _) | (_, Err(e)) => return format!("Error: failed to build tags: {e}"),
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let target_eid = match EventId::from_hex(&p.event_id) {
+            Ok(id) => id,
+            Err(e) => return format!("Error: invalid event_id: {e}"),
         };
 
-        let event =
-            match EventBuilder::new(kind, p.content, tags).sign_with_keys(self.client.keys()) {
-                Ok(event) => event,
-                Err(e) => return format!("Error: failed to sign edit event: {e}"),
-            };
-
+        let builder = match sprout_sdk::build_edit(channel_uuid, target_eid, &p.content) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign edit event: {e}"),
+        };
         match self.client.send_event(event).await {
             Ok(ok) => serde_json::json!({
                 "event_id": ok.event_id,
@@ -991,13 +1019,57 @@ Default kind is 9 (stream message)."
                 p.event_id
             );
         }
-        let encoded = percent_encode(&p.event_id);
-        match self
+        let target_eid = match EventId::from_hex(&p.event_id) {
+            Ok(id) => id,
+            Err(e) => return format!("Error: invalid event_id: {e}"),
+        };
+
+        // Fetch the event to extract its channel_id (h-tag) — required by build_delete_message.
+        let resp = match self
             .client
-            .delete(&format!("/api/messages/{}", encoded))
+            .get(&format!("/api/events/{}", p.event_id))
             .await
         {
-            Ok(_) => "Message deleted.".to_string(),
+            Ok(r) => r,
+            Err(e) => return format!("Error: failed to fetch event: {e}"),
+        };
+        let event_json: serde_json::Value = match serde_json::from_str(&resp) {
+            Ok(v) => v,
+            Err(e) => return format!("Error: failed to parse event: {e}"),
+        };
+        let channel_id_str = match event_json["tags"].as_array().and_then(|tags| {
+            tags.iter().find_map(|t| {
+                let parts = t.as_array()?;
+                if parts.first()?.as_str() == Some("h") {
+                    parts.get(1)?.as_str().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+        }) {
+            Some(id) => id,
+            None => return "Error: could not find channel_id (h-tag) on event".to_string(),
+        };
+        let channel_uuid = match uuid::Uuid::parse_str(&channel_id_str) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: event h-tag is not a valid UUID: {channel_id_str}"),
+        };
+
+        let builder = match sprout_sdk::build_delete_message(channel_uuid, target_eid) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign delete event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1074,14 +1146,47 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
         description = "Create a new Sprout channel. channel_type must be 'stream' or 'forum'. visibility must be 'open' or 'private'."
     )]
     pub async fn create_channel(&self, Parameters(p): Parameters<CreateChannelParams>) -> String {
-        let body = serde_json::json!({
-            "name": p.name,
-            "channel_type": p.channel_type,
-            "visibility": p.visibility,
-            "description": p.description,
-        });
-        match self.client.post("/api/channels", &body).await {
+        let channel_uuid = uuid::Uuid::new_v4();
+        let visibility = match p.visibility.as_str() {
+            "open" => sprout_sdk::Visibility::Open,
+            "private" => sprout_sdk::Visibility::Private,
+            other => {
+                return format!(
+                    "Error: invalid visibility: {other:?} (must be 'open' or 'private')"
+                )
+            }
+        };
+        let channel_type = match p.channel_type.as_str() {
+            "stream" => sprout_sdk::ChannelKind::Stream,
+            "forum" => sprout_sdk::ChannelKind::Forum,
+            other => {
+                return format!(
+                    "Error: invalid channel_type: {other:?} (must be 'stream' or 'forum')"
+                )
+            }
+        };
+        let builder = match sprout_sdk::build_create_channel(
+            channel_uuid,
+            &p.name,
+            Some(visibility),
+            Some(channel_type),
+            p.description.as_deref(),
+        ) {
             Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign create_channel event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "channel_id": channel_uuid.to_string(),
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1120,19 +1225,25 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-        match self.client.set_canvas(&p.channel_id, &p.content).await {
-            Ok(body) => {
-                // Parse REST JSON; return a clean confirmation string.
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
-                    if v.get("ok").and_then(|o| o.as_bool()) == Some(true) {
-                        return "Canvas updated.".to_string();
-                    }
-                    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
-                        return format!("Error: {err}");
-                    }
-                }
-                body
-            }
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let builder = match sprout_sdk::build_set_canvas(channel_uuid, &p.content) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign set_canvas event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1337,16 +1448,38 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-        let body = serde_json::json!({
-            "pubkeys": [p.pubkey],
-            "role": p.role.unwrap_or_else(|| "member".to_string()),
-        });
-        match self
-            .client
-            .post(&format!("/api/channels/{}/members", p.channel_id), &body)
-            .await
-        {
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let role = match p.role.as_deref() {
+            None => None,
+            Some("owner") => Some(sprout_sdk::MemberRole::Owner),
+            Some("admin") => Some(sprout_sdk::MemberRole::Admin),
+            Some("member") => Some(sprout_sdk::MemberRole::Member),
+            Some("guest") => Some(sprout_sdk::MemberRole::Guest),
+            Some("bot") => Some(sprout_sdk::MemberRole::Bot),
+            Some(other) => {
+                return format!(
+                    "Error: invalid role: {other:?} (must be owner/admin/member/guest/bot)"
+                )
+            }
+        };
+        let builder = match sprout_sdk::build_add_member(channel_uuid, &p.pubkey, role) {
             Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign add_member event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1363,16 +1496,25 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-        let encoded_pubkey = percent_encode(&p.pubkey);
-        match self
-            .client
-            .delete(&format!(
-                "/api/channels/{}/members/{}",
-                p.channel_id, encoded_pubkey
-            ))
-            .await
-        {
-            Ok(_) => "Member removed.".to_string(),
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let builder = match sprout_sdk::build_remove_member(channel_uuid, &p.pubkey) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign remove_member event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1408,13 +1550,25 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-        let body = serde_json::json!({});
-        match self
-            .client
-            .post(&format!("/api/channels/{}/join", p.channel_id), &body)
-            .await
-        {
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let builder = match sprout_sdk::build_join(channel_uuid) {
             Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign join event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1428,13 +1582,25 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-        let body = serde_json::json!({});
-        match self
-            .client
-            .post(&format!("/api/channels/{}/leave", p.channel_id), &body)
-            .await
-        {
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let builder = match sprout_sdk::build_leave(channel_uuid) {
             Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign leave event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1469,16 +1635,29 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-        let body = serde_json::json!({
-            "name": p.name,
-            "description": p.description,
-        });
-        match self
-            .client
-            .put(&format!("/api/channels/{}", p.channel_id), &body)
-            .await
-        {
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let builder = match sprout_sdk::build_update_channel(
+            channel_uuid,
+            p.name.as_deref(),
+            p.description.as_deref(),
+        ) {
             Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign update_channel event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1495,13 +1674,25 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-        let body = serde_json::json!({ "topic": p.topic });
-        match self
-            .client
-            .put(&format!("/api/channels/{}/topic", p.channel_id), &body)
-            .await
-        {
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let builder = match sprout_sdk::build_set_topic(channel_uuid, &p.topic) {
             Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign set_topic event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1518,13 +1709,25 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-        let body = serde_json::json!({ "purpose": p.purpose });
-        match self
-            .client
-            .put(&format!("/api/channels/{}/purpose", p.channel_id), &body)
-            .await
-        {
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let builder = match sprout_sdk::build_set_purpose(channel_uuid, &p.purpose) {
             Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign set_purpose event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1538,13 +1741,25 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-        let body = serde_json::json!({});
-        match self
-            .client
-            .post(&format!("/api/channels/{}/archive", p.channel_id), &body)
-            .await
-        {
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let builder = match sprout_sdk::build_archive(channel_uuid) {
             Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign archive event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1561,13 +1776,25 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
         if let Err(e) = validate_uuid(&p.channel_id) {
             return format!("Error: {e}");
         }
-        let body = serde_json::json!({});
-        match self
-            .client
-            .post(&format!("/api/channels/{}/unarchive", p.channel_id), &body)
-            .await
-        {
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let builder = match sprout_sdk::build_unarchive(channel_uuid) {
             Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign unarchive event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1672,6 +1899,34 @@ with kind:45003 comments)."
         }
     }
 
+    /// Hide a DM channel from the agent's DM list.
+    #[tool(
+        name = "hide_dm",
+        description = "Hide a direct message channel from the agent's DM list. The DM can be restored by opening a new DM with the same participants."
+    )]
+    pub async fn hide_dm(&self, Parameters(p): Parameters<HideDmParams>) -> String {
+        if let Err(e) = validate_uuid(&p.channel_id) {
+            return format!("Error: {e}");
+        }
+        match self
+            .client
+            .post(
+                &format!("/api/dms/{}/hide", p.channel_id),
+                &serde_json::json!({}),
+            )
+            .await
+        {
+            Ok(b) => {
+                if b.is_empty() {
+                    "DM hidden successfully.".to_string()
+                } else {
+                    b
+                }
+            }
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
     // ── Reaction tools ────────────────────────────────────────────────────────
 
     /// Add an emoji reaction to a message.
@@ -1680,17 +1935,25 @@ with kind:45003 comments)."
         description = "Add an emoji reaction to a Sprout message."
     )]
     pub async fn add_reaction(&self, Parameters(p): Parameters<AddReactionParams>) -> String {
-        let body = serde_json::json!({ "emoji": p.emoji });
-        let encoded_event_id = percent_encode(&p.event_id);
-        match self
-            .client
-            .post(
-                &format!("/api/messages/{}/reactions", encoded_event_id),
-                &body,
-            )
-            .await
-        {
+        let target_eid = match EventId::from_hex(&p.event_id) {
+            Ok(id) => id,
+            Err(e) => return format!("Error: invalid event_id: {e}"),
+        };
+        let builder = match sprout_sdk::build_reaction(target_eid, &p.emoji) {
             Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign reaction event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1701,18 +1964,71 @@ with kind:45003 comments)."
         description = "Remove an emoji reaction from a Sprout message."
     )]
     pub async fn remove_reaction(&self, Parameters(p): Parameters<RemoveReactionParams>) -> String {
+        // Fetch the reactions list to find the current user's reaction event ID for this emoji.
         let encoded_event_id = percent_encode(&p.event_id);
-        let encoded_emoji = percent_encode(&p.emoji);
-        match self
+        let my_pubkey = self.client.keys().public_key().to_hex();
+        let reactions_resp = match self
             .client
-            .delete(&format!(
-                "/api/messages/{}/reactions/{}",
-                encoded_event_id, encoded_emoji
-            ))
+            .get(&format!("/api/messages/{}/reactions", encoded_event_id))
             .await
         {
-            Ok(_) => "Reaction removed.".to_string(),
-            Err(e) => format!("Error: {e}"),
+            Ok(r) => r,
+            Err(e) => return format!("Error: failed to fetch reactions: {e}"),
+        };
+        let reactions: serde_json::Value = match serde_json::from_str(&reactions_resp) {
+            Ok(v) => v,
+            Err(e) => return format!("Error: failed to parse reactions: {e}"),
+        };
+
+        // Parse the grouped response: { "reactions": [ { "emoji": "...", "users": [ { "pubkey": "...", "reaction_event_id": "..." } ] } ] }
+        let reaction_event_id_hex = reactions
+            .get("reactions")
+            .and_then(|r| r.as_array())
+            .and_then(|groups| {
+                groups.iter().find_map(|group| {
+                    let group_emoji = group.get("emoji")?.as_str()?;
+                    if group_emoji != p.emoji {
+                        return None;
+                    }
+                    group.get("users")?.as_array()?.iter().find_map(|user| {
+                        let pubkey = user.get("pubkey")?.as_str()?;
+                        if pubkey != my_pubkey {
+                            return None;
+                        }
+                        user.get("reaction_event_id")?
+                            .as_str()
+                            .map(|s| s.to_string())
+                    })
+                })
+            });
+
+        match reaction_event_id_hex {
+            Some(hex) => {
+                let reaction_eid = match EventId::from_hex(&hex) {
+                    Ok(id) => id,
+                    Err(e) => return format!("Error: invalid reaction event_id: {e}"),
+                };
+                let builder = match sprout_sdk::build_remove_reaction(reaction_eid) {
+                    Ok(b) => b,
+                    Err(e) => return format!("Error: {e}"),
+                };
+                let event = match builder.sign_with_keys(self.client.keys()) {
+                    Ok(e) => e,
+                    Err(e) => return format!("Error: failed to sign remove_reaction event: {e}"),
+                };
+                match self.client.send_event(event).await {
+                    Ok(ok) => serde_json::json!({
+                        "event_id": ok.event_id,
+                        "accepted": ok.accepted,
+                        "message": ok.message,
+                    })
+                    .to_string(),
+                    Err(e) => format!("Error: {e}"),
+                }
+            }
+            None => "Error: could not find your reaction event ID for this emoji. \
+                 The reaction may not exist or the relay has not recorded the event ID."
+                .to_string(),
         }
     }
 
@@ -1741,14 +2057,48 @@ with kind:45003 comments)."
         description = "Update the agent's user profile (display name, about, avatar URL, and/or NIP-05 handle)."
     )]
     pub async fn set_profile(&self, Parameters(p): Parameters<SetProfileParams>) -> String {
-        let body = serde_json::json!({
-            "display_name": p.display_name,
-            "avatar_url": p.avatar_url,
-            "about": p.about,
-            "nip05_handle": p.nip05_handle,
-        });
-        match self.client.put("/api/users/me/profile", &body).await {
+        // Read-merge-write: fetch current profile, merge desired changes, sign kind:0.
+        let current_profile: serde_json::Value =
+            match self.client.get("/api/users/me/profile").await {
+                Ok(body) => serde_json::from_str(&body)
+                    .unwrap_or(serde_json::Value::Object(Default::default())),
+                Err(_) => serde_json::Value::Object(Default::default()),
+            };
+
+        // Resolve each field: use new value if provided, else keep existing.
+        let display_name = p
+            .display_name
+            .as_deref()
+            .or_else(|| current_profile.get("display_name").and_then(|v| v.as_str()));
+        let name = current_profile.get("name").and_then(|v| v.as_str());
+        let picture = p
+            .avatar_url
+            .as_deref()
+            .or_else(|| current_profile.get("avatar_url").and_then(|v| v.as_str()));
+        let about = p
+            .about
+            .as_deref()
+            .or_else(|| current_profile.get("about").and_then(|v| v.as_str()));
+        let nip05 = p
+            .nip05_handle
+            .as_deref()
+            .or_else(|| current_profile.get("nip05_handle").and_then(|v| v.as_str()));
+
+        let builder = match sprout_sdk::build_profile(display_name, name, picture, about, nip05) {
             Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign profile event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }
@@ -1875,30 +2225,58 @@ with kind:45003 comments)."
                 p.event_id
             );
         }
-        let content = match p.direction {
-            VoteDirection::Up => "+",
-            VoteDirection::Down => "-",
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
         };
-
-        let sender_pubkey = self.client.keys().public_key().to_hex();
-        let tags = match (
-            Tag::parse(&["h", &p.channel_id]),
-            Tag::parse(&["p", &sender_pubkey]),
-            Tag::parse(&["e", &p.event_id]),
-        ) {
-            (Ok(h), Ok(p), Ok(e)) => vec![h, p, e],
-            (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
-                return format!("Error: failed to build tags: {e}");
-            }
+        let target_eid = match EventId::from_hex(&p.event_id) {
+            Ok(id) => id,
+            Err(e) => return format!("Error: invalid event_id: {e}"),
         };
-
-        let kind = Kind::from(sprout_core::kind::KIND_FORUM_VOTE as u16);
-        let event = match EventBuilder::new(kind, content, tags).sign_with_keys(self.client.keys())
-        {
-            Ok(event) => event,
-            Err(e) => return format!("Error signing event: {e}"),
+        let direction = match p.direction {
+            VoteDirection::Up => sprout_sdk::VoteDirection::Up,
+            VoteDirection::Down => sprout_sdk::VoteDirection::Down,
         };
+        let builder = match sprout_sdk::build_vote(channel_uuid, target_eid, direction) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign vote event: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
 
+    /// Permanently delete a Sprout channel.
+    #[tool(
+        name = "delete_channel",
+        description = "Permanently delete a Sprout channel. You must be the channel owner. This action is irreversible."
+    )]
+    pub async fn delete_channel(&self, Parameters(p): Parameters<DeleteChannelParams>) -> String {
+        if let Err(e) = validate_uuid(&p.channel_id) {
+            return format!("Error: {e}");
+        }
+        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+            Ok(u) => u,
+            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+        };
+        let builder = match sprout_sdk::build_delete_channel(channel_uuid) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign delete_channel event: {e}"),
+        };
         match self.client.send_event(event).await {
             Ok(ok) => serde_json::json!({
                 "event_id": ok.event_id,
@@ -2010,146 +2388,6 @@ mod tests {
         assert_eq!(MAX_CONTENT_BYTES, 65_536);
     }
 
-    #[test]
-    fn normalize_mention_pubkeys_dedupes_and_skips_sender() {
-        let sender = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let mentions = vec![
-            sender.to_string(),
-            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string(),
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
-            "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC".to_string(),
-        ];
-
-        assert_eq!(
-            normalize_mention_pubkeys(&mentions, sender),
-            vec![
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
-                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn normalize_mention_pubkeys_skips_mixed_case_sender() {
-        let sender = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let mentions = vec![
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string(),
-        ];
-
-        assert_eq!(
-            normalize_mention_pubkeys(&mentions, sender),
-            vec!["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),]
-        );
-    }
-
-    #[test]
-    fn normalize_mention_pubkeys_empty_input() {
-        let sender = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        assert_eq!(normalize_mention_pubkeys(&[], sender), Vec::<String>::new());
-    }
-
-    #[test]
-    fn build_message_tags_lowercases_sender() {
-        let sender = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let tags = build_message_tags("550e8400-e29b-41d4-a716-446655440000", sender, None)
-            .expect("tags should build");
-        let tag_strings = tags
-            .iter()
-            .map(|tag| tag.clone().to_vec())
-            .collect::<Vec<Vec<String>>>();
-
-        assert_eq!(
-            tag_strings,
-            vec![
-                vec![
-                    "h".to_string(),
-                    "550e8400-e29b-41d4-a716-446655440000".to_string()
-                ],
-                vec![
-                    "p".to_string(),
-                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()
-                ],
-            ]
-        );
-    }
-
-    #[test]
-    fn build_message_tags_includes_mention_p_tags() {
-        let sender = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let mention =
-            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string();
-        let tags = build_message_tags(
-            "550e8400-e29b-41d4-a716-446655440000",
-            sender,
-            Some(&[mention]),
-        )
-        .expect("tags should build");
-        let tag_strings = tags
-            .iter()
-            .map(|tag| tag.clone().to_vec())
-            .collect::<Vec<Vec<String>>>();
-
-        assert_eq!(
-            tag_strings,
-            vec![
-                vec![
-                    "h".to_string(),
-                    "550e8400-e29b-41d4-a716-446655440000".to_string()
-                ],
-                vec!["p".to_string(), sender.to_string()],
-                vec![
-                    "p".to_string(),
-                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()
-                ],
-            ]
-        );
-    }
-
-    #[test]
-    fn build_message_tags_no_mentions_when_none() {
-        let sender = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let tags = build_message_tags("550e8400-e29b-41d4-a716-446655440000", sender, None)
-            .expect("tags should build");
-        let tag_strings = tags
-            .iter()
-            .map(|tag| tag.clone().to_vec())
-            .collect::<Vec<Vec<String>>>();
-
-        assert_eq!(
-            tag_strings,
-            vec![
-                vec![
-                    "h".to_string(),
-                    "550e8400-e29b-41d4-a716-446655440000".to_string()
-                ],
-                vec!["p".to_string(), sender.to_string()],
-            ]
-        );
-    }
-
-    #[test]
-    fn build_message_tags_no_mentions_when_empty_slice() {
-        let sender = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let tags = build_message_tags("550e8400-e29b-41d4-a716-446655440000", sender, Some(&[]))
-            .expect("tags should build");
-        let tag_strings = tags
-            .iter()
-            .map(|tag| tag.clone().to_vec())
-            .collect::<Vec<Vec<String>>>();
-
-        assert_eq!(
-            tag_strings,
-            vec![
-                vec![
-                    "h".to_string(),
-                    "550e8400-e29b-41d4-a716-446655440000".to_string()
-                ],
-                vec!["p".to_string(), sender.to_string()],
-            ]
-        );
-    }
-
     // ── VoteDirection serde ───────────────────────────────────────────────────
 
     #[test]
@@ -2192,146 +2430,6 @@ mod tests {
         assert_eq!(parsed.channel_id, params.channel_id);
         assert_eq!(parsed.event_id, params.event_id);
         assert!(matches!(parsed.direction, VoteDirection::Up));
-    }
-
-    // ── find_root_from_tags ───────────────────────────────────────────────────
-
-    #[test]
-    fn find_root_from_tags_no_thread_tags() {
-        let tags = serde_json::json!([["h", "channel-uuid"], ["p", "sender_hex"]]);
-        assert_eq!(find_root_from_tags(&tags), None);
-    }
-
-    #[test]
-    fn find_root_from_tags_direct_reply() {
-        // Parent has only a "reply" marker — it's a direct reply to root.
-        // The reply target IS the root, so we return it (needed for nested replies).
-        let tags = serde_json::json!([
-            ["h", "channel-uuid"],
-            ["p", "sender_hex"],
-            ["e", "parent123", "", "reply"]
-        ]);
-        assert_eq!(find_root_from_tags(&tags), Some("parent123".to_string()));
-    }
-
-    #[test]
-    fn find_root_from_tags_nested_reply() {
-        // Parent has both "root" and "reply" markers.
-        let tags = serde_json::json!([
-            ["h", "channel-uuid"],
-            ["e", "root_abc", "", "root"],
-            ["e", "parent_def", "", "reply"],
-            ["p", "sender_hex"]
-        ]);
-        assert_eq!(find_root_from_tags(&tags), Some("root_abc".to_string()));
-    }
-
-    #[test]
-    fn find_root_from_tags_root_only() {
-        // Parent has only a "root" marker (unusual but valid).
-        let tags = serde_json::json!([["e", "root_abc", "", "root"]]);
-        assert_eq!(find_root_from_tags(&tags), Some("root_abc".to_string()));
-    }
-
-    #[test]
-    fn find_root_from_tags_root_takes_priority_over_reply() {
-        // When both root and reply markers exist, root wins.
-        let tags = serde_json::json!([
-            ["e", "the_root", "", "root"],
-            ["e", "the_parent", "", "reply"]
-        ]);
-        assert_eq!(find_root_from_tags(&tags), Some("the_root".to_string()));
-    }
-
-    #[test]
-    fn find_root_from_tags_reply_only_returns_reply_target() {
-        // Parent is a direct reply (only "reply" marker) — the reply target
-        // IS the root. Needed so nested replies can supply the correct root tag.
-        let tags = serde_json::json!([["h", "channel-uuid"], ["e", "original_root", "", "reply"]]);
-        assert_eq!(
-            find_root_from_tags(&tags),
-            Some("original_root".to_string())
-        );
-    }
-
-    #[test]
-    fn find_root_from_tags_ignores_non_e_tags() {
-        let tags = serde_json::json!([
-            ["p", "some_pubkey"],
-            ["h", "channel-uuid"],
-            ["broadcast", "1"]
-        ]);
-        assert_eq!(find_root_from_tags(&tags), None);
-    }
-
-    #[test]
-    fn find_root_from_tags_ignores_short_e_tags() {
-        // e-tag with only 3 elements (no marker) — ignored.
-        let tags = serde_json::json!([["e", "abc123", ""]]);
-        assert_eq!(find_root_from_tags(&tags), None);
-    }
-
-    #[test]
-    fn find_root_from_tags_null_input() {
-        let tags = serde_json::json!(null);
-        assert_eq!(find_root_from_tags(&tags), None);
-    }
-
-    #[test]
-    fn find_root_from_tags_skips_malformed_tags() {
-        // Non-array tags (number, string) should be skipped, not abort the scan.
-        let tags = serde_json::json!([42, "not-an-array", ["e", "root_abc", "", "root"]]);
-        assert_eq!(find_root_from_tags(&tags), Some("root_abc".to_string()));
-    }
-
-    // ── build_message_tags (new tests) ────────────────────────────────────────
-
-    #[test]
-    fn build_message_tags_no_mentions() {
-        let tags = build_message_tags("chan-uuid", "aabb00", None).unwrap();
-        assert_eq!(tags.len(), 2);
-        assert_eq!(tags[0].as_slice(), &["h", "chan-uuid"]);
-        assert_eq!(tags[1].as_slice(), &["p", "aabb00"]);
-    }
-
-    #[test]
-    fn build_message_tags_with_mentions() {
-        let mentions = vec!["cc11".to_string(), "dd22".to_string()];
-        let tags = build_message_tags("chan-uuid", "aabb00", Some(&mentions)).unwrap();
-        assert_eq!(tags.len(), 4);
-        assert_eq!(tags[2].as_slice(), &["p", "cc11"]);
-        assert_eq!(tags[3].as_slice(), &["p", "dd22"]);
-    }
-
-    #[test]
-    fn build_message_tags_self_mention_excluded() {
-        // Sender in mention list should be filtered out.
-        let mentions = vec!["AABB00".to_string(), "cc11".to_string()];
-        let tags = build_message_tags("chan-uuid", "aabb00", Some(&mentions)).unwrap();
-        assert_eq!(tags.len(), 3); // h + p(sender) + p(cc11), NOT p(AABB00)
-        assert_eq!(tags[2].as_slice(), &["p", "cc11"]);
-    }
-
-    #[test]
-    fn build_message_tags_deduplicates_mentions() {
-        let mentions = vec!["cc11".to_string(), "CC11".to_string()];
-        let tags = build_message_tags("chan-uuid", "aabb00", Some(&mentions)).unwrap();
-        assert_eq!(tags.len(), 3); // h + p(sender) + p(cc11) — deduped
-    }
-
-    // ── normalize_mention_pubkeys (new tests) ─────────────────────────────────
-
-    #[test]
-    fn normalize_mention_pubkeys_empty() {
-        let result = normalize_mention_pubkeys(&[], "sender");
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn normalize_mention_pubkeys_case_insensitive_sender_filter() {
-        let mentions = vec!["SENDER".to_string(), "other".to_string()];
-        let result = normalize_mention_pubkeys(&mentions, "sender");
-        assert_eq!(result, vec!["other"]);
     }
 }
 

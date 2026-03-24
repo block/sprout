@@ -77,6 +77,7 @@ type AppSidebarProps = {
   onOpenBrowseChannels: () => void;
   onOpenBrowseForums: () => void;
   onOpenSearch: () => void;
+  onHideDm: (channelId: string) => void;
   onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
   onSelectAgents: () => void;
   onSelectHome: () => void;
@@ -440,6 +441,7 @@ export function AppSidebar({
   onOpenBrowseChannels,
   onOpenBrowseForums,
   onOpenSearch,
+  onHideDm,
   onOpenDm,
   onSelectAgents,
   onSelectHome,
@@ -640,6 +642,7 @@ export function AppSidebar({
               isActiveChannel={selectedView === "channel"}
               items={directMessages}
               channelLabels={dmChannelLabels}
+              onHideDm={onHideDm}
               onSelectChannel={onSelectChannel}
               presenceByChannelId={dmPresenceByChannelId}
               selectedChannelId={selectedChannelId}
