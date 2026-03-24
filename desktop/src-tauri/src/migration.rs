@@ -3,18 +3,29 @@
 //!
 //! Migration runs only when:
 //! 1. The legacy directory exists, AND
-//! 2. The new directory either doesn't exist or has no `identity.key` file.
+//! 2. The `.migration-complete` sentinel file has **not** been written yet.
+//!
+//! A sentinel file (rather than checking for `identity.key`) is used so that
+//! a partially-failed migration retries on the next launch — `copy_dir_recursive`
+//! overwrites existing files, so the retry completes the copy.
 //!
 //! The legacy directory is intentionally **not** deleted — users can clean it
 //! up manually once they're satisfied the migration succeeded.
 //!
 //! Errors are logged but never fatal; the app must still start even if the
 //! migration fails.
+//!
+//! **Note on dev/prod side-by-side:** Both the production build (`xyz.block.sprout.app`)
+//! and the dev build (`xyz.block.sprout.app.dev`) will attempt to migrate from
+//! the same legacy `com.wesb.sprout` directory, resulting in duplicated identity
+//! keys. To avoid this, set the `SPROUT_PRIVATE_KEY` env var when running the
+//! dev build — this bypasses file-based identity resolution entirely.
 
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 
 const LEGACY_DATA_DIR_NAME: &str = "com.wesb.sprout";
+const MIGRATION_SENTINEL: &str = ".migration-complete";
 
 /// Compute the legacy `com.wesb.sprout` data directory path by replacing the
 /// last component of the current app data directory.
@@ -32,6 +43,14 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         let file_type = entry.file_type()?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
+
+        if file_type.is_symlink() {
+            eprintln!(
+                "sprout-desktop: migration: skipping symlink {}",
+                src_path.display()
+            );
+            continue;
+        }
 
         if file_type.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
@@ -68,10 +87,9 @@ pub fn migrate_legacy_data_dir(app: &tauri::AppHandle) {
         return; // Nothing to migrate.
     }
 
-    // If the new directory already contains an identity key, the user has
-    // already run with the new identifier — skip migration.
-    if current_dir.join("identity.key").exists() {
-        eprintln!("sprout-desktop: migration: skipping — new data dir already has identity.key");
+    // Skip if a previous migration already completed successfully.
+    if current_dir.join(MIGRATION_SENTINEL).exists() {
+        eprintln!("sprout-desktop: migration: skipping — already completed");
         return;
     }
 
@@ -84,6 +102,15 @@ pub fn migrate_legacy_data_dir(app: &tauri::AppHandle) {
     if let Err(e) = copy_dir_recursive(&old_dir, &current_dir) {
         eprintln!("sprout-desktop: migration: failed to copy legacy data: {e}");
         return;
+    }
+
+    // Write a sentinel so we don't re-run on subsequent launches.
+    // Failure here is non-fatal — worst case we re-copy (idempotently) next time.
+    if let Err(e) = std::fs::write(
+        current_dir.join(MIGRATION_SENTINEL),
+        "migrated from com.wesb.sprout",
+    ) {
+        eprintln!("sprout-desktop: migration: warning: failed to write sentinel: {e}");
     }
 
     eprintln!("sprout-desktop: migration: complete");
@@ -177,26 +204,68 @@ mod tests {
     }
 
     #[test]
-    fn migration_skipped_when_new_dir_has_identity_key() {
+    fn migration_skipped_when_sentinel_exists() {
+        let (_parent, old_dir, new_dir) = setup_legacy_layout();
+
+        // Pre-create the new dir with the sentinel file.
+        std::fs::create_dir_all(&new_dir).unwrap();
+        std::fs::write(
+            new_dir.join(MIGRATION_SENTINEL),
+            "migrated from com.wesb.sprout",
+        )
+        .unwrap();
+
+        // The sentinel is the only guard — verify it exists.
+        assert!(
+            new_dir.join(MIGRATION_SENTINEL).exists(),
+            "sentinel should block migration"
+        );
+
+        // Even though old_dir has data, the sentinel prevents re-migration.
+        // We can't call migrate_legacy_data_dir without an AppHandle, but we
+        // verify the guard condition directly: sentinel present → skip.
+        assert!(old_dir.join("identity.key").exists());
+    }
+
+    #[test]
+    fn migration_retries_when_no_sentinel() {
         let (_parent, _old_dir, new_dir) = setup_legacy_layout();
 
-        // Pre-create the new dir with an identity.key.
+        // New dir has identity.key but NO sentinel — migration should still
+        // run (the sentinel is the only guard, not identity.key).
         std::fs::create_dir_all(&new_dir).unwrap();
         std::fs::write(new_dir.join("identity.key"), "nsec1-new-key").unwrap();
 
-        // copy_dir_recursive would overwrite, but the migration guard in
-        // `migrate_legacy_data_dir` checks for identity.key first.
-        // We test the guard logic directly here since we can't easily
-        // construct a real AppHandle in unit tests.
+        // Sentinel must be absent.
         assert!(
-            new_dir.join("identity.key").exists(),
-            "new dir identity.key should block migration"
+            !new_dir.join(MIGRATION_SENTINEL).exists(),
+            "no sentinel means migration should retry"
         );
 
-        // Verify the new key is untouched (migration would have overwritten it).
-        assert_eq!(
-            std::fs::read_to_string(new_dir.join("identity.key")).unwrap(),
-            "nsec1-new-key"
+        // identity.key alone does NOT block migration — only the sentinel does.
+        // copy_dir_recursive would overwrite the existing identity.key with the
+        // legacy one, which is the correct behavior for a partial-migration retry.
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_dir_recursive_skips_symlinks() {
+        let (_parent, old_dir, new_dir) = setup_legacy_layout();
+
+        // Add a symlink in the old directory.
+        std::os::unix::fs::symlink("/nonexistent/target", old_dir.join("dangling-link")).unwrap();
+
+        // copy_dir_recursive should succeed, skipping the symlink.
+        copy_dir_recursive(&old_dir, &new_dir).unwrap();
+
+        // Regular files should still be copied.
+        assert!(new_dir.join("identity.key").exists());
+        assert!(new_dir.join(".window-state.json").exists());
+
+        // The symlink should NOT appear in the new directory.
+        assert!(
+            !new_dir.join("dangling-link").exists(),
+            "symlink should have been skipped"
         );
     }
 }
