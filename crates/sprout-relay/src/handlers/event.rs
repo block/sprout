@@ -360,8 +360,34 @@ async fn handle_ephemeral_event(
             return;
         }
 
+        // Mark as local before Redis publish to prevent double-delivery when
+        // the event comes back through the Redis subscriber loop.
+        state.mark_local_event(&event.id);
+
         if let Err(e) = state.pubsub.publish_event(ch_id, &event).await {
+            state.local_event_ids.invalidate(&event.id.to_bytes());
             warn!(conn_id = %conn_id, event_id = %event_id_hex, "Ephemeral publish failed: {e}");
+        }
+
+        // Direct fan-out to local WS subscribers.
+        // Pass the channel_id so fan_out() uses the channel-kind index.
+        let stored_event = StoredEvent::new(event.clone(), Some(ch_id));
+        let matches = state.sub_registry.fan_out(&stored_event);
+        let event_json = serde_json::to_string(&event)
+            .expect("nostr::Event serialization is infallible for well-formed events");
+        let mut drop_count = 0u32;
+        for (target_conn_id, sub_id) in &matches {
+            let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
+            if !state.conn_manager.send_to(*target_conn_id, msg) {
+                drop_count += 1;
+            }
+        }
+        if drop_count > 0 {
+            tracing::warn!(
+                event_id = %event_id_hex,
+                drop_count,
+                "fan-out: {drop_count} connection(s) cancelled due to full/closed buffers"
+            );
         }
     }
 
