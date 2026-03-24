@@ -1219,7 +1219,12 @@ async fn handle_standard_deletion_event(
                 .unwrap_or(false);
             if !removed {
                 // Derive (target, actor, emoji) from the reaction event itself.
-                let actor = target_event.event.pubkey.serialize().to_vec();
+                // Use effective_message_author to handle legacy relay-signed
+                // reactions where event.pubkey is the relay key, not the user.
+                let actor = super::ingest::effective_message_author(
+                    &target_event.event,
+                    &state.relay_keypair.public_key(),
+                );
                 let emoji = if target_event.event.content.is_empty() {
                     "+"
                 } else {

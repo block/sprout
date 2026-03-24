@@ -493,7 +493,7 @@ fn count_e_tags(event: &Event) -> usize {
 }
 
 /// Extract the effective author of a stored event (handles relay-signed REST events).
-fn effective_message_author(event: &Event, relay_pubkey: &nostr::PublicKey) -> Vec<u8> {
+pub(crate) fn effective_message_author(event: &Event, relay_pubkey: &nostr::PublicKey) -> Vec<u8> {
     if event.pubkey == *relay_pubkey {
         // Relay-signed REST event — real author in "actor" or "p" tag.
         if let Some(hex) = event.tags.iter().find_map(|t| {
@@ -735,13 +735,17 @@ pub async fn ingest_event(
     }
 
     // ── 2b. Timestamp sanity ─────────────────────────────────────────────
-    const MAX_TIMESTAMP_DRIFT_SECS: i64 = 900; // ±15 minutes
-    let now = chrono::Utc::now().timestamp();
-    let event_ts = event.created_at.as_u64() as i64;
-    if (event_ts - now).abs() > MAX_TIMESTAMP_DRIFT_SECS {
-        return Err(IngestError::Rejected(
-            "invalid: event timestamp too far from server time".into(),
-        ));
+    // Skip for proxy:submit — proxy-translated events preserve upstream
+    // created_at timestamps which may be historical (backfill/replay).
+    if !auth.has_proxy_scope() {
+        const MAX_TIMESTAMP_DRIFT_SECS: i64 = 900; // ±15 minutes
+        let now = chrono::Utc::now().timestamp();
+        let event_ts = event.created_at.as_u64() as i64;
+        if (event_ts - now).abs() > MAX_TIMESTAMP_DRIFT_SECS {
+            return Err(IngestError::Rejected(
+                "invalid: event timestamp too far from server time".into(),
+            ));
+        }
     }
 
     // ── 2c. Content size guard ───────────────────────────────────────────
