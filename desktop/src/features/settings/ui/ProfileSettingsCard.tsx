@@ -70,30 +70,23 @@ export function ProfileSettingsCard({
   const currentDisplayName = profile?.displayName ?? "";
   const currentAvatarUrl = profile?.avatarUrl ?? "";
   const currentAbout = profile?.about ?? "";
-  const currentNip05Handle = profile?.nip05Handle ?? "";
-
   const [displayNameDraft, setDisplayNameDraft] = React.useState("");
   const [avatarUrlDraft, setAvatarUrlDraft] = React.useState("");
   const [aboutDraft, setAboutDraft] = React.useState("");
-  const [nip05HandleDraft, setNip05HandleDraft] = React.useState("");
 
   React.useEffect(() => {
     setDisplayNameDraft(currentDisplayName);
     setAvatarUrlDraft(currentAvatarUrl);
     setAboutDraft(currentAbout);
-    setNip05HandleDraft(currentNip05Handle);
-  }, [currentAbout, currentAvatarUrl, currentDisplayName, currentNip05Handle]);
+  }, [currentAbout, currentAvatarUrl, currentDisplayName]);
 
   const nextDisplayName = displayNameDraft.trim();
   const nextAvatarUrl = avatarUrlDraft.trim();
   const nextAbout = aboutDraft.trim();
-  const nextNip05Handle = nip05HandleDraft.trim();
-
   const updatePayload: {
     displayName?: string;
     avatarUrl?: string;
     about?: string;
-    nip05Handle?: string;
   } = {};
 
   if (nextDisplayName.length > 0 && nextDisplayName !== currentDisplayName) {
@@ -104,9 +97,6 @@ export function ProfileSettingsCard({
   }
   if (nextAbout.length > 0 && nextAbout !== currentAbout) {
     updatePayload.about = nextAbout;
-  }
-  if (nextNip05Handle !== currentNip05Handle) {
-    updatePayload.nip05Handle = nextNip05Handle;
   }
 
   const hasPendingClearRequest =
@@ -176,26 +166,6 @@ export function ProfileSettingsCard({
         ) : null}
 
         <Section
-          description="Your keypair is fixed for this device. Profile fields and NIP-05 are editable below."
-          title="Identity"
-        >
-          <div className="space-y-3">
-            <ReadOnlyField
-              label="Public key"
-              testId="profile-pubkey"
-              value={resolvedPubkey}
-            />
-            <ReadOnlyField
-              label="NIP-05 handle"
-              testId="profile-nip05"
-              value={nip05Handle}
-            />
-          </div>
-        </Section>
-
-        <Separator />
-
-        <Section
           description="These values are stored on the relay for your current identity."
           title="Profile"
         >
@@ -229,28 +199,6 @@ export function ProfileSettingsCard({
                   value={displayNameDraft}
                 />
               </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium" htmlFor="profile-nip05">
-                NIP-05 handle
-              </label>
-              <div className="relative min-w-0">
-                <AtSign className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  className="pl-9"
-                  data-testid="profile-nip05-input"
-                  disabled={updateProfileMutation.isPending}
-                  id="profile-nip05"
-                  onChange={(event) => setNip05HandleDraft(event.target.value)}
-                  placeholder="alice@localhost"
-                  value={nip05HandleDraft}
-                />
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Must match this relay&apos;s domain. Leave blank to clear your
-                current handle.
-              </p>
             </div>
 
             <div className="space-y-1.5">
@@ -308,6 +256,26 @@ export function ProfileSettingsCard({
               </p>
             ) : null}
           </form>
+        </Section>
+
+        <Separator />
+
+        <Section
+          description="Your keypair and NIP-05 handle are fixed for this device."
+          title="Identity"
+        >
+          <div className="space-y-3">
+            <ReadOnlyField
+              label="Public key"
+              testId="profile-pubkey"
+              value={resolvedPubkey}
+            />
+            <ReadOnlyField
+              label="NIP-05 handle"
+              testId="profile-nip05"
+              value={nip05Handle}
+            />
+          </div>
         </Section>
       </div>
     </section>
