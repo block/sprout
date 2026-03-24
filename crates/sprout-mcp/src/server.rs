@@ -109,6 +109,11 @@ pub struct GetMessagesParams {
     /// Unix timestamp cursor for pagination. Returns messages before this time.
     #[serde(default)]
     pub before: Option<i64>,
+    /// Unix timestamp cursor. Returns messages created strictly after this time.
+    /// When used without `before`, results are ordered oldest-first (chronological).
+    /// Useful for polling: pass the timestamp of the last seen message to get only newer ones.
+    #[serde(default)]
+    pub since: Option<i64>,
     /// Comma-separated event kind numbers to filter by (e.g. "45001" for forum posts,
     /// "45002" for votes). When omitted, all kinds are returned.
     #[serde(default)]
@@ -1072,8 +1077,10 @@ Default kind is 9 (stream message)."
     /// Get recent messages from a Sprout channel.
     #[tool(
         name = "get_messages",
-        description = "Fetch recent top-level messages from a Sprout channel. Use `before` for pagination \
-(Unix timestamp). Use `kinds` to filter by event type (e.g. \"45001\" for forum posts, \
+        description = "Fetch recent top-level messages from a Sprout channel. Use `before` for backward \
+pagination and `since` for forward pagination (both Unix timestamps). When `since` is \
+provided without `before`, results are ordered oldest-first — useful for polling new \
+messages. Use `kinds` to filter by event type (e.g. \"45001\" for forum posts, \
 \"45002\" for votes). Thread summaries are included automatically. Threaded replies \
 are not returned — use `get_thread` to fetch the full reply tree for a specific message."
     )]
@@ -1095,6 +1102,9 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
         query_parts.push(format!("limit={limit}"));
         if let Some(before) = p.before {
             query_parts.push(format!("before={before}"));
+        }
+        if let Some(since) = p.since {
+            query_parts.push(format!("since={since}"));
         }
         if let Some(ref kinds) = p.kinds {
             query_parts.push(format!("kinds={}", percent_encode(kinds)));
