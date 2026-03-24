@@ -3,35 +3,16 @@ use tauri::State;
 
 use crate::{
     app_state::AppState,
-    models::{
-        AddMembersBody, AddMembersResponse, ChannelDetailInfo, ChannelInfo, ChannelMembersResponse,
-        CreateChannelBody, SetPurposeBody, SetTopicBody, UpdateChannelBody,
-    },
-    relay::{build_authed_request, send_empty_request, send_json_request},
+    events,
+    models::{ChannelDetailInfo, ChannelInfo, ChannelMembersResponse},
+    relay::{build_authed_request, send_json_request, submit_event},
 };
+
+// ── Reads (unchanged) ────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelInfo>, String> {
     let request = build_authed_request(&state.http_client, Method::GET, "/api/channels", &state)?;
-    send_json_request(request).await
-}
-
-#[tauri::command]
-pub async fn create_channel(
-    name: String,
-    channel_type: String,
-    visibility: String,
-    description: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<ChannelInfo, String> {
-    let request = build_authed_request(&state.http_client, Method::POST, "/api/channels", &state)?
-        .json(&CreateChannelBody {
-            name: &name,
-            channel_type: &channel_type,
-            visibility: &visibility,
-            description: description.as_deref(),
-        });
-
     send_json_request(request).await
 }
 
@@ -55,6 +36,41 @@ pub async fn get_channel_members(
     send_json_request(request).await
 }
 
+// ── Writes (migrated to signed events via POST /api/events) ──────────────────
+
+fn parse_channel_uuid(channel_id: &str) -> Result<uuid::Uuid, String> {
+    uuid::Uuid::parse_str(channel_id).map_err(|_| format!("invalid channel UUID: {channel_id}"))
+}
+
+#[tauri::command]
+pub async fn create_channel(
+    name: String,
+    channel_type: String,
+    visibility: String,
+    description: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<ChannelInfo, String> {
+    let channel_uuid = uuid::Uuid::new_v4();
+
+    let vis = match visibility.as_str() {
+        "open" | "private" => visibility.as_str(),
+        other => return Err(format!("invalid visibility: {other}")),
+    };
+    let ct = match channel_type.as_str() {
+        "stream" | "forum" => channel_type.as_str(),
+        other => return Err(format!("invalid channel_type: {other}")),
+    };
+
+    let builder =
+        events::build_create_channel(channel_uuid, &name, vis, ct, description.as_deref())?;
+    submit_event(builder, &state).await?;
+
+    // Follow-up GET to return the full ChannelInfo the frontend expects.
+    let path = format!("/api/channels/{channel_uuid}");
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
+    send_json_request(request).await
+}
+
 #[tauri::command]
 pub async fn update_channel(
     channel_id: String,
@@ -62,14 +78,13 @@ pub async fn update_channel(
     description: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ChannelDetailInfo, String> {
-    let path = format!("/api/channels/{channel_id}");
-    let request = build_authed_request(&state.http_client, Method::PUT, &path, &state)?.json(
-        &UpdateChannelBody {
-            name: name.as_deref(),
-            description: description.as_deref(),
-        },
-    );
+    let uuid = parse_channel_uuid(&channel_id)?;
+    let builder = events::build_update_channel(uuid, name.as_deref(), description.as_deref())?;
+    submit_event(builder, &state).await?;
 
+    // Follow-up GET to return the full ChannelDetailInfo.
+    let path = format!("/api/channels/{channel_id}");
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
 
@@ -79,10 +94,10 @@ pub async fn set_channel_topic(
     topic: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let path = format!("/api/channels/{channel_id}/topic");
-    let request = build_authed_request(&state.http_client, Method::PUT, &path, &state)?
-        .json(&SetTopicBody { topic: &topic });
-    send_empty_request(request).await
+    let uuid = parse_channel_uuid(&channel_id)?;
+    let builder = events::build_set_topic(uuid, &topic)?;
+    submit_event(builder, &state).await?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -91,17 +106,18 @@ pub async fn set_channel_purpose(
     purpose: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let path = format!("/api/channels/{channel_id}/purpose");
-    let request = build_authed_request(&state.http_client, Method::PUT, &path, &state)?
-        .json(&SetPurposeBody { purpose: &purpose });
-    send_empty_request(request).await
+    let uuid = parse_channel_uuid(&channel_id)?;
+    let builder = events::build_set_purpose(uuid, &purpose)?;
+    submit_event(builder, &state).await?;
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn archive_channel(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let path = format!("/api/channels/{channel_id}/archive");
-    let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?;
-    send_empty_request(request).await
+    let uuid = parse_channel_uuid(&channel_id)?;
+    let builder = events::build_archive(uuid)?;
+    submit_event(builder, &state).await?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -109,16 +125,18 @@ pub async fn unarchive_channel(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let path = format!("/api/channels/{channel_id}/unarchive");
-    let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?;
-    send_empty_request(request).await
+    let uuid = parse_channel_uuid(&channel_id)?;
+    let builder = events::build_unarchive(uuid)?;
+    submit_event(builder, &state).await?;
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn delete_channel(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let path = format!("/api/channels/{channel_id}");
-    let request = build_authed_request(&state.http_client, Method::DELETE, &path, &state)?;
-    send_empty_request(request).await
+    let uuid = parse_channel_uuid(&channel_id)?;
+    let builder = events::build_delete_channel(uuid)?;
+    submit_event(builder, &state).await?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -127,16 +145,34 @@ pub async fn add_channel_members(
     pubkeys: Vec<String>,
     role: Option<String>,
     state: State<'_, AppState>,
-) -> Result<AddMembersResponse, String> {
-    let path = format!("/api/channels/{channel_id}/members");
-    let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?.json(
-        &AddMembersBody {
-            pubkeys: &pubkeys,
-            role: role.as_deref(),
-        },
-    );
+) -> Result<serde_json::Value, String> {
+    let uuid = parse_channel_uuid(&channel_id)?;
+    let role_str = match role.as_deref() {
+        Some("admin") => Some("admin"),
+        Some("bot") => Some("bot"),
+        Some("guest") => Some("guest"),
+        Some("member") | None => None,
+        Some(other) => return Err(format!("invalid role: {other}")),
+    };
 
-    send_json_request(request).await
+    let mut added = Vec::new();
+    let mut errors = Vec::<serde_json::Value>::new();
+
+    for pubkey in &pubkeys {
+        let builder = match events::build_add_member(uuid, pubkey, role_str) {
+            Ok(b) => b,
+            Err(e) => {
+                errors.push(serde_json::json!({"pubkey": pubkey, "error": e}));
+                continue;
+            }
+        };
+        match submit_event(builder, &state).await {
+            Ok(_) => added.push(pubkey.clone()),
+            Err(e) => errors.push(serde_json::json!({"pubkey": pubkey, "error": e})),
+        }
+    }
+
+    Ok(serde_json::json!({ "added": added, "errors": errors }))
 }
 
 #[tauri::command]
@@ -145,21 +181,24 @@ pub async fn remove_channel_member(
     pubkey: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let path = format!("/api/channels/{channel_id}/members/{pubkey}");
-    let request = build_authed_request(&state.http_client, Method::DELETE, &path, &state)?;
-    send_empty_request(request).await
+    let uuid = parse_channel_uuid(&channel_id)?;
+    let builder = events::build_remove_member(uuid, &pubkey)?;
+    submit_event(builder, &state).await?;
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn join_channel(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let path = format!("/api/channels/{channel_id}/join");
-    let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?;
-    send_empty_request(request).await
+    let uuid = parse_channel_uuid(&channel_id)?;
+    let builder = events::build_join(uuid)?;
+    submit_event(builder, &state).await?;
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn leave_channel(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let path = format!("/api/channels/{channel_id}/leave");
-    let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?;
-    send_empty_request(request).await
+    let uuid = parse_channel_uuid(&channel_id)?;
+    let builder = events::build_leave(uuid)?;
+    submit_event(builder, &state).await?;
+    Ok(())
 }

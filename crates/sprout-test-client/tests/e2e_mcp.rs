@@ -24,7 +24,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
-use nostr::{Keys, ToBech32};
+use nostr::{EventBuilder, Keys, Kind, Tag, ToBech32};
 use serde_json::{json, Value};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -60,29 +60,65 @@ fn nsec_from_keys(keys: &Keys) -> String {
 /// access to it.
 async fn create_channel_for_test(keys: &Keys, name: &str) -> String {
     let client = reqwest::Client::new();
-    let url = format!("{}/api/channels", relay_http_url());
+    let pubkey_hex = keys.public_key().to_hex();
+    let channel_uuid = uuid::Uuid::new_v4();
+    let tags = vec![
+        Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
+        Tag::parse(&["name", name]).unwrap(),
+        Tag::parse(&["channel_type", "stream"]).unwrap(),
+        Tag::parse(&["visibility", "open"]).unwrap(),
+    ];
+    let event = EventBuilder::new(Kind::Custom(9007), "", tags)
+        .sign_with_keys(keys)
+        .unwrap();
     let resp = client
-        .post(&url)
-        .header("X-Pubkey", keys.public_key().to_hex())
-        .json(&serde_json::json!({
-            "name": name,
-            "channel_type": "stream",
-            "visibility": "open",
-        }))
+        .post(format!("{}/api/events", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).unwrap())
         .send()
         .await
-        .expect("create channel request failed");
-    assert_eq!(
-        resp.status(),
-        201,
+        .expect("submit create-channel event");
+    assert!(
+        resp.status().is_success(),
         "channel creation failed: {}",
-        resp.text().await.unwrap_or_default()
+        resp.status()
     );
-    let body: serde_json::Value = resp.json().await.expect("parse channel response");
-    body["id"]
-        .as_str()
-        .expect("channel id in response")
-        .to_string()
+    channel_uuid.to_string()
+}
+
+/// Set a user profile via a signed kind:0 event submitted to POST /api/events.
+async fn set_profile_via_event(
+    client: &reqwest::Client,
+    keys: &Keys,
+    display_name: Option<&str>,
+    about: Option<&str>,
+) {
+    let pubkey_hex = keys.public_key().to_hex();
+    let mut map = serde_json::Map::new();
+    if let Some(n) = display_name {
+        map.insert("display_name".into(), serde_json::Value::String(n.into()));
+    }
+    if let Some(a) = about {
+        map.insert("about".into(), serde_json::Value::String(a.into()));
+    }
+    let content = serde_json::Value::Object(map).to_string();
+    let event = EventBuilder::new(Kind::Custom(0), &content, [])
+        .sign_with_keys(keys)
+        .unwrap();
+    let resp = client
+        .post(format!("{}/api/events", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).unwrap())
+        .send()
+        .await
+        .expect("submit profile event");
+    assert!(
+        resp.status().is_success(),
+        "profile set failed: {}",
+        resp.status()
+    );
 }
 
 /// Spawn the MCP server as a subprocess with stdin/stdout piped.
@@ -300,8 +336,8 @@ async fn test_mcp_initialize_and_list_tools() {
 
     assert_eq!(
         tools.len(),
-        43,
-        "expected exactly 43 tools, got {}. Tools: {:?}",
+        44,
+        "expected exactly 44 tools, got {}. Tools: {:?}",
         tools.len(),
         tools
             .iter()
@@ -320,6 +356,7 @@ async fn test_mcp_initialize_and_list_tools() {
         "archive_channel",
         "create_channel",
         "create_workflow",
+        "delete_channel",
         "delete_message",
         "delete_workflow",
         "edit_message",
@@ -918,9 +955,12 @@ async fn test_mcp_canvas_set_and_get() {
     );
 
     let set_text = McpSession::tool_text(&set_resp);
+    let set_json: serde_json::Value =
+        serde_json::from_str(&set_text).expect("set_canvas should return JSON");
     assert_eq!(
-        set_text, "Canvas updated.",
-        "expected 'Canvas updated.' from set_canvas, got: {set_text}"
+        set_json["accepted"].as_bool(),
+        Some(true),
+        "expected accepted=true from set_canvas, got: {set_text}"
     );
 
     // Small delay for the event to propagate.
@@ -955,17 +995,16 @@ async fn test_mcp_canvas_set_and_get() {
 #[ignore]
 async fn test_mcp_get_user_profile_self() {
     let keys = generate_test_keys();
-    let pubkey_hex = keys.public_key().to_hex();
 
-    // Set profile via REST first
+    // Set profile via signed kind:0 event
     let client = reqwest::Client::new();
-    client
-        .put(format!("{}/api/users/me/profile", relay_http_url()))
-        .header("X-Pubkey", &pubkey_hex)
-        .json(&json!({"display_name": "MCP Self Test", "about": "Testing MCP profile"}))
-        .send()
-        .await
-        .expect("PUT profile");
+    set_profile_via_event(
+        &client,
+        &keys,
+        Some("MCP Self Test"),
+        Some("Testing MCP profile"),
+    )
+    .await;
 
     let mut session = McpSession::start(&keys).await;
     session.initialize();
@@ -994,17 +1033,11 @@ async fn test_mcp_get_user_profile_self() {
 async fn test_mcp_get_user_profile_other() {
     let keys = generate_test_keys();
 
-    // Create another user with a profile
+    // Create another user with a profile via signed kind:0 event
     let other_keys = Keys::generate();
     let other_hex = other_keys.public_key().to_hex();
     let client = reqwest::Client::new();
-    client
-        .put(format!("{}/api/users/me/profile", relay_http_url()))
-        .header("X-Pubkey", &other_hex)
-        .json(&json!({"display_name": "Other User MCP"}))
-        .send()
-        .await
-        .expect("PUT other profile");
+    set_profile_via_event(&client, &other_keys, Some("Other User MCP"), None).await;
 
     let mut session = McpSession::start(&keys).await;
     session.initialize();
@@ -1032,15 +1065,9 @@ async fn test_mcp_get_users_batch() {
     let keys = generate_test_keys();
     let pubkey_hex = keys.public_key().to_hex();
 
-    // Set own profile
+    // Set own profile via signed kind:0 event
     let client = reqwest::Client::new();
-    client
-        .put(format!("{}/api/users/me/profile", relay_http_url()))
-        .header("X-Pubkey", &pubkey_hex)
-        .json(&json!({"display_name": "Batch MCP User"}))
-        .send()
-        .await
-        .expect("PUT profile");
+    set_profile_via_event(&client, &keys, Some("Batch MCP User"), None).await;
 
     let unknown_hex = Keys::generate().public_key().to_hex();
 

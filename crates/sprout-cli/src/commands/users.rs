@@ -2,6 +2,17 @@ use crate::client::SproutClient;
 use crate::error::CliError;
 use crate::validate::{percent_encode, validate_hex64};
 
+/// Require keys on the client — fail fast with a clear error if absent.
+macro_rules! require_keys {
+    ($client:expr) => {
+        $client.keys().ok_or_else(|| {
+            CliError::Key(
+                "private key required for write operations (set SPROUT_PRIVATE_KEY)".into(),
+            )
+        })?
+    };
+}
+
 /// 3-way dispatch based on pubkey count:
 ///   0 pubkeys → GET /api/users/me/profile
 ///   1 pubkey  → GET /api/users/{pk}/profile
@@ -49,20 +60,91 @@ pub async fn cmd_set_profile(
             "at least one field required (--name, --avatar, --about, --nip05)".into(),
         ));
     }
-    let mut body = serde_json::json!({});
-    if let Some(n) = display_name {
-        body["display_name"] = n.into();
+
+    let keys = require_keys!(client);
+
+    // Read-merge-write: fetch current profile, merge in the new fields, then sign.
+    // This preserves fields the caller didn't specify (e.g. existing avatar stays
+    // intact when only --name is passed).
+    let current = fetch_current_profile(client).await?;
+
+    // Merge: caller-supplied fields win; fall back to current profile values.
+    let merged_name = display_name
+        .map(|s| s.to_string())
+        .or_else(|| {
+            current
+                .get("display_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .or_else(|| {
+            current
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
+    let merged_picture = avatar_url.map(|s| s.to_string()).or_else(|| {
+        current
+            .get("picture")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
+    let merged_about = about.map(|s| s.to_string()).or_else(|| {
+        current
+            .get("about")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
+    let merged_nip05 = nip05_handle.map(|s| s.to_string()).or_else(|| {
+        current
+            .get("nip05")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
+
+    let builder = sprout_sdk::build_profile(
+        merged_name.as_deref(),
+        None, // `name` field (username) — not exposed by CLI; preserve via display_name
+        merged_picture.as_deref(),
+        merged_about.as_deref(),
+        merged_nip05.as_deref(),
+    )
+    .map_err(|e| CliError::Other(format!("build_profile failed: {e}")))?;
+
+    let event = builder
+        .sign_with_keys(keys)
+        .map_err(|e| CliError::Other(format!("signing failed: {e}")))?;
+
+    let resp = client.submit_event(event).await?;
+    println!("{resp}");
+    Ok(())
+}
+
+/// Fetch the current user's profile metadata from GET /api/users/me/profile.
+/// Returns the parsed JSON object (kind:0 content fields), or an empty object
+/// if the profile hasn't been set yet.
+async fn fetch_current_profile(
+    client: &SproutClient,
+) -> Result<serde_json::Map<String, serde_json::Value>, CliError> {
+    let raw = client.get_raw("/api/users/me/profile").await;
+    match raw {
+        Ok(body) => {
+            let v: serde_json::Value = serde_json::from_str(&body)
+                .map_err(|e| CliError::Other(format!("failed to parse profile response: {e}")))?;
+            // The relay may return the profile fields at top level or nested under "profile"
+            let obj = if let Some(profile) = v.get("profile").and_then(|p| p.as_object()) {
+                profile.clone()
+            } else if let Some(obj) = v.as_object() {
+                obj.clone()
+            } else {
+                serde_json::Map::new()
+            };
+            Ok(obj)
+        }
+        // 404 = no profile yet — start fresh
+        Err(CliError::Relay { status: 404, .. }) => Ok(serde_json::Map::new()),
+        Err(e) => Err(e),
     }
-    if let Some(a) = avatar_url {
-        body["avatar_url"] = a.into();
-    }
-    if let Some(a) = about {
-        body["about"] = a.into();
-    }
-    if let Some(h) = nip05_handle {
-        body["nip05_handle"] = h.into();
-    }
-    client.run_put("/api/users/me/profile", &body).await
 }
 
 pub async fn cmd_get_presence(client: &SproutClient, pubkeys_csv: &str) -> Result<(), CliError> {

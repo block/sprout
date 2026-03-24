@@ -62,10 +62,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                 .delete(tokens::delete_all_tokens),
         )
         .route("/api/tokens/{id}", delete(tokens::delete_token))
-        .route(
-            "/api/channels",
-            get(api::channels_handler).post(api::create_channel),
-        )
+        .route("/api/channels", get(api::channels_handler))
+        .route("/api/events", post(api::events::submit_event))
         .route("/api/events/{id}", get(api::get_event))
         .route("/api/search", get(api::search_handler))
         .route("/api/agents", get(api::agents_handler))
@@ -90,48 +88,15 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/approvals/{token}/grant", post(api::grant_approval))
         .route("/api/approvals/{token}/deny", post(api::deny_approval))
         // Membership routes
-        .route(
-            "/api/channels/{channel_id}/members",
-            get(api::list_members).post(api::add_members),
-        )
-        .route(
-            "/api/channels/{channel_id}/members/{pubkey}",
-            delete(api::remove_member),
-        )
-        .route("/api/channels/{channel_id}/join", post(api::join_channel))
-        .route("/api/channels/{channel_id}/leave", post(api::leave_channel))
+        .route("/api/channels/{channel_id}/members", get(api::list_members))
         // Channel detail + metadata routes
-        .route(
-            "/api/channels/{channel_id}",
-            get(api::get_channel_handler)
-                .put(api::update_channel_handler)
-                .delete(api::delete_channel_handler),
-        )
-        .route(
-            "/api/channels/{channel_id}/topic",
-            put(api::set_topic_handler),
-        )
-        .route(
-            "/api/channels/{channel_id}/purpose",
-            put(api::set_purpose_handler),
-        )
-        .route(
-            "/api/channels/{channel_id}/archive",
-            post(api::archive_channel_handler),
-        )
-        .route(
-            "/api/channels/{channel_id}/unarchive",
-            post(api::unarchive_channel_handler),
-        )
+        .route("/api/channels/{channel_id}", get(api::get_channel_handler))
         // Canvas routes
-        .route(
-            "/api/channels/{channel_id}/canvas",
-            get(api::get_canvas).put(api::set_canvas),
-        )
+        .route("/api/channels/{channel_id}/canvas", get(api::get_canvas))
         // Message + thread routes
         .route(
             "/api/channels/{channel_id}/messages",
-            get(api::list_messages).post(api::send_message),
+            get(api::list_messages),
         )
         .route(
             "/api/channels/{channel_id}/threads/{event_id}",
@@ -147,27 +112,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(api::add_dm_member_handler),
         )
         .route("/api/dms/{channel_id}/hide", post(api::hide_dm_handler))
-        // Message delete + edit routes
-        .route(
-            "/api/messages/{event_id}",
-            delete(api::delete_message).put(api::edit_message),
-        )
-        // Forum vote route
-        .route("/api/messages/{event_id}/votes", post(api::vote_on_post))
         // Reaction routes
         .route(
             "/api/messages/{event_id}/reactions",
-            get(api::list_reactions_handler).post(api::add_reaction_handler),
-        )
-        .route(
-            "/api/messages/{event_id}/reactions/{emoji}",
-            delete(api::remove_reaction_handler),
+            get(api::list_reactions_handler),
         )
         // User profile routes
-        .route(
-            "/api/users/me/profile",
-            get(api::get_profile).put(api::update_profile),
-        )
+        .route("/api/users/me/profile", get(api::get_profile))
         .route(
             "/api/users/me/channel-add-policy",
             put(api::put_channel_add_policy),

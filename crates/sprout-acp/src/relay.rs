@@ -169,6 +169,7 @@ impl RestClient {
     }
 
     /// DELETE an endpoint. Returns `Ok(())` on 2xx.
+    #[allow(dead_code)]
     pub async fn delete(&self, path: &str) -> Result<(), RelayError> {
         let url = format!("{}{}", self.base_url, path);
         let builder = self.http.delete(&url);

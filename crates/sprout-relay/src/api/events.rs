@@ -1,7 +1,8 @@
-//! Event lookup endpoints.
+//! Event endpoints.
 //!
 //! Endpoints:
-//!   GET /api/events/:id — fetch a single stored event by ID
+//!   GET  /api/events/:id — fetch a single stored event by ID
+//!   POST /api/events     — submit a signed Nostr event for ingestion
 
 use std::sync::Arc;
 
@@ -11,11 +12,12 @@ use axum::{
     response::Json,
 };
 
+use crate::handlers::ingest::{HttpAuthMethod, IngestAuth, IngestError};
 use crate::state::AppState;
 
 use super::{
     api_error, check_channel_access, check_token_channel_access, extract_auth_context,
-    internal_error, not_found,
+    internal_error, not_found, RestAuthMethod,
 };
 
 /// Fetch a single stored event by its 64-char hex ID.
@@ -63,4 +65,54 @@ pub async fn get_event(
         "content": stored_event.event.content,
         "sig": stored_event.event.sig.to_string(),
     })))
+}
+
+// ── POST /api/events ─────────────────────────────────────────────────────────
+
+/// Submit a signed Nostr event for ingestion.
+///
+/// Accepts the same 18 persistent kinds as the WebSocket `["EVENT", ...]` path.
+/// WS-only kinds (1059 gift-wrap, 20001 presence) are rejected.
+///
+/// Auth: API token, Okta JWT, or dev X-Pubkey — mapped to [`IngestAuth::Http`].
+pub async fn submit_event(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context(&headers, &state).await?;
+
+    let event: nostr::Event = serde_json::from_slice(&body)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid event JSON: {e}")))?;
+
+    let auth = IngestAuth::Http {
+        pubkey: ctx.pubkey,
+        scopes: ctx.scopes,
+        auth_method: match ctx.auth_method {
+            RestAuthMethod::ApiToken => HttpAuthMethod::ApiToken,
+            RestAuthMethod::OktaJwt => HttpAuthMethod::OktaJwt,
+            RestAuthMethod::DevPubkey => HttpAuthMethod::DevPubkey,
+            RestAuthMethod::Nip98 => {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    "NIP-98 auth is not supported for event submission",
+                ));
+            }
+        },
+        token_id: ctx.token_id,
+        channel_ids: ctx.channel_ids,
+    };
+
+    match crate::handlers::ingest::ingest_event(&state, event, auth).await {
+        Ok(result) => Ok(Json(serde_json::json!({
+            "event_id": result.event_id,
+            "accepted": result.accepted,
+            "message": result.message,
+        }))),
+        Err(e) => match e {
+            IngestError::Rejected(msg) => Err(api_error(StatusCode::BAD_REQUEST, &msg)),
+            IngestError::AuthFailed(msg) => Err(api_error(StatusCode::FORBIDDEN, &msg)),
+            IngestError::Internal(msg) => Err(internal_error(&msg)),
+        },
+    }
 }

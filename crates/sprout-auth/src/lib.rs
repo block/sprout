@@ -167,11 +167,14 @@ impl AuthService {
                     ));
                 }
                 // Default-open: no token present and require_token=false.
-                // Grant baseline read+write scopes so the connection is usable.
-                // This is intentional for dev/open-relay deployments — not a bug.
+                // Grant all scopes so the connection is fully usable in dev mode.
+                // The ingest pipeline enforces per-kind scope checks, so NIP-42
+                // pubkey-only connections need the full set — including admin
+                // scopes for kind:9000 (add member), kind:9001 (remove member),
+                // kind:9008 (delete group), etc.
                 (
                     auth_event.pubkey,
-                    vec![Scope::MessagesRead, Scope::MessagesWrite],
+                    Scope::all_known(),
                     AuthMethod::Nip42PubkeyOnly,
                 )
             }

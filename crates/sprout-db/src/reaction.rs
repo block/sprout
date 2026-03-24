@@ -27,6 +27,9 @@ pub struct ReactionUser {
     pub pubkey: Vec<u8>,
     /// Optional display name resolved from the users table.
     pub display_name: Option<String>,
+    /// Nostr event ID of the kind:7 reaction event (raw bytes), if present.
+    /// Clients use this to build signed kind:5 deletion events for reaction removal.
+    pub reaction_event_id: Option<Vec<u8>>,
 }
 
 /// Bulk reaction entry for embedding in message lists.
@@ -78,9 +81,10 @@ pub async fn add_reaction(
         INSERT INTO reactions (event_created_at, event_id, pubkey, emoji, reaction_event_id)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (event_created_at, event_id, pubkey, emoji) DO UPDATE SET
-            created_at = CASE WHEN reactions.removed_at IS NOT NULL THEN NOW() ELSE reactions.created_at END,
+            created_at = NOW(),
             removed_at = NULL,
             reaction_event_id = COALESCE(EXCLUDED.reaction_event_id, reactions.reaction_event_id)
+        WHERE reactions.removed_at IS NOT NULL
         "#,
     )
     .bind(event_created_at)
@@ -91,8 +95,12 @@ pub async fn add_reaction(
     .execute(pool)
     .await?;
 
-    // rows_affected = 0 means the row already existed and was already active
-    // (removed_at was already NULL, so no values changed).
+    // Three cases:
+    // (a) New reaction (no existing row): INSERT succeeds → rows_affected = 1 → true.
+    // (b) Reactivating (row exists, removed_at IS NOT NULL): WHERE matches → UPDATE fires
+    //     → rows_affected = 1 → true.
+    // (c) Active duplicate (row exists, removed_at IS NULL): WHERE fails → no UPDATE
+    //     → rows_affected = 0 → false. Caller should short-circuit and not store the event.
     Ok(result.rows_affected() != 0)
 }
 
@@ -234,18 +242,27 @@ pub async fn get_reactions(
     limit: u32,
     _cursor: Option<&str>,
 ) -> Result<Vec<ReactionGroup>> {
+    // Two-step query: first get the limited set of distinct emoji groups,
+    // then fetch all rows for those groups. This ensures `limit` applies to
+    // emoji groups (the API contract), not raw rows — so one busy emoji
+    // cannot consume the entire page and hide other groups.
     let rows = sqlx::query(
         r#"
-        SELECT emoji,
-               COUNT(*) AS count,
-               string_agg(encode(pubkey, 'hex'), ',' ORDER BY created_at) AS pubkeys_hex
-        FROM reactions
-        WHERE event_id = $1
-          AND event_created_at = $2
-          AND removed_at IS NULL
-        GROUP BY emoji
-        ORDER BY emoji
-        LIMIT $3
+        SELECT r.emoji, r.pubkey, r.reaction_event_id
+        FROM reactions r
+        INNER JOIN (
+            SELECT DISTINCT emoji
+            FROM reactions
+            WHERE event_id = $1
+              AND event_created_at = $2
+              AND removed_at IS NULL
+            ORDER BY emoji
+            LIMIT $3
+        ) g ON g.emoji = r.emoji
+        WHERE r.event_id = $1
+          AND r.event_created_at = $2
+          AND r.removed_at IS NULL
+        ORDER BY r.emoji, r.created_at
         "#,
     )
     .bind(event_id)
@@ -254,19 +271,42 @@ pub async fn get_reactions(
     .fetch_all(pool)
     .await?;
 
-    let mut groups = Vec::with_capacity(rows.len());
+    // Group individual rows by emoji in Rust.
+    let mut groups: Vec<ReactionGroup> = Vec::new();
+    let mut current_emoji: Option<String> = None;
+    let mut current_users: Vec<ReactionUser> = Vec::new();
 
-    for row in rows {
+    for row in &rows {
         let emoji: String = row.try_get("emoji")?;
-        let count: i64 = row.try_get("count")?;
-        let pubkeys_hex: Option<String> = row.try_get("pubkeys_hex")?;
+        let pubkey: Vec<u8> = row.try_get("pubkey")?;
+        let reaction_event_id: Option<Vec<u8>> = row.try_get("reaction_event_id")?;
 
-        let users = parse_pubkeys_hex(pubkeys_hex.as_deref().unwrap_or(""));
+        if current_emoji.as_ref() != Some(&emoji) {
+            if let Some(prev_emoji) = current_emoji.take() {
+                let count = current_users.len() as i64;
+                groups.push(ReactionGroup {
+                    emoji: prev_emoji,
+                    count,
+                    users: std::mem::take(&mut current_users),
+                });
+            }
+            current_emoji = Some(emoji);
+        }
 
+        current_users.push(ReactionUser {
+            pubkey,
+            display_name: None,
+            reaction_event_id,
+        });
+    }
+
+    // Flush the final group.
+    if let Some(emoji) = current_emoji {
+        let count = current_users.len() as i64;
         groups.push(ReactionGroup {
             emoji,
             count,
-            users,
+            users: current_users,
         });
     }
 
@@ -326,25 +366,4 @@ pub async fn get_reactions_bulk(
     }
 
     Ok(entries)
-}
-
-// -- Helpers ------------------------------------------------------------------
-
-/// Parse a `string_agg(encode(pubkey, 'hex'))` string into individual pubkeys.
-///
-/// Postgres `encode(bytea, 'hex')` produces lowercase hex characters, so a
-/// 32-byte pubkey becomes a 64-character hex string.
-fn parse_pubkeys_hex(hex_str: &str) -> Vec<ReactionUser> {
-    if hex_str.is_empty() {
-        return Vec::new();
-    }
-    hex_str
-        .split(',')
-        .filter_map(|h| hex::decode(h.trim()).ok())
-        .filter(|b| b.len() == 32)
-        .map(|pubkey| ReactionUser {
-            pubkey,
-            display_name: None,
-        })
-        .collect()
 }

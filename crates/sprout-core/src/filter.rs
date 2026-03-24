@@ -54,7 +54,27 @@ fn filter_match_one(f: &Filter, ev: &StoredEvent) -> bool {
                 .filter_map(|t| t.content())
                 .any(|event_val| event_val == filter_val.as_str())
         });
-        if !has_match {
+        // Fallback for #h (channel) filters: some events (reactions kind:7,
+        // deletions kind:5) derive their channel from the target event and
+        // don't carry an h-tag themselves. Use StoredEvent.channel_id as a
+        // fallback ONLY when the event has no h-tags at all — if the event
+        // has explicit h-tags, those are authoritative and must match.
+        if !has_match && tag_key_str == "h" {
+            let event_has_h_tags = ev.event.tags.iter().any(|t| t.kind().to_string() == "h");
+            if !event_has_h_tags {
+                if let Some(ch_id) = ev.channel_id {
+                    let ch_str = ch_id.to_string();
+                    if !tag_values.iter().any(|v| v.as_str() == ch_str) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            } else {
+                // Event has h-tags but none matched — strict rejection.
+                return false;
+            }
+        } else if !has_match {
             return false;
         }
     }
@@ -140,5 +160,62 @@ mod tests {
             &[Filter::new().event(nostr::EventId::from_byte_array([1u8; 32]))],
             &ev
         ));
+    }
+
+    #[test]
+    fn h_tag_fallback_uses_stored_channel_id() {
+        // Reactions (kind:7) and deletions (kind:5) don't carry h-tags —
+        // they derive their channel from the target event. The filter
+        // should fall back to StoredEvent.channel_id for #h matching.
+        let channel_id = uuid::Uuid::new_v4();
+        let keys = Keys::generate();
+
+        // Event with NO h-tag but with a stored channel_id.
+        let reaction = EventBuilder::new(
+            Kind::Reaction,
+            "👍",
+            [Tag::event(nostr::EventId::all_zeros())],
+        )
+        .sign_with_keys(&keys)
+        .expect("sign");
+        let stored = StoredEvent::with_received_at(reaction, Utc::now(), Some(channel_id), true);
+
+        let h_filter = Filter::new().kind(Kind::Reaction).custom_tag(
+            nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+            [channel_id.to_string()],
+        );
+
+        // Should match via channel_id fallback.
+        assert!(filters_match(std::slice::from_ref(&h_filter), &stored));
+
+        // Wrong channel should NOT match.
+        let wrong_channel = Filter::new().kind(Kind::Reaction).custom_tag(
+            nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+            [uuid::Uuid::new_v4().to_string()],
+        );
+        assert!(!filters_match(&[wrong_channel], &stored));
+
+        // No stored channel_id should NOT match.
+        let no_channel =
+            StoredEvent::with_received_at(stored.event.clone(), Utc::now(), None, true);
+        assert!(!filters_match(std::slice::from_ref(&h_filter), &no_channel));
+
+        // Event WITH an explicit h-tag: tag is authoritative, channel_id fallback
+        // must NOT override it. Prevents cross-channel leakage.
+        let other_channel = uuid::Uuid::new_v4();
+        let msg_with_h = EventBuilder::new(
+            Kind::Custom(9),
+            "hello",
+            [Tag::parse(&["h", &other_channel.to_string()]).unwrap()],
+        )
+        .sign_with_keys(&keys)
+        .expect("sign");
+        // channel_id matches the filter, but the h-tag points elsewhere.
+        let stored_with_h =
+            StoredEvent::with_received_at(msg_with_h, Utc::now(), Some(channel_id), true);
+        assert!(
+            !filters_match(std::slice::from_ref(&h_filter), &stored_with_h),
+            "explicit h-tag must be authoritative — channel_id fallback must not override it"
+        );
     }
 }

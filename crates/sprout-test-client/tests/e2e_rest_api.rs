@@ -20,16 +20,16 @@
 //!
 //! # Channel setup
 //!
-//! Each test creates its own channels dynamically via `POST /api/channels`.
+//! Each test creates its own channels dynamically via signed kind:9007 events.
 //! No pre-seeded data is required — tests are fully self-contained and work
 //! against a fresh database. Some tests also send messages via WebSocket to
 //! set up search / feed data.
 
 use std::time::Duration;
 
-use nostr::{Alphabet, Filter, Keys, Kind, SingleLetterTag, Tag};
+use nostr::{EventBuilder, Keys, Kind, Tag};
 use reqwest::Client;
-use sprout_test_client::{RelayMessage, SproutTestClient};
+use sprout_test_client::SproutTestClient;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -95,6 +95,89 @@ async fn authed_put(
         .unwrap_or_else(|e| panic!("HTTP PUT {url} failed: {e}"))
 }
 
+/// Create a channel via a signed kind:9007 event submitted to POST /api/events.
+/// Returns the channel UUID as a string.
+async fn create_channel_via_event(
+    client: &Client,
+    keys: &Keys,
+    name: &str,
+    channel_type: &str,
+    visibility: &str,
+    description: Option<&str>,
+) -> String {
+    let pubkey_hex = keys.public_key().to_hex();
+    let channel_uuid = uuid::Uuid::new_v4();
+    let mut tags = vec![
+        Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
+        Tag::parse(&["name", name]).unwrap(),
+        Tag::parse(&["channel_type", channel_type]).unwrap(),
+        Tag::parse(&["visibility", visibility]).unwrap(),
+    ];
+    if let Some(desc) = description {
+        tags.push(Tag::parse(&["about", desc]).unwrap());
+    }
+    let event = EventBuilder::new(Kind::Custom(9007), "", tags)
+        .sign_with_keys(keys)
+        .unwrap();
+    let resp = client
+        .post(format!("{}/api/events", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).unwrap())
+        .send()
+        .await
+        .expect("submit create-channel event");
+    assert!(
+        resp.status().is_success(),
+        "channel creation failed: {}",
+        resp.status()
+    );
+    channel_uuid.to_string()
+}
+
+/// Update profile via a signed kind:0 event submitted to POST /api/events.
+async fn set_profile_via_event(
+    client: &Client,
+    keys: &Keys,
+    display_name: Option<&str>,
+    about: Option<&str>,
+    avatar_url: Option<&str>,
+    nip05: Option<&str>,
+) {
+    let pubkey_hex = keys.public_key().to_hex();
+    let mut content_obj = serde_json::Map::new();
+    if let Some(n) = display_name {
+        content_obj.insert("display_name".to_string(), serde_json::json!(n));
+        content_obj.insert("name".to_string(), serde_json::json!(n));
+    }
+    if let Some(a) = about {
+        content_obj.insert("about".to_string(), serde_json::json!(a));
+    }
+    if let Some(p) = avatar_url {
+        content_obj.insert("picture".to_string(), serde_json::json!(p));
+    }
+    if let Some(n) = nip05 {
+        content_obj.insert("nip05".to_string(), serde_json::json!(n));
+    }
+    let content = serde_json::to_string(&serde_json::Value::Object(content_obj)).unwrap();
+    let event = EventBuilder::new(Kind::Custom(0), &content, vec![])
+        .sign_with_keys(keys)
+        .unwrap();
+    let resp = client
+        .post(format!("{}/api/events", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).unwrap())
+        .send()
+        .await
+        .expect("submit profile event");
+    assert!(
+        resp.status().is_success(),
+        "set profile failed: {}",
+        resp.status()
+    );
+}
+
 // ── Channel tests ─────────────────────────────────────────────────────────────
 
 /// GET /api/channels returns a non-empty list with the expected fields.
@@ -108,23 +191,15 @@ async fn test_list_channels_returns_expected_fields() {
     let url = format!("{}/api/channels", relay_http_url());
 
     // Ensure at least one channel exists (fresh DB may be empty).
-    let seed_resp = authed_post_json(
+    create_channel_via_event(
         &client,
-        &url,
-        &pubkey_hex,
-        serde_json::json!({
-            "name": format!("list-test-{}", uuid::Uuid::new_v4()),
-            "channel_type": "stream",
-            "visibility": "open",
-            "description": "Seed channel for list test"
-        }),
+        &keys,
+        &format!("list-test-{}", uuid::Uuid::new_v4()),
+        "stream",
+        "open",
+        Some("Seed channel for list test"),
     )
     .await;
-    assert_eq!(
-        seed_resp.status(),
-        201,
-        "bootstrap channel creation must succeed"
-    );
 
     let resp = authed_get(&client, &url, &pubkey_hex).await;
 
@@ -154,44 +229,29 @@ async fn test_list_channels_returns_expected_fields() {
     }
 }
 
-/// POST /api/channels creates a new channel owned by the requester.
+/// Creating a channel via POST /api/events (kind:9007) makes it visible via GET /api/channels.
 #[tokio::test]
 #[ignore]
 async fn test_create_channel_returns_channel_record() {
     let client = http_client();
     let keys = Keys::generate();
     let pubkey_hex = keys.public_key().to_hex();
-    let url = format!("{}/api/channels", relay_http_url());
     let channel_name = format!("desktop-create-{}", uuid::Uuid::new_v4());
 
-    let resp = authed_post_json(
+    let channel_id = create_channel_via_event(
         &client,
-        &url,
-        &pubkey_hex,
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "private",
-            "description": "Created by the REST API test"
-        }),
+        &keys,
+        &channel_name,
+        "stream",
+        "private",
+        Some("Created by the REST API test"),
     )
     .await;
 
-    assert_eq!(
-        resp.status(),
-        201,
-        "expected 201 Created from POST /api/channels"
-    );
+    assert!(!channel_id.is_empty(), "channel_id must be non-empty");
 
-    let created: serde_json::Value = resp.json().await.expect("response must be JSON");
-    assert!(created.get("id").is_some(), "channel missing 'id' field");
-    assert_eq!(created["name"].as_str(), Some(channel_name.as_str()));
-    assert_eq!(created["channel_type"].as_str(), Some("stream"));
-    assert_eq!(
-        created["description"].as_str(),
-        Some("Created by the REST API test")
-    );
-
+    // Verify the channel is visible via GET /api/channels
+    let url = format!("{}/api/channels", relay_http_url());
     let list_resp = authed_get(&client, &url, &pubkey_hex).await;
     assert_eq!(
         list_resp.status(),
@@ -202,9 +262,17 @@ async fn test_create_channel_returns_channel_record() {
     assert!(
         channels
             .iter()
-            .any(|channel| channel["id"] == created["id"] && channel["name"] == created["name"]),
-        "newly-created private channel should be visible to its creator"
+            .any(|channel| channel["id"].as_str() == Some(&channel_id)),
+        "newly-created channel should be visible to its creator"
     );
+
+    // Verify the channel record has the expected fields
+    let channel = channels
+        .iter()
+        .find(|c| c["id"].as_str() == Some(&channel_id))
+        .expect("channel must be in list");
+    assert_eq!(channel["name"].as_str(), Some(channel_name.as_str()));
+    assert_eq!(channel["channel_type"].as_str(), Some("stream"));
 }
 
 /// Open channels are visible to any authenticated user (no prior membership required).
@@ -221,27 +289,9 @@ async fn test_channel_visibility_open_channels_visible_to_all() {
 
     // Create an open channel as keys_a so there is at least one open channel to verify.
     let open_channel_name = format!("e2e-open-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &url,
-        &keys_a.public_key().to_hex(),
-        serde_json::json!({
-            "name": open_channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(
-        create_resp.status(),
-        201,
-        "failed to create open channel for visibility test"
-    );
-    let created_channel: serde_json::Value = create_resp.json().await.expect("JSON");
-    let open_channel_id = created_channel["id"]
-        .as_str()
-        .expect("created channel must have id")
-        .to_string();
+    let open_channel_id =
+        create_channel_via_event(&client, &keys_a, &open_channel_name, "stream", "open", None)
+            .await;
 
     let resp_a = authed_get(&client, &url, &keys_a.public_key().to_hex()).await;
     let resp_b = authed_get(&client, &url, &keys_b.public_key().to_hex()).await;
@@ -270,101 +320,6 @@ async fn test_channel_visibility_open_channels_visible_to_all() {
         ids_b.contains(&open_channel_id),
         "keys_b (unrelated user) should also see the open channel (id={open_channel_id})"
     );
-}
-
-/// REST-created channel messages must fan out to WebSocket subscribers and
-/// carry the canonical channel `h` tag.
-#[tokio::test]
-#[ignore]
-async fn test_rest_send_message_reaches_websocket_channel_subscriptions() {
-    let client = http_client();
-    let subscriber_keys = Keys::generate();
-    let poster_keys = Keys::generate();
-    let ws_url = relay_ws_url();
-
-    // Create a fresh open channel for this test.
-    let channels_url = format!("{}/api/channels", relay_http_url());
-    let channel_name = format!("e2e-rest-live-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &channels_url,
-        &poster_keys.public_key().to_hex(),
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(create_resp.status(), 201, "failed to create test channel");
-    let created: serde_json::Value = create_resp.json().await.expect("JSON");
-    let channel_id = created["id"]
-        .as_str()
-        .expect("channel must have id")
-        .to_string();
-
-    let mut subscriber = SproutTestClient::connect(&ws_url, &subscriber_keys)
-        .await
-        .expect("WebSocket connect failed");
-
-    let sid = format!("rest-live-{}", uuid::Uuid::new_v4().simple());
-    let filter = Filter::new().kind(Kind::Custom(9)).custom_tag(
-        SingleLetterTag::lowercase(Alphabet::H),
-        [channel_id.as_str()],
-    );
-
-    subscriber
-        .subscribe(&sid, vec![filter])
-        .await
-        .expect("subscribe failed");
-    subscriber
-        .collect_until_eose(&sid, Duration::from_secs(5))
-        .await
-        .expect("EOSE failed");
-
-    let content = format!("E2E REST live message: {}", uuid::Uuid::new_v4().simple());
-    let url = format!("{}/api/channels/{}/messages", relay_http_url(), channel_id);
-    let resp = authed_post_json(
-        &client,
-        &url,
-        &poster_keys.public_key().to_hex(),
-        serde_json::json!({ "content": content }),
-    )
-    .await;
-
-    assert_eq!(resp.status(), 200, "expected 200 OK from REST send_message");
-
-    let message = subscriber
-        .recv_event(Duration::from_secs(5))
-        .await
-        .expect("subscriber did not receive live event");
-
-    match message {
-        RelayMessage::Event { event, .. } => {
-            assert_eq!(event.content, content);
-
-            let tags: Vec<Vec<String>> = event
-                .tags
-                .iter()
-                .map(|tag| tag.as_slice().iter().map(|part| part.to_string()).collect())
-                .collect();
-
-            assert!(
-                tags.iter()
-                    .any(|tag| tag.len() >= 2 && tag[0] == "h" && tag[1] == channel_id),
-                "REST-created message is missing the channel h tag: {tags:?}"
-            );
-            assert!(
-                tags.iter().any(|tag| {
-                    tag.len() >= 2 && tag[0] == "p" && tag[1] == poster_keys.public_key().to_hex()
-                }),
-                "REST-created message is missing the sender attribution p tag: {tags:?}"
-            );
-        }
-        other => panic!("expected live EVENT after REST send_message, got {other:?}"),
-    }
-
-    subscriber.disconnect().await.expect("disconnect failed");
 }
 
 /// GET /api/channels requires authentication — unauthenticated requests are rejected.
@@ -429,25 +384,9 @@ async fn test_search_returns_indexed_event() {
     let ws_url = relay_ws_url();
 
     // Create a channel for this test so the event is accepted by the relay.
-    let channels_url = format!("{}/api/channels", relay_http_url());
     let channel_name = format!("e2e-search-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &channels_url,
-        &pubkey_hex,
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(create_resp.status(), 201, "failed to create test channel");
-    let created: serde_json::Value = create_resp.json().await.expect("JSON");
-    let channel_id = created["id"]
-        .as_str()
-        .expect("channel must have id")
-        .to_string();
+    let channel_id =
+        create_channel_via_event(&client, &keys, &channel_name, "stream", "open", None).await;
 
     let unique_token = format!("e2e-search-{}", uuid::Uuid::new_v4().simple());
     let content = format!("E2E REST search test marker: {unique_token}");
@@ -937,25 +876,9 @@ async fn test_feed_returns_activity() {
     }
 
     // Create a channel for this test so the event is accepted by the relay.
-    let channels_url = format!("{}/api/channels", relay_http_url());
     let channel_name = format!("e2e-feed-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &channels_url,
-        &pubkey_hex,
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(create_resp.status(), 201, "failed to create test channel");
-    let created_channel: serde_json::Value = create_resp.json().await.expect("JSON");
-    let channel_id = created_channel["id"]
-        .as_str()
-        .expect("channel must have id")
-        .to_string();
+    let channel_id =
+        create_channel_via_event(&client, &keys, &channel_name, "stream", "open", None).await;
 
     // Send a message to the open channel so there is activity to return.
     let unique_token = format!("e2e-feed-{}", uuid::Uuid::new_v4().simple());
@@ -1131,17 +1054,15 @@ async fn test_get_user_profile_returns_known_user() {
     let pubkey_hex = keys.public_key().to_hex();
 
     // Set a profile first
-    let put_resp = client
-        .put(format!("{}/api/users/me/profile", relay_http_url()))
-        .header("X-Pubkey", &pubkey_hex)
-        .json(&serde_json::json!({
-            "display_name": "Profile Test User",
-            "about": "Testing public profile endpoint"
-        }))
-        .send()
-        .await
-        .expect("PUT profile");
-    assert_eq!(put_resp.status(), 200);
+    set_profile_via_event(
+        &client,
+        &keys,
+        Some("Profile Test User"),
+        Some("Testing public profile endpoint"),
+        None,
+        None,
+    )
+    .await;
 
     // Read it back via the new public endpoint (using a different reader)
     let reader_keys = Keys::generate();
@@ -1239,21 +1160,8 @@ async fn test_batch_profiles_known_and_unknown() {
     let hex_b = keys_b.public_key().to_hex();
     let unknown_hex = Keys::generate().public_key().to_hex();
 
-    client
-        .put(format!("{}/api/users/me/profile", relay_http_url()))
-        .header("X-Pubkey", &hex_a)
-        .json(&serde_json::json!({"display_name": "Alice Batch"}))
-        .send()
-        .await
-        .expect("PUT alice");
-
-    client
-        .put(format!("{}/api/users/me/profile", relay_http_url()))
-        .header("X-Pubkey", &hex_b)
-        .json(&serde_json::json!({"display_name": "Bob Batch"}))
-        .send()
-        .await
-        .expect("PUT bob");
+    set_profile_via_event(&client, &keys_a, Some("Alice Batch"), None, None, None).await;
+    set_profile_via_event(&client, &keys_b, Some("Bob Batch"), None, None, None).await;
 
     // Batch lookup
     let resp = authed_post_json(
@@ -1377,13 +1285,7 @@ async fn test_batch_profiles_case_normalized() {
     let pubkey_hex = keys.public_key().to_hex();
 
     // Set profile
-    client
-        .put(format!("{}/api/users/me/profile", relay_http_url()))
-        .header("X-Pubkey", &pubkey_hex)
-        .json(&serde_json::json!({"display_name": "Case Test"}))
-        .send()
-        .await
-        .expect("PUT");
+    set_profile_via_event(&client, &keys, Some("Case Test"), None, None, None).await;
 
     // Query with uppercase version
     let upper_hex = pubkey_hex.to_uppercase();
@@ -1473,14 +1375,7 @@ async fn test_nip05_round_trip_set_and_lookup() {
     // Set NIP-05 handle — use "testuser@localhost" since relay_url is ws://localhost:3000
     let unique_name = format!("nip05test{}", &pubkey_hex[..8]);
     let handle = format!("{}@localhost", unique_name);
-    let resp = authed_put(
-        &client,
-        &format!("{}/api/users/me/profile", relay_http_url()),
-        &pubkey_hex,
-        serde_json::json!({"nip05_handle": handle}),
-    )
-    .await;
-    assert_eq!(resp.status(), 200, "set nip05_handle should succeed");
+    set_profile_via_event(&client, &keys, None, None, None, Some(&handle)).await;
 
     // Query NIP-05 endpoint
     let resp = client
@@ -1520,24 +1415,10 @@ async fn test_nip05_clear_handle() {
     let handle = format!("{}@localhost", unique_name);
 
     // Set handle
-    let resp = authed_put(
-        &client,
-        &format!("{}/api/users/me/profile", relay_http_url()),
-        &pubkey_hex,
-        serde_json::json!({"nip05_handle": handle}),
-    )
-    .await;
-    assert_eq!(resp.status(), 200);
+    set_profile_via_event(&client, &keys, None, None, None, Some(&handle)).await;
 
     // Clear handle
-    let resp = authed_put(
-        &client,
-        &format!("{}/api/users/me/profile", relay_http_url()),
-        &pubkey_hex,
-        serde_json::json!({"nip05_handle": ""}),
-    )
-    .await;
-    assert_eq!(resp.status(), 200);
+    set_profile_via_event(&client, &keys, None, None, None, Some("")).await;
 
     // Verify cleared — NIP-05 should no longer resolve
     let resp = client
@@ -1556,44 +1437,6 @@ async fn test_nip05_clear_handle() {
         !names.contains_key(&unique_name),
         "NIP-05 should NOT resolve after clearing. Got: {:?}",
         names
-    );
-}
-
-/// Duplicate nip05_handle returns 409 Conflict.
-#[tokio::test]
-#[ignore]
-async fn test_nip05_duplicate_handle_conflict() {
-    let client = http_client();
-    let keys_a = Keys::generate();
-    let pubkey_a = keys_a.public_key().to_hex();
-    let keys_b = Keys::generate();
-    let pubkey_b = keys_b.public_key().to_hex();
-
-    let unique_name = format!("duptest{}", &pubkey_a[..8]);
-    let handle = format!("{}@localhost", unique_name);
-
-    // User A sets handle
-    let resp = authed_put(
-        &client,
-        &format!("{}/api/users/me/profile", relay_http_url()),
-        &pubkey_a,
-        serde_json::json!({"nip05_handle": handle}),
-    )
-    .await;
-    assert_eq!(resp.status(), 200);
-
-    // User B tries same handle → 409
-    let resp = authed_put(
-        &client,
-        &format!("{}/api/users/me/profile", relay_http_url()),
-        &pubkey_b,
-        serde_json::json!({"nip05_handle": handle}),
-    )
-    .await;
-    assert_eq!(
-        resp.status(),
-        409,
-        "duplicate nip05_handle should return 409 Conflict"
     );
 }
 
@@ -1676,689 +1519,4 @@ async fn test_set_channel_add_policy_rejects_invalid() {
     assert_eq!(resp.status(), 400, "invalid policy value should return 400");
 }
 
-/// Default policy (no policy set) allows anyone to add the agent to a channel.
-#[tokio::test]
-#[ignore]
-async fn test_add_member_default_policy_allows_anyone() {
-    let client = http_client();
-    let owner_keys = Keys::generate();
-    let owner_hex = owner_keys.public_key().to_hex();
-    let agent_keys = Keys::generate();
-    let agent_hex = agent_keys.public_key().to_hex();
-
-    // Owner creates a channel (agent has no policy set — default "anyone")
-    let channel_name = format!("e2e-policy-default-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &format!("{}/api/channels", relay_http_url()),
-        &owner_hex,
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(create_resp.status(), 201, "channel creation should succeed");
-    let channel: serde_json::Value = create_resp.json().await.expect("json");
-    let channel_id = channel["id"].as_str().expect("channel id");
-
-    // Owner adds agent — default policy should allow it
-    let resp = authed_post_json(
-        &client,
-        &format!("{}/api/channels/{channel_id}/members", relay_http_url()),
-        &owner_hex,
-        serde_json::json!({ "pubkeys": [agent_hex], "role": "member" }),
-    )
-    .await;
-    assert_eq!(resp.status(), 200, "add member should return 200");
-    let body: serde_json::Value = resp.json().await.expect("json");
-    let added = body["added"].as_array().expect("added array");
-    assert!(
-        added.iter().any(|v| v.as_str() == Some(&agent_hex)),
-        "agent should be in added list; got body: {body}"
-    );
-}
-
-/// owner_only policy blocks a non-owner stranger from adding the agent.
-#[tokio::test]
-#[ignore]
-async fn test_add_member_owner_only_blocks_non_owner() {
-    let client = http_client();
-    let agent_keys = Keys::generate();
-    let agent_hex = agent_keys.public_key().to_hex();
-    let stranger_keys = Keys::generate();
-    let stranger_hex = stranger_keys.public_key().to_hex();
-
-    // Agent sets policy to owner_only
-    let resp = authed_put(
-        &client,
-        &format!("{}/api/users/me/channel-add-policy", relay_http_url()),
-        &agent_hex,
-        serde_json::json!({ "channel_add_policy": "owner_only" }),
-    )
-    .await;
-    assert_eq!(resp.status(), 200, "policy set should succeed");
-
-    // Stranger creates a channel
-    let channel_name = format!("e2e-owner-only-block-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &format!("{}/api/channels", relay_http_url()),
-        &stranger_hex,
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(create_resp.status(), 201, "channel creation should succeed");
-    let channel: serde_json::Value = create_resp.json().await.expect("json");
-    let channel_id = channel["id"].as_str().expect("channel id");
-
-    // Stranger tries to add agent — should be blocked by owner_only policy
-    let resp = authed_post_json(
-        &client,
-        &format!("{}/api/channels/{channel_id}/members", relay_http_url()),
-        &stranger_hex,
-        serde_json::json!({ "pubkeys": [agent_hex], "role": "member" }),
-    )
-    .await;
-    assert_eq!(
-        resp.status(),
-        200,
-        "add member returns 200 even on policy block"
-    );
-    let body: serde_json::Value = resp.json().await.expect("json");
-    let errors = body["errors"].as_array().expect("errors array");
-    let agent_error = errors
-        .iter()
-        .find(|e| e["pubkey"].as_str() == Some(&agent_hex))
-        .unwrap_or_else(|| panic!("agent should be in errors; got body: {body}"));
-    let error_msg = agent_error["error"].as_str().unwrap_or("");
-    assert!(
-        error_msg.contains("policy:owner_only"),
-        "error should mention policy:owner_only; got: {error_msg}"
-    );
-}
-
-/// owner_only policy: when no owner is set, even the channel creator is blocked.
-///
-/// Full AC-2 coverage (owner IS set and can add) requires setting `agent_owner_pubkey`
-/// via `sprout-admin set-agent-owner`, which is not available in e2e REST tests.
-/// The owner bypass path is covered by DB-level unit tests in sprout-db.
-///
-/// What we CAN verify here: with `owner_only` set and no owner configured, the policy
-/// blocks everyone — including the channel creator — because NULL owner matches nobody.
-#[tokio::test]
-#[ignore]
-async fn test_add_member_owner_only_null_owner_blocks_all() {
-    let client = http_client();
-    let agent_keys = Keys::generate();
-    let agent_hex = agent_keys.public_key().to_hex();
-    let channel_creator_keys = Keys::generate();
-    let channel_creator_hex = channel_creator_keys.public_key().to_hex();
-
-    // Agent sets policy to owner_only (no agent_owner_pubkey is set — NULL by default).
-    let resp = authed_put(
-        &client,
-        &format!("{}/api/users/me/channel-add-policy", relay_http_url()),
-        &agent_hex,
-        serde_json::json!({ "channel_add_policy": "owner_only" }),
-    )
-    .await;
-    assert_eq!(resp.status(), 200, "policy set should succeed");
-
-    // Channel creator creates a channel.
-    let channel_name = format!("e2e-owner-only-noowner-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &format!("{}/api/channels", relay_http_url()),
-        &channel_creator_hex,
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(create_resp.status(), 201, "channel creation should succeed");
-    let channel: serde_json::Value = create_resp.json().await.expect("json");
-    let channel_id = channel["id"].as_str().expect("channel id");
-
-    // Channel creator tries to add agent — owner_only with NULL owner blocks everyone.
-    let resp = authed_post_json(
-        &client,
-        &format!("{}/api/channels/{channel_id}/members", relay_http_url()),
-        &channel_creator_hex,
-        serde_json::json!({ "pubkeys": [agent_hex], "role": "member" }),
-    )
-    .await;
-    assert_eq!(
-        resp.status(),
-        200,
-        "add member returns 200 even on policy block"
-    );
-    let body: serde_json::Value = resp.json().await.expect("json");
-    let errors = body["errors"].as_array().expect("errors array");
-    let agent_error = errors
-        .iter()
-        .find(|e| e["pubkey"].as_str() == Some(&agent_hex))
-        .unwrap_or_else(|| panic!("agent should be in errors; got body: {body}"));
-    let error_msg = agent_error["error"].as_str().unwrap_or("");
-    assert!(
-        error_msg.contains("policy:owner_only"),
-        "error should mention policy:owner_only when no owner is set; got: {error_msg}"
-    );
-}
-
-/// nobody policy blocks all external callers from adding the agent.
-#[tokio::test]
-#[ignore]
-async fn test_add_member_nobody_blocks_all() {
-    let client = http_client();
-    let agent_keys = Keys::generate();
-    let agent_hex = agent_keys.public_key().to_hex();
-    let stranger_keys = Keys::generate();
-    let stranger_hex = stranger_keys.public_key().to_hex();
-
-    // Agent sets policy to nobody
-    let resp = authed_put(
-        &client,
-        &format!("{}/api/users/me/channel-add-policy", relay_http_url()),
-        &agent_hex,
-        serde_json::json!({ "channel_add_policy": "nobody" }),
-    )
-    .await;
-    assert_eq!(resp.status(), 200, "policy set should succeed");
-
-    // Stranger creates a channel
-    let channel_name = format!("e2e-nobody-block-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &format!("{}/api/channels", relay_http_url()),
-        &stranger_hex,
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(create_resp.status(), 201, "channel creation should succeed");
-    let channel: serde_json::Value = create_resp.json().await.expect("json");
-    let channel_id = channel["id"].as_str().expect("channel id");
-
-    // Stranger tries to add agent — nobody policy blocks all
-    let resp = authed_post_json(
-        &client,
-        &format!("{}/api/channels/{channel_id}/members", relay_http_url()),
-        &stranger_hex,
-        serde_json::json!({ "pubkeys": [agent_hex], "role": "member" }),
-    )
-    .await;
-    assert_eq!(
-        resp.status(),
-        200,
-        "add member returns 200 even on policy block"
-    );
-    let body: serde_json::Value = resp.json().await.expect("json");
-    let errors = body["errors"].as_array().expect("errors array");
-    let agent_error = errors
-        .iter()
-        .find(|e| e["pubkey"].as_str() == Some(&agent_hex))
-        .unwrap_or_else(|| panic!("agent should be in errors; got body: {body}"));
-    let error_msg = agent_error["error"].as_str().unwrap_or("");
-    assert!(
-        error_msg.contains("policy:nobody"),
-        "error should mention policy:nobody; got: {error_msg}"
-    );
-}
-
-/// Self-add bypasses the nobody policy — an agent can always add itself.
-#[tokio::test]
-#[ignore]
-async fn test_self_add_bypasses_policy() {
-    let client = http_client();
-    let agent_keys = Keys::generate();
-    let agent_hex = agent_keys.public_key().to_hex();
-
-    // Agent sets policy to nobody
-    let resp = authed_put(
-        &client,
-        &format!("{}/api/users/me/channel-add-policy", relay_http_url()),
-        &agent_hex,
-        serde_json::json!({ "channel_add_policy": "nobody" }),
-    )
-    .await;
-    assert_eq!(resp.status(), 200, "policy set should succeed");
-
-    // Agent creates a channel (making agent the owner)
-    let channel_name = format!("e2e-self-add-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &format!("{}/api/channels", relay_http_url()),
-        &agent_hex,
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(create_resp.status(), 201, "channel creation should succeed");
-    let channel: serde_json::Value = create_resp.json().await.expect("json");
-    let channel_id = channel["id"].as_str().expect("channel id");
-
-    // Agent adds itself — self-add should bypass nobody policy
-    let resp = authed_post_json(
-        &client,
-        &format!("{}/api/channels/{channel_id}/members", relay_http_url()),
-        &agent_hex,
-        serde_json::json!({ "pubkeys": [agent_hex], "role": "member" }),
-    )
-    .await;
-    assert_eq!(resp.status(), 200, "self-add should return 200");
-    let body: serde_json::Value = resp.json().await.expect("json");
-    let added = body["added"].as_array().expect("added array");
-    assert!(
-        added.iter().any(|v| v.as_str() == Some(&agent_hex)),
-        "agent should be in added list (self-add bypasses nobody); got body: {body}"
-    );
-}
-
-/// Batch add with mixed policies: allowed agent goes to added, blocked agent goes to errors.
-#[tokio::test]
-#[ignore]
-async fn test_batch_add_mixed_policies() {
-    let client = http_client();
-    let owner_keys = Keys::generate();
-    let owner_hex = owner_keys.public_key().to_hex();
-    let allowed_agent_keys = Keys::generate();
-    let allowed_agent_hex = allowed_agent_keys.public_key().to_hex();
-    let blocked_agent_keys = Keys::generate();
-    let blocked_agent_hex = blocked_agent_keys.public_key().to_hex();
-
-    // Blocked agent sets policy to nobody
-    let resp = authed_put(
-        &client,
-        &format!("{}/api/users/me/channel-add-policy", relay_http_url()),
-        &blocked_agent_hex,
-        serde_json::json!({ "channel_add_policy": "nobody" }),
-    )
-    .await;
-    assert_eq!(resp.status(), 200, "policy set should succeed");
-
-    // Owner creates a channel (allowed_agent has no policy — default "anyone")
-    let channel_name = format!("e2e-batch-mixed-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &format!("{}/api/channels", relay_http_url()),
-        &owner_hex,
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(create_resp.status(), 201, "channel creation should succeed");
-    let channel: serde_json::Value = create_resp.json().await.expect("json");
-    let channel_id = channel["id"].as_str().expect("channel id");
-
-    // Owner adds both agents in one batch request
-    let resp = authed_post_json(
-        &client,
-        &format!("{}/api/channels/{channel_id}/members", relay_http_url()),
-        &owner_hex,
-        serde_json::json!({
-            "pubkeys": [allowed_agent_hex, blocked_agent_hex],
-            "role": "member"
-        }),
-    )
-    .await;
-    assert_eq!(resp.status(), 200, "batch add should return 200");
-    let body: serde_json::Value = resp.json().await.expect("json");
-
-    // Allowed agent should be in added
-    let added = body["added"].as_array().expect("added array");
-    assert!(
-        added.iter().any(|v| v.as_str() == Some(&allowed_agent_hex)),
-        "allowed_agent should be in added; got body: {body}"
-    );
-
-    // Blocked agent should be in errors
-    let errors = body["errors"].as_array().expect("errors array");
-    let blocked_error = errors
-        .iter()
-        .find(|e| e["pubkey"].as_str() == Some(&blocked_agent_hex))
-        .unwrap_or_else(|| panic!("blocked_agent should be in errors; got body: {body}"));
-    let error_msg = blocked_error["error"].as_str().unwrap_or("");
-    assert!(
-        error_msg.contains("policy:nobody"),
-        "error should mention policy:nobody; got: {error_msg}"
-    );
-}
-
 // ── Thread reply mention p-tag tests ──────────────────────────────────────────
-
-/// Thread replies created via REST with `mention_pubkeys` must include the
-/// extra `p` tags so that `#p`-filtered subscribers (e.g. ACP agent harness)
-/// receive the event. This is the regression test for the bug where
-/// @mentioning an agent in a thread reply did not trigger the agent.
-#[tokio::test]
-#[ignore]
-async fn test_rest_reply_with_mention_pubkeys_includes_p_tags() {
-    let client = http_client();
-    let poster_keys = Keys::generate();
-    let agent_keys = Keys::generate();
-    let poster_hex = poster_keys.public_key().to_hex();
-    let agent_hex = agent_keys.public_key().to_hex();
-    let ws_url = relay_ws_url();
-
-    // Create an open channel.
-    let channels_url = format!("{}/api/channels", relay_http_url());
-    let channel_name = format!("e2e-reply-mention-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &channels_url,
-        &poster_hex,
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(create_resp.status(), 201, "failed to create test channel");
-    let created: serde_json::Value = create_resp.json().await.expect("JSON");
-    let channel_id = created["id"].as_str().expect("channel id").to_string();
-
-    // Subscribe as the "agent" with a #p filter matching agent_hex — this is
-    // exactly how the ACP harness subscribes.
-    let mut agent_sub = SproutTestClient::connect(&ws_url, &agent_keys)
-        .await
-        .expect("agent WS connect");
-    let sid = format!("agent-mention-{}", uuid::Uuid::new_v4().simple());
-    let filter = Filter::new()
-        .kind(Kind::Custom(9))
-        .custom_tag(
-            SingleLetterTag::lowercase(Alphabet::H),
-            [channel_id.as_str()],
-        )
-        .custom_tag(
-            SingleLetterTag::lowercase(Alphabet::P),
-            [agent_hex.as_str()],
-        );
-    agent_sub
-        .subscribe(&sid, vec![filter])
-        .await
-        .expect("subscribe");
-    agent_sub
-        .collect_until_eose(&sid, Duration::from_secs(5))
-        .await
-        .expect("EOSE");
-
-    // Post a top-level message (the future thread root).
-    let msg_url = format!("{}/api/channels/{}/messages", relay_http_url(), channel_id);
-    let root_resp = authed_post_json(
-        &client,
-        &msg_url,
-        &poster_hex,
-        serde_json::json!({ "content": "thread root" }),
-    )
-    .await;
-    assert_eq!(root_resp.status(), 200);
-    let root: serde_json::Value = root_resp.json().await.expect("JSON");
-    let root_event_id = root["event_id"].as_str().expect("event_id").to_string();
-
-    // Post a reply that @mentions the agent via mention_pubkeys.
-    let reply_resp = authed_post_json(
-        &client,
-        &msg_url,
-        &poster_hex,
-        serde_json::json!({
-            "content": "hey @agent check this out",
-            "parent_event_id": root_event_id,
-            "mention_pubkeys": [agent_hex],
-        }),
-    )
-    .await;
-    assert_eq!(
-        reply_resp.status(),
-        200,
-        "reply with mention_pubkeys failed"
-    );
-
-    // The agent subscriber should receive the reply because it has a p-tag
-    // matching agent_hex.
-    let msg = agent_sub
-        .recv_event(Duration::from_secs(5))
-        .await
-        .expect("agent subscriber did not receive the reply — p-tag likely missing");
-
-    match msg {
-        RelayMessage::Event { event, .. } => {
-            assert_eq!(event.content, "hey @agent check this out");
-
-            let tags: Vec<Vec<String>> = event
-                .tags
-                .iter()
-                .map(|tag| tag.as_slice().iter().map(|s| s.to_string()).collect())
-                .collect();
-
-            // Must have the agent's p-tag (the mention).
-            assert!(
-                tags.iter()
-                    .any(|t| t.len() >= 2 && t[0] == "p" && t[1] == agent_hex),
-                "reply is missing the agent mention p-tag: {tags:?}"
-            );
-            // Must still have the sender's p-tag (attribution).
-            assert!(
-                tags.iter()
-                    .any(|t| t.len() >= 2 && t[0] == "p" && t[1] == poster_hex),
-                "reply is missing the sender attribution p-tag: {tags:?}"
-            );
-            // Must have the reply e-tag.
-            assert!(
-                tags.iter().any(|t| t.len() >= 4
-                    && t[0] == "e"
-                    && t[1] == root_event_id
-                    && t[3] == "reply"),
-                "reply is missing the NIP-10 reply e-tag: {tags:?}"
-            );
-        }
-        other => panic!("expected EVENT, got {other:?}"),
-    }
-
-    agent_sub.disconnect().await.expect("disconnect");
-}
-
-/// mention_pubkeys validation: duplicates are deduplicated, self is skipped,
-/// mixed-case is canonicalized, and invalid entries are rejected.
-#[tokio::test]
-#[ignore]
-async fn test_rest_mention_pubkeys_validation() {
-    let client = http_client();
-    let keys = Keys::generate();
-    let pubkey_hex = keys.public_key().to_hex();
-
-    // Create a channel.
-    let channels_url = format!("{}/api/channels", relay_http_url());
-    let channel_name = format!("e2e-mention-val-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &channels_url,
-        &pubkey_hex,
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(create_resp.status(), 201);
-    let created: serde_json::Value = create_resp.json().await.expect("JSON");
-    let channel_id = created["id"].as_str().expect("channel id").to_string();
-    let msg_url = format!("{}/api/channels/{}/messages", relay_http_url(), channel_id);
-
-    // Invalid hex should be rejected.
-    let resp = authed_post_json(
-        &client,
-        &msg_url,
-        &pubkey_hex,
-        serde_json::json!({
-            "content": "bad mention",
-            "mention_pubkeys": ["not-valid-hex"],
-        }),
-    )
-    .await;
-    assert_eq!(resp.status(), 400, "invalid hex should be rejected");
-
-    // Too many mentions should be rejected.
-    let too_many: Vec<String> = (0..51).map(|i| format!("{:064x}", i)).collect();
-    let resp = authed_post_json(
-        &client,
-        &msg_url,
-        &pubkey_hex,
-        serde_json::json!({
-            "content": "too many mentions",
-            "mention_pubkeys": too_many,
-        }),
-    )
-    .await;
-    assert_eq!(
-        resp.status(),
-        400,
-        "exceeding 50 mentions should be rejected"
-    );
-
-    // Empty array should succeed.
-    let resp = authed_post_json(
-        &client,
-        &msg_url,
-        &pubkey_hex,
-        serde_json::json!({
-            "content": "no mentions",
-            "mention_pubkeys": [],
-        }),
-    )
-    .await;
-    assert_eq!(resp.status(), 200, "empty mention_pubkeys should succeed");
-}
-
-/// Thread reply with duplicate, uppercase, and self mention_pubkeys must
-/// produce exactly the expected normalized p-tags: sender first, then each
-/// unique mentioned pubkey lowercased, with self and duplicates removed.
-#[tokio::test]
-#[ignore]
-async fn test_rest_mention_pubkeys_normalization_in_emitted_event() {
-    let client = http_client();
-    let poster_keys = Keys::generate();
-    let agent_keys = Keys::generate();
-    let poster_hex = poster_keys.public_key().to_hex();
-    let agent_hex = agent_keys.public_key().to_hex();
-    let ws_url = relay_ws_url();
-
-    // Create an open channel.
-    let channels_url = format!("{}/api/channels", relay_http_url());
-    let channel_name = format!("e2e-norm-{}", uuid::Uuid::new_v4().simple());
-    let create_resp = authed_post_json(
-        &client,
-        &channels_url,
-        &poster_hex,
-        serde_json::json!({
-            "name": channel_name,
-            "channel_type": "stream",
-            "visibility": "open"
-        }),
-    )
-    .await;
-    assert_eq!(create_resp.status(), 201);
-    let created: serde_json::Value = create_resp.json().await.expect("JSON");
-    let channel_id = created["id"].as_str().expect("channel id").to_string();
-
-    // Subscribe to the channel (no #p filter — we want to see all events).
-    let mut sub = SproutTestClient::connect(&ws_url, &poster_keys)
-        .await
-        .expect("WS connect");
-    let sid = format!("norm-{}", uuid::Uuid::new_v4().simple());
-    let filter = Filter::new().kind(Kind::Custom(9)).custom_tag(
-        SingleLetterTag::lowercase(Alphabet::H),
-        [channel_id.as_str()],
-    );
-    sub.subscribe(&sid, vec![filter]).await.expect("subscribe");
-    sub.collect_until_eose(&sid, Duration::from_secs(5))
-        .await
-        .expect("EOSE");
-
-    // Post a root message.
-    let msg_url = format!("{}/api/channels/{}/messages", relay_http_url(), channel_id);
-    let root_resp = authed_post_json(
-        &client,
-        &msg_url,
-        &poster_hex,
-        serde_json::json!({ "content": "root" }),
-    )
-    .await;
-    assert_eq!(root_resp.status(), 200);
-    let root: serde_json::Value = root_resp.json().await.expect("JSON");
-    let root_id = root["event_id"].as_str().expect("event_id").to_string();
-
-    // Consume the root event so it doesn't interfere.
-    sub.recv_event(Duration::from_secs(5))
-        .await
-        .expect("root event");
-
-    // Post a reply with: duplicate agent, uppercase agent, and self-mention.
-    let reply_resp = authed_post_json(
-        &client,
-        &msg_url,
-        &poster_hex,
-        serde_json::json!({
-            "content": "normalization test",
-            "parent_event_id": root_id,
-            "mention_pubkeys": [
-                agent_hex,
-                agent_hex.to_uppercase(),
-                agent_hex,
-                poster_hex,
-            ],
-        }),
-    )
-    .await;
-    assert_eq!(reply_resp.status(), 200);
-
-    let msg = sub
-        .recv_event(Duration::from_secs(5))
-        .await
-        .expect("reply event");
-
-    match msg {
-        RelayMessage::Event { event, .. } => {
-            let p_tags: Vec<String> = event
-                .tags
-                .iter()
-                .filter(|t| t.kind().to_string() == "p")
-                .filter_map(|t| t.content().map(|s| s.to_string()))
-                .collect();
-
-            // Expect exactly 2 p-tags: sender (first) + agent (deduplicated, lowercased).
-            // Self-mention (poster_hex) must be suppressed.
-            assert_eq!(
-                p_tags.len(),
-                2,
-                "expected exactly 2 p-tags (sender + agent), got {p_tags:?}"
-            );
-            assert_eq!(p_tags[0], poster_hex, "first p-tag must be sender");
-            assert_eq!(
-                p_tags[1], agent_hex,
-                "second p-tag must be the agent (lowercased, deduplicated)"
-            );
-        }
-        other => panic!("expected EVENT, got {other:?}"),
-    }
-
-    sub.disconnect().await.expect("disconnect");
-}

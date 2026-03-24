@@ -484,22 +484,31 @@ async fn test_ws_valid_imeta() {
     let pubkey_hex = keys.public_key().to_hex();
     let http = http_client();
 
-    // Create channel via REST
-    let ch: serde_json::Value = http
-        .post(format!("{}/api/channels", relay_http_url()))
+    // Create channel via signed kind:9007 event
+    let channel_uuid = uuid::Uuid::new_v4();
+    let channel_name = format!("ws-imeta-test-{}", channel_uuid);
+    let create_event = EventBuilder::new(
+        Kind::from(9007),
+        "",
+        vec![
+            Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
+            Tag::parse(&["name", &channel_name]).unwrap(),
+            Tag::parse(&["channel_type", "stream"]).unwrap(),
+            Tag::parse(&["visibility", "open"]).unwrap(),
+        ],
+    )
+    .sign_with_keys(&keys)
+    .unwrap();
+    let create_resp = http
+        .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
-        .json(&serde_json::json!({
-            "name": format!("ws-imeta-test-{}", rand::random::<u32>()),
-            "channel_type": "stream",
-            "visibility": "open"
-        }))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&create_event).unwrap())
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
-    let channel_id = ch["id"].as_str().unwrap();
+    assert!(create_resp.status().is_success(), "channel creation failed");
+    let channel_id = channel_uuid.to_string();
     println!("Channel: {channel_id}");
 
     // Upload a JPEG to get a valid sha256
@@ -518,7 +527,7 @@ async fn test_ws_valid_imeta() {
         Kind::from(9),
         "image via ws",
         vec![
-            Tag::parse(&["h", channel_id]).unwrap(),
+            Tag::parse(&["h", &channel_id]).unwrap(),
             Tag::parse(&[
                 "imeta",
                 &format!("url http://localhost:3000/media/{sha256}.jpg"),
@@ -552,21 +561,30 @@ async fn test_ws_invalid_imeta_external_url() {
     let pubkey_hex = keys.public_key().to_hex();
     let http = http_client();
 
-    let ch: serde_json::Value = http
-        .post(format!("{}/api/channels", relay_http_url()))
+    let channel_uuid = uuid::Uuid::new_v4();
+    let channel_name = format!("ws-imeta-bad-{}", channel_uuid);
+    let create_event = EventBuilder::new(
+        Kind::from(9007),
+        "",
+        vec![
+            Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
+            Tag::parse(&["name", &channel_name]).unwrap(),
+            Tag::parse(&["channel_type", "stream"]).unwrap(),
+            Tag::parse(&["visibility", "open"]).unwrap(),
+        ],
+    )
+    .sign_with_keys(&keys)
+    .unwrap();
+    let create_resp = http
+        .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
-        .json(&serde_json::json!({
-            "name": format!("ws-imeta-bad-{}", rand::random::<u32>()),
-            "channel_type": "stream",
-            "visibility": "open"
-        }))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&create_event).unwrap())
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
-    let channel_id = ch["id"].as_str().unwrap();
+    assert!(create_resp.status().is_success(), "channel creation failed");
+    let channel_id = channel_uuid.to_string();
 
     let sha = "a".repeat(64);
     let mut client = SproutTestClient::connect(&relay_ws_url(), &keys)
@@ -577,7 +595,7 @@ async fn test_ws_invalid_imeta_external_url() {
         Kind::from(9),
         "bad imeta",
         vec![
-            Tag::parse(&["h", channel_id]).unwrap(),
+            Tag::parse(&["h", &channel_id]).unwrap(),
             Tag::parse(&[
                 "imeta",
                 &format!("url https://evil.com/media/{sha}.jpg"),
@@ -615,21 +633,30 @@ async fn test_ws_invalid_imeta_missing_fields() {
     let pubkey_hex = keys.public_key().to_hex();
     let http = http_client();
 
-    let ch: serde_json::Value = http
-        .post(format!("{}/api/channels", relay_http_url()))
+    let channel_uuid = uuid::Uuid::new_v4();
+    let channel_name = format!("ws-imeta-miss-{}", channel_uuid);
+    let create_event = EventBuilder::new(
+        Kind::from(9007),
+        "",
+        vec![
+            Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
+            Tag::parse(&["name", &channel_name]).unwrap(),
+            Tag::parse(&["channel_type", "stream"]).unwrap(),
+            Tag::parse(&["visibility", "open"]).unwrap(),
+        ],
+    )
+    .sign_with_keys(&keys)
+    .unwrap();
+    let create_resp = http
+        .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
-        .json(&serde_json::json!({
-            "name": format!("ws-imeta-miss-{}", rand::random::<u32>()),
-            "channel_type": "stream",
-            "visibility": "open"
-        }))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&create_event).unwrap())
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
-    let channel_id = ch["id"].as_str().unwrap();
+    assert!(create_resp.status().is_success(), "channel creation failed");
+    let channel_id = channel_uuid.to_string();
 
     let sha = "b".repeat(64);
     let mut client = SproutTestClient::connect(&relay_ws_url(), &keys)
@@ -641,7 +668,7 @@ async fn test_ws_invalid_imeta_missing_fields() {
         Kind::from(9),
         "incomplete imeta",
         vec![
-            Tag::parse(&["h", channel_id]).unwrap(),
+            Tag::parse(&["h", &channel_id]).unwrap(),
             Tag::parse(&[
                 "imeta",
                 &format!("url http://localhost:3000/media/{sha}.jpg"),
