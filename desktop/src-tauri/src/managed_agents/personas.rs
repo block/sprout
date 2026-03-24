@@ -68,7 +68,9 @@ fn built_in_persona_records(now: &str) -> Vec<PersonaRecord> {
 }
 
 fn built_in_order(id: &str) -> Option<usize> {
-    BUILT_IN_PERSONAS.iter().position(|persona| persona.id == id)
+    BUILT_IN_PERSONAS
+        .iter()
+        .position(|persona| persona.id == id)
 }
 
 fn sort_personas(records: &mut [PersonaRecord]) {
@@ -78,10 +80,12 @@ fn sort_personas(records: &mut [PersonaRecord]) {
 
         left_builtin
             .cmp(&right_builtin)
-            .then_with(|| match (built_in_order(&left.id), built_in_order(&right.id)) {
-                (Some(left_order), Some(right_order)) => left_order.cmp(&right_order),
-                _ => std::cmp::Ordering::Equal,
-            })
+            .then_with(
+                || match (built_in_order(&left.id), built_in_order(&right.id)) {
+                    (Some(left_order), Some(right_order)) => left_order.cmp(&right_order),
+                    _ => std::cmp::Ordering::Equal,
+                },
+            )
             .then_with(|| {
                 left.display_name
                     .to_lowercase()
@@ -179,10 +183,20 @@ mod tests {
         assert!(changed);
         assert_eq!(records.len(), BUILT_IN_PERSONAS.len());
         assert!(records.iter().all(|record| record.is_builtin));
-        let display_names: Vec<&str> = records.iter().map(|record| record.display_name.as_str()).collect();
+        let display_names: Vec<&str> = records
+            .iter()
+            .map(|record| record.display_name.as_str())
+            .collect();
         assert_eq!(
             display_names,
-            vec!["Orchestrator", "Researcher", "Planner", "Builder", "Refactor", "Reviewer"]
+            vec![
+                "Orchestrator",
+                "Researcher",
+                "Planner",
+                "Builder",
+                "Refactor",
+                "Reviewer"
+            ]
         );
     }
 
@@ -230,12 +244,12 @@ mod tests {
         let (records, changed) = merge_personas(legacy_builtins, "2026-03-19T00:00:00Z");
 
         assert!(changed);
-        assert!(
-            records
-                .iter()
-                .any(|record| record.id == "builtin:implementer" && record.display_name == "Builder")
-        );
-        assert!(records.iter().any(|record| record.id == "builtin:orchestrator"));
+        assert!(records
+            .iter()
+            .any(|record| record.id == "builtin:implementer" && record.display_name == "Builder"));
+        assert!(records
+            .iter()
+            .any(|record| record.id == "builtin:orchestrator"));
         assert!(records.iter().any(|record| record.id == "builtin:refactor"));
         assert!(records.iter().any(|record| record.id == "builtin:reviewer"));
     }

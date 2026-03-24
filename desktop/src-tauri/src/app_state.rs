@@ -55,7 +55,6 @@ pub fn build_app_state() -> AppState {
         session_token: Mutex::new(None),
         managed_agents_store_lock: Mutex::new(()),
         managed_agent_processes: Mutex::new(HashMap::new()),
-
     }
 }
 
@@ -80,8 +79,7 @@ pub fn resolve_persisted_identity(app: &AppHandle, state: &AppState) -> Result<(
         .path()
         .app_data_dir()
         .map_err(|e| format!("app data dir: {e}"))?;
-    std::fs::create_dir_all(&data_dir)
-        .map_err(|e| format!("create app data dir: {e}"))?;
+    std::fs::create_dir_all(&data_dir).map_err(|e| format!("create app data dir: {e}"))?;
     let key_path = data_dir.join("identity.key");
 
     // Try to load an existing key.
@@ -103,7 +101,9 @@ pub fn resolve_persisted_identity(app: &AppHandle, state: &AppState) -> Result<(
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 let bad_name = format!("identity.key.bad.{ts}");
-                eprintln!("sprout-desktop: corrupt identity.key ({error}), quarantining to {bad_name}");
+                eprintln!(
+                    "sprout-desktop: corrupt identity.key ({error}), quarantining to {bad_name}"
+                );
                 let bad_path = data_dir.join(bad_name);
                 if std::fs::rename(&key_path, &bad_path).is_err() {
                     let _ = std::fs::remove_file(&key_path);
@@ -125,8 +125,7 @@ pub fn resolve_persisted_identity(app: &AppHandle, state: &AppState) -> Result<(
 }
 
 fn load_key_file(path: &std::path::Path) -> Result<Keys, String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("read identity.key: {e}"))?;
+    let content = std::fs::read_to_string(path).map_err(|e| format!("read identity.key: {e}"))?;
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return Err("empty identity.key".to_string());

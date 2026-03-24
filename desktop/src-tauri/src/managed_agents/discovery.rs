@@ -92,7 +92,10 @@ fn normalize_command_identity(command: &str) -> String {
     let lower = lower.strip_suffix(".exe").unwrap_or(&lower).to_string();
 
     if let Some(suffix) = std::env::consts::EXE_SUFFIX.strip_prefix('.') {
-        return lower.strip_suffix(&format!(".{suffix}")).unwrap_or(&lower).to_string();
+        return lower
+            .strip_suffix(&format!(".{suffix}"))
+            .unwrap_or(&lower)
+            .to_string();
     }
 
     if !std::env::consts::EXE_SUFFIX.is_empty() {
@@ -309,7 +312,11 @@ pub async fn mint_token_via_api(
 
     // Build NIP-98 auth header signed by the AGENT's keys (not the desktop user's).
     let payload_hash = format!("{:x}", Sha256::digest(&body_bytes));
-    let forwarded_proto = if url.starts_with("http://") { "http" } else { "https" };
+    let forwarded_proto = if url.starts_with("http://") {
+        "http"
+    } else {
+        "https"
+    };
     let tags = vec![
         Tag::parse(vec!["u", &url]).map_err(|e| format!("url tag failed: {e}"))?,
         Tag::parse(vec!["method", "POST"]).map_err(|e| format!("method tag failed: {e}"))?,
@@ -343,8 +350,7 @@ mod tests {
 
     #[test]
     fn resolves_known_avatar_for_bare_command() {
-        let avatar_url =
-            managed_agent_avatar_url("goose").expect("goose avatar should resolve");
+        let avatar_url = managed_agent_avatar_url("goose").expect("goose avatar should resolve");
 
         assert_eq!(avatar_url, GOOSE_AVATAR_URL);
     }

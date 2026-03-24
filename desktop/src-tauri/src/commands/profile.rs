@@ -94,10 +94,11 @@ pub async fn get_users_batch(
     state: State<'_, AppState>,
 ) -> Result<UsersBatchResponse, String> {
     let request =
-        build_authed_request(&state.http_client, Method::POST, "/api/users/batch", &state)?
-            .json(&GetUsersBatchBody {
+        build_authed_request(&state.http_client, Method::POST, "/api/users/batch", &state)?.json(
+            &GetUsersBatchBody {
                 pubkeys: pubkeys.as_slice(),
-            });
+            },
+        );
     send_json_request(request).await
 }
 
@@ -109,13 +110,9 @@ pub async fn search_users(
 ) -> Result<SearchUsersResponse, String> {
     let limit = limit.unwrap_or(8);
     let limit_param = limit.to_string();
-    let request = build_authed_request(
-        &state.http_client,
-        Method::GET,
-        "/api/users/search",
-        &state,
-    )?
-    .query(&[("q", query.as_str()), ("limit", limit_param.as_str())]);
+    let request =
+        build_authed_request(&state.http_client, Method::GET, "/api/users/search", &state)?
+            .query(&[("q", query.as_str()), ("limit", limit_param.as_str())]);
 
     send_json_request(request).await
 }

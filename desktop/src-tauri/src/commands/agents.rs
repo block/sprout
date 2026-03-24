@@ -11,8 +11,8 @@ use crate::{
         stop_managed_agent_process, sync_managed_agent_processes, validate_provider_config,
         BackendKind, BackendProviderInfo, CreateManagedAgentRequest, CreateManagedAgentResponse,
         ManagedAgentLogResponse, ManagedAgentRecord, ManagedAgentSummary,
-        MintManagedAgentTokenRequest, MintManagedAgentTokenResponse, DEFAULT_AGENT_ARG,
-        DEFAULT_ACP_COMMAND, DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM,
+        MintManagedAgentTokenRequest, MintManagedAgentTokenResponse, DEFAULT_ACP_COMMAND,
+        DEFAULT_AGENT_ARG, DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM,
         DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
     },
     relay::{relay_ws_url, sync_managed_agent_profile},
@@ -61,18 +61,17 @@ async fn deploy_to_provider(
         .filter(|p| p.exists())
         .map(|p| p.canonicalize().unwrap_or(p))
         .filter(|canonical| {
-            discover_provider_candidates()
-                .iter()
-                .any(|(id, cp)| id == provider_id && cp.canonicalize().ok().as_ref() == Some(canonical))
+            discover_provider_candidates().iter().any(|(id, cp)| {
+                id == provider_id && cp.canonicalize().ok().as_ref() == Some(canonical)
+            })
         })
         .map_or_else(|| resolve_provider_binary(provider_id), Ok)?;
 
     let config_clone = config.clone();
-    let deploy_result = tokio::task::spawn_blocking(move || {
-        provider_deploy(&bin_path, &agent_json, &config_clone)
-    })
-    .await
-    .map_err(|e| format!("spawn_blocking failed: {e}"))?;
+    let deploy_result =
+        tokio::task::spawn_blocking(move || provider_deploy(&bin_path, &agent_json, &config_clone))
+            .await
+            .map_err(|e| format!("spawn_blocking failed: {e}"))?;
 
     // Persist result under lock.
     let _store_guard = state
@@ -152,7 +151,16 @@ pub async fn create_managed_agent(
 
     // ── Phase 1: generate keys and collect mint parameters (sync lock) ────────
     // We do NOT mint here — minting is async and must happen outside the lock.
-    let (agent_keys, private_key_nsec, pubkey, resolved_relay_url, token_scopes, token_name, mint_token, input) = {
+    let (
+        agent_keys,
+        private_key_nsec,
+        pubkey,
+        resolved_relay_url,
+        token_scopes,
+        token_name,
+        mint_token,
+        input,
+    ) = {
         let _store_guard = state
             .managed_agents_store_lock
             .lock()
@@ -215,7 +223,16 @@ pub async fn create_managed_agent(
             .unwrap_or_else(relay_ws_url);
 
         let mint_token = input.mint_token;
-        (keys, private_key_nsec, pubkey, resolved_relay_url, token_scopes, token_name, mint_token, input)
+        (
+            keys,
+            private_key_nsec,
+            pubkey,
+            resolved_relay_url,
+            token_scopes,
+            token_name,
+            mint_token,
+            input,
+        )
     };
 
     // ── Pre-Phase 2: validate provider config BEFORE any side effects ────────
@@ -231,8 +248,12 @@ pub async fn create_managed_agent(
         }
         // Enforce minimum scopes for remote agents. The harness needs users:read
         // to query its owner (for !shutdown). Without it, the agent is unstoppable.
-        const REQUIRED_PROVIDER_SCOPES: &[&str] =
-            &["messages:read", "messages:write", "channels:read", "users:read"];
+        const REQUIRED_PROVIDER_SCOPES: &[&str] = &[
+            "messages:read",
+            "messages:write",
+            "channels:read",
+            "users:read",
+        ];
         for required in REQUIRED_PROVIDER_SCOPES {
             if !token_scopes.iter().any(|s| s == required) {
                 return Err(format!(
@@ -295,7 +316,9 @@ pub async fn create_managed_agent(
         // Cache the discovered binary path for deploy_to_provider.
         let provider_binary_path = if let BackendKind::Provider { ref id, .. } = input.backend {
             // Use resolve_provider_binary (discovered candidates only).
-            resolve_provider_binary(id).ok().map(|p| p.display().to_string())
+            resolve_provider_binary(id)
+                .ok()
+                .map(|p| p.display().to_string())
         } else {
             None
         };
@@ -429,9 +452,14 @@ pub async fn create_managed_agent(
             // Read the saved record to build the deploy payload (record has the
             // canonical field values after Phase 3 normalization).
             let agent_json = {
-                let _g = state.managed_agents_store_lock.lock().map_err(|e| e.to_string())?;
+                let _g = state
+                    .managed_agents_store_lock
+                    .lock()
+                    .map_err(|e| e.to_string())?;
                 let records = load_managed_agents(&app)?;
-                let rec = records.iter().find(|r| r.pubkey == pubkey)
+                let rec = records
+                    .iter()
+                    .find(|r| r.pubkey == pubkey)
                     .ok_or_else(|| "agent disappeared".to_string())?;
                 build_deploy_payload(rec)
             };
@@ -448,10 +476,18 @@ pub async fn create_managed_agent(
 
     // Rebuild summary if provider deploy may have updated backend_agent_id.
     let final_agent = if input.backend != BackendKind::Local && spawn_error.is_none() {
-        let _store_guard = state.managed_agents_store_lock.lock().map_err(|e| e.to_string())?;
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|e| e.to_string())?;
         let records = load_managed_agents(&app)?;
-        let runtimes = state.managed_agent_processes.lock().map_err(|e| e.to_string())?;
-        let record = records.iter().find(|r| r.pubkey == pubkey)
+        let runtimes = state
+            .managed_agent_processes
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let record = records
+            .iter()
+            .find(|r| r.pubkey == pubkey)
             .ok_or_else(|| "agent disappeared".to_string())?;
         build_managed_agent_summary(&app, record, &runtimes)?
     } else {
@@ -690,7 +726,8 @@ pub async fn mint_managed_agent_token(
     // Re-minting: do NOT send owner_pubkey. Ownership was established during
     // the first mint (create flow). Sending it again would be rejected by the
     // relay if the owner is already set to a different pubkey.
-    let minted_token = mint_token_via_api(&state, &agent_keys, &relay_url, &token_name, &scopes, None).await?;
+    let minted_token =
+        mint_token_via_api(&state, &agent_keys, &relay_url, &token_name, &scopes, None).await?;
 
     // ── Phase 3: persist new token to agent record (sync lock) ───────────────
     let (agent, api_token) = {
@@ -724,7 +761,10 @@ pub async fn mint_managed_agent_token(
         (agent, minted_token)
     };
 
-    Ok(MintManagedAgentTokenResponse { agent, token: api_token })
+    Ok(MintManagedAgentTokenResponse {
+        agent,
+        token: api_token,
+    })
 }
 
 #[tauri::command]
@@ -739,7 +779,9 @@ pub fn get_managed_agent_log(
         .lock()
         .map_err(|error| error.to_string())?;
     let records = load_managed_agents(&app)?;
-    let record = records.iter().find(|record| record.pubkey == pubkey)
+    let record = records
+        .iter()
+        .find(|record| record.pubkey == pubkey)
         .ok_or_else(|| format!("agent {pubkey} not found"))?;
     if record.backend != BackendKind::Local {
         return Err("logs are not available for remote agents".to_string());

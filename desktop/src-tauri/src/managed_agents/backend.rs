@@ -21,8 +21,10 @@ pub fn invoke_provider(
     request: &serde_json::Value,
     timeout: Duration,
 ) -> Result<serde_json::Value, String> {
-    let request_bytes =
-        format!("{}\n", serde_json::to_string(request).map_err(|e| e.to_string())?);
+    let request_bytes = format!(
+        "{}\n",
+        serde_json::to_string(request).map_err(|e| e.to_string())?
+    );
 
     let mut child = std::process::Command::new(binary)
         .stdin(std::process::Stdio::piped())
@@ -241,7 +243,8 @@ fn split_config_key(key: &str) -> Vec<String> {
         } else if ch.is_uppercase() {
             // Start a new word on: (a) transition from lowercase to uppercase, or
             // (b) uppercase followed by lowercase (end of acronym run, e.g. "APIKey" → "API" + "Key").
-            let prev_lower = !current.is_empty() && current.chars().last().map_or(false, |c| c.is_lowercase());
+            let prev_lower =
+                !current.is_empty() && current.chars().last().map_or(false, |c| c.is_lowercase());
             let acronym_end = !current.is_empty()
                 && current.chars().last().map_or(false, |c| c.is_uppercase())
                 && chars.get(i + 1).map_or(false, |c| c.is_lowercase());

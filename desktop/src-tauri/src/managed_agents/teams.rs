@@ -41,8 +41,8 @@ pub fn load_teams(app: &AppHandle) -> Result<Vec<TeamRecord>, String> {
         return Ok(Vec::new());
     }
 
-    let content =
-        fs::read_to_string(&path).map_err(|error| format!("failed to read teams store: {error}"))?;
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read teams store: {error}"))?;
     let mut records: Vec<TeamRecord> = serde_json::from_str(&content)
         .map_err(|error| format!("failed to parse teams store: {error}"))?;
     sort_teams(&mut records);
@@ -66,10 +66,7 @@ pub fn save_teams(app: &AppHandle, records: &[TeamRecord]) -> Result<(), String>
 /// Encode a team as a JSON blob for export. The format includes the team's
 /// name, description, and the full persona data for each member (so the
 /// import side can recreate personas that don't exist locally).
-pub fn encode_team_json(
-    team: &TeamRecord,
-    personas: &[PersonaRecord],
-) -> Result<Vec<u8>, String> {
+pub fn encode_team_json(team: &TeamRecord, personas: &[PersonaRecord]) -> Result<Vec<u8>, String> {
     let resolved_personas: Vec<serde_json::Value> = team
         .persona_ids
         .iter()
@@ -185,11 +182,7 @@ mod tests {
 
     #[test]
     fn sort_teams_alphabetical_case_insensitive() {
-        let mut teams = vec![
-            team("3", "Zulu"),
-            team("1", "alpha"),
-            team("2", "Bravo"),
-        ];
+        let mut teams = vec![team("3", "Zulu"), team("1", "alpha"), team("2", "Bravo")];
         sort_teams(&mut teams);
 
         let names: Vec<&str> = teams.iter().map(|t| t.name.as_str()).collect();
@@ -198,10 +191,7 @@ mod tests {
 
     #[test]
     fn sort_teams_breaks_ties_by_id() {
-        let mut teams = vec![
-            team("b", "same"),
-            team("a", "same"),
-        ];
+        let mut teams = vec![team("b", "same"), team("a", "same")];
         sort_teams(&mut teams);
 
         let ids: Vec<&str> = teams.iter().map(|t| t.id.as_str()).collect();
