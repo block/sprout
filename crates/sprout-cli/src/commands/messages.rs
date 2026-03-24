@@ -69,6 +69,7 @@ pub async fn cmd_get_messages(
     channel_id: &str,
     limit: Option<u32>,
     before: Option<i64>,
+    since: Option<i64>,
     kinds: Option<&str>,
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
@@ -76,6 +77,9 @@ pub async fn cmd_get_messages(
     let mut path = format!("/api/channels/{}/messages?limit={}", channel_id, limit);
     if let Some(b) = before {
         path.push_str(&format!("&before={b}"));
+    }
+    if let Some(s) = since {
+        path.push_str(&format!("&since={s}"));
     }
     if let Some(k) = kinds {
         path.push_str(&format!("&kinds={}", percent_encode(k)));

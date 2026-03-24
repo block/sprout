@@ -97,6 +97,8 @@ enum Cmd {
         #[arg(long)]
         before: Option<i64>,
         #[arg(long)]
+        since: Option<i64>,
+        #[arg(long)]
         kinds: Option<String>,
     },
     /// Get a message thread
@@ -531,10 +533,18 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             channel,
             limit,
             before,
+            since,
             kinds,
         } => {
-            commands::messages::cmd_get_messages(&client, &channel, limit, before, kinds.as_deref())
-                .await
+            commands::messages::cmd_get_messages(
+                &client,
+                &channel,
+                limit,
+                before,
+                since,
+                kinds.as_deref(),
+            )
+            .await
         }
         Cmd::GetThread {
             channel,
