@@ -65,3 +65,27 @@ export function resolvePersonaProvider(
     ],
   };
 }
+
+/**
+ * Collect provider-resolution warnings for a list of personas.
+ *
+ * Used by deploy dialogs to surface inline alerts when one or more
+ * personas reference a runtime that isn't currently available.
+ */
+export function collectProviderWarnings(
+  personas: readonly { provider: string | null }[],
+  providers: readonly AcpProvider[],
+  fallbackProvider: AcpProvider | null,
+): string[] {
+  if (!fallbackProvider) return [];
+  const warnings: string[] = [];
+  for (const persona of personas) {
+    const { warnings: w } = resolvePersonaProvider(
+      persona.provider,
+      providers,
+      fallbackProvider,
+    );
+    warnings.push(...w);
+  }
+  return warnings;
+}

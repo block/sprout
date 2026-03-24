@@ -37,7 +37,10 @@ import {
   coerceConfigValues,
   ProviderConfigFields,
 } from "@/features/agents/ui/ProviderConfigFields";
-import { resolvePersonaProvider } from "@/features/agents/lib/resolvePersonaProvider";
+import {
+  collectProviderWarnings,
+  resolvePersonaProvider,
+} from "@/features/agents/lib/resolvePersonaProvider";
 
 type AddChannelBotDialogProps = {
   backendProviders?: BackendProviderCandidate[];
@@ -152,19 +155,11 @@ export function AddChannelBotDialog({
   // choice), NOT `providers[0]`. This differs intentionally from
   // AddTeamToChannelDialog which has no provider selector and falls back
   // to the first available runtime.
-  const providerWarnings = React.useMemo(() => {
-    if (!selectedProvider) return [];
-    const warnings: string[] = [];
-    for (const persona of selectedPersonas) {
-      const { warnings: w } = resolvePersonaProvider(
-        persona.provider,
-        providers,
-        selectedProvider,
-      );
-      warnings.push(...w);
-    }
-    return warnings;
-  }, [selectedPersonas, providers, selectedProvider]);
+  const providerWarnings = React.useMemo(
+    () =>
+      collectProviderWarnings(selectedPersonas, providers, selectedProvider),
+    [selectedPersonas, providers, selectedProvider],
+  );
 
   const isProviderMode = runOn !== "local";
   const selectedBackendProvider = React.useMemo(

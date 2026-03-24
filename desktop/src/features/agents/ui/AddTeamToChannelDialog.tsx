@@ -6,7 +6,10 @@ import {
   useCreateChannelManagedAgentsMutation,
 } from "@/features/agents/hooks";
 import type { CreateChannelManagedAgentsResult } from "@/features/agents/channelAgents";
-import { resolvePersonaProvider } from "@/features/agents/lib/resolvePersonaProvider";
+import {
+  collectProviderWarnings,
+  resolvePersonaProvider,
+} from "@/features/agents/lib/resolvePersonaProvider";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type {
@@ -75,19 +78,10 @@ export function AddTeamToChannelDialog({
   // Surface warnings when a persona's preferred provider is unavailable.
   // This dialog has no provider selector, so the fallback is always
   // `defaultProvider` (the first available runtime).
-  const providerWarnings = React.useMemo(() => {
-    if (!defaultProvider) return [];
-    const warnings: string[] = [];
-    for (const persona of resolved) {
-      const { warnings: w } = resolvePersonaProvider(
-        persona.provider,
-        providers,
-        defaultProvider,
-      );
-      warnings.push(...w);
-    }
-    return warnings;
-  }, [resolved, providers, defaultProvider]);
+  const providerWarnings = React.useMemo(
+    () => collectProviderWarnings(resolved, providers, defaultProvider),
+    [resolved, providers, defaultProvider],
+  );
 
   function reset() {
     setChannelId("");

@@ -65,6 +65,8 @@ pub fn parse_png_persona(png_bytes: &[u8]) -> Result<ParsedPersonaPreview, Strin
         return Err("This image doesn't contain persona data.".to_string());
     };
 
+    // For PNG persona cards, the avatar is the image itself — override
+    // whatever avatarUrl the embedded JSON metadata might contain.
     let avatar_data_url = Some(format!("data:image/png;base64,{}", STANDARD.encode(png_bytes)));
 
     Ok(ParsedPersonaPreview {
@@ -88,6 +90,7 @@ fn decode_b64_json(b64: &str) -> Result<Value, String> {
 struct SproutPersonaFields {
     display_name: String,
     system_prompt: String,
+    avatar_url: Option<String>,
     provider: Option<String>,
     model: Option<String>,
 }
@@ -117,6 +120,12 @@ fn extract_sprout_fields(v: &Value) -> Result<SproutPersonaFields, String> {
     if prompt.is_empty() {
         return Err("systemPrompt is empty".to_string());
     }
+    let avatar_url = v
+        .get("avatarUrl")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
     let provider = v
         .get("provider")
         .and_then(|v| v.as_str())
@@ -132,6 +141,7 @@ fn extract_sprout_fields(v: &Value) -> Result<SproutPersonaFields, String> {
     Ok(SproutPersonaFields {
         display_name: name,
         system_prompt: prompt,
+        avatar_url,
         provider,
         model,
     })
@@ -174,6 +184,7 @@ fn parse_chara_payload(b64: &str) -> Result<SproutPersonaFields, String> {
     Ok(SproutPersonaFields {
         display_name: name,
         system_prompt: prompt,
+        avatar_url: None,
         provider: None,
         model: None,
     })
@@ -188,17 +199,10 @@ pub fn parse_json_persona(json_bytes: &[u8]) -> Result<ParsedPersonaPreview, Str
         serde_json::from_slice(json_bytes).map_err(|e| format!("Invalid JSON: {e}"))?;
     let fields = extract_sprout_fields(&v)?;
 
-    let avatar_data_url = v
-        .get("avatarUrl")
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string());
-
     Ok(ParsedPersonaPreview {
         display_name: fields.display_name,
         system_prompt: fields.system_prompt,
-        avatar_data_url,
+        avatar_data_url: fields.avatar_url,
         provider: fields.provider,
         model: fields.model,
         source_file: String::new(),
