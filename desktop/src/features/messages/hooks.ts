@@ -22,6 +22,9 @@ type MessageQueryContext = {
   queryKey: readonly ["channel-messages", string];
 };
 
+const CHANNEL_HISTORY_LIMIT = 200;
+const MAX_TIMELINE_MESSAGES = CHANNEL_HISTORY_LIMIT * 2;
+
 function dedupeMessagesById(messages: RelayEvent[]) {
   const seenIds = new Set<string>();
   const deduped: RelayEvent[] = [];
@@ -40,9 +43,28 @@ function dedupeMessagesById(messages: RelayEvent[]) {
   return deduped.reverse();
 }
 
-export function mergeMessages(
+function sortMessages(messages: RelayEvent[]) {
+  return dedupeMessagesById(messages).sort(
+    (left, right) => left.created_at - right.created_at,
+  );
+}
+
+function normalizeTimelineMessages(messages: RelayEvent[]) {
+  const normalized = sortMessages(messages);
+
+  if (normalized.length <= MAX_TIMELINE_MESSAGES) {
+    return normalized;
+  }
+
+  // Keep the live timeline bounded so de-virtualized rendering does not grow
+  // into an unbounded DOM during long-lived channel sessions.
+  return normalized.slice(-MAX_TIMELINE_MESSAGES);
+}
+
+function mergeMessagesWithNormalizer(
   current: RelayEvent[],
   incoming: RelayEvent,
+  normalize: (messages: RelayEvent[]) => RelayEvent[],
 ): RelayEvent[] {
   const normalizedCurrent = dedupeMessagesById(current);
   const deduped = normalizedCurrent.filter(
@@ -51,8 +73,24 @@ export function mergeMessages(
       !(message.pending && incoming.content === message.content),
   );
 
-  return dedupeMessagesById([...deduped, incoming]).sort(
-    (left, right) => left.created_at - right.created_at,
+  return normalize([...deduped, incoming]);
+}
+
+export function mergeMessages(
+  current: RelayEvent[],
+  incoming: RelayEvent,
+): RelayEvent[] {
+  return mergeMessagesWithNormalizer(current, incoming, sortMessages);
+}
+
+export function mergeTimelineCacheMessages(
+  current: RelayEvent[],
+  incoming: RelayEvent,
+): RelayEvent[] {
+  return mergeMessagesWithNormalizer(
+    current,
+    incoming,
+    normalizeTimelineMessages,
   );
 }
 
@@ -117,13 +155,16 @@ export function useChannelMessagesQuery(channel: Channel | null) {
         throw new Error("No channel selected.");
       }
 
-      const history = await relayClient.fetchChannelHistory(channel.id, 200);
+      const history = await relayClient.fetchChannelHistory(
+        channel.id,
+        CHANNEL_HISTORY_LIMIT,
+      );
       const currentMessages =
         queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];
-      const mergedHistory = dedupeMessagesById([
+      const mergedHistory = normalizeTimelineMessages([
         ...currentMessages,
         ...history,
-      ]).sort((left, right) => left.created_at - right.created_at);
+      ]);
 
       return mergedHistory;
     },
@@ -141,14 +182,18 @@ export function useChannelSubscription(channel: Channel | null) {
       return;
     }
 
-    const history = await relayClient.fetchChannelHistory(channelId, 200);
+    const history = await relayClient.fetchChannelHistory(
+      channelId,
+      CHANNEL_HISTORY_LIMIT,
+    );
 
     queryClient.setQueryData<RelayEvent[]>(
       ["channel-messages", channelId],
       (current = []) => {
-        const mergedHistory = dedupeMessagesById([...current, ...history]).sort(
-          (left, right) => left.created_at - right.created_at,
-        );
+        const mergedHistory = normalizeTimelineMessages([
+          ...current,
+          ...history,
+        ]);
 
         return mergedHistory;
       },
@@ -167,7 +212,7 @@ export function useChannelSubscription(channel: Channel | null) {
     );
     queryClient.setQueryData<RelayEvent[]>(
       ["channel-messages", channelId],
-      (current = []) => mergeMessages(current, event),
+      (current = []) => mergeTimelineCacheMessages(current, event),
     );
   });
 
@@ -344,7 +389,7 @@ export function useSendMessageMutation(
 
       queryClient.setQueryData<RelayEvent[]>(
         queryKey,
-        mergeMessages(previousMessages, optimisticMessage),
+        mergeTimelineCacheMessages(previousMessages, optimisticMessage),
       );
 
       return {
@@ -379,7 +424,7 @@ export function useSendMessageMutation(
           const withoutOptimistic = current.filter(
             (item) => item.id !== context.optimisticId,
           );
-          return mergeMessages(withoutOptimistic, message);
+          return mergeTimelineCacheMessages(withoutOptimistic, message);
         },
       );
     },

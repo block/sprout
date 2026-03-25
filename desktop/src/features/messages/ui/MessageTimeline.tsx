@@ -1,19 +1,13 @@
 import * as React from "react";
 import { ArrowDown } from "lucide-react";
-import { useVirtualizer } from "@tanstack/react-virtual";
 
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
-import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { Button } from "@/shared/ui/button";
 import { Separator } from "@/shared/ui/separator";
-import { MessageRow } from "./MessageRow";
-import { SystemMessageRow } from "./SystemMessageRow";
 import { TimelineSkeleton } from "./TimelineSkeleton";
+import { TimelineMessageList } from "./TimelineMessageList";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
-
-const ESTIMATED_ROW_HEIGHT = 60;
-const OVERSCAN_COUNT = 10;
 
 type MessageTimelineProps = {
   channelId?: string | null;
@@ -50,13 +44,6 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 }: MessageTimelineProps) {
   const scrollContainerRef = React.useRef<HTMLDivElement>(null);
 
-  const virtualizer = useVirtualizer({
-    count: messages.length,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => ESTIMATED_ROW_HEIGHT,
-    overscan: OVERSCAN_COUNT,
-  });
-
   const {
     bottomAnchorRef,
     contentRef,
@@ -72,11 +59,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     onTargetReached,
     scrollContainerRef,
     targetMessageId,
-    virtualizer,
   });
-
-  const virtualItems = virtualizer.getVirtualItems();
-  const totalSize = virtualizer.getTotalSize();
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -118,43 +101,15 @@ export const MessageTimeline = React.memo(function MessageTimeline({
           ) : null}
 
           {!isLoading && messages.length > 0 ? (
-            <div
-              className="relative w-full"
-              style={{ height: `${totalSize}px` }}
-            >
-              {virtualItems.map((virtualRow) => {
-                const message = messages[virtualRow.index];
-                return (
-                  <div
-                    key={message.id}
-                    data-index={virtualRow.index}
-                    ref={virtualizer.measureElement}
-                    className="absolute left-0 top-0 w-full"
-                    style={{
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                  >
-                    {message.kind === KIND_SYSTEM_MESSAGE ? (
-                      <SystemMessageRow
-                        body={message.body}
-                        currentPubkey={currentPubkey}
-                        profiles={profiles}
-                        time={message.time}
-                      />
-                    ) : (
-                      <MessageRow
-                        activeReplyTargetId={activeReplyTargetId}
-                        highlighted={message.id === highlightedMessageId}
-                        message={message}
-                        onToggleReaction={onToggleReaction}
-                        onReply={onReply}
-                        profiles={profiles}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <TimelineMessageList
+              activeReplyTargetId={activeReplyTargetId}
+              currentPubkey={currentPubkey}
+              highlightedMessageId={highlightedMessageId}
+              messages={messages}
+              onReply={onReply}
+              onToggleReaction={onToggleReaction}
+              profiles={profiles}
+            />
           ) : null}
 
           <div aria-hidden className="h-px" ref={bottomAnchorRef} />
