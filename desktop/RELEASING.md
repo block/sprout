@@ -74,7 +74,7 @@ The `sprout-desktop-release.yml` workflow:
    `Cargo.toml` using `set-version-from-tag.mjs`.
 3. **Regenerates `Cargo.lock`** to match the patched `Cargo.toml`.
 4. **Validates** all required secrets are present.
-5. **Builds** the release config with signing and updater settings.
+5. **Builds** the release config with the updater public key and endpoint.
 6. **Builds** the Tauri app (unsigned).
 7. **Signs and notarizes** the macOS bundle via `block/apple-codesign-action`.
 8. **Re-packages** the signed app into a DMG and updater archive.
@@ -89,7 +89,7 @@ The `sprout-desktop-release.yml` workflow:
 
 Local builds will not be codesigned or notarized — that only happens in CI
 via `block/apple-codesign-action`. Local builds are useful for testing the
-updater config and DMG packaging.
+updater runtime config and DMG packaging.
 
 ```bash
 # Set updater env vars
@@ -167,3 +167,8 @@ tag drives the version.
 - **Build failures**: If versions are wrong, check that the tag follows the
   format `desktop/v<semver>` (e.g. `desktop/v0.3.0`). CI extracts the version
   from the tag automatically.
+
+- **"A public key has been found, but no private key"**: The Tauri build should
+  not require `TAURI_SIGNING_PRIVATE_KEY`. If you see this, the build is trying
+  to generate updater artifacts before the signed app bundle exists. The updater
+  archive is supposed to be created and signed later from the notarized app.
