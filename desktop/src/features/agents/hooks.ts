@@ -142,8 +142,9 @@ export function useManagedAgentPrereqsQuery(
   });
 }
 
-export function useRelayAgentsQuery() {
+export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
   return useQuery({
+    enabled: options?.enabled ?? true,
     queryKey: relayAgentsQueryKey,
     queryFn: listRelayAgents,
     staleTime: 30_000,

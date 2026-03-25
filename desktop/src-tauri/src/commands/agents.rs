@@ -6,7 +6,8 @@ use crate::{
     managed_agents::{
         build_managed_agent_summary, default_token_scopes, discover_provider_candidates,
         find_managed_agent_mut, invoke_provider, load_managed_agents, load_personas,
-        managed_agent_avatar_url, managed_agent_log_path, mint_token_via_api, provider_deploy,
+        managed_agent_avatar_url, managed_agent_log_path, managed_agent_type_label,
+        mint_token_via_api, provider_deploy,
         read_log_tail, resolve_provider_binary, save_managed_agents, start_managed_agent_process,
         stop_managed_agent_process, sync_managed_agent_processes, validate_provider_config,
         BackendKind, BackendProviderInfo, CreateManagedAgentRequest, CreateManagedAgentResponse,
@@ -431,6 +432,7 @@ pub async fn create_managed_agent(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .or_else(|| managed_agent_avatar_url(agent.agent_command.as_str()));
+    let agent_type_label = managed_agent_type_label(agent.agent_command.as_str());
     let profile_sync_error = (sync_managed_agent_profile(
         &state,
         &resolved_relay_url,
@@ -439,6 +441,7 @@ pub async fn create_managed_agent(
         &token_scopes,
         &name,
         avatar_url.as_deref(),
+        agent_type_label,
     )
     .await)
         .err();

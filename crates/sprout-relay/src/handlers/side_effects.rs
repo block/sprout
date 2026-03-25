@@ -581,6 +581,14 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
 
     let about = content.get("about").and_then(|v| v.as_str()).unwrap_or("");
 
+    // Only update agent_type when explicitly present in the kind:0 JSON.
+    // Passing None leaves the existing DB value untouched, preventing data loss
+    // when clients that don't know about agent_type publish kind:0 events.
+    let agent_type = content
+        .get("agent_type")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+
     // Validate NIP-05 handle: must be user@domain where domain matches this relay.
     // Invalid or off-domain handles are silently cleared (treated as absent) rather
     // than stored, since the event is already persisted and can't be rejected.
@@ -606,6 +614,7 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
             Some(avatar_url),
             Some(about),
             Some(nip05_handle),
+            agent_type,
         )
         .await;
 
@@ -622,6 +631,7 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
                     Some(avatar_url),
                     Some(about),
                     None, // skip contested NIP-05
+                    agent_type,
                 )
                 .await?;
         } else {

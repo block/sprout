@@ -2084,10 +2084,11 @@ with kind:45003 comments)."
             .as_deref()
             .or_else(|| current_profile.get("nip05_handle").and_then(|v| v.as_str()));
 
-        let builder = match sprout_sdk::build_profile(display_name, name, picture, about, nip05) {
-            Ok(b) => b,
-            Err(e) => return format!("Error: {e}"),
-        };
+        let builder =
+            match sprout_sdk::build_profile(display_name, name, picture, about, nip05, None) {
+                Ok(b) => b,
+                Err(e) => return format!("Error: {e}"),
+            };
         let event = match builder.sign_with_keys(self.client.keys()) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign profile event: {e}"),

@@ -67,9 +67,11 @@ pub async fn sync_managed_agent_profile(
     token_scopes: &[String],
     display_name: &str,
     avatar_url: Option<&str>,
+    agent_type: Option<&str>,
 ) -> Result<(), String> {
     // Build a kind:0 profile event signed by the agent's keys.
-    let builder = crate::events::build_profile(Some(display_name), None, avatar_url, None, None)?;
+    let builder =
+        crate::events::build_profile(Some(display_name), None, avatar_url, None, None, agent_type)?;
 
     // Sign with the agent's keys (not the desktop user's).
     let event = builder

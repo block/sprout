@@ -309,6 +309,7 @@ pub fn build_profile(
     picture: Option<&str>,
     about: Option<&str>,
     nip05: Option<&str>,
+    agent_type: Option<&str>,
 ) -> Result<EventBuilder, SdkError> {
     let mut map = serde_json::Map::new();
     if let Some(v) = display_name {
@@ -325,6 +326,9 @@ pub fn build_profile(
     }
     if let Some(v) = nip05 {
         map.insert("nip05".into(), serde_json::Value::String(v.into()));
+    }
+    if let Some(v) = agent_type {
+        map.insert("agent_type".into(), serde_json::Value::String(v.into()));
     }
     let content = serde_json::Value::Object(map).to_string();
     Ok(EventBuilder::new(Kind::Custom(0), content, []))
@@ -925,6 +929,7 @@ mod tests {
                 Some("https://example.com/pic.jpg"),
                 Some("Hello world"),
                 Some("alice@example.com"),
+                Some("Goose"),
             )
             .unwrap(),
         );
@@ -933,11 +938,12 @@ mod tests {
         assert_eq!(v["display_name"], "Alice");
         assert_eq!(v["name"], "alice");
         assert_eq!(v["nip05"], "alice@example.com");
+        assert_eq!(v["agent_type"], "Goose");
     }
 
     #[test]
     fn profile_some_fields() {
-        let ev = sign(build_profile(Some("Bob"), None, None, None, None).unwrap());
+        let ev = sign(build_profile(Some("Bob"), None, None, None, None, None).unwrap());
         let v: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
         assert_eq!(v["display_name"], "Bob");
         assert!(
@@ -949,7 +955,7 @@ mod tests {
 
     #[test]
     fn profile_no_fields() {
-        let ev = sign(build_profile(None, None, None, None, None).unwrap());
+        let ev = sign(build_profile(None, None, None, None, None, None).unwrap());
         let v: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
         assert!(v.as_object().unwrap().is_empty());
     }

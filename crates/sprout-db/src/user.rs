@@ -96,6 +96,7 @@ pub async fn update_user_profile(
     avatar_url: Option<&str>,
     about: Option<&str>,
     nip05_handle: Option<&str>,
+    agent_type: Option<&str>,
 ) -> Result<()> {
     let mut set_parts: Vec<String> = Vec::new();
     let mut param_idx = 1u32;
@@ -114,6 +115,10 @@ pub async fn update_user_profile(
     }
     if nip05_handle.is_some() {
         set_parts.push(format!("nip05_handle = ${param_idx}"));
+        param_idx += 1;
+    }
+    if agent_type.is_some() {
+        set_parts.push(format!("agent_type = ${param_idx}"));
         param_idx += 1;
     }
 
@@ -144,6 +149,9 @@ pub async fn update_user_profile(
     }
     if nip05_handle.is_some() {
         query = query.bind(empty_to_none(nip05_handle));
+    }
+    if agent_type.is_some() {
+        query = query.bind(empty_to_none(agent_type));
     }
     query = query.bind(pubkey);
     query.execute(pool).await?;

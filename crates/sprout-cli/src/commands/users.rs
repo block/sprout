@@ -108,6 +108,7 @@ pub async fn cmd_set_profile(
         merged_picture.as_deref(),
         merged_about.as_deref(),
         merged_nip05.as_deref(),
+        None, // agent_type — not exposed by CLI
     )
     .map_err(|e| CliError::Other(format!("build_profile failed: {e}")))?;
 

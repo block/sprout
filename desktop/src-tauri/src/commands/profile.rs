@@ -60,7 +60,7 @@ pub async fn update_profile(
         .as_deref()
         .or_else(|| current.get("nip05_handle").and_then(|v| v.as_str()));
 
-    let builder = events::build_profile(dn, name, picture, ab, nip05)?;
+    let builder = events::build_profile(dn, name, picture, ab, nip05, None)?;
     submit_event(builder, &state).await?;
 
     // Re-fetch to return the canonical profile the frontend expects.

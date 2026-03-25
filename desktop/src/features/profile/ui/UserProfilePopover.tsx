@@ -1,7 +1,9 @@
 import * as React from "react";
 
+import { useRelayAgentsQuery } from "@/features/agents/hooks";
 import { useUserProfileQuery } from "@/features/profile/hooks";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
@@ -24,13 +26,26 @@ export function UserProfilePopover({
   pubkey,
 }: UserProfilePopoverProps) {
   const [open, setOpen] = React.useState(false);
+  const normalizedPubkey = React.useMemo(
+    () => normalizePubkey(pubkey),
+    [pubkey],
+  );
   const profileQuery = useUserProfileQuery(open ? pubkey : undefined);
   const presenceQuery = usePresenceQuery(open ? [pubkey] : [], {
     enabled: open,
   });
+  const relayAgentsQuery = useRelayAgentsQuery({ enabled: open });
 
   const profile = profileQuery.data;
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
+  const agentType = React.useMemo(() => {
+    const agent = relayAgentsQuery.data?.find(
+      (candidate) => normalizePubkey(candidate.pubkey) === normalizedPubkey,
+    );
+    const nextAgentType = agent?.agentType?.trim();
+
+    return nextAgentType ? nextAgentType : null;
+  }, [normalizedPubkey, relayAgentsQuery.data]);
 
   return (
     <Popover onOpenChange={setOpen} open={open}>
@@ -57,6 +72,15 @@ export function UserProfilePopover({
               <p className="truncate text-sm font-semibold">
                 {profile?.displayName ?? truncatePubkey(pubkey)}
               </p>
+              {agentType ? (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"
+                  data-testid="user-profile-agent-type"
+                >
+                  <span aria-hidden="true">🤖</span>
+                  {agentType}
+                </span>
+              ) : null}
               {profile?.nip05Handle ? (
                 <p className="truncate text-xs text-muted-foreground">
                   {profile.nip05Handle}

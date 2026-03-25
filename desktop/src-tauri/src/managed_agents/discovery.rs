@@ -273,6 +273,12 @@ pub fn managed_agent_avatar_url(command: &str) -> Option<String> {
     Some(provider.avatar_url.to_string())
 }
 
+/// Return the human-readable agent type label (e.g. "Goose", "Claude Code",
+/// "Codex") for a given agent command, if it matches a known ACP provider.
+pub fn managed_agent_type_label(command: &str) -> Option<&'static str> {
+    known_acp_provider(command).map(|p| p.label)
+}
+
 pub fn default_token_scopes() -> Vec<String> {
     vec![
         "messages:read".to_string(),
