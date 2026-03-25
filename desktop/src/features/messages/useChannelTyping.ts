@@ -11,9 +11,9 @@ import {
 
 type TypingState = Record<string, number>;
 
-const TYPING_INDICATOR_TTL_MS = 5_500;
+const TYPING_INDICATOR_TTL_MS = 8_000;
 const TYPING_PRUNE_INTERVAL_MS = 1_000;
-const TYPING_POST_MESSAGE_SUPPRESS_MS = 4_000;
+const TYPING_POST_MESSAGE_SUPPRESS_MS = 2_000;
 
 function pruneTypingState(state: TypingState, now = Date.now()) {
   let changed = false;
