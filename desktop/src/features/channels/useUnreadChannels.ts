@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { updateChannelLastMessageAt } from "@/features/channels/hooks";
 import { getChannelIdFromTags } from "@/features/messages/lib/threading";
-import { mergeMessages } from "@/features/messages/hooks";
+import { mergeTimelineCacheMessages } from "@/features/messages/hooks";
 import { relayClient } from "@/shared/api/relayClient";
 import type { Channel, RelayEvent } from "@/shared/api/types";
 
@@ -198,7 +198,7 @@ export function useUnreadChannels(
           return current;
         }
 
-        return mergeMessages(current, event);
+        return mergeTimelineCacheMessages(current, event);
       },
     );
   });

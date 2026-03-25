@@ -364,6 +364,9 @@ test("keeps scroll position when new messages arrive above the fold", async ({
 
     await pageTwo.getByTestId("message-scroll-to-latest").click();
 
+    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
+      incomingMessage,
+    );
     await expect
       .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
       .toBeLessThan(8);
