@@ -316,6 +316,7 @@ declare global {
   interface Window {
     __SPROUT_E2E__?: E2eConfig;
     __SPROUT_E2E_COMMANDS__?: string[];
+    __SPROUT_E2E_WEBVIEW_ZOOM__?: number;
     __SPROUT_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
@@ -3207,6 +3208,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockPersonas();
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
+  window.__SPROUT_E2E_WEBVIEW_ZOOM__ = 1;
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({
     channelName,
     content,
@@ -3542,6 +3544,11 @@ export function maybeInstallE2eTauriMocks() {
         }
 
         return disconnectMockSocket((payload as { id: number }).id);
+      case "plugin:webview|set_webview_zoom":
+        window.__SPROUT_E2E_WEBVIEW_ZOOM__ = (
+          payload as { value: number }
+        ).value;
+        return;
       default:
         throw new Error(`Unsupported mocked Tauri command: ${command}`);
     }
