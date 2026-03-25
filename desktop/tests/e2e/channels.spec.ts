@@ -378,6 +378,21 @@ test("manage channel can invite and remove members", async ({ page }) => {
   ).toHaveCount(0);
 });
 
+test("open-channel members can add agents from the header", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await page.getByTestId("channel-random").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("random");
+
+  const addAgentTrigger = page.getByTestId("channel-add-bot-trigger");
+  await expect(addAgentTrigger).toBeEnabled();
+
+  await addAgentTrigger.click();
+  await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
+});
+
 test("open channel management supports join and leave", async ({ page }) => {
   await page.goto("/");
 
