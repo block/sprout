@@ -13,17 +13,13 @@ const baseConfig = JSON.parse(readFileSync(baseConfigPath, "utf-8"));
 
 const releaseConfig = { ...baseConfig };
 
-releaseConfig.bundle = {
-  ...(releaseConfig.bundle ?? baseConfig.bundle ?? {}),
-  createUpdaterArtifacts: "v1Compatible",
-};
-
 releaseConfig.bundle.macOS = {
   ...(releaseConfig.bundle?.macOS ?? baseConfig.bundle?.macOS ?? {}),
   minimumSystemVersion: "10.15",
 };
 
 if (publicKey && endpoint) {
+  // Build-time updater artifacts are created later from the signed app bundle.
   releaseConfig.plugins = {
     ...(baseConfig.plugins ?? {}),
     updater: {
