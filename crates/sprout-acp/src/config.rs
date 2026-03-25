@@ -42,6 +42,59 @@ pub enum DedupMode {
     Queue,
 }
 
+/// Permission mode for agents that support `session/set_config_option` with
+/// `configId: "mode"` (e.g. `claude-agent-acp`).
+///
+/// - `default` — agent's built-in behaviour (permission requests per tool call).
+/// - `acceptEdits` — auto-approve file edits, still ask for other tools.
+/// - `bypassPermissions` — skip the permission flow entirely.
+/// - `dontAsk` — never prompt; reject anything that would require permission.
+/// - `plan` — planning-only mode (no tool execution).
+#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
+pub enum PermissionMode {
+    /// Agent default — permission requests per tool call.
+    #[value(alias = "default")]
+    Default,
+    /// Auto-approve file edits, still ask for other tools.
+    #[value(alias = "acceptEdits")]
+    AcceptEdits,
+    /// Skip the permission flow entirely.
+    #[value(alias = "bypassPermissions")]
+    BypassPermissions,
+    /// Never prompt; reject anything that would require permission.
+    #[value(alias = "dontAsk")]
+    DontAsk,
+    /// Planning-only mode (no tool execution).
+    #[value(alias = "plan")]
+    Plan,
+}
+
+impl PermissionMode {
+    /// Return the wire-format string sent to the agent via
+    /// `session/set_config_option`.
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::AcceptEdits => "acceptEdits",
+            Self::BypassPermissions => "bypassPermissions",
+            Self::DontAsk => "dontAsk",
+            Self::Plan => "plan",
+        }
+    }
+
+    /// Returns `true` when the mode is the agent's built-in default and
+    /// therefore doesn't need to be explicitly set.
+    pub fn is_default(&self) -> bool {
+        matches!(self, Self::Default)
+    }
+}
+
+impl std::fmt::Display for PermissionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_wire_str())
+    }
+}
+
 // ── Models subcommand ─────────────────────────────────────────────────────────
 
 /// CLI args for `sprout-acp models` — query available models from an agent.
@@ -203,6 +256,20 @@ pub struct CliArgs {
     /// Use `sprout-acp models` to discover available model IDs.
     #[arg(long, env = "SPROUT_ACP_MODEL")]
     pub model: Option<String>,
+
+    /// Permission mode for agents that support `session/set_config_option`
+    /// with `configId: "mode"` (e.g. `claude-agent-acp`).
+    ///
+    /// Defaults to `bypassPermissions` which skips the per-tool-call
+    /// permission flow. Set to `default` to restore the agent's built-in
+    /// behaviour.
+    #[arg(
+        long,
+        env = "SPROUT_ACP_PERMISSION_MODE",
+        default_value = "bypass-permissions",
+        value_enum
+    )]
+    pub permission_mode: PermissionMode,
 }
 
 // ── Merged NIP-01 filter ──────────────────────────────────────────────────────
@@ -246,6 +313,8 @@ pub struct Config {
     pub typing_enabled: bool,
     /// Desired LLM model ID. Applied after every `session_new_full()`.
     pub model: Option<String>,
+    /// Permission mode to apply after session creation. `Default` = skip.
+    pub permission_mode: PermissionMode,
 }
 
 fn normalize_agent_command_identity(command: &str) -> String {
@@ -385,13 +454,14 @@ impl Config {
             presence_enabled: !args.no_presence,
             typing_enabled: !args.no_typing,
             model: args.model,
+            permission_mode: args.permission_mode,
         })
     }
 
     /// Human-readable summary (no secrets).
     pub fn summary(&self) -> String {
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} timeout={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} model={}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} timeout={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} model={} permission_mode={}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -408,6 +478,7 @@ impl Config {
             self.presence_enabled,
             self.typing_enabled,
             self.model.as_deref().unwrap_or("(agent default)"),
+            self.permission_mode,
         )
     }
 }
@@ -706,6 +777,7 @@ mod tests {
             presence_enabled: true,
             typing_enabled: true,
             model: None,
+            permission_mode: PermissionMode::BypassPermissions,
         }
     }
 
@@ -1256,5 +1328,108 @@ channels = "ALL"
             s.contains("heartbeat=30s"),
             "summary should include heartbeat=30s, got: {s}"
         );
+    }
+
+    // ── permission mode ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_permission_mode_wire_strings() {
+        assert_eq!(PermissionMode::Default.as_wire_str(), "default");
+        assert_eq!(PermissionMode::AcceptEdits.as_wire_str(), "acceptEdits");
+        assert_eq!(
+            PermissionMode::BypassPermissions.as_wire_str(),
+            "bypassPermissions"
+        );
+        assert_eq!(PermissionMode::DontAsk.as_wire_str(), "dontAsk");
+        assert_eq!(PermissionMode::Plan.as_wire_str(), "plan");
+    }
+
+    #[test]
+    fn test_permission_mode_is_default() {
+        assert!(PermissionMode::Default.is_default());
+        assert!(!PermissionMode::BypassPermissions.is_default());
+        assert!(!PermissionMode::AcceptEdits.is_default());
+        assert!(!PermissionMode::DontAsk.is_default());
+        assert!(!PermissionMode::Plan.is_default());
+    }
+
+    #[test]
+    fn test_permission_mode_display() {
+        assert_eq!(
+            format!("{}", PermissionMode::BypassPermissions),
+            "bypassPermissions"
+        );
+        assert_eq!(format!("{}", PermissionMode::Default), "default");
+    }
+
+    #[test]
+    fn test_summary_includes_permission_mode() {
+        let mut config = test_config(SubscribeMode::Mentions);
+        config.permission_mode = PermissionMode::BypassPermissions;
+        let s = config.summary();
+        assert!(
+            s.contains("permission_mode=bypassPermissions"),
+            "summary should include permission_mode, got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_summary_permission_mode_default() {
+        let mut config = test_config(SubscribeMode::Mentions);
+        config.permission_mode = PermissionMode::Default;
+        let s = config.summary();
+        assert!(
+            s.contains("permission_mode=default"),
+            "summary should show 'default', got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_default_config_uses_bypass_permissions() {
+        let config = test_config(SubscribeMode::Mentions);
+        assert_eq!(config.permission_mode, PermissionMode::BypassPermissions);
+    }
+
+    #[test]
+    fn test_permission_mode_value_enum_kebab_case() {
+        // clap::ValueEnum generates kebab-case by default from PascalCase variants.
+        // Verify the parse path so variant renames don't silently break CLI/env parsing.
+        use clap::ValueEnum;
+        let cases = [
+            ("default", PermissionMode::Default),
+            ("accept-edits", PermissionMode::AcceptEdits),
+            ("bypass-permissions", PermissionMode::BypassPermissions),
+            ("dont-ask", PermissionMode::DontAsk),
+            ("plan", PermissionMode::Plan),
+        ];
+        for (input, expected) in &cases {
+            assert_eq!(
+                PermissionMode::from_str(input, true).unwrap(),
+                *expected,
+                "kebab-case {input:?} should parse"
+            );
+        }
+    }
+
+    #[test]
+    fn test_permission_mode_value_enum_camel_case_aliases() {
+        // Operators may set env vars using the camelCase wire-format strings
+        // (e.g. SPROUT_ACP_PERMISSION_MODE=bypassPermissions). The #[value(alias)]
+        // attributes ensure these parse correctly.
+        use clap::ValueEnum;
+        let cases = [
+            ("default", PermissionMode::Default),
+            ("acceptEdits", PermissionMode::AcceptEdits),
+            ("bypassPermissions", PermissionMode::BypassPermissions),
+            ("dontAsk", PermissionMode::DontAsk),
+            ("plan", PermissionMode::Plan),
+        ];
+        for (input, expected) in &cases {
+            assert_eq!(
+                PermissionMode::from_str(input, true).unwrap(),
+                *expected,
+                "camelCase alias {input:?} should parse"
+            );
+        }
     }
 }

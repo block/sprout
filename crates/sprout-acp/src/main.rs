@@ -230,6 +230,7 @@ async fn main() -> Result<()> {
         channel_info: channel_info_map,
         context_message_limit: config.context_message_limit,
         max_turns_per_session: config.max_turns_per_session,
+        permission_mode: config.permission_mode,
     });
 
     // ── Step 6: Heartbeat timer ───────────────────────────────────────────────
