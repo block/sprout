@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const repo = process.env.GITHUB_REPOSITORY ?? "block/sprout";
-const version = process.env.VERSION ?? readVersionFromConfig();
+const version = requireVersionEnv();
 const versionTag = `desktop/v${version}`;
 const latestTag = "sprout-desktop-latest";
 const dryRun = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
@@ -26,14 +26,14 @@ const dmgDir = resolve(
 );
 const dmgPath = join(dmgDir, dmgName);
 
-function readVersionFromConfig() {
-  const configPath = resolve(process.cwd(), "src-tauri/tauri.conf.json");
-  const config = JSON.parse(readFileSync(configPath, "utf-8"));
-  const configVersion = config?.version;
-  if (typeof configVersion !== "string" || !configVersion.trim()) {
-    throw new Error(`Could not determine version from ${configPath}`);
+function requireVersionEnv() {
+  const v = process.env.VERSION;
+  if (!v || !v.trim()) {
+    throw new Error(
+      "VERSION env var is required. CI sets this from the git tag; for local use, run: VERSION=x.y.z pnpm run release:dmg:publish",
+    );
   }
-  return configVersion;
+  return v.trim();
 }
 
 function quote(arg) {

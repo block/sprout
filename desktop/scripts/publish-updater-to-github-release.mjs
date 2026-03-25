@@ -12,8 +12,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
 const repo = process.env.GITHUB_REPOSITORY ?? "block/sprout";
-const tauriConfigPath = resolve(process.cwd(), "src-tauri/tauri.conf.json");
-const version = process.env.VERSION ?? readVersionFromConfig();
+const version = requireVersionEnv();
 const latestTag = "sprout-desktop-latest";
 const tauriTarget = process.env.TAURI_TARGET ?? "aarch64-apple-darwin";
 const updaterPlatform = process.env.UPDATER_PLATFORM ?? "darwin-aarch64";
@@ -31,13 +30,14 @@ const bundleDir = resolve(
 );
 const latestPath = join(bundleDir, "latest.json");
 
-function readVersionFromConfig() {
-  const config = JSON.parse(readFileSync(tauriConfigPath, "utf-8"));
-  const configVersion = config?.version;
-  if (typeof configVersion !== "string" || !configVersion.trim()) {
-    throw new Error(`Could not determine version from ${tauriConfigPath}`);
+function requireVersionEnv() {
+  const v = process.env.VERSION;
+  if (!v || !v.trim()) {
+    throw new Error(
+      "VERSION env var is required. CI sets this from the git tag; for local use, run: VERSION=x.y.z pnpm run release:updater:publish",
+    );
   }
-  return configVersion;
+  return v.trim();
 }
 
 function requirePath(path) {
