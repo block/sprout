@@ -310,6 +310,7 @@ pub const DEFAULT_ADMIN_COMMAND: &str = "sprout-admin";
 pub const DEFAULT_AGENT_COMMAND: &str = "goose";
 pub const DEFAULT_MCP_COMMAND: &str = "sprout-mcp-server";
 pub const DEFAULT_AGENT_ARG: &str = "acp";
+/// 10 min — agents with tool-heavy turns regularly exceed the previous 5 min default.
 pub const DEFAULT_AGENT_TURN_TIMEOUT_SECONDS: u64 = 600;
 pub const DEFAULT_AGENT_PARALLELISM: u32 = 1;
 

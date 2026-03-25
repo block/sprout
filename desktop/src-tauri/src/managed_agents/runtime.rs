@@ -283,7 +283,6 @@ pub fn start_managed_agent_process(
         .ok_or_else(|| missing_command_message(&record.mcp_command, "MCP server command"))?;
 
     let mut command = std::process::Command::new(&resolved_acp_command);
-    // Default agent working directory to user's home
     if let Some(home) = super::default_agent_workdir() {
         command.current_dir(home);
     }

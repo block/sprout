@@ -2,13 +2,11 @@ use std::collections::HashSet;
 
 use tauri::{AppHandle, State};
 
-use crate::managed_agents::default_agent_workdir;
-
 use crate::{
     app_state::AppState,
     managed_agents::{
-        build_managed_agent_summary, find_managed_agent_mut, load_managed_agents,
-        missing_command_message, resolve_command, save_managed_agents,
+        build_managed_agent_summary, default_agent_workdir, find_managed_agent_mut,
+        load_managed_agents, missing_command_message, resolve_command, save_managed_agents,
         sync_managed_agent_processes, AgentModelInfo, AgentModelsResponse, ManagedAgentSummary,
         UpdateManagedAgentRequest, DEFAULT_AGENT_ARG,
     },
