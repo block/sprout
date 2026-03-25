@@ -310,7 +310,7 @@ pub const DEFAULT_ADMIN_COMMAND: &str = "sprout-admin";
 pub const DEFAULT_AGENT_COMMAND: &str = "goose";
 pub const DEFAULT_MCP_COMMAND: &str = "sprout-mcp-server";
 pub const DEFAULT_AGENT_ARG: &str = "acp";
-pub const DEFAULT_AGENT_TURN_TIMEOUT_SECONDS: u64 = 300;
+pub const DEFAULT_AGENT_TURN_TIMEOUT_SECONDS: u64 = 600;
 pub const DEFAULT_AGENT_PARALLELISM: u32 = 1;
 
 fn default_agent_parallelism() -> u32 {
