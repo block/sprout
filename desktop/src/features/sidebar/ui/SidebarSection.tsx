@@ -159,6 +159,13 @@ export function ChannelMenuButton({
         presenceStatus={presenceStatus}
       />
       <span className="min-w-0 flex-1 truncate">{resolvedLabel}</span>
+      {hasUnread && !isActive && channel.channelType !== "dm" ? (
+        <span
+          aria-hidden="true"
+          className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-primary group-hover/menu-item:hidden"
+          data-testid={`channel-unread-${channel.name}`}
+        />
+      ) : null}
     </SidebarMenuButton>
   );
 }
@@ -214,15 +221,14 @@ export function SidebarSection({
                   presenceStatus={presenceByChannelId?.[channel.id]}
                   onSelectChannel={onSelectChannel}
                 />
-                {unreadChannelIds.has(channel.id) &&
+                {channel.channelType === "dm" &&
+                unreadChannelIds.has(channel.id) &&
                 !(isActiveChannel && selectedChannelId === channel.id) ? (
                   <span
                     aria-hidden="true"
-                    className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center group-hover/menu-item:hidden"
+                    className="absolute right-[9px] top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-primary group-hover/menu-item:hidden"
                     data-testid={`channel-unread-${channel.name}`}
-                  >
-                    <span className="h-2.5 w-2.5 rounded-full bg-primary" />
-                  </span>
+                  />
                 ) : null}
                 {channel.channelType === "dm" && onHideDm ? (
                   <SidebarMenuAction
