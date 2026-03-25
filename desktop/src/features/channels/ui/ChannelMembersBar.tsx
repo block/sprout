@@ -75,10 +75,12 @@ export function ChannelMembersBar({
     members.find(
       (member) => normalizePubkey(member.pubkey) === normalizedCurrentPubkey,
     ) ?? null;
+  const canManageMembers =
+    selfMember?.role === "owner" || selfMember?.role === "admin";
   const canAddAgents =
     channel.channelType !== "dm" &&
     channel.archivedAt === null &&
-    (selfMember?.role === "owner" || selfMember?.role === "admin");
+    (channel.visibility === "open" || canManageMembers);
   const managedAgentPubkeys = React.useMemo(
     () => new Set(managedAgents.map((agent) => normalizePubkey(agent.pubkey))),
     [managedAgents],
