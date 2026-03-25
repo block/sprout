@@ -26,7 +26,11 @@ pub fn invoke_provider(
         serde_json::to_string(request).map_err(|e| e.to_string())?
     );
 
-    let mut child = std::process::Command::new(binary)
+    let mut cmd = std::process::Command::new(binary);
+    if let Some(home) = super::default_agent_workdir() {
+        cmd.current_dir(home);
+    }
+    let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

@@ -5,8 +5,8 @@ use tauri::{AppHandle, State};
 use crate::{
     app_state::AppState,
     managed_agents::{
-        build_managed_agent_summary, find_managed_agent_mut, load_managed_agents,
-        missing_command_message, resolve_command, save_managed_agents,
+        build_managed_agent_summary, default_agent_workdir, find_managed_agent_mut,
+        load_managed_agents, missing_command_message, resolve_command, save_managed_agents,
         sync_managed_agent_processes, AgentModelInfo, AgentModelsResponse, ManagedAgentSummary,
         UpdateManagedAgentRequest, DEFAULT_AGENT_ARG,
     },
@@ -63,8 +63,11 @@ pub async fn get_agent_models(
     // tokio's `process` feature. std::process::Command is synchronous
     // but fine for a short-lived subprocess (~2-5s).
     let output = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&resolved_acp)
-            .arg("models")
+        let mut cmd = std::process::Command::new(&resolved_acp);
+        if let Some(home) = default_agent_workdir() {
+            cmd.current_dir(home);
+        }
+        cmd.arg("models")
             .arg("--json")
             .env("SPROUT_ACP_AGENT_COMMAND", &agent_command)
             .env("SPROUT_ACP_AGENT_ARGS", agent_args.join(","))
