@@ -215,6 +215,18 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
   await expect(page.getByTestId("chat-title")).toHaveText("Home");
 });
 
+test("increases webview zoom with the keyboard shortcut", async ({ page }) => {
+  await page.goto("/");
+
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+Shift+Equal" : "Control+Shift+Equal",
+  );
+
+  await expect
+    .poll(() => page.evaluate(() => window.__SPROUT_E2E_WEBVIEW_ZOOM__))
+    .toBe(1.2);
+});
+
 test("shows doctor checks for local sprout tooling", async ({ page }) => {
   await page.goto("/");
 

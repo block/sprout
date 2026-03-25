@@ -58,10 +58,12 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/shared/ui/sidebar";
+import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 
 type AppView = "home" | "channel" | "settings" | "agents";
 type MainView = Exclude<AppView, "settings">;
 export function AppShell() {
+  useWebviewZoomShortcuts();
   const [selectedView, setSelectedView] = React.useState<AppView>("home");
   const [settingsSection, setSettingsSection] = React.useState<SettingsSection>(
     DEFAULT_SETTINGS_SECTION,
@@ -182,7 +184,6 @@ export function AppShell() {
       ),
     [messageProfilesQuery.data?.profiles, profileQuery.data],
   );
-
   const timelineMessages = React.useMemo(
     () =>
       formatTimelineMessages(
