@@ -131,7 +131,7 @@ export function BatchImportDialog({
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent className="max-w-2xl overflow-hidden p-0">
         <div className="flex max-h-[85vh] flex-col">
-          <DialogHeader className="border-b border-border/60 px-6 py-5 pr-14">
+          <DialogHeader className="shrink-0 border-b border-border/60 px-6 py-5 pr-14">
             <DialogTitle>Import Personas</DialogTitle>
             <DialogDescription>
               Found {personas.length} persona
@@ -139,7 +139,7 @@ export function BatchImportDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto px-6 py-4">
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
             <div className="space-y-1">
               {personas.map((persona, index) => {
                 const isExpanded = expandedIndex === index;
@@ -245,7 +245,7 @@ export function BatchImportDialog({
             ) : null}
           </div>
 
-          <div className="flex justify-end gap-2 border-t border-border/60 px-6 py-4">
+          <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 px-6 py-4">
             <Button
               onClick={() => onOpenChange(false)}
               size="sm"
