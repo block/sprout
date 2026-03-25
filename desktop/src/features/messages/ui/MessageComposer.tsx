@@ -3,6 +3,7 @@ import * as React from "react";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
 import { useMentions } from "@/features/messages/lib/useMentions";
+import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
 import {
   type BlobDescriptor,
   pickAndUploadMedia,
@@ -63,6 +64,7 @@ export function MessageComposer({
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
+  const notifyTyping = useTypingBroadcast(channelId);
 
   const [uploadState, setUploadState] = React.useState<{
     status: "idle" | "uploading" | "error";
@@ -371,11 +373,15 @@ export function MessageComposer({
       updateDraftSelection(event.target);
       mentions.updateMentionQuery(nextContent, cursorPos);
       channelLinks.updateChannelQuery(nextContent, cursorPos);
+      if (nextContent.trim().length > 0) {
+        notifyTyping();
+      }
     },
     [
       updateDraftSelection,
       mentions.updateMentionQuery,
       channelLinks.updateChannelQuery,
+      notifyTyping,
     ],
   );
 

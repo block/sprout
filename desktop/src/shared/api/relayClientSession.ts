@@ -125,6 +125,21 @@ export class RelayClient {
     );
   }
 
+  async sendTypingIndicator(channelId: string) {
+    // Bail when disconnected — not worth triggering a reconnect for ephemeral typing events.
+    if (this.wsId === null) {
+      return;
+    }
+    const event = await signRelayEvent({
+      kind: KIND_TYPING_INDICATOR,
+      content: "",
+      tags: [["h", channelId]],
+    });
+
+    // Fire-and-forget: no need to wait for relay acknowledgement.
+    void this.sendRaw(["EVENT", event]).catch(() => {});
+  }
+
   async subscribeToChannel(
     channelId: string,
     onEvent: (event: RelayEvent) => void,

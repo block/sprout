@@ -1,0 +1,39 @@
+import { useCallback, useRef } from "react";
+
+import { relayClient } from "@/shared/api/relayClient";
+
+const TYPING_SEND_INTERVAL_MS = 3_000;
+
+/**
+ * Publishes kind:20002 typing indicators for the current user,
+ * throttled to at most once every 3 seconds per channel.
+ */
+export function useTypingBroadcast(channelId: string | null | undefined) {
+  const lastSentRef = useRef(0);
+  const lastChannelRef = useRef(channelId);
+  const channelIdRef = useRef(channelId);
+  channelIdRef.current = channelId;
+
+  const notifyTyping = useCallback(() => {
+    const id = channelIdRef.current;
+    if (!id) {
+      return;
+    }
+
+    // Reset throttle when channel changes.
+    if (lastChannelRef.current !== id) {
+      lastChannelRef.current = id;
+      lastSentRef.current = 0;
+    }
+
+    const now = Date.now();
+    if (now - lastSentRef.current < TYPING_SEND_INTERVAL_MS) {
+      return;
+    }
+
+    lastSentRef.current = now;
+    relayClient.sendTypingIndicator(id).catch(() => {});
+  }, []);
+
+  return notifyTyping;
+}
