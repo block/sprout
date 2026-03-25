@@ -380,6 +380,47 @@ pub struct PromptChannelInfo {
     pub channel_type: String,
 }
 
+/// Minimal profile fields needed to label users in ACP prompts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PromptProfile {
+    pub display_name: Option<String>,
+    pub nip05_handle: Option<String>,
+}
+
+/// Pubkey-keyed profile lookup used while formatting ACP prompts.
+pub type PromptProfileLookup = HashMap<String, PromptProfile>;
+
+fn normalize_lookup_key(pubkey: &str) -> String {
+    pubkey.trim().to_ascii_lowercase()
+}
+
+fn resolve_prompt_label<'a>(
+    pubkey: &str,
+    profile_lookup: Option<&'a PromptProfileLookup>,
+) -> Option<&'a str> {
+    let profile = profile_lookup?.get(&normalize_lookup_key(pubkey))?;
+
+    profile
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            profile
+                .nip05_handle
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+}
+
+fn format_prompt_actor(pubkey: &str, profile_lookup: Option<&PromptProfileLookup>) -> String {
+    match resolve_prompt_label(pubkey, profile_lookup) {
+        Some(label) => format!("{label} ({pubkey})"),
+        None => pubkey.to_string(),
+    }
+}
+
 /// Format the per-event `[Event]` block for a single [`BatchEvent`].
 ///
 /// Includes: event_id, channel (name + UUID), kind, sender (hex + npub),
@@ -388,6 +429,7 @@ fn format_event_block(
     channel_id: Uuid,
     channel_info: Option<&PromptChannelInfo>,
     be: &BatchEvent,
+    profile_lookup: Option<&PromptProfileLookup>,
 ) -> String {
     let hex = be.event.pubkey.to_hex();
     let npub = be.event.pubkey.to_bech32().unwrap_or_else(|_| hex.clone());
@@ -408,9 +450,13 @@ fn format_event_block(
         "Event ID: {event_id}\n\
          Channel: {channel_display}\n\
          Kind: {kind}\n\
-         From: {npub} (hex: {hex})\n\
+         From: {}\n\
          Time: {time}\n\
          Content: {}",
+        match resolve_prompt_label(&hex, profile_lookup) {
+            Some(label) => format!("{label} (npub: {npub}, hex: {hex})"),
+            None => format!("{npub} (hex: {hex})"),
+        },
         be.event.content,
     );
 
@@ -432,7 +478,12 @@ fn format_event_block(
     if !thread.mentioned_pubkeys.is_empty() {
         parsed_parts.push(format!(
             "mentions=[{}]",
-            thread.mentioned_pubkeys.join(", ")
+            thread
+                .mentioned_pubkeys
+                .iter()
+                .map(|pubkey| format_prompt_actor(pubkey, profile_lookup))
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     if !parsed_parts.is_empty() {
@@ -516,7 +567,10 @@ fn format_context_hints(
 }
 
 /// Format a conversation context section (thread or DM).
-fn format_conversation_context(ctx: &ConversationContext) -> String {
+fn format_conversation_context(
+    ctx: &ConversationContext,
+    profile_lookup: Option<&PromptProfileLookup>,
+) -> String {
     let (label, messages, total, truncated) = match ctx {
         ConversationContext::Thread {
             messages,
@@ -539,7 +593,7 @@ fn format_conversation_context(ctx: &ConversationContext) -> String {
         s.push_str(&format!(
             "\n[{}] {} ({}): {}",
             i + 1,
-            msg.pubkey,
+            format_prompt_actor(&msg.pubkey, profile_lookup),
             msg.timestamp,
             msg.content,
         ));
@@ -559,6 +613,23 @@ pub fn format_prompt(
     system_prompt: Option<&str>,
     channel_info: Option<&PromptChannelInfo>,
     conversation_context: Option<&ConversationContext>,
+) -> String {
+    format_prompt_with_profiles(
+        batch,
+        system_prompt,
+        channel_info,
+        conversation_context,
+        None,
+    )
+}
+
+/// Like [`format_prompt`], but labels known users with display names when available.
+pub fn format_prompt_with_profiles(
+    batch: &FlushBatch,
+    system_prompt: Option<&str>,
+    channel_info: Option<&PromptChannelInfo>,
+    conversation_context: Option<&ConversationContext>,
+    profile_lookup: Option<&PromptProfileLookup>,
 ) -> String {
     // Scope is always derived from the LAST event in the batch — that's the
     // one the agent is responding to. Thread/DM context is supplementary info
@@ -588,7 +659,7 @@ pub fn format_prompt(
 
     // 3. Conversation context (thread or DM).
     if let Some(ctx) = conversation_context {
-        sections.push(format_conversation_context(ctx));
+        sections.push(format_conversation_context(ctx, profile_lookup));
     }
 
     // 4. Event block(s).
@@ -597,7 +668,7 @@ pub fn format_prompt(
         format!(
             "[Sprout event: {}]\n{}",
             be.prompt_tag,
-            format_event_block(batch.channel_id, channel_info, be)
+            format_event_block(batch.channel_id, channel_info, be, profile_lookup)
         )
     } else {
         let mut s = format!("[Sprout events — {} events]", batch.events.len());
@@ -606,7 +677,7 @@ pub fn format_prompt(
                 "\n\n--- Event {} ({}) ---\n{}",
                 i + 1,
                 be.prompt_tag,
-                format_event_block(batch.channel_id, channel_info, be)
+                format_event_block(batch.channel_id, channel_info, be, profile_lookup)
             ));
         }
         s
@@ -1500,6 +1571,60 @@ mod tests {
         assert!(prompt.contains("Scope: dm"));
         assert!(prompt.contains("[Conversation Context (1 of 1 messages)]"));
         assert!(prompt.contains("Can you deploy?"));
+    }
+
+    #[test]
+    fn test_format_prompt_with_profiles_prefers_display_names() {
+        let ch = Uuid::new_v4();
+        let event = make_event_with_tags(
+            "hello there",
+            vec![vec![
+                "p".into(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            ]],
+        );
+        let author_hex = event.pubkey.to_hex();
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "@mention".into(),
+                received_at: Instant::now(),
+            }],
+        };
+        let ctx = ConversationContext::Thread {
+            messages: vec![ContextMessage {
+                pubkey: author_hex.clone(),
+                timestamp: "2026-03-25T05:51:25Z".into(),
+                content: "follow up".into(),
+            }],
+            total: 1,
+            truncated: false,
+        };
+        let profiles = HashMap::from([
+            (
+                author_hex.clone(),
+                PromptProfile {
+                    display_name: Some("Wes".into()),
+                    nip05_handle: None,
+                },
+            ),
+            (
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                PromptProfile {
+                    display_name: Some("Rick".into()),
+                    nip05_handle: None,
+                },
+            ),
+        ]);
+
+        let prompt = format_prompt_with_profiles(&batch, None, None, Some(&ctx), Some(&profiles));
+
+        assert!(prompt.contains("From: Wes (npub:"));
+        assert!(prompt.contains(
+            "mentions=[Rick (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)]"
+        ));
+        assert!(prompt.contains("[1] Wes ("));
     }
 
     #[test]
