@@ -17,6 +17,7 @@ jobs:
       contents: write
     env:
       RELEASE_VERSION: '' # set in the "Extract version from tag" step
+      SPROUT_RELAY_URL: wss://sprout-oss.stage.blox.sqprod.co
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 

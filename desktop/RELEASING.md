@@ -130,9 +130,12 @@ and signature for the latest version.
 
 The app connects to the relay via the `SPROUT_RELAY_URL` environment variable.
 
-- **Release builds**: Set this to the production relay URL (e.g.
-  `wss://relay.sprout.example.com`). Configure it in the environment before
-  building, or set it in the CI workflow.
+- **Production releases**: The GitHub release workflow currently builds the app
+  with `SPROUT_RELAY_URL=wss://sprout-oss.stage.blox.sqprod.co`, which is baked
+  into the release binary as its default relay URL.
+- **Local release builds**: Export `SPROUT_RELAY_URL` before running
+  `just desktop-release-build` if you want a non-localhost relay URL compiled
+  into the app.
 - **Development**: If not set, it defaults to `ws://localhost:3000`.
 
 ---
