@@ -613,22 +613,6 @@ pub fn format_prompt(
     system_prompt: Option<&str>,
     channel_info: Option<&PromptChannelInfo>,
     conversation_context: Option<&ConversationContext>,
-) -> String {
-    format_prompt_with_profiles(
-        batch,
-        system_prompt,
-        channel_info,
-        conversation_context,
-        None,
-    )
-}
-
-/// Like [`format_prompt`], but labels known users with display names when available.
-pub fn format_prompt_with_profiles(
-    batch: &FlushBatch,
-    system_prompt: Option<&str>,
-    channel_info: Option<&PromptChannelInfo>,
-    conversation_context: Option<&ConversationContext>,
     profile_lookup: Option<&PromptProfileLookup>,
 ) -> String {
     // Scope is always derived from the LAST event in the batch — that's the
@@ -919,7 +903,7 @@ mod tests {
             }],
         };
 
-        let prompt = format_prompt(&batch, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None);
 
         // Should contain [Context] section before the event.
         assert!(prompt.contains("[Context]"));
@@ -1014,7 +998,7 @@ mod tests {
             ],
         };
 
-        let prompt = format_prompt(&batch, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None);
 
         assert!(prompt.contains("[Context]"));
         assert!(prompt.contains("[Sprout events — 3 events]"));
@@ -1042,7 +1026,7 @@ mod tests {
             }],
         };
 
-        let prompt = format_prompt(&batch, Some("You are a triage bot."), None, None);
+        let prompt = format_prompt(&batch, Some("You are a triage bot."), None, None, None);
         assert!(prompt.starts_with("[System]\nYou are a triage bot.\n\n[Context]"));
     }
 
@@ -1446,7 +1430,7 @@ mod tests {
             channel_type: "stream".into(),
         };
 
-        let prompt = format_prompt(&batch, None, Some(&ci), None);
+        let prompt = format_prompt(&batch, None, Some(&ci), None, None);
         assert!(prompt.contains("engineering (#"));
         assert!(prompt.contains("Scope: channel"));
     }
@@ -1468,7 +1452,7 @@ mod tests {
             channel_type: "dm".into(),
         };
 
-        let prompt = format_prompt(&batch, None, Some(&ci), None);
+        let prompt = format_prompt(&batch, None, Some(&ci), None, None);
         assert!(prompt.contains("Scope: dm"));
     }
 
@@ -1493,7 +1477,7 @@ mod tests {
             }],
         };
 
-        let prompt = format_prompt(&batch, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None);
         assert!(prompt.contains("Scope: thread"));
         assert!(prompt.contains("Thread root: root123"));
     }
@@ -1535,7 +1519,7 @@ mod tests {
             truncated: true,
         };
 
-        let prompt = format_prompt(&batch, None, None, Some(&ctx));
+        let prompt = format_prompt(&batch, None, None, Some(&ctx), None);
         assert!(prompt.contains("[Thread Context (2 of 5 messages, truncated)]"));
         assert!(prompt.contains("Let's refactor auth"));
         assert!(prompt.contains("Thread context included below"));
@@ -1567,7 +1551,7 @@ mod tests {
             truncated: false,
         };
 
-        let prompt = format_prompt(&batch, None, Some(&ci), Some(&ctx));
+        let prompt = format_prompt(&batch, None, Some(&ci), Some(&ctx), None);
         assert!(prompt.contains("Scope: dm"));
         assert!(prompt.contains("[Conversation Context (1 of 1 messages)]"));
         assert!(prompt.contains("Can you deploy?"));
@@ -1618,7 +1602,7 @@ mod tests {
             ),
         ]);
 
-        let prompt = format_prompt_with_profiles(&batch, None, None, Some(&ctx), Some(&profiles));
+        let prompt = format_prompt(&batch, None, None, Some(&ctx), Some(&profiles));
 
         assert!(prompt.contains("From: Wes (npub:"));
         assert!(prompt.contains(
@@ -1663,7 +1647,7 @@ mod tests {
             truncated: false,
         };
 
-        let prompt = format_prompt(&batch, None, Some(&ci), Some(&ctx));
+        let prompt = format_prompt(&batch, None, Some(&ci), Some(&ctx), None);
         // Scope should be "dm", not "thread".
         assert!(
             prompt.contains("Scope: dm"),
@@ -1701,7 +1685,7 @@ mod tests {
         };
 
         // No context fetched — hints only.
-        let prompt = format_prompt(&batch, None, Some(&ci), None);
+        let prompt = format_prompt(&batch, None, Some(&ci), None, None);
         assert!(prompt.contains("Scope: dm"));
         assert!(
             prompt.contains("get_channel_history()"),
@@ -1727,7 +1711,7 @@ mod tests {
             }],
         };
 
-        let prompt = format_prompt(&batch, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None);
         assert!(
             prompt.contains(&format!("Event ID: {event_id}")),
             "prompt should contain the event ID"
@@ -1749,7 +1733,7 @@ mod tests {
             }],
         };
 
-        let prompt = format_prompt(&batch, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None);
         assert!(
             prompt.contains(&format!("From: {npub} (hex: {hex})")),
             "prompt should contain both npub and hex"
@@ -1770,7 +1754,7 @@ mod tests {
             }],
         };
 
-        let prompt = format_prompt(&batch, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None);
         assert!(
             prompt.contains("Tags:"),
             "tags should always be included, even for stream messages"

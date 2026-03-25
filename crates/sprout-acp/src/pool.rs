@@ -679,7 +679,7 @@ pub async fn run_prompt_task(
         let profile_lookup =
             fetch_prompt_profile_lookup(b, conversation_context.as_ref(), &ctx.rest_client).await;
 
-        crate::queue::format_prompt_with_profiles(
+        crate::queue::format_prompt(
             b,
             ctx.system_prompt.as_deref(),
             channel_info.as_ref(),
