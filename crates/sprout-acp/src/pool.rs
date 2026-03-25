@@ -19,7 +19,7 @@
 //!
 //! `AcpClient` is NOT Clone — ownership moves out on claim and back on return.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,7 +33,10 @@ use crate::acp::{
     AcpError, McpServer, ModelSwitchMethod, StopReason,
 };
 use crate::config::{DedupMode, PermissionMode};
-use crate::queue::{ContextMessage, ConversationContext, FlushBatch, PromptChannelInfo};
+use crate::queue::{
+    ContextMessage, ConversationContext, FlushBatch, PromptChannelInfo, PromptProfile,
+    PromptProfileLookup,
+};
 use crate::relay::{ChannelInfo, RestClient};
 
 // ── FlushBatch Clone note ─────────────────────────────────────────────────────
@@ -673,11 +676,15 @@ pub async fn run_prompt_task(
             None
         };
 
+        let profile_lookup =
+            fetch_prompt_profile_lookup(b, conversation_context.as_ref(), &ctx.rest_client).await;
+
         crate::queue::format_prompt(
             b,
             ctx.system_prompt.as_deref(),
             channel_info.as_ref(),
             conversation_context.as_ref(),
+            profile_lookup.as_ref(),
         )
     } else {
         // Should not happen — batch is None only for heartbeats which have prompt_text.
@@ -904,6 +911,110 @@ async fn fetch_conversation_context(
     }
 
     None
+}
+
+/// Normalize AND validate a pubkey for the batch profile API request.
+/// Returns `None` for malformed input — only valid 64-char hex passes.
+/// See also: `normalize_lookup_key` in queue.rs (normalize-only, no validation).
+fn normalize_prompt_pubkey(pubkey: &str) -> Option<String> {
+    let normalized = pubkey.trim().to_ascii_lowercase();
+    if normalized.len() == 64 && normalized.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn collect_prompt_pubkeys(
+    batch: &FlushBatch,
+    conversation_context: Option<&ConversationContext>,
+) -> Vec<String> {
+    let mut pubkeys = HashSet::new();
+
+    for event in &batch.events {
+        pubkeys.insert(event.event.pubkey.to_hex().to_ascii_lowercase());
+
+        for mentioned in crate::queue::parse_thread_tags(&event.event).mentioned_pubkeys {
+            if let Some(normalized) = normalize_prompt_pubkey(&mentioned) {
+                pubkeys.insert(normalized);
+            }
+        }
+    }
+
+    let context_messages = match conversation_context {
+        Some(ConversationContext::Thread { messages, .. })
+        | Some(ConversationContext::Dm { messages, .. }) => Some(messages),
+        None => None,
+    };
+
+    if let Some(messages) = context_messages {
+        for message in messages {
+            if let Some(normalized) = normalize_prompt_pubkey(&message.pubkey) {
+                pubkeys.insert(normalized);
+            }
+        }
+    }
+
+    let mut pubkeys: Vec<String> = pubkeys.into_iter().collect();
+    pubkeys.sort();
+    pubkeys
+}
+
+fn parse_profile_lookup_response(json: serde_json::Value) -> Option<PromptProfileLookup> {
+    let profiles = json.get("profiles")?.as_object()?;
+    let mut lookup = PromptProfileLookup::new();
+
+    for (pubkey, profile) in profiles {
+        lookup.insert(
+            pubkey.to_ascii_lowercase(),
+            PromptProfile {
+                display_name: profile
+                    .get("display_name")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+                nip05_handle: profile
+                    .get("nip05_handle")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+            },
+        );
+    }
+
+    if lookup.is_empty() {
+        None
+    } else {
+        Some(lookup)
+    }
+}
+
+async fn fetch_prompt_profile_lookup(
+    batch: &FlushBatch,
+    conversation_context: Option<&ConversationContext>,
+    rest: &RestClient,
+) -> Option<PromptProfileLookup> {
+    let pubkeys = collect_prompt_pubkeys(batch, conversation_context);
+    if pubkeys.is_empty() {
+        return None;
+    }
+
+    let body = serde_json::json!({ "pubkeys": pubkeys });
+    let result = timeout(
+        CONTEXT_FETCH_TIMEOUT,
+        rest.post_json("/api/users/batch", &body),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(json)) => parse_profile_lookup_response(json),
+        Ok(Err(e)) => {
+            tracing::debug!("prompt profile lookup failed: {e} — using raw pubkeys");
+            None
+        }
+        Err(_) => {
+            tracing::debug!("prompt profile lookup timed out — using raw pubkeys");
+            None
+        }
+    }
 }
 
 /// Fetch thread context via REST: `GET /api/channels/{id}/threads/{event_id}?limit=N`
@@ -1368,6 +1479,7 @@ async fn clear_reactions(rest: crate::relay::RestClient, event_ids: Vec<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nostr::{EventBuilder, Keys, Kind, Tag};
     use serde_json::json;
 
     // ── parse_thread_response tests ──────────────────────────────────────────
@@ -1603,6 +1715,77 @@ mod tests {
     fn test_json_to_context_message_missing_content() {
         let obj = json!({ "pubkey": "abc" });
         assert!(json_to_context_message(&obj).is_none());
+    }
+
+    #[test]
+    fn test_collect_prompt_pubkeys_includes_authors_mentions_and_context() {
+        let keys = Keys::generate();
+        let p_tag = Tag::parse(&[
+            "p",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ])
+        .unwrap();
+        let event = EventBuilder::new(Kind::Custom(9), "hello", [p_tag])
+            .sign_with_keys(&keys)
+            .unwrap();
+        let author_hex = event.pubkey.to_hex();
+        let batch = FlushBatch {
+            channel_id: Uuid::new_v4(),
+            events: vec![crate::queue::BatchEvent {
+                event,
+                prompt_tag: "@mention".into(),
+                received_at: std::time::Instant::now(),
+            }],
+        };
+        let context = ConversationContext::Thread {
+            messages: vec![ContextMessage {
+                pubkey: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                timestamp: "2026-03-25T05:51:25Z".into(),
+                content: "follow up".into(),
+            }],
+            total: 1,
+            truncated: false,
+        };
+
+        let pubkeys = collect_prompt_pubkeys(&batch, Some(&context));
+
+        let mut expected = vec![
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            author_hex,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        ];
+        expected.sort();
+
+        assert_eq!(pubkeys, expected);
+    }
+
+    #[test]
+    fn test_parse_profile_lookup_response_extracts_display_name_and_nip05() {
+        let lookup = parse_profile_lookup_response(json!({
+            "profiles": {
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+                    "display_name": "Wes",
+                    "avatar_url": null,
+                    "nip05_handle": "wes@example.com"
+                }
+            },
+            "missing": []
+        }))
+        .expect("lookup should parse");
+
+        assert_eq!(
+            lookup.get("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            Some(&PromptProfile {
+                display_name: Some("Wes".into()),
+                nip05_handle: Some("wes@example.com".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_profile_lookup_response_returns_none_for_empty() {
+        assert!(parse_profile_lookup_response(json!({"profiles": {}})).is_none());
+        assert!(parse_profile_lookup_response(json!({})).is_none());
     }
 
     #[test]
