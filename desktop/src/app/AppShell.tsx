@@ -22,6 +22,7 @@ import { HomeView } from "@/features/home/ui/HomeView";
 import {
   useChannelMessagesQuery,
   mergeMessages,
+  useEditMessageMutation,
   useSendMessageMutation,
   useChannelSubscription,
   useToggleReactionMutation,
@@ -86,6 +87,7 @@ export function AppShell() {
   const [searchAnchorEvent, setSearchAnchorEvent] =
     React.useState<RelayEvent | null>(null);
   const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
+  const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
   const lastNonSettingsViewRef = React.useRef<MainView>("home");
   const queryClient = useQueryClient();
   const identityQuery = useIdentityQuery();
@@ -134,6 +136,7 @@ export function AppShell() {
     identityQuery.data,
   );
   const toggleReactionMutation = useToggleReactionMutation();
+  const editMessageMutation = useEditMessageMutation(activeChannel);
   const availableChannelIds = React.useMemo(
     () => new Set(channels.map((channel) => channel.id)),
     [channels],
@@ -206,14 +209,29 @@ export function AppShell() {
       timelineMessages.find((message) => message.id === replyTargetId) ?? null,
     [replyTargetId, timelineMessages],
   );
+  const editTargetMessage = React.useMemo(
+    () =>
+      timelineMessages.find((message) => message.id === editTargetId) ?? null,
+    [editTargetId, timelineMessages],
+  );
 
-  const { handleCancelReply, handleReply, handleSend, handleToggleReaction } =
-    useChannelPaneHandlers({
-      replyTargetId,
-      sendMessageMutation,
-      setReplyTargetId,
-      toggleReactionMutation,
-    });
+  const {
+    handleCancelEdit,
+    handleCancelReply,
+    handleEdit,
+    handleEditSave,
+    handleReply,
+    handleSend,
+    handleToggleReaction,
+  } = useChannelPaneHandlers({
+    editMessageMutation,
+    editTargetId,
+    replyTargetId,
+    sendMessageMutation,
+    setEditTargetId,
+    setReplyTargetId,
+    toggleReactionMutation,
+  });
 
   const handleTargetReached = React.useCallback((messageId: string) => {
     setSearchAnchor((current) =>
@@ -713,10 +731,22 @@ export function AppShell() {
                     <ChannelPane
                       activeChannel={activeChannel}
                       currentPubkey={identityQuery.data?.pubkey}
+                      editTarget={
+                        editTargetMessage
+                          ? {
+                              author: editTargetMessage.author,
+                              body: editTargetMessage.body,
+                              id: editTargetMessage.id,
+                            }
+                          : null
+                      }
                       isSending={sendMessageMutation.isPending}
                       isTimelineLoading={isTimelineLoading}
                       messages={timelineMessages}
+                      onCancelEdit={handleCancelEdit}
                       onCancelReply={handleCancelReply}
+                      onEdit={handleEdit}
+                      onEditSave={handleEditSave}
                       onReply={handleReply}
                       onSend={handleSend}
                       onTargetReached={handleTargetReached}
