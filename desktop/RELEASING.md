@@ -38,42 +38,29 @@ Store the password you chose in `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 
 ## Cutting a Release
 
-### 1. Prepare
-
-From `main`, run:
+From any branch (typically `main`):
 
 ```bash
-just desktop-prepare <version>
+just desktop-release 0.3.0
 ```
 
-For example:
+Or equivalently:
 
 ```bash
-just desktop-prepare 0.2.0
+git tag desktop/v0.3.0
+git push origin desktop/v0.3.0
 ```
 
-This creates a release branch, bumps versions in `package.json`,
-`tauri.conf.json`, and `Cargo.toml`, and opens a PR.
+That's it. CI extracts the version from the tag and writes it into
+`package.json`, `tauri.conf.json`, and `Cargo.toml` at build time. The
+versions checked into the repo are not used for releases — the tag is the
+source of truth.
 
-### 2. Review & Merge
-
-Review the PR, ensure CI passes, then merge to `main`.
-
-### 3. Release
-
-From `main` (after pulling the merged changes), run:
-
-```bash
-just desktop-release <version>
-```
-
-This tags the commit and pushes the tag — CI handles the rest.
-
-### 4. Verify
+### Verify
 
 Check GitHub Releases for:
 
-- The **versioned release** (e.g. `sprout-desktop-v0.2.0`)
+- The **versioned release** (e.g. `desktop/v0.3.0`)
 - The **`sprout-desktop-latest` rolling release** (updated with every release)
 
 ---
@@ -82,17 +69,19 @@ Check GitHub Releases for:
 
 The `sprout-desktop-release.yml` workflow:
 
-1. **Validates** the tag version matches the version in `package.json`,
-   `tauri.conf.json`, and `Cargo.toml`.
-2. **Validates** all required secrets are present.
-3. **Builds** the release config with signing and updater settings.
-4. **Builds** the Tauri app (unsigned).
-5. **Signs and notarizes** the macOS bundle via `block/apple-codesign-action`.
-6. **Re-packages** the signed app into a DMG and updater archive.
-7. **Signs** the updater archive with the Tauri updater key.
-8. **Publishes** the updater manifest (`latest.json`) to the rolling
-   `sprout-desktop-latest` release.
-9. **Publishes** the DMG to both the versioned and rolling releases.
+1. **Extracts the version** from the git tag once into `RELEASE_VERSION`.
+2. **Sets the version** into `package.json`, `tauri.conf.json`, and
+   `Cargo.toml` using `set-version-from-tag.mjs`.
+3. **Regenerates `Cargo.lock`** to match the patched `Cargo.toml`.
+4. **Validates** all required secrets are present.
+5. **Builds** the release config with signing and updater settings.
+6. **Builds** the Tauri app (unsigned).
+7. **Signs and notarizes** the macOS bundle via `block/apple-codesign-action`.
+8. **Re-packages** the signed app into a DMG and updater archive.
+9. **Signs** the updater archive with the Tauri updater key.
+10. **Publishes** the updater manifest (`latest.json`) to the rolling
+    `sprout-desktop-latest` release.
+11. **Publishes** the DMG to both the versioned and rolling releases.
 
 ---
 
@@ -111,8 +100,14 @@ export SPROUT_UPDATER_ENDPOINT="https://github.com/block/sprout/releases/downloa
 cd desktop
 pnpm run tauri:release:config
 
-# Build (unsigned)
-just desktop-release-build
+# Build (unsigned) — pass a version to set it before building
+just desktop-release-build version=0.3.0
+```
+
+You can also set the version separately without building:
+
+```bash
+just desktop-set-version 0.3.0
 ```
 
 ---
@@ -142,6 +137,20 @@ The app connects to the relay via the `SPROUT_RELAY_URL` environment variable.
 
 ---
 
+## How Versioning Works
+
+The git tag is the single source of truth for the release version. The version
+fields in `package.json`, `tauri.conf.json`, and `Cargo.toml` on `main` are
+**not** used for releases — CI overwrites them at build time from the tag.
+
+This means the tagged commit will show a different version in its source files
+than what the release actually contains. This is an accepted tradeoff — the tag
+is the canonical version, the commit is just the code state at release time.
+This is standard practice in ecosystems like Docker, Go, and Rust where the
+tag drives the version.
+
+---
+
 ## Troubleshooting
 
 - **"Missing required desktop release secrets"**: Ensure all secrets listed in
@@ -152,6 +161,6 @@ The app connects to the relay via the `SPROUT_RELAY_URL` environment variable.
   `CODESIGN_S3_BUCKET` are configured correctly. Check the
   `block/apple-codesign-action` step logs for details.
 
-- **Version mismatch**: The tag version must exactly match all three version
-  files (`package.json`, `tauri.conf.json`, `Cargo.toml`). Use
-  `just desktop-prepare` to ensure consistency.
+- **Build failures**: If versions are wrong, check that the tag follows the
+  format `desktop/v<semver>` (e.g. `desktop/v0.3.0`). CI extracts the version
+  from the tag automatically.

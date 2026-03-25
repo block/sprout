@@ -15,6 +15,8 @@ jobs:
     permissions:
       id-token: write
       contents: write
+    env:
+      RELEASE_VERSION: '' # set in the "Extract version from tag" step
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -27,16 +29,19 @@ jobs:
           workspaces: desktop/src-tauri
           key: desktop-release-aarch64-apple-darwin
 
-      - name: Validate tag matches desktop versions
+      - name: Extract version from tag
         run: |
-          TAG_VERSION="${GITHUB_REF#refs/tags/desktop/v}"
-          PACKAGE_VERSION="$(node -p "require('./desktop/package.json').version")"
-          TAURI_VERSION="$(node -p "require('./desktop/src-tauri/tauri.conf.json').version")"
-          CARGO_VERSION="$(grep '^version' desktop/src-tauri/Cargo.toml | head -1 | sed 's/version = "//;s/"//')"
-          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ] || [ "$TAG_VERSION" != "$TAURI_VERSION" ] || [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
-            echo "::error::Tag version ($TAG_VERSION) must match package.json ($PACKAGE_VERSION), tauri.conf.json ($TAURI_VERSION), and Cargo.toml ($CARGO_VERSION)"
-            exit 1
-          fi
+          RELEASE_VERSION="${GITHUB_REF#refs/tags/desktop/v}"
+          echo "RELEASE_VERSION=${RELEASE_VERSION}" >> "$GITHUB_ENV"
+          echo "Release version: ${RELEASE_VERSION}"
+
+      - name: Set version from tag
+        working-directory: desktop
+        run: node scripts/set-version-from-tag.mjs "$RELEASE_VERSION"
+
+      - name: Regenerate Cargo lockfile
+        working-directory: desktop/src-tauri
+        run: cargo generate-lockfile
 
       - name: Validate release secrets
         env:
@@ -97,14 +102,13 @@ jobs:
 
       - name: Create DMG from signed app
         run: |
-          VERSION="$(node -p "require('./desktop/package.json').version")"
           DMG_DIR="desktop/src-tauri/target/release/bundle/dmg"
           mkdir -p "${DMG_DIR}"
           rm -f "${DMG_DIR}"/*.dmg
           hdiutil create -volname "Sprout" \
             -srcfolder desktop/src-tauri/target/release/bundle/macos/Sprout.app \
             -ov -format UDZO \
-            "${DMG_DIR}/Sprout_${VERSION}_aarch64.dmg"
+            "${DMG_DIR}/Sprout_${RELEASE_VERSION}_aarch64.dmg"
 
       - name: Create updater archive from signed app
         env:
@@ -120,10 +124,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${GITHUB_REF#refs/tags/desktop/v}"
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Sprout Desktop v${VERSION}" \
+            --title "Sprout Desktop v${RELEASE_VERSION}" \
             --notes "See the assets to download and install this version."
 
       - name: Publish updater alias
@@ -131,6 +134,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ env.RELEASE_VERSION }}
         run: pnpm run release:updater:publish
 
       - name: Publish DMG alias
@@ -138,4 +142,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ env.RELEASE_VERSION }}
         run: pnpm run release:dmg:publish
