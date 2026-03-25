@@ -10,6 +10,7 @@ import {
 import { relayClient } from "@/shared/api/relayClient";
 import {
   addReaction,
+  editMessage,
   removeReaction,
   sendChannelMessage,
 } from "@/shared/api/tauri";
@@ -448,6 +449,40 @@ export function useToggleReactionMutation() {
       }
 
       await addReaction(eventId, emoji);
+    },
+  });
+}
+
+export function useEditMessageMutation(channel: Channel | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    void,
+    Error,
+    {
+      eventId: string;
+      content: string;
+    }
+  >({
+    mutationFn: async ({ eventId, content }) => {
+      if (!channel) {
+        throw new Error("No channel selected.");
+      }
+
+      await editMessage(channel.id, eventId, content);
+    },
+    onSuccess: (_data, { eventId, content }) => {
+      if (!channel) {
+        return;
+      }
+
+      queryClient.setQueryData<RelayEvent[]>(
+        ["channel-messages", channel.id],
+        (current = []) =>
+          current.map((message) =>
+            message.id === eventId ? { ...message, content } : message,
+          ),
+      );
     },
   });
 }

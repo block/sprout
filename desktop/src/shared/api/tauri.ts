@@ -735,6 +735,14 @@ export async function uploadMediaBytes(
   return invokeTauri<BlobDescriptor>("upload_media_bytes", { data });
 }
 
+export async function editMessage(
+  channelId: string,
+  eventId: string,
+  content: string,
+): Promise<void> {
+  await invokeTauri("edit_message", { channelId, eventId, content });
+}
+
 export async function addReaction(
   eventId: string,
   emoji: string,

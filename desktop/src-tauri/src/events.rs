@@ -275,6 +275,20 @@ pub fn build_forum_comment(
     Ok(EventBuilder::new(Kind::Custom(45003), content).tags(tags))
 }
 
+/// Kind 40003 — edit a message.
+pub fn build_message_edit(
+    channel_id: Uuid,
+    target_event_id: EventId,
+    content: &str,
+) -> Result<EventBuilder, String> {
+    check_content(content)?;
+    let tags = vec![
+        tag(vec!["h", &channel_id.to_string()])?,
+        tag(vec!["e", &target_event_id.to_hex()])?,
+    ];
+    Ok(EventBuilder::new(Kind::Custom(40003), content).tags(tags))
+}
+
 /// Kind 5 — NIP-09 deletion (messages).
 pub fn build_delete_compat(target_event_id: EventId) -> Result<EventBuilder, String> {
     let tags = vec![tag(vec!["e", &target_event_id.to_hex()])?];

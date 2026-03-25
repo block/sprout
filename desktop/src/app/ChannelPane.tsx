@@ -10,10 +10,18 @@ import type { Channel } from "@/shared/api/types";
 type ChannelPaneProps = {
   activeChannel: Channel | null;
   currentPubkey?: string;
+  editTarget?: {
+    author: string;
+    body: string;
+    id: string;
+  } | null;
   isSending: boolean;
   isTimelineLoading: boolean;
   messages: TimelineMessage[];
+  onCancelEdit?: () => void;
   onCancelReply: () => void;
+  onEdit?: (message: TimelineMessage) => void;
+  onEditSave?: (content: string) => Promise<void>;
   onReply: (message: TimelineMessage) => void;
   onSend: (
     content: string,
@@ -36,10 +44,14 @@ type ChannelPaneProps = {
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
   currentPubkey,
+  editTarget = null,
   isSending,
   isTimelineLoading,
   messages,
+  onCancelEdit,
   onCancelReply,
+  onEdit,
+  onEditSave,
   onReply,
   onSend,
   onTargetReached,
@@ -71,6 +83,7 @@ export const ChannelPane = React.memo(function ChannelPane({
         }
         isLoading={isTimelineLoading}
         messages={messages}
+        onEdit={onEdit}
         onReply={onReply}
         onTargetReached={onTargetReached}
         onToggleReaction={onToggleReaction}
@@ -92,8 +105,11 @@ export const ChannelPane = React.memo(function ChannelPane({
           activeChannel.channelType === "forum" ||
           isSending
         }
+        editTarget={editTarget}
         isSending={isSending}
+        onCancelEdit={onCancelEdit}
         onCancelReply={onCancelReply}
+        onEditSave={onEditSave}
         onSend={onSend}
         placeholder={
           activeChannel?.archivedAt

@@ -14,6 +14,7 @@ export const CHANNEL_EVENT_KINDS = [
   KIND_REACTION, // 7 — NIP-25 reactions
   KIND_STREAM_MESSAGE, // 9 — NIP-29 group chat messages
   40001, // legacy: pre-migration stream messages
+  KIND_STREAM_MESSAGE_EDIT, // 40003 — message edits
   KIND_STREAM_MESSAGE_DIFF, // 40008 — message diffs
   KIND_SYSTEM_MESSAGE, // 40099 — system messages (join, leave, etc.)
 ] as const;

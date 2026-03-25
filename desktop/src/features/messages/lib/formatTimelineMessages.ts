@@ -13,6 +13,7 @@ import {
   KIND_DELETION,
   KIND_REACTION,
   KIND_STREAM_MESSAGE,
+  KIND_STREAM_MESSAGE_EDIT,
   KIND_STREAM_MESSAGE_DIFF,
   KIND_SYSTEM_MESSAGE,
 } from "@/shared/constants/kinds";
@@ -126,6 +127,34 @@ export function formatTimelineMessages(
 
     for (const targetId of getDeletionTargets(event.tags)) {
       deletedEventIds.add(targetId);
+    }
+  }
+
+  // Build a map of latest edit per original message: targetId → { content, createdAt }.
+  // When multiple edits exist for the same message, the most recent one wins.
+  const editsByTargetId = new Map<
+    string,
+    { content: string; createdAt: number }
+  >();
+  for (const event of events) {
+    if (
+      event.kind !== KIND_STREAM_MESSAGE_EDIT ||
+      deletedEventIds.has(event.id)
+    ) {
+      continue;
+    }
+
+    const targetId = getReactionTargetId(event.tags);
+    if (!targetId || deletedEventIds.has(targetId)) {
+      continue;
+    }
+
+    const existing = editsByTargetId.get(targetId);
+    if (!existing || event.created_at > existing.createdAt) {
+      editsByTargetId.set(targetId, {
+        content: event.content,
+        createdAt: event.created_at,
+      });
     }
   }
 
@@ -258,6 +287,7 @@ export function formatTimelineMessages(
         requireChannelTagForPTags: true,
       });
     const thread = getThreadReference(event.tags);
+    const edit = editsByTargetId.get(event.id);
     return {
       id: event.id,
       createdAt: event.created_at,
@@ -270,12 +300,13 @@ export function formatTimelineMessages(
         profiles,
       }),
       time: TIME_FORMATTER.format(new Date(event.created_at * 1_000)),
-      body: event.content,
+      body: edit ? edit.content : event.content,
       parentId: thread.parentId,
       rootId: thread.rootId,
       depth: getDepth(event),
       accent: currentPubkey === authorPubkey,
       pending: event.pending,
+      edited: edit !== undefined,
       kind: event.kind,
       tags: event.tags,
       reactions: (() => {

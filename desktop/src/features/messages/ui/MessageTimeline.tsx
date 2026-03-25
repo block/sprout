@@ -18,6 +18,7 @@ type MessageTimelineProps = {
   activeReplyTargetId?: string | null;
   currentPubkey?: string;
   profiles?: UserProfileLookup;
+  onEdit?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
   onToggleReaction?: (
     message: TimelineMessage,
@@ -37,6 +38,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   activeReplyTargetId = null,
   currentPubkey,
   profiles,
+  onEdit,
   onReply,
   onToggleReaction,
   targetMessageId = null,
@@ -106,6 +108,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
               currentPubkey={currentPubkey}
               highlightedMessageId={highlightedMessageId}
               messages={messages}
+              onEdit={onEdit}
               onReply={onReply}
               onToggleReaction={onToggleReaction}
               profiles={profiles}
