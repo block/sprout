@@ -246,6 +246,7 @@ pub fn run() {
             send_channel_message,
             get_forum_posts,
             get_forum_thread,
+            edit_message,
             delete_message,
             add_reaction,
             remove_reaction,
