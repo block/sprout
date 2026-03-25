@@ -913,6 +913,9 @@ async fn fetch_conversation_context(
     None
 }
 
+/// Normalize AND validate a pubkey for the batch profile API request.
+/// Returns `None` for malformed input — only valid 64-char hex passes.
+/// See also: `normalize_lookup_key` in queue.rs (normalize-only, no validation).
 fn normalize_prompt_pubkey(pubkey: &str) -> Option<String> {
     let normalized = pubkey.trim().to_ascii_lowercase();
     if normalized.len() == 64 && normalized.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -1777,6 +1780,12 @@ mod tests {
                 nip05_handle: Some("wes@example.com".into()),
             })
         );
+    }
+
+    #[test]
+    fn test_parse_profile_lookup_response_returns_none_for_empty() {
+        assert!(parse_profile_lookup_response(json!({"profiles": {}})).is_none());
+        assert!(parse_profile_lookup_response(json!({})).is_none());
     }
 
     #[test]
