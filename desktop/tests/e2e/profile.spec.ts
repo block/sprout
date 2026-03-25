@@ -215,7 +215,7 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
   await expect(page.getByTestId("chat-title")).toHaveText("Home");
 });
 
-test("increases webview zoom with the keyboard shortcut", async ({ page }) => {
+test("supports webview zoom keyboard shortcuts", async ({ page }) => {
   await page.goto("/");
 
   await page.keyboard.press(
@@ -225,6 +225,33 @@ test("increases webview zoom with the keyboard shortcut", async ({ page }) => {
   await expect
     .poll(() => page.evaluate(() => window.__SPROUT_E2E_WEBVIEW_ZOOM__))
     .toBe(1.2);
+
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+Minus" : "Control+Minus",
+  );
+
+  await expect
+    .poll(() => page.evaluate(() => window.__SPROUT_E2E_WEBVIEW_ZOOM__))
+    .toBe(1);
+
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+Shift+Equal" : "Control+Shift+Equal",
+  );
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+Shift+Equal" : "Control+Shift+Equal",
+  );
+
+  await expect
+    .poll(() => page.evaluate(() => window.__SPROUT_E2E_WEBVIEW_ZOOM__))
+    .toBe(1.4);
+
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+Digit0" : "Control+Digit0",
+  );
+
+  await expect
+    .poll(() => page.evaluate(() => window.__SPROUT_E2E_WEBVIEW_ZOOM__))
+    .toBe(1);
 });
 
 test("shows doctor checks for local sprout tooling", async ({ page }) => {
