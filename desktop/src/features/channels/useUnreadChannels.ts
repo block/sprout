@@ -1,7 +1,10 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { updateChannelLastMessageAt } from "@/features/channels/hooks";
+import {
+  channelsQueryKey,
+  updateChannelLastMessageAt,
+} from "@/features/channels/hooks";
 import { getChannelIdFromTags } from "@/features/messages/lib/threading";
 import { mergeTimelineCacheMessages } from "@/features/messages/hooks";
 import { relayClient } from "@/shared/api/relayClient";
@@ -180,11 +183,12 @@ export function useUnreadChannels(
 
   const handleIncomingMessage = React.useEffectEvent((event: RelayEvent) => {
     const channelId = getChannelIdFromTags(event.tags);
-    if (
-      !channelId ||
-      channelId === activeChannelId ||
-      !liveChannelIds.has(channelId)
-    ) {
+    if (!channelId || channelId === activeChannelId) {
+      return;
+    }
+
+    if (!liveChannelIds.has(channelId)) {
+      void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
       return;
     }
 
@@ -202,6 +206,12 @@ export function useUnreadChannels(
       },
     );
   });
+
+  React.useEffect(() => {
+    return relayClient.subscribeToReconnects(() => {
+      void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+    });
+  }, [queryClient]);
 
   React.useEffect(() => {
     if (liveChannelIds.size === 0) {
