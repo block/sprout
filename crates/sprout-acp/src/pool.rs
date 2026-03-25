@@ -32,7 +32,7 @@ use crate::acp::{
     extract_model_config_options, extract_model_state, resolve_model_switch_method, AcpClient,
     AcpError, McpServer, ModelSwitchMethod, StopReason,
 };
-use crate::config::DedupMode;
+use crate::config::{DedupMode, PermissionMode};
 use crate::queue::{ContextMessage, ConversationContext, FlushBatch, PromptChannelInfo};
 use crate::relay::{ChannelInfo, RestClient};
 
@@ -176,6 +176,8 @@ pub struct PromptContext {
     pub context_message_limit: u32,
     /// Max turns per session before proactive rotation. 0 = disabled.
     pub max_turns_per_session: u32,
+    /// Permission mode to apply after session creation. `Default` = skip.
+    pub permission_mode: PermissionMode,
 }
 
 // ── AgentPool impl ────────────────────────────────────────────────────────────
@@ -311,6 +313,9 @@ const CONTEXT_FETCH_TIMEOUT: Duration = Duration::from_millis(500);
 /// Timeout for model-switch requests (`session/set_config_option`, `session/set_model`).
 const MODEL_SWITCH_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Timeout for permission-mode requests (`session/set_config_option` with `configId: "mode"`).
+const PERMISSION_MODE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Create a new ACP session via `session_new_full()`, populate model capabilities
 /// on the agent (first session only), and apply `desired_model` if set.
 ///
@@ -347,6 +352,11 @@ async fn create_session_and_apply_model(
                 );
             }
         }
+    }
+
+    // Apply permission mode if not the agent's built-in default.
+    if !ctx.permission_mode.is_default() {
+        apply_permission_mode(&mut agent.acp, &resp.session_id, &ctx.permission_mode).await;
     }
 
     Ok(resp.session_id)
@@ -404,6 +414,41 @@ async fn apply_model_switch(
             tracing::warn!(
                 target: "pool::model",
                 "model set via {method_label} timed out ({MODEL_SWITCH_TIMEOUT:?}) — proceeding with agent default"
+            );
+        }
+    }
+}
+
+/// Set the session permission mode via `session/set_config_option`.
+///
+/// Non-fatal: logs and proceeds on timeout or error. The agent falls back
+/// to its default permission mode (`"default"`), which still works via
+/// per-tool auto-approval in `handle_permission_request`.
+async fn apply_permission_mode(acp: &mut AcpClient, session_id: &str, mode: &PermissionMode) {
+    let wire = mode.as_wire_str();
+    let result = tokio::time::timeout(PERMISSION_MODE_TIMEOUT, async {
+        acp.session_set_config_option(session_id, "mode", wire)
+            .await
+    })
+    .await;
+
+    match result {
+        Ok(Ok(_)) => {
+            tracing::info!(
+                target: "pool::permission",
+                "applied permission mode {wire:?} on session {session_id}"
+            );
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(
+                target: "pool::permission",
+                "failed to set permission mode {wire:?}: {e} — falling back to per-tool auto-approval"
+            );
+        }
+        Err(_) => {
+            tracing::warn!(
+                target: "pool::permission",
+                "permission mode set timed out ({PERMISSION_MODE_TIMEOUT:?}) — falling back to per-tool auto-approval"
             );
         }
     }
