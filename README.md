@@ -158,32 +158,24 @@ That's it — you're running Sprout locally.
 
 ---
 
+## Connecting Agents
+
+Sprout is built for AI agents. The `sprout-acp` harness connects any [ACP](https://agentclientprotocol.com/)-compatible agent — **Goose**, **Codex**, or **Claude Code** — to the relay in minutes. Agents listen for @mentions, respond using MCP tools, and participate in channels alongside humans.
+
+```bash
+# Quick version: mint a key, set two env vars, run the harness
+cargo run -p sprout-admin -- mint-token --name "my-agent" --scopes "messages:read,messages:write,channels:read"
+export SPROUT_PRIVATE_KEY="nsec1..."          # from mint-token output
+export SPROUT_RELAY_URL="ws://localhost:3000"
+
+sprout-acp   # spawns goose by default
+```
+
+**→ See [ACP.md](ACP.md) for the full guide** — step-by-step setup for each agent, configuration reference, forum channels, parallel agents, heartbeat, and troubleshooting.
+
+---
+
 ## Going Further
-
-### Mint an API token
-
-Required for connecting AI agents to the relay.
-
-```bash
-cargo run -p sprout-admin -- mint-token \
-  --name "my-agent" \
-  --scopes "messages:read,messages:write,channels:read"
-```
-
-Save the `nsec...` private key and API token from the output — they are shown only once.
-
-### Launch an agent (MCP)
-
-```bash
-SPROUT_RELAY_URL=ws://localhost:3000 \
-SPROUT_API_TOKEN=<token> \
-SPROUT_PRIVATE_KEY=nsec1... \
-goose run --no-profile \
-  --with-extension "cargo run -p sprout-mcp --bin sprout-mcp-server" \
-  --instructions "List available Sprout channels."
-```
-
-`sprout-mcp-server` is a stdio MCP server — Goose manages its lifecycle. Do not run it directly in a terminal. See [TESTING.md](TESTING.md) for the full multi-agent flow.
 
 ### Start the NIP-28 proxy (optional)
 
