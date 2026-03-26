@@ -4,8 +4,8 @@
 # =============================================================================
 # Usage: ./scripts/dev-setup.sh
 #
-# Starts all Docker services, waits for healthy, runs migrations, prints
-# connection info and next steps.
+# Copies .env.example → .env (if missing), starts Docker services, waits for
+# healthy, runs migrations, installs desktop deps, and prints next steps.
 # =============================================================================
 set -euo pipefail
 
@@ -20,10 +20,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-log()    { echo -e "${BLUE}[dev-setup]${NC} $*"; }
-success(){ echo -e "${GREEN}[dev-setup]${NC} $*"; }
-warn()   { echo -e "${YELLOW}[dev-setup]${NC} $*"; }
-error()  { echo -e "${RED}[dev-setup]${NC} $*" >&2; }
+log()     { echo -e "${BLUE}[dev-setup]${NC} $*"; }
+success() { echo -e "${GREEN}[dev-setup]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[dev-setup]${NC} $*"; }
+error()   { echo -e "${RED}[dev-setup]${NC} $*" >&2; }
 
 # ---- Preflight checks -------------------------------------------------------
 
