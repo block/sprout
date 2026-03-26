@@ -17,7 +17,6 @@ jobs:
       contents: write
     env:
       RELEASE_VERSION: '' # set in the "Extract version from tag" step
-      SPROUT_RELAY_URL: wss://sprout-oss.stage.blox.sqprod.co
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -46,6 +45,7 @@ jobs:
 
       - name: Validate release secrets
         env:
+          SPROUT_RELAY_URL: ${{ secrets.SPROUT_RELAY_URL }}
           SPROUT_UPDATER_PUBLIC_KEY: ${{ secrets.SPROUT_UPDATER_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -54,6 +54,7 @@ jobs:
         run: |
           missing=()
           for name in \
+            SPROUT_RELAY_URL \
             SPROUT_UPDATER_PUBLIC_KEY \
             TAURI_SIGNING_PRIVATE_KEY \
             TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
@@ -82,6 +83,8 @@ jobs:
 
       - name: Build Tauri app
         working-directory: desktop
+        env:
+          SPROUT_RELAY_URL: ${{ secrets.SPROUT_RELAY_URL }}
         run: pnpm tauri build --config src-tauri/tauri.release.conf.json
 
       - name: Codesign and Notarize
