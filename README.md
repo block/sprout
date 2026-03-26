@@ -134,7 +134,7 @@ just setup
 
 This single command:
 - Copies `.env.example` to `.env` (if it doesn't already exist)
-- Starts Docker services (Postgres, Redis, Typesense, Adminer, Keycloak)
+- Starts Docker services (Postgres, Redis, Typesense, Adminer, Keycloak, MinIO, Prometheus)
 - Waits for all services to be healthy
 - Runs database migrations
 - Installs desktop dependencies (`pnpm install`)
@@ -191,6 +191,14 @@ just proxy
 The proxy lets third-party Nostr clients (Coracle, nak, Amethyst) connect to Sprout using
 standard NIP-28 channel events. See [NOSTR.md](NOSTR.md) for setup, guest registration, and
 client configuration.
+
+### Run the desktop web UI without Tauri (optional)
+
+```bash
+just desktop-dev
+```
+
+This starts only the web frontend at `http://localhost:1420` — useful for UI development without rebuilding the Tauri shell. Use `just dev` (from Quick Start) for the full desktop app.
 
 ## Configuration
 
