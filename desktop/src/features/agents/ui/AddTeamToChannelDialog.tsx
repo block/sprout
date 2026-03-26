@@ -153,7 +153,7 @@ export function AddTeamToChannelDialog({
     <Dialog onOpenChange={handleOpenChange} open={open}>
       <DialogContent className="max-w-xl overflow-hidden p-0">
         <div className="flex max-h-[85vh] flex-col">
-          <DialogHeader className="border-b border-border/60 px-6 py-5 pr-14">
+          <DialogHeader className="shrink-0 border-b border-border/60 px-6 py-5 pr-14">
             <DialogTitle>Deploy team to channel</DialogTitle>
             <DialogDescription>
               Create and attach one agent per persona in{" "}
@@ -162,7 +162,7 @@ export function AddTeamToChannelDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-5 px-6 py-5">
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
             {resolved.length > 0 ? (
               <div className="space-y-1.5">
                 <span className="text-sm font-medium">
@@ -267,7 +267,7 @@ export function AddTeamToChannelDialog({
             ) : null}
           </div>
 
-          <div className="flex justify-end gap-2 border-t border-border/60 px-6 py-4">
+          <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 px-6 py-4">
             <Button
               onClick={() => handleOpenChange(false)}
               size="sm"

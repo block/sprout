@@ -19,6 +19,7 @@ export const MessageRow = React.memo(
     activeReplyTargetId = null,
     highlighted = false,
     message,
+    onEdit,
     onToggleReaction,
     onReply,
     profiles,
@@ -26,6 +27,7 @@ export const MessageRow = React.memo(
     activeReplyTargetId?: string | null;
     highlighted?: boolean;
     message: TimelineMessage;
+    onEdit?: (message: TimelineMessage) => void;
     onToggleReaction?: (
       message: TimelineMessage,
       emoji: string,
@@ -240,6 +242,7 @@ export const MessageRow = React.memo(
                 <MessageActionBar
                   activeReplyTargetId={activeReplyTargetId}
                   message={message}
+                  onEdit={onEdit}
                   onReactionSelect={
                     canToggleReactions ? handleReactionSelect : undefined
                   }
@@ -251,6 +254,14 @@ export const MessageRow = React.memo(
                 {message.pending ? (
                   <p className="font-medium uppercase tracking-[0.14em] text-primary/80">
                     Sending
+                  </p>
+                ) : null}
+                {message.edited ? (
+                  <p
+                    className="text-muted-foreground/70"
+                    title="This message has been edited"
+                  >
+                    (edited)
                   </p>
                 ) : null}
                 <p className="whitespace-nowrap">{message.time}</p>
@@ -308,6 +319,7 @@ export const MessageRow = React.memo(
     prev.message.depth === next.message.depth &&
     prev.message.kind === next.message.kind &&
     prev.message.pending === next.message.pending &&
+    prev.message.edited === next.message.edited &&
     prev.message.reactions === next.message.reactions &&
     prev.message.tags === next.message.tags &&
     prev.message.role === next.message.role &&

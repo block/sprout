@@ -233,6 +233,8 @@ export type RawManagedAgent = {
   agent_args: string[];
   mcp_command: string;
   turn_timeout_seconds: number;
+  idle_timeout_seconds: number | null;
+  max_turn_duration_seconds: number | null;
   parallelism: number;
   system_prompt: string | null;
   model: string | null;
@@ -735,6 +737,14 @@ export async function uploadMediaBytes(
   return invokeTauri<BlobDescriptor>("upload_media_bytes", { data });
 }
 
+export async function editMessage(
+  channelId: string,
+  eventId: string,
+  content: string,
+): Promise<void> {
+  await invokeTauri("edit_message", { channelId, eventId, content });
+}
+
 export async function addReaction(
   eventId: string,
   emoji: string,
@@ -802,6 +812,8 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     agentArgs: agent.agent_args,
     mcpCommand: agent.mcp_command,
     turnTimeoutSeconds: agent.turn_timeout_seconds,
+    idleTimeoutSeconds: agent.idle_timeout_seconds,
+    maxTurnDurationSeconds: agent.max_turn_duration_seconds,
     parallelism: agent.parallelism,
     systemPrompt: agent.system_prompt,
     model: agent.model,
@@ -902,6 +914,8 @@ export async function createManagedAgent(input: CreateManagedAgentInput) {
         agentArgs: input.agentArgs,
         mcpCommand: input.mcpCommand,
         turnTimeoutSeconds: input.turnTimeoutSeconds,
+        idleTimeoutSeconds: input.idleTimeoutSeconds,
+        maxTurnDurationSeconds: input.maxTurnDurationSeconds,
         parallelism: input.parallelism,
         systemPrompt: input.systemPrompt,
         avatarUrl: input.avatarUrl,

@@ -161,8 +161,18 @@ pub struct CliArgs {
     )]
     pub mcp_command: String,
 
-    #[arg(long, env = "SPROUT_ACP_TURN_TIMEOUT", default_value = "300")]
-    pub turn_timeout: u64,
+    /// Idle timeout: max seconds of silence before killing a turn.
+    /// Resets on any agent stdout activity.
+    #[arg(long, env = "SPROUT_ACP_IDLE_TIMEOUT")]
+    pub idle_timeout: Option<u64>,
+
+    /// Absolute wall-clock cap per turn (safety valve).
+    #[arg(long, env = "SPROUT_ACP_MAX_TURN_DURATION", default_value = "3600")]
+    pub max_turn_duration: u64,
+
+    /// Deprecated: alias for --idle-timeout. If both set, --idle-timeout wins.
+    #[arg(long, env = "SPROUT_ACP_TURN_TIMEOUT", hide = true)]
+    pub turn_timeout: Option<u64>,
 
     #[arg(
         long,
@@ -293,7 +303,8 @@ pub struct Config {
     pub agent_command: String,
     pub agent_args: Vec<String>,
     pub mcp_command: String,
-    pub turn_timeout_secs: u64,
+    pub idle_timeout_secs: u64,
+    pub max_turn_duration_secs: u64,
     pub agents: u32,
     pub heartbeat_interval_secs: u64,
     pub heartbeat_prompt: Option<String>,
@@ -436,7 +447,44 @@ impl Config {
             agent_command,
             agent_args,
             mcp_command: args.mcp_command,
-            turn_timeout_secs: args.turn_timeout,
+            // Deprecated --turn-timeout is a fallback for backward compat.
+            // New deployments should use --idle-timeout exclusively.
+            // Precedence: explicit --idle-timeout > --turn-timeout (deprecated) > default 300.
+            idle_timeout_secs: {
+                let raw = match (args.idle_timeout, args.turn_timeout) {
+                    (Some(idle), Some(_turn)) => {
+                        tracing::warn!(
+                            "--turn-timeout / SPROUT_ACP_TURN_TIMEOUT is deprecated and ignored \
+                             when --idle-timeout / SPROUT_ACP_IDLE_TIMEOUT is also set"
+                        );
+                        idle
+                    }
+                    (Some(idle), None) => idle,
+                    (None, Some(turn)) => {
+                        tracing::warn!(
+                            "--turn-timeout / SPROUT_ACP_TURN_TIMEOUT is deprecated; \
+                             use --idle-timeout / SPROUT_ACP_IDLE_TIMEOUT instead"
+                        );
+                        turn
+                    }
+                    (None, None) => 300, // default
+                };
+                if raw == 0 {
+                    tracing::warn!("idle timeout of 0 is invalid — using 1s minimum");
+                    1
+                } else {
+                    raw
+                }
+            },
+            max_turn_duration_secs: {
+                let raw = args.max_turn_duration;
+                if raw == 0 {
+                    tracing::warn!("max turn duration of 0 is invalid — using 60s minimum");
+                    60
+                } else {
+                    raw
+                }
+            },
             agents: args.agents,
             heartbeat_interval_secs: args.heartbeat_interval,
             heartbeat_prompt,
@@ -461,13 +509,14 @@ impl Config {
     /// Human-readable summary (no secrets).
     pub fn summary(&self) -> String {
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} timeout={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} model={} permission_mode={}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} model={} permission_mode={}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
             self.agent_args.join(" "),
             self.mcp_command,
-            self.turn_timeout_secs,
+            self.idle_timeout_secs,
+            self.max_turn_duration_secs,
             self.agents,
             self.heartbeat_interval_secs,
             self.subscribe_mode,
@@ -759,7 +808,8 @@ mod tests {
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
             mcp_command: "sprout-mcp-server".into(),
-            turn_timeout_secs: 300,
+            idle_timeout_secs: 300,
+            max_turn_duration_secs: 3600,
             agents: 1,
             heartbeat_interval_secs: 0,
             heartbeat_prompt: None,
@@ -1431,5 +1481,62 @@ channels = "ALL"
                 "camelCase alias {input:?} should parse"
             );
         }
+    }
+
+    // ── Idle timeout config precedence ─────────────────────────────────────
+
+    /// Helper: resolve idle_timeout_secs using the same precedence logic as Config::from_args.
+    /// Precedence: explicit --idle-timeout > --turn-timeout (deprecated) > default 300.
+    fn resolve_idle_timeout(idle: Option<u64>, turn: Option<u64>) -> u64 {
+        let raw = match (idle, turn) {
+            (Some(idle), Some(_)) => idle,
+            (Some(idle), None) => idle,
+            (None, Some(turn)) => turn,
+            (None, None) => 300,
+        };
+        if raw == 0 {
+            1
+        } else {
+            raw
+        }
+    }
+
+    #[test]
+    fn idle_timeout_explicit_wins_over_deprecated() {
+        assert_eq!(resolve_idle_timeout(Some(120), Some(600)), 120);
+    }
+
+    #[test]
+    fn idle_timeout_falls_back_to_deprecated_turn_timeout() {
+        assert_eq!(resolve_idle_timeout(None, Some(600)), 600);
+    }
+
+    #[test]
+    fn idle_timeout_defaults_to_300_when_neither_set() {
+        assert_eq!(resolve_idle_timeout(None, None), 300);
+    }
+
+    #[test]
+    fn idle_timeout_zero_clamped_to_one() {
+        assert_eq!(resolve_idle_timeout(Some(0), None), 1);
+    }
+
+    #[test]
+    fn idle_timeout_zero_from_deprecated_clamped_to_one() {
+        assert_eq!(resolve_idle_timeout(None, Some(0)), 1);
+    }
+
+    #[test]
+    fn test_config_summary_includes_idle_and_max_turn() {
+        let config = test_config(SubscribeMode::Mentions);
+        let summary = config.summary();
+        assert!(
+            summary.contains("idle_timeout=300s"),
+            "summary should include idle_timeout: {summary}"
+        );
+        assert!(
+            summary.contains("max_turn=3600s"),
+            "summary should include max_turn: {summary}"
+        );
     }
 }

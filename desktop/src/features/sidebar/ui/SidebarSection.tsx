@@ -159,7 +159,7 @@ export function ChannelMenuButton({
         presenceStatus={presenceStatus}
       />
       <span className="min-w-0 flex-1 truncate">{resolvedLabel}</span>
-      {hasUnread && !isActive ? (
+      {hasUnread && !isActive && channel.channelType !== "dm" ? (
         <span
           aria-hidden="true"
           className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-primary group-hover/menu-item:hidden"
@@ -221,6 +221,15 @@ export function SidebarSection({
                   presenceStatus={presenceByChannelId?.[channel.id]}
                   onSelectChannel={onSelectChannel}
                 />
+                {channel.channelType === "dm" &&
+                unreadChannelIds.has(channel.id) &&
+                !(isActiveChannel && selectedChannelId === channel.id) ? (
+                  <span
+                    aria-hidden="true"
+                    className="absolute right-[9px] top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-primary group-hover/menu-item:hidden"
+                    data-testid={`channel-unread-${channel.name}`}
+                  />
+                ) : null}
                 {channel.channelType === "dm" && onHideDm ? (
                   <SidebarMenuAction
                     aria-label="Close direct message"

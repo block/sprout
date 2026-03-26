@@ -57,6 +57,12 @@ pub struct ManagedAgentRecord {
     pub agent_args: Vec<String>,
     pub mcp_command: String,
     pub turn_timeout_seconds: u64,
+    /// Idle timeout in seconds. If set, overrides turn_timeout_seconds.
+    #[serde(default)]
+    pub idle_timeout_seconds: Option<u64>,
+    /// Absolute wall-clock cap per turn.
+    #[serde(default)]
+    pub max_turn_duration_seconds: Option<u64>,
     #[serde(default = "default_agent_parallelism")]
     pub parallelism: u32,
     pub system_prompt: Option<String>,
@@ -100,6 +106,8 @@ pub struct ManagedAgentSummary {
     pub agent_args: Vec<String>,
     pub mcp_command: String,
     pub turn_timeout_seconds: u64,
+    pub idle_timeout_seconds: Option<u64>,
+    pub max_turn_duration_seconds: Option<u64>,
     pub parallelism: u32,
     pub system_prompt: Option<String>,
     pub model: Option<String>,
@@ -131,6 +139,8 @@ pub struct CreateManagedAgentRequest {
     pub agent_args: Vec<String>,
     pub mcp_command: Option<String>,
     pub turn_timeout_seconds: Option<u64>,
+    pub idle_timeout_seconds: Option<u64>,
+    pub max_turn_duration_seconds: Option<u64>,
     pub parallelism: Option<u32>,
     pub system_prompt: Option<String>,
     pub avatar_url: Option<String>,
@@ -312,6 +322,8 @@ pub const DEFAULT_MCP_COMMAND: &str = "sprout-mcp-server";
 pub const DEFAULT_AGENT_ARG: &str = "acp";
 /// 10 min — agents with tool-heavy turns regularly exceed the previous 5 min default.
 pub const DEFAULT_AGENT_TURN_TIMEOUT_SECONDS: u64 = 600;
+/// 1 hour — absolute wall-clock safety cap per turn.
+pub const DEFAULT_AGENT_MAX_TURN_DURATION_SECONDS: u64 = 3600;
 pub const DEFAULT_AGENT_PARALLELISM: u32 = 1;
 
 fn default_agent_parallelism() -> u32 {

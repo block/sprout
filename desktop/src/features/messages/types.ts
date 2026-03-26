@@ -19,6 +19,7 @@ export type TimelineMessage = {
   depth: number;
   accent?: boolean;
   pending?: boolean;
+  edited?: boolean;
   highlighted?: boolean;
   kind?: number;
   tags?: string[][];

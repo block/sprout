@@ -31,16 +31,16 @@ const rules = [
 // Exceptions should stay rare and temporary. Prefer splitting files instead.
 const overrides = new Map([
   ["src-tauri/src/managed_agents/persona_card.rs", 772], // PNG/ZIP persona card codec + provider/model fields + 27 unit tests (~350 lines of tests); rustfmt adds line breaks around long literals/builders
-  ["src/app/AppShell.tsx", 775],
+  ["src/app/AppShell.tsx", 810], // message edit state + handlers + ChannelPane edit prop threading
   ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
-  ["src/features/messages/ui/MessageComposer.tsx", 665], // media upload handlers (paste, drop, dialog) + channelId reset effect
+  ["src/features/messages/ui/MessageComposer.tsx", 700], // media upload handlers (paste, drop, dialog) + channelId reset effect + edit mode (pre-fill, save, cancel, escape)
   ["src/features/settings/ui/SettingsView.tsx", 600],
   ["src/features/sidebar/ui/AppSidebar.tsx", 850], // channels + forums creation forms
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
   ["src/shared/api/relayClientSession.ts", 740], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
-  ["src-tauri/src/commands/agents.rs", 845], // remote agent lifecycle routing (local + provider branches) + scope enforcement; rustfmt adds line breaks around long tuple/closure blocks
+  ["src-tauri/src/commands/agents.rs", 849], // remote agent lifecycle routing (local + provider branches) + scope enforcement; rustfmt adds line breaks around long tuple/closure blocks
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests
   ["src/features/agents/ui/AgentsView.tsx", 790], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard + persona/team import + provider/model fields
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes

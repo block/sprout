@@ -23,8 +23,15 @@ type MessageComposerProps = {
   channelId?: string | null;
   channelName: string;
   disabled?: boolean;
+  editTarget?: {
+    author: string;
+    body: string;
+    id: string;
+  } | null;
   isSending?: boolean;
+  onCancelEdit?: () => void;
   onCancelReply?: () => void;
+  onEditSave?: (content: string) => Promise<void>;
   onSend: (
     content: string,
     mentionPubkeys: string[],
@@ -44,8 +51,11 @@ export function MessageComposer({
   channelId = null,
   channelName,
   disabled = false,
+  editTarget = null,
   isSending = false,
+  onCancelEdit,
   onCancelReply,
+  onEditSave,
   onSend,
   placeholder,
   replyTarget = null,
@@ -78,10 +88,14 @@ export function MessageComposer({
   const disabledRef = React.useRef(disabled);
   const isSendingRef = React.useRef(isSending);
   const onSendRef = React.useRef(onSend);
+  const onEditSaveRef = React.useRef(onEditSave);
+  const editTargetRef = React.useRef(editTarget);
   pendingImetaRef.current = pendingImeta;
   disabledRef.current = disabled;
   isSendingRef.current = isSending;
   onSendRef.current = onSend;
+  onEditSaveRef.current = onEditSave;
+  editTargetRef.current = editTarget;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger — reset all composer state on channel switch to prevent draft/upload/autocomplete leaks
   React.useEffect(() => {
@@ -309,6 +323,28 @@ export function MessageComposer({
 
   const submitMessage = React.useCallback(async () => {
     const trimmed = contentRef.current.trim();
+
+    // Edit mode: save the edit and return.
+    if (editTargetRef.current && onEditSaveRef.current) {
+      if (!trimmed || isSendingRef.current) {
+        return;
+      }
+
+      const savedContent = trimmed;
+      setContent("");
+      draftSelectionRef.current = { end: 0, start: 0 };
+      mentions.clearMentions();
+      channelLinks.clearChannels();
+      setIsEmojiPickerOpen(false);
+
+      try {
+        await onEditSaveRef.current(trimmed);
+      } catch {
+        setContent(savedContent);
+      }
+      return;
+    }
+
     const currentPendingImeta = pendingImetaRef.current;
     const hasMedia = currentPendingImeta.length > 0;
     if (
@@ -403,6 +439,12 @@ export function MessageComposer({
         return;
       }
 
+      if (event.key === "Escape" && editTargetRef.current && onCancelEdit) {
+        event.preventDefault();
+        onCancelEdit();
+        return;
+      }
+
       if (event.key !== "Enter" || event.nativeEvent.isComposing) {
         return;
       }
@@ -435,6 +477,7 @@ export function MessageComposer({
       mentions.handleMentionKeyDown,
       applyMentionInsert,
       submitMessage,
+      onCancelEdit,
     ],
   );
 
@@ -476,6 +519,21 @@ export function MessageComposer({
 
     textareaRef.current?.focus();
   }, [disabled, replyTarget]);
+
+  // Pre-fill content when entering edit mode.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: editTarget?.id is the trigger — only reset when the edited message changes
+  React.useEffect(() => {
+    if (!editTarget) {
+      return;
+    }
+
+    setContent(editTarget.body);
+    contentRef.current = editTarget.body;
+    const cursorPos = editTarget.body.length;
+    draftSelectionRef.current = { end: cursorPos, start: cursorPos };
+    pendingSelectionRef.current = cursorPos;
+    textareaRef.current?.focus();
+  }, [editTarget?.id]);
 
   const isUploading = uploadState.status === "uploading";
 
@@ -520,7 +578,30 @@ export function MessageComposer({
             suggestions={mentions.isMentionOpen ? mentions.suggestions : []}
           />
 
-          {replyTarget ? (
+          {editTarget ? (
+            <div
+              className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-primary/30 bg-primary/5 px-3 py-2"
+              data-testid="edit-target"
+            >
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  Editing message
+                </p>
+                <p className="truncate text-sm text-foreground/80">
+                  {editTarget.body}
+                </p>
+              </div>
+              <Button
+                className="shrink-0"
+                onClick={onCancelEdit}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                Cancel
+              </Button>
+            </div>
+          ) : replyTarget ? (
             <div
               className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-border/70 bg-muted/40 px-3 py-2"
               data-testid="reply-target"
@@ -584,10 +665,12 @@ export function MessageComposer({
                 updateDraftSelection(event.currentTarget);
               }}
               placeholder={
-                placeholder ??
-                (replyTarget
-                  ? `Reply to ${replyTarget.author} in #${channelName}`
-                  : `Message #${channelName}`)
+                editTarget
+                  ? "Edit your message"
+                  : (placeholder ??
+                    (replyTarget
+                      ? `Reply to ${replyTarget.author} in #${channelName}`
+                      : `Message #${channelName}`))
               }
               ref={textareaRef}
               rows={1}

@@ -1,6 +1,6 @@
 import Picker from "@emoji-mart/react";
 import data from "@emoji-mart/data";
-import { CornerUpLeft, LoaderCircle, SmilePlus } from "lucide-react";
+import { CornerUpLeft, LoaderCircle, Pencil, SmilePlus } from "lucide-react";
 import * as React from "react";
 
 import type {
@@ -14,6 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 export function MessageActionBar({
   activeReplyTargetId = null,
   message,
+  onEdit,
   onReactionSelect,
   onReply,
   reactionErrorMessage = null,
@@ -22,6 +23,7 @@ export function MessageActionBar({
 }: {
   activeReplyTargetId?: string | null;
   message: TimelineMessage;
+  onEdit?: (message: TimelineMessage) => void;
   onReactionSelect?: (emoji: string) => Promise<void>;
   onReply?: (message: TimelineMessage) => void;
   reactionErrorMessage?: string | null;
@@ -29,10 +31,11 @@ export function MessageActionBar({
   reactionPending?: boolean;
 }) {
   const [isReactionPickerOpen, setIsReactionPickerOpen] = React.useState(false);
+  const hasEditAction = Boolean(onEdit);
   const hasReplyAction = Boolean(onReply);
   const hasReactionAction = Boolean(onReactionSelect);
 
-  if (!hasReplyAction && !hasReactionAction) {
+  if (!hasReplyAction && !hasReactionAction && !hasEditAction) {
     return null;
   }
 
@@ -44,12 +47,12 @@ export function MessageActionBar({
   return (
     <div
       className={cn(
-        "max-w-20 overflow-hidden rounded-full border border-border/70 bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85 transition-all duration-150 ease-out",
+        "max-w-28 overflow-hidden rounded-full border border-border/70 bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85 transition-all duration-150 ease-out",
         "translate-y-0 opacity-100 sm:max-w-0 sm:translate-y-1 sm:opacity-0",
-        "sm:group-hover/message:max-w-20 sm:group-hover/message:translate-y-0 sm:group-hover/message:opacity-100",
-        "sm:group-focus-within/message:max-w-20 sm:group-focus-within/message:translate-y-0 sm:group-focus-within/message:opacity-100",
+        "sm:group-hover/message:max-w-28 sm:group-hover/message:translate-y-0 sm:group-hover/message:opacity-100",
+        "sm:group-focus-within/message:max-w-28 sm:group-focus-within/message:translate-y-0 sm:group-focus-within/message:opacity-100",
         isReplyingToMessage || isReactionPickerOpen
-          ? "sm:max-w-20 sm:translate-y-0 sm:opacity-100"
+          ? "sm:max-w-28 sm:translate-y-0 sm:opacity-100"
           : "",
       )}
       data-testid={`message-action-bar-${message.id}`}
@@ -119,6 +122,23 @@ export function MessageActionBar({
               />
             </PopoverContent>
           </Popover>
+        ) : null}
+
+        {hasEditAction ? (
+          <Button
+            aria-label="Edit"
+            className="h-6 w-6 rounded-full p-0"
+            data-testid={`edit-message-${message.id}`}
+            onClick={() => {
+              onEdit?.(message);
+            }}
+            size="sm"
+            title="Edit"
+            type="button"
+            variant="ghost"
+          >
+            <Pencil className="h-3 w-3" />
+          </Button>
         ) : null}
 
         {hasReplyAction ? (
