@@ -1,4 +1,3 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Bot, Home, Lock, PenSquare, Plus, Search } from "lucide-react";
 import * as React from "react";
 
@@ -479,30 +478,13 @@ export function AppSidebar({
     fallbackDisplayName?.trim() ||
     "Current identity";
 
-  function handleDragPointerDown(e: React.PointerEvent) {
-    if (e.button !== 0) return;
-    const target = e.target as HTMLElement;
-    if (
-      target.closest(
-        'button, a, input, textarea, select, [role="button"], [role="textbox"], [contenteditable="true"]',
-      )
-    ) {
-      return;
-    }
-    e.preventDefault();
-    getCurrentWindow().startDragging();
-  }
-
   return (
     <Sidebar
       collapsible="offcanvas"
       data-testid="app-sidebar"
       variant="sidebar"
     >
-      <SidebarHeader
-        className="gap-3 pt-10"
-        onPointerDown={handleDragPointerDown}
-      >
+      <SidebarHeader className="gap-3 pt-10" data-tauri-drag-region>
         <Button
           className="w-full justify-between rounded-xl border border-sidebar-border/80 bg-sidebar-accent/60 px-3 text-sidebar-foreground/80 shadow-sm hover:bg-sidebar-accent hover:text-sidebar-foreground"
           data-testid="open-search"
