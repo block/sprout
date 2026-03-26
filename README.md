@@ -225,9 +225,7 @@ automatically via the MCP protocol — see [AGENTS.md](AGENTS.md) for integratio
 
 ## Development
 
-**Prerequisites:** Docker, and either [Hermit](https://cashapp.github.io/hermit/) or Rust 1.88+, Node.js 24+, pnpm 10+, [`just`](https://github.com/casey/just).
-
-This repo uses Hermit for toolchain pinning. Activate with `. ./bin/activate-hermit`.
+See [Quick Start](#quick-start) for prerequisites. This repo uses Hermit for toolchain pinning — activate with `. ./bin/activate-hermit`.
 
 For a fresh clone, `just setup` handles everything (Docker, migrations, desktop deps).
 To install Git hooks:

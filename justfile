@@ -11,7 +11,7 @@ default:
 
 # ─── Dev Environment ─────────────────────────────────────────────────────────
 
-# Start all dev services (Docker Compose) and run migrations
+# Full dev setup: .env, Docker services, migrations, desktop deps
 setup:
     ./scripts/dev-setup.sh
 
