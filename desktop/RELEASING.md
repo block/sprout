@@ -12,6 +12,7 @@ release:
 
 | Secret                             | Description                                                        |
 | ---------------------------------- | ------------------------------------------------------------------ |
+| `SPROUT_RELAY_URL`                 | WebSocket relay URL baked into the release binary (for example `wss://...`) |
 | `SPROUT_UPDATER_PUBLIC_KEY`        | Tauri updater public key (generate with `pnpm tauri signer generate`) |
 | `TAURI_SIGNING_PRIVATE_KEY`        | Tauri updater private key                                          |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the private key                                     |
@@ -130,9 +131,9 @@ and signature for the latest version.
 
 The app connects to the relay via the `SPROUT_RELAY_URL` environment variable.
 
-- **Production releases**: The GitHub release workflow currently builds the app
-  with `SPROUT_RELAY_URL=wss://sprout-oss.stage.blox.sqprod.co`, which is baked
-  into the release binary as its default relay URL.
+- **Production releases**: The GitHub release workflow builds the app with
+  `SPROUT_RELAY_URL` sourced from the `SPROUT_RELAY_URL` repository secret,
+  which is baked into the release binary as its default relay URL.
 - **Local release builds**: Export `SPROUT_RELAY_URL` before running
   `just desktop-release-build` if you want a non-localhost relay URL compiled
   into the app.
