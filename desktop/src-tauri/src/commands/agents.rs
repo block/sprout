@@ -315,8 +315,7 @@ pub async fn create_managed_agent(
         if records.iter().any(|record| record.pubkey == pubkey) {
             return Err(format!("agent {pubkey} already exists"));
         }
-        // Provider config was already validated in Pre-Phase 2.
-        // Cache the discovered binary path for deploy_to_provider.
+        // Provider config was already validated in Pre-Phase 2; cache the discovered binary path for deploy_to_provider.
         let provider_binary_path = if let BackendKind::Provider { ref id, .. } = input.backend {
             // Use resolve_provider_binary (discovered candidates only).
             resolve_provider_binary(id)
@@ -370,8 +369,7 @@ pub async fn create_managed_agent(
                 .turn_timeout_seconds
                 .filter(|seconds| *seconds > 0)
                 .unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_SECONDS),
-            // 0 or None → harness uses its own default (300s idle, 3600s max).
-            // The harness CLI also clamps 0 → minimum, so both paths are safe.
+            // 0 or None → harness uses its own default (300s idle, 3600s max), and the CLI also clamps 0 → minimum.
             idle_timeout_seconds: input.idle_timeout_seconds.filter(|s| *s > 0),
             max_turn_duration_seconds: input.max_turn_duration_seconds.filter(|s| *s > 0),
             parallelism: input
