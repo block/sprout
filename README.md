@@ -278,8 +278,8 @@ cargo run -p sprout-proxy
 Run `just test-unit` for unit tests (no infra required) or `just test` for the full suite.
 See [TESTING.md](TESTING.md) for the multi-agent E2E suite (Alice/Bob/Charlie via `sprout-acp`).
 
-**Database migrations** live in `migrations/`. The relay applies them automatically on startup.
-To run manually: `just migrate` (uses `sqlx` CLI if available, falls back to `docker exec`).
+**Database schema** lives in `schema/schema.sql`. The relay applies it automatically on startup.
+To run manually: `just migrate`.
 
 ## License
 
