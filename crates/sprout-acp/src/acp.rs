@@ -546,7 +546,7 @@ impl AcpClient {
         loop {
             // Determine which deadline fires first BEFORE sleeping — this is
             // the classification we'll use on timeout, immune to scheduler jitter.
-            let idle_fires_first = idle_deadline <= hard_deadline;
+            let idle_fires_first = idle_deadline < hard_deadline;
             let next_deadline = if idle_fires_first {
                 idle_deadline
             } else {
