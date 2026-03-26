@@ -39,6 +39,20 @@ fi
 
 cd "${REPO_ROOT}"
 
+# ---- Copy .env if missing ----------------------------------------------------
+
+if [[ ! -f ".env" ]]; then
+  if [[ -f ".env.example" ]]; then
+    log "Copying .env.example → .env..."
+    cp .env.example .env
+    success ".env created from .env.example"
+  else
+    warn ".env.example not found — skipping .env creation"
+  fi
+else
+  log ".env already exists, skipping copy"
+fi
+
 # ---- Load environment -------------------------------------------------------
 
 load_env() {
@@ -157,6 +171,23 @@ else
   fi
 fi
 
+# ---- Install desktop dependencies -------------------------------------------
+
+DESKTOP_DIR="${REPO_ROOT}/desktop"
+
+if [[ -d "${DESKTOP_DIR}" ]]; then
+  if command -v pnpm &>/dev/null; then
+    log "Installing desktop dependencies (pnpm install)..."
+    (cd "${DESKTOP_DIR}" && pnpm install)
+    success "Desktop dependencies installed"
+  else
+    warn "pnpm not found — skipping desktop dependency install."
+    warn "Run '. ./bin/activate-hermit' to get pnpm, then 'just desktop-install'."
+  fi
+else
+  warn "Desktop directory not found at ${DESKTOP_DIR} — skipping."
+fi
+
 # ---- Print connection info --------------------------------------------------
 
 echo ""
@@ -171,10 +202,8 @@ echo -e "  ${BLUE}Adminer${NC}     http://localhost:8082  (DB browser)"
 echo -e "  ${BLUE}Keycloak${NC}    http://localhost:8180  (admin / admin — local OAuth testing)"
 echo ""
 echo -e "  ${YELLOW}Next steps:${NC}"
-echo -e "    cp .env.example .env                    # configure your environment"
-echo -e "    bash scripts/setup-keycloak.sh          # configure Keycloak for OAuth testing (optional)"
-echo -e "    cargo run -p sprout-relay               # start the relay server"
-echo -e "    ./scripts/run-tests.sh                  # run all tests"
+echo -e "    just relay                              # start the relay (terminal 1)"
+echo -e "    just dev                                # start the desktop app (terminal 2)"
 echo ""
 echo -e "  ${YELLOW}Useful commands:${NC}"
 echo -e "    docker compose ps             # check service status"
