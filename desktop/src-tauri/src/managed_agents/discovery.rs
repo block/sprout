@@ -120,11 +120,7 @@ fn known_acp_provider(command: &str) -> Option<&'static KnownAcpProvider> {
 fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_command_identity(command).as_str() {
         "goose" => Some(vec!["acp".to_string()]),
-        "codex"
-        | "codex-acp"
-        | "claude-agent-acp"
-        | "claude-code-acp"
-        | "claude-code"
+        "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
         | "claudecode" => Some(Vec::new()),
         _ => None,
     }
@@ -293,12 +289,12 @@ pub fn discover_local_acp_providers() -> Vec<AcpProviderInfo> {
                 .iter()
                 .find_map(|command| find_command(command).map(|path| (*command, path)))
                 .map(|(command, binary_path)| AcpProviderInfo {
-                id: provider.id.to_string(),
-                label: provider.label.to_string(),
-                command: command.to_string(),
-                binary_path: binary_path.display().to_string(),
-                default_args: normalize_agent_args(command, Vec::new()),
-            })
+                    id: provider.id.to_string(),
+                    label: provider.label.to_string(),
+                    command: command.to_string(),
+                    binary_path: binary_path.display().to_string(),
+                    default_args: normalize_agent_args(command, Vec::new()),
+                })
         })
         .collect()
 }
@@ -380,8 +376,8 @@ pub async fn mint_token_via_api(
 #[cfg(test)]
 mod tests {
     use super::{
-        managed_agent_avatar_url, normalize_agent_args, CLAUDE_CODE_AVATAR_URL,
-        CODEX_AVATAR_URL, GOOSE_AVATAR_URL,
+        managed_agent_avatar_url, normalize_agent_args, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL,
+        GOOSE_AVATAR_URL,
     };
 
     #[test]

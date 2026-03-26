@@ -4,8 +4,8 @@ use tauri::AppHandle;
 
 use crate::{
     managed_agents::{
-        append_log_marker, managed_agent_log_path, missing_command_message, open_log_file,
-        normalize_agent_args, resolve_command, ManagedAgentProcess, ManagedAgentRecord,
+        append_log_marker, managed_agent_log_path, missing_command_message, normalize_agent_args,
+        open_log_file, resolve_command, ManagedAgentProcess, ManagedAgentRecord,
         ManagedAgentSummary,
     },
     util::now_iso,

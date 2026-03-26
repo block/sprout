@@ -2,6 +2,8 @@ pre-commit:
   commands:
     rust-fmt:
       run: just fmt-check
+    desktop-tauri-fmt:
+      run: just desktop-tauri-fmt-check
     desktop-check:
       run: just desktop-check
 
@@ -16,6 +18,8 @@ pre-push:
       run: just test-unit
     desktop-check:
       run: just desktop-check
+    desktop-tauri-fmt:
+      run: just desktop-tauri-fmt-check
     desktop-build:
       run: just desktop-build
     desktop-tauri-check:
