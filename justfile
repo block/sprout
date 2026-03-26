@@ -11,7 +11,7 @@ default:
 
 # ─── Dev Environment ─────────────────────────────────────────────────────────
 
-# Full dev setup: .env, Docker services, migrations, desktop deps
+# Start Docker services, run migrations, install desktop deps
 setup:
     ./scripts/dev-setup.sh
 

@@ -4,8 +4,8 @@
 # =============================================================================
 # Usage: ./scripts/dev-setup.sh
 #
-# Copies .env.example → .env (if missing), starts Docker services, waits for
-# healthy, runs migrations, installs desktop deps, and prints next steps.
+# Starts Docker services, waits for healthy, runs migrations, installs desktop
+# deps, and prints next steps.
 # =============================================================================
 set -euo pipefail
 
@@ -38,20 +38,6 @@ if ! docker info &>/dev/null; then
 fi
 
 cd "${REPO_ROOT}"
-
-# ---- Copy .env if missing ----------------------------------------------------
-
-if [[ ! -f ".env" ]]; then
-  if [[ -f ".env.example" ]]; then
-    log "Copying .env.example → .env..."
-    cp .env.example .env
-    success ".env created from .env.example"
-  else
-    warn ".env.example not found — skipping .env creation"
-  fi
-else
-  log ".env already exists, skipping copy"
-fi
 
 # ---- Load environment -------------------------------------------------------
 

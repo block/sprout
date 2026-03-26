@@ -126,14 +126,14 @@ Three steps to get the full stack running locally.
 
 Hermit pins Rust, Node.js, pnpm, `just`, and related tooling from `bin/`.
 
-**2. Set up the dev environment**
+**2. Configure and set up the dev environment**
 
 ```bash
+cp .env.example .env
 just setup
 ```
 
-This single command:
-- Copies `.env.example` to `.env` (if it doesn't already exist)
+`just setup` does the heavy lifting:
 - Starts Docker services (Postgres, Redis, Typesense, Adminer, Keycloak, MinIO, Prometheus)
 - Waits for all services to be healthy
 - Runs database migrations
@@ -202,7 +202,7 @@ This starts only the web frontend at `http://localhost:1420` — useful for UI d
 
 ## Configuration
 
-Copy `.env.example` to `.env` (done automatically by `just setup`). All defaults work out of the box.
+Copy `.env.example` to `.env` and adjust as needed. All defaults work out of the box for local development.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -245,7 +245,7 @@ lefthook install
 **Common tasks**
 
 ```bash
-just setup          # Full dev setup: .env, Docker, migrations, pnpm install
+just setup          # Docker services, migrations, desktop deps (pnpm install)
 just relay          # Run the relay (dev mode)
 just proxy          # Run the NIP-28 proxy (dev mode)
 just build          # Build the Rust workspace
