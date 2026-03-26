@@ -235,7 +235,7 @@ automatically via the MCP protocol — see [AGENTS.md](AGENTS.md) for integratio
 
 See [Quick Start](#quick-start) for prerequisites. This repo uses Hermit for toolchain pinning — activate with `. ./bin/activate-hermit`.
 
-For a fresh clone, `just setup` handles everything (Docker, migrations, desktop deps).
+For a fresh clone, copy `.env.example` to `.env`, then `just setup` handles the rest (Docker, migrations, desktop deps).
 To install Git hooks:
 
 ```bash
