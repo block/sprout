@@ -2578,7 +2578,7 @@ async function handleCreateManagedAgent(args: {
         ? [...args.input.agentArgs]
         : ["acp"],
     mcp_command: args.input.mcpCommand ?? "sprout-mcp-server",
-    turn_timeout_seconds: args.input.turnTimeoutSeconds ?? 300,
+    turn_timeout_seconds: args.input.turnTimeoutSeconds ?? 320,
     idle_timeout_seconds: args.input.idleTimeoutSeconds ?? null,
     max_turn_duration_seconds: args.input.maxTurnDurationSeconds ?? null,
     parallelism: args.input.parallelism ?? 3,
