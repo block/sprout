@@ -200,6 +200,8 @@ pub fn build_managed_agent_summary(
         agent_args: record.agent_args.clone(),
         mcp_command: record.mcp_command.clone(),
         turn_timeout_seconds: record.turn_timeout_seconds,
+        idle_timeout_seconds: record.idle_timeout_seconds,
+        max_turn_duration_seconds: record.max_turn_duration_seconds,
         parallelism: record.parallelism,
         system_prompt: record.system_prompt.clone(),
         model: record.model.clone(),
@@ -294,10 +296,23 @@ pub fn start_managed_agent_process(
     command.env("SPROUT_ACP_AGENT_COMMAND", &record.agent_command);
     command.env("SPROUT_ACP_AGENT_ARGS", agent_args.join(","));
     command.env("SPROUT_ACP_MCP_COMMAND", &resolved_mcp_command);
-    command.env(
-        "SPROUT_ACP_TURN_TIMEOUT",
-        record.turn_timeout_seconds.to_string(),
-    );
+    // Timeout configuration: always set both IDLE_TIMEOUT and the deprecated TURN_TIMEOUT
+    // so older harness binaries (which only read TURN_TIMEOUT) still get a value.
+    if let Some(idle) = record.idle_timeout_seconds {
+        command.env("SPROUT_ACP_IDLE_TIMEOUT", idle.to_string());
+        // Mirror to deprecated var for older harness binaries.
+        command.env("SPROUT_ACP_TURN_TIMEOUT", idle.to_string());
+    } else {
+        command.env(
+            "SPROUT_ACP_TURN_TIMEOUT",
+            record.turn_timeout_seconds.to_string(),
+        );
+    }
+
+    let max_dur = record
+        .max_turn_duration_seconds
+        .unwrap_or(super::types::DEFAULT_AGENT_MAX_TURN_DURATION_SECONDS);
+    command.env("SPROUT_ACP_MAX_TURN_DURATION", max_dur.to_string());
     command.env("SPROUT_ACP_AGENTS", record.parallelism.to_string());
     command.env(
         "GOOSE_MODE",

@@ -166,7 +166,8 @@ pub enum PromptOutcome {
 pub struct PromptContext {
     pub mcp_servers: Vec<McpServer>,
     pub initial_message: Option<String>,
-    pub turn_timeout: Duration,
+    pub idle_timeout: Duration,
+    pub max_turn_duration: Duration,
     pub dedup_mode: DedupMode,
     pub system_prompt: Option<String>,
     pub heartbeat_prompt: Option<String>,
@@ -357,9 +358,14 @@ async fn create_session_and_apply_model(
         }
     }
 
-    // Apply permission mode if not the agent's built-in default.
-    if !ctx.permission_mode.is_default() {
-        apply_permission_mode(&mut agent.acp, &resp.session_id, &ctx.permission_mode).await;
+    // Apply permission mode if not the agent's built-in default AND the agent
+    // advertises the requested mode in session/new. Agents that don't support
+    // the mode (e.g., goose crashes on unrecognized set_config_option values)
+    // are safely skipped — the harness auto-approves via handle_permission_request.
+    if !ctx.permission_mode.is_default()
+        && agent_supports_mode(&resp.raw, ctx.permission_mode.as_wire_str())
+    {
+        apply_permission_mode(&mut agent.acp, &resp.session_id, &ctx.permission_mode).await?;
     }
 
     Ok(resp.session_id)
@@ -424,10 +430,33 @@ async fn apply_model_switch(
 
 /// Set the session permission mode via `session/set_config_option`.
 ///
-/// Non-fatal: logs and proceeds on timeout or error. The agent falls back
+/// Non-fatal for most errors: logs and proceeds. The agent falls back
 /// to its default permission mode (`"default"`), which still works via
+/// Check if the agent's `session/new` response advertises a given mode ID
+/// in `result.modes.availableModes[].id`. Returns `false` if the modes
+/// field is absent or the mode isn't listed.
+fn agent_supports_mode(session_new_result: &serde_json::Value, mode_wire: &str) -> bool {
+    session_new_result
+        .get("modes")
+        .and_then(|m| m.get("availableModes"))
+        .and_then(|a| a.as_array())
+        .map(|modes| {
+            modes
+                .iter()
+                .any(|m| m.get("id").and_then(|v| v.as_str()) == Some(mode_wire))
+        })
+        .unwrap_or(false)
+}
+
 /// per-tool auto-approval in `handle_permission_request`.
-async fn apply_permission_mode(acp: &mut AcpClient, session_id: &str, mode: &PermissionMode) {
+///
+/// **Fatal exception:** if the agent process exits (e.g., goose crashes on
+/// unrecognized methods), returns `Err(AgentExited)` so the caller can respawn.
+async fn apply_permission_mode(
+    acp: &mut AcpClient,
+    session_id: &str,
+    mode: &PermissionMode,
+) -> Result<(), AcpError> {
     let wire = mode.as_wire_str();
     let result = tokio::time::timeout(PERMISSION_MODE_TIMEOUT, async {
         acp.session_set_config_option(session_id, "mode", wire)
@@ -442,6 +471,16 @@ async fn apply_permission_mode(acp: &mut AcpClient, session_id: &str, mode: &Per
                 "applied permission mode {wire:?} on session {session_id}"
             );
         }
+        Ok(Err(AcpError::AgentExited)) => {
+            // Fatal: the agent process crashed (e.g., goose doesn't support
+            // session/set_config_option and exits instead of returning an error).
+            // Propagate so the caller can respawn.
+            tracing::error!(
+                target: "pool::permission",
+                "agent exited while setting permission mode {wire:?} — process crashed"
+            );
+            return Err(AcpError::AgentExited);
+        }
         Ok(Err(e)) => {
             tracing::warn!(
                 target: "pool::permission",
@@ -455,6 +494,7 @@ async fn apply_permission_mode(acp: &mut AcpClient, session_id: &str, mode: &Per
             );
         }
     }
+    Ok(())
 }
 
 /// Core async function spawned for each prompt.
@@ -578,20 +618,24 @@ pub async fn run_prompt_task(
                 target: "pool::session",
                 "sending initial_message to session {session_id} for channel {cid}"
             );
-            let init_result = timeout(
-                ctx.turn_timeout,
-                agent.acp.session_prompt(&session_id, initial_msg),
-            )
-            .await;
+            let init_result = agent
+                .acp
+                .session_prompt_with_idle_timeout(
+                    &session_id,
+                    initial_msg,
+                    ctx.idle_timeout,
+                    ctx.max_turn_duration,
+                )
+                .await;
 
             match init_result {
-                Ok(Ok(stop_reason)) => {
+                Ok(stop_reason) => {
                     tracing::info!(
                         target: "pool::session",
                         "initial_message complete for channel {cid}: {stop_reason:?}"
                     );
                 }
-                Ok(Err(AcpError::AgentExited)) => {
+                Err(AcpError::AgentExited) => {
                     agent.state.invalidate_all();
                     let _ = result_tx.send(PromptResult {
                         agent,
@@ -601,26 +645,17 @@ pub async fn run_prompt_task(
                     });
                     return;
                 }
-                Ok(Err(e)) => {
-                    tracing::error!(
-                        target: "pool::session",
-                        "initial_message failed for channel {cid}: {e} — invalidating session"
-                    );
-                    agent.state.invalidate(&source);
-                    let _ = result_tx.send(PromptResult {
-                        agent,
-                        source,
-                        outcome: PromptOutcome::Error(e),
-                        batch: requeue_batch_if_queue(&ctx, batch),
-                    });
-                    return;
-                }
-                Err(_elapsed) => {
+                Err(AcpError::IdleTimeout(_)) => {
                     tracing::warn!(
                         target: "pool::session",
-                        "initial_message timed out for channel {cid} — cancelling"
+                        "initial_message idle timeout ({}s) for channel {cid} — cancelling",
+                        ctx.idle_timeout.as_secs()
                     );
-                    match agent.acp.cancel_with_cleanup(&session_id).await {
+                    match agent
+                        .acp
+                        .cancel_with_cleanup(&session_id, ctx.idle_timeout)
+                        .await
+                    {
                         Ok(_) => {
                             agent.state.invalidate(&source);
                         }
@@ -646,6 +681,35 @@ pub async fn run_prompt_task(
                         agent,
                         source,
                         outcome: PromptOutcome::Timeout,
+                        batch: requeue_batch_if_queue(&ctx, batch),
+                    });
+                    return;
+                }
+                Err(AcpError::HardTimeout) => {
+                    tracing::error!(
+                        target: "pool::session",
+                        "hard timeout ({}s cap) during initial_message for channel {cid} — agent process is unrecoverable",
+                        ctx.max_turn_duration.as_secs()
+                    );
+                    agent.state.invalidate_all();
+                    let _ = result_tx.send(PromptResult {
+                        agent,
+                        source,
+                        outcome: PromptOutcome::Timeout,
+                        batch: requeue_batch_if_queue(&ctx, batch),
+                    });
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        target: "pool::session",
+                        "initial_message failed for channel {cid}: {e} — invalidating session"
+                    );
+                    agent.state.invalidate(&source);
+                    let _ = result_tx.send(PromptResult {
+                        agent,
+                        source,
+                        outcome: PromptOutcome::Error(e),
                         batch: requeue_batch_if_queue(&ctx, batch),
                     });
                     return;
@@ -712,14 +776,18 @@ pub async fn run_prompt_task(
 
     // ── Send the actual prompt ────────────────────────────────────────────
 
-    let prompt_result = timeout(
-        ctx.turn_timeout,
-        agent.acp.session_prompt(&session_id, &prompt_text),
-    )
-    .await;
+    let prompt_result = agent
+        .acp
+        .session_prompt_with_idle_timeout(
+            &session_id,
+            &prompt_text,
+            ctx.idle_timeout,
+            ctx.max_turn_duration,
+        )
+        .await;
 
     match prompt_result {
-        Ok(Ok(stop_reason)) => {
+        Ok(stop_reason) => {
             log_stop_reason(&source, &stop_reason);
 
             // ── Session rotation on context exhaustion ────────────────
@@ -763,7 +831,7 @@ pub async fn run_prompt_task(
                 batch: None,
             });
         }
-        Ok(Err(AcpError::AgentExited)) => {
+        Err(AcpError::AgentExited) => {
             tracing::error!(target: "pool::prompt", "agent {} exited during prompt", agent.index);
             agent.state.invalidate_all();
             let _ = result_tx.send(PromptResult {
@@ -773,27 +841,21 @@ pub async fn run_prompt_task(
                 batch: requeue_batch_if_queue(&ctx, batch),
             });
         }
-        Ok(Err(e)) => {
-            tracing::error!(target: "pool::prompt", "session_prompt error: {e}");
-            // Invalidate only the affected session.
-            agent.state.invalidate(&source);
-            let _ = result_tx.send(PromptResult {
-                agent,
-                source,
-                outcome: PromptOutcome::Error(e),
-                batch: requeue_batch_if_queue(&ctx, batch),
-            });
-        }
-        Err(_elapsed) => {
+        Err(AcpError::IdleTimeout(_)) => {
             tracing::warn!(
                 target: "pool::prompt",
-                "turn timeout ({}s) — cancelling session {session_id}",
-                ctx.turn_timeout.as_secs()
+                "idle timeout ({}s) — cancelling session {session_id}",
+                ctx.idle_timeout.as_secs()
             );
-            match agent.acp.cancel_with_cleanup(&session_id).await {
+            match agent
+                .acp
+                .cancel_with_cleanup(&session_id, ctx.idle_timeout)
+                .await
+            {
                 Ok(stop_reason) => {
                     log_stop_reason(&source, &stop_reason);
-                    // Session is still valid after a clean cancel.
+                    // Timeout triggers respawn in handle_prompt_result —
+                    // session state will be discarded with the old agent.
                     let _ = result_tx.send(PromptResult {
                         agent,
                         source,
@@ -829,6 +891,31 @@ pub async fn run_prompt_task(
                     });
                 }
             }
+        }
+        Err(AcpError::HardTimeout) => {
+            tracing::error!(
+                target: "pool::prompt",
+                "hard timeout ({}s cap) — agent process is unrecoverable, invalidating all sessions",
+                ctx.max_turn_duration.as_secs()
+            );
+            agent.state.invalidate_all();
+            let _ = result_tx.send(PromptResult {
+                agent,
+                source,
+                outcome: PromptOutcome::Timeout,
+                batch: requeue_batch_if_queue(&ctx, batch),
+            });
+        }
+        Err(e) => {
+            tracing::error!(target: "pool::prompt", "session_prompt error: {e}");
+            // Invalidate only the affected session.
+            agent.state.invalidate(&source);
+            let _ = result_tx.send(PromptResult {
+                agent,
+                source,
+                outcome: PromptOutcome::Error(e),
+                batch: requeue_batch_if_queue(&ctx, batch),
+            });
         }
     }
     // _reaction_guard drops here → spawns clear_reactions for all exit paths.

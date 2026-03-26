@@ -218,7 +218,8 @@ async fn main() -> Result<()> {
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
         initial_message: config.initial_message.clone(),
-        turn_timeout: Duration::from_secs(config.turn_timeout_secs),
+        idle_timeout: Duration::from_secs(config.idle_timeout_secs),
+        max_turn_duration: Duration::from_secs(config.max_turn_duration_secs),
         dedup_mode: config.dedup_mode,
         system_prompt: config.system_prompt.clone(),
         heartbeat_prompt: config.heartbeat_prompt.clone(),
@@ -665,7 +666,9 @@ async fn main() -> Result<()> {
 
     // ── Shutdown sequence ─────────────────────────────────────────────────────
     tracing::info!("shutdown: waiting for in-flight prompts");
-    let grace = Duration::from_secs(config.turn_timeout_secs + 5);
+    // 30 s is generous for in-flight prompts to be cancelled; using
+    // max_turn_duration here would cause Ctrl+C to hang for up to an hour.
+    let grace = Duration::from_secs(30);
     let shutdown_result = tokio::time::timeout(grace, async {
         while let Some(result) = pool.join_set.join_next().await {
             if let Err(e) = result {
@@ -824,11 +827,12 @@ async fn handle_prompt_result(
     let agent_index = result.agent.index;
 
     match result.outcome {
-        PromptOutcome::AgentExited => {
+        // Fatal outcomes: the agent subprocess is dead or poisoned — respawn it.
+        PromptOutcome::AgentExited | PromptOutcome::Timeout => {
             tracing::debug!(
                 agent = agent_index,
                 outcome = outcome_label,
-                "agent_returned"
+                "agent_returned — respawning"
             );
             let index = result.agent.index;
             match respawn_agent_into(result.agent, config).await {

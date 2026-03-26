@@ -40,7 +40,7 @@ const overrides = new Map([
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
   ["src/shared/api/relayClientSession.ts", 740], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
-  ["src-tauri/src/commands/agents.rs", 845], // remote agent lifecycle routing (local + provider branches) + scope enforcement; rustfmt adds line breaks around long tuple/closure blocks
+  ["src-tauri/src/commands/agents.rs", 849], // remote agent lifecycle routing (local + provider branches) + scope enforcement; rustfmt adds line breaks around long tuple/closure blocks
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests
   ["src/features/agents/ui/AgentsView.tsx", 790], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard + persona/team import + provider/model fields
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes

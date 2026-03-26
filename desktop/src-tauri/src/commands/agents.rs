@@ -31,6 +31,8 @@ fn build_deploy_payload(record: &ManagedAgentRecord) -> serde_json::Value {
         "system_prompt": &record.system_prompt,
         "model": &record.model,
         "turn_timeout_seconds": record.turn_timeout_seconds,
+        "idle_timeout_seconds": record.idle_timeout_seconds,
+        "max_turn_duration_seconds": record.max_turn_duration_seconds,
         "parallelism": record.parallelism,
     })
 }
@@ -361,6 +363,10 @@ pub async fn create_managed_agent(
                 .turn_timeout_seconds
                 .filter(|seconds| *seconds > 0)
                 .unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_SECONDS),
+            // 0 or None → harness uses its own default (300s idle, 3600s max).
+            // The harness CLI also clamps 0 → minimum, so both paths are safe.
+            idle_timeout_seconds: input.idle_timeout_seconds.filter(|s| *s > 0),
+            max_turn_duration_seconds: input.max_turn_duration_seconds.filter(|s| *s > 0),
             parallelism: input
                 .parallelism
                 .filter(|count| (1..=32).contains(count))

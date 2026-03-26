@@ -286,6 +286,8 @@ export type ManagedAgent = {
   agentArgs: string[];
   mcpCommand: string;
   turnTimeoutSeconds: number;
+  idleTimeoutSeconds: number | null;
+  maxTurnDurationSeconds: number | null;
   parallelism: number;
   systemPrompt: string | null;
   model: string | null;
@@ -326,6 +328,8 @@ export type CreateManagedAgentInput = {
   agentArgs?: string[];
   mcpCommand?: string;
   turnTimeoutSeconds?: number;
+  idleTimeoutSeconds?: number;
+  maxTurnDurationSeconds?: number;
   parallelism?: number;
   systemPrompt?: string;
   avatarUrl?: string;

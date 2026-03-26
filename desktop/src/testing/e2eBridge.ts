@@ -226,6 +226,8 @@ type RawManagedAgent = {
   agent_args: string[];
   mcp_command: string;
   turn_timeout_seconds: number;
+  idle_timeout_seconds: number | null;
+  max_turn_duration_seconds: number | null;
   parallelism: number;
   system_prompt: string | null;
   model: string | null;
@@ -541,6 +543,8 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     agent_args: [...agent.agent_args],
     mcp_command: agent.mcp_command,
     turn_timeout_seconds: agent.turn_timeout_seconds,
+    idle_timeout_seconds: agent.idle_timeout_seconds ?? null,
+    max_turn_duration_seconds: agent.max_turn_duration_seconds ?? null,
     parallelism: agent.parallelism,
     system_prompt: agent.system_prompt,
     model: agent.model,
@@ -2535,6 +2539,8 @@ async function handleCreateManagedAgent(args: {
     agentArgs?: string[];
     mcpCommand?: string;
     turnTimeoutSeconds?: number;
+    idleTimeoutSeconds?: number;
+    maxTurnDurationSeconds?: number;
     parallelism?: number;
     systemPrompt?: string;
     avatarUrl?: string;
@@ -2573,6 +2579,8 @@ async function handleCreateManagedAgent(args: {
         : ["acp"],
     mcp_command: args.input.mcpCommand ?? "sprout-mcp-server",
     turn_timeout_seconds: args.input.turnTimeoutSeconds ?? 300,
+    idle_timeout_seconds: args.input.idleTimeoutSeconds ?? null,
+    max_turn_duration_seconds: args.input.maxTurnDurationSeconds ?? null,
     parallelism: args.input.parallelism ?? 1,
     system_prompt: args.input.systemPrompt?.trim() || null,
     model: args.input.model?.trim() || null,

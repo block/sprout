@@ -103,12 +103,13 @@ All configuration is via environment variables (or CLI flags — every env var h
 | `SPROUT_ACP_AGENT_COMMAND` | no | `goose` | Agent binary to spawn. |
 | `SPROUT_ACP_AGENT_ARGS` | no | `acp` | Agent arguments (comma-separated). |
 | `SPROUT_ACP_MCP_COMMAND` | no | `sprout-mcp-server` | Path to the Sprout MCP server binary. |
-| `SPROUT_ACP_TURN_TIMEOUT` | no | `300` | Max seconds per agent turn before cancellation. |
+| `SPROUT_ACP_IDLE_TIMEOUT` | no | `300` | Idle timeout: max seconds of silence before cancelling a turn. Resets on any agent stdout activity. |
+| `SPROUT_ACP_MAX_TURN_DURATION` | no | `3600` | Absolute wall-clock cap per turn (safety valve). |
 | `SPROUT_API_TOKEN` | no | — | API token (required if relay enforces token auth). |
 
 **Note:** `SPROUT_ACP_AGENT_ARGS` splits on commas. For args with values, use: `-c,key="value"`.
 
-**Legacy env vars:** `SPROUT_ACP_PRIVATE_KEY` and `SPROUT_ACP_API_TOKEN` are still accepted as fallbacks.
+**Legacy env vars:** `SPROUT_ACP_PRIVATE_KEY`, `SPROUT_ACP_API_TOKEN`, and `SPROUT_ACP_TURN_TIMEOUT` (replaced by `SPROUT_ACP_IDLE_TIMEOUT`) are still accepted as fallbacks.
 
 ### Parallel Agents & Heartbeat
 
