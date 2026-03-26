@@ -41,7 +41,7 @@ unacceptable behavior to **conduct@sprout-relay.org**.
 | Rust | 1.88+ | Install via [rustup](https://rustup.rs/) |
 | Node.js | 24+ | Required for desktop app commands and `just ci` |
 | pnpm | 10+ | Required for desktop app commands and `just ci` |
-| Docker | 24+ | For MySQL, Redis, Typesense |
+| Docker | 24+ | For Postgres, Redis, Typesense |
 | `just` | latest | Task runner — `cargo install just` |
 | `lefthook` | latest | Optional; run `lefthook install` for local Git hooks |
 | `sqlx-cli` | latest | Optional; `just migrate` falls back to `docker exec` |
@@ -76,7 +76,7 @@ just setup
 lefthook install
 ```
 
-`just setup` starts Docker services (MySQL on `:3306`, Redis on `:6379`,
+`just setup` starts Docker services (Postgres on `:5432`, Redis on `:6379`,
 Typesense on `:8108`, Adminer on `:8082`, Keycloak on `:8180` for local
 OAuth/OIDC testing) and runs all pending database migrations.
 
@@ -280,7 +280,7 @@ The short version:
 ```
 sprout-relay      ← WebSocket server, REST API, event ingestion
 sprout-core       ← Shared types, event verification, filter matching
-sprout-db         ← MySQL access layer (sqlx)
+sprout-db         ← Postgres access layer (sqlx)
 sprout-auth       ← NIP-42 + OIDC JWT + API token scopes
 sprout-pubsub     ← Redis fan-out
 sprout-search     ← Typesense full-text search

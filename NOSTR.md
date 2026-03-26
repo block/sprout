@@ -34,8 +34,8 @@ cargo run -p sprout-relay &          # relay on :3000
 
 # 4. Add a pubkey to the allowlist (if enabled)
 #    Insert directly — there is no CLI command for this yet.
-mysql -u sprout -psprout_dev sprout -e \
-  "INSERT INTO pubkey_allowlist (pubkey) VALUES (UNHEX('<64-char-hex-pubkey>'))"
+psql postgres://sprout:sprout_dev@localhost:5432/sprout -c \
+  "INSERT INTO pubkey_allowlist (pubkey) VALUES (decode('<64-char-hex-pubkey>', 'hex'))"
 
 # 5. Connect any NIP-29 + NIP-42 client to ws://localhost:3000
 ```

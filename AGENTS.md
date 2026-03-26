@@ -12,7 +12,7 @@ code style, PR process, architecture), see [CONTRIBUTING.md](CONTRIBUTING.md).
 crates/
   sprout-relay        # WebSocket relay server — main entry point
   sprout-core         # Core types, event verification, filter matching
-  sprout-db           # MySQL event store and data access layer
+  sprout-db           # Postgres event store and data access layer
   sprout-auth         # Authentication and authorization
   sprout-pubsub       # Redis pub/sub fan-out, presence, typing indicators
   sprout-mcp          # MCP server providing AI agent tools
@@ -53,7 +53,7 @@ Run `just ci` before every PR. It runs: `fmt`, `clippy`, unit tests, desktop
 build, and Tauri check. All must pass.
 
 Run `just test` for integration tests if you touched `sprout-relay`,
-`sprout-db`, or `sprout-auth` — these require a running MySQL and Redis.
+`sprout-db`, or `sprout-auth` — these require a running Postgres and Redis.
 
 Additional rules:
 - No `unsafe` code
@@ -93,7 +93,7 @@ check existing reply handlers for the pattern.
 
 ```bash
 just test-unit    # unit tests, no infrastructure needed
-just test         # full integration suite (requires MySQL + Redis)
+just test         # full integration suite (requires Postgres + Redis)
 ```
 
 E2E tests live in `crates/sprout-test-client/tests/`:

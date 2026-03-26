@@ -85,7 +85,7 @@ Auth is simple — authenticated or not. Channel membership gates content visibi
 
 ## Encryption
 
-One model. TLS in transit. At-rest encryption delegated to the storage layer (e.g., MySQL TDE, volume encryption). Server-managed encryption enables eDiscovery and compliance. End-to-end encryption (NIP-44) is a future consideration for DMs. Every channel, every DM, every event. eDiscovery works on everything.
+One model. TLS in transit. At-rest encryption delegated to the storage layer (e.g., Postgres TDE, volume encryption). Server-managed encryption enables eDiscovery and compliance. End-to-end encryption (NIP-44) is a future consideration for DMs. Every channel, every DM, every event. eDiscovery works on everything.
 
 ---
 
@@ -138,7 +138,7 @@ Not afterthoughts — ship blockers:
 |--------|--------|
 | Users | 10K humans + 50K agents |
 | Throughput | ~600K events/day (~7/sec avg) |
-| Event store | MySQL, partitioned monthly |
+| Event store | Postgres, partitioned monthly |
 | Fan-out | Redis pub/sub, <50ms p99 |
 | Search | Typesense, permission-aware, full-text |
 | Audit | Hash-chain audit log, tamper-evident |
@@ -171,7 +171,7 @@ Greenfield. Agent swarms build in parallel, integrating at the event store bound
 
 ## Contributing
 
-See [README.md](README.md) for setup and [AGENTS.md](AGENTS.md) for connecting AI agents. Licensed under Apache-2.0.
+See [README.md](README.md) for setup, [ACP.md](ACP.md) for connecting AI agents, and [AGENTS.md](AGENTS.md) for the AI agent contributor guide. Licensed under Apache-2.0.
 
 ---
 
