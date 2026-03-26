@@ -131,6 +131,7 @@ Hermit pins Rust, Node.js, pnpm, `just`, and related tooling from `bin/`.
 ```bash
 cp .env.example .env
 just setup
+just build
 ```
 
 `just setup` does the heavy lifting:
@@ -138,6 +139,8 @@ just setup
 - Waits for all services to be healthy
 - Runs database migrations
 - Installs desktop dependencies (`pnpm install`)
+
+Then run `just build` once to compile the Rust workspace so binaries like `sprout-acp` and `sprout-mcp-server` are available when you start connecting agents.
 
 **3. Start the relay and desktop app**
 
