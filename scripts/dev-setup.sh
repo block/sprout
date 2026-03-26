@@ -4,8 +4,8 @@
 # =============================================================================
 # Usage: ./scripts/dev-setup.sh
 #
-# Starts all Docker services, waits for healthy, runs migrations, prints
-# connection info and next steps.
+# Starts Docker services, waits for healthy, runs migrations, installs desktop
+# deps, and prints next steps.
 # =============================================================================
 set -euo pipefail
 
@@ -20,10 +20,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-log()    { echo -e "${BLUE}[dev-setup]${NC} $*"; }
-success(){ echo -e "${GREEN}[dev-setup]${NC} $*"; }
-warn()   { echo -e "${YELLOW}[dev-setup]${NC} $*"; }
-error()  { echo -e "${RED}[dev-setup]${NC} $*" >&2; }
+log()     { echo -e "${BLUE}[dev-setup]${NC} $*"; }
+success() { echo -e "${GREEN}[dev-setup]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[dev-setup]${NC} $*"; }
+error()   { echo -e "${RED}[dev-setup]${NC} $*" >&2; }
 
 # ---- Preflight checks -------------------------------------------------------
 
@@ -157,6 +157,23 @@ else
   fi
 fi
 
+# ---- Install desktop dependencies -------------------------------------------
+
+DESKTOP_DIR="${REPO_ROOT}/desktop"
+
+if [[ -d "${DESKTOP_DIR}" ]]; then
+  if command -v pnpm &>/dev/null; then
+    log "Installing desktop dependencies (pnpm install)..."
+    (cd "${DESKTOP_DIR}" && pnpm install)
+    success "Desktop dependencies installed"
+  else
+    warn "pnpm not found — skipping desktop dependency install."
+    warn "Run '. ./bin/activate-hermit' to get pnpm, then 'just desktop-install'."
+  fi
+else
+  warn "Desktop directory not found at ${DESKTOP_DIR} — skipping."
+fi
+
 # ---- Print connection info --------------------------------------------------
 
 echo ""
@@ -171,10 +188,8 @@ echo -e "  ${BLUE}Adminer${NC}     http://localhost:8082  (DB browser)"
 echo -e "  ${BLUE}Keycloak${NC}    http://localhost:8180  (admin / admin — local OAuth testing)"
 echo ""
 echo -e "  ${YELLOW}Next steps:${NC}"
-echo -e "    cp .env.example .env                    # configure your environment"
-echo -e "    bash scripts/setup-keycloak.sh          # configure Keycloak for OAuth testing (optional)"
-echo -e "    cargo run -p sprout-relay               # start the relay server"
-echo -e "    ./scripts/run-tests.sh                  # run all tests"
+echo -e "    just relay                              # start the relay (terminal 1)"
+echo -e "    just dev                                # start the desktop app (terminal 2)"
 echo ""
 echo -e "  ${YELLOW}Useful commands:${NC}"
 echo -e "    docker compose ps             # check service status"

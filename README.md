@@ -63,7 +63,7 @@ append-only and audited.
 └──────────┬──────────────────────┬───────────────────────────────────────┘
            │                      │
     ┌──────▼──────┐        ┌──────▼──────┐
-    │    MySQL    │        │    Redis    │
+    │  Postgres   │        │    Redis    │
     │  (events,   │        │  (pub/sub,  │
     │  channels,  │        │  presence)  │
     │  tokens)    │        └─────────────┘
@@ -87,7 +87,7 @@ append-only and audited.
 **Services**
 | Crate | Role |
 |-------|------|
-| `sprout-db` | MySQL access layer — events, channels, API tokens (sqlx) |
+| `sprout-db` | Postgres access layer — events, channels, API tokens (sqlx) |
 | `sprout-auth` | NIP-42 challenge/response + Okta OIDC JWT validation + token scopes |
 | `sprout-pubsub` | Redis pub/sub bridge — fan-out events across relay instances |
 | `sprout-search` | Typesense indexing and query — full-text search over event content |
@@ -114,6 +114,10 @@ append-only and audited.
 
 ## Quick Start
 
+Three steps to get the full stack running locally.
+
+**Prerequisites:** Docker, and either [Hermit](https://cashapp.github.io/hermit/) (recommended) or Rust 1.88+, Node.js 24+, pnpm 10+, and [`just`](https://github.com/casey/just) installed manually.
+
 **1. Activate the pinned toolchain**
 
 ```bash
@@ -121,40 +125,41 @@ append-only and audited.
 ```
 
 Hermit pins Rust, Node.js, pnpm, `just`, and related tooling from `bin/`.
-If you prefer not to use Hermit, install the prerequisites manually first.
 
-**2. Start infrastructure**
+**2. Configure and set up the dev environment**
 
 ```bash
 cp .env.example .env
 just setup
 ```
 
-`just setup` starts Docker services and applies pending database migrations.
+`just setup` does the heavy lifting:
+- Starts Docker services (Postgres, Redis, Typesense, Adminer, Keycloak, MinIO, Prometheus)
+- Waits for all services to be healthy
+- Runs database migrations
+- Installs desktop dependencies (`pnpm install`)
 
-Services: MySQL `:3306`, Redis `:6379`, Typesense `:8108`, Adminer `:8082`
-
-**3. Install desktop dependencies**
-
-```bash
-just desktop-install
-```
-
-This is required before running `just check`, `just ci`, Git hooks, or any
-`just desktop-*` command.
-
-The desktop workflow documented here is macOS-first for now.
-
-**4. Start the relay**
+**3. Start the relay and desktop app**
 
 ```bash
+# Terminal 1 — relay
 just relay
-# or: cargo run -p sprout-relay
+
+# Terminal 2 — desktop app
+just dev
 ```
 
-Relay listens on `ws://localhost:3000` by default.
+The relay listens on `ws://localhost:3000`. The desktop app opens automatically.
 
-**5. Mint an API token**
+That's it — you're running Sprout locally.
+
+---
+
+## Going Further
+
+### Mint an API token
+
+Required for connecting AI agents to the relay.
 
 ```bash
 cargo run -p sprout-admin -- mint-token \
@@ -162,11 +167,9 @@ cargo run -p sprout-admin -- mint-token \
   --scopes "messages:read,messages:write,channels:read"
 ```
 
-Save the `nsec...` private key and API token from the output. They are shown only once.
+Save the `nsec...` private key and API token from the output — they are shown only once.
 
-> **Note:** Requires infrastructure from Step 2 to be running.
-
-**6. Launch an agent with the MCP extension**
+### Launch an agent (MCP)
 
 ```bash
 SPROUT_RELAY_URL=ws://localhost:3000 \
@@ -179,35 +182,31 @@ goose run --no-profile \
 
 `sprout-mcp-server` is a stdio MCP server — Goose manages its lifecycle. Do not run it directly in a terminal. See [TESTING.md](TESTING.md) for the full multi-agent flow.
 
-**6b. Start the NIP-28 proxy (optional)**
+### Start the NIP-28 proxy (optional)
 
 ```bash
 just proxy
-# or: cargo run -p sprout-proxy
 ```
 
 The proxy lets third-party Nostr clients (Coracle, nak, Amethyst) connect to Sprout using
 standard NIP-28 channel events. See [NOSTR.md](NOSTR.md) for setup, guest registration, and
 client configuration.
 
-**7. Run the desktop app (optional)**
+### Run the desktop web UI without Tauri (optional)
 
 ```bash
-just desktop-app
-# or: just desktop-dev
+just desktop-dev
 ```
 
-The desktop app includes a home feed, Cmd+K search, settings page, profile management, presence
-indicators, unread badges, diff message rendering, custom window chrome (macOS overlay titlebar),
-and a full channel management UI.
+This starts only the web frontend at `http://localhost:1420` — useful for UI development without rebuilding the Tauri shell. Use `just dev` (from Quick Start) for the full desktop app.
 
 ## Configuration
 
-Copy `.env.example` to `.env`. All defaults work with `docker compose up` out of the box.
+Copy `.env.example` to `.env` and adjust as needed. All defaults work out of the box for local development.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `mysql://sprout:sprout_dev@localhost:3306/sprout` | MySQL connection string |
+| `DATABASE_URL` | `postgres://sprout:sprout_dev@localhost:5432/sprout` | Postgres connection string |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
 | `TYPESENSE_URL` | `http://localhost:8108` | Typesense base URL |
 | `TYPESENSE_API_KEY` | `sprout_dev_key` | Typesense API key |
@@ -234,26 +233,19 @@ automatically via the MCP protocol — see [AGENTS.md](AGENTS.md) for integratio
 
 ## Development
 
-**Prerequisites:** Rust 1.88+, Docker, Node.js 24+, pnpm 10+, [`just`](https://github.com/casey/just)
+See [Quick Start](#quick-start) for prerequisites. This repo uses Hermit for toolchain pinning — activate with `. ./bin/activate-hermit`.
 
-This repo uses [Hermit](https://cashapp.github.io/hermit/) for toolchain pinning. Activate with:
-
-```bash
-. ./bin/activate-hermit
-```
-
-For a fresh clone, install desktop dependencies before running desktop-aware
-checks or hooks:
+For a fresh clone, copy `.env.example` to `.env`, then `just setup` handles the rest (Docker, migrations, desktop deps).
+To install Git hooks:
 
 ```bash
-just desktop-install
 lefthook install
 ```
 
 **Common tasks**
 
 ```bash
-just setup          # Start Docker services + run migrations
+just setup          # Docker services, migrations, desktop deps (pnpm install)
 just relay          # Run the relay (dev mode)
 just proxy          # Run the NIP-28 proxy (dev mode)
 just build          # Build the Rust workspace
@@ -286,8 +278,8 @@ cargo run -p sprout-proxy
 Run `just test-unit` for unit tests (no infra required) or `just test` for the full suite.
 See [TESTING.md](TESTING.md) for the multi-agent E2E suite (Alice/Bob/Charlie via `sprout-acp`).
 
-**Database migrations** live in `migrations/`. The relay applies them automatically on startup.
-To run manually: `just migrate` (uses `sqlx` CLI if available, falls back to `docker exec`).
+**Database schema** lives in `schema/schema.sql`. The relay applies it automatically on startup.
+To run manually: `just migrate`.
 
 ## License
 
