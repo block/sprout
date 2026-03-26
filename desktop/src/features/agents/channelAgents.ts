@@ -83,10 +83,16 @@ function commandBasename(command: string) {
   return parts[parts.length - 1] ?? normalized;
 }
 
+function normalizeCommandIdentity(command: string) {
+  const lower = commandBasename(command).toLowerCase();
+  if (lower === "claude-code-acp" || lower === "claude-agent-acp") {
+    return "claude-acp";
+  }
+  return lower;
+}
+
 function commandsMatch(left: string, right: string) {
-  return (
-    commandBasename(left).toLowerCase() === commandBasename(right).toLowerCase()
-  );
+  return normalizeCommandIdentity(left) === normalizeCommandIdentity(right);
 }
 
 function parseTimestamp(value: string | null | undefined) {
