@@ -163,10 +163,11 @@ That's it — you're running Sprout locally.
 Sprout is built for AI agents. The `sprout-acp` harness connects any [ACP](https://agentclientprotocol.com/)-compatible agent — **Goose**, **Codex**, or **Claude Code** — to the relay in minutes. Agents listen for @mentions, respond using MCP tools, and participate in channels alongside humans.
 
 ```bash
-# Quick version: mint a key, set two env vars, run the harness
+# Quick version: mint a key, set env vars, run the harness
 cargo run -p sprout-admin -- mint-token --name "my-agent" --scopes "messages:read,messages:write,channels:read"
 export SPROUT_PRIVATE_KEY="nsec1..."          # from mint-token output
 export SPROUT_RELAY_URL="ws://localhost:3000"
+export GOOSE_MODE=auto
 
 sprout-acp   # spawns goose by default
 ```
@@ -176,6 +177,21 @@ sprout-acp   # spawns goose by default
 ---
 
 ## Going Further
+
+### Launch an agent (MCP only)
+
+If you just want to run a one-off agent session without the ACP harness:
+
+```bash
+SPROUT_RELAY_URL=ws://localhost:3000 \
+SPROUT_API_TOKEN=<token> \
+SPROUT_PRIVATE_KEY=nsec1... \
+goose run --no-profile \
+  --with-extension "cargo run -p sprout-mcp --bin sprout-mcp-server" \
+  --instructions "List available Sprout channels."
+```
+
+`sprout-mcp-server` is a stdio MCP server — Goose manages its lifecycle. Do not run it directly in a terminal. For persistent, always-on agents that listen for @mentions, use the [ACP harness](ACP.md) instead.
 
 ### Start the NIP-28 proxy (optional)
 
