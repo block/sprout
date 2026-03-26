@@ -190,33 +190,76 @@ See [`crates/sprout-acp/README.md`](crates/sprout-acp/README.md#using-any-acp-ag
 
 ## Configuration Reference
 
-All configuration is via environment variables. Every env var also has a matching CLI flag (run `sprout-acp --help` to see them).
+All configuration is via environment variables. Every env var also has a matching CLI flag (run `sprout-acp --help` to see them all).
 
-### Core Settings
+### Identity & Connection
 
-| Variable | Required | Default | Description |
+| Variable | CLI Flag | Required | Default | Description |
+|----------|----------|----------|---------|-------------|
+| `SPROUT_PRIVATE_KEY` | `--private-key` | **yes** | — | Agent's Nostr private key (`nsec1...`). Used for relay auth and identity. |
+| `SPROUT_RELAY_URL` | `--relay-url` | no | `ws://localhost:3000` | Relay WebSocket URL. |
+| `SPROUT_API_TOKEN` | `--api-token` | no | — | API token (required if relay enforces token auth). |
+
+### Agent & MCP
+
+| Variable | CLI Flag | Default | Description |
 |----------|----------|---------|-------------|
-| `SPROUT_PRIVATE_KEY` | **yes** | — | Agent's Nostr private key (`nsec1...`). Used for relay auth and identity. |
-| `SPROUT_RELAY_URL` | no | `ws://localhost:3000` | Relay WebSocket URL. |
-| `SPROUT_API_TOKEN` | no | — | API token (required if relay enforces token auth). |
-| `SPROUT_ACP_AGENT_COMMAND` | no | `goose` | Agent binary to spawn. |
-| `SPROUT_ACP_AGENT_ARGS` | no | `acp` | Agent arguments (comma-separated). |
-| `SPROUT_ACP_MCP_COMMAND` | no | `sprout-mcp-server` | Path to the Sprout MCP server binary. |
-| `SPROUT_ACP_IDLE_TIMEOUT` | no | `300` | Max seconds of silence before cancelling a turn. Resets on any agent stdout activity. |
-| `SPROUT_ACP_MAX_TURN_DURATION` | no | `3600` | Absolute wall-clock cap per turn (safety valve). |
+| `SPROUT_ACP_AGENT_COMMAND` | `--agent-command` | `goose` | Agent binary to spawn. |
+| `SPROUT_ACP_AGENT_ARGS` | `--agent-args` | `acp` | Agent arguments (comma-separated). |
+| `SPROUT_ACP_MCP_COMMAND` | `--mcp-command` | `sprout-mcp-server` | Path to the Sprout MCP server binary. |
+| `SPROUT_ACP_MODEL` | `--model` | — | LLM model ID. Applied to every new ACP session. Use `sprout-acp models` to discover available IDs. |
+| `SPROUT_ACP_PERMISSION_MODE` | `--permission-mode` | `bypass-permissions` | Permission mode for agents that support `session/set_config_option` (e.g. `claude-agent-acp`). Values: `default`, `accept-edits`, `bypass-permissions`, `dont-ask`, `plan`. **⚠️ Defaults to `bypass-permissions`** — set to `default` to restore per-tool-call prompts. |
 
-> **Note:** `SPROUT_ACP_AGENT_ARGS` splits on commas. For args with values, use: `-c,key="value"`.
+### Timeouts & Session Limits
 
-> **Legacy env vars:** `SPROUT_ACP_PRIVATE_KEY`, `SPROUT_ACP_API_TOKEN`, and `SPROUT_ACP_TURN_TIMEOUT` (replaced by `SPROUT_ACP_IDLE_TIMEOUT`) are still accepted as fallbacks.
+| Variable | CLI Flag | Default | Description |
+|----------|----------|---------|-------------|
+| `SPROUT_ACP_IDLE_TIMEOUT` | `--idle-timeout` | `300` | Max seconds of silence before cancelling a turn. Resets on any agent stdout activity. |
+| `SPROUT_ACP_MAX_TURN_DURATION` | `--max-turn-duration` | `3600` | Absolute wall-clock cap per turn (safety valve). |
+| `SPROUT_ACP_MAX_TURNS_PER_SESSION` | `--max-turns-per-session` | `0` | Max turns before proactive session rotation. `0` = disabled (rotate only on MaxTokens / MaxTurnRequests). |
 
-### Parallel Agents & Heartbeat Settings
+### Subscription & Filtering
+
+| Variable | CLI Flag | Default | Description |
+|----------|----------|---------|-------------|
+| `SPROUT_ACP_SUBSCRIBE` | `--subscribe` | `mentions` | Subscribe mode: `mentions` (only @mentions), `all` (all events), `config` (use TOML rules file). |
+| `SPROUT_ACP_KINDS` | `--kinds` | — | Comma-separated event kinds to subscribe to. Overrides defaults per channel. |
+| `SPROUT_ACP_CHANNELS` | `--channels` | — | Comma-separated channel UUIDs. Limits subscription to these channels only. |
+| `SPROUT_ACP_NO_MENTION_FILTER` | `--no-mention-filter` | `false` | Disable the `#p` tag mention filter. Required for forum events. |
+| `SPROUT_ACP_CONFIG` | `--config` | `./sprout-acp.toml` | Path to TOML config file for `[[rules]]`-based subscription (used when `--subscribe config`). |
+| `SPROUT_ACP_DEDUP` | `--dedup` | `queue` | Duplicate event handling: `drop` (discard) or `queue` (re-queue). |
+| `SPROUT_ACP_NO_IGNORE_SELF` | `--no-ignore-self` | `false` | Process events authored by the agent itself (normally ignored). |
+
+### Prompts
+
+| Variable | CLI Flag | Default | Description |
+|----------|----------|---------|-------------|
+| `SPROUT_ACP_SYSTEM_PROMPT` | `--system-prompt` | — | Custom system prompt text. Conflicts with `--system-prompt-file`. |
+| `SPROUT_ACP_SYSTEM_PROMPT_FILE` | `--system-prompt-file` | — | Read system prompt from a file. Conflicts with `--system-prompt`. |
+| `SPROUT_ACP_INITIAL_MESSAGE` | `--initial-message` | — | Message sent to the agent on first session creation. |
+| `SPROUT_ACP_CONTEXT_MESSAGE_LIMIT` | `--context-message-limit` | `12` | Max context messages for thread replies and DMs. `0` = disable. Max `100`. |
+
+### Parallel Agents & Heartbeat
 
 | Variable | CLI Flag | Default | Description |
 |----------|----------|---------|-------------|
 | `SPROUT_ACP_AGENTS` | `--agents` | `1` | Number of agent subprocesses (1–32). |
 | `SPROUT_ACP_HEARTBEAT_INTERVAL` | `--heartbeat-interval` | `0` | Seconds between heartbeat prompts. `0` = disabled. Must be `0` or ≥10. |
-| `SPROUT_ACP_HEARTBEAT_PROMPT` | `--heartbeat-prompt` | (built-in) | Custom heartbeat prompt text. |
-| `SPROUT_ACP_HEARTBEAT_PROMPT_FILE` | `--heartbeat-prompt-file` | — | Read heartbeat prompt from a file. |
+| `SPROUT_ACP_HEARTBEAT_PROMPT` | `--heartbeat-prompt` | (built-in) | Custom heartbeat prompt text. Conflicts with `--heartbeat-prompt-file`. |
+| `SPROUT_ACP_HEARTBEAT_PROMPT_FILE` | `--heartbeat-prompt-file` | — | Read heartbeat prompt from a file. Conflicts with `--heartbeat-prompt`. |
+
+### Presence & Typing
+
+| Variable | CLI Flag | Default | Description |
+|----------|----------|---------|-------------|
+| `SPROUT_ACP_NO_PRESENCE` | `--no-presence` | `false` | Disable automatic online/offline presence status. |
+| `SPROUT_ACP_NO_TYPING` | `--no-typing` | `false` | Disable typing indicators while agent is processing. |
+
+> **Note:** `SPROUT_ACP_AGENT_ARGS` splits on commas. For args with values, use: `-c,key="value"`.
+
+> **Legacy env vars:** `SPROUT_ACP_PRIVATE_KEY`, `SPROUT_ACP_API_TOKEN`, and `SPROUT_ACP_TURN_TIMEOUT` (replaced by `SPROUT_ACP_IDLE_TIMEOUT`) are still accepted as fallbacks.
+
+> For the complete and always-up-to-date list, run `sprout-acp --help`.
 
 ---
 
@@ -250,10 +293,12 @@ sprout-acp --kinds 9,46010,40007,45001,45002,45003 --no-mention-filter
 sprout-acp --subscribe all --kinds 9,46010,40007,45001,45002,45003
 ```
 
-**Per-channel TOML config:**
+**Per-channel TOML config** (`SPROUT_ACP_CONFIG` controls the path; default: `./sprout-acp.toml`):
 
 ```toml
-[channel.CHANNEL_UUID]
+[[rules]]
+name = "forum-events"
+channels = ["CHANNEL_UUID"]   # or "all" for every channel
 kinds = [9, 46010, 40007, 45001, 45002, 45003]
 require_mention = false
 ```

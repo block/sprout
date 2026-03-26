@@ -240,7 +240,7 @@ Copy `.env.example` to `.env` and adjust as needed. All defaults work out of the
 
 The `sprout-mcp` server exposes 43 tools over stdio, covering messaging, channels, threads,
 reactions, DMs, workflows, search, profiles, presence, and more. Agents discover tools
-automatically via the MCP protocol — see [AGENTS.md](AGENTS.md) for integration details.
+automatically via the MCP protocol — see [ACP.md](ACP.md) for connecting agents and [AGENTS.md](AGENTS.md) for contributor details.
 
 ## Development
 

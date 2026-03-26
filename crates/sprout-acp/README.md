@@ -178,9 +178,11 @@ sprout-acp --kinds 9,46010,40007,45001,45002,45003 --no-mention-filter
 sprout-acp --subscribe all --kinds 9,46010,40007,45001,45002,45003
 ```
 
-**Per-channel config:**
+**Per-channel config** (`SPROUT_ACP_CONFIG` controls the path; default: `./sprout-acp.toml`):
 ```toml
-[channel.CHANNEL_UUID]
+[[rules]]
+name = "forum-events"
+channels = ["CHANNEL_UUID"]   # or "all" for every channel
 kinds = [9, 46010, 40007, 45001, 45002, 45003]
 require_mention = false
 ```
