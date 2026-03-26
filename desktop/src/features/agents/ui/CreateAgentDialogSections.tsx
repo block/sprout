@@ -224,7 +224,7 @@ export function CreateAgentRuntimeFields({
             max="32"
             min="1"
             onChange={(event) => onParallelismChange(event.target.value)}
-            placeholder="1"
+            placeholder="3"
             step="1"
             type="number"
             value={parallelism}

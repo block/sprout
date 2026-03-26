@@ -2581,7 +2581,7 @@ async function handleCreateManagedAgent(args: {
     turn_timeout_seconds: args.input.turnTimeoutSeconds ?? 300,
     idle_timeout_seconds: args.input.idleTimeoutSeconds ?? null,
     max_turn_duration_seconds: args.input.maxTurnDurationSeconds ?? null,
-    parallelism: args.input.parallelism ?? 1,
+    parallelism: args.input.parallelism ?? 3,
     system_prompt: args.input.systemPrompt?.trim() || null,
     model: args.input.model?.trim() || null,
     has_api_token: token !== null,
@@ -2600,7 +2600,7 @@ async function handleCreateManagedAgent(args: {
     private_key_nsec: `nsec1mock${pubkey.slice(0, 20)}`,
     api_token: token,
     log_lines: [
-      `sprout-acp starting: relay=${args.input.relayUrl ?? DEFAULT_RELAY_WS_URL} agent_pubkey=${pubkey} parallelism=${args.input.parallelism ?? 1}`,
+      `sprout-acp starting: relay=${args.input.relayUrl ?? DEFAULT_RELAY_WS_URL} agent_pubkey=${pubkey} parallelism=${args.input.parallelism ?? 3}`,
       args.input.systemPrompt?.trim()
         ? `system prompt override configured (${args.input.systemPrompt.trim().length} chars)`
         : "system prompt override not set",
