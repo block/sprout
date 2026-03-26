@@ -448,7 +448,7 @@ impl Config {
             mcp_command: args.mcp_command,
             // Deprecated --turn-timeout is a fallback for backward compat.
             // New deployments should use --idle-timeout exclusively.
-            // Precedence: explicit --idle-timeout > --turn-timeout (deprecated) > default 300.
+            // Precedence: explicit --idle-timeout > --turn-timeout (deprecated) > default 320.
             idle_timeout_secs: {
                 let raw = match (args.idle_timeout, args.turn_timeout) {
                     (Some(idle), Some(_turn)) => {
@@ -466,7 +466,7 @@ impl Config {
                         );
                         turn
                     }
-                    (None, None) => 300, // default
+                    (None, None) => 320, // default: 20s buffer over goose's 300s turn timeout
                 };
                 if raw == 0 {
                     tracing::warn!("idle timeout of 0 is invalid — using 1s minimum");
@@ -807,7 +807,7 @@ mod tests {
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
             mcp_command: "sprout-mcp-server".into(),
-            idle_timeout_secs: 300,
+            idle_timeout_secs: 320,
             max_turn_duration_secs: 3600,
             agents: 1,
             heartbeat_interval_secs: 0,
@@ -1493,13 +1493,13 @@ channels = "ALL"
     // ── Idle timeout config precedence ─────────────────────────────────────
 
     /// Helper: resolve idle_timeout_secs using the same precedence logic as Config::from_args.
-    /// Precedence: explicit --idle-timeout > --turn-timeout (deprecated) > default 300.
+    /// Precedence: explicit --idle-timeout > --turn-timeout (deprecated) > default 320.
     fn resolve_idle_timeout(idle: Option<u64>, turn: Option<u64>) -> u64 {
         let raw = match (idle, turn) {
             (Some(idle), Some(_)) => idle,
             (Some(idle), None) => idle,
             (None, Some(turn)) => turn,
-            (None, None) => 300,
+            (None, None) => 320,
         };
         if raw == 0 {
             1
@@ -1519,8 +1519,8 @@ channels = "ALL"
     }
 
     #[test]
-    fn idle_timeout_defaults_to_300_when_neither_set() {
-        assert_eq!(resolve_idle_timeout(None, None), 300);
+    fn idle_timeout_defaults_to_320_when_neither_set() {
+        assert_eq!(resolve_idle_timeout(None, None), 320);
     }
 
     #[test]
@@ -1538,7 +1538,7 @@ channels = "ALL"
         let config = test_config(SubscribeMode::Mentions);
         let summary = config.summary();
         assert!(
-            summary.contains("idle_timeout=300s"),
+            summary.contains("idle_timeout=320s"),
             "summary should include idle_timeout: {summary}"
         );
         assert!(

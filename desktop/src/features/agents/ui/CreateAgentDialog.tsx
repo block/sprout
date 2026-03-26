@@ -63,8 +63,8 @@ export function CreateAgentDialog({
   const [selectedScopes, setSelectedScopes] = React.useState<Set<TokenScope>>(
     () => new Set<TokenScope>(DEFAULT_MANAGED_AGENT_SCOPES),
   );
-  const [turnTimeoutSeconds, setTurnTimeoutSeconds] = React.useState("300");
-  const [parallelism, setParallelism] = React.useState("1");
+  const [turnTimeoutSeconds, setTurnTimeoutSeconds] = React.useState("320");
+  const [parallelism, setParallelism] = React.useState("3");
   const [systemPrompt, setSystemPrompt] = React.useState("");
   const [selectedProviderId, setSelectedProviderId] =
     React.useState<string>("custom");
@@ -212,8 +212,8 @@ export function CreateAgentDialog({
     setAgentCommand("goose");
     setAgentArgs("acp");
     setMcpCommand("sprout-mcp-server");
-    setTurnTimeoutSeconds("300");
-    setParallelism("1");
+    setTurnTimeoutSeconds("320");
+    setParallelism("3");
     setSystemPrompt("");
     setSelectedProviderId("custom");
     setHasSyncedProviderSelection(false);
