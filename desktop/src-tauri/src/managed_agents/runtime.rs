@@ -4,9 +4,9 @@ use tauri::AppHandle;
 
 use crate::{
     managed_agents::{
-        append_log_marker, managed_agent_log_path, missing_command_message, open_log_file,
-        resolve_command, ManagedAgentProcess, ManagedAgentRecord, ManagedAgentSummary,
-        DEFAULT_AGENT_ARG,
+        append_log_marker, managed_agent_log_path, missing_command_message, normalize_agent_args,
+        open_log_file, resolve_command, ManagedAgentProcess, ManagedAgentRecord,
+        ManagedAgentSummary,
     },
     util::now_iso,
 };
@@ -274,11 +274,7 @@ pub fn start_managed_agent_process(
     let stderr = stdout
         .try_clone()
         .map_err(|error| format!("failed to clone log handle: {error}"))?;
-    let agent_args = if record.agent_args.is_empty() {
-        vec![DEFAULT_AGENT_ARG.to_string()]
-    } else {
-        record.agent_args.clone()
-    };
+    let agent_args = normalize_agent_args(&record.agent_command, record.agent_args.clone());
     let resolved_acp_command = resolve_command(&record.acp_command, Some(app))
         .ok_or_else(|| missing_command_message(&record.acp_command, "ACP harness command"))?;
     let resolved_mcp_command = resolve_command(&record.mcp_command, Some(app))

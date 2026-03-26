@@ -6,13 +6,13 @@ use crate::{
     managed_agents::{
         build_managed_agent_summary, default_token_scopes, discover_provider_candidates,
         find_managed_agent_mut, invoke_provider, load_managed_agents, load_personas,
-        managed_agent_avatar_url, managed_agent_log_path, mint_token_via_api, provider_deploy,
-        read_log_tail, resolve_provider_binary, save_managed_agents, start_managed_agent_process,
-        stop_managed_agent_process, sync_managed_agent_processes, validate_provider_config,
-        BackendKind, BackendProviderInfo, CreateManagedAgentRequest, CreateManagedAgentResponse,
-        ManagedAgentLogResponse, ManagedAgentRecord, ManagedAgentSummary,
-        MintManagedAgentTokenRequest, MintManagedAgentTokenResponse, DEFAULT_ACP_COMMAND,
-        DEFAULT_AGENT_ARG, DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM,
+        managed_agent_avatar_url, managed_agent_log_path, mint_token_via_api, normalize_agent_args,
+        provider_deploy, read_log_tail, resolve_provider_binary, save_managed_agents,
+        start_managed_agent_process, stop_managed_agent_process, sync_managed_agent_processes,
+        validate_provider_config, BackendKind, BackendProviderInfo, CreateManagedAgentRequest,
+        CreateManagedAgentResponse, ManagedAgentLogResponse, ManagedAgentRecord,
+        ManagedAgentSummary, MintManagedAgentTokenRequest, MintManagedAgentTokenResponse,
+        DEFAULT_ACP_COMMAND, DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM,
         DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
     },
     relay::{relay_ws_url, sync_managed_agent_profile},
@@ -314,8 +314,7 @@ pub async fn create_managed_agent(
         if records.iter().any(|record| record.pubkey == pubkey) {
             return Err(format!("agent {pubkey} already exists"));
         }
-        // Provider config was already validated in Pre-Phase 2.
-        // Cache the discovered binary path for deploy_to_provider.
+        // Provider config was already validated in Pre-Phase 2; cache the discovered binary path for deploy_to_provider.
         let provider_binary_path = if let BackendKind::Provider { ref id, .. } = input.backend {
             // Use resolve_provider_binary (discovered candidates only).
             resolve_provider_binary(id)
@@ -325,7 +324,24 @@ pub async fn create_managed_agent(
             None
         };
 
-        let mut record = crate::managed_agents::ManagedAgentRecord {
+        let agent_command = input
+            .agent_command
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(DEFAULT_AGENT_COMMAND)
+            .to_string();
+        let agent_args = normalize_agent_args(
+            &agent_command,
+            input
+                .agent_args
+                .iter()
+                .map(|arg| arg.trim().to_string())
+                .filter(|arg| !arg.is_empty())
+                .collect::<Vec<_>>(),
+        );
+
+        let record = crate::managed_agents::ManagedAgentRecord {
             pubkey: pubkey.clone(),
             name: name.clone(),
             persona_id: requested_persona_id.clone(),
@@ -339,19 +355,8 @@ pub async fn create_managed_agent(
                 .filter(|value| !value.is_empty())
                 .unwrap_or(DEFAULT_ACP_COMMAND)
                 .to_string(),
-            agent_command: input
-                .agent_command
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(DEFAULT_AGENT_COMMAND)
-                .to_string(),
-            agent_args: input
-                .agent_args
-                .into_iter()
-                .map(|arg| arg.trim().to_string())
-                .filter(|arg| !arg.is_empty())
-                .collect::<Vec<_>>(),
+            agent_command,
+            agent_args,
             mcp_command: input
                 .mcp_command
                 .as_deref()
@@ -363,8 +368,7 @@ pub async fn create_managed_agent(
                 .turn_timeout_seconds
                 .filter(|seconds| *seconds > 0)
                 .unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_SECONDS),
-            // 0 or None → harness uses its own default (300s idle, 3600s max).
-            // The harness CLI also clamps 0 → minimum, so both paths are safe.
+            // 0 or None → harness uses its own default (300s idle, 3600s max), and the CLI also clamps 0 → minimum.
             idle_timeout_seconds: input.idle_timeout_seconds.filter(|s| *s > 0),
             max_turn_duration_seconds: input.max_turn_duration_seconds.filter(|s| *s > 0),
             parallelism: input
@@ -402,10 +406,6 @@ pub async fn create_managed_agent(
             last_exit_code: None,
             last_error: None,
         };
-
-        if record.agent_args.is_empty() {
-            record.agent_args.push(DEFAULT_AGENT_ARG.to_string());
-        }
 
         records.push(record);
 

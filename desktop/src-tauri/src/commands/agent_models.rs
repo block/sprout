@@ -6,9 +6,9 @@ use crate::{
     app_state::AppState,
     managed_agents::{
         build_managed_agent_summary, default_agent_workdir, find_managed_agent_mut,
-        load_managed_agents, missing_command_message, resolve_command, save_managed_agents,
-        sync_managed_agent_processes, AgentModelInfo, AgentModelsResponse, ManagedAgentSummary,
-        UpdateManagedAgentRequest, DEFAULT_AGENT_ARG,
+        load_managed_agents, missing_command_message, normalize_agent_args, resolve_command,
+        save_managed_agents, sync_managed_agent_processes, AgentModelInfo, AgentModelsResponse,
+        ManagedAgentSummary, UpdateManagedAgentRequest,
     },
     util::now_iso,
 };
@@ -45,11 +45,7 @@ pub async fn get_agent_models(
         let resolved = resolve_command(&record.acp_command, Some(&app))
             .ok_or_else(|| missing_command_message(&record.acp_command, "ACP harness command"))?;
 
-        let args = if record.agent_args.is_empty() {
-            vec![DEFAULT_AGENT_ARG.to_string()]
-        } else {
-            record.agent_args.clone()
-        };
+        let args = normalize_agent_args(&record.agent_command, record.agent_args.clone());
 
         (
             resolved,

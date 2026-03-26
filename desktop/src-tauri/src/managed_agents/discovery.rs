@@ -9,7 +9,7 @@ use tauri::AppHandle;
 
 use crate::{
     app_state::AppState,
-    managed_agents::{AcpProviderInfo, CommandAvailabilityInfo, DEFAULT_AGENT_ARG},
+    managed_agents::{AcpProviderInfo, CommandAvailabilityInfo},
     models::MintTokenBody,
     relay::{relay_http_base_url, send_json_request},
 };
@@ -17,9 +17,8 @@ use crate::{
 struct KnownAcpProvider {
     id: &'static str,
     label: &'static str,
-    command: &'static str,
+    commands: &'static [&'static str],
     aliases: &'static [&'static str],
-    default_args: &'static [&'static str],
     avatar_url: &'static str,
 }
 
@@ -38,25 +37,22 @@ const KNOWN_ACP_PROVIDERS: &[KnownAcpProvider] = &[
     KnownAcpProvider {
         id: "goose",
         label: "Goose",
-        command: "goose",
+        commands: &["goose"],
         aliases: &[],
-        default_args: &[DEFAULT_AGENT_ARG],
         avatar_url: GOOSE_AVATAR_URL,
     },
     KnownAcpProvider {
         id: "claude",
         label: "Claude Code",
-        command: "claude-agent-acp",
+        commands: &["claude-agent-acp", "claude-code-acp"],
         aliases: &["claude-code", "claudecode"],
-        default_args: &[],
         avatar_url: CLAUDE_CODE_AVATAR_URL,
     },
     KnownAcpProvider {
         id: "codex",
         label: "Codex",
-        command: "codex-acp",
+        commands: &["codex-acp"],
         aliases: &[],
-        default_args: &[],
         avatar_url: CODEX_AVATAR_URL,
     },
 ];
@@ -113,9 +109,44 @@ fn known_acp_provider(command: &str) -> Option<&'static KnownAcpProvider> {
 
     KNOWN_ACP_PROVIDERS.iter().find(|provider| {
         normalized == provider.id
-            || normalized == normalize_command_identity(provider.command)
+            || provider
+                .commands
+                .iter()
+                .any(|command| normalized == normalize_command_identity(command))
             || provider.aliases.iter().any(|alias| normalized == *alias)
     })
+}
+
+fn default_agent_args(command: &str) -> Option<Vec<String>> {
+    match normalize_command_identity(command).as_str() {
+        "goose" => Some(vec!["acp".to_string()]),
+        "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
+        | "claudecode" => Some(Vec::new()),
+        _ => None,
+    }
+}
+
+pub fn normalize_agent_args(command: &str, agent_args: Vec<String>) -> Vec<String> {
+    let normalized = agent_args
+        .into_iter()
+        .map(|arg| arg.trim().to_string())
+        .filter(|arg| !arg.is_empty())
+        .collect::<Vec<_>>();
+
+    let Some(default_args) = default_agent_args(command) else {
+        return normalized;
+    };
+
+    if normalized.is_empty() {
+        return default_args;
+    }
+
+    if normalized.len() == 1 && normalized[0].eq_ignore_ascii_case("acp") && default_args.is_empty()
+    {
+        return default_args;
+    }
+
+    normalized
 }
 
 fn command_search_dirs(app: Option<&AppHandle>) -> Vec<PathBuf> {
@@ -253,17 +284,17 @@ pub fn discover_local_acp_providers() -> Vec<AcpProviderInfo> {
     KNOWN_ACP_PROVIDERS
         .iter()
         .filter_map(|provider| {
-            find_command(provider.command).map(|binary_path| AcpProviderInfo {
-                id: provider.id.to_string(),
-                label: provider.label.to_string(),
-                command: provider.command.to_string(),
-                binary_path: binary_path.display().to_string(),
-                default_args: provider
-                    .default_args
-                    .iter()
-                    .map(|arg| (*arg).to_string())
-                    .collect(),
-            })
+            provider
+                .commands
+                .iter()
+                .find_map(|command| find_command(command).map(|path| (*command, path)))
+                .map(|(command, binary_path)| AcpProviderInfo {
+                    id: provider.id.to_string(),
+                    label: provider.label.to_string(),
+                    command: command.to_string(),
+                    binary_path: binary_path.display().to_string(),
+                    default_args: normalize_agent_args(command, Vec::new()),
+                })
         })
         .collect()
 }
@@ -345,7 +376,8 @@ pub async fn mint_token_via_api(
 #[cfg(test)]
 mod tests {
     use super::{
-        managed_agent_avatar_url, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL, GOOSE_AVATAR_URL,
+        managed_agent_avatar_url, normalize_agent_args, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL,
+        GOOSE_AVATAR_URL,
     };
 
     #[test]
@@ -369,10 +401,30 @@ mod tests {
             managed_agent_avatar_url(r"C:\Tools\claude-agent-acp.exe"),
             Some(CLAUDE_CODE_AVATAR_URL.to_string())
         );
+        assert_eq!(
+            managed_agent_avatar_url("/usr/local/bin/claude-code-acp"),
+            Some(CLAUDE_CODE_AVATAR_URL.to_string())
+        );
     }
 
     #[test]
     fn returns_none_for_unknown_commands() {
         assert!(managed_agent_avatar_url("custom-agent").is_none());
+    }
+
+    #[test]
+    fn normalizes_claude_and_codex_args_to_empty() {
+        assert_eq!(
+            normalize_agent_args("claude-agent-acp", vec!["acp".into()]),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            normalize_agent_args("claude-code-acp", vec!["acp".into()]),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            normalize_agent_args("codex-acp", vec!["acp".into()]),
+            Vec::<String>::new()
+        );
     }
 }
