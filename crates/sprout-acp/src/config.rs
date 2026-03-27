@@ -380,27 +380,42 @@ pub fn normalize_agent_args(command: &str, agent_args: Vec<String>) -> Vec<Strin
     normalized
 }
 
-impl Config {
-    pub fn from_cli() -> Result<Self, ConfigError> {
-        // Propagate legacy env vars so clap sees them under the canonical names.
-        // Only set if the canonical var is absent — clap's `env` reads these.
-        // NOTE: std::env::set_var is safe in edition 2021 but will require
-        // `unsafe` in edition 2024. This runs inside #[tokio::main] so worker
-        // threads are already alive. When migrating to edition 2024, move this
-        // to a non-async fn main() wrapper that runs before the runtime starts.
-        for (legacy, canonical) in [
-            ("SPROUT_ACP_PRIVATE_KEY", "SPROUT_PRIVATE_KEY"),
-            ("SPROUT_ACP_API_TOKEN", "SPROUT_API_TOKEN"),
-        ] {
-            if std::env::var(canonical).is_err() {
-                if let Ok(val) = std::env::var(legacy) {
-                    std::env::set_var(canonical, &val);
-                }
+/// Propagate legacy env-var aliases to their canonical names.
+///
+/// Must be called **before** the tokio runtime starts — i.e. from the sync
+/// `fn main()` wrapper, not from inside `#[tokio::main]`.
+///
+/// `std::env::set_var` is safe in Rust 2021 only when no other threads are
+/// running. In Rust 2024 it requires `unsafe`. Calling this before
+/// `#[tokio::main]` ensures worker threads are not yet alive.
+///
+/// // Must be called before tokio runtime starts — see Rust 2024 edition safety.
+pub fn propagate_legacy_env_vars() {
+    for (legacy, canonical) in [
+        ("SPROUT_ACP_PRIVATE_KEY", "SPROUT_PRIVATE_KEY"),
+        ("SPROUT_ACP_API_TOKEN", "SPROUT_API_TOKEN"),
+    ] {
+        if std::env::var(canonical).is_err() {
+            if let Ok(val) = std::env::var(legacy) {
+                std::env::set_var(canonical, &val);
             }
         }
+    }
+}
 
-        let args = CliArgs::parse();
+impl Config {
+    pub fn from_cli() -> Result<Self, ConfigError> {
+        // Legacy env-var propagation is intentionally NOT done here.
+        // Call `propagate_legacy_env_vars()` before the tokio runtime starts
+        // (in the sync `fn main()` wrapper) — see Rust 2024 edition safety.
+        let mut args = CliArgs::parse();
         let keys = Keys::parse(&args.private_key)?;
+        // Best-effort zeroize: overwrite the raw private key string to reduce
+        // exposure via core dumps or heap inspection (#41). Without the `zeroize`
+        // crate we can only clear the String — the allocator may retain copies.
+        args.private_key
+            .replace_range(.., &"0".repeat(args.private_key.len()));
+        args.private_key.clear();
 
         let system_prompt = if let Some(text) = args.system_prompt {
             Some(text)
@@ -437,55 +452,99 @@ impl Config {
         }
 
         let agent_command = args.agent_command;
+
+        // Finding #49a — agent_command must not be empty.
+        if agent_command.trim().is_empty() {
+            return Err(ConfigError::ConfigFile(
+                "agent_command must not be empty".into(),
+            ));
+        }
+
         let agent_args = normalize_agent_args(&agent_command, args.agent_args);
 
-        Ok(Config {
+        // Finding #49b — warn on invalid UUIDs in --channels.
+        if let Some(ref channels) = args.channels {
+            for ch in channels {
+                if ch.parse::<Uuid>().is_err() {
+                    tracing::warn!(
+                        channel = %ch,
+                        "--channels entry is not a valid UUID and will be ignored"
+                    );
+                }
+            }
+        }
+
+        // Finding #49c — cap heartbeat interval at 86400s (24h).
+        let heartbeat_interval = if args.heartbeat_interval > 86400 {
+            tracing::warn!(
+                interval = args.heartbeat_interval,
+                "heartbeat interval exceeds 24h — capping at 86400s"
+            );
+            86400u64
+        } else {
+            args.heartbeat_interval
+        };
+
+        // Resolve idle_timeout_secs with deprecation handling.
+        // Precedence: explicit --idle-timeout > --turn-timeout (deprecated) > default 300.
+        let idle_timeout_secs = {
+            let raw = match (args.idle_timeout, args.turn_timeout) {
+                (Some(idle), Some(_turn)) => {
+                    tracing::warn!(
+                        "--turn-timeout / SPROUT_ACP_TURN_TIMEOUT is deprecated and ignored \
+                         when --idle-timeout / SPROUT_ACP_IDLE_TIMEOUT is also set"
+                    );
+                    idle
+                }
+                (Some(idle), None) => idle,
+                (None, Some(turn)) => {
+                    tracing::warn!(
+                        "--turn-timeout / SPROUT_ACP_TURN_TIMEOUT is deprecated; \
+                         use --idle-timeout / SPROUT_ACP_IDLE_TIMEOUT instead"
+                    );
+                    turn
+                }
+                (None, None) => 300, // default
+            };
+            if raw == 0 {
+                tracing::warn!("idle timeout of 0 is invalid — using 1s minimum");
+                1
+            } else {
+                raw
+            }
+        };
+
+        let max_turn_duration_secs = {
+            let raw = args.max_turn_duration;
+            if raw == 0 {
+                tracing::warn!("max turn duration of 0 is invalid — using 60s minimum");
+                60
+            } else {
+                raw
+            }
+        };
+
+        // Finding #20 — idle_timeout must be strictly less than max_turn_duration.
+        // If idle_timeout >= max_turn_duration, the absolute wall-clock cap would
+        // fire before the idle timeout ever could, making idle_timeout a dead letter.
+        if idle_timeout_secs >= max_turn_duration_secs {
+            return Err(ConfigError::ConfigFile(format!(
+                "idle_timeout ({}s) must be less than max_turn_duration ({}s)",
+                idle_timeout_secs, max_turn_duration_secs
+            )));
+        }
+
+        let config = Config {
             keys,
             api_token: args.api_token,
             relay_url: args.relay_url,
             agent_command,
             agent_args,
             mcp_command: args.mcp_command,
-            // Deprecated --turn-timeout is a fallback for backward compat.
-            // New deployments should use --idle-timeout exclusively.
-            // Precedence: explicit --idle-timeout > --turn-timeout (deprecated) > default 300.
-            idle_timeout_secs: {
-                let raw = match (args.idle_timeout, args.turn_timeout) {
-                    (Some(idle), Some(_turn)) => {
-                        tracing::warn!(
-                            "--turn-timeout / SPROUT_ACP_TURN_TIMEOUT is deprecated and ignored \
-                             when --idle-timeout / SPROUT_ACP_IDLE_TIMEOUT is also set"
-                        );
-                        idle
-                    }
-                    (Some(idle), None) => idle,
-                    (None, Some(turn)) => {
-                        tracing::warn!(
-                            "--turn-timeout / SPROUT_ACP_TURN_TIMEOUT is deprecated; \
-                             use --idle-timeout / SPROUT_ACP_IDLE_TIMEOUT instead"
-                        );
-                        turn
-                    }
-                    (None, None) => 300, // default
-                };
-                if raw == 0 {
-                    tracing::warn!("idle timeout of 0 is invalid — using 1s minimum");
-                    1
-                } else {
-                    raw
-                }
-            },
-            max_turn_duration_secs: {
-                let raw = args.max_turn_duration;
-                if raw == 0 {
-                    tracing::warn!("max turn duration of 0 is invalid — using 60s minimum");
-                    60
-                } else {
-                    raw
-                }
-            },
+            idle_timeout_secs,
+            max_turn_duration_secs,
             agents: args.agents,
-            heartbeat_interval_secs: args.heartbeat_interval,
+            heartbeat_interval_secs: heartbeat_interval,
             heartbeat_prompt,
             system_prompt,
             initial_message: args.initial_message,
@@ -502,7 +561,9 @@ impl Config {
             typing_enabled: !args.no_typing,
             model: args.model,
             permission_mode: args.permission_mode,
-        })
+        };
+
+        Ok(config)
     }
 
     /// Human-readable summary (no secrets).
@@ -540,8 +601,11 @@ struct TomlConfig {
 }
 
 pub fn load_rules(path: &std::path::Path) -> Result<Vec<SubscriptionRule>, ConfigError> {
+    use std::sync::atomic::AtomicU32;
+    use std::sync::Arc;
+
     let content = std::fs::read_to_string(path)?;
-    let config: TomlConfig =
+    let mut config: TomlConfig =
         toml::from_str(&content).map_err(|e| ConfigError::ConfigFile(e.to_string()))?;
 
     if config.rules.len() > 100 {
@@ -551,14 +615,22 @@ pub fn load_rules(path: &std::path::Path) -> Result<Vec<SubscriptionRule>, Confi
         )));
     }
 
+    // Finding #49d — warn when Config mode has no rules; agent will receive nothing.
+    if config.rules.is_empty() {
+        tracing::warn!(
+            path = %path.display(),
+            "config file contains zero rules — agent will receive no events in Config mode"
+        );
+    }
+
     let mut seen_names = std::collections::HashSet::new();
-    for rule in &config.rules {
+    for rule in &mut config.rules {
         if rule.name.trim().is_empty() {
             return Err(ConfigError::ConfigFile(
                 "rule name must not be empty".into(),
             ));
         }
-        if !seen_names.insert(&rule.name) {
+        if !seen_names.insert(rule.name.clone()) {
             return Err(ConfigError::ConfigFile(format!(
                 "duplicate rule name: {}",
                 rule.name
@@ -574,11 +646,17 @@ pub fn load_rules(path: &std::path::Path) -> Result<Vec<SubscriptionRule>, Confi
             }
             // Fail fast: parse the expression at load time so typos don't
             // silently produce dead rules at runtime.
-            if let Err(e) = evalexpr::build_operator_tree(expr) {
-                return Err(ConfigError::ConfigFile(format!(
-                    "rule '{}': invalid filter expression: {e}",
-                    rule.name,
-                )));
+            // Finding #34 — store the compiled AST so match_event never re-parses.
+            match evalexpr::build_operator_tree(expr) {
+                Ok(node) => {
+                    rule.compiled_filter = Some(Arc::new(node));
+                }
+                Err(e) => {
+                    return Err(ConfigError::ConfigFile(format!(
+                        "rule '{}': invalid filter expression: {e}",
+                        rule.name,
+                    )));
+                }
             }
         }
         // Validate channel scope — catch typos like "ALL" or "All" early.
@@ -590,6 +668,10 @@ pub fn load_rules(path: &std::path::Path) -> Result<Vec<SubscriptionRule>, Confi
                 )));
             }
         }
+        // Initialise the consecutive-timeout counter (finding #25).
+        // Deserialization leaves it at default (new Arc<AtomicU32::new(0)>)
+        // but we set it explicitly here for clarity.
+        rule.consecutive_timeouts = Arc::new(AtomicU32::new(0));
     }
 
     Ok(config.rules)
@@ -836,6 +918,8 @@ mod tests {
         kinds: Vec<u32>,
         mention: bool,
     ) -> SubscriptionRule {
+        use std::sync::atomic::AtomicU32;
+        use std::sync::Arc;
         SubscriptionRule {
             name: name.into(),
             channels,
@@ -843,6 +927,8 @@ mod tests {
             require_mention: mention,
             filter: None,
             prompt_tag: None,
+            compiled_filter: None,
+            consecutive_timeouts: Arc::new(AtomicU32::new(0)),
         }
     }
 

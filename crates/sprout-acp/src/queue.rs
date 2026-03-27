@@ -20,6 +20,26 @@ use uuid::Uuid;
 
 use crate::config::DedupMode;
 
+// ── Reliability constants ─────────────────────────────────────────────────────
+
+/// Maximum events queued per channel before oldest events are dropped.
+const MAX_PENDING_PER_CHANNEL: usize = 500;
+
+/// Maximum events drained into a single batch.
+const MAX_BATCH_EVENTS: usize = 50;
+
+/// Maximum retry attempts before a batch is dead-lettered.
+const MAX_RETRIES: u32 = 10;
+
+/// Base retry delay in seconds (doubled each attempt).
+const BASE_RETRY_DELAY_SECS: u64 = 5;
+
+/// Cap on retry delay in seconds.
+const MAX_RETRY_DELAY_SECS: u64 = 300;
+
+/// In-flight deadline: max_turn (3600s) + 100s buffer.
+const IN_FLIGHT_DEADLINE_SECS: u64 = 3700;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /// An event waiting in the queue.
@@ -55,36 +75,53 @@ pub struct FlushBatch {
 ///
 /// ```text
 /// State:
-///   queues:            Map<channel_id, VecDeque<QueuedEvent>>
-///   in_flight_channels: HashSet<Uuid>
-///   retry_after:       Map<channel_id, Instant>
-///   dedup_mode:        DedupMode
+///   queues:               Map<channel_id, VecDeque<QueuedEvent>>  (capped at MAX_PENDING_PER_CHANNEL)
+///   in_flight_channels:   HashSet<Uuid>
+///   in_flight_deadlines:  Map<channel_id, Instant>                (auto-expire after IN_FLIGHT_DEADLINE_SECS)
+///   retry_after:          Map<channel_id, Instant>
+///   retry_counts:         Map<channel_id, u32>                    (dead-letter after MAX_RETRIES)
+///   dedup_mode:           DedupMode
 ///
 /// Transitions:
 ///   push(event):
 ///     if dedup_mode == Drop AND in_flight_channels.contains(event.channel_id):
 ///       debug log + discard
+///     else if queues[channel].len() >= MAX_PENDING_PER_CHANNEL:
+///       drop oldest (pop_front), warn, push_back new event
 ///     else:
 ///       queues[event.channel_id].push_back(event)
 ///
 ///   flush_next() → Option<FlushBatch>:
+///     expire any stuck in-flight entries past their deadline
 ///     candidates = channels where queue non-empty
 ///                  AND NOT in in_flight_channels
 ///                  AND (no retry_after OR retry_after[c] <= now)
 ///     if candidates empty: return None
 ///     channel = pick candidate with oldest head event (min received_at)
-///     events = drain queues[channel]
+///     events = drain up to MAX_BATCH_EVENTS from queues[channel]
 ///     in_flight_channels.insert(channel)
+///     in_flight_deadlines.insert(channel, now + IN_FLIGHT_DEADLINE_SECS)
 ///     return Some(FlushBatch { channel, events })
 ///
 ///   mark_complete(channel_id):
 ///     in_flight_channels.remove(channel_id)
-///     (retry_after entries expire naturally via Instant check)
+///     in_flight_deadlines.remove(channel_id)
+///     retry_counts.remove(channel_id)
+///     clean up expired retry_after entry if present
+///
+///   requeue(batch):
+///     increment retry_counts[channel]
+///     if retry_counts[channel] > MAX_RETRIES: dead-letter (log ERROR, discard)
+///     else: push_front with original received_at, set exponential backoff retry_after with jitter
 /// ```
 pub struct EventQueue {
     queues: HashMap<Uuid, VecDeque<QueuedEvent>>,
     in_flight_channels: HashSet<Uuid>,
+    /// Per-channel deadline for auto-expiring stuck in-flight entries.
+    in_flight_deadlines: HashMap<Uuid, Instant>,
     retry_after: HashMap<Uuid, Instant>,
+    /// Per-channel retry attempt counter for exponential backoff / dead-lettering.
+    retry_counts: HashMap<Uuid, u32>,
     dedup_mode: DedupMode,
 }
 
@@ -94,7 +131,9 @@ impl EventQueue {
         Self {
             queues: HashMap::new(),
             in_flight_channels: HashSet::new(),
+            in_flight_deadlines: HashMap::new(),
             retry_after: HashMap::new(),
+            retry_counts: HashMap::new(),
             dedup_mode,
         }
     }
@@ -115,10 +154,17 @@ impl EventQueue {
             );
             return false;
         }
-        self.queues
-            .entry(event.channel_id)
-            .or_default()
-            .push_back(event);
+        let queue = self.queues.entry(event.channel_id).or_default();
+        // Enforce per-channel depth cap: drop oldest to make room.
+        if queue.len() >= MAX_PENDING_PER_CHANNEL {
+            queue.pop_front();
+            tracing::warn!(
+                channel_id = %event.channel_id,
+                limit = MAX_PENDING_PER_CHANNEL,
+                "queue depth cap reached — dropped oldest event"
+            );
+        }
+        queue.push_back(event);
         true
     }
 
@@ -130,6 +176,22 @@ impl EventQueue {
     /// inserts into `in_flight_channels`, and returns the batch.
     pub fn flush_next(&mut self) -> Option<FlushBatch> {
         let now = Instant::now();
+
+        // Auto-expire any stuck in-flight entries that missed mark_complete.
+        let expired: Vec<Uuid> = self
+            .in_flight_deadlines
+            .iter()
+            .filter(|(_, deadline)| now >= **deadline)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired {
+            tracing::error!(
+                channel_id = %id,
+                "BUG: in-flight channel expired without mark_complete — auto-releasing"
+            );
+            self.in_flight_channels.remove(&id);
+            self.in_flight_deadlines.remove(&id);
+        }
 
         // Find the channel whose head event has the oldest received_at,
         // excluding in-flight channels and throttled channels.
@@ -144,10 +206,11 @@ impl EventQueue {
             .min_by_key(|(_, q)| q.front().unwrap().received_at)
             .map(|(id, _)| *id)?;
 
-        // Drain ALL events for that channel.
-        let queue = self.queues.remove(&channel_id)?;
+        // Drain up to MAX_BATCH_EVENTS; leave any remainder in the queue.
+        let queue = self.queues.entry(channel_id).or_default();
+        let drain_count = MAX_BATCH_EVENTS.min(queue.len());
         let events: Vec<BatchEvent> = queue
-            .into_iter()
+            .drain(..drain_count)
             .map(|qe| BatchEvent {
                 event: qe.event,
                 prompt_tag: qe.prompt_tag,
@@ -155,17 +218,47 @@ impl EventQueue {
             })
             .collect();
 
+        // Remove the queue entry if now empty (keeps pending_channels() accurate).
+        if self.queues.get(&channel_id).is_some_and(|q| q.is_empty()) {
+            self.queues.remove(&channel_id);
+        }
+
         self.in_flight_channels.insert(channel_id);
+        self.in_flight_deadlines.insert(
+            channel_id,
+            now + Duration::from_secs(IN_FLIGHT_DEADLINE_SECS),
+        );
 
         Some(FlushBatch { channel_id, events })
     }
 
     /// Mark the prompt for `channel_id` as complete.
     ///
-    /// Removes the channel from `in_flight_channels`. Does NOT clear
-    /// `retry_after` — those entries expire naturally via Instant check.
+    /// Removes the channel from `in_flight_channels` and `in_flight_deadlines`.
+    ///
+    /// If the channel was NOT requeued (no active `retry_after` throttle), the
+    /// retry counter is reset — the channel is healthy and the next failure
+    /// starts fresh. If the channel WAS requeued, `retry_counts` is left intact
+    /// so the backoff sequence continues on the next attempt.
+    ///
+    /// Also cleans up any already-expired `retry_after` entry.
     pub fn mark_complete(&mut self, channel_id: Uuid) {
         self.in_flight_channels.remove(&channel_id);
+        self.in_flight_deadlines.remove(&channel_id);
+        let now = Instant::now();
+        match self.retry_after.get(&channel_id) {
+            // Active throttle → channel was requeued; keep retry_counts intact.
+            Some(&deadline) if deadline > now => {}
+            // Expired or absent throttle → successful completion; reset counter
+            // and clean up the stale retry_after entry.
+            Some(_) => {
+                self.retry_after.remove(&channel_id);
+                self.retry_counts.remove(&channel_id);
+            }
+            None => {
+                self.retry_counts.remove(&channel_id);
+            }
+        }
     }
 
     /// Re-queue a batch of events that failed to process.
@@ -174,25 +267,84 @@ impl EventQueue {
     /// are processed first on the next flush cycle. This prevents event loss
     /// when session creation or `session/prompt` fails transiently.
     ///
-    /// `received_at` is reset to `Instant::now()` for re-queued events.
-    /// A 5-second `retry_after` throttle is set so the channel is not
-    /// immediately re-flushed.
+    /// Original `received_at` timestamps are preserved so the channel retains
+    /// its fairness position. The retry delay comes from exponential backoff,
+    /// not from resetting received_at.
+    ///
+    /// After [`MAX_RETRIES`] attempts the batch is dead-lettered: logged at
+    /// ERROR and discarded rather than requeued. This prevents poison batches
+    /// from looping forever.
     ///
     /// Note: does NOT remove from `in_flight_channels` — caller must call
     /// `mark_complete` separately.
     pub fn requeue(&mut self, batch: FlushBatch) {
-        let queue = self.queues.entry(batch.channel_id).or_default();
+        let channel_id = batch.channel_id;
+        let attempt = {
+            let count = self.retry_counts.entry(channel_id).or_insert(0);
+            *count += 1;
+            *count
+        };
+
+        if attempt > MAX_RETRIES {
+            tracing::error!(
+                channel_id = %channel_id,
+                attempt,
+                events = batch.events.len(),
+                "dead-lettering batch after {} retries — discarding {} events",
+                MAX_RETRIES,
+                batch.events.len(),
+            );
+            self.retry_counts.remove(&channel_id);
+            // Also clear retry_after so fresh traffic on this channel isn't
+            // throttled by stale backoff from the discarded poison batch.
+            self.retry_after.remove(&channel_id);
+            return;
+        }
+
+        // Exponential backoff: BASE * 2^(attempt-1), capped at MAX, with ±20% jitter.
+        let base_secs = BASE_RETRY_DELAY_SECS.saturating_mul(1u64 << (attempt - 1).min(6));
+        let capped_secs = base_secs.min(MAX_RETRY_DELAY_SECS);
+        // Jitter: multiply by 0.8..1.2 using subsecond nanos as entropy source.
+        let jitter = {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos();
+            0.8 + (nanos as f64 / u32::MAX as f64) * 0.4
+        };
+        let delay = Duration::from_secs_f64(capped_secs as f64 * jitter);
+
+        tracing::warn!(
+            channel_id = %channel_id,
+            attempt,
+            max = MAX_RETRIES,
+            delay_secs = delay.as_secs_f64(),
+            events = batch.events.len(),
+            "requeueing failed batch with backoff"
+        );
+
+        let queue = self.queues.entry(channel_id).or_default();
         // Push to front in reverse order so original order is preserved.
         for be in batch.events.into_iter().rev() {
             queue.push_front(QueuedEvent {
-                channel_id: batch.channel_id,
+                channel_id,
                 event: be.event,
                 prompt_tag: be.prompt_tag,
-                received_at: Instant::now(),
+                received_at: be.received_at, // preserve original timestamp (#46)
             });
         }
-        self.retry_after
-            .insert(batch.channel_id, Instant::now() + Duration::from_secs(5));
+        // Enforce per-channel cap: trim oldest (back) events if requeue pushed
+        // the queue over the limit. Without this, repeated requeue+push cycles
+        // can grow the queue unboundedly.
+        while queue.len() > MAX_PENDING_PER_CHANNEL {
+            queue.pop_back();
+            tracing::warn!(
+                channel_id = %channel_id,
+                limit = MAX_PENDING_PER_CHANNEL,
+                "requeue overflow — dropped oldest event to enforce cap"
+            );
+        }
+        self.retry_after.insert(channel_id, Instant::now() + delay);
     }
 
     /// Re-queue a batch preserving original `received_at` timestamps.
@@ -218,8 +370,29 @@ impl EventQueue {
 
     /// Returns `true` if any channel has pending events that are not in-flight
     /// and not throttled by `retry_after`.
-    pub fn has_flushable_work(&self) -> bool {
+    ///
+    /// Also auto-expires any stuck in-flight entries whose deadline has passed.
+    /// This is a `&mut self` method so expiry can happen without requiring a
+    /// full `flush_next` call.
+    pub fn has_flushable_work(&mut self) -> bool {
         let now = Instant::now();
+
+        // Auto-expire stuck in-flight entries (same logic as flush_next).
+        let expired: Vec<Uuid> = self
+            .in_flight_deadlines
+            .iter()
+            .filter(|(_, deadline)| now >= **deadline)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired {
+            tracing::error!(
+                channel_id = %id,
+                "BUG: in-flight channel expired without mark_complete — auto-releasing"
+            );
+            self.in_flight_channels.remove(&id);
+            self.in_flight_deadlines.remove(&id);
+        }
+
         self.queues.iter().any(|(id, q)| {
             !q.is_empty()
                 && !self.in_flight_channels.contains(id)
@@ -266,6 +439,12 @@ impl EventQueue {
             .map(|q| q.into_iter().map(|e| e.event.id.to_hex()).collect())
             .unwrap_or_default();
         self.retry_after.remove(&channel_id);
+        self.retry_counts.remove(&channel_id);
+        // Preserve in_flight_channels AND in_flight_deadlines: the in-flight
+        // task will eventually complete (calling mark_complete) or the deadline
+        // will expire (auto-cleaning the channel). Removing deadlines without
+        // removing in_flight_channels would disable auto-expiry and leave a
+        // wedged task permanently blocking the channel.
         ids
     }
 
@@ -273,6 +452,17 @@ impl EventQueue {
     #[allow(dead_code)]
     pub fn is_channel_in_flight(&self, channel_id: Uuid) -> bool {
         self.in_flight_channels.contains(&channel_id)
+    }
+
+    /// Compact expired metadata entries to prevent unbounded map growth.
+    ///
+    /// Removes `retry_after` entries whose deadline has already passed.
+    /// Should be called periodically from the main event loop (e.g., every
+    /// few minutes). `flush_next` and `has_flushable_work` handle in-flight
+    /// expiry inline; this covers the `retry_after` map specifically.
+    pub fn compact_expired_state(&mut self) {
+        let now = Instant::now();
+        self.retry_after.retain(|_, deadline| *deadline > now);
     }
 }
 
@@ -641,7 +831,13 @@ pub fn format_prompt(
     // one the agent is responding to. Thread/DM context is supplementary info
     // included alongside, not a scope override. This prevents mixed batches
     // (thread reply + later plain message) from being mislabeled as "thread".
-    let last_event = batch.events.last().expect("batch must have ≥1 event");
+    let last_event = match batch.events.last() {
+        Some(e) => e,
+        None => {
+            tracing::error!("format_prompt called with empty batch — returning empty prompt");
+            return String::new();
+        }
+    };
     let thread_tags = parse_thread_tags(&last_event.event);
     let is_dm = channel_info
         .map(|ci| ci.channel_type == "dm")

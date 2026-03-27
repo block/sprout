@@ -191,9 +191,31 @@ impl AgentPool {
     ///
     /// Agents are placed into indexed slots. The unbounded channel is created
     /// here; tasks send results back through `result_tx`.
+    ///
+    /// Prefer [`AgentPool::from_slots`] for startup paths where some agents may
+    /// have failed — `new()` packs agents densely and will break the
+    /// `agent.index` invariant if any slot was skipped.
+    #[allow(dead_code)]
     pub fn new(agents: Vec<OwnedAgent>) -> Self {
         let (result_tx, result_rx) = mpsc::unbounded_channel();
         let slots = agents.into_iter().map(Some).collect();
+        Self {
+            agents: slots,
+            result_tx,
+            result_rx,
+            join_set: JoinSet::new(),
+            task_map: HashMap::new(),
+        }
+    }
+
+    /// Create a pool from pre-indexed slots (may contain None for failed startups).
+    ///
+    /// Slot positions are preserved so that `agent.index` always matches the
+    /// index into `self.agents`. Use this instead of `new()` when the startup
+    /// loop skips failed agents — `new()` would pack agents densely and break
+    /// the index invariant.
+    pub fn from_slots(slots: Vec<Option<OwnedAgent>>) -> Self {
+        let (result_tx, result_rx) = mpsc::unbounded_channel();
         Self {
             agents: slots,
             result_tx,
@@ -230,10 +252,16 @@ impl AgentPool {
     /// Return an agent to its slot after a task completes.
     pub fn return_agent(&mut self, agent: OwnedAgent) {
         let idx = agent.index;
-        debug_assert!(
-            self.agents[idx].is_none(),
-            "return_agent: slot {idx} already occupied"
-        );
+        if self.agents[idx].is_some() {
+            // This is a bug: two tasks returned the same agent index. Log it
+            // loudly so it shows up in production logs, then overwrite — the
+            // alternative (dropping the incoming agent) would permanently leak
+            // the slot.
+            tracing::error!(
+                idx,
+                "BUG: return_agent called for slot {idx} which is already occupied — overwriting"
+            );
+        }
         self.agents[idx] = Some(agent);
     }
 
@@ -284,6 +312,24 @@ impl AgentPool {
         (&mut self.result_rx, &mut self.join_set)
     }
 
+    /// Non-blocking drain of the result channel. Used during shutdown to
+    /// collect agents that completed while join_set was being drained.
+    pub fn result_rx_try_recv(&mut self) -> Result<PromptResult, mpsc::error::TryRecvError> {
+        self.result_rx.try_recv()
+    }
+
+    /// Check whether a slot is alive: either idle in the pool or checked out
+    /// for an in-flight task. Returns `false` only when the slot is truly
+    /// empty and available for refill.
+    pub fn slot_alive(&self, index: usize) -> bool {
+        let idle = self.agents.get(index).is_some_and(|s| s.is_some());
+        if idle {
+            return true;
+        }
+        // Check if the agent is checked out (in-flight on a task).
+        self.task_map.values().any(|m| m.agent_index == index)
+    }
+
     pub fn agents_mut(&mut self) -> &mut Vec<Option<OwnedAgent>> {
         &mut self.agents
     }
@@ -311,8 +357,13 @@ impl AgentPool {
 
 // ── run_prompt_task ───────────────────────────────────────────────────────────
 
-/// Timeout for pre-prompt context fetches (thread/DM history).
-const CONTEXT_FETCH_TIMEOUT: Duration = Duration::from_millis(500);
+/// Timeout for a single pre-prompt context fetch attempt (thread/DM history).
+/// Each call gets this budget; with one retry the total worst-case is
+/// 2 × CONTEXT_FETCH_TIMEOUT + CONTEXT_FETCH_RETRY_DELAY ≈ 6.5 s.
+const CONTEXT_FETCH_TIMEOUT: Duration = Duration::from_millis(3_000);
+
+/// Delay between the first failed context fetch and the single retry.
+const CONTEXT_FETCH_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 /// Timeout for model-switch requests (`session/set_config_option`, `session/set_model`).
 const MODEL_SWITCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -347,7 +398,7 @@ async fn create_session_and_apply_model(
     if let Some(ref desired) = agent.desired_model {
         match resolve_model_switch_method(&resp.raw, desired) {
             Some(method) => {
-                apply_model_switch(&mut agent.acp, &resp.session_id, desired, &method).await;
+                apply_model_switch(&mut agent.acp, &resp.session_id, desired, &method).await?;
             }
             None => {
                 tracing::warn!(
@@ -382,7 +433,7 @@ async fn apply_model_switch(
     session_id: &str,
     desired: &str,
     method: &ModelSwitchMethod,
-) {
+) -> Result<(), AcpError> {
     let method_label = match method {
         ModelSwitchMethod::ConfigOption { config_id, .. } => {
             format!("configOption (configId={config_id})")
@@ -413,6 +464,20 @@ async fn apply_model_switch(
                 "applied model {desired} via {method_label} on session {session_id}"
             );
         }
+        // Transport-class errors may have corrupted the stdio stream — propagate
+        // so the caller can respawn the agent instead of reusing a poisoned one.
+        Ok(Err(e @ AcpError::Io(_)))
+        | Ok(Err(e @ AcpError::WriteTimeout(_)))
+        | Ok(Err(e @ AcpError::Timeout(_)))
+        | Ok(Err(e @ AcpError::Protocol(_)))
+        | Ok(Err(e @ AcpError::AgentExited)) => {
+            tracing::error!(
+                target: "pool::model",
+                "fatal error setting model {desired} via {method_label}: {e}"
+            );
+            return Err(e);
+        }
+        // Application-level errors (Json, etc.) — agent is fine, just uses default model.
         Ok(Err(e)) => {
             tracing::warn!(
                 target: "pool::model",
@@ -420,12 +485,16 @@ async fn apply_model_switch(
             );
         }
         Err(_) => {
-            tracing::warn!(
+            // Outer timeout fired — the inner send_request may have left the
+            // stream in an unknown state. Treat as transport error.
+            tracing::error!(
                 target: "pool::model",
-                "model set via {method_label} timed out ({MODEL_SWITCH_TIMEOUT:?}) — proceeding with agent default"
+                "model set via {method_label} timed out ({MODEL_SWITCH_TIMEOUT:?}) — treating as fatal"
             );
+            return Err(AcpError::Timeout(MODEL_SWITCH_TIMEOUT));
         }
     }
+    Ok(())
 }
 
 /// Set the session permission mode via `session/set_config_option`.
@@ -471,16 +540,20 @@ async fn apply_permission_mode(
                 "applied permission mode {wire:?} on session {session_id}"
             );
         }
-        Ok(Err(AcpError::AgentExited)) => {
-            // Fatal: the agent process crashed (e.g., goose doesn't support
-            // session/set_config_option and exits instead of returning an error).
-            // Propagate so the caller can respawn.
+        // Transport-class errors may have corrupted the stdio stream — propagate
+        // so the caller can respawn the agent.
+        Ok(Err(e @ AcpError::Io(_)))
+        | Ok(Err(e @ AcpError::WriteTimeout(_)))
+        | Ok(Err(e @ AcpError::Timeout(_)))
+        | Ok(Err(e @ AcpError::Protocol(_)))
+        | Ok(Err(e @ AcpError::AgentExited)) => {
             tracing::error!(
                 target: "pool::permission",
-                "agent exited while setting permission mode {wire:?} — process crashed"
+                "fatal error setting permission mode {wire:?}: {e}"
             );
-            return Err(AcpError::AgentExited);
+            return Err(e);
         }
+        // Application-level errors — agent is fine, just uses default permission mode.
         Ok(Err(e)) => {
             tracing::warn!(
                 target: "pool::permission",
@@ -488,10 +561,12 @@ async fn apply_permission_mode(
             );
         }
         Err(_) => {
-            tracing::warn!(
+            // Outer timeout fired — stream may be in unknown state.
+            tracing::error!(
                 target: "pool::permission",
-                "permission mode set timed out ({PERMISSION_MODE_TIMEOUT:?}) — falling back to per-tool auto-approval"
+                "permission mode set timed out ({PERMISSION_MODE_TIMEOUT:?}) — treating as fatal"
             );
+            return Err(AcpError::Timeout(PERMISSION_MODE_TIMEOUT));
         }
     }
     Ok(())
@@ -923,44 +998,63 @@ pub async fn run_prompt_task(
 
 // ── Context fetching ──────────────────────────────────────────────────────────
 
+/// Retry wrapper for context fetches: one retry with `CONTEXT_FETCH_RETRY_DELAY`
+/// on any `None` result. The closure is called twice at most.
+///
+/// Using a closure (not a `Future`) so the retry can construct a fresh `Future`
+/// each attempt without requiring `Clone` or re-boxing.
+async fn fetch_with_retry<F, Fut, T>(f: F) -> Option<T>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Option<T>>,
+{
+    if let Some(result) = f().await {
+        return Some(result);
+    }
+    tokio::time::sleep(CONTEXT_FETCH_RETRY_DELAY).await;
+    f().await
+}
+
 /// Lazy-fetch channel metadata for a channel not in the startup discovery cache.
 ///
 /// Handles channels added dynamically via membership notifications after startup.
-/// Uses the same 500ms timeout as context fetches. Returns `None` on failure
-/// (graceful degradation — prompt will lack channel name and DM detection).
+/// Uses `CONTEXT_FETCH_TIMEOUT` with one retry on failure. Returns `None` on
+/// persistent failure (graceful degradation — prompt will lack channel name and
+/// DM detection).
 async fn fetch_channel_info(channel_id: Uuid, rest: &RestClient) -> Option<PromptChannelInfo> {
     let path = format!("/api/channels/{}", channel_id);
-    let result = timeout(CONTEXT_FETCH_TIMEOUT, rest.get_json(&path)).await;
-
-    match result {
-        Ok(Ok(json)) => {
-            let name = json
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let channel_type = json
-                .get("channel_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("stream")
-                .to_string();
-            Some(PromptChannelInfo { name, channel_type })
+    fetch_with_retry(|| async {
+        match timeout(CONTEXT_FETCH_TIMEOUT, rest.get_json(&path)).await {
+            Ok(Ok(json)) => {
+                let name = json
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let channel_type = json
+                    .get("channel_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("stream")
+                    .to_string();
+                Some(PromptChannelInfo { name, channel_type })
+            }
+            Ok(Err(e)) => {
+                tracing::debug!(
+                    channel_id = %channel_id,
+                    "channel info fetch failed: {e} — will retry"
+                );
+                None
+            }
+            Err(_) => {
+                tracing::debug!(
+                    channel_id = %channel_id,
+                    "channel info fetch timed out — will retry"
+                );
+                None
+            }
         }
-        Ok(Err(e)) => {
-            tracing::debug!(
-                channel_id = %channel_id,
-                "channel info fetch failed: {e} — using defaults"
-            );
-            None
-        }
-        Err(_) => {
-            tracing::debug!(
-                channel_id = %channel_id,
-                "channel info fetch timed out — using defaults"
-            );
-            None
-        }
-    }
+    })
+    .await
 }
 
 /// Fetch conversation context (thread or DM) for a batch before prompting.
@@ -1085,23 +1179,25 @@ async fn fetch_prompt_profile_lookup(
     }
 
     let body = serde_json::json!({ "pubkeys": pubkeys });
-    let result = timeout(
-        CONTEXT_FETCH_TIMEOUT,
-        rest.post_json("/api/users/batch", &body),
-    )
-    .await;
-
-    match result {
-        Ok(Ok(json)) => parse_profile_lookup_response(json),
-        Ok(Err(e)) => {
-            tracing::debug!("prompt profile lookup failed: {e} — using raw pubkeys");
-            None
+    fetch_with_retry(|| async {
+        match timeout(
+            CONTEXT_FETCH_TIMEOUT,
+            rest.post_json("/api/users/batch", &body),
+        )
+        .await
+        {
+            Ok(Ok(json)) => parse_profile_lookup_response(json),
+            Ok(Err(e)) => {
+                tracing::debug!("prompt profile lookup failed: {e} — will retry");
+                None
+            }
+            Err(_) => {
+                tracing::debug!("prompt profile lookup timed out — will retry");
+                None
+            }
         }
-        Err(_) => {
-            tracing::debug!("prompt profile lookup timed out — using raw pubkeys");
-            None
-        }
-    }
+    })
+    .await
 }
 
 /// Fetch thread context via REST: `GET /api/channels/{id}/threads/{event_id}?limit=N`
@@ -1129,27 +1225,28 @@ async fn fetch_thread_context(
         channel_id, root_event_id, limit
     );
 
-    let result = timeout(CONTEXT_FETCH_TIMEOUT, rest.get_json(&path)).await;
-
-    match result {
-        Ok(Ok(json)) => parse_thread_response(json),
-        Ok(Err(e)) => {
-            tracing::warn!(
-                channel_id = %channel_id,
-                root = root_event_id,
-                "thread context fetch failed: {e} — falling back to hints-only"
-            );
-            None
+    fetch_with_retry(|| async {
+        match timeout(CONTEXT_FETCH_TIMEOUT, rest.get_json(&path)).await {
+            Ok(Ok(json)) => parse_thread_response(json),
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    channel_id = %channel_id,
+                    root = root_event_id,
+                    "thread context fetch failed: {e} — will retry"
+                );
+                None
+            }
+            Err(_) => {
+                tracing::warn!(
+                    channel_id = %channel_id,
+                    root = root_event_id,
+                    "thread context fetch timed out — will retry"
+                );
+                None
+            }
         }
-        Err(_) => {
-            tracing::warn!(
-                channel_id = %channel_id,
-                root = root_event_id,
-                "thread context fetch timed out — falling back to hints-only"
-            );
-            None
-        }
-    }
+    })
+    .await
 }
 
 /// Fetch DM context via REST: `GET /api/channels/{id}/messages?limit=N`
@@ -1160,25 +1257,26 @@ async fn fetch_dm_context(
 ) -> Option<ConversationContext> {
     let path = format!("/api/channels/{}/messages?limit={}", channel_id, limit);
 
-    let result = timeout(CONTEXT_FETCH_TIMEOUT, rest.get_json(&path)).await;
-
-    match result {
-        Ok(Ok(json)) => parse_dm_response(json, limit),
-        Ok(Err(e)) => {
-            tracing::warn!(
-                channel_id = %channel_id,
-                "DM context fetch failed: {e} — falling back to hints-only"
-            );
-            None
+    fetch_with_retry(|| async {
+        match timeout(CONTEXT_FETCH_TIMEOUT, rest.get_json(&path)).await {
+            Ok(Ok(json)) => parse_dm_response(json, limit),
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    channel_id = %channel_id,
+                    "DM context fetch failed: {e} — will retry"
+                );
+                None
+            }
+            Err(_) => {
+                tracing::warn!(
+                    channel_id = %channel_id,
+                    "DM context fetch timed out — will retry"
+                );
+                None
+            }
         }
-        Err(_) => {
-            tracing::warn!(
-                channel_id = %channel_id,
-                "DM context fetch timed out — falling back to hints-only"
-            );
-            None
-        }
-    }
+    })
+    .await
 }
 
 /// Parse the thread REST response into a `ConversationContext::Thread`.
@@ -1367,13 +1465,18 @@ impl ReactionGuard {
 
 impl Drop for ReactionGuard {
     fn drop(&mut self) {
-        // Safety: always called from within a tokio task (run_prompt_task is
-        // spawned via JoinSet::spawn), so a runtime context is guaranteed.
-        // During shutdown the spawned cleanup may be dropped before completing
-        // — acceptable for a cosmetic indicator.
+        // Guard against drop outside a tokio runtime (e.g., in unit tests or
+        // during process teardown before the runtime is fully initialized).
+        // `run_prompt_task` is always spawned via `JoinSet::spawn`, so a
+        // runtime handle is normally available; `try_current` is the safe
+        // fallback for the rare cases it isn't.
         if let Some(rest) = self.rest.take() {
             let ids = std::mem::take(&mut self.ids);
-            tokio::spawn(clear_reactions(rest, ids));
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(clear_reactions(rest, ids));
+            }
+            // If no runtime is available, reactions are left as-is — they are
+            // cosmetic indicators and the stale state is harmless.
         }
     }
 }
@@ -1537,28 +1640,38 @@ pub(crate) async fn reaction_remove(rest: &crate::relay::RestClient, event_id: &
     }
 }
 
-/// Add 💬 to all events concurrently. Awaited inline before the prompt fires.
-/// Bounded by `REACTION_TIMEOUT` per call — worst case is a single 500ms wait
-/// regardless of batch size.
+/// Maximum concurrent reaction HTTP requests per fan-out call.
+/// Prevents unbounded parallelism when a large batch of events arrives.
+const REACTION_CONCURRENCY: usize = 10;
+
+/// Add 💬 to all events, capped at `REACTION_CONCURRENCY` concurrent requests.
+/// Awaited inline before the prompt fires.
 async fn react_working(rest: &crate::relay::RestClient, event_ids: &[String]) {
-    futures_util::future::join_all(
-        event_ids
-            .iter()
-            .map(|eid| reaction_add(rest, eid, REACTION_WORKING)),
-    )
-    .await;
+    for chunk in event_ids.chunks(REACTION_CONCURRENCY) {
+        futures_util::future::join_all(
+            chunk
+                .iter()
+                .map(|eid| reaction_add(rest, eid, REACTION_WORKING)),
+        )
+        .await;
+    }
 }
 
 /// Fire-and-forget: remove both 👀 and 💬 from all events. Spawned on turn complete.
-/// All removals run concurrently — bounded by `REACTION_TIMEOUT` per call.
+/// Capped at `REACTION_CONCURRENCY` concurrent requests per chunk to avoid
+/// unbounded HTTP fan-out on large batches.
 async fn clear_reactions(rest: crate::relay::RestClient, event_ids: Vec<String>) {
-    futures_util::future::join_all(event_ids.iter().flat_map(|eid| {
-        [
-            reaction_remove(&rest, eid, REACTION_SEEN),
-            reaction_remove(&rest, eid, REACTION_WORKING),
-        ]
-    }))
-    .await;
+    // Each event needs two removals (👀 and 💬); pair them and chunk by
+    // REACTION_CONCURRENCY pairs so the total concurrent requests stay bounded.
+    for chunk in event_ids.chunks(REACTION_CONCURRENCY) {
+        futures_util::future::join_all(chunk.iter().flat_map(|eid| {
+            [
+                reaction_remove(&rest, eid, REACTION_SEEN),
+                reaction_remove(&rest, eid, REACTION_WORKING),
+            ]
+        }))
+        .await;
+    }
 }
 
 // ─── Unit Tests ──────────────────────────────────────────────────────────────

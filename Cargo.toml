@@ -31,7 +31,7 @@ repository = "https://github.com/sprout-rs/sprout"
 [workspace.dependencies]
 # Runtime
 tokio       = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal", "process"] }
-tokio-util  = { version = "0.7", features = ["rt"] }
+tokio-util  = { version = "0.7", features = ["rt", "codec"] }
 
 # HTTP + WebSocket
 axum        = { version = "0.8", features = ["ws", "macros"] }

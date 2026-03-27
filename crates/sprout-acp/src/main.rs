@@ -27,7 +27,7 @@ use sprout_core::kind::{
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
     KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
@@ -48,8 +48,211 @@ fn is_subcommand(name: &str) -> bool {
 /// Timeout for the `sprout-acp models` subcommand (spawn + init + session/new).
 const MODELS_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Maximum crashes in a 60-second window before a slot's circuit opens.
+const CIRCUIT_BREAKER_THRESHOLD: usize = 3;
+/// Window for circuit-breaker crash counting.
+const CIRCUIT_BREAKER_WINDOW: Duration = Duration::from_secs(60);
+/// Cooldown before a tripped circuit breaker allows a probe respawn.
+const CIRCUIT_BREAKER_COOLDOWN: Duration = Duration::from_secs(300); // 5 minutes
+/// Base backoff delay for respawn (doubles per recent crash, capped at 30s).
+const RESPAWN_BASE_DELAY: Duration = Duration::from_secs(1);
+/// Maximum respawn backoff delay.
+const RESPAWN_MAX_DELAY: Duration = Duration::from_secs(30);
+
+/// Per-slot circuit breaker state.
+///
+/// `crash_times` holds timestamps of recent crashes within `CIRCUIT_BREAKER_WINDOW`.
+/// `open_until` is set when the threshold is hit; the circuit stays open until that
+/// instant, then allows one probe respawn (half-open). If the probe crashes, the
+/// circuit re-opens for another `CIRCUIT_BREAKER_COOLDOWN` period.
+///
+/// All state transitions go through methods on this struct — callers never
+/// manipulate `crash_times` or `open_until` directly.
+struct SlotCircuit {
+    crash_times: Vec<std::time::Instant>,
+    open_until: Option<std::time::Instant>,
+    /// True while a background respawn/refill task is in flight for this slot.
+    /// Prevents duplicate spawns from maintenance ticks that fire before the
+    /// previous spawn_and_init completes.
+    respawn_in_flight: bool,
+}
+
+/// Result of [`SlotCircuit::record_crash`].
+enum CrashVerdict {
+    /// Respawn is allowed after sleeping for this duration (jittered backoff).
+    Respawn(Duration),
+    /// Circuit is open — do not respawn.
+    CircuitOpen,
+    /// Circuit was open but cooldown has elapsed — one probe respawn is allowed
+    /// (no backoff sleep). If the probe crashes, the next `record_crash` will
+    /// immediately re-open the circuit.
+    HalfOpenProbe,
+}
+
+impl SlotCircuit {
+    /// Record a crash and decide whether to respawn.
+    ///
+    /// This is the **single canonical path** for all crash → respawn decisions.
+    /// Called by `respawn_agent_into`, `recover_panicked_agent`, and slot refill.
+    fn record_crash(&mut self) -> CrashVerdict {
+        let now = std::time::Instant::now();
+
+        // Half-open: cooldown elapsed → allow one probe.
+        if let Some(open_until) = self.open_until {
+            if now >= open_until {
+                // Pre-seed crash_times to threshold-1 so that if the probe
+                // itself crashes on the *next* call, the threshold is hit
+                // immediately and the circuit re-opens. This implements a
+                // "prove stability for one full window" policy.
+                self.crash_times.clear();
+                for _ in 0..(CIRCUIT_BREAKER_THRESHOLD - 1) {
+                    self.crash_times.push(now);
+                }
+                self.open_until = None;
+                return CrashVerdict::HalfOpenProbe;
+            } else {
+                return CrashVerdict::CircuitOpen;
+            }
+        }
+
+        // Record this crash and prune old entries.
+        self.crash_times.push(now);
+        self.crash_times
+            .retain(|&t| now.duration_since(t) < CIRCUIT_BREAKER_WINDOW);
+
+        let recent = self.crash_times.len();
+
+        if recent >= CIRCUIT_BREAKER_THRESHOLD {
+            self.open_until = Some(now + CIRCUIT_BREAKER_COOLDOWN);
+            return CrashVerdict::CircuitOpen;
+        }
+
+        // Exponential backoff: 1s * 2^(recent-1), capped at 30s, with ±20% jitter.
+        let base = RESPAWN_BASE_DELAY.saturating_mul(1u32 << (recent - 1).min(5));
+        let capped = base.min(RESPAWN_MAX_DELAY);
+        let jitter = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() as f64)
+            / 1_000_000_000.0; // 0.0..1.0
+        let factor = 0.8 + jitter * 0.4; // 0.8..1.2
+        CrashVerdict::Respawn(capped.mul_f64(factor))
+    }
+
+    /// Mark a spawn failure — opens the circuit so the slot isn't retried
+    /// on every heartbeat tick. Uses fresh `Instant::now()` so spawn latency
+    /// doesn't shorten the effective cooldown.
+    fn mark_spawn_failed(&mut self) {
+        self.open_until = Some(std::time::Instant::now() + CIRCUIT_BREAKER_COOLDOWN);
+    }
+
+    /// Check if an empty slot can be refilled. Unlike `record_crash`, this
+    /// does NOT record a new crash — it only checks whether the circuit
+    /// allows a respawn attempt.
+    ///
+    /// Returns `true` if respawn is allowed. For half-open probes, pre-seeds
+    /// crash_times so the next crash re-opens immediately. For normal refills
+    /// (no circuit was ever opened), crash history is preserved so the breaker
+    /// can still trip if the refilled agent crashes quickly.
+    fn can_refill(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        match self.open_until {
+            Some(open_until) => {
+                if now >= open_until {
+                    // Half-open probe: pre-seed crash_times.
+                    self.crash_times.clear();
+                    for _ in 0..(CIRCUIT_BREAKER_THRESHOLD - 1) {
+                        self.crash_times.push(now);
+                    }
+                    self.open_until = None;
+                    true
+                } else {
+                    false // cooldown not elapsed
+                }
+            }
+            None => true, // no circuit open — normal refill, preserve crash history
+        }
+    }
+}
+
+/// Result of a background respawn task.
+struct RespawnResult {
+    index: usize,
+    result: Result<AcpClient>,
+}
+
+/// RAII guard that ensures a `RespawnResult` is sent even if the task panics.
+/// Without this, a panicked respawn task would leave `respawn_in_flight = true`
+/// permanently, silently losing the slot forever.
+struct RespawnGuard {
+    index: usize,
+    tx: mpsc::Sender<RespawnResult>,
+    sent: bool,
+}
+
+impl RespawnGuard {
+    fn new(index: usize, tx: mpsc::Sender<RespawnResult>) -> Self {
+        Self {
+            index,
+            tx,
+            sent: false,
+        }
+    }
+
+    /// Send the result and disarm the guard. Uses `try_send` (sync) so there
+    /// is no await boundary between marking `sent` and actually enqueueing —
+    /// cancellation cannot slip between the two.
+    fn send(mut self, result: Result<AcpClient>) {
+        // Invariant: try_send succeeds because the channel capacity equals the
+        // slot count, and respawn_in_flight guarantees at most one outstanding
+        // result per slot. If this ever fails, the channel sizing or the
+        // respawn_in_flight guard has drifted — that's a bug, not a transient.
+        match self.tx.try_send(RespawnResult {
+            index: self.index,
+            result,
+        }) {
+            Ok(()) => self.sent = true,
+            Err(e) => {
+                tracing::error!(
+                    agent = self.index,
+                    "respawn result channel full or closed: {e}"
+                );
+                // Drop will fire and send a failure result as fallback.
+            }
+        }
+    }
+}
+
+impl Drop for RespawnGuard {
+    fn drop(&mut self) {
+        if !self.sent {
+            tracing::error!(
+                agent = self.index,
+                "respawn task exited without sending result — sending failure"
+            );
+            // Best-effort: try_send in Drop (can't await).
+            let _ = self.tx.try_send(RespawnResult {
+                index: self.index,
+                result: Err(anyhow::anyhow!("respawn task panicked or was cancelled")),
+            });
+        }
+    }
+}
+
+// ── Finding #16: propagate_legacy_env_vars before tokio runtime ───────────────
+//
+// Sync env-var propagation must run before the tokio runtime starts so that
+// any child processes inherit the correct environment. This must happen in the
+// sync entry point — `std::env::set_var` is only safe before tokio spawns
+// worker threads (Rust 2024 edition safety requirement).
+
+fn main() -> Result<()> {
+    config::propagate_legacy_env_vars();
+    tokio_main()
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn tokio_main() -> Result<()> {
     // Install the ring crypto provider for rustls (required for wss:// connections).
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -78,21 +281,79 @@ async fn main() -> Result<()> {
     tracing::info!("sprout-acp starting: {}", config.summary());
 
     // ── Step 1: Spawn N ACP agent subprocesses and initialize ─────────────────
-    let mut agents = Vec::with_capacity(config.agents as usize);
+    //
+    // Finding #10: one agent failing to start must not kill the whole pool.
+    // We attempt each spawn under a 60-second timeout; failures are logged and
+    // skipped. If ALL agents fail we return an error. A partial pool is valid —
+    // the harness continues with reduced capacity and logs a warning.
+    let mut agent_slots: Vec<Option<OwnedAgent>> = Vec::with_capacity(config.agents as usize);
     for i in 0..config.agents as usize {
-        let acp = spawn_and_init(&config).await?;
-        agents.push(OwnedAgent {
-            index: i,
-            acp,
-            state: SessionState::default(),
-            model_capabilities: None,
-            desired_model: config.model.clone(),
-        });
+        // Spawn OUTSIDE the timeout so we always own the child for cleanup.
+        // This matches the run_models pattern and prevents zombie leaks on
+        // init timeout (the cancelled future would drop the AcpClient via
+        // Drop which is best-effort only).
+        let spawn_result = AcpClient::spawn(&config.agent_command, &config.agent_args).await;
+        match spawn_result {
+            Ok(mut acp) => {
+                match tokio::time::timeout(Duration::from_secs(60), acp.initialize()).await {
+                    Ok(Ok(init_result)) => {
+                        tracing::info!(agent = i, "agent initialized: {init_result}");
+                        agent_slots.push(Some(OwnedAgent {
+                            index: i,
+                            acp,
+                            state: SessionState::default(),
+                            model_capabilities: None,
+                            desired_model: config.model.clone(),
+                        }));
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!(agent = i, "agent initialize failed: {e}");
+                        acp.shutdown().await;
+                        agent_slots.push(None);
+                    }
+                    Err(_) => {
+                        tracing::error!(agent = i, "agent timed out during init (60s)");
+                        acp.shutdown().await;
+                        agent_slots.push(None);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(agent = i, "agent failed to spawn: {e}");
+                agent_slots.push(None);
+            }
+        }
     }
-    tracing::info!("agent_pool_ready agents={}", agents.len());
-    let mut pool = AgentPool::new(agents);
+    let live_count = agent_slots.iter().filter(|s| s.is_some()).count();
+    if live_count == 0 {
+        return Err(anyhow::anyhow!(
+            "all {} agents failed to start — cannot continue",
+            config.agents
+        ));
+    }
+    if live_count < config.agents as usize {
+        tracing::warn!(
+            "started {}/{} agents — continuing with reduced pool",
+            live_count,
+            config.agents
+        );
+    }
+    tracing::info!("agent_pool_ready agents={}", live_count);
+    let mut pool = AgentPool::from_slots(agent_slots);
 
     // ── Step 2: Connect to Sprout relay ──────────────────────────────────────
+    //
+    // Finding #22: capture a startup watermark BEFORE connecting to the relay.
+    // This timestamp is used for membership notification replay (via
+    // startup_watermark) and as the initial subscribe_since for channels
+    // discovered at startup. The Subscribe handler falls back to
+    // subscribe_since when last_seen is None, closing the blind spot
+    // between "agents ready" and "first REQ sent".
+    let startup_watermark: u64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
     let pubkey_hex = config.keys.public_key().to_hex();
     let mut relay = HarnessRelay::connect(
         &config.relay_url,
@@ -102,6 +363,14 @@ async fn main() -> Result<()> {
     )
     .await
     .map_err(|e| anyhow::anyhow!("relay connect error: {e}"))?;
+
+    // Finding #22: tell the relay background task the watermark so it can use
+    // `since = watermark - 5s` on the first REQ instead of `since=now`.
+    // Best-effort: a failure here is non-fatal (we just lose the startup window
+    // protection, which is the same as the pre-fix behaviour).
+    if let Err(e) = relay.set_startup_watermark(startup_watermark).await {
+        tracing::warn!("failed to set startup watermark: {e}");
+    }
 
     tracing::info!("connected to relay at {}", config.relay_url);
 
@@ -173,6 +442,8 @@ async fn main() -> Result<()> {
                 }),
                 require_mention: !config.no_mention_filter,
                 filter: None,
+                compiled_filter: None,
+                consecutive_timeouts: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
                 prompt_tag: Some("@mention".into()),
             }]
         }
@@ -183,18 +454,14 @@ async fn main() -> Result<()> {
                 kinds: config.kinds_override.clone().unwrap_or_default(),
                 require_mention: false,
                 filter: None,
+                compiled_filter: None,
+                consecutive_timeouts: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
                 prompt_tag: Some("all".into()),
             }]
         }
         SubscribeMode::Config => {
-            let loaded = config::load_rules(&config.config_path)?;
-            if loaded.is_empty() {
-                tracing::warn!(
-                    "config file {} contains zero rules — agent will receive no events",
-                    config.config_path.display()
-                );
-            }
-            loaded
+            // load_rules() already warns if the config file has zero rules.
+            config::load_rules(&config.config_path)?
         }
     };
 
@@ -270,6 +537,19 @@ async fn main() -> Result<()> {
     let mut typing_channels: HashSet<Uuid> = HashSet::new();
     let mut presence_task: Option<tokio::task::JoinHandle<()>> = None;
 
+    // ── Step 6d: Maintenance (slot refill + queue compaction) ────────────────
+    // Runs at the TOP of every loop iteration via Instant check — cannot be
+    // starved by the biased select. Slot refill spawns background tasks so
+    // spawn_and_init never blocks the main loop.
+    let maintenance_interval = Duration::from_secs(30);
+    let mut last_maintenance = std::time::Instant::now();
+
+    // Channel for background respawn tasks to return completed agents.
+    // Bounded to agent count — at most one respawn per slot in flight.
+    let (respawn_tx, mut respawn_rx) = mpsc::channel::<RespawnResult>(config.agents as usize);
+    // JoinSet for respawn tasks so shutdown can abort them.
+    let mut respawn_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+
     // ── Step 7: Shutdown signal ───────────────────────────────────────────────
     let (shutdown_tx, mut shutdown_rx) = watch::channel(());
 
@@ -299,8 +579,10 @@ async fn main() -> Result<()> {
     // second are both processed. The seen_membership_ids set handles exact
     // replays that share the same timestamp.
     let mut membership_newest_ts: HashMap<Uuid, u64> = HashMap::new();
-    // Dedup set for exact membership event replays (bounded, cleared at 2000).
-    let mut seen_membership_ids: HashSet<String> = HashSet::new();
+    // Two-generation dedup for membership event replays (bounded, no amnesia).
+    // Rotates at 1000 entries instead of clearing the entire set at 2000.
+    let mut seen_membership_current: HashSet<String> = HashSet::new();
+    let mut seen_membership_previous: HashSet<String> = HashSet::new();
 
     // Channels the agent has been removed from. When a checked-out agent is
     // returned to the pool, its sessions for these channels are stripped, and
@@ -320,6 +602,20 @@ async fn main() -> Result<()> {
     // and capture it in TaskMeta at dispatch time.
     let mut removed_channels: HashSet<Uuid> = HashSet::new();
 
+    // ── Finding #14: Per-slot crash history for circuit breaker ───────────────
+    //
+    // One SlotCircuit per agent slot. crash_times entries are pruned to the last
+    // CIRCUIT_BREAKER_WINDOW on each respawn attempt. The Vec is indexed by
+    // agent slot index, so it must be sized to the configured pool capacity
+    // (not the live count, which may be smaller after partial startup).
+    let mut crash_history: Vec<SlotCircuit> = (0..config.agents as usize)
+        .map(|_| SlotCircuit {
+            crash_times: Vec::new(),
+            open_until: None,
+            respawn_in_flight: false,
+        })
+        .collect();
+
     // ── Step 8: Main orchestration loop ──────────────────────────────────────
     //
     // Branches 1 & 2 both need to borrow `pool`, but they access different
@@ -331,12 +627,69 @@ async fn main() -> Result<()> {
     }
 
     loop {
+        // ── Maintenance (runs at loop top — cannot be starved by biased select) ──
+        if last_maintenance.elapsed() >= maintenance_interval {
+            last_maintenance = std::time::Instant::now();
+            queue.compact_expired_state();
+
+            // Slot refill: spawn background tasks for empty slots whose
+            // circuit breaker allows it. spawn_and_init runs off the main
+            // loop so it never blocks event processing.
+            for (idx, slot) in crash_history.iter_mut().enumerate() {
+                if pool.slot_alive(idx) || slot.respawn_in_flight {
+                    continue;
+                }
+                if !slot.can_refill() {
+                    continue;
+                }
+                slot.respawn_in_flight = true;
+                tracing::info!(agent = idx, "slot refill: spawning background respawn");
+                let cmd = config.agent_command.clone();
+                let args = config.agent_args.clone();
+                let guard = RespawnGuard::new(idx, respawn_tx.clone());
+                respawn_tasks.spawn(async move {
+                    let result = spawn_and_init(&cmd, &args).await;
+                    guard.send(result);
+                });
+            }
+        }
+
+        // ── Collect completed background respawns (non-blocking) ─────────────
+        while let Ok(rr) = respawn_rx.try_recv() {
+            crash_history[rr.index].respawn_in_flight = false;
+            match rr.result {
+                Ok(acp) => {
+                    let agent = OwnedAgent {
+                        index: rr.index,
+                        acp,
+                        state: SessionState::default(),
+                        model_capabilities: None,
+                        desired_model: config.model.clone(),
+                    };
+                    pool.return_agent(agent);
+                    tracing::info!(agent = rr.index, "respawn complete");
+                }
+                Err(e) => {
+                    crash_history[rr.index].mark_spawn_failed();
+                    tracing::warn!(agent = rr.index, "respawn failed: {e} — circuit re-opened");
+                }
+            }
+        }
+
         // Borrow result_rx and join_set simultaneously via split-borrow helper.
         let pool_event: Option<PoolEvent> = {
             let (result_rx, join_set) = pool.rx_and_join_set();
             tokio::select! {
                 biased;
-                r = result_rx.recv() => Some(PoolEvent::Result(Box::new(r.expect("result channel closed")))),
+                // Finding #24: recv() returning None means all senders dropped
+                // (pool was torn down). Break cleanly instead of panicking.
+                r = result_rx.recv() => match r {
+                    Some(result) => Some(PoolEvent::Result(Box::new(result))),
+                    None => {
+                        tracing::info!("result channel closed — exiting main loop");
+                        break;
+                    }
+                },
                 // Guard: join_next() returns None immediately when JoinSet is
                 // empty, which would cause a tight spin. Only poll when there
                 // are in-flight tasks.
@@ -372,7 +725,10 @@ async fn main() -> Result<()> {
                                 // Why not `<=`? That would suppress legitimate live
                                 // add→remove (or remove→add) sequences in the same second,
                                 // leaving the harness in the wrong membership state.
-                                if !seen_membership_ids.insert(eid.clone()) {
+                                // Two-generation dedup: check both sets before inserting.
+                                if seen_membership_current.contains(&eid)
+                                    || seen_membership_previous.contains(&eid)
+                                {
                                     tracing::debug!(
                                         channel_id = %ch,
                                         kind = kind_u32,
@@ -380,13 +736,11 @@ async fn main() -> Result<()> {
                                     );
                                     continue;
                                 }
-                                // Bound the dedup set to prevent unbounded growth.
-                                // Re-insert the current ID after clearing so it stays
-                                // protected against immediate replay (same pattern as
-                                // relay.rs BgState::record_event).
-                                if seen_membership_ids.len() > 2000 {
-                                    seen_membership_ids.clear();
-                                    seen_membership_ids.insert(eid);
+                                seen_membership_current.insert(eid);
+                                // Rotate at 1000: current → previous, no amnesia window.
+                                if seen_membership_current.len() >= 1000 {
+                                    seen_membership_previous =
+                                        std::mem::take(&mut seen_membership_current);
                                 }
                                 if let Some(&newest) = membership_newest_ts.get(&ch) {
                                     if ts < newest {
@@ -592,10 +946,13 @@ async fn main() -> Result<()> {
                     }
                 } => {
                     let _ = result_rx;
+                    // Use try_publish (non-blocking) for typing indicators —
+                    // they're ephemeral and must not block the main loop during
+                    // relay reconnection (#35).
                     for &ch in &typing_channels {
                         if let Ok(event) = relay.build_typing_event(ch) {
-                            if let Err(e) = relay.publish_event(event).await {
-                                tracing::debug!("typing indicator failed for {ch}: {e}");
+                            if let Err(e) = relay.try_publish_event(event) {
+                                tracing::debug!("typing indicator dropped for {ch}: {e}");
                             }
                         }
                     }
@@ -621,9 +978,10 @@ async fn main() -> Result<()> {
                     *result,
                     &mut heartbeat_in_flight,
                     &removed_channels,
-                )
-                .await
-                    == LoopAction::Exit
+                    &mut crash_history,
+                    &respawn_tx,
+                    &mut respawn_tasks,
+                ) == LoopAction::Exit
                 {
                     break;
                 }
@@ -634,9 +992,10 @@ async fn main() -> Result<()> {
                     &mut heartbeat_in_flight,
                     &removed_channels,
                     &mut typing_channels,
-                )
-                .await
-                    == LoopAction::Exit
+                    &mut crash_history,
+                    &respawn_tx,
+                    &mut respawn_tasks,
+                ) == LoopAction::Exit
                 {
                     break;
                 }
@@ -652,8 +1011,10 @@ async fn main() -> Result<()> {
                     &mut heartbeat_in_flight,
                     &removed_channels,
                     &mut typing_channels,
-                )
-                .await;
+                    &mut crash_history,
+                    &respawn_tx,
+                    &mut respawn_tasks,
+                );
                 if pool.live_count() == 0 {
                     tracing::error!("all agents dead — exiting");
                     break;
@@ -669,10 +1030,30 @@ async fn main() -> Result<()> {
     // 30 s is generous for in-flight prompts to be cancelled; using
     // max_turn_duration here would cause Ctrl+C to hang for up to an hour.
     let grace = Duration::from_secs(30);
+    // Best-effort drain of both join_set and result_rx during the grace period.
+    // Tasks that finish normally send their OwnedAgent through result_rx — we
+    // explicitly shut them down here to reap child processes. If the grace
+    // period expires, remaining tasks are aborted and fall back to
+    // AcpClient::Drop (start_kill + try_wait — best-effort, not guaranteed).
+    let (rx_ref, js_ref) = pool.rx_and_join_set();
     let shutdown_result = tokio::time::timeout(grace, async {
-        while let Some(result) = pool.join_set.join_next().await {
-            if let Err(e) = result {
-                tracing::warn!("task finished with error during shutdown: {e}");
+        loop {
+            tokio::select! {
+                result = js_ref.join_next() => {
+                    match result {
+                        Some(Err(e)) => tracing::warn!("task error during shutdown: {e}"),
+                        Some(Ok(())) => {}
+                        None => break, // join_set empty
+                    }
+                }
+                maybe_result = rx_ref.recv() => {
+                    if let Some(mut pr) = maybe_result {
+                        let idx = pr.agent.index;
+                        pr.agent.acp.shutdown().await;
+                        tracing::debug!(agent = idx, "reaped checked-out agent on shutdown");
+                    }
+                    // If None, channel closed — tasks are done.
+                }
             }
         }
     })
@@ -681,7 +1062,38 @@ async fn main() -> Result<()> {
         tracing::warn!("grace period expired, aborting remaining tasks");
         pool.join_set.shutdown().await;
     }
+    // Drain any remaining results that arrived after join_set drained but
+    // before tasks were aborted.
+    while let Ok(mut pr) = pool.result_rx_try_recv() {
+        let idx = pr.agent.index;
+        pr.agent.acp.shutdown().await;
+        tracing::debug!(agent = idx, "reaped late-arriving agent on shutdown");
+    }
+    // Explicitly shut down idle agents still sitting in their slots.
+    for slot in pool.agents_mut().iter_mut() {
+        if let Some(agent) = slot.take() {
+            let idx = agent.index;
+            let mut acp = agent.acp;
+            acp.shutdown().await;
+            tracing::debug!(agent = idx, "reaped idle agent on shutdown");
+        }
+    }
     drop(pool);
+
+    // Abort any in-flight respawn tasks. They may be sleeping in backoff or
+    // running spawn_and_init — either way, we don't want them spawning new
+    // children after the main loop has exited. RespawnGuard::Drop sends a
+    // failure result for aborted tasks, so respawn_in_flight is cleared.
+    respawn_tasks.shutdown().await;
+
+    // Drain any respawn results that completed before the abort. Explicitly
+    // shut down returned agents instead of relying on AcpClient::Drop.
+    while let Ok(rr) = respawn_rx.try_recv() {
+        if let Ok(mut acp) = rr.result {
+            acp.shutdown().await;
+            tracing::debug!(agent = rr.index, "reaped respawned agent on shutdown");
+        }
+    }
 
     // Cancel any in-flight presence heartbeat before sending offline.
     if let Some(h) = presence_task.take() {
@@ -702,6 +1114,10 @@ async fn main() -> Result<()> {
             Err(_) => tracing::warn!("offline presence timed out"),
         }
     }
+
+    // Graceful relay shutdown — sends WebSocket close frame and waits up to 5s
+    // for the background task to finish, rather than aborting immediately (#40).
+    relay.shutdown().await;
 
     tracing::info!("sprout-acp stopped");
     Ok(())
@@ -778,13 +1194,17 @@ fn dispatch_pending(
 
 // ── handle_prompt_result ──────────────────────────────────────────────────────
 
-async fn handle_prompt_result(
+#[allow(clippy::too_many_arguments)]
+fn handle_prompt_result(
     pool: &mut AgentPool,
     queue: &mut EventQueue,
     config: &Config,
     mut result: PromptResult,
     heartbeat_in_flight: &mut bool,
     removed_channels: &HashSet<Uuid>,
+    crash_history: &mut [SlotCircuit],
+    respawn_tx: &mpsc::Sender<RespawnResult>,
+    respawn_tasks: &mut tokio::task::JoinSet<()>,
 ) -> LoopAction {
     let before = pool.task_map().len();
     let agent_index = result.agent.index;
@@ -792,11 +1212,11 @@ async fn handle_prompt_result(
         .retain(|_, meta| meta.agent_index != agent_index);
     debug_assert_eq!(before, pool.task_map().len() + 1);
 
-    match &result.source {
-        PromptSource::Channel(ch) => queue.mark_complete(*ch),
-        PromptSource::Heartbeat => *heartbeat_in_flight = false,
-    }
-
+    // Requeue BEFORE mark_complete: requeue() sets retry_after with a future
+    // deadline, and mark_complete() checks for it to decide whether to preserve
+    // retry_counts. If mark_complete runs first, retry_counts is cleared and
+    // every retry starts at attempt 1 — defeating exponential backoff and
+    // dead-letter protection.
     if let Some(batch) = result.batch {
         // Don't requeue batches for channels the agent was removed from —
         // those events are stale and should be silently dropped.
@@ -809,6 +1229,11 @@ async fn handle_prompt_result(
                 "dropping failed batch for removed channel"
             );
         }
+    }
+
+    match &result.source {
+        PromptSource::Channel(ch) => queue.mark_complete(*ch),
+        PromptSource::Heartbeat => *heartbeat_in_flight = false,
     }
 
     // Strip sessions for channels the agent was removed from while this
@@ -827,6 +1252,15 @@ async fn handle_prompt_result(
     let agent_index = result.agent.index;
 
     match result.outcome {
+        // Successful prompt — return agent to pool.
+        PromptOutcome::Ok(_) => {
+            tracing::debug!(
+                agent = agent_index,
+                outcome = outcome_label,
+                "agent_returned"
+            );
+            pool.return_agent(result.agent);
+        }
         // Fatal outcomes: the agent subprocess is dead or poisoned — respawn it.
         PromptOutcome::AgentExited | PromptOutcome::Timeout => {
             tracing::debug!(
@@ -835,24 +1269,66 @@ async fn handle_prompt_result(
                 "agent_returned — respawning"
             );
             let index = result.agent.index;
-            match respawn_agent_into(result.agent, config).await {
-                Ok(agent) => pool.return_agent(agent),
-                Err(e) => {
-                    tracing::error!("failed to respawn agent {index}: {e}");
-                    if pool.live_count() == 0 {
-                        tracing::error!("all agents dead — exiting");
-                        return LoopAction::Exit;
-                    }
+            let slot_history = &mut crash_history[index];
+            if !spawn_respawn_task(
+                result.agent,
+                config,
+                slot_history,
+                respawn_tx,
+                respawn_tasks,
+            ) {
+                // Circuit open — slot stays empty until maintenance refill.
+                if pool.live_count() == 0 {
+                    tracing::error!("all agents dead — exiting");
+                    return LoopAction::Exit;
                 }
             }
         }
-        _ => {
-            tracing::debug!(
-                agent = agent_index,
-                outcome = outcome_label,
-                "agent_returned"
+        // Errors fall into two categories:
+        //
+        // 1. Transport-class (Io, WriteTimeout, Timeout, Protocol): the stdio
+        //    pipe may be corrupted or the agent desynchronized. These are fatal
+        //    to the agent regardless of whether they occurred during session
+        //    creation or an active prompt — respawn unconditionally.
+        //
+        // 2. Application-class (IdleTimeout, HardTimeout, Json): the pipe is
+        //    intact but the prompt failed. Return the agent to the pool so it
+        //    can be reused for the next event.
+        PromptOutcome::Error(ref e) => {
+            let is_transport_error = matches!(
+                e,
+                acp::AcpError::Io(_)
+                    | acp::AcpError::WriteTimeout(_)
+                    | acp::AcpError::Timeout(_)
+                    | acp::AcpError::Protocol(_)
             );
-            pool.return_agent(result.agent);
+            if is_transport_error {
+                tracing::warn!(
+                    agent = agent_index,
+                    outcome = outcome_label,
+                    "transport/protocol error — respawning agent"
+                );
+                let index = result.agent.index;
+                let slot_history = &mut crash_history[index];
+                if !spawn_respawn_task(
+                    result.agent,
+                    config,
+                    slot_history,
+                    respawn_tx,
+                    respawn_tasks,
+                ) && pool.live_count() == 0
+                {
+                    tracing::error!("all agents dead — exiting");
+                    return LoopAction::Exit;
+                }
+            } else {
+                tracing::debug!(
+                    agent = agent_index,
+                    outcome = outcome_label,
+                    "agent_returned (application error — pipe intact)"
+                );
+                pool.return_agent(result.agent);
+            }
         }
     }
     LoopAction::Continue
@@ -860,7 +1336,8 @@ async fn handle_prompt_result(
 
 // ── recover_panicked_agent ────────────────────────────────────────────────────
 
-async fn recover_panicked_agent(
+#[allow(clippy::too_many_arguments)]
+fn recover_panicked_agent(
     pool: &mut AgentPool,
     queue: &mut EventQueue,
     config: &Config,
@@ -868,6 +1345,9 @@ async fn recover_panicked_agent(
     heartbeat_in_flight: &mut bool,
     removed_channels: &HashSet<Uuid>,
     typing_channels: &mut HashSet<Uuid>,
+    crash_history: &mut [SlotCircuit],
+    respawn_tx: &mpsc::Sender<RespawnResult>,
+    respawn_tasks: &mut tokio::task::JoinSet<()>,
 ) {
     let task_id = join_error.id();
     let Some(meta) = pool.task_map_mut().remove(&task_id) else {
@@ -875,6 +1355,21 @@ async fn recover_panicked_agent(
         return;
     };
     let i = meta.agent_index;
+
+    // Requeue BEFORE mark_complete (same rationale as handle_prompt_result).
+    if let Some(batch) = meta.recoverable_batch {
+        if let Some(ch) = meta.channel_id {
+            if !removed_channels.contains(&ch) {
+                queue.requeue(batch);
+                tracing::warn!("requeued batch for panicked agent {i}");
+            } else {
+                tracing::debug!(
+                    channel_id = %ch,
+                    "dropping panicked batch for removed channel"
+                );
+            }
+        }
+    }
 
     if let Some(ch) = meta.channel_id {
         queue.mark_complete(ch);
@@ -885,45 +1380,57 @@ async fn recover_panicked_agent(
         tracing::warn!("cleared wedged heartbeat_in_flight from panicked agent {i}");
     }
 
-    if let Some(batch) = meta.recoverable_batch {
-        // Don't requeue batches for removed channels.
-        if !removed_channels.contains(&batch.channel_id) {
-            queue.requeue(batch);
-            tracing::warn!("requeued batch for panicked agent {i}");
-        } else {
-            tracing::debug!(
-                channel_id = %batch.channel_id,
-                "dropping panicked batch for removed channel"
-            );
-        }
-    }
+    // Panics count as crashes for the circuit breaker.
+    // The panicked task already dropped the AcpClient, so we just need to
+    // check the circuit and spawn a fresh agent in the background.
+    let slot = &mut crash_history[i];
 
-    match spawn_and_init(config).await {
-        Ok(acp) => {
-            pool.agents_mut()[i] = Some(OwnedAgent {
-                index: i,
-                acp,
-                state: SessionState::default(),
-                model_capabilities: None,
-                desired_model: config.model.clone(),
-            });
-            tracing::info!("respawned agent {i} after panic");
+    let delay = match slot.record_crash() {
+        CrashVerdict::CircuitOpen => {
+            tracing::error!(agent = i, "circuit open after panic — not respawning");
+            return;
         }
-        Err(e) => {
-            tracing::error!("failed to respawn agent {i} after panic: {e}");
+        CrashVerdict::HalfOpenProbe => {
+            tracing::info!(agent = i, "circuit half-open — probe respawn after panic");
+            Duration::ZERO
         }
-    }
+        CrashVerdict::Respawn(d) => {
+            tracing::info!(
+                agent = i,
+                delay_ms = d.as_millis(),
+                "respawn backoff after panic"
+            );
+            d
+        }
+    };
+
+    // Spawn respawn work off the main loop.
+    slot.respawn_in_flight = true;
+    let cmd = config.agent_command.clone();
+    let args = config.agent_args.clone();
+    let guard = RespawnGuard::new(i, respawn_tx.clone());
+    respawn_tasks.spawn(async move {
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        let result = spawn_and_init(&cmd, &args).await;
+        guard.send(result);
+    });
 }
 
 // ── drain_ready_join_results ──────────────────────────────────────────────────
 
-async fn drain_ready_join_results(
+#[allow(clippy::too_many_arguments)]
+fn drain_ready_join_results(
     pool: &mut AgentPool,
     queue: &mut EventQueue,
     config: &Config,
     heartbeat_in_flight: &mut bool,
     removed_channels: &HashSet<Uuid>,
     typing_channels: &mut HashSet<Uuid>,
+    crash_history: &mut [SlotCircuit],
+    respawn_tx: &mpsc::Sender<RespawnResult>,
+    respawn_tasks: &mut tokio::task::JoinSet<()>,
 ) -> LoopAction {
     while let Some(Some(join_result)) = pool.join_set.join_next().now_or_never() {
         if let Err(join_error) = join_result {
@@ -936,8 +1443,10 @@ async fn drain_ready_join_results(
                 heartbeat_in_flight,
                 removed_channels,
                 typing_channels,
-            )
-            .await;
+                crash_history,
+                respawn_tx,
+                respawn_tasks,
+            );
             if pool.live_count() == 0 {
                 return LoopAction::Exit;
             }
@@ -1007,33 +1516,85 @@ fn default_heartbeat_prompt() -> String {
 
 // ── respawn_agent_into ────────────────────────────────────────────────────────
 
-async fn respawn_agent_into(old_agent: OwnedAgent, config: &Config) -> Result<OwnedAgent> {
+/// Spawn a background respawn task for a crashed agent slot.
+///
+/// Does the circuit breaker check synchronously (non-blocking), then spawns
+/// the actual shutdown + backoff + spawn_and_init work into a background task.
+/// The result comes back through `respawn_tx` so the main loop stays responsive.
+///
+/// Returns `true` if a respawn task was spawned, `false` if the circuit is open.
+fn spawn_respawn_task(
+    old_agent: OwnedAgent,
+    config: &Config,
+    slot: &mut SlotCircuit,
+    respawn_tx: &mpsc::Sender<RespawnResult>,
+    respawn_tasks: &mut tokio::task::JoinSet<()>,
+) -> bool {
     let index = old_agent.index;
-    drop(old_agent); // kill the old process via AcpClient Drop
-    let acp = spawn_and_init(config).await?;
-    Ok(OwnedAgent {
-        index,
-        acp,
-        state: SessionState::default(),
-        model_capabilities: None,
-        desired_model: config.model.clone(),
-    })
+
+    // Circuit breaker: record crash, decide whether to respawn.
+    let delay = match slot.record_crash() {
+        CrashVerdict::CircuitOpen => {
+            tracing::error!(agent = index, "circuit open — not respawning");
+            return false;
+        }
+        CrashVerdict::HalfOpenProbe => {
+            tracing::info!(agent = index, "circuit half-open — probe respawn");
+            Duration::ZERO
+        }
+        CrashVerdict::Respawn(d) => {
+            tracing::info!(agent = index, delay_ms = d.as_millis(), "respawn backoff");
+            d
+        }
+    };
+
+    slot.respawn_in_flight = true;
+
+    // Spawn the actual work (shutdown + sleep + spawn + init) off the main loop.
+    let cmd = config.agent_command.clone();
+    let args = config.agent_args.clone();
+    let guard = RespawnGuard::new(index, respawn_tx.clone());
+    respawn_tasks.spawn(async move {
+        // Shutdown old agent (reap child, prevent zombie).
+        let mut agent = old_agent;
+        agent.acp.shutdown().await;
+        drop(agent);
+
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+
+        let result = spawn_and_init(&cmd, &args).await;
+        guard.send(result);
+    });
+
+    true
 }
 
 // ── spawn_and_init ────────────────────────────────────────────────────────────
 
-async fn spawn_and_init(config: &Config) -> Result<AcpClient> {
-    let mut acp = AcpClient::spawn(&config.agent_command, &config.agent_args)
+/// Spawn an agent subprocess and run the MCP `initialize` handshake.
+///
+/// Takes owned args so it can run in a background `tokio::spawn` task without
+/// borrowing `Config`. All respawn/refill paths use this.
+async fn spawn_and_init(command: &str, args: &[String]) -> Result<AcpClient> {
+    let mut acp = AcpClient::spawn(command, args)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
 
-    let init_result = acp
-        .initialize()
-        .await
-        .map_err(|e| anyhow::anyhow!("agent initialize failed: {e}"))?;
-
-    tracing::info!("agent initialized: {init_result}");
-    Ok(acp)
+    match acp.initialize().await {
+        Ok(init_result) => {
+            tracing::info!("agent initialized: {init_result}");
+            Ok(acp)
+        }
+        Err(e) => {
+            // Explicitly shut down the spawned child to prevent zombie/leak.
+            // Drop only does start_kill + try_wait (best-effort); shutdown()
+            // does start_kill + bounded wait (guaranteed reap).
+            acp.shutdown().await;
+            Err(anyhow::anyhow!("agent initialize failed: {e}"))
+        }
+    }
 }
 
 // ── build_mcp_servers ─────────────────────────────────────────────────────────
@@ -1191,6 +1752,9 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                 },
                 EnvVar {
                     name: "SPROUT_PRIVATE_KEY".into(),
+                    // bech32 encoding of a valid secret key is infallible.
+                    // Panic here is correct: injecting a bogus secret would cause
+                    // delayed, hard-to-diagnose agent failures downstream.
                     value: config
                         .keys
                         .secret_key()

@@ -5,9 +5,11 @@
 //! - Evaluating boolean filter expressions with a hard timeout
 //! - Matching events against ordered subscription rules (first match wins)
 
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use tracing::warn;
+use tracing::{error, warn};
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -77,7 +79,13 @@ impl ChannelScope {
 }
 
 /// A single subscription rule from the agent config.
-#[derive(Debug, Clone, serde::Deserialize)]
+///
+/// # Thread safety
+///
+/// `consecutive_timeouts` is an `AtomicU32` so `match_event` can update it
+/// without requiring `&mut self` — rules are shared via `Arc<[SubscriptionRule]>`
+/// across the event-dispatch loop.
+#[derive(Debug, serde::Deserialize)]
 pub struct SubscriptionRule {
     /// Human-readable rule name; used as fallback `prompt_tag`.
     pub name: String,
@@ -95,6 +103,52 @@ pub struct SubscriptionRule {
     /// Tag passed to the prompt template. Falls back to `name` if absent.
     #[serde(default)]
     pub prompt_tag: Option<String>,
+    /// Pre-compiled evalexpr AST for the `filter` expression (finding #34).
+    ///
+    /// Populated by `load_rules()` at startup so `match_event` never re-parses
+    /// the expression string on the hot path. `None` when `filter` is `None`
+    /// or the rule was constructed without calling `load_rules()` (e.g. tests).
+    #[serde(skip)]
+    pub compiled_filter: Option<Arc<evalexpr::Node>>,
+    /// Consecutive filter-evaluation timeout counter (finding #25).
+    ///
+    /// Incremented on each timeout; reset on any successful evaluation.
+    /// When this reaches `MAX_CONSECUTIVE_TIMEOUTS`, the rule is treated as
+    /// disabled and `match_event` returns `None` (fail-closed).
+    #[serde(skip)]
+    pub consecutive_timeouts: Arc<AtomicU32>,
+}
+
+impl Default for SubscriptionRule {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            channels: ChannelScope::All("all".into()),
+            kinds: Vec::new(),
+            require_mention: false,
+            filter: None,
+            prompt_tag: None,
+            compiled_filter: None,
+            consecutive_timeouts: Arc::new(AtomicU32::new(0)),
+        }
+    }
+}
+
+impl Clone for SubscriptionRule {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            channels: self.channels.clone(),
+            kinds: self.kinds.clone(),
+            require_mention: self.require_mention,
+            filter: self.filter.clone(),
+            prompt_tag: self.prompt_tag.clone(),
+            compiled_filter: self.compiled_filter.clone(),
+            // Share the same counter across clones so all copies of a rule
+            // agree on the timeout state.
+            consecutive_timeouts: self.consecutive_timeouts.clone(),
+        }
+    }
 }
 
 // ── MatchedRule ───────────────────────────────────────────────────────────────
@@ -120,13 +174,41 @@ const MAX_EXPR_LEN: usize = 4096;
 /// Maximum wall-clock time allowed for a single evalexpr evaluation.
 const EVAL_TIMEOUT: Duration = Duration::from_millis(100);
 
+/// Maximum concurrent blocking filter evaluations (finding #13 / Issue 3).
+///
+/// The semaphore permit is moved into each `spawn_blocking` closure so it is
+/// held until the blocking thread finishes — not just until the caller's timeout
+/// fires. This truly bounds the number of live blocking evals even under repeated
+/// slow expressions.
+const MAX_CONCURRENT_FILTER_EVALS: usize = 4;
+
+/// Semaphore that bounds concurrent `spawn_blocking` filter evaluations.
+///
+/// Wrapped in `Arc` so `acquire_owned()` can be used, which returns an
+/// `OwnedSemaphorePermit` that can be moved into the `spawn_blocking` closure.
+/// This ensures the permit is held until the blocking task actually finishes —
+/// not just until the caller's timeout fires — so the semaphore truly bounds
+/// the number of live blocking threads (finding #13 / Issue 3).
+static FILTER_EVAL_SEMAPHORE: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_FILTER_EVALS)));
+
 /// Evaluate a boolean filter expression against a `FilterContext`.
 ///
 /// - Caps expression length at [`MAX_EXPR_LEN`] bytes.
+/// - Acquires an owned permit from [`FILTER_EVAL_SEMAPHORE`] and moves it into
+///   the blocking closure so it is held until the task finishes, not just until
+///   the caller's timeout fires (finding #13 / Issue 3).
 /// - Runs evaluation on a blocking thread with a [`EVAL_TIMEOUT`] hard timeout.
+/// - When a pre-compiled `node` is provided (via `Arc`), uses
+///   `node.eval_boolean_with_context()` instead of re-parsing the expression
+///   string on every call (finding #34).
 /// - Registers custom string helpers: `str_contains`, `str_starts_with`,
 ///   `str_ends_with`, `str_len` (duplicated intentionally from sprout-workflow).
-pub async fn evaluate_filter(expr: &str, ctx: &FilterContext) -> Result<bool, FilterError> {
+pub async fn evaluate_filter(
+    expr: &str,
+    ctx: &FilterContext,
+    node: Option<Arc<evalexpr::Node>>,
+) -> Result<bool, FilterError> {
     if expr.len() > MAX_EXPR_LEN {
         return Err(FilterError::ExpressionTooLong {
             len: expr.len(),
@@ -137,10 +219,33 @@ pub async fn evaluate_filter(expr: &str, ctx: &FilterContext) -> Result<bool, Fi
     let eval_ctx = build_eval_context(ctx).map_err(FilterError::EvalError)?;
     let expr_owned = expr.to_owned();
 
+    // Acquire an *owned* permit so it can be moved into the spawn_blocking closure.
+    // The permit is held until the blocking task actually completes — not just until
+    // the caller's timeout fires — so the semaphore truly bounds the number of live
+    // blocking threads even when callers time out (Issue 3 / finding #13).
+    //
+    // The acquire itself is bounded by EVAL_TIMEOUT: if all permits are held by
+    // wedged blocking tasks, we time out instead of blocking the main event loop.
+    let permit = tokio::time::timeout(
+        EVAL_TIMEOUT,
+        Arc::clone(&*FILTER_EVAL_SEMAPHORE).acquire_owned(),
+    )
+    .await
+    .map_err(|_| FilterError::Timeout)?
+    .map_err(|e| FilterError::EvalError(format!("semaphore closed: {e}")))?;
+
     let result = tokio::time::timeout(
         EVAL_TIMEOUT,
         tokio::task::spawn_blocking(move || {
-            evalexpr::eval_boolean_with_context(&expr_owned, &eval_ctx)
+            // Hold the permit for the lifetime of this closure: released only
+            // when the blocking thread returns, not when the caller times out.
+            let _permit = permit;
+            // Use the pre-compiled AST when available; fall back to string parsing.
+            if let Some(node) = node {
+                node.eval_boolean_with_context(&eval_ctx)
+            } else {
+                evalexpr::eval_boolean_with_context(&expr_owned, &eval_ctx)
+            }
         }),
     )
     .await
@@ -243,6 +348,13 @@ fn build_eval_context(ctx: &FilterContext) -> Result<evalexpr::HashMapContext, S
 
 // ── match_event ───────────────────────────────────────────────────────────────
 
+/// Consecutive timeout threshold before a rule is treated as disabled.
+///
+/// After this many back-to-back timeouts on a single rule, the rule is logged
+/// at ERROR level and `match_event` returns `None` (fail-closed). This prevents
+/// a pathological expression from silently widening the subscription.
+const MAX_CONSECUTIVE_TIMEOUTS: u32 = 5;
+
 /// Match a Nostr event against an ordered list of subscription rules.
 ///
 /// Rules are evaluated in order; the first rule whose conditions all pass
@@ -252,9 +364,22 @@ fn build_eval_context(ctx: &FilterContext) -> Result<evalexpr::HashMapContext, S
 ///
 /// 1. **channels** — if not `"all"`, the event's channel UUID must be in the list.
 /// 2. **kinds** — if non-empty, the event kind must be in the list.
-/// 3. **require_mention** — if `true`, a `p` tag matching `agent_pubkey_hex` must exist.
+/// 3. **require_mention** — if `true`, a `p` tag matching `agent_pubkey_hex` must
+///    exist. Tag kind is checked via `tag.as_slice()` for stable, library-independent
+///    access (finding #45).
 /// 4. **filter** — if `Some`, the evalexpr expression must evaluate to `true`.
-///    Evaluation errors are logged as warnings and treated as non-matching.
+///
+/// # Fail-closed filter error handling (finding #25)
+///
+/// Any filter evaluation error — including timeout — causes the **entire
+/// `match_event` call** to return `None` (no match for any rule). We never
+/// fall through to the next rule on error because that would silently widen
+/// the subscription: a broken/slow rule would let events through that were
+/// meant to be gated.
+///
+/// After [`MAX_CONSECUTIVE_TIMEOUTS`] consecutive timeouts on a single rule,
+/// that rule is logged at ERROR and the call returns `None` immediately to
+/// avoid blocking the event loop indefinitely.
 pub async fn match_event(
     event: &nostr::Event,
     channel_id: uuid::Uuid,
@@ -274,10 +399,14 @@ pub async fn match_event(
             continue;
         }
 
-        // 3. Mention check — look for a `p` tag whose value equals agent_pubkey_hex.
+        // 3. Mention check — look for a `p` tag whose first element equals
+        //    agent_pubkey_hex. Uses tag.as_slice() for stable, library-independent
+        //    access (finding #45) — avoids relying on the Display impl of tag kind.
         if rule.require_mention {
             let mentioned = event.tags.iter().any(|tag| {
-                tag.kind().to_string() == "p" && (tag.content() == Some(agent_pubkey_hex))
+                let s = tag.as_slice();
+                s.first().map(|k| k.as_str()) == Some("p")
+                    && s.get(1).map(|v| v.as_str()) == Some(agent_pubkey_hex)
             });
             if !mentioned {
                 continue;
@@ -286,12 +415,49 @@ pub async fn match_event(
 
         // 4. Optional evalexpr filter expression.
         if let Some(expr) = &rule.filter {
-            match evaluate_filter(expr, &filter_ctx).await {
-                Ok(true) => {}
-                Ok(false) => continue,
-                Err(e) => {
-                    warn!(rule = %rule.name, error = %e, "filter expression error; skipping rule");
+            // Skip rules that have timed out too many times — treat as disabled.
+            let prior_timeouts = rule.consecutive_timeouts.load(Ordering::Relaxed);
+            if prior_timeouts >= MAX_CONSECUTIVE_TIMEOUTS {
+                error!(
+                    rule = %rule.name,
+                    rule_index = index,
+                    timeouts = prior_timeouts,
+                    "filter rule disabled after too many consecutive timeouts; \
+                     failing closed (no match for any rule)"
+                );
+                // Fail-closed: disabled rule → no match for this event.
+                return None;
+            }
+
+            match evaluate_filter(expr, &filter_ctx, rule.compiled_filter.clone()).await {
+                Ok(true) => {
+                    // Successful match — reset timeout counter.
+                    rule.consecutive_timeouts.store(0, Ordering::Relaxed);
+                }
+                Ok(false) => {
+                    rule.consecutive_timeouts.store(0, Ordering::Relaxed);
                     continue;
+                }
+                Err(FilterError::Timeout) => {
+                    let n = rule.consecutive_timeouts.fetch_add(1, Ordering::Relaxed) + 1;
+                    warn!(
+                        rule = %rule.name,
+                        rule_index = index,
+                        consecutive_timeouts = n,
+                        "filter expression timed out; failing closed (no match for any rule)"
+                    );
+                    // Fail-closed: timeout → no match, not next rule.
+                    return None;
+                }
+                Err(e) => {
+                    warn!(
+                        rule = %rule.name,
+                        rule_index = index,
+                        error = %e,
+                        "filter expression error; failing closed (no match for any rule)"
+                    );
+                    // Fail-closed: any error → no match, not next rule.
+                    return None;
                 }
             }
         }
@@ -337,6 +503,26 @@ mod tests {
         Uuid::new_v4()
     }
 
+    fn make_rule(
+        name: &str,
+        channels: ChannelScope,
+        kinds: Vec<u32>,
+        mention: bool,
+        filter: Option<&str>,
+        prompt_tag: Option<&str>,
+    ) -> SubscriptionRule {
+        SubscriptionRule {
+            name: name.into(),
+            channels,
+            kinds,
+            require_mention: mention,
+            filter: filter.map(|s| s.into()),
+            prompt_tag: prompt_tag.map(|s| s.into()),
+            compiled_filter: None,
+            consecutive_timeouts: Arc::new(AtomicU32::new(0)),
+        }
+    }
+
     // ── FilterContext ─────────────────────────────────────────────────────────
 
     #[test]
@@ -359,12 +545,12 @@ mod tests {
         let event = make_event(9, "P1 incident in production");
         let ctx = FilterContext::from_event(&event, any_channel());
 
-        let result = evaluate_filter(r#"str_contains(content, "P1")"#, &ctx)
+        let result = evaluate_filter(r#"str_contains(content, "P1")"#, &ctx, None)
             .await
             .unwrap();
         assert!(result);
 
-        let result = evaluate_filter(r#"str_contains(content, "P2")"#, &ctx)
+        let result = evaluate_filter(r#"str_contains(content, "P2")"#, &ctx, None)
             .await
             .unwrap();
         assert!(!result);
@@ -375,10 +561,10 @@ mod tests {
         let event = make_event(9, "some content");
         let ctx = FilterContext::from_event(&event, any_channel());
 
-        let result = evaluate_filter("kind == 9", &ctx).await.unwrap();
+        let result = evaluate_filter("kind == 9", &ctx, None).await.unwrap();
         assert!(result);
 
-        let result = evaluate_filter("kind == 1", &ctx).await.unwrap();
+        let result = evaluate_filter("kind == 1", &ctx, None).await.unwrap();
         assert!(!result);
     }
 
@@ -388,13 +574,26 @@ mod tests {
         let ctx = FilterContext::from_event(&event, any_channel());
 
         let long_expr = "a".repeat(MAX_EXPR_LEN + 1);
-        let err = evaluate_filter(&long_expr, &ctx).await.unwrap_err();
+        let err = evaluate_filter(&long_expr, &ctx, None).await.unwrap_err();
 
         assert!(matches!(
             err,
             FilterError::ExpressionTooLong { len, max }
             if len == MAX_EXPR_LEN + 1 && max == MAX_EXPR_LEN
         ));
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_filter_precompiled_node() {
+        let event = make_event(9, "hello world");
+        let ctx = FilterContext::from_event(&event, any_channel());
+
+        let node =
+            Arc::new(evalexpr::build_operator_tree(r#"str_contains(content, "hello")"#).unwrap());
+        let result = evaluate_filter(r#"str_contains(content, "hello")"#, &ctx, Some(node))
+            .await
+            .unwrap();
+        assert!(result);
     }
 
     // ── match_event ───────────────────────────────────────────────────────────
@@ -405,22 +604,22 @@ mod tests {
         let channel_id = any_channel();
 
         let rules = vec![
-            SubscriptionRule {
-                name: "first".into(),
-                channels: ChannelScope::All("all".into()),
-                kinds: vec![],
-                require_mention: false,
-                filter: None,
-                prompt_tag: Some("tag-first".into()),
-            },
-            SubscriptionRule {
-                name: "second".into(),
-                channels: ChannelScope::All("all".into()),
-                kinds: vec![],
-                require_mention: false,
-                filter: None,
-                prompt_tag: Some("tag-second".into()),
-            },
+            make_rule(
+                "first",
+                ChannelScope::All("all".into()),
+                vec![],
+                false,
+                None,
+                Some("tag-first"),
+            ),
+            make_rule(
+                "second",
+                ChannelScope::All("all".into()),
+                vec![],
+                false,
+                None,
+                Some("tag-second"),
+            ),
         ];
 
         let matched = match_event(&event, channel_id, &rules, "").await.unwrap();
@@ -434,22 +633,22 @@ mod tests {
         let channel_id = any_channel();
 
         let rules = vec![
-            SubscriptionRule {
-                name: "wrong-kind".into(),
-                channels: ChannelScope::All("all".into()),
-                kinds: vec![1],
-                require_mention: false,
-                filter: None,
-                prompt_tag: None,
-            },
-            SubscriptionRule {
-                name: "right-kind".into(),
-                channels: ChannelScope::All("all".into()),
-                kinds: vec![9],
-                require_mention: false,
-                filter: None,
-                prompt_tag: Some("matched".into()),
-            },
+            make_rule(
+                "wrong-kind",
+                ChannelScope::All("all".into()),
+                vec![1],
+                false,
+                None,
+                None,
+            ),
+            make_rule(
+                "right-kind",
+                ChannelScope::All("all".into()),
+                vec![9],
+                false,
+                None,
+                Some("matched"),
+            ),
         ];
 
         let matched = match_event(&event, channel_id, &rules, "").await.unwrap();
@@ -465,14 +664,14 @@ mod tests {
         let event_with_mention = make_event_with_p_tag(9, "hello", agent_pubkey);
         let channel_id = any_channel();
 
-        let rules = vec![SubscriptionRule {
-            name: "mention-only".into(),
-            channels: ChannelScope::All("all".into()),
-            kinds: vec![],
-            require_mention: true,
-            filter: None,
-            prompt_tag: Some("mentioned".into()),
-        }];
+        let rules = vec![make_rule(
+            "mention-only",
+            ChannelScope::All("all".into()),
+            vec![],
+            true,
+            None,
+            Some("mentioned"),
+        )];
 
         // Without mention — no match.
         let result = match_event(&event_no_mention, channel_id, &rules, agent_pubkey).await;
@@ -490,14 +689,14 @@ mod tests {
         let event = make_event(1, "hello");
         let channel_id = any_channel();
 
-        let rules = vec![SubscriptionRule {
-            name: "kind-9-only".into(),
-            channels: ChannelScope::All("all".into()),
-            kinds: vec![9],
-            require_mention: false,
-            filter: None,
-            prompt_tag: None,
-        }];
+        let rules = vec![make_rule(
+            "kind-9-only",
+            ChannelScope::All("all".into()),
+            vec![9],
+            false,
+            None,
+            None,
+        )];
 
         let result = match_event(&event, channel_id, &rules, "").await;
         assert!(result.is_none());
@@ -542,16 +741,74 @@ mod tests {
         let event = make_event(9, "hello");
         let channel_id = any_channel();
 
-        let rules = vec![SubscriptionRule {
-            name: "my-rule".into(),
-            channels: ChannelScope::All("all".into()),
-            kinds: vec![],
-            require_mention: false,
-            filter: None,
-            prompt_tag: None, // no explicit tag
-        }];
+        let rules = vec![make_rule(
+            "my-rule",
+            ChannelScope::All("all".into()),
+            vec![],
+            false,
+            None,
+            None, // no explicit tag
+        )];
 
         let matched = match_event(&event, channel_id, &rules, "").await.unwrap();
         assert_eq!(matched.prompt_tag, "my-rule");
+    }
+
+    // ── Fail-closed filter error handling (finding #25) ───────────────────────
+
+    #[tokio::test]
+    async fn test_filter_error_fails_closed_no_fallthrough() {
+        // A broken filter on rule[0] must NOT fall through to rule[1].
+        let event = make_event(9, "hello");
+        let channel_id = any_channel();
+
+        let rules = vec![
+            make_rule(
+                "broken-filter",
+                ChannelScope::All("all".into()),
+                vec![],
+                false,
+                Some("this is not valid evalexpr syntax !!!"),
+                Some("should-not-match"),
+            ),
+            make_rule(
+                "catch-all",
+                ChannelScope::All("all".into()),
+                vec![],
+                false,
+                None,
+                Some("catch-all"),
+            ),
+        ];
+
+        // Must return None — not "catch-all".
+        let result = match_event(&event, channel_id, &rules, "").await;
+        assert!(
+            result.is_none(),
+            "filter error must fail closed, not fall through to next rule"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_consecutive_timeouts_disables_rule() {
+        // After MAX_CONSECUTIVE_TIMEOUTS, the rule is skipped and None returned.
+        let event = make_event(9, "hello");
+        let channel_id = any_channel();
+
+        let rule = make_rule(
+            "timed-out-rule",
+            ChannelScope::All("all".into()),
+            vec![],
+            false,
+            Some("kind == 9"),
+            Some("should-not-match"),
+        );
+        // Pre-seed the counter at the threshold.
+        rule.consecutive_timeouts
+            .store(MAX_CONSECUTIVE_TIMEOUTS, Ordering::Relaxed);
+
+        let rules = vec![rule];
+        let result = match_event(&event, channel_id, &rules, "").await;
+        assert!(result.is_none(), "disabled rule must return None");
     }
 }
