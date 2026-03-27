@@ -1,4 +1,12 @@
-import { Bot, CircleDot, FileText, Hash, Home, Lock, Settings2 } from "lucide-react";
+import {
+  Bot,
+  CircleDot,
+  FileText,
+  Hash,
+  Home,
+  Lock,
+  Settings2,
+} from "lucide-react";
 import type * as React from "react";
 
 import type { ChannelType, ChannelVisibility } from "@/shared/api/types";
@@ -66,7 +74,11 @@ export function ChatHeader({
     >
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
-          <ChannelIcon channelType={channelType} mode={mode} visibility={visibility} />
+          <ChannelIcon
+            channelType={channelType}
+            mode={mode}
+            visibility={visibility}
+          />
           <h1
             className="truncate text-lg font-semibold tracking-tight"
             data-testid="chat-title"
