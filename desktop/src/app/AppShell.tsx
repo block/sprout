@@ -668,6 +668,7 @@ export function AppShell() {
                     ) : null
                   }
                   channelType={activeChannel?.channelType}
+                  visibility={activeChannel?.visibility}
                   description={channelDescription}
                   statusBadge={
                     activeChannel?.channelType === "dm" &&
