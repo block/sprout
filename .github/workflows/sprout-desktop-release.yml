@@ -106,13 +106,26 @@ jobs:
 
       - name: Create DMG from signed app
         run: |
+          brew install create-dmg
           DMG_DIR="desktop/src-tauri/target/release/bundle/dmg"
           mkdir -p "${DMG_DIR}"
           rm -f "${DMG_DIR}"/*.dmg
-          hdiutil create -volname "Sprout" \
-            -srcfolder desktop/src-tauri/target/release/bundle/macos/Sprout.app \
-            -ov -format UDZO \
-            "${DMG_DIR}/Sprout_${RELEASE_VERSION}_aarch64.dmg"
+          set +e
+          create-dmg \
+            --volname "Sprout" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 128 \
+            --icon "Sprout.app" 150 200 \
+            --app-drop-link 450 200 \
+            --hide-extension "Sprout.app" \
+            --no-internet-enable \
+            "${DMG_DIR}/Sprout_${RELEASE_VERSION}_aarch64.dmg" \
+            "desktop/src-tauri/target/release/bundle/macos/Sprout.app"
+          EXIT_CODE=$?
+          if [ $EXIT_CODE -ne 0 ] && [ $EXIT_CODE -ne 2 ]; then
+            exit $EXIT_CODE
+          fi
 
       - name: Create updater archive from signed app
         env:
