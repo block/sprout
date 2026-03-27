@@ -655,6 +655,7 @@ async fn tokio_main() -> Result<()> {
         }
 
         // ── Collect completed background respawns (non-blocking) ─────────────
+        let mut respawn_collected = false;
         while let Ok(rr) = respawn_rx.try_recv() {
             crash_history[rr.index].respawn_in_flight = false;
             match rr.result {
@@ -668,12 +669,19 @@ async fn tokio_main() -> Result<()> {
                     };
                     pool.return_agent(agent);
                     tracing::info!(agent = rr.index, "respawn complete");
+                    respawn_collected = true;
                 }
                 Err(e) => {
                     crash_history[rr.index].mark_spawn_failed();
                     tracing::warn!(agent = rr.index, "respawn failed: {e} — circuit re-opened");
                 }
             }
+        }
+        // Flush requeued events that were waiting for a live agent. Without
+        // this, batches requeued during crash recovery sit idle until the
+        // next relay event arrives — which can be minutes on quiet channels.
+        if respawn_collected {
+            typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
         }
 
         // Borrow result_rx and join_set simultaneously via split-borrow helper.

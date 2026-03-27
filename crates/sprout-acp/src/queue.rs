@@ -456,13 +456,31 @@ impl EventQueue {
 
     /// Compact expired metadata entries to prevent unbounded map growth.
     ///
-    /// Removes `retry_after` entries whose deadline has already passed.
+    /// Removes `retry_after` entries whose deadline has already passed, and
+    /// cleans up orphaned `retry_counts` entries for channels that have no
+    /// queued events, no active throttle, and no in-flight prompt. Without
+    /// this, channels that completed their retry cycle but never received
+    /// fresh traffic would leak a `u32` entry in `retry_counts` indefinitely.
+    ///
+    /// The in-flight guard is critical: a channel whose throttle expired and
+    /// whose queue is empty because it was flushed may still have a retry
+    /// attempt in flight. Removing its `retry_counts` would reset the
+    /// backoff sequence if that attempt fails and requeues.
+    ///
     /// Should be called periodically from the main event loop (e.g., every
-    /// few minutes). `flush_next` and `has_flushable_work` handle in-flight
-    /// expiry inline; this covers the `retry_after` map specifically.
+    /// 30 seconds). `flush_next` and `has_flushable_work` handle in-flight
+    /// expiry inline; this covers the `retry_after` and `retry_counts` maps.
     pub fn compact_expired_state(&mut self) {
         let now = Instant::now();
         self.retry_after.retain(|_, deadline| *deadline > now);
+        // Remove retry_counts for channels with no active throttle, no
+        // queued events, AND no in-flight prompt — they completed their
+        // retry cycle and are truly idle.
+        self.retry_counts.retain(|ch, _| {
+            self.retry_after.contains_key(ch)
+                || self.queues.get(ch).is_some_and(|q| !q.is_empty())
+                || self.in_flight_channels.contains(ch)
+        });
     }
 }
 
@@ -2098,5 +2116,85 @@ mod tests {
         let drained = q.drain_channel(ch);
         assert_eq!(drained.len(), 1);
         assert!(q.is_in_flight()); // in-flight unaffected
+    }
+
+    // ── compact_expired_state ─────────────────────────────────────────────
+
+    #[test]
+    fn test_compact_cleans_orphaned_retry_counts() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // Simulate: push, flush, requeue (sets retry_after + retry_counts),
+        // then mark_complete (preserves retry_counts because throttle is active).
+        q.push(make_queued(ch, "msg1"));
+        let batch = q.flush_next().unwrap();
+        q.requeue(batch);
+        q.mark_complete(ch);
+        assert!(q.retry_after.contains_key(&ch));
+        assert!(q.retry_counts.contains_key(&ch));
+
+        // The requeued event is back in the queue. Flush it again so the
+        // queue is empty (simulating a successful retry dispatch).
+        // We need to wait for retry_after to expire first.
+        q.retry_after
+            .insert(ch, Instant::now() - Duration::from_secs(1));
+        let _batch2 = q.flush_next().unwrap();
+        // Now mark_complete with no active throttle — clears retry_counts.
+        q.mark_complete(ch);
+        assert!(!q.retry_counts.contains_key(&ch));
+
+        // Re-create the orphan scenario: manually insert stale retry_counts
+        // with no queue, no throttle, and no in-flight.
+        q.retry_counts.insert(ch, 3);
+        q.compact_expired_state();
+        assert!(
+            !q.retry_counts.contains_key(&ch),
+            "orphaned retry_counts should be removed"
+        );
+    }
+
+    #[test]
+    fn test_compact_preserves_retry_counts_when_in_flight() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // Push, flush, requeue, mark_complete — sets up retry state.
+        q.push(make_queued(ch, "msg1"));
+        let batch = q.flush_next().unwrap();
+        q.requeue(batch);
+        q.mark_complete(ch);
+
+        // Expire the throttle so the requeued event can be flushed.
+        q.retry_after
+            .insert(ch, Instant::now() - Duration::from_secs(1));
+        let _batch2 = q.flush_next().unwrap();
+        // Channel is now in-flight with empty queue and expired throttle.
+        assert!(q.in_flight_channels.contains(&ch));
+        assert!(q.queues.get(&ch).is_none_or(|q| q.is_empty()));
+
+        // compact must NOT remove retry_counts — the in-flight attempt
+        // may fail and requeue, which needs the existing count.
+        q.compact_expired_state();
+        assert!(
+            q.retry_counts.contains_key(&ch),
+            "retry_counts must survive while channel is in-flight"
+        );
+    }
+
+    #[test]
+    fn test_compact_preserves_retry_counts_with_queued_events() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // Manually set up: retry_counts exists, queue is non-empty, no throttle.
+        q.push(make_queued(ch, "msg1"));
+        q.retry_counts.insert(ch, 2);
+
+        q.compact_expired_state();
+        assert!(
+            q.retry_counts.contains_key(&ch),
+            "retry_counts should survive when queue is non-empty"
+        );
     }
 }

@@ -1346,6 +1346,21 @@ async fn handle_ws_message(
                                 return true;
                             }
                         };
+                        // Dedup membership notifications through TwoGenDedup.
+                        // We use seen_ids directly instead of record_event()
+                        // because record_event() also updates last_seen, which
+                        // would contaminate per-channel replay watermarks with
+                        // membership-event timestamps and cause channel event
+                        // loss on reconnect.
+                        let event_id_hex = event.id.to_hex();
+                        if !state.seen_ids.insert(event_id_hex.clone()) {
+                            debug!(
+                                channel_id = %channel_uuid,
+                                event_id = %event_id_hex,
+                                "duplicate membership notification — skipping"
+                            );
+                            return true;
+                        }
                         let ts = event.created_at.as_u64();
                         let sprout_event = SproutEvent {
                             channel_id: channel_uuid,
@@ -1367,6 +1382,10 @@ async fn handle_ws_message(
                                     Some(state.membership_last_seen.unwrap_or(0).max(ts));
                             }
                             Err(mpsc::error::TrySendError::Full(_)) => {
+                                // Remove from dedup so reconnect replay can
+                                // re-deliver this event (it was never forwarded
+                                // to the harness).
+                                state.seen_ids.remove(&event_id_hex);
                                 // Track the oldest dropped timestamp so reconnect
                                 // replay starts early enough to re-deliver it.
                                 state.membership_dropped_since =
@@ -3055,6 +3074,66 @@ mod tests {
         assert!(
             !state.channel_dropped_since.contains_key(&channel_id),
             "channel_dropped_since should be cleared after resubscribe"
+        );
+    }
+
+    // ── Membership dedup regression tests (M4) ───────────────────────────
+
+    /// Membership dedup must NOT contaminate per-channel `last_seen`.
+    /// Using `record_event()` for membership notifications would update
+    /// `last_seen[channel_uuid]`, causing channel resubscribe to use a
+    /// membership timestamp as the `since` filter — skipping channel events.
+    /// The fix uses `seen_ids.insert()` directly.
+    #[test]
+    fn membership_dedup_does_not_touch_last_seen() {
+        let mut state = BgState::new();
+        let channel_id = Uuid::new_v4();
+        let keys = nostr::Keys::generate();
+
+        // Simulate: a channel event sets last_seen to 1000.
+        let event1 = make_test_event(&keys, 1_000);
+        assert!(state.record_event(channel_id, &event1));
+        assert_eq!(state.last_seen.get(&channel_id).copied(), Some(1_000));
+
+        // Simulate: a membership notification for the same channel at ts=2000.
+        // This should go through seen_ids only, NOT update last_seen.
+        let membership_event = make_test_event(&keys, 2_000);
+        let membership_id = membership_event.id.to_hex();
+        assert!(
+            state.seen_ids.insert(membership_id),
+            "membership event should be accepted by dedup"
+        );
+        // last_seen must still be 1000, not 2000.
+        assert_eq!(
+            state.last_seen.get(&channel_id).copied(),
+            Some(1_000),
+            "membership dedup must not contaminate last_seen"
+        );
+    }
+
+    /// On membership backpressure (TrySendError::Full), the dedup ID must
+    /// be removed from seen_ids so reconnect replay can re-deliver the event.
+    /// Without this, a dropped membership notification would be permanently
+    /// rejected as a duplicate on replay.
+    #[test]
+    fn membership_backpressure_removes_dedup_id() {
+        let mut state = BgState::new();
+        let keys = nostr::Keys::generate();
+
+        let event = make_test_event(&keys, 1_000);
+        let event_id_hex = event.id.to_hex();
+
+        // Insert into dedup (simulating the pre-try_send path).
+        assert!(state.seen_ids.insert(event_id_hex.clone()));
+        assert!(state.seen_ids.contains(&event_id_hex));
+
+        // Simulate backpressure: remove the ID (matching the production code).
+        state.seen_ids.remove(&event_id_hex);
+
+        // The ID should now be accepted again on replay.
+        assert!(
+            state.seen_ids.insert(event_id_hex),
+            "after backpressure removal, replay must be accepted"
         );
     }
 }
