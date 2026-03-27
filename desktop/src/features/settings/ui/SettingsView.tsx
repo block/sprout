@@ -1,6 +1,4 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { X } from "lucide-react";
-import type * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -21,20 +19,6 @@ type SettingsViewProps = SettingsPanelProps & {
   onSectionChange: (section: SettingsSection) => void;
   section: SettingsSection;
 };
-
-function handleSettingsHeaderPointerDown(event: React.PointerEvent) {
-  if (event.button !== 0) {
-    return;
-  }
-
-  const target = event.target as HTMLElement;
-  if (target.closest('button, a, input, textarea, [role="button"]')) {
-    return;
-  }
-
-  event.preventDefault();
-  getCurrentWindow().startDragging();
-}
 
 function SettingsSectionButton({
   active,
@@ -100,7 +84,7 @@ export function SettingsView({
     >
       <header
         className="flex items-start justify-between gap-4 border-b border-border/80 bg-background px-4 pb-4 pt-8 sm:px-6"
-        onPointerDown={handleSettingsHeaderPointerDown}
+        data-tauri-drag-region
       >
         <div className="min-w-0 pt-0.5">
           <h1
