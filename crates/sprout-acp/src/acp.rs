@@ -8,8 +8,14 @@
 //! 4. [`AcpClient::session_prompt_with_idle_timeout`] — send prompt with idle/hard deadline, return stop reason
 //! 5. [`AcpClient::session_cancel`] / [`AcpClient::cancel_with_cleanup`] — cancel in-flight turn
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use futures_util::StreamExt;
+use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio_util::codec::{FramedRead, LinesCodec, LinesCodecError};
+
+/// Maximum allowed size of a single NDJSON line from the agent's stdout.
+/// Lines exceeding this limit are rejected to prevent OOM from rogue agents.
+const MAX_LINE_SIZE: usize = 10_000_000; // 10 MB
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -52,8 +58,11 @@ pub enum StopReason {
 
 impl StopReason {
     /// Parse a `stopReason` string from the ACP wire format.
+    ///
+    /// Matching is case-insensitive so agents that send `"END_TURN"` or
+    /// `"Cancelled"` are handled correctly without a protocol error.
     pub fn from_str(s: &str) -> Option<Self> {
-        match s {
+        match s.to_ascii_lowercase().as_str() {
             "end_turn" => Some(Self::EndTurn),
             "cancelled" => Some(Self::Cancelled),
             "max_tokens" => Some(Self::MaxTokens),
@@ -82,6 +91,12 @@ pub enum AcpError {
     #[error("Hard turn timeout exceeded")]
     HardTimeout,
 
+    #[error("Request timeout — agent did not respond within {0:?}")]
+    Timeout(std::time::Duration),
+
+    #[error("Write timeout — agent stopped reading stdin (blocked for {0:?})")]
+    WriteTimeout(std::time::Duration),
+
     #[error("Protocol error: {0}")]
     Protocol(String),
 }
@@ -97,8 +112,10 @@ pub struct AcpClient {
     child: Child,
     /// Write end of the agent's stdin pipe.
     stdin: ChildStdin,
-    /// Buffered reader over the agent's stdout pipe (line-oriented).
-    reader: BufReader<ChildStdout>,
+    /// Framed reader over the agent's stdout pipe (line-oriented, bounded).
+    /// Uses `LinesCodec::new_with_max_length` to enforce MAX_LINE_SIZE at the
+    /// read level — prevents OOM from rogue agents writing infinite non-newline bytes.
+    reader: FramedRead<ChildStdout, LinesCodec>,
     /// Monotonically increasing JSON-RPC request id counter.
     /// Harness-generated IDs are always numeric.
     next_id: u64,
@@ -131,8 +148,21 @@ impl AcpClient {
     /// Call this when you need guaranteed cleanup — e.g., in `run_models`
     /// before process exit.
     pub async fn shutdown(&mut self) {
+        // Send SIGKILL to the direct child. On Unix, process_group(0) was set
+        // at spawn time, so the child runs in its own process group. Ideally
+        // we'd kill the entire group via kill(-pgid, SIGKILL), but that
+        // requires `unsafe` (libc::kill) which is denied by #![deny(unsafe_code)].
+        // When the direct child dies, its subprocesses become orphans adopted
+        // by init — acceptable for a harness that respawns or exits.
         let _ = self.child.start_kill();
-        let _ = self.child.wait().await;
+        // Bounded wait: if the child doesn't exit within 5s after SIGKILL,
+        // give up and let Drop/OS handle it. An unbounded wait here would
+        // wedge the harness during respawn or shutdown if a child is stuck.
+        match tokio::time::timeout(std::time::Duration::from_secs(5), self.child.wait()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => tracing::debug!("child wait error after kill: {e}"),
+            Err(_) => tracing::warn!("child did not exit within 5s after SIGKILL — abandoning"),
+        }
     }
 
     /// Spawn the agent binary as a subprocess and connect to its stdio pipes.
@@ -146,7 +176,16 @@ impl AcpClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Inherit stderr so agent logs are visible in the harness terminal.
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::inherit())
+            // Ensure the child is killed when the AcpClient is dropped (best-effort).
+            // Callers MUST still call shutdown().await for guaranteed cleanup.
+            .kill_on_drop(true);
+
+        // Spawn the agent in its own process group so SIGKILL doesn't propagate
+        // to the harness's own process group on Unix.
+        // tokio::process::Command::process_group is a stable tokio API (no extra imports needed).
+        #[cfg(unix)]
+        cmd.process_group(0);
 
         let mut child = cmd.spawn()?;
 
@@ -162,7 +201,7 @@ impl AcpClient {
         Ok(Self {
             child,
             stdin,
-            reader: BufReader::new(stdout),
+            reader: FramedRead::new(stdout, LinesCodec::new_with_max_length(MAX_LINE_SIZE)),
             next_id: 0,
             pending_permission_id: None,
             permission_responded: false,
@@ -343,7 +382,7 @@ impl AcpClient {
     pub async fn cancel_with_cleanup(
         &mut self,
         session_id: &str,
-        idle_timeout: std::time::Duration,
+        _idle_timeout: std::time::Duration,
     ) -> Result<StopReason, AcpError> {
         // Inherit the hard deadline from the timed-out turn so the drain loop
         // doesn't start a fresh timer (prevents double-jeopardy). If the original
@@ -392,9 +431,13 @@ impl AcpClient {
         // Step 2: send session/cancel notification (no id)
         self.session_cancel(session_id).await?;
         tracing::info!(target: "acp::cancel", "sent session/cancel for {session_id}");
-        // Clamp idle timeout to at least 30s during cleanup — the cancel notification
+        // Use a fixed 30s idle timeout during cleanup — the cancel notification
         // needs time to propagate and the agent may go silent while winding down.
-        let cleanup_idle = idle_timeout.max(std::time::Duration::from_secs(30));
+        // We do NOT use the caller's idle_timeout here: that value was tuned for
+        // normal prompt activity and may be very short (e.g. 5s). Using it during
+        // cancel would cause premature IdleTimeout before the cancelled response
+        // arrives, leaving the session in an inconsistent state.
+        let cleanup_idle = std::time::Duration::from_secs(30);
         let result = self
             .read_until_response_with_idle_timeout(prompt_id, cleanup_idle, hard_deadline)
             .await?;
@@ -404,18 +447,35 @@ impl AcpClient {
     // ── Internal helpers ──────────────────────────────────────────────────
 
     /// Serialize `value` as a single NDJSON line and flush to the agent's stdin.
+    ///
+    /// Bounded by a 30-second write timeout. If the agent stops reading stdin
+    /// (e.g., it's stuck or dead), the write would otherwise block forever.
     async fn write_ndjson(&mut self, value: &serde_json::Value) -> Result<(), AcpError> {
+        const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
         let line = serde_json::to_string(value)?;
-        self.stdin.write_all(line.as_bytes()).await?;
-        self.stdin.write_all(b"\n").await?;
-        self.stdin.flush().await?;
-        Ok(())
+        tokio::time::timeout(WRITE_TIMEOUT, async {
+            self.stdin.write_all(line.as_bytes()).await?;
+            self.stdin.write_all(b"\n").await?;
+            self.stdin.flush().await?;
+            Ok::<(), std::io::Error>(())
+        })
+        .await
+        .map_err(|_| AcpError::WriteTimeout(WRITE_TIMEOUT))?
+        .map_err(AcpError::Io)
     }
+
+    /// Default timeout for non-prompt RPCs (initialize, session/new, etc.).
+    const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
     /// Send a JSON-RPC request and wait for the matching response.
     ///
     /// Assigns the next available id, writes the NDJSON line to stdin,
     /// then calls [`read_until_response`](Self::read_until_response).
+    ///
+    /// The write phase is bounded by `WRITE_TIMEOUT` (30s) and the read phase
+    /// by `REQUEST_TIMEOUT` (60s), so worst-case wall clock is ~90s. Non-prompt
+    /// RPCs like `initialize` and `session/new` should complete in seconds;
+    /// if they don't, the agent is likely stuck and we must not block forever.
     async fn send_request(
         &mut self,
         method: &str,
@@ -432,9 +492,52 @@ impl AcpClient {
         });
 
         tracing::debug!(target: "acp::wire", "→ {}", &serde_json::to_string(&msg).unwrap_or_default());
-        self.write_ndjson(&msg).await?;
 
-        self.read_until_response(id).await
+        // Wrap write + read in a single timeout so a hung agent can't block forever.
+        // We cannot use an async block that borrows `self` mutably across two awaits
+        // inside timeout(), so we sequence them with early-return on timeout.
+        let timeout = Self::REQUEST_TIMEOUT;
+        match tokio::time::timeout(timeout, self.write_ndjson(&msg)).await {
+            Ok(result) => result?,
+            Err(_) => return Err(AcpError::Timeout(timeout)),
+        }
+
+        match tokio::time::timeout(timeout, self.read_until_response(id)).await {
+            Ok(result) => result,
+            Err(_) => Err(AcpError::Timeout(timeout)),
+        }
+    }
+
+    /// Drain any buffered lines from the agent's stdout without blocking.
+    ///
+    /// After a [`AcpError::Timeout`] from [`send_request`], the agent may
+    /// eventually send the late response. That stale message will sit in the
+    /// `BufReader` buffer and be silently skipped by the next `read_until_response`
+    /// call (ID mismatch). However, if the caller wants a clean slate — e.g.
+    /// before retrying the same method — they can call this to consume any
+    /// buffered data with a short deadline.
+    ///
+    /// This is a best-effort drain: it reads until the buffer is empty or
+    /// `drain_timeout` elapses, whichever comes first. Errors are ignored.
+    #[allow(dead_code)] // Scaffolding for future model-switch timeout cleanup; not yet wired.
+    pub async fn drain_stale_responses(&mut self, drain_timeout: std::time::Duration) {
+        let deadline = tokio::time::Instant::now() + drain_timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let read_result = tokio::time::timeout(remaining, self.reader.next()).await;
+            match read_result {
+                // Timeout or stream ended — buffer is empty or agent exited.
+                Err(_) | Ok(None) => break,
+                Ok(Some(Ok(_))) => {
+                    // Consumed one buffered line; loop to drain more.
+                    tracing::debug!(target: "acp::wire", "drained stale buffered line");
+                }
+                Ok(Some(Err(_))) => break,
+            }
+        }
     }
 
     /// Send a JSON-RPC **notification** — no `id` field, no response expected.
@@ -463,7 +566,8 @@ impl AcpClient {
     /// While waiting, handles:
     /// - `session/update` notifications → logged via tracing
     /// - `session/request_permission` requests → auto-approved with `allow_once`
-    /// - Any other messages → debug-logged and ignored
+    /// - Any other messages → debug-logged and ignored; if they carry an `id`
+    ///   (i.e. they are requests, not notifications), a JSON-RPC -32601 error is sent.
     ///
     /// Compares the incoming `id` field as a `serde_json::Value` against
     /// `json!(expected_id)` so that both numeric and string IDs work correctly.
@@ -472,17 +576,28 @@ impl AcpClient {
         expected_id: u64,
     ) -> Result<serde_json::Value, AcpError> {
         loop {
-            let mut line = String::new();
-            let n = self.reader.read_line(&mut line).await?;
-            if n == 0 {
-                return Err(AcpError::AgentExited);
-            }
+            // LinesCodec::new_with_max_length enforces MAX_LINE_SIZE at the
+            // read level — the buffer never grows beyond the limit, preventing
+            // OOM from rogue agents writing infinite non-newline bytes.
+            let line = match self.reader.next().await {
+                None => return Err(AcpError::AgentExited),
+                Some(Err(LinesCodecError::MaxLineLengthExceeded)) => {
+                    return Err(AcpError::Protocol(
+                        "agent stdout line exceeded 10MB limit".into(),
+                    ));
+                }
+                Some(Err(e)) => {
+                    return Err(AcpError::Io(std::io::Error::other(e)));
+                }
+                Some(Ok(line)) => line,
+            };
 
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
             }
 
+            // Only log and reset idle after we have a valid non-empty line.
             tracing::debug!(target: "acp::wire", "← {trimmed}");
 
             let msg: serde_json::Value = match serde_json::from_str(trimmed) {
@@ -519,6 +634,19 @@ impl AcpClient {
                         self.handle_permission_request(&msg).await?;
                     }
                     other => {
+                        // If the unknown message has an id, it's a request expecting a reply.
+                        // Silence would cause the agent to hang waiting for a response.
+                        // Send a JSON-RPC -32601 "Method not found" error.
+                        if msg.get("id").is_some() {
+                            let err_resp = serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": msg["id"],
+                                "error": {"code": -32601, "message": format!("Method not found: {other}")}
+                            });
+                            // Surface write failures — a broken pipe means the
+                            // agent process is dead and continuing would hang.
+                            self.write_ndjson(&err_resp).await?;
+                        }
                         tracing::debug!(target: "acp::wire", "ignoring unknown method: {other}");
                     }
                 }
@@ -554,19 +682,21 @@ impl AcpClient {
             };
             let remaining = next_deadline.saturating_duration_since(Instant::now());
 
-            let read_result = tokio::time::timeout(remaining, async {
-                let mut line = String::new();
-                let n = self.reader.read_line(&mut line).await?;
-                Ok::<(usize, String), std::io::Error>((n, line))
-            })
-            .await;
+            // LinesCodec::new_with_max_length enforces MAX_LINE_SIZE at the
+            // read level — the buffer never grows beyond the limit.
+            let read_result = tokio::time::timeout(remaining, self.reader.next()).await;
 
             match read_result {
-                Ok(Ok((0, _))) => return Err(AcpError::AgentExited),
-                Ok(Ok((_, line))) => {
-                    // Any stdout activity resets the idle clock.
-                    idle_deadline = Instant::now() + idle_timeout;
-
+                Ok(None) => return Err(AcpError::AgentExited),
+                Ok(Some(Err(LinesCodecError::MaxLineLengthExceeded))) => {
+                    return Err(AcpError::Protocol(
+                        "agent stdout line exceeded 10MB limit".into(),
+                    ));
+                }
+                Ok(Some(Err(e))) => {
+                    return Err(AcpError::Io(std::io::Error::other(e)));
+                }
+                Ok(Some(Ok(line))) => {
                     let trimmed = line.trim();
                     if trimmed.is_empty() {
                         continue;
@@ -585,6 +715,10 @@ impl AcpClient {
                         }
                     };
 
+                    // Only reset the idle clock on lines that parse as valid JSON.
+                    // Malformed lines (skipped above) don't count as real agent activity.
+                    idle_deadline = Instant::now() + idle_timeout;
+
                     // Check for matching response.
                     if let Some(id) = msg.get("id") {
                         if *id == serde_json::json!(expected_id) {
@@ -595,7 +729,7 @@ impl AcpClient {
                         }
                     }
 
-                    // Dispatch notifications.
+                    // Dispatch notifications and agent-initiated requests.
                     if let Some(method) = msg.get("method").and_then(|v| v.as_str()) {
                         match method {
                             "session/update" => self.handle_session_update(&msg),
@@ -603,12 +737,24 @@ impl AcpClient {
                                 self.handle_permission_request(&msg).await?;
                             }
                             other => {
+                                // If the unknown message has an id, it's a request expecting a reply.
+                                // Silence would cause the agent to hang waiting for a response.
+                                // Send a JSON-RPC -32601 "Method not found" error.
+                                if msg.get("id").is_some() {
+                                    let err_resp = serde_json::json!({
+                                        "jsonrpc": "2.0",
+                                        "id": msg["id"],
+                                        "error": {"code": -32601, "message": format!("Method not found: {other}")}
+                                    });
+                                    // Surface write failures — a broken pipe means the
+                                    // agent process is dead and continuing would hang.
+                                    self.write_ndjson(&err_resp).await?;
+                                }
                                 tracing::debug!(target: "acp::wire", "ignoring unknown method: {other}");
                             }
                         }
                     }
                 }
-                Ok(Err(e)) => return Err(AcpError::Io(e)),
                 Err(_elapsed) => {
                     // Classification was determined before sleeping — not
                     // affected by scheduler jitter between deadline and wakeup.
@@ -739,11 +885,22 @@ impl AcpClient {
             }
         };
 
-        // Mark as responded BEFORE the write — if the future is dropped by a
-        // timeout between write and flag-set, cancel_with_cleanup would otherwise
-        // see permission_responded=false and send a second response (protocol violation).
-        self.permission_responded = true;
+        // Write the response first, then mark as responded.
+        //
+        // Previous ordering (flag-before-write) was intended to guard against a
+        // double-response if a timeout fires between write and flag-set. However,
+        // the deadlock risk is worse: if write_ndjson fails (e.g. WriteTimeout),
+        // the flag would be true but no response was actually sent. Then
+        // cancel_with_cleanup would see permission_responded=true, skip sending
+        // the cancelled outcome, and the agent would hang waiting for a reply
+        // that never arrives — a guaranteed deadlock.
+        //
+        // The correct fix: set the flag AFTER a successful write. The double-
+        // response window (between write completion and flag-set) is negligibly
+        // small and bounded by a single memory store; the deadlock window was
+        // unbounded.
         self.write_ndjson(&response).await?;
+        self.permission_responded = true;
         self.pending_permission_id = None;
         Ok(())
     }
@@ -875,8 +1032,18 @@ pub fn resolve_model_switch_method(
 
 impl Drop for AcpClient {
     fn drop(&mut self) {
-        // Best-effort kill — ignore errors (process may have already exited).
+        // Best-effort SIGKILL + reap. We cannot `await` in Drop (sync context),
+        // so we use `start_kill()` followed by `try_wait()`. The `try_wait()`
+        // reaps the child if it has already exited (likely after SIGKILL on most
+        // platforms). If the process hasn't exited yet, it will be reaped by the
+        // OS when the harness process itself exits (init adopts orphans).
+        //
+        // Callers SHOULD still call `shutdown().await` whenever possible for
+        // guaranteed reaping. Drop is the safety net for panics and early exits.
         let _ = self.child.start_kill();
+        // Non-blocking reap attempt — prevents zombie accumulation in the
+        // common case where SIGKILL takes effect before Drop returns.
+        let _ = self.child.try_wait();
     }
 }
 
@@ -910,8 +1077,26 @@ mod tests {
     fn stop_reason_returns_none_for_unknown() {
         assert_eq!(StopReason::from_str("unknown_value"), None);
         assert_eq!(StopReason::from_str(""), None);
-        assert_eq!(StopReason::from_str("END_TURN"), None); // case-sensitive
-        assert_eq!(StopReason::from_str("endturn"), None); // no camelCase
+        assert_eq!(StopReason::from_str("endturn"), None); // no camelCase — still unknown
+    }
+
+    #[test]
+    fn stop_reason_is_case_insensitive() {
+        // Agents may send uppercase or mixed-case variants — all should parse correctly.
+        assert_eq!(StopReason::from_str("END_TURN"), Some(StopReason::EndTurn));
+        assert_eq!(
+            StopReason::from_str("CANCELLED"),
+            Some(StopReason::Cancelled)
+        );
+        assert_eq!(
+            StopReason::from_str("Max_Tokens"),
+            Some(StopReason::MaxTokens)
+        );
+        assert_eq!(
+            StopReason::from_str("MAX_TURN_REQUESTS"),
+            Some(StopReason::MaxTurnRequests)
+        );
+        assert_eq!(StopReason::from_str("Refusal"), Some(StopReason::Refusal));
     }
 
     // ── Permission option finding ─────────────────────────────────────────
@@ -1436,9 +1621,12 @@ mod tests {
 
     #[tokio::test]
     async fn idle_resets_on_stdout_activity() {
-        let mut client =
-            spawn_script("for i in $(seq 1 10); do echo 'keepalive'; sleep 0.05; done; sleep 10")
-                .await;
+        // Send valid JSON (session/update notifications) to reset the idle timer.
+        // Non-JSON lines no longer reset idle (Finding #6 hardening).
+        let mut client = spawn_script(
+            r#"for i in $(seq 1 10); do echo '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"text":"thinking"}}}}'; sleep 0.05; done; sleep 10"#,
+        )
+        .await;
         let hard_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         let start = std::time::Instant::now();
         let result = client
@@ -1449,6 +1637,7 @@ mod tests {
             )
             .await;
         let elapsed = start.elapsed();
+        // 10 messages × 50ms = ~500ms of activity, then idle timeout fires after 200ms more
         assert!(elapsed >= std::time::Duration::from_millis(400));
         assert!(elapsed < std::time::Duration::from_secs(3));
         assert!(matches!(result, Err(AcpError::IdleTimeout(_))));
