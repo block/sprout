@@ -175,6 +175,12 @@ impl SlotCircuit {
     }
 }
 
+/// True if any slot has a respawn task in flight. Used to prevent premature
+/// "all agents dead" exits — a respawning agent may succeed in seconds.
+fn any_respawn_in_flight(crash_history: &[SlotCircuit]) -> bool {
+    crash_history.iter().any(|s| s.respawn_in_flight)
+}
+
 /// Result of a background respawn task.
 struct RespawnResult {
     index: usize,
@@ -652,6 +658,15 @@ async fn tokio_main() -> Result<()> {
                     guard.send(result);
                 });
             }
+
+            // Flush requeued batches whose retry_after has expired. Without
+            // this, a batch requeued during crash recovery can sit idle
+            // indefinitely on quiet channels — dispatch_pending is only
+            // called on relay events or pool results, neither of which
+            // arrive when the channel is silent.
+            if queue.has_flushable_work() {
+                typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+            }
         }
 
         // ── Collect completed background respawns (non-blocking) ─────────────
@@ -1023,7 +1038,7 @@ async fn tokio_main() -> Result<()> {
                     &respawn_tx,
                     &mut respawn_tasks,
                 );
-                if pool.live_count() == 0 {
+                if pool.live_count() == 0 && !any_respawn_in_flight(&crash_history) {
                     tracing::error!("all agents dead — exiting");
                     break;
                 }
@@ -1286,7 +1301,7 @@ fn handle_prompt_result(
                 respawn_tasks,
             ) {
                 // Circuit open — slot stays empty until maintenance refill.
-                if pool.live_count() == 0 {
+                if pool.live_count() == 0 && !any_respawn_in_flight(crash_history) {
                     tracing::error!("all agents dead — exiting");
                     return LoopAction::Exit;
                 }
@@ -1325,6 +1340,7 @@ fn handle_prompt_result(
                     respawn_tx,
                     respawn_tasks,
                 ) && pool.live_count() == 0
+                    && !any_respawn_in_flight(crash_history)
                 {
                     tracing::error!("all agents dead — exiting");
                     return LoopAction::Exit;
@@ -1455,7 +1471,7 @@ fn drain_ready_join_results(
                 respawn_tx,
                 respawn_tasks,
             );
-            if pool.live_count() == 0 {
+            if pool.live_count() == 0 && !any_respawn_in_flight(crash_history) {
                 return LoopAction::Exit;
             }
         }

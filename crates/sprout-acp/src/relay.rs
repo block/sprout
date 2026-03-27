@@ -783,10 +783,14 @@ fn apply_command_to_state(state: &mut BgState, cmd: RelayCommand) {
                 .insert(channel_id, channel_sub_id(channel_id));
             state.active_filters.insert(channel_id, filter);
             state.subscribe_since.entry(channel_id).or_insert_with(|| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
+                // Use startup_watermark as floor when available — closes the
+                // blind spot between watermark capture and first REQ.
+                state.startup_watermark.unwrap_or_else(|| {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                })
             });
         }
         RelayCommand::Unsubscribe { channel_id } => {
@@ -836,12 +840,16 @@ async fn execute_connected_command(
         RelayCommand::Subscribe { channel_id, filter } => {
             // Seed subscribe_since BEFORE computing since — on first
             // subscribe, this provides the fallback timestamp that
-            // closes the startup blind spot.
+            // closes the startup blind spot. Use startup_watermark as
+            // floor when available so events between watermark capture
+            // and this REQ are not missed.
             state.subscribe_since.entry(channel_id).or_insert_with(|| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
+                state.startup_watermark.unwrap_or_else(|| {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                })
             });
             let since = state
                 .last_seen
