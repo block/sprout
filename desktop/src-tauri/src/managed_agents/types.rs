@@ -319,11 +319,11 @@ pub const DEFAULT_ACP_COMMAND: &str = "sprout-acp";
 pub const DEFAULT_ADMIN_COMMAND: &str = "sprout-admin";
 pub const DEFAULT_AGENT_COMMAND: &str = "goose";
 pub const DEFAULT_MCP_COMMAND: &str = "sprout-mcp-server";
-/// 5 min — matches the CLI harness default (SPROUT_ACP_IDLE_TIMEOUT).
-pub const DEFAULT_AGENT_TURN_TIMEOUT_SECONDS: u64 = 300;
+/// ~5 min (320s) — matches the CLI harness default (SPROUT_ACP_IDLE_TIMEOUT).
+pub const DEFAULT_AGENT_TURN_TIMEOUT_SECONDS: u64 = 320;
 /// 1 hour — absolute wall-clock safety cap per turn.
 pub const DEFAULT_AGENT_MAX_TURN_DURATION_SECONDS: u64 = 3600;
-pub const DEFAULT_AGENT_PARALLELISM: u32 = 1;
+pub const DEFAULT_AGENT_PARALLELISM: u32 = 3;
 
 fn default_agent_parallelism() -> u32 {
     DEFAULT_AGENT_PARALLELISM

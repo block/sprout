@@ -1558,10 +1558,10 @@ mod tests {
 
     #[test]
     fn idle_timeout_error_includes_duration() {
-        let err = AcpError::IdleTimeout(std::time::Duration::from_secs(300));
+        let err = AcpError::IdleTimeout(std::time::Duration::from_secs(320));
         let msg = err.to_string();
         assert!(
-            msg.contains("300"),
+            msg.contains("320"),
             "IdleTimeout display should include duration: {msg}"
         );
     }
