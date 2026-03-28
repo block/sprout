@@ -48,6 +48,9 @@ url = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# Process-group kill (safe wrapper around killpg)
+nix = { version = "0.31", default-features = false, features = ["signal"] }
+
 # Error handling
 thiserror = { workspace = true }
 anyhow = { workspace = true }

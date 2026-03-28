@@ -756,6 +756,27 @@ impl BgState {
         true
     }
 
+    /// Compute the `since` timestamp for a channel (re)subscribe.
+    ///
+    /// Picks the earliest of `last_seen` and `channel_dropped_since` so
+    /// the replay window covers both successfully processed events and any
+    /// that were dropped due to queue pressure. Falls back to the per-channel
+    /// `subscribe_since` (set at first subscribe) or `startup_watermark`.
+    fn channel_since(&self, channel_id: &Uuid) -> Option<u64> {
+        let last_seen = self.last_seen.get(channel_id).copied();
+        let dropped = self.channel_dropped_since.get(channel_id).copied();
+        match (last_seen, dropped) {
+            (Some(l), Some(d)) => Some(l.min(d)),
+            (Some(l), None) => Some(l),
+            (None, Some(d)) => Some(d),
+            (None, None) => self
+                .subscribe_since
+                .get(channel_id)
+                .copied()
+                .or(self.startup_watermark),
+        }
+    }
+
     /// Clear all per-channel state for a channel that is being unsubscribed.
     /// Prevents stale replay on re-subscribe and avoids unbounded state growth
     /// for channels that are removed and never re-added.
@@ -1522,15 +1543,7 @@ async fn handle_ws_message(
                         if !state.active_subscriptions.contains_key(&channel_id) {
                             debug!("ignoring CLOSED for already-unsubscribed channel {channel_id}");
                         } else {
-                            let last_seen = state.last_seen.get(&channel_id).copied();
-                            let dropped = state.channel_dropped_since.get(&channel_id).copied();
-                            let subscribe_ts = state.subscribe_since.get(&channel_id).copied();
-                            let since = match (last_seen, dropped) {
-                                (Some(l), Some(d)) => Some(l.min(d)),
-                                (Some(l), None) => Some(l),
-                                (None, Some(d)) => Some(d),
-                                (None, None) => subscribe_ts.or(state.startup_watermark),
-                            };
+                            let since = state.channel_since(&channel_id);
                             let filter = match state.active_filters.get(&channel_id).cloned() {
                                 Some(f) => f,
                                 None => {
@@ -1697,17 +1710,7 @@ async fn resubscribe_after_reconnect(
             channels.len()
         );
         for channel_id in channels {
-            let last_seen = state.last_seen.get(&channel_id).copied();
-            let dropped = state.channel_dropped_since.get(&channel_id).copied();
-            // Fall back to per-channel subscribe_since (not startup_watermark)
-            // so channels joined after startup don't replay stale history.
-            let subscribe_ts = state.subscribe_since.get(&channel_id).copied();
-            let since = match (last_seen, dropped) {
-                (Some(l), Some(d)) => Some(l.min(d)),
-                (Some(l), None) => Some(l),
-                (None, Some(d)) => Some(d),
-                (None, None) => subscribe_ts.or(state.startup_watermark),
-            };
+            let since = state.channel_since(&channel_id);
             let filter = match state.active_filters.get(&channel_id).cloned() {
                 Some(f) => f,
                 None => {
@@ -3057,14 +3060,7 @@ mod tests {
         state.channel_dropped_since.insert(channel_id, 900);
 
         // Compute the since value the reconnect path would use.
-        let last_seen = state.last_seen.get(&channel_id).copied();
-        let dropped = state.channel_dropped_since.get(&channel_id).copied();
-        let since = match (last_seen, dropped) {
-            (Some(l), Some(d)) => Some(l.min(d)),
-            (Some(l), None) => Some(l),
-            (None, Some(d)) => Some(d),
-            (None, None) => None,
-        };
+        let since = state.channel_since(&channel_id);
 
         // The since passed to send_subscribe (which subtracts SINCE_SKEW_SECS internally).
         assert_eq!(since, Some(900), "since should be min(1000, 900) = 900");
