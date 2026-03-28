@@ -119,6 +119,8 @@ pub struct EventQueue {
     in_flight_channels: HashSet<Uuid>,
     /// Per-channel deadline for auto-expiring stuck in-flight entries.
     in_flight_deadlines: HashMap<Uuid, Instant>,
+    /// Number of events in each in-flight batch (for expiry logging).
+    in_flight_batch_sizes: HashMap<Uuid, usize>,
     retry_after: HashMap<Uuid, Instant>,
     /// Per-channel retry attempt counter for exponential backoff / dead-lettering.
     retry_counts: HashMap<Uuid, u32>,
@@ -132,6 +134,7 @@ impl EventQueue {
             queues: HashMap::new(),
             in_flight_channels: HashSet::new(),
             in_flight_deadlines: HashMap::new(),
+            in_flight_batch_sizes: HashMap::new(),
             retry_after: HashMap::new(),
             retry_counts: HashMap::new(),
             dedup_mode,
@@ -185,9 +188,13 @@ impl EventQueue {
             .map(|(id, _)| *id)
             .collect();
         for id in expired {
+            let lost_events = self.in_flight_batch_sizes.remove(&id).unwrap_or(0);
             tracing::error!(
                 channel_id = %id,
-                "BUG: in-flight channel expired without mark_complete — auto-releasing"
+                lost_events,
+                deadline_secs = IN_FLIGHT_DEADLINE_SECS,
+                "BUG: in-flight channel expired without mark_complete — \
+                 auto-releasing; {lost_events} dispatched event(s) orphaned"
             );
             self.in_flight_channels.remove(&id);
             self.in_flight_deadlines.remove(&id);
@@ -228,6 +235,7 @@ impl EventQueue {
             channel_id,
             now + Duration::from_secs(IN_FLIGHT_DEADLINE_SECS),
         );
+        self.in_flight_batch_sizes.insert(channel_id, events.len());
 
         Some(FlushBatch { channel_id, events })
     }
@@ -245,6 +253,7 @@ impl EventQueue {
     pub fn mark_complete(&mut self, channel_id: Uuid) {
         self.in_flight_channels.remove(&channel_id);
         self.in_flight_deadlines.remove(&channel_id);
+        self.in_flight_batch_sizes.remove(&channel_id);
         let now = Instant::now();
         match self.retry_after.get(&channel_id) {
             // Active throttle → channel was requeued; keep retry_counts intact.
@@ -356,15 +365,25 @@ impl EventQueue {
     /// Does NOT set `retry_after`. Does NOT remove from `in_flight_channels` —
     /// caller must call `mark_complete` separately.
     pub fn requeue_preserve_timestamps(&mut self, batch: FlushBatch) {
-        let queue = self.queues.entry(batch.channel_id).or_default();
+        let channel_id = batch.channel_id;
+        let queue = self.queues.entry(channel_id).or_default();
         // Push to front in reverse order so original order is preserved.
         for be in batch.events.into_iter().rev() {
             queue.push_front(QueuedEvent {
-                channel_id: batch.channel_id,
+                channel_id,
                 event: be.event,
                 prompt_tag: be.prompt_tag,
                 received_at: be.received_at,
             });
+        }
+        // Enforce per-channel cap: trim newest (back) events if over limit.
+        while queue.len() > MAX_PENDING_PER_CHANNEL {
+            queue.pop_back();
+            tracing::warn!(
+                channel_id = %channel_id,
+                limit = MAX_PENDING_PER_CHANNEL,
+                "requeue_preserve overflow — dropped newest event to enforce cap"
+            );
         }
     }
 
@@ -385,9 +404,13 @@ impl EventQueue {
             .map(|(id, _)| *id)
             .collect();
         for id in expired {
+            let lost_events = self.in_flight_batch_sizes.remove(&id).unwrap_or(0);
             tracing::error!(
                 channel_id = %id,
-                "BUG: in-flight channel expired without mark_complete — auto-releasing"
+                lost_events,
+                deadline_secs = IN_FLIGHT_DEADLINE_SECS,
+                "BUG: in-flight channel expired without mark_complete — \
+                 auto-releasing; {lost_events} dispatched event(s) orphaned"
             );
             self.in_flight_channels.remove(&id);
             self.in_flight_deadlines.remove(&id);
@@ -1493,6 +1516,81 @@ mod tests {
         // No retry_after — channel should be immediately flushable.
         assert!(!q.retry_after.contains_key(&ch));
         assert!(q.flush_next().is_some());
+    }
+
+    // ── Test 20b: requeue_preserve_timestamps enforces per-channel cap ────────
+
+    #[test]
+    fn test_requeue_preserve_timestamps_enforces_cap() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // Fill the channel to MAX_PENDING_PER_CHANNEL.
+        for i in 0..MAX_PENDING_PER_CHANNEL {
+            q.push(make_queued(ch, &format!("fill-{i}")));
+        }
+        assert_eq!(q.pending_count(), MAX_PENDING_PER_CHANNEL);
+
+        // Flush a batch (removes some events from the queue).
+        let batch = q.flush_next().expect("should flush");
+        let batch_size = batch.events.len();
+        let remaining = MAX_PENDING_PER_CHANNEL - batch_size;
+        assert_eq!(q.pending_count(), remaining);
+
+        // Push more events while the batch is "in-flight" — fill back to cap.
+        for i in 0..batch_size {
+            q.push(make_queued(ch, &format!("new-{i}")));
+        }
+        assert_eq!(q.pending_count(), MAX_PENDING_PER_CHANNEL);
+
+        // Requeue the original batch — without cap enforcement this would
+        // push the queue to MAX_PENDING_PER_CHANNEL + batch_size.
+        q.requeue_preserve_timestamps(batch);
+
+        // Cap must be enforced: queue should not exceed MAX_PENDING_PER_CHANNEL.
+        assert!(
+            q.pending_count() <= MAX_PENDING_PER_CHANNEL,
+            "queue exceeded cap: {} > {}",
+            q.pending_count(),
+            MAX_PENDING_PER_CHANNEL,
+        );
+    }
+
+    // ── Test 20c: requeue_preserve overflow trims newest, keeps requeued ─────
+
+    #[test]
+    fn test_requeue_preserve_timestamps_overflow_keeps_requeued_events() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // Push exactly MAX_PENDING_PER_CHANNEL events with identifiable content.
+        for i in 0..MAX_PENDING_PER_CHANNEL {
+            q.push(make_queued(ch, &format!("original-{i}")));
+        }
+
+        // Flush a batch — these are the "requeued" events we want to survive.
+        let batch = q.flush_next().expect("should flush");
+        let batch_size = batch.events.len();
+
+        // Push new events to fill back to cap.
+        for i in 0..batch_size {
+            q.push(make_queued(ch, &format!("new-{i}")));
+        }
+
+        // Capture the content of the first requeued event for verification.
+        let requeued_first_content = batch.events[0].event.content.to_string();
+
+        // Requeue — older events go to front, overflow trims from back (newest).
+        q.requeue_preserve_timestamps(batch);
+        q.mark_complete(ch);
+
+        // The requeued events should be at the front of the queue.
+        let batch2 = q.flush_next().expect("should flush after requeue");
+        assert_eq!(
+            batch2.events[0].event.content.to_string(),
+            requeued_first_content,
+            "requeued events should be at the front (oldest), not trimmed"
+        );
     }
 
     // ── Test 21: has_flushable_work returns correct results ───────────────────

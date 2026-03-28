@@ -148,13 +148,19 @@ impl AcpClient {
     /// Call this when you need guaranteed cleanup — e.g., in `run_models`
     /// before process exit.
     pub async fn shutdown(&mut self) {
-        // Send SIGKILL to the direct child. On Unix, process_group(0) was set
-        // at spawn time, so the child runs in its own process group. Ideally
-        // we'd kill the entire group via kill(-pgid, SIGKILL), but that
-        // requires `unsafe` (libc::kill) which is denied by #![deny(unsafe_code)].
-        // When the direct child dies, its subprocesses become orphans adopted
-        // by init — acceptable for a harness that respawns or exits.
-        let _ = self.child.start_kill();
+        // Kill the entire process group when possible. The child was spawned
+        // with process_group(0), so its PID == its PGID. Killing the group
+        // ensures subprocesses (MCP servers, tool processes) are cleaned up
+        // rather than orphaned to init.
+        //
+        // Falls back to start_kill() (direct child only) on non-Unix or if
+        // the child has been polled to completion (id() returns None).
+        match self.child.id() {
+            Some(pid) if kill_process_group(pid) => {}
+            _ => {
+                let _ = self.child.start_kill();
+            }
+        }
         // Bounded wait: if the child doesn't exit within 5s after SIGKILL,
         // give up and let Drop/OS handle it. An unbounded wait here would
         // wedge the harness during respawn or shutdown if a child is stuck.
@@ -611,17 +617,16 @@ impl AcpClient {
                 }
             };
 
-            // Check if this is a response to our expected request (has matching id).
-            // Compare as serde_json::Value so both numeric and string IDs work.
+            // Check if this is a response to our expected request (has matching id
+            // AND no `method` field — a `method` field means it's an agent-initiated
+            // request, not a response, even if the id happens to match).
             if let Some(id) = msg.get("id") {
-                if *id == serde_json::json!(expected_id) {
+                if *id == serde_json::json!(expected_id) && msg.get("method").is_none() {
                     if let Some(error) = msg.get("error") {
                         return Err(AcpError::Protocol(error.to_string()));
                     }
                     return Ok(msg["result"].clone());
                 }
-                // Has an id but not ours — fall through to method dispatch
-                // (e.g., session/request_permission has both id and method).
             }
 
             // Dispatch by method name (notifications and agent-initiated requests).
@@ -719,9 +724,10 @@ impl AcpClient {
                     // Malformed lines (skipped above) don't count as real agent activity.
                     idle_deadline = Instant::now() + idle_timeout;
 
-                    // Check for matching response.
+                    // Check for matching response (has matching id AND no `method`
+                    // field — a `method` field means agent-initiated request, not response).
                     if let Some(id) = msg.get("id") {
-                        if *id == serde_json::json!(expected_id) {
+                        if *id == serde_json::json!(expected_id) && msg.get("method").is_none() {
                             if let Some(error) = msg.get("error") {
                                 return Err(AcpError::Protocol(error.to_string()));
                             }
@@ -1032,19 +1038,43 @@ pub fn resolve_model_switch_method(
 
 impl Drop for AcpClient {
     fn drop(&mut self) {
-        // Best-effort SIGKILL + reap. We cannot `await` in Drop (sync context),
-        // so we use `start_kill()` followed by `try_wait()`. The `try_wait()`
-        // reaps the child if it has already exited (likely after SIGKILL on most
-        // platforms). If the process hasn't exited yet, it will be reaped by the
-        // OS when the harness process itself exits (init adopts orphans).
-        //
-        // Callers SHOULD still call `shutdown().await` whenever possible for
-        // guaranteed reaping. Drop is the safety net for panics and early exits.
-        let _ = self.child.start_kill();
+        // Best-effort SIGKILL + reap. We cannot `await` in Drop (sync context).
+        // Kill the process group when possible so subprocesses don't leak.
+        // Callers SHOULD still call `shutdown().await` for guaranteed reaping.
+        match self.child.id() {
+            Some(pid) if kill_process_group(pid) => {}
+            _ => {
+                let _ = self.child.start_kill();
+            }
+        }
         // Non-blocking reap attempt — prevents zombie accumulation in the
         // common case where SIGKILL takes effect before Drop returns.
         let _ = self.child.try_wait();
     }
+}
+
+/// Send SIGKILL to an entire process group. Returns `true` if the signal was sent.
+///
+/// The child is spawned with `process_group(0)`, so its PID equals its PGID.
+/// Killing the group ensures subprocesses (MCP servers, tool processes) are
+/// cleaned up rather than orphaned to init on repeated crash-recovery cycles.
+///
+/// Uses `nix::sys::signal::killpg` — a safe wrapper around the POSIX `killpg`
+/// syscall — so the crate's `#![deny(unsafe_code)]` policy is preserved.
+#[cfg(unix)]
+fn kill_process_group(pid: u32) -> bool {
+    use nix::sys::signal::{killpg, Signal};
+    use nix::unistd::Pid;
+
+    // pid == pgid because the child was spawned with process_group(0).
+    killpg(Pid::from_raw(pid as i32), Signal::SIGKILL).is_ok()
+}
+
+/// Fallback for non-Unix: process-group kill not available.
+/// Returns `false` so the caller falls back to `child.start_kill()`.
+#[cfg(not(unix))]
+fn kill_process_group(_pid: u32) -> bool {
+    false
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -1675,6 +1705,34 @@ mod tests {
         assert!(matches!(result, Err(AcpError::AgentExited)));
     }
 
+    /// A message with both `id` and `method` is an agent-initiated request,
+    /// not a response. The response matcher must not consume it even if the
+    /// id happens to match the expected value.
+    #[tokio::test]
+    async fn agent_request_with_matching_id_not_consumed_as_response() {
+        // The script sends an agent-initiated request (has both id and method)
+        // whose id matches what we're waiting for (0), then sends the real
+        // response. The request should be dispatched (triggering -32601 since
+        // "test/method" is unknown), and the real response should be returned.
+        let script = r#"
+            echo '{"jsonrpc":"2.0","id":0,"method":"test/method","params":{}}'
+            read -t 2 _reply
+            echo '{"jsonrpc":"2.0","id":0,"result":{"ok":true}}'
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        let hard_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let result = client
+            .read_until_response_with_idle_timeout(
+                0,
+                std::time::Duration::from_secs(3),
+                hard_deadline,
+            )
+            .await;
+        assert!(result.is_ok(), "expected Ok response, got {result:?}");
+        assert_eq!(result.unwrap()["ok"], serde_json::json!(true));
+    }
+
     #[tokio::test]
     async fn idle_fires_before_hard_when_idle_is_shorter() {
         let mut client = spawn_script("sleep 10").await;
@@ -1687,5 +1745,36 @@ mod tests {
             matches!(result, Err(AcpError::IdleTimeout(_))),
             "idle should fire before hard when idle << hard, got {result:?}"
         );
+    }
+
+    /// Same as `agent_request_with_matching_id_not_consumed_as_response` but
+    /// exercises the non-idle `read_until_response` path (via `send_request`).
+    #[tokio::test]
+    async fn agent_request_not_consumed_via_send_request() {
+        // Script: wait for the initialize request, reply, then send an
+        // agent-initiated request with id=1 (matching the next send_request id),
+        // wait for the -32601 error reply, then send the real response.
+        let script = r#"
+            read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}'
+            read -t 2 _req
+            echo '{"jsonrpc":"2.0","id":1,"method":"test/unknown","params":{}}'
+            read -t 2 _err_reply
+            echo '{"jsonrpc":"2.0","id":1,"result":{"worked":true}}'
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        // initialize consumes id=0
+        let _init = client
+            .initialize()
+            .await
+            .expect("initialize should succeed");
+        // send_request uses id=1 — the agent's request with id=1 and method
+        // must not be consumed as the response.
+        let result = client
+            .send_request("test/echo", serde_json::json!({}))
+            .await;
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+        assert_eq!(result.unwrap()["worked"], serde_json::json!(true));
     }
 }
