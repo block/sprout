@@ -1,23 +1,33 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Bot, CircleDot, FileText, Hash, Home, Settings2 } from "lucide-react";
+import {
+  Bot,
+  CircleDot,
+  FileText,
+  Hash,
+  Home,
+  Lock,
+  Settings2,
+} from "lucide-react";
 import type * as React from "react";
 
-import type { ChannelType } from "@/shared/api/types";
+import type { ChannelType, ChannelVisibility } from "@/shared/api/types";
 
 type ChatHeaderProps = {
   actions?: React.ReactNode;
   title: string;
   description: string;
   channelType?: ChannelType;
+  visibility?: ChannelVisibility;
   mode?: "home" | "channel" | "settings" | "agents";
   statusBadge?: React.ReactNode;
 };
 
 function ChannelIcon({
   channelType,
+  visibility,
   mode = "channel",
 }: {
   channelType?: ChannelType;
+  visibility?: ChannelVisibility;
   mode?: "home" | "channel" | "settings" | "agents";
 }) {
   if (mode === "home") {
@@ -36,6 +46,10 @@ function ChannelIcon({
     return <CircleDot className="h-5 w-5 text-primary" />;
   }
 
+  if (visibility === "private") {
+    return <Lock className="h-5 w-5 text-primary" />;
+  }
+
   if (channelType === "forum") {
     return <FileText className="h-5 w-5 text-primary" />;
   }
@@ -43,25 +57,12 @@ function ChannelIcon({
   return <Hash className="h-5 w-5 text-primary" />;
 }
 
-function handlePointerDown(e: React.PointerEvent) {
-  if (e.button !== 0) return;
-  const target = e.target as HTMLElement;
-  if (
-    target.closest(
-      'button, a, input, textarea, select, [role="button"], [role="textbox"], [contenteditable="true"]',
-    )
-  ) {
-    return;
-  }
-  e.preventDefault();
-  getCurrentWindow().startDragging();
-}
-
 export function ChatHeader({
   actions,
   title,
   description,
   channelType,
+  visibility,
   mode = "channel",
   statusBadge,
 }: ChatHeaderProps) {
@@ -69,11 +70,15 @@ export function ChatHeader({
     <header
       className="flex min-w-0 items-center gap-3 border-b border-border/80 bg-background px-4 pb-3 pt-8 sm:px-6"
       data-testid="chat-header"
-      onPointerDown={handlePointerDown}
+      data-tauri-drag-region
     >
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
-          <ChannelIcon channelType={channelType} mode={mode} />
+          <ChannelIcon
+            channelType={channelType}
+            mode={mode}
+            visibility={visibility}
+          />
           <h1
             className="truncate text-lg font-semibold tracking-tight"
             data-testid="chat-title"
