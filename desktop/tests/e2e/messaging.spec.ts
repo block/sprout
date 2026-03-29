@@ -132,6 +132,50 @@ test("messages persist across channel switches", async ({ page }) => {
   await expect(page.getByTestId("message-timeline")).toContainText(message);
 });
 
+test("draft is preserved when switching channels", async ({ page }) => {
+  const draft = `Unsent draft ${Date.now()}`;
+  const input = page.getByTestId("message-input");
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  // Type a draft but do not send it
+  await input.fill(draft);
+  await expect(input).toHaveValue(draft);
+
+  // Switch to another channel — composer should be empty
+  await page.getByTestId("channel-random").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("random");
+  await expect(input).toHaveValue("");
+
+  // Switch back — the draft should still be there
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(input).toHaveValue(draft);
+});
+
+test("sending a message clears the draft", async ({ page }) => {
+  const message = `Sent message ${Date.now()}`;
+  const input = page.getByTestId("message-input");
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  // Type and send a message
+  await input.fill(message);
+  await page.getByTestId("send-message").click();
+  await expect(page.getByTestId("message-timeline")).toContainText(message);
+
+  // Switch away and back — composer should be empty, not restored from draft
+  await page.getByTestId("channel-random").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("random");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(input).toHaveValue("");
+});
+
 test("different channels have independent messages", async ({ page }) => {
   const ts = Date.now();
   const generalMessage = `General only ${ts}`;

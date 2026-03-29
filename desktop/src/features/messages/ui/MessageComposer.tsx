@@ -2,13 +2,10 @@ import * as React from "react";
 
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
+import { useDrafts } from "@/features/messages/lib/useDrafts";
+import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
 import { useMentions } from "@/features/messages/lib/useMentions";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
-import {
-  type BlobDescriptor,
-  pickAndUploadMedia,
-  uploadMediaBytes,
-} from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
@@ -72,43 +69,72 @@ export function MessageComposer({
   // Keep contentRef in sync — no extra re-render, just a ref assignment.
   contentRef.current = content;
 
+  const drafts = useDrafts();
+  const previousChannelIdRef = React.useRef<string | null>(null);
+
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
   const notifyTyping = useTypingBroadcast(channelId);
 
-  const [uploadState, setUploadState] = React.useState<{
-    status: "idle" | "uploading" | "error";
-    message?: string;
-  }>({ status: "idle" });
-  const [pendingImeta, setPendingImeta] = React.useState<BlobDescriptor[]>([]);
+  const media = useMediaUpload(setContent);
 
   // Stable refs for values read inside callbacks that should not cause
   // callback identity changes when they update.
-  const pendingImetaRef = React.useRef(pendingImeta);
   const disabledRef = React.useRef(disabled);
   const isSendingRef = React.useRef(isSending);
   const onSendRef = React.useRef(onSend);
   const onEditSaveRef = React.useRef(onEditSave);
   const editTargetRef = React.useRef(editTarget);
-  pendingImetaRef.current = pendingImeta;
+  const channelIdRef = React.useRef(channelId);
   disabledRef.current = disabled;
   isSendingRef.current = isSending;
   onSendRef.current = onSend;
   onEditSaveRef.current = onEditSave;
   editTargetRef.current = editTarget;
+  channelIdRef.current = channelId;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger — reset all composer state on channel switch to prevent draft/upload/autocomplete leaks
+  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger — save draft for previous channel, restore draft for new channel, reset transient state
   React.useEffect(() => {
-    setContent("");
-    contentRef.current = "";
-    setPendingImeta([]);
-    setUploadState({ status: "idle" });
+    // Save draft for the channel we're leaving
+    const prevId = previousChannelIdRef.current;
+    if (prevId) {
+      const currentContent = contentRef.current;
+      const sel = draftSelectionRef.current;
+      if (currentContent.trim().length > 0) {
+        drafts.saveDraft(prevId, {
+          content: currentContent,
+          selectionEnd: sel.end,
+          selectionStart: sel.start,
+        });
+      } else {
+        drafts.clearDraft(prevId);
+      }
+    }
+    previousChannelIdRef.current = channelId;
+
+    // Restore draft for the channel we're entering
+    const saved = channelId ? drafts.loadDraft(channelId) : undefined;
+    if (saved) {
+      setContent(saved.content);
+      contentRef.current = saved.content;
+      draftSelectionRef.current = {
+        end: saved.selectionEnd,
+        start: saved.selectionStart,
+      };
+      pendingSelectionRef.current = saved.selectionStart;
+    } else {
+      setContent("");
+      contentRef.current = "";
+      draftSelectionRef.current = { end: 0, start: 0 };
+    }
+
+    // Always reset transient state
+    media.setPendingImeta([]);
+    media.setUploadState({ status: "idle" });
     setIsEmojiPickerOpen(false);
     setComposerScrollTop(0);
     mentions.clearMentions();
     channelLinks.clearChannels();
-    draftSelectionRef.current = { end: 0, start: 0 };
-    pendingSelectionRef.current = null;
     lineHeightRef.current = null;
   }, [channelId]);
 
@@ -223,97 +249,6 @@ export function MessageComposer({
     mentions.updateMentionQuery(nextContent, nextCursor);
   }, [mentions.updateMentionQuery]);
 
-  const onUploaded = React.useCallback((descriptor: BlobDescriptor) => {
-    const markdown = `\n![image](${descriptor.url})\n`;
-    setContent((prev) => prev + markdown);
-    setPendingImeta((prev) => [...prev, descriptor]);
-    setUploadState({ status: "idle" });
-  }, []);
-
-  const handlePaperclip = React.useCallback(async () => {
-    setUploadState({ status: "uploading" });
-    try {
-      const descriptor = await pickAndUploadMedia();
-      if (descriptor) {
-        onUploaded(descriptor);
-      } else {
-        setUploadState({ status: "idle" });
-      }
-    } catch (err) {
-      setUploadState({ status: "error", message: String(err) });
-    }
-  }, [onUploaded]);
-
-  const handleDrop = React.useCallback(
-    async (event: React.DragEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      const files = Array.from(event.dataTransfer.files);
-      if (files.length === 0) return;
-
-      const file = files[0];
-      if (!file) return;
-
-      const ALLOWED_TYPES = [
-        "image/jpeg",
-        "image/png",
-        "image/gif",
-        "image/webp",
-      ];
-      if (!ALLOWED_TYPES.includes(file.type)) {
-        setUploadState({
-          status: "error",
-          message: "Only JPEG, PNG, GIF, and WebP images are supported",
-        });
-        return;
-      }
-
-      setUploadState({ status: "uploading" });
-      try {
-        const buffer = await file.arrayBuffer();
-        const descriptor = await uploadMediaBytes([...new Uint8Array(buffer)]);
-        onUploaded(descriptor);
-      } catch (err) {
-        setUploadState({ status: "error", message: String(err) });
-      }
-    },
-    [onUploaded],
-  );
-
-  const handleDragOver = React.useCallback(
-    (event: React.DragEvent<HTMLFormElement>) => {
-      event.preventDefault();
-    },
-    [],
-  );
-
-  const handlePaste = React.useCallback(
-    async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      const items = Array.from(event.clipboardData.items);
-      const ALLOWED_TYPES = [
-        "image/jpeg",
-        "image/png",
-        "image/gif",
-        "image/webp",
-      ];
-      const imageItem = items.find((item) => ALLOWED_TYPES.includes(item.type));
-      if (!imageItem) return;
-
-      event.preventDefault();
-      const file = imageItem.getAsFile();
-      if (!file) return;
-
-      setUploadState({ status: "uploading" });
-      try {
-        const buffer = await file.arrayBuffer();
-        const descriptor = await uploadMediaBytes([...new Uint8Array(buffer)]);
-        onUploaded(descriptor);
-      } catch (err) {
-        setUploadState({ status: "error", message: String(err) });
-      }
-    },
-    [onUploaded],
-  );
-
   const handleScroll = React.useCallback(
     (event: React.UIEvent<HTMLTextAreaElement>) => {
       setComposerScrollTop(event.currentTarget.scrollTop);
@@ -345,7 +280,7 @@ export function MessageComposer({
       return;
     }
 
-    const currentPendingImeta = pendingImetaRef.current;
+    const currentPendingImeta = media.pendingImetaRef.current;
     const hasMedia = currentPendingImeta.length > 0;
     if (
       (!trimmed && !hasMedia) ||
@@ -376,18 +311,25 @@ export function MessageComposer({
 
     setContent("");
     draftSelectionRef.current = { end: 0, start: 0 };
-    setPendingImeta([]);
+    media.setPendingImeta([]);
     mentions.clearMentions();
     channelLinks.clearChannels();
     setIsEmojiPickerOpen(false);
 
+    const sendChannelId = channelIdRef.current;
     try {
       await onSendRef.current(trimmed, pubkeys, mediaTags);
+      if (sendChannelId) {
+        drafts.clearDraft(sendChannelId);
+      }
     } catch {
       setContent(savedContent);
-      setPendingImeta(savedImeta);
+      media.setPendingImeta(savedImeta);
     }
   }, [
+    drafts.clearDraft,
+    media.pendingImetaRef,
+    media.setPendingImeta,
     mentions.extractMentionPubkeys,
     mentions.clearMentions,
     channelLinks.clearChannels,
@@ -535,12 +477,11 @@ export function MessageComposer({
     textareaRef.current?.focus();
   }, [editTarget?.id]);
 
-  const isUploading = uploadState.status === "uploading";
-
   const sendDisabled = React.useMemo(
     () =>
-      disabled || (content.trim().length === 0 && pendingImeta.length === 0),
-    [disabled, content, pendingImeta.length],
+      disabled ||
+      (content.trim().length === 0 && media.pendingImeta.length === 0),
+    [disabled, content, media.pendingImeta.length],
   );
 
   const handleCaptureSelection = React.useCallback(() => {
@@ -548,8 +489,8 @@ export function MessageComposer({
   }, [updateDraftSelection]);
 
   const handlePaperclipClick = React.useCallback(() => {
-    void handlePaperclip();
-  }, [handlePaperclip]);
+    void media.handlePaperclip();
+  }, [media.handlePaperclip]);
 
   return (
     <footer className="border-t border-border/80 bg-background p-4">
@@ -557,9 +498,9 @@ export function MessageComposer({
         <form
           className="relative rounded-2xl border border-input bg-card px-3 py-4 shadow-sm sm:px-4"
           data-testid="message-composer"
-          onDragOver={handleDragOver}
+          onDragOver={media.handleDragOver}
           onDrop={(e) => {
-            void handleDrop(e);
+            void media.handleDrop(e);
           }}
           onSubmit={(event) => {
             handleSubmit(event);
@@ -626,12 +567,12 @@ export function MessageComposer({
             </div>
           ) : null}
 
-          {uploadState.status === "error" ? (
+          {media.uploadState.status === "error" ? (
             <div className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              Upload failed: {uploadState.message}
+              Upload failed: {media.uploadState.message}
               <button
                 className="ml-2 underline"
-                onClick={() => setUploadState({ status: "idle" })}
+                onClick={() => media.setUploadState({ status: "idle" })}
                 type="button"
               >
                 Dismiss
@@ -658,7 +599,7 @@ export function MessageComposer({
               onChange={handleChange}
               onKeyDown={handleKeyDown}
               onPaste={(e) => {
-                void handlePaste(e);
+                void media.handlePaste(e);
               }}
               onScroll={handleScroll}
               onSelect={(event) => {
@@ -682,7 +623,7 @@ export function MessageComposer({
             composerDisabled={disabled}
             isEmojiPickerOpen={isEmojiPickerOpen}
             isSending={isSending}
-            isUploading={isUploading}
+            isUploading={media.isUploading}
             onCaptureSelection={handleCaptureSelection}
             onEmojiPickerOpenChange={setIsEmojiPickerOpen}
             onEmojiSelect={insertEmoji}
