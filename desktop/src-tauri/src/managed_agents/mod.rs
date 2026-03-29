@@ -1,5 +1,6 @@
 mod backend;
 mod discovery;
+mod persona_avatars;
 mod persona_card;
 mod personas;
 mod runtime;

@@ -30,6 +30,7 @@ const rules = [
 
 // Exceptions should stay rare and temporary. Prefer splitting files instead.
 const overrides = new Map([
+  ["src-tauri/src/managed_agents/personas.rs", 600], // built-in persona system prompts (Solo, Ralph, Strategist) are long string literals
   ["src-tauri/src/managed_agents/persona_card.rs", 772], // PNG/ZIP persona card codec + provider/model fields + 27 unit tests (~350 lines of tests); rustfmt adds line breaks around long literals/builders
   ["src/app/AppShell.tsx", 810], // message edit state + handlers + ChannelPane edit prop threading
   ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
