@@ -208,17 +208,7 @@ export function SearchDialog({
       setQuery("");
       setDebouncedQuery("");
       setSelectedIndex(0);
-      return;
     }
-
-    const timeout = window.setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }, 0);
-
-    return () => {
-      window.clearTimeout(timeout);
-    };
   }, [open]);
 
   React.useEffect(() => {
@@ -238,6 +228,10 @@ export function SearchDialog({
       <DialogContent
         className="gap-0 overflow-hidden p-0"
         data-testid="search-dialog"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          inputRef.current?.focus();
+        }}
       >
         <DialogHeader className="border-b border-border/80 px-6 py-5">
           <DialogTitle className="flex items-center gap-3">
@@ -252,6 +246,7 @@ export function SearchDialog({
           <div className="mt-4 flex items-center gap-3 rounded-2xl border border-input bg-card px-3 py-3 shadow-sm">
             <Search className="h-4 w-4 text-muted-foreground" />
             <Input
+              autoFocus
               className="h-auto border-0 bg-transparent px-0 py-0 text-base shadow-none focus-visible:ring-0"
               data-testid="search-input"
               onChange={(event) => {
