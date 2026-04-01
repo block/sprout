@@ -3,7 +3,7 @@
 //! CLI-first: every option is a CLI flag with env var fallback.
 //! Config file (TOML) for complex subscription rules.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -40,6 +40,32 @@ pub enum SubscribeMode {
 pub enum DedupMode {
     Drop,
     Queue,
+}
+
+/// Inbound author gate: which authors' events the harness forwards to the agent.
+///
+/// - `owner-only` — only the agent's registered owner (default).
+/// - `allowlist`  — owner + explicit pubkey list (`--respond-to-allowlist`).
+/// - `anyone`     — all events forwarded (no author filtering).
+/// - `nobody`     — all events dropped (proactive/heartbeat-only mode).
+#[derive(Debug, Clone, Default, PartialEq, clap::ValueEnum)]
+pub enum RespondTo {
+    #[default]
+    OwnerOnly,
+    Allowlist,
+    Anyone,
+    Nobody,
+}
+
+impl std::fmt::Display for RespondTo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OwnerOnly => f.write_str("owner-only"),
+            Self::Allowlist => f.write_str("allowlist"),
+            Self::Anyone => f.write_str("anyone"),
+            Self::Nobody => f.write_str("nobody"),
+        }
+    }
 }
 
 /// Permission mode for agents that support `session/set_config_option` with
@@ -280,6 +306,21 @@ pub struct CliArgs {
         value_enum
     )]
     pub permission_mode: PermissionMode,
+
+    /// Inbound author gate: which authors' events the harness forwards.
+    /// Modes: owner-only (default), allowlist, anyone, nobody.
+    #[arg(
+        long,
+        env = "SPROUT_ACP_RESPOND_TO",
+        default_value = "owner-only",
+        value_enum
+    )]
+    pub respond_to: RespondTo,
+
+    /// Comma-separated 64-char hex pubkeys for allowlist mode.
+    /// Owner pubkey is always implicitly included.
+    #[arg(long, env = "SPROUT_ACP_RESPOND_TO_ALLOWLIST", value_delimiter = ',')]
+    pub respond_to_allowlist: Option<Vec<String>>,
 }
 
 // ── Merged NIP-01 filter ──────────────────────────────────────────────────────
@@ -326,6 +367,26 @@ pub struct Config {
     pub model: Option<String>,
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
+    /// Inbound author gate mode.
+    pub respond_to: RespondTo,
+    /// Validated allowlist of pubkey hex strings (used when respond_to == Allowlist).
+    pub respond_to_allowlist: HashSet<String>,
+}
+
+/// Validate and deduplicate allowlist entries: each must be exactly 64 hex chars.
+fn validate_allowlist(entries: &[String]) -> Result<HashSet<String>, ConfigError> {
+    let mut validated = HashSet::new();
+    for entry in entries {
+        let trimmed = entry.trim().to_ascii_lowercase();
+        if trimmed.len() != 64 || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(ConfigError::ConfigFile(format!(
+                "invalid pubkey in --respond-to-allowlist: '{entry}' \
+                 (must be exactly 64 hex characters)"
+            )));
+        }
+        validated.insert(trimmed);
+    }
+    Ok(validated)
 }
 
 fn normalize_agent_command_identity(command: &str) -> String {
@@ -534,6 +595,24 @@ impl Config {
             )));
         }
 
+        // ── Inbound author gate validation ──────────────────────────────────
+        let respond_to_allowlist = if args.respond_to == RespondTo::Allowlist {
+            let raw = args.respond_to_allowlist.unwrap_or_default();
+            if raw.is_empty() {
+                return Err(ConfigError::ConfigFile(
+                    "--respond-to=allowlist requires --respond-to-allowlist with at least one pubkey".into(),
+                ));
+            }
+            validate_allowlist(&raw)?
+        } else {
+            if args.respond_to_allowlist.is_some() {
+                tracing::warn!(
+                    "--respond-to-allowlist is ignored when --respond-to is not 'allowlist'"
+                );
+            }
+            HashSet::new()
+        };
+
         let config = Config {
             keys,
             api_token: args.api_token,
@@ -561,6 +640,8 @@ impl Config {
             typing_enabled: !args.no_typing,
             model: args.model,
             permission_mode: args.permission_mode,
+            respond_to: args.respond_to,
+            respond_to_allowlist,
         };
 
         Ok(config)
@@ -568,8 +649,14 @@ impl Config {
 
     /// Human-readable summary (no secrets).
     pub fn summary(&self) -> String {
+        let respond_to_detail = match &self.respond_to {
+            RespondTo::Allowlist => {
+                format!("respond_to=allowlist({})", self.respond_to_allowlist.len())
+            }
+            other => format!("respond_to={other}"),
+        };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} model={} permission_mode={}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} model={} permission_mode={} {}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -588,6 +675,7 @@ impl Config {
             self.typing_enabled,
             self.model.as_deref().unwrap_or("(agent default)"),
             self.permission_mode,
+            respond_to_detail,
         )
     }
 }
@@ -909,6 +997,8 @@ mod tests {
             typing_enabled: true,
             model: None,
             permission_mode: PermissionMode::BypassPermissions,
+            respond_to: RespondTo::Anyone,
+            respond_to_allowlist: HashSet::new(),
         }
     }
 
@@ -1631,5 +1721,137 @@ channels = "ALL"
             summary.contains("max_turn=3600s"),
             "summary should include max_turn: {summary}"
         );
+    }
+
+    // ── RespondTo tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_respond_to_default_is_owner_only() {
+        assert_eq!(RespondTo::default(), RespondTo::OwnerOnly);
+    }
+
+    #[test]
+    fn test_respond_to_display() {
+        assert_eq!(format!("{}", RespondTo::OwnerOnly), "owner-only");
+        assert_eq!(format!("{}", RespondTo::Allowlist), "allowlist");
+        assert_eq!(format!("{}", RespondTo::Anyone), "anyone");
+        assert_eq!(format!("{}", RespondTo::Nobody), "nobody");
+    }
+
+    #[test]
+    fn test_respond_to_value_enum_parsing() {
+        use clap::ValueEnum;
+        assert_eq!(
+            RespondTo::from_str("owner-only", true).unwrap(),
+            RespondTo::OwnerOnly
+        );
+        assert_eq!(
+            RespondTo::from_str("allowlist", true).unwrap(),
+            RespondTo::Allowlist
+        );
+        assert_eq!(
+            RespondTo::from_str("anyone", true).unwrap(),
+            RespondTo::Anyone
+        );
+        assert_eq!(
+            RespondTo::from_str("nobody", true).unwrap(),
+            RespondTo::Nobody
+        );
+    }
+
+    #[test]
+    fn test_summary_includes_respond_to() {
+        let config = test_config(SubscribeMode::Mentions);
+        let s = config.summary();
+        assert!(
+            s.contains("respond_to=anyone"),
+            "test_config uses Anyone, got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_summary_respond_to_allowlist_shows_count() {
+        let mut config = test_config(SubscribeMode::Mentions);
+        config.respond_to = RespondTo::Allowlist;
+        config.respond_to_allowlist = HashSet::from(["ab".repeat(32), "cd".repeat(32)]);
+        let s = config.summary();
+        assert!(
+            s.contains("respond_to=allowlist(2)"),
+            "should show allowlist count, got: {s}"
+        );
+    }
+
+    // ── validate_allowlist tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_validate_allowlist_valid_entries() {
+        let entries = vec!["ab".repeat(32), "cd".repeat(32)];
+        let result = validate_allowlist(&entries).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_validate_allowlist_deduplicates() {
+        let pk = "ab".repeat(32);
+        let entries = vec![pk.clone(), pk.clone(), pk];
+        let result = validate_allowlist(&entries).unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_validate_allowlist_normalizes_case() {
+        let upper = "AB".repeat(32);
+        let lower = "ab".repeat(32);
+        let entries = vec![upper, lower];
+        let result = validate_allowlist(&entries).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&"ab".repeat(32)));
+    }
+
+    #[test]
+    fn test_validate_allowlist_trims_whitespace() {
+        let entries = vec![format!("  {}  ", "ab".repeat(32))];
+        let result = validate_allowlist(&entries).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&"ab".repeat(32)));
+    }
+
+    #[test]
+    fn test_validate_allowlist_rejects_short() {
+        let entries = vec!["abcd".to_string()];
+        let err = validate_allowlist(&entries).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("must be exactly 64 hex characters"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_allowlist_rejects_non_hex() {
+        let entries = vec!["zz".repeat(32)];
+        let err = validate_allowlist(&entries).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("must be exactly 64 hex characters"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_allowlist_rejects_too_long() {
+        let entries = vec!["ab".repeat(33)]; // 66 chars
+        let err = validate_allowlist(&entries).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("must be exactly 64 hex characters"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_allowlist_empty_is_ok() {
+        let result = validate_allowlist(&[]).unwrap();
+        assert!(result.is_empty());
     }
 }

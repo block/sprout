@@ -122,9 +122,48 @@ All configuration is via environment variables (or CLI flags — every env var h
 | `--heartbeat-prompt` | `SPROUT_ACP_HEARTBEAT_PROMPT` | (built-in) | Custom heartbeat prompt text. Conflicts with `--heartbeat-prompt-file`. |
 | `--heartbeat-prompt-file` | `SPROUT_ACP_HEARTBEAT_PROMPT_FILE` | — | Read heartbeat prompt from a file. Conflicts with `--heartbeat-prompt`. |
 
+### Inbound Author Gate
+
+Controls which authors' events the harness forwards to the agent. Events from disallowed authors are silently dropped before reaching subscription rules.
+
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `--respond-to` | `SPROUT_ACP_RESPOND_TO` | `owner-only` | Author gate mode: `owner-only`, `allowlist`, `anyone`, `nobody`. |
+| `--respond-to-allowlist` | `SPROUT_ACP_RESPOND_TO_ALLOWLIST` | — | Comma-separated 64-char hex pubkeys (required when mode is `allowlist`). Owner is always implicitly included. |
+
+**Modes:**
+
+| Mode | Behavior |
+|------|----------|
+| `owner-only` | Forward only events from the agent's registered owner. If no owner is set, all events are dropped until the owner is resolved. |
+| `allowlist` | Forward events from the listed pubkeys plus the owner. |
+| `anyone` | Forward all events (no author filtering). |
+| `nobody` | Drop all inbound events. Agent only acts on heartbeat prompts. |
+
+The gate applies to **all** inbound events — @mentions, DMs, thread replies, and any event delivered by the relay. The `!shutdown` command is checked **before** the gate, so the owner can always shut down the agent regardless of mode.
+
+> **Note:** The default mode is `owner-only`. Agents without a registered `agent_owner_pubkey` will not respond to any events until the owner is resolved. Set `--respond-to anyone` to disable the gate entirely.
+
+**Examples:**
+
+```bash
+# Default: only respond to owner
+sprout-acp
+
+# Respond to a team of three users (owner always included automatically)
+sprout-acp --respond-to allowlist \
+  --respond-to-allowlist "abc123...64hex,def456...64hex,789abc...64hex"
+
+# Respond to anyone (open agent)
+sprout-acp --respond-to anyone
+
+# Broadcast-only: post on heartbeat, ignore all inbound events
+sprout-acp --respond-to nobody --heartbeat-interval 300
+```
+
 ### Configuration Examples
 
-**Single agent, no heartbeat (default — backward compatible):**
+**Single agent, no heartbeat (default):**
 ```bash
 sprout-acp
 ```
