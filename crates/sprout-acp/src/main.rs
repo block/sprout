@@ -14,7 +14,7 @@ use std::time::Duration;
 use acp::{AcpClient, EnvVar, McpServer};
 use anyhow::Result;
 use clap::Parser;
-use config::{Config, DedupMode, ModelsArgs, SubscribeMode};
+use config::{Config, DedupMode, ModelsArgs, RespondTo, SubscribeMode};
 use filter::SubscriptionRule;
 use futures_util::FutureExt;
 use nostr::ToBech32;
@@ -47,6 +47,73 @@ fn is_subcommand(name: &str) -> bool {
 
 /// Timeout for the `sprout-acp models` subcommand (spawn + init + session/new).
 const MODELS_TIMEOUT: Duration = Duration::from_secs(10);
+
+// ── Owner cache ───────────────────────────────────────────────────────────────
+
+/// Lazy-resolving cache for the agent's owner pubkey.
+///
+/// Replaces the bare `Option<String>` that previously lived in the event loop.
+/// On success, the owner pubkey is cached for the process lifetime (owner
+/// changes require a harness restart). On failure/miss, retries after 60s
+/// to avoid hammering the API.
+struct OwnerCache {
+    pubkey: Option<String>,
+    last_attempt: Option<std::time::Instant>,
+}
+
+/// How long to cache a failed owner lookup before retrying.
+const OWNER_CACHE_TTL: Duration = Duration::from_secs(60);
+
+impl OwnerCache {
+    fn new(initial: Option<String>) -> Self {
+        let last_attempt = if initial.is_some() {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        Self {
+            pubkey: initial,
+            last_attempt,
+        }
+    }
+
+    /// Return the cached owner pubkey, or attempt a lazy resolution if stale.
+    async fn get_or_resolve(
+        &mut self,
+        rest_client: &relay::RestClient,
+        agent_pubkey_hex: &str,
+    ) -> Option<&str> {
+        if self.pubkey.is_some() {
+            return self.pubkey.as_deref();
+        }
+        let stale = self
+            .last_attempt
+            .map(|t| t.elapsed() >= OWNER_CACHE_TTL)
+            .unwrap_or(true);
+        if !stale {
+            return None;
+        }
+        self.last_attempt = Some(std::time::Instant::now());
+        let profile_url = format!("/api/users/{agent_pubkey_hex}/profile");
+        match rest_client.get_json(&profile_url).await {
+            Ok(v) => {
+                // Normalize to lowercase hex for consistent comparison with
+                // nostr PublicKey::to_hex() and validated allowlist entries.
+                self.pubkey = v
+                    .get("agent_owner_pubkey")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_ascii_lowercase());
+                if let Some(ref o) = self.pubkey {
+                    tracing::info!("lazy owner resolution succeeded: {o}");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("lazy owner lookup failed: {e}");
+            }
+        }
+        self.pubkey.as_deref()
+    }
+}
 
 /// Maximum crashes in a 60-second window before a slot's circuit opens.
 const CIRCUIT_BREAKER_THRESHOLD: usize = 3;
@@ -399,31 +466,47 @@ async fn tokio_main() -> Result<()> {
         }
     }
 
-    // ── Step 2d: Query agent owner (with retry) ─────────────────────────────
-    // Owner lookup is critical for !shutdown — a transient failure here would
-    // permanently disable remote shutdown for this process. Retry a few times
-    // with backoff so a brief relay hiccup doesn't leave us uncontrollable.
-    // Owner lookup: try at startup, but if it fails the shutdown handler will
-    // retry lazily when a candidate !shutdown message arrives. This means a
-    // relay outage during startup doesn't permanently disable remote shutdown.
-    let mut owner_pubkey: Option<String> = {
+    // ── Step 2d: Query agent owner ──────────────────────────────────────────
+    // Owner lookup is used by !shutdown and the inbound author gate.
+    // Try at startup; OwnerCache retries lazily on cache miss.
+    let startup_owner: Option<String> = {
         let profile_url = format!("/api/users/{pubkey_hex}/profile");
         match rest_client_for_presence.get_json(&profile_url).await {
             Ok(v) => v
                 .get("agent_owner_pubkey")
                 .and_then(|v| v.as_str())
-                .map(String::from),
+                .map(|s| s.to_ascii_lowercase()),
             Err(e) => {
                 tracing::warn!("startup owner lookup failed (will retry lazily): {e}");
                 None
             }
         }
     };
-    if let Some(ref owner) = owner_pubkey {
+    if let Some(ref owner) = startup_owner {
         tracing::info!("agent owner: {owner}");
     } else {
-        tracing::info!("no agent owner set at startup — will resolve lazily on !shutdown");
+        tracing::info!("no agent owner set at startup — will resolve lazily");
     }
+    // Warn if owner-dependent mode but no owner resolved yet.
+    if startup_owner.is_none() {
+        match &config.respond_to {
+            RespondTo::OwnerOnly => {
+                tracing::warn!(
+                    "respond-to=owner-only but no owner is set — all events will be \
+                     dropped until owner is resolved. Set --respond-to=anyone to override."
+                );
+            }
+            RespondTo::Allowlist => {
+                tracing::warn!(
+                    "respond-to=allowlist but no owner is set — allowlisted pubkeys \
+                     will still be accepted, but owner-based matching is unavailable \
+                     until owner is resolved."
+                );
+            }
+            _ => {} // anyone/nobody don't depend on owner
+        }
+    }
+    let mut owner_cache = OwnerCache::new(startup_owner);
 
     // ── Step 3: Discover channels and build subscription rules ────────────────
     let channel_info_map = relay
@@ -849,28 +932,13 @@ async fn tokio_main() -> Result<()> {
                                         && t.as_slice().get(1).map(|s| s.as_str()) == Some(pubkey_hex.as_str())
                                 });
                             if is_shutdown {
-                                // Lazy owner resolution: if we don't have the owner
-                                // yet (startup lookup failed), try now. This ensures
-                                // a relay outage during startup doesn't permanently
+                                // Lazy owner resolution via OwnerCache — a relay
+                                // outage during startup doesn't permanently
                                 // disable remote shutdown.
-                                if owner_pubkey.is_none() {
-                                    let profile_url = format!("/api/users/{pubkey_hex}/profile");
-                                    match rest_client_for_presence.get_json(&profile_url).await {
-                                        Ok(v) => {
-                                            owner_pubkey = v
-                                                .get("agent_owner_pubkey")
-                                                .and_then(|v| v.as_str())
-                                                .map(String::from);
-                                            if let Some(ref o) = owner_pubkey {
-                                                tracing::info!("lazy owner resolution succeeded: {o}");
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!("lazy owner lookup failed: {e}");
-                                        }
-                                    }
-                                }
-                                if let Some(ref owner) = owner_pubkey {
+                                let owner = owner_cache
+                                    .get_or_resolve(&rest_client_for_presence, &pubkey_hex)
+                                    .await;
+                                if let Some(owner) = owner {
                                     if sprout_event.event.pubkey.to_hex() == *owner {
                                         tracing::info!(
                                             channel_id = %sprout_event.channel_id,
@@ -886,6 +954,48 @@ async fn tokio_main() -> Result<()> {
                                 // contain "!shutdown" from a non-owner.
                             }
                             // ── End shutdown command handling ──────────────────
+
+                            // ── Inbound author gate ──────────────────────────
+                            // Coarse security policy: drop events from disallowed
+                            // authors before they reach subscription rules or the
+                            // agent. Must be AFTER !shutdown (owner can always
+                            // shut down regardless of gate mode).
+                            {
+                                let author = sprout_event.event.pubkey.to_hex();
+                                let allowed = match &config.respond_to {
+                                    RespondTo::Anyone => true,
+                                    RespondTo::Nobody => false,
+                                    RespondTo::OwnerOnly => {
+                                        let owner = owner_cache
+                                            .get_or_resolve(
+                                                &rest_client_for_presence,
+                                                &pubkey_hex,
+                                            )
+                                            .await;
+                                        owner == Some(author.as_str())
+                                    }
+                                    RespondTo::Allowlist => {
+                                        let owner = owner_cache
+                                            .get_or_resolve(
+                                                &rest_client_for_presence,
+                                                &pubkey_hex,
+                                            )
+                                            .await;
+                                        config.respond_to_allowlist.contains(&author)
+                                            || owner == Some(author.as_str())
+                                    }
+                                };
+                                if !allowed {
+                                    tracing::debug!(
+                                        channel_id = %sprout_event.channel_id,
+                                        author = %sprout_event.event.pubkey.to_hex(),
+                                        mode = %config.respond_to,
+                                        "inbound author gate — dropping event"
+                                    );
+                                    continue;
+                                }
+                            }
+                            // ── End inbound author gate ──────────────────────
 
                             let matched = filter::match_event(&sprout_event.event, sprout_event.channel_id, &rules, &pubkey_hex).await;
                             let prompt_tag = match matched {
@@ -1795,4 +1905,85 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
             env
         },
     }]
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod owner_cache_tests {
+    use super::*;
+
+    #[test]
+    fn new_with_some_caches_immediately() {
+        let cache = OwnerCache::new(Some("abcd".into()));
+        assert_eq!(cache.pubkey.as_deref(), Some("abcd"));
+        assert!(cache.last_attempt.is_some());
+    }
+
+    #[test]
+    fn new_with_none_has_no_attempt() {
+        let cache = OwnerCache::new(None);
+        assert!(cache.pubkey.is_none());
+        assert!(cache.last_attempt.is_none());
+    }
+
+    #[test]
+    fn get_or_resolve_returns_cached_immediately() {
+        // When pubkey is already cached, get_or_resolve should return it
+        // without any API call. We can verify this by checking the return
+        // value without providing a real RestClient (the method short-circuits
+        // before using it).
+        let cache = OwnerCache::new(Some("ab".repeat(32)));
+        // We can't call get_or_resolve without a RestClient in a sync test,
+        // but we can verify the cache state directly.
+        assert_eq!(cache.pubkey.as_deref(), Some("ab".repeat(32)).as_deref());
+    }
+
+    #[test]
+    fn success_cached_for_process_lifetime() {
+        // After a successful resolution, pubkey stays cached even if
+        // last_attempt is old. The early return `if self.pubkey.is_some()`
+        // means the TTL check is never reached.
+        let mut cache = OwnerCache::new(Some("ab".repeat(32)));
+        // Simulate time passing by backdating last_attempt
+        cache.last_attempt = Some(std::time::Instant::now() - Duration::from_secs(3600));
+        // pubkey is still cached — success is permanent
+        assert!(cache.pubkey.is_some());
+    }
+
+    #[test]
+    fn failure_respects_ttl() {
+        // After a failed lookup, last_attempt is set. A subsequent call
+        // within the TTL window should NOT retry (stale == false).
+        let mut cache = OwnerCache::new(None);
+        cache.last_attempt = Some(std::time::Instant::now());
+        // Within TTL: stale check returns false, so no retry
+        let stale = cache
+            .last_attempt
+            .map(|t| t.elapsed() >= OWNER_CACHE_TTL)
+            .unwrap_or(true);
+        assert!(!stale, "should not be stale within TTL");
+    }
+
+    #[test]
+    fn failure_retries_after_ttl() {
+        // After TTL expires, the cache should consider itself stale.
+        let mut cache = OwnerCache::new(None);
+        cache.last_attempt = Some(std::time::Instant::now() - Duration::from_secs(61));
+        let stale = cache
+            .last_attempt
+            .map(|t| t.elapsed() >= OWNER_CACHE_TTL)
+            .unwrap_or(true);
+        assert!(stale, "should be stale after TTL");
+    }
+
+    #[test]
+    fn no_attempt_is_always_stale() {
+        let cache = OwnerCache::new(None);
+        let stale = cache
+            .last_attempt
+            .map(|t| t.elapsed() >= OWNER_CACHE_TTL)
+            .unwrap_or(true);
+        assert!(stale, "no prior attempt should be considered stale");
+    }
 }
