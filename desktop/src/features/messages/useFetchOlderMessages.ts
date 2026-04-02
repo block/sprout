@@ -1,9 +1,12 @@
 import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import {
+  channelMessagesKey,
+  sortMessages,
+} from "@/features/messages/lib/messageQueryKeys";
 import { relayClient } from "@/shared/api/relayClient";
 import type { Channel, RelayEvent } from "@/shared/api/types";
-import { sortMessages } from "@/features/messages/hooks";
 
 const OLDER_MESSAGES_BATCH_SIZE = 100;
 
@@ -31,7 +34,7 @@ export function useFetchOlderMessages(channel: Channel | null) {
       return;
     }
 
-    const queryKey = ["channel-messages", channelId] as const;
+    const queryKey = channelMessagesKey(channelId);
     const currentMessages =
       queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];
     if (currentMessages.length === 0) {
