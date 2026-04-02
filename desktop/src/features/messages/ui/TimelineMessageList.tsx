@@ -1,8 +1,13 @@
 import * as React from "react";
 
+import {
+  formatDayHeading,
+  isSameDay,
+} from "@/features/messages/lib/dateFormatters";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
+import { DayDivider } from "./DayDivider";
 import { MessageRow } from "./MessageRow";
 import { SystemMessageRow } from "./SystemMessageRow";
 
@@ -31,30 +36,51 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   onToggleReaction,
   profiles,
 }: TimelineMessageListProps) {
-  return messages.map((message) =>
-    message.kind === KIND_SYSTEM_MESSAGE ? (
-      <SystemMessageRow
-        key={message.id}
-        body={message.body}
-        currentPubkey={currentPubkey}
-        profiles={profiles}
-        time={message.time}
-      />
-    ) : (
-      <MessageRow
-        key={message.id}
-        activeReplyTargetId={activeReplyTargetId}
-        highlighted={message.id === highlightedMessageId}
-        message={message}
-        onEdit={
-          onEdit && currentPubkey && message.pubkey === currentPubkey
-            ? onEdit
-            : undefined
-        }
-        onToggleReaction={onToggleReaction}
-        onReply={onReply}
-        profiles={profiles}
-      />
-    ),
-  );
+  const elements: React.ReactNode[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    const prev = i > 0 ? messages[i - 1] : null;
+
+    if (!prev || !isSameDay(prev.createdAt, message.createdAt)) {
+      elements.push(
+        <DayDivider
+          key={`day-${message.createdAt}`}
+          label={formatDayHeading(message.createdAt)}
+        />,
+      );
+    }
+
+    if (message.kind === KIND_SYSTEM_MESSAGE) {
+      elements.push(
+        <SystemMessageRow
+          key={message.id}
+          body={message.body}
+          createdAt={message.createdAt}
+          currentPubkey={currentPubkey}
+          profiles={profiles}
+          time={message.time}
+        />,
+      );
+    } else {
+      elements.push(
+        <MessageRow
+          key={message.id}
+          activeReplyTargetId={activeReplyTargetId}
+          highlighted={message.id === highlightedMessageId}
+          message={message}
+          onEdit={
+            onEdit && currentPubkey && message.pubkey === currentPubkey
+              ? onEdit
+              : undefined
+          }
+          onToggleReaction={onToggleReaction}
+          onReply={onReply}
+          profiles={profiles}
+        />,
+      );
+    }
+  }
+
+  return elements;
 });

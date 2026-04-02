@@ -18,13 +18,9 @@ import {
   KIND_SYSTEM_MESSAGE,
 } from "@/shared/constants/kinds";
 import { resolveEventAuthorPubkey } from "@/shared/lib/authors";
+import { formatTime } from "@/features/messages/lib/dateFormatters";
 
 const HEX_RE = /^[0-9a-f]+$/i;
-
-const TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
-  hour: "numeric",
-  minute: "2-digit",
-});
 
 function isTimelineContentEvent(event: RelayEvent) {
   return (
@@ -299,7 +295,7 @@ export function formatTimelineMessages(
         currentUserAvatarUrl,
         profiles,
       }),
-      time: TIME_FORMATTER.format(new Date(event.created_at * 1_000)),
+      time: formatTime(event.created_at),
       body: edit ? edit.content : event.content,
       parentId: thread.parentId,
       rootId: thread.rootId,

@@ -8,6 +8,7 @@ import { Separator } from "@/shared/ui/separator";
 import { TimelineSkeleton } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
 import { useLoadOlderOnScroll } from "./useLoadOlderOnScroll";
+import { useStickyDayHeader } from "./useStickyDayHeader";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
 type MessageTimelineProps = {
@@ -81,8 +82,20 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     sentinelRef: topSentinelRef,
   });
 
+  const stickyDayLabel = useStickyDayHeader(scrollContainerRef);
+
   return (
     <div className="relative min-h-0 flex-1">
+      {stickyDayLabel && !isAtBottom ? (
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center px-4 pt-2 sm:px-6"
+          data-testid="message-timeline-sticky-day"
+        >
+          <p className="rounded-full bg-muted/90 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground shadow-sm backdrop-blur-sm">
+            {stickyDayLabel}
+          </p>
+        </div>
+      ) : null}
       <div
         className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 [overflow-anchor:none] sm:px-6"
         data-testid="message-timeline"
@@ -113,17 +126,6 @@ export const MessageTimeline = React.memo(function MessageTimeline({
               <Separator className="flex-1" />
             </div>
           ) : null}
-
-          <div
-            className="flex items-center gap-3"
-            data-testid="message-timeline-day-divider"
-          >
-            <Separator className="flex-1" />
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-              Today
-            </p>
-            <Separator className="flex-1" />
-          </div>
 
           {isLoading ? <TimelineSkeleton /> : null}
 

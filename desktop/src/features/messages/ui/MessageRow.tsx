@@ -10,6 +10,7 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
 import { MessageActionBar } from "./MessageActionBar";
+import { MessageTimestamp } from "./MessageTimestamp";
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
@@ -264,7 +265,10 @@ export const MessageRow = React.memo(
                     (edited)
                   </p>
                 ) : null}
-                <p className="whitespace-nowrap">{message.time}</p>
+                <MessageTimestamp
+                  createdAt={message.createdAt}
+                  time={message.time}
+                />
               </div>
             </div>
             {renderBody()}

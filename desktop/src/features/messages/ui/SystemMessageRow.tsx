@@ -2,6 +2,7 @@ import { ArrowRightLeft } from "lucide-react";
 
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
+import { MessageTimestamp } from "./MessageTimestamp";
 
 type SystemMessagePayload = {
   type: string;
@@ -57,11 +58,13 @@ function describeSystemEvent(
 
 export function SystemMessageRow({
   body,
+  createdAt,
   time,
   currentPubkey,
   profiles,
 }: {
   body: string;
+  createdAt: number;
   time: string;
   currentPubkey?: string;
   profiles?: UserProfileLookup;
@@ -87,8 +90,8 @@ export function SystemMessageRow({
         <ArrowRightLeft className="h-3 w-3 text-muted-foreground" />
       </div>
       <p className="text-xs text-muted-foreground">{description}</p>
-      <span className="ml-auto whitespace-nowrap text-xs text-muted-foreground/60">
-        {time}
+      <span className="ml-auto text-xs text-muted-foreground/60">
+        <MessageTimestamp createdAt={createdAt} time={time} />
       </span>
     </div>
   );
