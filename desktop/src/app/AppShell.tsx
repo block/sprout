@@ -21,13 +21,13 @@ import { ChannelManagementSheet } from "@/features/channels/ui/ChannelManagement
 import { HomeView } from "@/features/home/ui/HomeView";
 import {
   useChannelMessagesQuery,
-  useFetchOlderMessages,
   mergeMessages,
   useEditMessageMutation,
   useSendMessageMutation,
   useChannelSubscription,
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
+import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import {
   collectMessageAuthorPubkeys,
   formatTimelineMessages,

@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useEffectEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { updateChannelLastMessageAt } from "@/features/channels/hooks";
@@ -30,7 +24,6 @@ type MessageQueryContext = {
 };
 
 const CHANNEL_HISTORY_LIMIT = 200;
-const OLDER_MESSAGES_BATCH_SIZE = 100;
 const MAX_TIMELINE_MESSAGES = 5_000;
 
 function dedupeMessagesById(messages: RelayEvent[]) {
@@ -51,7 +44,7 @@ function dedupeMessagesById(messages: RelayEvent[]) {
   return deduped.reverse();
 }
 
-function sortMessages(messages: RelayEvent[]) {
+export function sortMessages(messages: RelayEvent[]) {
   return dedupeMessagesById(messages).sort(
     (left, right) => left.created_at - right.created_at,
   );
@@ -279,59 +272,6 @@ export function useChannelSubscription(channel: Channel | null) {
       }
     };
   }, [channelId, channelType]);
-}
-
-export function useFetchOlderMessages(channel: Channel | null) {
-  const queryClient = useQueryClient();
-  const channelId = channel?.id ?? null;
-  const queryKey = ["channel-messages", channelId ?? "none"] as const;
-  const [isFetchingOlder, setIsFetchingOlder] = useState(false);
-  const [hasOlderMessages, setHasOlderMessages] = useState(true);
-  const previousChannelIdRef = useRef(channelId);
-
-  if (previousChannelIdRef.current !== channelId) {
-    previousChannelIdRef.current = channelId;
-    setHasOlderMessages(true);
-  }
-
-  const fetchOlder = useCallback(async () => {
-    if (!channelId || isFetchingOlder || !hasOlderMessages) {
-      return;
-    }
-
-    const currentMessages =
-      queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];
-    if (currentMessages.length === 0) {
-      return;
-    }
-
-    const oldestTimestamp = currentMessages[0].created_at;
-    setIsFetchingOlder(true);
-
-    try {
-      const olderMessages = await relayClient.fetchChannelHistoryBefore(
-        channelId,
-        oldestTimestamp,
-        OLDER_MESSAGES_BATCH_SIZE,
-      );
-
-      if (olderMessages.length < OLDER_MESSAGES_BATCH_SIZE) {
-        setHasOlderMessages(false);
-      }
-
-      if (olderMessages.length > 0) {
-        queryClient.setQueryData<RelayEvent[]>(queryKey, (current = []) =>
-          sortMessages([...current, ...olderMessages]),
-        );
-      }
-    } catch (error) {
-      console.error("Failed to fetch older messages", channelId, error);
-    } finally {
-      setIsFetchingOlder(false);
-    }
-  }, [channelId, isFetchingOlder, hasOlderMessages, queryClient, queryKey]);
-
-  return { fetchOlder, isFetchingOlder, hasOlderMessages };
 }
 
 export function useSendMessageMutation(

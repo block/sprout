@@ -46,6 +46,18 @@ export class RelayClient {
   private notifyReconnectListeners = false;
 
   async fetchChannelHistory(channelId: string, limit = 50) {
+    return this.fetchHistory(this.buildChannelFilter(channelId, limit));
+  }
+
+  async fetchChannelHistoryBefore(
+    channelId: string,
+    before: number,
+    limit = 50,
+  ) {
+    return this.fetchHistory(this.buildChannelFilter(channelId, limit, before));
+  }
+
+  private async fetchHistory(filter: RelaySubscriptionFilter) {
     await this.ensureConnected();
 
     return new Promise<RelayEvent[]>((resolve, reject) => {
@@ -64,56 +76,13 @@ export class RelayClient {
         timeout,
       });
 
-      void this.sendRaw([
-        "REQ",
-        subId,
-        this.buildChannelFilter(channelId, limit),
-      ]).catch((error) => {
+      void this.sendRaw(["REQ", subId, filter]).catch((error) => {
         window.clearTimeout(timeout);
         this.subscriptions.delete(subId);
         reject(
           error instanceof Error
             ? error
             : new Error("Failed to request channel history."),
-        );
-      });
-    });
-  }
-
-  async fetchChannelHistoryBefore(
-    channelId: string,
-    before: number,
-    limit = 50,
-  ) {
-    await this.ensureConnected();
-
-    return new Promise<RelayEvent[]>((resolve, reject) => {
-      const subId = `history-${crypto.randomUUID()}`;
-      const timeout = window.setTimeout(() => {
-        this.subscriptions.delete(subId);
-        void this.closeSubscription(subId);
-        reject(new Error("Timed out while loading older channel history."));
-      }, 8_000);
-
-      this.subscriptions.set(subId, {
-        mode: "history",
-        events: [],
-        resolve,
-        reject,
-        timeout,
-      });
-
-      void this.sendRaw([
-        "REQ",
-        subId,
-        this.buildChannelFilter(channelId, limit, before),
-      ]).catch((error) => {
-        window.clearTimeout(timeout);
-        this.subscriptions.delete(subId);
-        reject(
-          error instanceof Error
-            ? error
-            : new Error("Failed to request older channel history."),
         );
       });
     });

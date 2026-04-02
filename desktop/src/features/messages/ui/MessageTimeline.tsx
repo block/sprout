@@ -80,29 +80,25 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && hasOlderMessages && !isFetchingOlder) {
-          const previousHeight = container.scrollHeight;
-          void fetchOlder().then(() => {
-            const newHeight = container.scrollHeight;
-            const delta = newHeight - previousHeight;
-            if (delta > 0) {
-              restoreScrollPosition(container.scrollTop + delta);
-            }
-          });
+        if (!entry.isIntersecting) {
+          return;
         }
+
+        const previousHeight = container.scrollHeight;
+        void fetchOlder().then(() => {
+          const newHeight = container.scrollHeight;
+          const delta = newHeight - previousHeight;
+          if (delta > 0) {
+            restoreScrollPosition(container.scrollTop + delta);
+          }
+        });
       },
       { root: container, rootMargin: "200px 0px 0px 0px" },
     );
 
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [
-    fetchOlder,
-    hasOlderMessages,
-    isFetchingOlder,
-    isLoading,
-    restoreScrollPosition,
-  ]);
+  }, [fetchOlder, isLoading, restoreScrollPosition]);
 
   return (
     <div className="relative min-h-0 flex-1">
