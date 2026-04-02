@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -18,11 +18,12 @@ export function useFetchOlderMessages(channel: Channel | null) {
   const isFetchingOlderRef = useRef(false);
   const hasOlderMessagesRef = useRef(true);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is intentionally the sole trigger — we reset pagination state when the channel changes
-  useEffect(() => {
+  const previousChannelIdRef = useRef(channelId);
+  if (previousChannelIdRef.current !== channelId) {
+    previousChannelIdRef.current = channelId;
     hasOlderMessagesRef.current = true;
     setHasOlderMessages(true);
-  }, [channelId]);
+  }
 
   const fetchOlder = useCallback(async () => {
     if (
