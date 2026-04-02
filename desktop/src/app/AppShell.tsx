@@ -27,6 +27,7 @@ import {
   useChannelSubscription,
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
+import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import {
   collectMessageAuthorPubkeys,
@@ -489,7 +490,7 @@ export function AppShell() {
           }
 
           queryClient.setQueryData<RelayEvent[]>(
-            ["channel-messages", activeChannel.id],
+            channelMessagesKey(activeChannel.id),
             (current = []) => mergeMessages(current, event),
           );
         } catch (error) {
