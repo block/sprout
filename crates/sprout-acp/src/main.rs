@@ -115,6 +115,182 @@ impl OwnerCache {
     }
 }
 
+// ── Sibling cache ─────────────────────────────────────────────────────────────
+
+/// Result of looking up an author's owner via the REST API.
+#[derive(Debug, Clone)]
+enum SiblingLookup {
+    /// Profile resolved; contains the author's `agent_owner_pubkey` (if any),
+    /// normalized to lowercase hex.
+    Resolved(Option<String>),
+    /// REST call failed — treat as "not a sibling" (fail-closed).
+    Failed,
+}
+
+/// Cache of author → owner lookups for the sibling author gate.
+///
+/// When `--respond-to=owner-only`, the harness accepts events from the owner
+/// AND from any pubkey whose `agent_owner_pubkey` matches the owner (siblings).
+/// This cache avoids hitting the REST API on every event from a known author.
+///
+/// TTL is derived at **read time**: a cached `Resolved(Some(owner))` that
+/// matches the expected owner uses `SIBLING_CACHE_HIT_TTL` (5 min); all other
+/// results use `SIBLING_CACHE_MISS_TTL` (1 min). This is correct even if the
+/// agent owner changes (it doesn't — `OwnerCache` is process-stable — but the
+/// design doesn't depend on that).
+struct SiblingCache {
+    /// author_hex → (lookup_result, resolved_at)
+    entries: HashMap<String, (SiblingLookup, std::time::Instant)>,
+}
+
+/// TTL for a cached sibling match (Resolved(Some(owner)) where owner == expected).
+const SIBLING_CACHE_HIT_TTL: Duration = Duration::from_secs(300);
+/// TTL for a cached miss/different-owner/failure.
+const SIBLING_CACHE_MISS_TTL: Duration = Duration::from_secs(60);
+/// Maximum entries before oldest-eviction.
+const SIBLING_CACHE_MAX_ENTRIES: usize = 256;
+
+impl SiblingCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+
+    /// Record a lookup result for `author_hex`. Pure cache mutation — no I/O.
+    ///
+    /// Normalizes any owner pubkey inside `Resolved(Some(_))` to lowercase hex
+    /// so callers of `check()` get consistent comparisons regardless of API
+    /// casing. Evicts the oldest entry when at capacity.
+    fn record(&mut self, author_hex: String, result: SiblingLookup) {
+        // Normalize before caching.
+        let normalized = match result {
+            SiblingLookup::Resolved(Some(owner)) => {
+                SiblingLookup::Resolved(Some(owner.to_ascii_lowercase()))
+            }
+            other => other,
+        };
+
+        if self.entries.len() >= SIBLING_CACHE_MAX_ENTRIES
+            && !self.entries.contains_key(&author_hex)
+        {
+            // Evict oldest entry by resolved_at.
+            if let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, ts))| *ts)
+                .map(|(k, _)| k.clone())
+            {
+                self.entries.remove(&oldest_key);
+            }
+        }
+
+        self.entries
+            .insert(author_hex, (normalized, std::time::Instant::now()));
+    }
+
+    /// Check if a cached entry exists and is fresh for the given expected owner.
+    ///
+    /// Returns `Some(true)` if the author is a confirmed sibling (same owner),
+    /// `Some(false)` if confirmed non-sibling, or `None` if the cache entry is
+    /// missing or stale (caller should fetch).
+    fn check(&self, author_hex: &str, expected_owner_hex: &str) -> Option<bool> {
+        let (lookup, resolved_at) = self.entries.get(author_hex)?;
+
+        let is_match = matches!(
+            lookup,
+            SiblingLookup::Resolved(Some(ref o)) if o == expected_owner_hex
+        );
+
+        let ttl = if is_match {
+            SIBLING_CACHE_HIT_TTL
+        } else {
+            SIBLING_CACHE_MISS_TTL
+        };
+
+        if resolved_at.elapsed() >= ttl {
+            return None; // stale
+        }
+
+        Some(is_match)
+    }
+
+    /// Full lookup: check cache, fetch if needed, record result.
+    async fn is_sibling(
+        &mut self,
+        rest_client: &relay::RestClient,
+        author_hex: &str,
+        expected_owner_hex: &str,
+    ) -> bool {
+        if let Some(result) = self.check(author_hex, expected_owner_hex) {
+            return result;
+        }
+
+        let lookup = Self::fetch_owner(rest_client, author_hex).await;
+        // Note: fetch_owner() already lowercases, and record() normalizes too,
+        // so no additional to_ascii_lowercase() needed here.
+        let is_match = matches!(
+            &lookup,
+            SiblingLookup::Resolved(Some(ref o)) if o == expected_owner_hex
+        );
+        self.record(author_hex.to_owned(), lookup);
+        is_match
+    }
+
+    /// Fetch an author's owner from the REST API.
+    async fn fetch_owner(rest_client: &relay::RestClient, author_hex: &str) -> SiblingLookup {
+        let url = format!("/api/users/{author_hex}/profile");
+        match rest_client.get_json(&url).await {
+            Ok(v) => {
+                let owner = v
+                    .get("agent_owner_pubkey")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_ascii_lowercase());
+                tracing::debug!(
+                    author = author_hex,
+                    owner = ?owner,
+                    "sibling cache: resolved author owner"
+                );
+                SiblingLookup::Resolved(owner)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    author = author_hex,
+                    error = %e,
+                    "sibling cache: REST lookup failed — treating as non-sibling"
+                );
+                SiblingLookup::Failed
+            }
+        }
+    }
+}
+
+/// Check if `author` is the owner or a sibling (shares the same owner).
+///
+/// Used by the `OwnerOnly` author gate mode. The owner is the direct match;
+/// siblings are other pubkeys whose `agent_owner_pubkey` equals the owner.
+async fn is_owner_or_sibling(
+    author: &str,
+    owner_cache: &mut OwnerCache,
+    sibling_cache: &mut SiblingCache,
+    rest_client: &relay::RestClient,
+    agent_pubkey_hex: &str,
+) -> bool {
+    let owner = owner_cache
+        .get_or_resolve(rest_client, agent_pubkey_hex)
+        .await;
+    match owner {
+        Some(o) if author == o => true, // direct owner match
+        Some(o) => {
+            // Check if author is a sibling — another agent with the same owner.
+            // Need to copy `o` because `owner_cache` borrows are released.
+            let o = o.to_owned();
+            sibling_cache.is_sibling(rest_client, author, &o).await
+        }
+        None => false, // no owner resolved — fail closed
+    }
+}
+
 /// Maximum crashes in a 60-second window before a slot's circuit opens.
 const CIRCUIT_BREAKER_THRESHOLD: usize = 3;
 /// Window for circuit-breaker crash counting.
@@ -507,6 +683,7 @@ async fn tokio_main() -> Result<()> {
         }
     }
     let mut owner_cache = OwnerCache::new(startup_owner);
+    let mut sibling_cache = SiblingCache::new();
 
     // ── Step 3: Discover channels and build subscription rules ────────────────
     let channel_info_map = relay
@@ -960,19 +1137,26 @@ async fn tokio_main() -> Result<()> {
                             // authors before they reach subscription rules or the
                             // agent. Must be AFTER !shutdown (owner can always
                             // shut down regardless of gate mode).
+                            //
+                            // OwnerOnly also accepts events from "siblings" —
+                            // pubkeys whose agent_owner_pubkey matches this
+                            // agent's owner (e.g. other bots launched by the
+                            // same human). Allowlist is unchanged: owner +
+                            // explicit pubkey list only.
                             {
                                 let author = sprout_event.event.pubkey.to_hex();
                                 let allowed = match &config.respond_to {
                                     RespondTo::Anyone => true,
                                     RespondTo::Nobody => false,
                                     RespondTo::OwnerOnly => {
-                                        let owner = owner_cache
-                                            .get_or_resolve(
-                                                &rest_client_for_presence,
-                                                &pubkey_hex,
-                                            )
-                                            .await;
-                                        owner == Some(author.as_str())
+                                        is_owner_or_sibling(
+                                            &author,
+                                            &mut owner_cache,
+                                            &mut sibling_cache,
+                                            &rest_client_for_presence,
+                                            &pubkey_hex,
+                                        )
+                                        .await
                                     }
                                     RespondTo::Allowlist => {
                                         let owner = owner_cache
@@ -1985,5 +2169,177 @@ mod owner_cache_tests {
             .map(|t| t.elapsed() >= OWNER_CACHE_TTL)
             .unwrap_or(true);
         assert!(stale, "no prior attempt should be considered stale");
+    }
+}
+
+#[cfg(test)]
+mod sibling_cache_tests {
+    use super::*;
+
+    const OWNER_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OWNER_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const AUTHOR_1: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+    const AUTHOR_2: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+
+    #[test]
+    fn sibling_with_matching_owner_returns_true() {
+        let mut cache = SiblingCache::new();
+        cache.record(
+            AUTHOR_1.into(),
+            SiblingLookup::Resolved(Some(OWNER_A.into())),
+        );
+        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
+    }
+
+    #[test]
+    fn different_owner_returns_false() {
+        let mut cache = SiblingCache::new();
+        cache.record(
+            AUTHOR_1.into(),
+            SiblingLookup::Resolved(Some(OWNER_B.into())),
+        );
+        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(false));
+    }
+
+    #[test]
+    fn no_owner_on_profile_returns_false() {
+        let mut cache = SiblingCache::new();
+        cache.record(AUTHOR_1.into(), SiblingLookup::Resolved(None));
+        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(false));
+    }
+
+    #[test]
+    fn lookup_failure_returns_false() {
+        let mut cache = SiblingCache::new();
+        cache.record(AUTHOR_1.into(), SiblingLookup::Failed);
+        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(false));
+    }
+
+    #[test]
+    fn unknown_author_returns_none() {
+        let cache = SiblingCache::new();
+        assert_eq!(cache.check(AUTHOR_1, OWNER_A), None);
+    }
+
+    #[test]
+    fn record_normalizes_to_lowercase() {
+        let mut cache = SiblingCache::new();
+        let mixed_case = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        cache.record(
+            AUTHOR_1.into(),
+            SiblingLookup::Resolved(Some(mixed_case.into())),
+        );
+        // Should match lowercase expected owner.
+        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
+    }
+
+    #[test]
+    fn positive_ttl_holds_within_window() {
+        let mut cache = SiblingCache::new();
+        cache.record(
+            AUTHOR_1.into(),
+            SiblingLookup::Resolved(Some(OWNER_A.into())),
+        );
+        // Freshly inserted — should be within 5-minute TTL.
+        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
+    }
+
+    #[test]
+    fn positive_ttl_expires() {
+        let mut cache = SiblingCache::new();
+        cache.record(
+            AUTHOR_1.into(),
+            SiblingLookup::Resolved(Some(OWNER_A.into())),
+        );
+        // Backdate the entry past the hit TTL.
+        if let Some((_, ts)) = cache.entries.get_mut(AUTHOR_1) {
+            *ts = std::time::Instant::now() - SIBLING_CACHE_HIT_TTL - Duration::from_secs(1);
+        }
+        assert_eq!(
+            cache.check(AUTHOR_1, OWNER_A),
+            None,
+            "should be stale after hit TTL"
+        );
+    }
+
+    #[test]
+    fn negative_ttl_expires() {
+        let mut cache = SiblingCache::new();
+        cache.record(
+            AUTHOR_1.into(),
+            SiblingLookup::Resolved(Some(OWNER_B.into())),
+        );
+        // Backdate past the miss TTL.
+        if let Some((_, ts)) = cache.entries.get_mut(AUTHOR_1) {
+            *ts = std::time::Instant::now() - SIBLING_CACHE_MISS_TTL - Duration::from_secs(1);
+        }
+        assert_eq!(
+            cache.check(AUTHOR_1, OWNER_A),
+            None,
+            "should be stale after miss TTL"
+        );
+    }
+
+    #[test]
+    fn negative_ttl_holds_within_window() {
+        let mut cache = SiblingCache::new();
+        cache.record(AUTHOR_1.into(), SiblingLookup::Failed);
+        // Freshly inserted — should be within 1-minute TTL.
+        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(false));
+    }
+
+    #[test]
+    fn eviction_when_at_capacity() {
+        let mut cache = SiblingCache::new();
+        // Fill to capacity with unique authors.
+        for i in 0..SIBLING_CACHE_MAX_ENTRIES {
+            let author = format!("{:064x}", i);
+            cache.record(author, SiblingLookup::Resolved(Some(OWNER_A.into())));
+        }
+        assert_eq!(cache.entries.len(), SIBLING_CACHE_MAX_ENTRIES);
+
+        // Insert one more — should evict the oldest and stay at capacity.
+        cache.record(
+            AUTHOR_1.into(),
+            SiblingLookup::Resolved(Some(OWNER_A.into())),
+        );
+        assert_eq!(cache.entries.len(), SIBLING_CACHE_MAX_ENTRIES);
+
+        // The new entry should be present.
+        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
+    }
+
+    #[test]
+    fn update_existing_entry_refreshes_timestamp() {
+        let mut cache = SiblingCache::new();
+        cache.record(
+            AUTHOR_1.into(),
+            SiblingLookup::Resolved(Some(OWNER_B.into())),
+        );
+        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(false));
+
+        // Update with new owner — should overwrite.
+        cache.record(
+            AUTHOR_1.into(),
+            SiblingLookup::Resolved(Some(OWNER_A.into())),
+        );
+        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
+    }
+
+    #[test]
+    fn multiple_authors_independent() {
+        let mut cache = SiblingCache::new();
+        cache.record(
+            AUTHOR_1.into(),
+            SiblingLookup::Resolved(Some(OWNER_A.into())),
+        );
+        cache.record(
+            AUTHOR_2.into(),
+            SiblingLookup::Resolved(Some(OWNER_B.into())),
+        );
+
+        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
+        assert_eq!(cache.check(AUTHOR_2, OWNER_A), Some(false));
+        assert_eq!(cache.check(AUTHOR_2, OWNER_B), Some(true));
     }
 }
