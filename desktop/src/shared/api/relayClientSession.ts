@@ -80,6 +80,45 @@ export class RelayClient {
     });
   }
 
+  async fetchChannelHistoryBefore(
+    channelId: string,
+    before: number,
+    limit = 50,
+  ) {
+    await this.ensureConnected();
+
+    return new Promise<RelayEvent[]>((resolve, reject) => {
+      const subId = `history-${crypto.randomUUID()}`;
+      const timeout = window.setTimeout(() => {
+        this.subscriptions.delete(subId);
+        void this.closeSubscription(subId);
+        reject(new Error("Timed out while loading older channel history."));
+      }, 8_000);
+
+      this.subscriptions.set(subId, {
+        mode: "history",
+        events: [],
+        resolve,
+        reject,
+        timeout,
+      });
+
+      void this.sendRaw([
+        "REQ",
+        subId,
+        this.buildChannelFilter(channelId, limit, before),
+      ]).catch((error) => {
+        window.clearTimeout(timeout);
+        this.subscriptions.delete(subId);
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("Failed to request older channel history."),
+        );
+      });
+    });
+  }
+
   async sendMessage(
     channelId: string,
     content: string,
@@ -244,12 +283,19 @@ export class RelayClient {
   private buildChannelFilter(
     channelId: string,
     limit: number,
+    until?: number,
   ): RelaySubscriptionFilter {
-    return {
+    const filter: RelaySubscriptionFilter = {
       kinds: [...CHANNEL_EVENT_KINDS],
       "#h": [channelId],
       limit,
     };
+
+    if (until !== undefined) {
+      filter.until = until;
+    }
+
+    return filter;
   }
 
   private buildGlobalStreamFilter(limit: number): RelaySubscriptionFilter {
