@@ -353,7 +353,7 @@ export function useSendMessageMutation(
         return undefined;
       }
 
-      const queryKey = channelMessagesKey(channel.id) as const;
+      const queryKey = channelMessagesKey(channel.id);
       await queryClient.cancelQueries({ queryKey });
 
       const previousMessages =

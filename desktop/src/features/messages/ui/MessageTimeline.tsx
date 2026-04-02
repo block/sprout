@@ -78,26 +78,25 @@ export const MessageTimeline = React.memo(function MessageTimeline({
       return;
     }
 
+    let disposed = false;
     let currentObserver: IntersectionObserver | null = null;
 
     const observe = () => {
+      if (disposed) {
+        return;
+      }
+
       currentObserver = new IntersectionObserver(
         ([entry]) => {
-          if (!entry.isIntersecting || isFetchingOlder) {
+          if (!entry.isIntersecting || disposed) {
             return;
           }
 
-          // Disconnect immediately to prevent rapid-fire callbacks during
-          // the React render gap between fetchOlder resolving and the DOM
-          // updating with new messages.
           currentObserver?.disconnect();
 
           const previousHeight = container.scrollHeight;
           const previousScrollTop = container.scrollTop;
           void fetchOlder().then(() => {
-            // Two nested rAF calls: the first lets React flush its commit
-            // phase, the second lets the browser recalculate layout so
-            // scrollHeight reflects the newly prepended messages.
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
                 const newHeight = container.scrollHeight;
@@ -105,8 +104,6 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                 if (delta > 0) {
                   restoreScrollPosition(previousScrollTop + delta);
                 }
-                // Re-observe after the scroll restoration settles so the
-                // next scroll-to-top triggers a fresh fetch.
                 observe();
               });
             });
@@ -119,8 +116,11 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     };
 
     observe();
-    return () => currentObserver?.disconnect();
-  }, [fetchOlder, isFetchingOlder, isLoading, restoreScrollPosition]);
+    return () => {
+      disposed = true;
+      currentObserver?.disconnect();
+    };
+  }, [fetchOlder, isLoading, restoreScrollPosition]);
 
   return (
     <div className="relative min-h-0 flex-1">
