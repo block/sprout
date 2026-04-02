@@ -7,6 +7,7 @@ import { Button } from "@/shared/ui/button";
 import { Separator } from "@/shared/ui/separator";
 import { TimelineSkeleton } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
+import { useLoadOlderOnScroll } from "./useLoadOlderOnScroll";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
 type MessageTimelineProps = {
@@ -71,56 +72,14 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     targetMessageId,
   });
 
-  React.useEffect(() => {
-    const sentinel = topSentinelRef.current;
-    const container = scrollContainerRef.current;
-    if (!sentinel || !container || !fetchOlder || isLoading) {
-      return;
-    }
-
-    let disposed = false;
-    let currentObserver: IntersectionObserver | null = null;
-
-    const observe = () => {
-      if (disposed) {
-        return;
-      }
-
-      currentObserver = new IntersectionObserver(
-        ([entry]) => {
-          if (!entry.isIntersecting || disposed) {
-            return;
-          }
-
-          currentObserver?.disconnect();
-
-          const previousHeight = container.scrollHeight;
-          const previousScrollTop = container.scrollTop;
-          void fetchOlder().then(() => {
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const newHeight = container.scrollHeight;
-                const delta = newHeight - previousHeight;
-                if (delta > 0) {
-                  restoreScrollPosition(previousScrollTop + delta);
-                }
-                observe();
-              });
-            });
-          });
-        },
-        { root: container, rootMargin: "200px 0px 0px 0px" },
-      );
-
-      currentObserver.observe(sentinel);
-    };
-
-    observe();
-    return () => {
-      disposed = true;
-      currentObserver?.disconnect();
-    };
-  }, [fetchOlder, isLoading, restoreScrollPosition]);
+  useLoadOlderOnScroll({
+    fetchOlder,
+    hasOlderMessages,
+    isLoading,
+    restoreScrollPosition,
+    scrollContainerRef,
+    sentinelRef: topSentinelRef,
+  });
 
   return (
     <div className="relative min-h-0 flex-1">

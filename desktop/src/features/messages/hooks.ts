@@ -5,6 +5,7 @@ import { updateChannelLastMessageAt } from "@/features/channels/hooks";
 import {
   channelMessagesKey,
   dedupeMessagesById,
+  normalizeTimelineMessages,
   sortMessages,
 } from "@/features/messages/lib/messageQueryKeys";
 import {
@@ -29,19 +30,6 @@ type MessageQueryContext = {
 };
 
 const CHANNEL_HISTORY_LIMIT = 200;
-const MAX_TIMELINE_MESSAGES = 2_000;
-
-function normalizeTimelineMessages(messages: RelayEvent[]) {
-  const normalized = sortMessages(messages);
-
-  if (normalized.length <= MAX_TIMELINE_MESSAGES) {
-    return normalized;
-  }
-
-  // Keep the live timeline bounded so de-virtualized rendering does not grow
-  // into an unbounded DOM during long-lived channel sessions.
-  return normalized.slice(-MAX_TIMELINE_MESSAGES);
-}
 
 function mergeMessagesWithNormalizer(
   current: RelayEvent[],

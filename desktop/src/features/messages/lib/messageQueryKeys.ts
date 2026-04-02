@@ -1,5 +1,7 @@
 import type { RelayEvent } from "@/shared/api/types";
 
+const MAX_TIMELINE_MESSAGES = 2_000;
+
 export function channelMessagesKey(channelId: string) {
   return ["channel-messages", channelId] as const;
 }
@@ -26,4 +28,19 @@ export function sortMessages(messages: RelayEvent[]) {
   return dedupeMessagesById(messages).sort(
     (left, right) => left.created_at - right.created_at,
   );
+}
+
+/**
+ * Sort, dedupe, and cap the timeline at {@link MAX_TIMELINE_MESSAGES} so
+ * de-virtualized rendering does not grow into an unbounded DOM during
+ * long-lived channel sessions.
+ */
+export function normalizeTimelineMessages(messages: RelayEvent[]) {
+  const normalized = sortMessages(messages);
+
+  if (normalized.length <= MAX_TIMELINE_MESSAGES) {
+    return normalized;
+  }
+
+  return normalized.slice(-MAX_TIMELINE_MESSAGES);
 }
