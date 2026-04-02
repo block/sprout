@@ -78,33 +78,49 @@ export const MessageTimeline = React.memo(function MessageTimeline({
       return;
     }
 
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry.isIntersecting) {
-          return;
-        }
+    let currentObserver: IntersectionObserver | null = null;
 
-        const previousHeight = container.scrollHeight;
-        const previousScrollTop = container.scrollTop;
-        void fetchOlder().then(() => {
-          // Wait one frame for React to flush DOM updates before measuring
-          // the new scrollHeight — without this, the delta is often 0 because
-          // queryClient.setQueryData schedules a re-render asynchronously.
-          requestAnimationFrame(() => {
-            const newHeight = container.scrollHeight;
-            const delta = newHeight - previousHeight;
-            if (delta > 0) {
-              restoreScrollPosition(previousScrollTop + delta);
-            }
+    const observe = () => {
+      currentObserver = new IntersectionObserver(
+        ([entry]) => {
+          if (!entry.isIntersecting || isFetchingOlder) {
+            return;
+          }
+
+          // Disconnect immediately to prevent rapid-fire callbacks during
+          // the React render gap between fetchOlder resolving and the DOM
+          // updating with new messages.
+          currentObserver?.disconnect();
+
+          const previousHeight = container.scrollHeight;
+          const previousScrollTop = container.scrollTop;
+          void fetchOlder().then(() => {
+            // Two nested rAF calls: the first lets React flush its commit
+            // phase, the second lets the browser recalculate layout so
+            // scrollHeight reflects the newly prepended messages.
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                const newHeight = container.scrollHeight;
+                const delta = newHeight - previousHeight;
+                if (delta > 0) {
+                  restoreScrollPosition(previousScrollTop + delta);
+                }
+                // Re-observe after the scroll restoration settles so the
+                // next scroll-to-top triggers a fresh fetch.
+                observe();
+              });
+            });
           });
-        });
-      },
-      { root: container, rootMargin: "200px 0px 0px 0px" },
-    );
+        },
+        { root: container, rootMargin: "200px 0px 0px 0px" },
+      );
 
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [fetchOlder, isLoading, restoreScrollPosition]);
+      currentObserver.observe(sentinel);
+    };
+
+    observe();
+    return () => currentObserver?.disconnect();
+  }, [fetchOlder, isFetchingOlder, isLoading, restoreScrollPosition]);
 
   return (
     <div className="relative min-h-0 flex-1">

@@ -38,10 +38,10 @@ export function useFetchOlderMessages(channel: Channel | null) {
       return;
     }
 
-    // Subtract 1 because Nostr NIP-01 `until` is inclusive (created_at <= until).
-    // Without this, the relay returns the boundary message again, wasting a slot
-    // in the batch and risking missed messages at the same timestamp.
-    const oldestTimestamp = currentMessages[0].created_at - 1;
+    // Use the oldest timestamp directly — `until` is inclusive so the relay will
+    // return the boundary message again, but `sortMessages` deduplicates by id.
+    // Subtracting 1 risks skipping messages that share the same second.
+    const oldestTimestamp = currentMessages[0].created_at;
     isFetchingOlderRef.current = true;
     setIsFetchingOlder(true);
 
