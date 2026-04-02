@@ -5,6 +5,7 @@ import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { Button } from "@/shared/ui/button";
 import { Separator } from "@/shared/ui/separator";
+import { TooltipProvider } from "@/shared/ui/tooltip";
 import { TimelineSkeleton } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
 import { useLoadOlderOnScroll } from "./useLoadOlderOnScroll";
@@ -85,99 +86,101 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   const stickyDayLabel = useStickyDayHeader(scrollContainerRef);
 
   return (
-    <div className="relative min-h-0 flex-1">
-      {stickyDayLabel && !isAtBottom ? (
-        <div
-          className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center px-4 pt-2 sm:px-6"
-          data-testid="message-timeline-sticky-day"
-        >
-          <p className="rounded-full bg-muted/90 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground shadow-sm backdrop-blur-sm">
-            {stickyDayLabel}
-          </p>
-        </div>
-      ) : null}
-      <div
-        className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 [overflow-anchor:none] sm:px-6"
-        data-testid="message-timeline"
-        onScroll={syncScrollState}
-        ref={scrollContainerRef}
-      >
-        <div
-          className="mx-auto flex w-full max-w-4xl flex-col gap-2"
-          ref={contentRef}
-        >
-          <div ref={topSentinelRef} aria-hidden className="h-px" />
-
-          {isFetchingOlder ? (
-            <div className="flex justify-center py-2">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            </div>
-          ) : null}
-
-          {!hasOlderMessages && !isLoading && messages.length > 0 ? (
-            <div
-              className="flex items-center gap-3 py-2"
-              data-testid="message-timeline-beginning"
-            >
-              <Separator className="flex-1" />
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                Beginning of conversation
-              </p>
-              <Separator className="flex-1" />
-            </div>
-          ) : null}
-
-          {isLoading ? <TimelineSkeleton /> : null}
-
-          {!isLoading && messages.length === 0 ? (
-            <div
-              className="rounded-3xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center shadow-sm"
-              data-testid="message-empty"
-            >
-              <p className="text-base font-semibold tracking-tight">
-                {emptyTitle}
-              </p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                {emptyDescription}
-              </p>
-            </div>
-          ) : null}
-
-          {!isLoading && messages.length > 0 ? (
-            <TimelineMessageList
-              activeReplyTargetId={activeReplyTargetId}
-              currentPubkey={currentPubkey}
-              highlightedMessageId={highlightedMessageId}
-              messages={messages}
-              onEdit={onEdit}
-              onReply={onReply}
-              onToggleReaction={onToggleReaction}
-              profiles={profiles}
-            />
-          ) : null}
-
-          <div aria-hidden className="h-px" ref={bottomAnchorRef} />
-        </div>
-      </div>
-
-      {!isAtBottom ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-4">
-          <Button
-            className="pointer-events-auto rounded-full shadow-lg"
-            data-testid="message-scroll-to-latest"
-            onClick={() => {
-              scrollToBottom("smooth");
-            }}
-            size="sm"
-            type="button"
+    <TooltipProvider delayDuration={200}>
+      <div className="relative min-h-0 flex-1">
+        {stickyDayLabel && !isAtBottom ? (
+          <div
+            className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center px-4 pt-2 sm:px-6"
+            data-testid="message-timeline-sticky-day"
           >
-            <ArrowDown className="h-4 w-4" />
-            {newMessageCount > 0
-              ? `${newMessageCount} new message${newMessageCount === 1 ? "" : "s"}`
-              : "Jump to latest"}
-          </Button>
+            <p className="rounded-full bg-muted/90 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground shadow-sm backdrop-blur-sm">
+              {stickyDayLabel}
+            </p>
+          </div>
+        ) : null}
+        <div
+          className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 [overflow-anchor:none] sm:px-6"
+          data-testid="message-timeline"
+          onScroll={syncScrollState}
+          ref={scrollContainerRef}
+        >
+          <div
+            className="mx-auto flex w-full max-w-4xl flex-col gap-2"
+            ref={contentRef}
+          >
+            <div ref={topSentinelRef} aria-hidden className="h-px" />
+
+            {isFetchingOlder ? (
+              <div className="flex justify-center py-2">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : null}
+
+            {!hasOlderMessages && !isLoading && messages.length > 0 ? (
+              <div
+                className="flex items-center gap-3 py-2"
+                data-testid="message-timeline-beginning"
+              >
+                <Separator className="flex-1" />
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                  Beginning of conversation
+                </p>
+                <Separator className="flex-1" />
+              </div>
+            ) : null}
+
+            {isLoading ? <TimelineSkeleton /> : null}
+
+            {!isLoading && messages.length === 0 ? (
+              <div
+                className="rounded-3xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center shadow-sm"
+                data-testid="message-empty"
+              >
+                <p className="text-base font-semibold tracking-tight">
+                  {emptyTitle}
+                </p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {emptyDescription}
+                </p>
+              </div>
+            ) : null}
+
+            {!isLoading && messages.length > 0 ? (
+              <TimelineMessageList
+                activeReplyTargetId={activeReplyTargetId}
+                currentPubkey={currentPubkey}
+                highlightedMessageId={highlightedMessageId}
+                messages={messages}
+                onEdit={onEdit}
+                onReply={onReply}
+                onToggleReaction={onToggleReaction}
+                profiles={profiles}
+              />
+            ) : null}
+
+            <div aria-hidden className="h-px" ref={bottomAnchorRef} />
+          </div>
         </div>
-      ) : null}
-    </div>
+
+        {!isAtBottom ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-4">
+            <Button
+              className="pointer-events-auto rounded-full shadow-lg"
+              data-testid="message-scroll-to-latest"
+              onClick={() => {
+                scrollToBottom("smooth");
+              }}
+              size="sm"
+              type="button"
+            >
+              <ArrowDown className="h-4 w-4" />
+              {newMessageCount > 0
+                ? `${newMessageCount} new message${newMessageCount === 1 ? "" : "s"}`
+                : "Jump to latest"}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </TooltipProvider>
   );
 });

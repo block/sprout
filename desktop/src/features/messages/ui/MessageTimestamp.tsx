@@ -1,10 +1,5 @@
 import { formatFullDateTime } from "@/features/messages/lib/dateFormatters";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 export function MessageTimestamp({
   createdAt,
@@ -14,15 +9,13 @@ export function MessageTimestamp({
   time: string;
 }) {
   return (
-    <TooltipProvider delayDuration={200}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <p className="cursor-default whitespace-nowrap">{time}</p>
-        </TooltipTrigger>
-        <TooltipContent side="top">
-          {formatFullDateTime(createdAt)}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <p className="cursor-default whitespace-nowrap">{time}</p>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {formatFullDateTime(createdAt)}
+      </TooltipContent>
+    </Tooltip>
   );
 }
