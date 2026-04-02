@@ -5,6 +5,7 @@ export type RelaySubscriptionFilter = {
   "#h"?: string[];
   limit: number;
   since?: number;
+  until?: number;
 };
 
 type HistorySubscription = {

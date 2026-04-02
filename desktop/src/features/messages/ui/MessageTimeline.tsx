@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, Loader2 } from "lucide-react";
 
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
@@ -7,6 +7,7 @@ import { Button } from "@/shared/ui/button";
 import { Separator } from "@/shared/ui/separator";
 import { TimelineSkeleton } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
+import { useLoadOlderOnScroll } from "./useLoadOlderOnScroll";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
 type MessageTimelineProps = {
@@ -17,6 +18,9 @@ type MessageTimelineProps = {
   emptyDescription?: string;
   activeReplyTargetId?: string | null;
   currentPubkey?: string;
+  fetchOlder?: () => Promise<void>;
+  hasOlderMessages?: boolean;
+  isFetchingOlder?: boolean;
   profiles?: UserProfileLookup;
   onEdit?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
@@ -37,6 +41,9 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   emptyDescription = "Send the first message to start the thread.",
   activeReplyTargetId = null,
   currentPubkey,
+  fetchOlder,
+  hasOlderMessages = true,
+  isFetchingOlder = false,
   profiles,
   onEdit,
   onReply,
@@ -45,6 +52,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   onTargetReached,
 }: MessageTimelineProps) {
   const scrollContainerRef = React.useRef<HTMLDivElement>(null);
+  const topSentinelRef = React.useRef<HTMLDivElement>(null);
 
   const {
     bottomAnchorRef,
@@ -52,6 +60,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     highlightedMessageId,
     isAtBottom,
     newMessageCount,
+    restoreScrollPosition,
     scrollToBottom,
     syncScrollState,
   } = useTimelineScrollManager({
@@ -61,6 +70,15 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     onTargetReached,
     scrollContainerRef,
     targetMessageId,
+  });
+
+  useLoadOlderOnScroll({
+    fetchOlder,
+    hasOlderMessages,
+    isLoading,
+    restoreScrollPosition,
+    scrollContainerRef,
+    sentinelRef: topSentinelRef,
   });
 
   return (
@@ -75,6 +93,27 @@ export const MessageTimeline = React.memo(function MessageTimeline({
           className="mx-auto flex w-full max-w-4xl flex-col gap-2"
           ref={contentRef}
         >
+          <div ref={topSentinelRef} aria-hidden className="h-px" />
+
+          {isFetchingOlder ? (
+            <div className="flex justify-center py-2">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : null}
+
+          {!hasOlderMessages && !isLoading && messages.length > 0 ? (
+            <div
+              className="flex items-center gap-3 py-2"
+              data-testid="message-timeline-beginning"
+            >
+              <Separator className="flex-1" />
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                Beginning of conversation
+              </p>
+              <Separator className="flex-1" />
+            </div>
+          ) : null}
+
           <div
             className="flex items-center gap-3"
             data-testid="message-timeline-day-divider"

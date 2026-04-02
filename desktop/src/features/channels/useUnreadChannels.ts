@@ -5,6 +5,7 @@ import {
   channelsQueryKey,
   updateChannelLastMessageAt,
 } from "@/features/channels/hooks";
+import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
 import { getChannelIdFromTags } from "@/features/messages/lib/threading";
 import { mergeTimelineCacheMessages } from "@/features/messages/hooks";
 import { relayClient } from "@/shared/api/relayClient";
@@ -196,7 +197,7 @@ export function useUnreadChannels(
 
     updateChannelLastMessageAt(queryClient, channelId, messageTimestamp);
     queryClient.setQueryData<RelayEvent[]>(
-      ["channel-messages", channelId],
+      channelMessagesKey(channelId),
       (current) => {
         if (!current) {
           return current;

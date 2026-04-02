@@ -380,6 +380,7 @@ export function useTimelineScrollManager({
     highlightedMessageId,
     isAtBottom,
     newMessageCount,
+    restoreScrollPosition,
     scrollToBottom,
     syncScrollState,
   };

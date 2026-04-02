@@ -15,6 +15,9 @@ type ChannelPaneProps = {
     body: string;
     id: string;
   } | null;
+  fetchOlder?: () => Promise<void>;
+  hasOlderMessages?: boolean;
+  isFetchingOlder?: boolean;
   isSending: boolean;
   isTimelineLoading: boolean;
   messages: TimelineMessage[];
@@ -45,6 +48,9 @@ export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
   currentPubkey,
   editTarget = null,
+  fetchOlder,
+  hasOlderMessages,
+  isFetchingOlder,
   isSending,
   isTimelineLoading,
   messages,
@@ -68,6 +74,9 @@ export const ChannelPane = React.memo(function ChannelPane({
         channelId={activeChannel?.id}
         activeReplyTargetId={replyTargetId}
         currentPubkey={currentPubkey}
+        fetchOlder={fetchOlder}
+        hasOlderMessages={hasOlderMessages}
+        isFetchingOlder={isFetchingOlder}
         profiles={profiles}
         emptyDescription={
           activeChannel?.channelType === "forum"

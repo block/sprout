@@ -27,6 +27,8 @@ import {
   useChannelSubscription,
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
+import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
+import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import {
   collectMessageAuthorPubkeys,
   formatTimelineMessages,
@@ -117,6 +119,8 @@ export function AppShell() {
   const activeChannelId = activeChannel?.id ?? null;
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
+  const { fetchOlder, isFetchingOlder, hasOlderMessages } =
+    useFetchOlderMessages(activeChannel);
   const latestActiveMessage =
     messagesQuery.data?.[messagesQuery.data.length - 1];
   const activeReadAt = latestActiveMessage
@@ -486,7 +490,7 @@ export function AppShell() {
           }
 
           queryClient.setQueryData<RelayEvent[]>(
-            ["channel-messages", activeChannel.id],
+            channelMessagesKey(activeChannel.id),
             (current = []) => mergeMessages(current, event),
           );
         } catch (error) {
@@ -732,6 +736,9 @@ export function AppShell() {
                     <ChannelPane
                       activeChannel={activeChannel}
                       currentPubkey={identityQuery.data?.pubkey}
+                      fetchOlder={fetchOlder}
+                      hasOlderMessages={hasOlderMessages}
+                      isFetchingOlder={isFetchingOlder}
                       editTarget={
                         editTargetMessage
                           ? {

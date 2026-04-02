@@ -3,6 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { updateChannelLastMessageAt } from "@/features/channels/hooks";
 import {
+  channelMessagesKey,
+  dedupeMessagesById,
+  normalizeTimelineMessages,
+  sortMessages,
+} from "@/features/messages/lib/messageQueryKeys";
+import {
   buildReplyTags,
   normalizeMentionPubkeys,
   resolveReplyRootId,
@@ -20,47 +26,10 @@ import { KIND_STREAM_MESSAGE } from "@/shared/constants/kinds";
 type MessageQueryContext = {
   optimisticId: string;
   previousMessages: RelayEvent[];
-  queryKey: readonly ["channel-messages", string];
+  queryKey: ReturnType<typeof channelMessagesKey>;
 };
 
 const CHANNEL_HISTORY_LIMIT = 200;
-const MAX_TIMELINE_MESSAGES = CHANNEL_HISTORY_LIMIT * 2;
-
-function dedupeMessagesById(messages: RelayEvent[]) {
-  const seenIds = new Set<string>();
-  const deduped: RelayEvent[] = [];
-
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-
-    if (seenIds.has(message.id)) {
-      continue;
-    }
-
-    seenIds.add(message.id);
-    deduped.push(message);
-  }
-
-  return deduped.reverse();
-}
-
-function sortMessages(messages: RelayEvent[]) {
-  return dedupeMessagesById(messages).sort(
-    (left, right) => left.created_at - right.created_at,
-  );
-}
-
-function normalizeTimelineMessages(messages: RelayEvent[]) {
-  const normalized = sortMessages(messages);
-
-  if (normalized.length <= MAX_TIMELINE_MESSAGES) {
-    return normalized;
-  }
-
-  // Keep the live timeline bounded so de-virtualized rendering does not grow
-  // into an unbounded DOM during long-lived channel sessions.
-  return normalized.slice(-MAX_TIMELINE_MESSAGES);
-}
 
 function mergeMessagesWithNormalizer(
   current: RelayEvent[],
@@ -145,7 +114,7 @@ function createOptimisticMessage(
 
 export function useChannelMessagesQuery(channel: Channel | null) {
   const queryClient = useQueryClient();
-  const queryKey = ["channel-messages", channel?.id ?? "none"] as const;
+  const queryKey = channelMessagesKey(channel?.id ?? "none");
 
   return useQuery({
     enabled: channel !== null && channel.channelType !== "forum",
@@ -189,7 +158,7 @@ export function useChannelSubscription(channel: Channel | null) {
     );
 
     queryClient.setQueryData<RelayEvent[]>(
-      ["channel-messages", channelId],
+      channelMessagesKey(channelId),
       (current = []) => {
         const mergedHistory = normalizeTimelineMessages([
           ...current,
@@ -212,7 +181,7 @@ export function useChannelSubscription(channel: Channel | null) {
       new Date(event.created_at * 1_000).toISOString(),
     );
     queryClient.setQueryData<RelayEvent[]>(
-      ["channel-messages", channelId],
+      channelMessagesKey(channelId),
       (current = []) => mergeTimelineCacheMessages(current, event),
     );
   });
@@ -309,10 +278,9 @@ export function useSendMessageMutation(
       // validation runs. The WebSocket path does not validate imeta tags.
       if (parentEventId || (mediaTags && mediaTags.length > 0)) {
         const cachedMessages =
-          queryClient.getQueryData<RelayEvent[]>([
-            "channel-messages",
-            channel.id,
-          ]) ?? [];
+          queryClient.getQueryData<RelayEvent[]>(
+            channelMessagesKey(channel.id),
+          ) ?? [];
         const result = await sendChannelMessage(
           channel.id,
           content,
@@ -373,7 +341,7 @@ export function useSendMessageMutation(
         return undefined;
       }
 
-      const queryKey = ["channel-messages", channel.id] as const;
+      const queryKey = channelMessagesKey(channel.id);
       await queryClient.cancelQueries({ queryKey });
 
       const previousMessages =
@@ -477,7 +445,7 @@ export function useEditMessageMutation(channel: Channel | null) {
       }
 
       queryClient.setQueryData<RelayEvent[]>(
-        ["channel-messages", channel.id],
+        channelMessagesKey(channel.id),
         (current = []) =>
           current.map((message) =>
             message.id === eventId ? { ...message, content } : message,
