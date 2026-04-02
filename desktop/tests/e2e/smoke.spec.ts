@@ -223,13 +223,13 @@ test("replaces the channel pane when switching channels", async ({ page }) => {
     "Welcome to #general",
   );
   await expect(page.getByTestId("message-timeline")).toHaveCount(1);
-  await expect(page.getByTestId("message-timeline-day-divider")).toHaveCount(1);
+  await expect(page.getByTestId("message-timeline-day-divider")).toHaveCount(0);
 
   await page.getByTestId("channel-engineering").click();
   await expect(page.getByTestId("chat-title")).toHaveText("engineering");
   await expect(page.getByTestId("message-empty")).toBeVisible();
   await expect(page.getByTestId("message-timeline")).toHaveCount(1);
-  await expect(page.getByTestId("message-timeline-day-divider")).toHaveCount(1);
+  await expect(page.getByTestId("message-timeline-day-divider")).toHaveCount(0);
 });
 
 test("sends a mocked channel message", async ({ page }) => {
