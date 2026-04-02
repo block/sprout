@@ -38,6 +38,8 @@ export function useFetchOlderMessages(channel: Channel | null) {
     const currentMessages =
       queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];
     if (currentMessages.length === 0) {
+      hasOlderMessagesRef.current = false;
+      setHasOlderMessages(false);
       return;
     }
 
@@ -64,6 +66,16 @@ export function useFetchOlderMessages(channel: Channel | null) {
         queryClient.setQueryData<RelayEvent[]>(queryKey, (current = []) =>
           sortMessages([...current, ...olderMessages]),
         );
+
+        const updatedMessages =
+          queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];
+        if (
+          updatedMessages.length > 0 &&
+          updatedMessages[0].created_at === oldestTimestamp
+        ) {
+          hasOlderMessagesRef.current = false;
+          setHasOlderMessages(false);
+        }
       }
     } catch (error) {
       console.error("Failed to fetch older messages", channelId, error);
