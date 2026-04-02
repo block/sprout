@@ -85,12 +85,18 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         }
 
         const previousHeight = container.scrollHeight;
+        const previousScrollTop = container.scrollTop;
         void fetchOlder().then(() => {
-          const newHeight = container.scrollHeight;
-          const delta = newHeight - previousHeight;
-          if (delta > 0) {
-            restoreScrollPosition(container.scrollTop + delta);
-          }
+          // Wait one frame for React to flush DOM updates before measuring
+          // the new scrollHeight — without this, the delta is often 0 because
+          // queryClient.setQueryData schedules a re-render asynchronously.
+          requestAnimationFrame(() => {
+            const newHeight = container.scrollHeight;
+            const delta = newHeight - previousHeight;
+            if (delta > 0) {
+              restoreScrollPosition(previousScrollTop + delta);
+            }
+          });
         });
       },
       { root: container, rootMargin: "200px 0px 0px 0px" },
