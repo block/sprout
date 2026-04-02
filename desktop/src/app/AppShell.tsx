@@ -21,6 +21,7 @@ import { ChannelManagementSheet } from "@/features/channels/ui/ChannelManagement
 import { HomeView } from "@/features/home/ui/HomeView";
 import {
   useChannelMessagesQuery,
+  useFetchOlderMessages,
   mergeMessages,
   useEditMessageMutation,
   useSendMessageMutation,
@@ -117,6 +118,8 @@ export function AppShell() {
   const activeChannelId = activeChannel?.id ?? null;
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
+  const { fetchOlder, isFetchingOlder, hasOlderMessages } =
+    useFetchOlderMessages(activeChannel);
   const latestActiveMessage =
     messagesQuery.data?.[messagesQuery.data.length - 1];
   const activeReadAt = latestActiveMessage
@@ -732,6 +735,9 @@ export function AppShell() {
                     <ChannelPane
                       activeChannel={activeChannel}
                       currentPubkey={identityQuery.data?.pubkey}
+                      fetchOlder={fetchOlder}
+                      hasOlderMessages={hasOlderMessages}
+                      isFetchingOlder={isFetchingOlder}
                       editTarget={
                         editTargetMessage
                           ? {
