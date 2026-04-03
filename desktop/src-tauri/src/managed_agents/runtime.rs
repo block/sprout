@@ -129,129 +129,18 @@ pub(crate) fn terminate_process(_pid: u32) -> Result<(), String> {
     Err("managed agent shutdown after app restart is only supported on Unix".to_string())
 }
 
-/// Sweep all processes owned by the current user and kill any whose binary
-/// name matches a known agent binary. This catches processes that escaped
-/// process-group kills (e.g. via `setsid()`) or weren't tracked in records.
-///
-/// `skip_pids` contains PIDs we've already handled — no need to signal them
-/// again.
-#[cfg(target_os = "macos")]
-pub(crate) fn sweep_orphaned_agent_processes(skip_pids: &[u32]) {
-    // Use sysctl to enumerate all PIDs, then check each one.
-    extern "C" {
-        fn proc_listallpids(buffer: *mut libc::pid_t, buffersize: libc::c_int) -> libc::c_int;
-    }
-
-    // First call with null to get the count.
-    let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
-    if count <= 0 {
-        return;
-    }
-
-    let mut pids = vec![0i32; (count as usize) * 2]; // over-allocate for safety
-    let actual =
-        unsafe { proc_listallpids(pids.as_mut_ptr(), (pids.len() * size_of::<i32>()) as i32) };
-    if actual <= 0 {
-        return;
-    }
-    pids.truncate(actual as usize);
-
-    for &pid in &pids {
-        if pid <= 1 {
-            continue;
-        }
-        let pid_u32 = pid as u32;
-        if skip_pids.contains(&pid_u32) {
-            continue;
-        }
-        // Check ownership: only kill our own processes.
-        // Use proc_pidinfo to get uid, but a simpler approach is to just
-        // check if we can signal it (kill -0) and verify the name.
-        if !process_is_running(pid_u32) {
-            continue;
-        }
-        // Verify the process is owned by us by checking euid via proc_pidinfo.
-        // For simplicity, rely on process_belongs_to_us which checks binary name,
-        // and kill() will fail with EPERM if it's not ours.
-        if process_belongs_to_us(pid_u32) {
-            // SIGTERM first
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
-            }
-        }
-    }
-
-    // Brief pause then SIGKILL any survivors.
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
-    for &pid in &pids {
-        if pid <= 1 {
-            continue;
-        }
-        let pid_u32 = pid as u32;
-        if skip_pids.contains(&pid_u32) {
-            continue;
-        }
-        if process_is_running(pid_u32) && process_belongs_to_us(pid_u32) {
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
-            }
-        }
-    }
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-pub(crate) fn sweep_orphaned_agent_processes(skip_pids: &[u32]) {
-    // On Linux, walk /proc to find matching processes.
-    let my_uid = unsafe { libc::getuid() };
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return;
-    };
-
-    let mut matching_pids = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(pid_str) = name.to_str() else {
-            continue;
-        };
-        let Ok(pid) = pid_str.parse::<u32>() else {
-            continue;
-        };
-        if pid <= 1 || skip_pids.contains(&pid) {
-            continue;
-        }
-        // Check ownership via /proc/<pid>/status
-        let status_path = format!("/proc/{pid}/status");
-        let Ok(status) = std::fs::read_to_string(&status_path) else {
-            continue;
-        };
-        let is_ours = status.lines().any(|line| {
-            line.starts_with("Uid:")
-                && line
-                    .split_whitespace()
-                    .nth(1)
-                    .and_then(|uid| uid.parse::<u32>().ok())
-                    == Some(my_uid)
-        });
-        if !is_ours {
-            continue;
-        }
-        if process_belongs_to_us(pid) {
-            matching_pids.push(pid as i32);
-        }
-    }
-
-    // SIGTERM all
-    for &pid in &matching_pids {
+/// Send SIGTERM to all given PIDs, wait 500ms, then SIGKILL any survivors.
+#[cfg(unix)]
+fn sigterm_then_sigkill(pids: &[i32]) {
+    for &pid in pids {
         unsafe {
             libc::kill(pid, libc::SIGTERM);
         }
     }
 
-    // Brief pause then SIGKILL survivors
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    for &pid in &matching_pids {
+    for &pid in pids {
         if process_is_running(pid as u32) {
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
@@ -260,9 +149,120 @@ pub(crate) fn sweep_orphaned_agent_processes(skip_pids: &[u32]) {
     }
 }
 
+/// Enumerate all PIDs on the system that are owned by the current user and
+/// match a known agent binary name, excluding `skip_pids`.
+#[cfg(target_os = "macos")]
+fn enumerate_orphaned_agent_pids(skip_pids: &[u32]) -> Vec<i32> {
+    extern "C" {
+        fn proc_listallpids(buffer: *mut libc::pid_t, buffersize: libc::c_int) -> libc::c_int;
+    }
+
+    let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
+    if count <= 0 {
+        return Vec::new();
+    }
+
+    let mut pids = vec![0i32; (count as usize) * 2]; // over-allocate for safety
+    let actual =
+        unsafe { proc_listallpids(pids.as_mut_ptr(), (pids.len() * size_of::<i32>()) as i32) };
+    if actual <= 0 {
+        return Vec::new();
+    }
+    pids.truncate(actual as usize);
+
+    pids.into_iter()
+        .filter(|&pid| {
+            pid > 1 && {
+                let pid_u32 = pid as u32;
+                !skip_pids.contains(&pid_u32)
+                    && process_is_running(pid_u32)
+                    && process_belongs_to_us(pid_u32)
+            }
+        })
+        .collect()
+}
+
+/// Enumerate all PIDs on the system that are owned by the current user and
+/// match a known agent binary name, excluding `skip_pids`.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn enumerate_orphaned_agent_pids(skip_pids: &[u32]) -> Vec<i32> {
+    let my_uid = unsafe { libc::getuid() };
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
+            if pid <= 1 || skip_pids.contains(&pid) {
+                return None;
+            }
+            let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+            let is_ours = status.lines().any(|line| {
+                line.starts_with("Uid:")
+                    && line
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|uid| uid.parse::<u32>().ok())
+                        == Some(my_uid)
+            });
+            if is_ours && process_belongs_to_us(pid) {
+                Some(pid as i32)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Sweep all processes owned by the current user and kill any whose binary
+/// name matches a known agent binary. This catches processes that escaped
+/// process-group kills (e.g. via `setsid()`) or weren't tracked in records.
+///
+/// `skip_pids` contains PIDs we've already handled — no need to signal them
+/// again.
+#[cfg(unix)]
+pub(crate) fn sweep_orphaned_agent_processes(skip_pids: &[u32]) {
+    let orphans = enumerate_orphaned_agent_pids(skip_pids);
+    if !orphans.is_empty() {
+        sigterm_then_sigkill(&orphans);
+    }
+}
+
 #[cfg(not(unix))]
 pub(crate) fn sweep_orphaned_agent_processes(_skip_pids: &[u32]) {
     // No-op on non-Unix platforms.
+}
+
+/// Kill stale agent processes from a previous session whose PID is still alive
+/// but not tracked in the current `runtimes` map. Updates the record fields and
+/// returns `true` if any records were modified.
+pub fn kill_stale_tracked_processes(
+    records: &mut [ManagedAgentRecord],
+    runtimes: &HashMap<String, ManagedAgentProcess>,
+) -> bool {
+    use crate::managed_agents::BackendKind;
+
+    let mut changed = false;
+    for record in records.iter_mut() {
+        if record.backend != BackendKind::Local {
+            continue;
+        }
+        let Some(pid) = record.runtime_pid else {
+            continue;
+        };
+        if !runtimes.contains_key(&record.pubkey) {
+            if process_belongs_to_us(pid) {
+                let _ = terminate_process(pid);
+            }
+            record.runtime_pid = None;
+            record.last_stopped_at = Some(crate::util::now_iso());
+            record.updated_at = crate::util::now_iso();
+            changed = true;
+        }
+    }
+    changed
 }
 
 pub fn sync_managed_agent_processes(

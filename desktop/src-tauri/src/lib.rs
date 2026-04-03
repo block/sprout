@@ -10,8 +10,8 @@ mod util;
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use commands::*;
 use managed_agents::{
-    find_managed_agent_mut, load_managed_agents, save_managed_agents, start_managed_agent_process,
-    sync_managed_agent_processes, BackendKind, ManagedAgentProcess,
+    find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents, save_managed_agents,
+    start_managed_agent_process, sync_managed_agent_processes, BackendKind, ManagedAgentProcess,
 };
 use tauri::{http, Manager, RunEvent};
 use tauri_plugin_window_state::StateFlags;
@@ -28,30 +28,10 @@ fn restore_managed_agents_on_launch(app: &tauri::AppHandle) -> Result<(), String
         .lock()
         .map_err(|error| error.to_string())?;
     let mut changed = sync_managed_agent_processes(&mut records, &mut runtimes);
+    changed |= kill_stale_tracked_processes(&mut records, &runtimes);
 
-    // Kill stale agent processes left over from a previous session (e.g. if the
-    // app was force-quit or crashed). sync_managed_agent_processes marks records
-    // whose PID is no longer running, but any PID that’s still alive and not in
-    // our runtimes map is an orphan from a previous launch — kill it now.
-    for record in records.iter_mut() {
-        if record.backend != BackendKind::Local {
-            continue;
-        }
-        let Some(pid) = record.runtime_pid else {
-            continue;
-        };
-        if !runtimes.contains_key(&record.pubkey) {
-            if managed_agents::process_belongs_to_us(pid) {
-                let _ = managed_agents::terminate_process(pid);
-            }
-            record.runtime_pid = None;
-            record.last_stopped_at = Some(util::now_iso());
-            record.updated_at = util::now_iso();
-            changed = true;
-        }
-    }
     // Broad sweep: kill any orphaned agent processes owned by the current user
-    // that weren't tracked in records (e.g. escaped process groups, double-forked).
+    // that weren’t tracked in records (e.g. escaped process groups, double-forked).
     let tracked_pids: Vec<u32> = records
         .iter()
         .filter_map(|r| r.runtime_pid)
@@ -98,28 +78,9 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
         .lock()
         .map_err(|error| error.to_string())?;
     let mut changed = sync_managed_agent_processes(&mut records, &mut runtimes);
+    changed |= kill_stale_tracked_processes(&mut records, &runtimes);
 
-    // First pass: kill stale processes left from a previous session whose PID
-    // is still alive but not tracked in the current runtimes map.
-    for record in records.iter_mut() {
-        if record.backend != BackendKind::Local {
-            continue;
-        }
-        let Some(pid) = record.runtime_pid else {
-            continue;
-        };
-        if !runtimes.contains_key(&record.pubkey) {
-            if managed_agents::process_belongs_to_us(pid) {
-                let _ = managed_agents::terminate_process(pid);
-            }
-            record.runtime_pid = None;
-            record.last_stopped_at = Some(util::now_iso());
-            record.updated_at = util::now_iso();
-            changed = true;
-        }
-    }
-
-    // Second pass: stop all tracked agents. Send SIGTERM to all process
+    // Stop all tracked agents. Send SIGTERM to all process
     // groups first, then wait for exits in parallel to avoid serial 1s waits.
     struct AgentToStop {
         idx: usize,
