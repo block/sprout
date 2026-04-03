@@ -162,15 +162,10 @@ export function WorkflowFormBuilder({
     }
   }, [mode, yaml]);
 
-  const stepCounter = React.useRef(0);
   const addStep = React.useCallback(() => {
-    stepCounter.current += 1;
     updateFormState({
       ...formState,
-      steps: [
-        ...formState.steps,
-        { id: `step_${Date.now()}_${stepCounter.current}`, action: "delay" },
-      ],
+      steps: [...formState.steps, { id: crypto.randomUUID(), action: "delay" }],
     });
   }, [formState, updateFormState]);
 

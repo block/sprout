@@ -97,7 +97,7 @@ function actionFieldsForStep(step: StepFormState): Record<string, unknown> {
       break;
     case "call_webhook":
       if (step.url) fields.url = step.url;
-      if (step.method) fields.method = step.method;
+      fields.method = step.method || "POST";
       if (step.body) fields.body = step.body;
       break;
     case "request_approval":

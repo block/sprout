@@ -96,6 +96,11 @@ function StepConfigFields({
               placeholder="https://..."
               value={step.url ?? ""}
             />
+            {step.url && !step.url.startsWith("https://") ? (
+              <p className="text-xs text-destructive">
+                URL must start with https://
+              </p>
+            ) : null}
           </div>
           <div className="space-y-1.5">
             <FieldLabel>Method (optional)</FieldLabel>
@@ -234,9 +239,13 @@ export function WorkflowStepCard({
         <div className="space-y-1.5">
           <FieldLabel>Action</FieldLabel>
           <FormSelect
-            onChange={(value) =>
-              onUpdate({ ...step, action: value as ActionType })
-            }
+            onChange={(value) => {
+              const next = { ...step, action: value as ActionType };
+              if (value === "call_webhook" && !next.method) {
+                next.method = "POST";
+              }
+              onUpdate(next);
+            }}
             value={step.action}
           >
             {ACTION_TYPES.map((action) => (
