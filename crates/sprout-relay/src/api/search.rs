@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Json,
 };
 use serde::Deserialize;
@@ -33,7 +33,7 @@ pub async fn search_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(params): Query<SearchParams>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, super::ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
         .map_err(super::scope_error)?;

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Json,
 };
 use chrono::Utc;
@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use crate::state::AppState;
 
-use super::{api_error, extract_auth_context, forbidden, internal_error, not_found, scope_error};
+use super::{extract_auth_context, forbidden, internal_error, not_found, scope_error, ApiError};
 
 // ── Request body ──────────────────────────────────────────────────────────────
 
@@ -38,10 +38,7 @@ pub struct ApprovalBody {
 /// All other formats (role strings such as `@release-manager`, group specs, etc.)
 /// are **rejected** (fail-closed). They are not yet implemented; allowing them
 /// silently would let any user approve a gate the workflow author intended to restrict.
-fn check_approver_spec(
-    approver_spec: &str,
-    requester_hex: &str,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+fn check_approver_spec(approver_spec: &str, requester_hex: &str) -> Result<(), ApiError> {
     let spec = approver_spec.trim();
 
     // Empty or "any" — anyone may approve.
@@ -177,7 +174,7 @@ pub async fn grant_approval(
     headers: HeaderMap,
     Path(token): Path<String>,
     body: Option<Json<ApprovalBody>>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
         .map_err(scope_error)?;
@@ -190,14 +187,14 @@ pub async fn grant_approval(
         .map_err(|_| not_found("approval not found"))?;
 
     if approval.status != sprout_db::workflow::ApprovalStatus::Pending {
-        return Err(api_error(
-            StatusCode::CONFLICT,
-            &format!("approval already {}", approval.status),
-        ));
+        return Err(ApiError::Conflict(format!(
+            "approval already {}",
+            approval.status
+        )));
     }
 
     if Utc::now() > approval.expires_at {
-        return Err(api_error(StatusCode::GONE, "approval token has expired"));
+        return Err(ApiError::Gone("approval token has expired".into()));
     }
 
     check_approver_spec(&approval.approver_spec, &ctx.pubkey.to_hex())?;
@@ -216,7 +213,7 @@ pub async fn grant_approval(
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
     if !updated {
-        return Err(api_error(StatusCode::CONFLICT, "approval already acted on"));
+        return Err(ApiError::Conflict("approval already acted on".into()));
     }
 
     // Resume workflow execution from the step after the approval gate.
@@ -232,7 +229,7 @@ pub async fn grant_approval(
     });
 
     Ok((
-        StatusCode::ACCEPTED,
+        axum::http::StatusCode::ACCEPTED,
         Json(serde_json::json!({
             "token": token,
             "status": "granted",
@@ -252,7 +249,7 @@ pub async fn deny_approval(
     headers: HeaderMap,
     Path(token): Path<String>,
     body: Option<Json<ApprovalBody>>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
         .map_err(scope_error)?;
@@ -265,14 +262,14 @@ pub async fn deny_approval(
         .map_err(|_| not_found("approval not found"))?;
 
     if approval.status != sprout_db::workflow::ApprovalStatus::Pending {
-        return Err(api_error(
-            StatusCode::CONFLICT,
-            &format!("approval already {}", approval.status),
-        ));
+        return Err(ApiError::Conflict(format!(
+            "approval already {}",
+            approval.status
+        )));
     }
 
     if Utc::now() > approval.expires_at {
-        return Err(api_error(StatusCode::GONE, "approval token has expired"));
+        return Err(ApiError::Gone("approval token has expired".into()));
     }
 
     check_approver_spec(&approval.approver_spec, &ctx.pubkey.to_hex())?;
@@ -291,7 +288,7 @@ pub async fn deny_approval(
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
     if !updated {
-        return Err(api_error(StatusCode::CONFLICT, "approval already acted on"));
+        return Err(ApiError::Conflict("approval already acted on".into()));
     }
 
     // Mark the workflow run as Cancelled — only if it's still WaitingApproval.
@@ -333,7 +330,7 @@ pub async fn deny_approval(
     });
 
     Ok((
-        StatusCode::ACCEPTED,
+        axum::http::StatusCode::ACCEPTED,
         Json(serde_json::json!({
             "token": token,
             "status": "denied",
@@ -382,17 +379,13 @@ mod tests {
     #[test]
     fn exact_pubkey_spec_rejects_non_matching_requester() {
         let result = check_approver_spec(ALICE_HEX, BOB_HEX);
-        assert!(result.is_err());
-        let (status, _) = result.unwrap_err();
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(matches!(result.unwrap_err(), ApiError::Forbidden(_)));
     }
 
     #[test]
     fn exact_pubkey_spec_rejects_empty_requester() {
         let result = check_approver_spec(ALICE_HEX, "");
-        assert!(result.is_err());
-        let (status, _) = result.unwrap_err();
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(matches!(result.unwrap_err(), ApiError::Forbidden(_)));
     }
 
     // ── Role-based / unrecognised spec ────────────────────────────────────────
@@ -401,26 +394,20 @@ mod tests {
     fn role_spec_is_rejected_fail_closed() {
         // Role strings are not yet implemented — must fail closed regardless of requester.
         let result = check_approver_spec("@release-manager", ALICE_HEX);
-        assert!(result.is_err());
-        let (status, _) = result.unwrap_err();
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(matches!(result.unwrap_err(), ApiError::Forbidden(_)));
     }
 
     #[test]
     fn group_spec_is_rejected_fail_closed() {
         let result = check_approver_spec("group:security-team", BOB_HEX);
-        assert!(result.is_err());
-        let (status, _) = result.unwrap_err();
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(matches!(result.unwrap_err(), ApiError::Forbidden(_)));
     }
 
     #[test]
     fn short_hex_spec_is_rejected_as_unrecognised() {
         // A hex string shorter than 64 chars is not a valid pubkey spec — fail closed.
         let result = check_approver_spec("deadbeef", ALICE_HEX);
-        assert!(result.is_err());
-        let (status, _) = result.unwrap_err();
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(matches!(result.unwrap_err(), ApiError::Forbidden(_)));
     }
 
     #[test]

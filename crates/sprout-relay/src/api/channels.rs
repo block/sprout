@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Json,
 };
 use nostr::util::hex as nostr_hex;
@@ -17,7 +17,7 @@ use sprout_db::channel::ChannelRecord;
 
 use crate::state::AppState;
 
-use super::{extract_auth_context, internal_error};
+use super::{extract_auth_context, internal_error, ApiError};
 
 /// Query parameters for `GET /api/channels`.
 #[derive(Debug, Deserialize)]
@@ -35,7 +35,7 @@ pub async fn channels_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(params): Query<ListChannelsParams>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
         .map_err(super::scope_error)?;

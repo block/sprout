@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Json,
 };
 
@@ -17,7 +17,7 @@ use crate::state::AppState;
 
 use super::{
     api_error, check_channel_access, check_token_channel_access, extract_auth_context,
-    internal_error, not_found, RestAuthMethod,
+    internal_error, not_found, ApiError, RestAuthMethod,
 };
 
 /// Fetch a single stored event by its 64-char hex ID.
@@ -25,16 +25,19 @@ pub async fn get_event(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(event_id): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
         .map_err(super::scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let id_bytes = hex::decode(&event_id)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid event ID"))?;
+        .map_err(|_| api_error(axum::http::StatusCode::BAD_REQUEST, "invalid event ID"))?;
     if id_bytes.len() != 32 {
-        return Err(api_error(StatusCode::BAD_REQUEST, "invalid event ID"));
+        return Err(api_error(
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid event ID",
+        ));
     }
 
     let stored_event = state
@@ -79,11 +82,15 @@ pub async fn submit_event(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     body: axum::body::Bytes,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
 
-    let event: nostr::Event = serde_json::from_slice(&body)
-        .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid event JSON: {e}")))?;
+    let event: nostr::Event = serde_json::from_slice(&body).map_err(|e| {
+        api_error(
+            axum::http::StatusCode::BAD_REQUEST,
+            &format!("invalid event JSON: {e}"),
+        )
+    })?;
 
     let auth = IngestAuth::Http {
         pubkey: ctx.pubkey,
@@ -94,7 +101,7 @@ pub async fn submit_event(
             RestAuthMethod::DevPubkey => HttpAuthMethod::DevPubkey,
             RestAuthMethod::Nip98 => {
                 return Err(api_error(
-                    StatusCode::BAD_REQUEST,
+                    axum::http::StatusCode::BAD_REQUEST,
                     "NIP-98 auth is not supported for event submission",
                 ));
             }
@@ -110,8 +117,8 @@ pub async fn submit_event(
             "message": result.message,
         }))),
         Err(e) => match e {
-            IngestError::Rejected(msg) => Err(api_error(StatusCode::BAD_REQUEST, &msg)),
-            IngestError::AuthFailed(msg) => Err(api_error(StatusCode::FORBIDDEN, &msg)),
+            IngestError::Rejected(msg) => Err(api_error(axum::http::StatusCode::BAD_REQUEST, &msg)),
+            IngestError::AuthFailed(msg) => Err(api_error(axum::http::StatusCode::FORBIDDEN, &msg)),
             IngestError::Internal(msg) => Err(internal_error(&msg)),
         },
     }

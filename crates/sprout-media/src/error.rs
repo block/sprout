@@ -1,8 +1,5 @@
 //! Media error types.
 
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-
 /// Errors from media operations.
 #[derive(Debug, thiserror::Error)]
 pub enum MediaError {
@@ -74,8 +71,10 @@ impl From<serde_json::Error> for MediaError {
     }
 }
 
-impl IntoResponse for MediaError {
-    fn into_response(self) -> Response {
+#[cfg(feature = "axum")]
+impl axum::response::IntoResponse for MediaError {
+    fn into_response(self) -> axum::response::Response {
+        use axum::http::StatusCode;
         let (status, msg) = match &self {
             Self::NotFound => (StatusCode::NOT_FOUND, self.to_string()),
             Self::DisallowedContentType(_) => {

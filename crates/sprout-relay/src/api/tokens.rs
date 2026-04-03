@@ -30,7 +30,7 @@ use uuid::Uuid;
 use nostr::JsonUtil;
 use sprout_auth::{is_self_mintable, Scope};
 
-use super::{api_error, extract_auth_context, internal_error, RestAuthMethod};
+use super::{api_error, extract_auth_context, internal_error, ApiError, RestAuthMethod};
 use crate::state::AppState;
 
 // ── Rate limiter ──────────────────────────────────────────────────────────────
@@ -201,7 +201,7 @@ pub async fn post_tokens(
     State(state): State<std::sync::Arc<AppState>>,
     headers: HeaderMap,
     body: axum::body::Bytes,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Parse the request body as JSON.
     let req: MintTokenRequest = serde_json::from_slice(&body).map_err(|e| {
         api_error(
@@ -224,24 +224,12 @@ pub async fn post_tokens(
                 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
                 BASE64.decode(encoded).map_err(|_| {
                     tracing::warn!("post_tokens: NIP-98 base64 decode failed");
-                    (
-                        StatusCode::UNAUTHORIZED,
-                        Json(serde_json::json!({
-                            "error": "invalid_auth",
-                            "message": "NIP-98 verification failed"
-                        })),
-                    )
+                    ApiError::Unauthorized
                 })?
             };
             let event_json = String::from_utf8(decoded_bytes).map_err(|_| {
                 tracing::warn!("post_tokens: NIP-98 decoded bytes are not valid UTF-8");
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(serde_json::json!({
-                        "error": "invalid_auth",
-                        "message": "NIP-98 verification failed"
-                    })),
-                )
+                ApiError::Unauthorized
             })?;
 
             match sprout_auth::verify_nip98_event(&event_json, &canonical_url, "POST", Some(&body))
@@ -255,13 +243,7 @@ pub async fn post_tokens(
                     let has_payload = event.tags.find(nostr::TagKind::Payload).is_some();
                     if !has_payload {
                         tracing::warn!("post_tokens: NIP-98 event missing required payload tag");
-                        return Err((
-                            StatusCode::UNAUTHORIZED,
-                            Json(serde_json::json!({
-                                "error": "invalid_auth",
-                                "message": "NIP-98 payload tag required for POST /api/tokens"
-                            })),
-                        ));
+                        return Err(ApiError::Unauthorized);
                     }
                     let pubkey_bytes = pubkey.to_bytes().to_vec();
                     if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
@@ -278,13 +260,7 @@ pub async fn post_tokens(
                 }
                 Err(e) => {
                     tracing::warn!("post_tokens: NIP-98 verification failed: {e}");
-                    return Err((
-                        StatusCode::UNAUTHORIZED,
-                        Json(serde_json::json!({
-                            "error": "invalid_auth",
-                            "message": "NIP-98 verification failed"
-                        })),
-                    ));
+                    return Err(ApiError::Unauthorized);
                 }
             }
         } else {
@@ -296,17 +272,15 @@ pub async fn post_tokens(
 
     // ── Validate name ─────────────────────────────────────────────────────────
     if req.name.is_empty() || req.name.len() > 100 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_name: name must be 1–100 characters",
+        return Err(ApiError::BadRequest(
+            "invalid_name: name must be 1–100 characters".into(),
         ));
     }
 
     // ── Validate scopes ───────────────────────────────────────────────────────
     if req.scopes.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_scopes: scopes must not be empty",
+        return Err(ApiError::BadRequest(
+            "invalid_scopes: scopes must not be empty".into(),
         ));
     }
 
@@ -316,23 +290,11 @@ pub async fn post_tokens(
         let scope: Scope = s.parse().expect("SAFETY: Scope::from_str is infallible");
         match &scope {
             Scope::Unknown(_) => {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": "invalid_scopes",
-                        "message": format!("unknown scope: {s}")
-                    })),
-                ));
+                return Err(ApiError::BadRequest(format!("unknown scope: {s}")));
             }
             _ => {
                 if !is_self_mintable(&scope) {
-                    return Err((
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({
-                            "error": "invalid_scopes",
-                            "message": format!("scope requires admin: {s}")
-                        })),
-                    ));
+                    return Err(ApiError::BadRequest(format!("scope requires admin: {s}")));
                 }
             }
         }
@@ -351,13 +313,10 @@ pub async fn post_tokens(
     if matches!(ctx.auth_method, RestAuthMethod::ApiToken) {
         for scope in &parsed_scopes {
             if !ctx.scopes.contains(scope) {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({
-                        "error": "scope_escalation",
-                        "message": format!("Cannot mint scope '{}' — not in your token's scopes", scope)
-                    })),
-                ));
+                return Err(ApiError::Forbidden(format!(
+                    "scope_escalation: Cannot mint scope '{}' — not in your token's scopes",
+                    scope
+                )));
             }
         }
 
@@ -366,12 +325,8 @@ pub async fn post_tokens(
         if let Some(ref caller_channels) = ctx.channel_ids {
             match &req.channel_ids {
                 None => {
-                    return Err((
-                        StatusCode::FORBIDDEN,
-                        Json(serde_json::json!({
-                            "error": "channel_escalation",
-                            "message": "Your token is channel-restricted; minted tokens must also specify channel_ids (subset of yours)"
-                        })),
+                    return Err(ApiError::Forbidden(
+                        "channel_escalation: Your token is channel-restricted; minted tokens must also specify channel_ids (subset of yours)".into(),
                     ));
                 }
                 Some(requested_raw) => {
@@ -379,13 +334,10 @@ pub async fn post_tokens(
                     for raw in requested_raw {
                         if let Ok(cid) = raw.parse::<uuid::Uuid>() {
                             if !caller_channels.contains(&cid) {
-                                return Err((
-                                    StatusCode::FORBIDDEN,
-                                    Json(serde_json::json!({
-                                        "error": "channel_escalation",
-                                        "message": format!("Cannot mint access to channel {} — not in your token's channel_ids", cid)
-                                    })),
-                                ));
+                                return Err(ApiError::Forbidden(format!(
+                                    "channel_escalation: Cannot mint access to channel {} — not in your token's channel_ids",
+                                    cid
+                                )));
                             }
                         }
                     }
@@ -403,17 +355,11 @@ pub async fn post_tokens(
 
     if let Err(retry_after) = state.mint_rate_limiter.check_and_record(&pubkey_bytes_arr) {
         let retry_secs = retry_after.as_secs();
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(serde_json::json!({
-                "error": "rate_limited",
-                "message": format!(
-                    "Mint limit exceeded: {} per hour. Try again in {} seconds.",
-                    state.mint_rate_limiter.limit(), retry_secs
-                ),
-                "retry_after_seconds": retry_secs
-            })),
-        ));
+        return Err(ApiError::TooManyRequests(format!(
+            "Mint limit exceeded: {} per hour. Try again in {} seconds.",
+            state.mint_rate_limiter.limit(),
+            retry_secs
+        )));
     }
 
     // ── Validate and verify channel_ids ──────────────────────────────────────
@@ -424,12 +370,8 @@ pub async fn post_tokens(
             // check above already rejects `None` for restricted callers, so we
             // must also reject empty arrays here.
             if matches!(ctx.auth_method, RestAuthMethod::ApiToken) && ctx.channel_ids.is_some() {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({
-                        "error": "channel_escalation",
-                        "message": "Your token is channel-restricted; minted tokens must specify non-empty channel_ids (subset of yours)"
-                    })),
+                return Err(ApiError::Forbidden(
+                    "channel_escalation: Your token is channel-restricted; minted tokens must specify non-empty channel_ids (subset of yours)".into(),
                 ));
             }
             None
@@ -437,26 +379,13 @@ pub async fn post_tokens(
             let mut uuids = Vec::with_capacity(raw_ids.len());
             for raw in raw_ids {
                 let cid: Uuid = raw.parse().map_err(|_| {
-                    (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({
-                            "error": "invalid_channel_ids",
-                            "message": format!("malformed UUID: {raw}")
-                        })),
-                    )
+                    ApiError::BadRequest(format!("invalid_channel_ids: malformed UUID: {raw}"))
                 })?;
 
                 // Verify channel exists.
-                let channel = state.db.get_channel(cid).await.map_err(|_| {
-                    (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({
-                            "error": "invalid_channel_ids",
-                            "message": format!("channel not found: {cid}")
-                        })),
-                    )
+                state.db.get_channel(cid).await.map_err(|_| {
+                    ApiError::BadRequest(format!("invalid_channel_ids: channel not found: {cid}"))
                 })?;
-                let _ = channel; // existence confirmed
 
                 // Verify caller is a member of the channel.
                 let is_member = state
@@ -465,13 +394,9 @@ pub async fn post_tokens(
                     .await
                     .map_err(|e| internal_error(&format!("db error: {e}")))?;
                 if !is_member {
-                    return Err((
-                        StatusCode::FORBIDDEN,
-                        Json(serde_json::json!({
-                            "error": "not_channel_member",
-                            "message": format!("not a member of channel: {cid}")
-                        })),
-                    ));
+                    return Err(ApiError::Forbidden(format!(
+                        "not_channel_member: not a member of channel: {cid}"
+                    )));
                 }
 
                 uuids.push(cid);
@@ -488,17 +413,15 @@ pub async fn post_tokens(
     // ── Validate owner_pubkey (before token insert) ─────────────────────────
     let validated_owner_bytes: Option<Vec<u8>> = if let Some(ref owner_hex) = req.owner_pubkey {
         if ctx.auth_method != super::RestAuthMethod::Nip98 {
-            return Err(api_error(
-                StatusCode::FORBIDDEN,
-                "owner_pubkey can only be set via NIP-98 auth (bootstrap mint)",
+            return Err(ApiError::Forbidden(
+                "owner_pubkey can only be set via NIP-98 auth (bootstrap mint)".into(),
             ));
         }
         let bytes = nostr::util::hex::decode(owner_hex)
-            .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid owner_pubkey hex"))?;
+            .map_err(|_| ApiError::BadRequest("invalid owner_pubkey hex".into()))?;
         if bytes.len() != 32 {
-            return Err(api_error(
-                StatusCode::BAD_REQUEST,
-                "owner_pubkey must be 32 bytes (64 hex chars)",
+            return Err(ApiError::BadRequest(
+                "owner_pubkey must be 32 bytes (64 hex chars)".into(),
             ));
         }
         Some(bytes)
@@ -509,9 +432,8 @@ pub async fn post_tokens(
     // ── Validate expires_in_days ──────────────────────────────────────────────
     if let Some(days) = req.expires_in_days {
         if days == 0 || days > 365 {
-            return Err(api_error(
-                StatusCode::BAD_REQUEST,
-                "invalid expires_in_days: must be 1–365",
+            return Err(ApiError::BadRequest(
+                "invalid expires_in_days: must be 1–365".into(),
             ));
         }
     }
@@ -552,10 +474,9 @@ pub async fn post_tokens(
         let scope_strs: Vec<String> = parsed_scopes.iter().map(|s| s.to_string()).collect();
         for r in &required {
             if !scope_strs.iter().any(|s| s == r) {
-                return Err(api_error(
-                    StatusCode::BAD_REQUEST,
-                    &format!("owned agents require the '{r}' scope for controllability"),
-                ));
+                return Err(ApiError::BadRequest(format!(
+                    "owned agents require the '{r}' scope for controllability"
+                )));
             }
         }
     }
@@ -589,9 +510,8 @@ pub async fn post_tokens(
                     .map_err(|e| internal_error(&format!("db error checking owner: {e}")))?
                     .and_then(|(_, owner)| owner);
                 if existing.as_deref() != Some(owner_bytes.as_slice()) {
-                    return Err(api_error(
-                        StatusCode::CONFLICT,
-                        "agent already has a different owner",
+                    return Err(ApiError::Conflict(
+                        "agent already has a different owner".into(),
                     ));
                 }
                 tracing::debug!("agent already owned by the requested pubkey — no change needed");
@@ -625,12 +545,8 @@ pub async fn post_tokens(
     let token_id = match token_id {
         Some(id) => id,
         None => {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": "token_limit_exceeded",
-                    "message": "Maximum of 10 active tokens per pubkey"
-                })),
+            return Err(ApiError::Conflict(
+                "token_limit_exceeded: Maximum of 10 active tokens per pubkey".into(),
             ));
         }
     };
@@ -670,15 +586,12 @@ pub async fn post_tokens(
 pub async fn get_tokens(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
 
     // NIP-98 bootstrap is not allowed for listing — caller must have a real token.
     if ctx.auth_method == RestAuthMethod::Nip98 {
-        return Err(api_error(
-            StatusCode::UNAUTHORIZED,
-            "Bearer token required to list tokens",
-        ));
+        return Err(ApiError::Unauthorized);
     }
 
     let records = state
@@ -721,20 +634,15 @@ pub async fn delete_token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<StatusCode, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
 
     if ctx.auth_method == RestAuthMethod::Nip98 {
-        return Err(api_error(
-            StatusCode::UNAUTHORIZED,
-            "Bearer token required to revoke tokens",
-        ));
+        return Err(ApiError::Unauthorized);
     }
 
     // First, check if the token exists and is owned by the caller — to distinguish
     // "not found / not owned" (404) from "already revoked" (409).
-    // We use get_api_token_by_hash_including_revoked is not applicable here (we have
-    // the UUID, not the hash). Instead, we attempt the revoke and then check existence.
     let revoked = state
         .db
         .revoke_token(id, &ctx.pubkey_bytes, &ctx.pubkey_bytes)
@@ -755,19 +663,11 @@ pub async fn delete_token(
 
     let found = all_tokens.iter().find(|t| t.id == id);
     match found {
-        Some(t) if t.revoked_at.is_some() => Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "already_revoked",
-                "message": "Token is already revoked"
-            })),
+        Some(t) if t.revoked_at.is_some() => Err(ApiError::Conflict(
+            "already_revoked: Token is already revoked".into(),
         )),
-        _ => Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "not_found",
-                "message": "Token not found or not owned by caller"
-            })),
+        _ => Err(ApiError::NotFound(
+            "Token not found or not owned by caller".into(),
         )),
     }
 }
@@ -780,14 +680,11 @@ pub async fn delete_token(
 pub async fn delete_all_tokens(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
 
     if ctx.auth_method == RestAuthMethod::Nip98 {
-        return Err(api_error(
-            StatusCode::UNAUTHORIZED,
-            "Bearer token required to revoke tokens",
-        ));
+        return Err(ApiError::Unauthorized);
     }
 
     let revoked_count = state

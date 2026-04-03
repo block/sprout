@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Json,
 };
 use chrono::{TimeZone, Utc};
@@ -19,7 +19,7 @@ use crate::state::AppState;
 
 use super::{
     api_error, check_channel_access, check_token_channel_access, extract_auth_context,
-    internal_error, not_found,
+    internal_error, not_found, ApiError,
 };
 
 // ── Request / query types ─────────────────────────────────────────────────────
@@ -38,15 +38,20 @@ pub struct ListReactionsParams {
 /// Decode a hex event_id path segment into 32 bytes.
 ///
 /// Returns a 400 error if the string is not valid hex or not exactly 32 bytes.
-fn decode_event_id(hex: &str) -> Result<Vec<u8>, (StatusCode, Json<serde_json::Value>)> {
+fn decode_event_id(hex: &str) -> Result<Vec<u8>, ApiError> {
     hex::decode(hex)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid event_id: not valid hex"))
+        .map_err(|_| {
+            api_error(
+                axum::http::StatusCode::BAD_REQUEST,
+                "invalid event_id: not valid hex",
+            )
+        })
         .and_then(|bytes| {
             if bytes.len() == 32 {
                 Ok(bytes)
             } else {
                 Err(api_error(
-                    StatusCode::BAD_REQUEST,
+                    axum::http::StatusCode::BAD_REQUEST,
                     "invalid event_id: must be 32 bytes (64 hex chars)",
                 ))
             }
@@ -64,7 +69,7 @@ pub async fn list_reactions_handler(
     headers: HeaderMap,
     Path(event_id_hex): Path<String>,
     Query(params): Query<ListReactionsParams>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
         .map_err(super::scope_error)?;

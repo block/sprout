@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Json,
 };
 use nostr::util::hex as nostr_hex;
@@ -18,7 +18,7 @@ use crate::state::AppState;
 
 use super::{
     api_error, check_channel_access, check_token_channel_access, extract_auth_context,
-    internal_error, scope_error,
+    internal_error, scope_error, ApiError,
 };
 
 /// `GET /api/channels/{channel_id}/members` — List members of a channel.
@@ -28,14 +28,14 @@ pub async fn list_members(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(channel_id): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
         .map_err(scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = Uuid::parse_str(&channel_id)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel_id"))?;
+        .map_err(|_| api_error(axum::http::StatusCode::BAD_REQUEST, "invalid channel_id"))?;
     check_token_channel_access(&ctx, &channel_id)?;
 
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;

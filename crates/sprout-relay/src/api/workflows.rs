@@ -27,7 +27,7 @@ use super::workflow_helpers::{
 };
 use super::{
     api_error, check_channel_access, check_token_channel_access, extract_auth_context, forbidden,
-    internal_error, not_found, scope_error,
+    internal_error, not_found, scope_error, ApiError,
 };
 
 // ── GET /api/channels/:channel_id/workflows ───────────────────────────────────
@@ -37,14 +37,14 @@ pub async fn list_channel_workflows(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(channel_id_str): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
         .map_err(scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = uuid::Uuid::parse_str(&channel_id_str)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel UUID"))?;
+        .map_err(|_| ApiError::BadRequest("invalid channel UUID".into()))?;
 
     check_token_channel_access(&ctx, &channel_id)?;
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
@@ -77,14 +77,14 @@ pub async fn create_workflow(
     headers: HeaderMap,
     Path(channel_id_str): Path<String>,
     Json(body): Json<CreateWorkflowBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
         .map_err(scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = uuid::Uuid::parse_str(&channel_id_str)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel UUID"))?;
+        .map_err(|_| ApiError::BadRequest("invalid channel UUID".into()))?;
 
     check_token_channel_access(&ctx, &channel_id)?;
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
@@ -149,14 +149,14 @@ pub async fn get_workflow(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id_str): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
         .map_err(scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let id = uuid::Uuid::parse_str(&id_str)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workflow UUID"))?;
+        .map_err(|_| ApiError::BadRequest("invalid workflow UUID".into()))?;
 
     let workflow = state
         .db
@@ -192,14 +192,14 @@ pub async fn update_workflow(
     headers: HeaderMap,
     Path(id_str): Path<String>,
     Json(body): Json<UpdateWorkflowBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
         .map_err(scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let id = uuid::Uuid::parse_str(&id_str)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workflow UUID"))?;
+        .map_err(|_| ApiError::BadRequest("invalid workflow UUID".into()))?;
 
     let existing = state
         .db
@@ -276,14 +276,14 @@ pub async fn delete_workflow(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id_str): Path<String>,
-) -> Result<axum::response::Response, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<axum::response::Response, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
         .map_err(scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let id = uuid::Uuid::parse_str(&id_str)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workflow UUID"))?;
+        .map_err(|_| ApiError::BadRequest("invalid workflow UUID".into()))?;
 
     let workflow = state
         .db
@@ -327,14 +327,14 @@ pub async fn list_workflow_runs(
     headers: HeaderMap,
     Path(id_str): Path<String>,
     Query(params): Query<RunsParams>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
         .map_err(scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let id = uuid::Uuid::parse_str(&id_str)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workflow UUID"))?;
+        .map_err(|_| ApiError::BadRequest("invalid workflow UUID".into()))?;
 
     let workflow = state
         .db
@@ -365,14 +365,14 @@ pub async fn trigger_workflow(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id_str): Path<String>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
         .map_err(scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let id = uuid::Uuid::parse_str(&id_str)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workflow UUID"))?;
+        .map_err(|_| ApiError::BadRequest("invalid workflow UUID".into()))?;
 
     let workflow = state
         .db
@@ -431,9 +431,9 @@ pub async fn workflow_webhook(
     Query(query): Query<WebhookQuery>,
     headers: HeaderMap,
     body: axum::body::Bytes,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let id = uuid::Uuid::parse_str(&id_str)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workflow UUID"))?;
+        .map_err(|_| ApiError::BadRequest("invalid workflow UUID".into()))?;
 
     let workflow = state
         .db
@@ -445,9 +445,8 @@ pub async fn workflow_webhook(
         .map_err(|e| internal_error(&format!("corrupt workflow definition: {e}")))?;
 
     if !matches!(def.trigger, sprout_workflow::TriggerDef::Webhook) {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "workflow does not have a webhook trigger",
+        return Err(ApiError::BadRequest(
+            "workflow does not have a webhook trigger".into(),
         ));
     }
 
@@ -464,14 +463,11 @@ pub async fn workflow_webhook(
         Some(secret) => {
             if !crate::webhook_secret::verify_secret(&provided_secret, secret) {
                 tracing::warn!("webhook: invalid secret for workflow {id}");
-                return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
+                return Err(ApiError::Unauthorized);
             }
         }
         None => {
-            return Err(api_error(
-                StatusCode::UNAUTHORIZED,
-                "webhook secret required but not configured — re-save the workflow to generate one",
-            ));
+            return Err(ApiError::Unauthorized);
         }
     }
 

@@ -111,5 +111,8 @@ sprout-mcp = { path = "crates/sprout-mcp" }
 sprout-proxy = { path = "crates/sprout-proxy" }
 sprout-huddle = { path = "crates/sprout-huddle" }
 sprout-workflow = { path = "crates/sprout-workflow" }
-sprout-media = { path = "crates/sprout-media" }
+sprout-media = { path = "crates/sprout-media", features = ["axum"] }
 sprout-sdk = { path = "crates/sprout-sdk" }
+
+[workspace.lints.clippy]
+unwrap_used = "warn"

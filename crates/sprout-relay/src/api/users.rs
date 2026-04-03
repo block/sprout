@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Json as ExtractJson, Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Json,
 };
 use nostr::util::hex as nostr_hex;
@@ -19,7 +19,7 @@ use serde::Deserialize;
 
 use crate::state::AppState;
 
-use super::{api_error, extract_auth_context, internal_error, scope_error};
+use super::{extract_auth_context, internal_error, scope_error, ApiError};
 
 /// `GET /api/users/me/profile` — get the authenticated user's profile.
 ///
@@ -27,7 +27,7 @@ use super::{api_error, extract_auth_context, internal_error, scope_error};
 pub async fn get_profile(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersRead).map_err(scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
@@ -56,7 +56,7 @@ pub async fn get_profile(
                 "agent_owner_pubkey": owner_pk.map(|b| nostr_hex::encode(&b)),
             })))
         }
-        None => Err(api_error(StatusCode::NOT_FOUND, "user not found")),
+        None => Err(ApiError::NotFound("user not found".into())),
     }
 }
 
@@ -65,17 +65,14 @@ pub async fn get_user_profile(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(pubkey_hex): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersRead).map_err(scope_error)?;
 
     let pubkey_bytes = nostr_hex::decode(&pubkey_hex)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid pubkey hex"))?;
+        .map_err(|_| ApiError::BadRequest("invalid pubkey hex".into()))?;
     if pubkey_bytes.len() != 32 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "pubkey must be 32 bytes",
-        ));
+        return Err(ApiError::BadRequest("pubkey must be 32 bytes".into()));
     }
 
     let profile = state
@@ -83,7 +80,7 @@ pub async fn get_user_profile(
         .get_user(&pubkey_bytes)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?
-        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "user not found"))?;
+        .ok_or_else(|| ApiError::NotFound("user not found".into()))?;
 
     let (_, owner_pk) = state
         .db
@@ -123,15 +120,12 @@ pub async fn get_users_batch(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     ExtractJson(body): ExtractJson<BatchProfilesRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersRead).map_err(scope_error)?;
 
     if body.pubkeys.len() > 200 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "max 200 pubkeys per request",
-        ));
+        return Err(ApiError::BadRequest("max 200 pubkeys per request".into()));
     }
 
     // Partition inputs: valid hex (64 chars, valid hex) vs invalid (wrong length or bad hex).
@@ -206,7 +200,7 @@ pub async fn search_users(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(query): Query<SearchUsersQuery>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersRead).map_err(scope_error)?;
 
@@ -245,16 +239,15 @@ pub async fn put_channel_add_policy(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     ExtractJson(body): ExtractJson<UpdateChannelAddPolicyBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersWrite).map_err(scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let policy = body.channel_add_policy.as_str();
     if !matches!(policy, "anyone" | "owner_only" | "nobody") {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "channel_add_policy must be 'anyone', 'owner_only', or 'nobody'",
+        return Err(ApiError::BadRequest(
+            "channel_add_policy must be 'anyone', 'owner_only', or 'nobody'".into(),
         ));
     }
 

@@ -24,7 +24,7 @@ use crate::handlers::side_effects::{
 };
 use crate::state::AppState;
 
-use super::{api_error, extract_auth_context, internal_error};
+use super::{api_error, extract_auth_context, internal_error, ApiError};
 
 // ── Request / query types ─────────────────────────────────────────────────────
 
@@ -62,22 +62,20 @@ pub async fn open_dm_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     ExtractJson(body): ExtractJson<OpenDmBody>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
         .map_err(super::scope_error)?;
     let self_bytes = ctx.pubkey_bytes.clone();
 
     if body.pubkeys.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "pubkeys must contain at least 1 other participant",
+        return Err(ApiError::BadRequest(
+            "pubkeys must contain at least 1 other participant".into(),
         ));
     }
     if body.pubkeys.len() > 8 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "pubkeys may contain at most 8 other participants (9 total including self)",
+        return Err(ApiError::BadRequest(
+            "pubkeys may contain at most 8 other participants (9 total including self)".into(),
         ));
     }
 
@@ -181,19 +179,18 @@ pub async fn add_dm_member_handler(
     headers: HeaderMap,
     Path(channel_id_str): Path<String>,
     ExtractJson(body): ExtractJson<AddDmMemberBody>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
         .map_err(super::scope_error)?;
     let self_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = Uuid::parse_str(&channel_id_str)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel_id format"))?;
+        .map_err(|_| ApiError::BadRequest("invalid channel_id format".into()))?;
 
     if body.pubkeys.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "pubkeys must contain at least 1 new participant",
+        return Err(ApiError::BadRequest(
+            "pubkeys must contain at least 1 new participant".into(),
         ));
     }
 
@@ -214,7 +211,7 @@ pub async fn add_dm_member_handler(
         .await
         .map_err(|_| super::not_found("DM not found"))?;
     if existing_channel.channel_type != "dm" {
-        return Err(api_error(StatusCode::BAD_REQUEST, "channel is not a DM"));
+        return Err(ApiError::BadRequest("channel is not a DM".into()));
     }
 
     // Get existing participants.
@@ -247,9 +244,8 @@ pub async fn add_dm_member_handler(
 
     // Enforce max 9 participants.
     if all_bytes.len() > 9 {
-        return Err(api_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "DM supports at most 9 participants",
+        return Err(ApiError::UnprocessableEntity(
+            "DM supports at most 9 participants".into(),
         ));
     }
 
@@ -310,7 +306,7 @@ pub async fn list_dms_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(params): Query<ListDmsQuery>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
         .map_err(super::scope_error)?;
@@ -323,7 +319,7 @@ pub async fn list_dms_handler(
         .as_deref()
         .map(Uuid::parse_str)
         .transpose()
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid cursor format"))?;
+        .map_err(|_| ApiError::BadRequest("invalid cursor format".into()))?;
 
     let dms = state
         .db
@@ -371,14 +367,14 @@ pub async fn hide_dm_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(channel_id_str): Path<String>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<StatusCode, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesWrite)
         .map_err(super::scope_error)?;
 
     let channel_id: Uuid = channel_id_str
         .parse()
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel_id format"))?;
+        .map_err(|_| ApiError::BadRequest("invalid channel_id format".into()))?;
 
     // Verify the channel exists and is a DM.
     let channel = state
@@ -388,7 +384,7 @@ pub async fn hide_dm_handler(
         .map_err(|_| super::not_found("DM not found"))?;
 
     if channel.channel_type != "dm" {
-        return Err(api_error(StatusCode::BAD_REQUEST, "channel is not a DM"));
+        return Err(ApiError::BadRequest("channel is not a DM".into()));
     }
 
     // Verify caller is a member.

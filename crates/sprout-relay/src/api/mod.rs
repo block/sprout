@@ -49,6 +49,8 @@ pub mod workflow_helpers;
 /// Workflow CRUD, trigger, and webhook endpoints.
 pub mod workflows;
 
+pub use crate::error::ApiError;
+
 // Re-export all public handlers so router.rs can use `api::*_handler` unchanged.
 pub use agents::agents_handler;
 pub use approvals::{deny_approval, grant_approval};
@@ -77,10 +79,7 @@ pub use workflows::{
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use axum::{
-    http::{HeaderMap, StatusCode},
-    response::Json,
-};
+use axum::http::{HeaderMap, StatusCode};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -146,7 +145,7 @@ pub struct RestAuthContext {
 pub(crate) async fn extract_auth_context(
     headers: &HeaderMap,
     state: &AppState,
-) -> Result<RestAuthContext, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<RestAuthContext, ApiError> {
     let require_auth = state.config.require_auth_token;
 
     if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
@@ -156,13 +155,7 @@ pub(crate) async fn extract_auth_context(
         // rather than falling through to a confusing "authentication failed".
         if auth_header.starts_with("Nostr ") {
             tracing::warn!("auth: NIP-98 auth header sent to non-token endpoint");
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({
-                    "error": "nip98_not_supported",
-                    "message": "NIP-98 auth is only supported for POST /api/tokens"
-                })),
-            ));
+            return Err(ApiError::Unauthorized);
         }
 
         // ── 2. Bearer token path ──────────────────────────────────────────────
@@ -181,37 +174,25 @@ pub(crate) async fn extract_auth_context(
                     Ok(Some(r)) => r,
                     Ok(None) => {
                         tracing::warn!("auth: API token not found");
-                        return Err((
-                            StatusCode::UNAUTHORIZED,
-                            Json(serde_json::json!({ "error": "invalid_token" })),
-                        ));
+                        return Err(ApiError::Unauthorized);
                     }
                     Err(e) => {
                         tracing::warn!("auth: API token lookup failed: {e}");
-                        return Err((
-                            StatusCode::UNAUTHORIZED,
-                            Json(serde_json::json!({ "error": "invalid_token" })),
-                        ));
+                        return Err(ApiError::Unauthorized);
                     }
                 };
 
                 // Relay-layer revocation check (before hash verification).
                 if record.revoked_at.is_some() {
                     tracing::warn!("auth: API token is revoked");
-                    return Err((
-                        StatusCode::UNAUTHORIZED,
-                        Json(serde_json::json!({ "error": "token_revoked" })),
-                    ));
+                    return Err(ApiError::Unauthorized);
                 }
 
                 // Relay-layer expiry check (before hash verification).
                 if let Some(exp) = record.expires_at {
                     if exp < chrono::Utc::now() {
                         tracing::warn!("auth: API token is expired");
-                        return Err((
-                            StatusCode::UNAUTHORIZED,
-                            Json(serde_json::json!({ "error": "token_expired" })),
-                        ));
+                        return Err(ApiError::Unauthorized);
                     }
                 }
 
@@ -219,10 +200,7 @@ pub(crate) async fn extract_auth_context(
                     Ok(pk) => pk,
                     Err(e) => {
                         tracing::warn!("auth: API token owner pubkey invalid: {e}");
-                        return Err((
-                            StatusCode::UNAUTHORIZED,
-                            Json(serde_json::json!({ "error": "invalid_token" })),
-                        ));
+                        return Err(ApiError::Unauthorized);
                     }
                 };
 
@@ -266,10 +244,7 @@ pub(crate) async fn extract_auth_context(
                     }
                     Err(_) => {
                         tracing::warn!("auth: API token hash verification failed");
-                        return Err((
-                            StatusCode::UNAUTHORIZED,
-                            Json(serde_json::json!({ "error": "invalid_token" })),
-                        ));
+                        return Err(ApiError::Unauthorized);
                     }
                 }
             }
@@ -293,10 +268,7 @@ pub(crate) async fn extract_auth_context(
                     }
                     Err(_) => {
                         tracing::warn!("auth: JWT validation failed");
-                        return Err((
-                            StatusCode::UNAUTHORIZED,
-                            Json(serde_json::json!({ "error": "authentication failed" })),
-                        ));
+                        return Err(ApiError::Unauthorized);
                     }
                 }
             } else {
@@ -326,37 +298,23 @@ pub(crate) async fn extract_auth_context(
                                     }
                                     Err(_) => {
                                         tracing::warn!("auth: key derivation failed for username");
-                                        return Err((
-                                            StatusCode::UNAUTHORIZED,
-                                            Json(
-                                                serde_json::json!({ "error": "authentication failed" }),
-                                            ),
-                                        ));
+                                        return Err(ApiError::Unauthorized);
                                     }
                                 }
                             }
                             tracing::warn!("auth: JWT missing preferred_username claim");
-                            return Err((
-                                StatusCode::UNAUTHORIZED,
-                                Json(serde_json::json!({ "error": "authentication failed" })),
-                            ));
+                            return Err(ApiError::Unauthorized);
                         }
                         Err(_) => {
                             tracing::warn!("auth: malformed JWT");
-                            return Err((
-                                StatusCode::UNAUTHORIZED,
-                                Json(serde_json::json!({ "error": "authentication failed" })),
-                            ));
+                            return Err(ApiError::Unauthorized);
                         }
                     }
                 }
                 #[cfg(not(any(test, feature = "dev")))]
                 {
                     tracing::warn!("auth: dev-mode JWT auth disabled in release builds");
-                    return Err((
-                        StatusCode::UNAUTHORIZED,
-                        Json(serde_json::json!({ "error": "authentication failed" })),
-                    ));
+                    return Err(ApiError::Unauthorized);
                 }
             }
         }
@@ -384,19 +342,13 @@ pub(crate) async fn extract_auth_context(
                 }
                 Err(_) => {
                     tracing::warn!("auth: invalid X-Pubkey header value");
-                    return Err((
-                        StatusCode::UNAUTHORIZED,
-                        Json(serde_json::json!({ "error": "authentication failed" })),
-                    ));
+                    return Err(ApiError::Unauthorized);
                 }
             }
         }
     }
 
-    Err((
-        StatusCode::UNAUTHORIZED,
-        Json(serde_json::json!({ "error": "authentication required" })),
-    ))
+    Err(ApiError::Unauthorized)
 }
 
 // ── Step 8: Token-level channel access enforcement ────────────────────────────
@@ -413,56 +365,59 @@ pub(crate) async fn extract_auth_context(
 pub fn check_token_channel_access(
     ctx: &RestAuthContext,
     channel_id: &Uuid,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(), ApiError> {
     if let Some(ref allowed) = ctx.channel_ids {
         if !allowed.contains(channel_id) {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({
-                    "error": "channel_not_permitted",
-                    "message": "Token does not have access to this channel"
-                })),
-            ));
+            return Err(ApiError::Forbidden("channel_not_permitted".into()));
         }
     }
     Ok(())
 }
 
-/// Convert a scope-check failure into a 403 Forbidden response.
+/// Convert a scope-check failure into a 403 Forbidden ApiError.
 ///
 /// Used by handlers to propagate `require_scope` errors via `?`.
-pub(crate) fn scope_error(e: sprout_auth::AuthError) -> (StatusCode, Json<serde_json::Value>) {
+pub(crate) fn scope_error(e: sprout_auth::AuthError) -> ApiError {
     match e {
-        sprout_auth::AuthError::InsufficientScope { required, .. } => (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "insufficient_scope",
-                "message": format!("token missing required scope: {required}"),
-            })),
-        ),
+        sprout_auth::AuthError::InsufficientScope { required, .. } => ApiError::Forbidden(format!(
+            "insufficient_scope: token missing required scope: {required}"
+        )),
         other => {
             tracing::warn!("scope_error: unexpected auth error: {other}");
-            api_error(StatusCode::FORBIDDEN, "insufficient_scope")
+            ApiError::Forbidden("insufficient_scope".into())
         }
     }
 }
 
-/// Standard error envelope.
-pub(crate) fn api_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (status, Json(serde_json::json!({ "error": msg })))
+/// Build a generic API error with an explicit status code.
+///
+/// Prefer the typed `ApiError` variants directly; this helper exists for
+/// the few call sites that need a status code that doesn't map to a named variant.
+pub(crate) fn api_error(status: StatusCode, msg: &str) -> ApiError {
+    match status {
+        StatusCode::NOT_FOUND => ApiError::NotFound(msg.into()),
+        StatusCode::FORBIDDEN => ApiError::Forbidden(msg.into()),
+        StatusCode::BAD_REQUEST => ApiError::BadRequest(msg.into()),
+        StatusCode::UNAUTHORIZED => ApiError::Unauthorized,
+        StatusCode::CONFLICT => ApiError::Conflict(msg.into()),
+        StatusCode::GONE => ApiError::Gone(msg.into()),
+        StatusCode::TOO_MANY_REQUESTS => ApiError::TooManyRequests(msg.into()),
+        StatusCode::UNPROCESSABLE_ENTITY => ApiError::UnprocessableEntity(msg.into()),
+        _ => ApiError::Internal(anyhow::anyhow!("{msg}")),
+    }
 }
 
-pub(crate) fn internal_error(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
+pub(crate) fn internal_error(msg: &str) -> ApiError {
     tracing::error!("Internal error: {msg}");
-    api_error(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+    ApiError::Internal(anyhow::anyhow!("internal server error"))
 }
 
-pub(crate) fn not_found(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
-    api_error(StatusCode::NOT_FOUND, msg)
+pub(crate) fn not_found(msg: &str) -> ApiError {
+    ApiError::NotFound(msg.into())
 }
 
-pub(crate) fn forbidden(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
-    api_error(StatusCode::FORBIDDEN, msg)
+pub(crate) fn forbidden(msg: &str) -> ApiError {
+    ApiError::Forbidden(msg.into())
 }
 
 /// Decode a JWT payload segment without signature verification.
@@ -495,7 +450,7 @@ pub(crate) async fn check_channel_membership(
     state: &AppState,
     channel_id: uuid::Uuid,
     pubkey_bytes: &[u8],
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(), ApiError> {
     let is_member = state
         .db
         .is_member(channel_id, pubkey_bytes)
@@ -525,7 +480,7 @@ pub(crate) async fn check_channel_access(
     state: &AppState,
     channel_id: uuid::Uuid,
     pubkey_bytes: &[u8],
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(), ApiError> {
     check_channel_membership(state, channel_id, pubkey_bytes).await
 }
 
@@ -542,7 +497,7 @@ where
     axum::Json<T>: FromRequest<S, Rejection = JsonRejection>,
     S: Send + Sync,
 {
-    type Rejection = (StatusCode, Json<serde_json::Value>);
+    type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         match axum::Json::<T>::from_request(req, state).await {
@@ -736,30 +691,41 @@ mod tests {
 
     #[test]
     fn forbidden_error_message_matches_expected_format() {
-        let (status, body) = forbidden("not a member of this channel");
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(body.0["error"], "not a member of this channel");
+        let err = forbidden("not a member of this channel");
+        assert!(matches!(err, ApiError::Forbidden(_)));
+        assert_eq!(err.to_string(), "forbidden: not a member of this channel");
     }
 
     #[test]
-    fn internal_error_returns_500_with_generic_message() {
-        let (status, body) = internal_error("db error: connection refused");
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        // Internal errors must NOT leak implementation details to callers.
-        assert_eq!(body.0["error"], "internal server error");
+    fn internal_error_returns_internal_variant() {
+        let err = internal_error("db error: connection refused");
+        assert!(matches!(err, ApiError::Internal(_)));
     }
 
     #[test]
-    fn api_error_helper_sets_correct_status_and_body() {
-        let (status, body) = api_error(StatusCode::UNAUTHORIZED, "authentication required");
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-        assert_eq!(body.0["error"], "authentication required");
+    fn api_error_helper_maps_status_codes() {
+        assert!(matches!(
+            api_error(StatusCode::UNAUTHORIZED, "x"),
+            ApiError::Unauthorized
+        ));
+        assert!(matches!(
+            api_error(StatusCode::NOT_FOUND, "x"),
+            ApiError::NotFound(_)
+        ));
+        assert!(matches!(
+            api_error(StatusCode::FORBIDDEN, "x"),
+            ApiError::Forbidden(_)
+        ));
+        assert!(matches!(
+            api_error(StatusCode::BAD_REQUEST, "x"),
+            ApiError::BadRequest(_)
+        ));
     }
 
     #[test]
-    fn not_found_helper_sets_404() {
-        let (status, body) = not_found("approval not found");
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(body.0["error"], "approval not found");
+    fn not_found_helper_returns_not_found_variant() {
+        let err = not_found("approval not found");
+        assert!(matches!(err, ApiError::NotFound(_)));
+        assert_eq!(err.to_string(), "not found: approval not found");
     }
 }

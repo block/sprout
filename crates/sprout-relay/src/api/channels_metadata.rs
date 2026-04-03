@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Json,
 };
 use nostr::util::hex as nostr_hex;
@@ -17,15 +17,14 @@ use crate::state::AppState;
 
 use super::{
     check_channel_access, check_token_channel_access, extract_auth_context, internal_error,
-    not_found, scope_error,
+    not_found, scope_error, ApiError,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Parse a channel_id path parameter as a UUID.
-fn parse_channel_id(raw: &str) -> Result<uuid::Uuid, (StatusCode, Json<serde_json::Value>)> {
-    uuid::Uuid::parse_str(raw)
-        .map_err(|_| super::api_error(StatusCode::BAD_REQUEST, "invalid channel_id"))
+fn parse_channel_id(raw: &str) -> Result<uuid::Uuid, ApiError> {
+    uuid::Uuid::parse_str(raw).map_err(|_| ApiError::BadRequest("invalid channel_id".into()))
 }
 
 /// Serialize a `ChannelRecord` to JSON, including topic, purpose, and member_count.
@@ -62,7 +61,7 @@ pub async fn get_channel_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(channel_id_str): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
         .map_err(scope_error)?;

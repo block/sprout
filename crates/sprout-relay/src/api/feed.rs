@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Json,
 };
 use chrono::{DateTime, Duration, Utc};
@@ -21,7 +21,7 @@ use sprout_core::kind::{self, event_kind_u32};
 
 use crate::state::AppState;
 
-use super::{extract_auth_context, internal_error};
+use super::{extract_auth_context, internal_error, ApiError};
 
 /// Agent activity kind set — used to partition activity into agent vs channel activity.
 const AGENT_KINDS: &[u32] = &[
@@ -53,7 +53,7 @@ pub async fn feed_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(params): Query<FeedParams>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
         .map_err(super::scope_error)?;

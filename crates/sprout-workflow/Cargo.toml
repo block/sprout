@@ -15,8 +15,8 @@ serde       = { workspace = true }
 serde_json  = { workspace = true }
 serde_yaml  = { workspace = true }
 dashmap     = { workspace = true }
-evalexpr    = "11"
-cron        = "0.12"
+evalexpr    = { workspace = true }
+cron        = { workspace = true }
 uuid        = { workspace = true }
 chrono      = { workspace = true }
 tokio       = { workspace = true }
@@ -29,3 +29,6 @@ nostr = { workspace = true }
 
 [features]
 reqwest = ["dep:reqwest"]
+
+[lints]
+workspace = true

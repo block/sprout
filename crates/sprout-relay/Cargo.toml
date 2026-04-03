@@ -39,7 +39,7 @@ redis = { workspace = true }
 sqlx = { workspace = true }
 base64 = "0.22"
 sprout-workflow = { workspace = true, features = ["reqwest"] }
-sprout-media = { workspace = true }
+sprout-media = { workspace = true, features = ["axum"] }
 bytes = "1"
 infer = "0.16"
 serde_yaml      = { workspace = true }

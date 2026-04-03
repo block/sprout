@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Json,
 };
 use chrono::Utc;
@@ -18,8 +18,8 @@ use serde::Deserialize;
 use crate::state::AppState;
 
 use super::{
-    api_error, check_channel_access, check_token_channel_access, extract_auth_context,
-    internal_error, not_found,
+    check_channel_access, check_token_channel_access, extract_auth_context, internal_error,
+    not_found, ApiError,
 };
 
 /// Validate imeta tags for correctness and safety.
@@ -412,14 +412,14 @@ pub async fn list_messages(
     headers: HeaderMap,
     Path(channel_id_str): Path<String>,
     Query(params): Query<ListMessagesParams>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
         .map_err(super::scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = uuid::Uuid::parse_str(&channel_id_str)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel UUID"))?;
+        .map_err(|_| ApiError::BadRequest("invalid channel UUID".into()))?;
 
     check_token_channel_access(&ctx, &channel_id)?;
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
@@ -443,12 +443,9 @@ pub async fn list_messages(
                 .collect::<Result<Vec<_>, _>>()
         })
         .transpose()
-        .map_err(|_| {
-            api_error(
-                StatusCode::BAD_REQUEST,
-                "Invalid 'kinds' parameter — expected comma-separated integers (e.g. '45001' or '9,45001')",
-            )
-        })?;
+        .map_err(|_| ApiError::BadRequest(
+            "Invalid 'kinds' parameter — expected comma-separated integers (e.g. '45001' or '9,45001')".into(),
+        ))?;
 
     let mut messages = state
         .db
@@ -557,20 +554,20 @@ pub async fn get_thread(
     headers: HeaderMap,
     Path((channel_id_str, event_id_hex)): Path<(String, String)>,
     Query(params): Query<GetThreadParams>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ctx = extract_auth_context(&headers, &state).await?;
     sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
         .map_err(super::scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     let channel_id = uuid::Uuid::parse_str(&channel_id_str)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel UUID"))?;
+        .map_err(|_| ApiError::BadRequest("invalid channel UUID".into()))?;
 
     check_token_channel_access(&ctx, &channel_id)?;
     check_channel_access(&state, channel_id, &pubkey_bytes).await?;
 
     let root_id_bytes = nostr_hex::decode(&event_id_hex)
-        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid event_id hex"))?;
+        .map_err(|_| ApiError::BadRequest("invalid event_id hex".into()))?;
 
     // Fetch the root event.
     let root_event = state
@@ -583,9 +580,8 @@ pub async fn get_thread(
     // Verify the root event belongs to the requested channel.
     if let Some(root_channel) = root_event.channel_id {
         if root_channel != channel_id {
-            return Err(api_error(
-                StatusCode::BAD_REQUEST,
-                "event belongs to a different channel",
+            return Err(ApiError::BadRequest(
+                "event belongs to a different channel".into(),
             ));
         }
     }
@@ -605,11 +601,10 @@ pub async fn get_thread(
     let cursor_bytes: Option<Vec<u8>> = match params.cursor {
         Some(ref hex) => {
             let bytes = nostr_hex::decode(hex)
-                .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid cursor hex"))?;
+                .map_err(|_| ApiError::BadRequest("invalid cursor hex".into()))?;
             if bytes.len() != 8 {
-                return Err(api_error(
-                    StatusCode::BAD_REQUEST,
-                    "cursor must be 8 bytes (timestamp)",
+                return Err(ApiError::BadRequest(
+                    "cursor must be 8 bytes (timestamp)".into(),
                 ));
             }
             Some(bytes)

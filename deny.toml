@@ -35,5 +35,41 @@ confidence-threshold = 0.8
 ignore = true
 
 [bans]
-multiple-versions = "warn"
+multiple-versions = "deny"
 wildcards = "allow"
+skip = [
+    # Transitive duplicates from sqlx (hashlink) vs axum/hyper dependency chains
+    { name = "foldhash" },
+    { name = "hashbrown" },
+    # rand 0.8 (workspace) vs rand 0.9 (nostr transitive)
+    { name = "rand" },
+    { name = "rand_chacha" },
+    { name = "rand_core" },
+    # getrandom 0.2/0.3/0.4 — transitive via rand versions
+    { name = "getrandom" },
+    # negentropy — nostr transitive dep
+    { name = "negentropy" },
+    # socket2 — tokio vs reqwest transitive
+    { name = "socket2" },
+    # tungstenite 0.26 (workspace) vs 0.28 (nostr transitive)
+    { name = "tokio-tungstenite" },
+    { name = "tungstenite" },
+    # webpki-roots — rustls version mismatch (rust-s3 old stack vs modern)
+    { name = "webpki-roots" },
+    # r-efi — transitive via windows crates
+    { name = "r-efi" },
+    # windows-* — transitive via various crates on different windows-sys versions
+    { name = "windows-core" },
+    { name = "windows-link" },
+    { name = "windows-result" },
+    { name = "windows-strings" },
+    { name = "windows-sys" },
+    { name = "windows-targets" },
+    { name = "windows_aarch64_gnullvm" },
+    { name = "windows_aarch64_msvc" },
+    { name = "windows_i686_gnu" },
+    { name = "windows_i686_msvc" },
+    { name = "windows_x86_64_gnu" },
+    { name = "windows_x86_64_gnullvm" },
+    { name = "windows_x86_64_msvc" },
+]
