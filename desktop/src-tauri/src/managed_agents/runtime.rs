@@ -28,33 +28,35 @@ fn process_is_running(_pid: u32) -> bool {
 
 #[cfg(unix)]
 fn terminate_process(pid: u32) -> Result<(), String> {
-    let pid_arg = pid.to_string();
-    let status = Command::new("kill")
-        .arg("-TERM")
-        .arg(&pid_arg)
-        .status()
-        .map_err(|error| format!("failed to terminate process {pid}: {error}"))?;
-    if !status.success() && process_is_running(pid) {
-        return Err(format!(
-            "failed to terminate process {pid}: signal was rejected"
-        ));
+    // The child was spawned with process_group(0), so pid == pgid.
+    // Kill the entire process group to avoid orphaning MCP servers
+    // and agent subprocesses.
+    let pgid = -(pid as i32);
+
+    // Try graceful shutdown first (SIGTERM to the group).
+    if unsafe { libc::kill(pgid, libc::SIGTERM) } != 0 {
+        // ESRCH means the process is already gone — that's fine.
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::ESRCH) && process_is_running(pid) {
+            return Err(format!("failed to terminate process group {pid}: {err}"));
+        }
+        return Ok(());
     }
 
+    // Wait up to 1s for graceful exit.
     for _ in 0..10 {
         if !process_is_running(pid) {
             return Ok(());
         }
-
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    let kill_status = Command::new("kill")
-        .arg("-KILL")
-        .arg(&pid_arg)
-        .status()
-        .map_err(|error| format!("failed to kill process {pid}: {error}"))?;
-    if !kill_status.success() && process_is_running(pid) {
-        return Err(format!("failed to kill process {pid}: signal was rejected"));
+    // Escalate to SIGKILL on the entire group.
+    if unsafe { libc::kill(pgid, libc::SIGKILL) } != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::ESRCH) && process_is_running(pid) {
+            return Err(format!("failed to kill process group {pid}: {err}"));
+        }
     }
 
     Ok(())
@@ -333,6 +335,14 @@ pub fn start_managed_agent_process(
         command.env_remove("SPROUT_API_TOKEN");
     }
 
+    // Spawn the harness in its own process group so we can kill the entire
+    // tree (harness + MCP servers + agent subprocesses) on shutdown.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
     let child = command.spawn().map_err(|error| {
         format!(
             "failed to spawn `{}` for agent {}: {error}",
@@ -376,7 +386,10 @@ pub fn stop_managed_agent_process(
         return Ok(());
     };
 
-    let _ = runtime.child.kill();
+    // Kill the entire process group (harness + MCP servers + agent
+    // subprocesses). The child was spawned with process_group(0), so
+    // its PID == its PGID.
+    terminate_process(runtime.child.id())?;
     let status = runtime
         .child
         .wait()
