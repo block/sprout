@@ -1,4 +1,4 @@
-use std::{collections::HashMap, process::Command};
+use std::collections::HashMap;
 
 use tauri::AppHandle;
 
@@ -11,18 +11,80 @@ use crate::{
     util::now_iso,
 };
 
+/// Binary name fragments for all known agent/harness processes that Sprout
+/// may spawn. Used by `process_belongs_to_us()` and the orphan sweep to
+/// identify processes we should clean up. Both hyphenated and underscored
+/// variants are listed because macOS `proc_name()` and Linux `/proc/comm`
+/// may report either form depending on how the binary was built.
+pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
+    "sprout-acp",
+    "sprout_acp",
+    "claude-agent-acp",
+    "claude_agent_acp",
+    "claude-code-acp",
+    "claude_code_acp",
+    "codex-acp",
+    "codex_acp",
+    "goose",
+    "sprout-mcp",
+    "sprout_mcp",
+];
+
+/// Check if a process name matches any of our known agent binaries.
+fn name_matches_known_binary(name: &str) -> bool {
+    KNOWN_AGENT_BINARIES
+        .iter()
+        .any(|binary| name.contains(binary))
+}
+
 #[cfg(unix)]
-fn process_is_running(pid: u32) -> bool {
-    Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .status()
-        .map(|status| status.success())
+pub(crate) fn process_is_running(pid: u32) -> bool {
+    // Use libc::kill with signal 0 instead of forking a subprocess.
+    // Returns true only if the process exists AND we can signal it.
+    // Returns false for non-existent PIDs (ESRCH) and PIDs owned by
+    // other users (EPERM) — callers should not interact with those.
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn process_is_running(_pid: u32) -> bool {
+    false
+}
+
+/// Check if a PID belongs to a known agent process we spawned.
+/// Returns false for recycled PIDs that now belong to other processes.
+#[cfg(target_os = "macos")]
+pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
+    // Use proc_name() from libproc to get the process name without spawning
+    // a subprocess.
+    extern "C" {
+        fn proc_name(pid: libc::c_int, buffer: *mut libc::c_void, buffersize: u32) -> libc::c_int;
+    }
+    let mut buf = [0u8; 1024];
+    let len = unsafe {
+        proc_name(
+            pid as i32,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            buf.len() as u32,
+        )
+    };
+    if len <= 0 {
+        return false;
+    }
+    let name = String::from_utf8_lossy(&buf[..len as usize]);
+    name_matches_known_binary(&name)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
+    // On Linux, read /proc/<pid>/comm
+    std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .map(|name| name_matches_known_binary(name.trim()))
         .unwrap_or(false)
 }
 
 #[cfg(not(unix))]
-fn process_is_running(_pid: u32) -> bool {
+pub(crate) fn process_belongs_to_us(_pid: u32) -> bool {
     false
 }
 
@@ -65,6 +127,144 @@ pub(crate) fn terminate_process(pid: u32) -> Result<(), String> {
 #[cfg(not(unix))]
 pub(crate) fn terminate_process(_pid: u32) -> Result<(), String> {
     Err("managed agent shutdown after app restart is only supported on Unix".to_string())
+}
+
+/// Sweep all processes owned by the current user and kill any whose binary
+/// name matches a known agent binary. This catches processes that escaped
+/// process-group kills (e.g. via `setsid()`) or weren't tracked in records.
+///
+/// `skip_pids` contains PIDs we've already handled — no need to signal them
+/// again.
+#[cfg(target_os = "macos")]
+pub(crate) fn sweep_orphaned_agent_processes(skip_pids: &[u32]) {
+    // Use sysctl to enumerate all PIDs, then check each one.
+    extern "C" {
+        fn proc_listallpids(buffer: *mut libc::pid_t, buffersize: libc::c_int) -> libc::c_int;
+    }
+
+    let my_uid = unsafe { libc::getuid() };
+
+    // First call with null to get the count.
+    let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
+    if count <= 0 {
+        return;
+    }
+
+    let mut pids = vec![0i32; (count as usize) * 2]; // over-allocate for safety
+    let actual =
+        unsafe { proc_listallpids(pids.as_mut_ptr(), (pids.len() * size_of::<i32>()) as i32) };
+    if actual <= 0 {
+        return;
+    }
+    pids.truncate(actual as usize);
+
+    for &pid in &pids {
+        if pid <= 1 {
+            continue;
+        }
+        let pid_u32 = pid as u32;
+        if skip_pids.contains(&pid_u32) {
+            continue;
+        }
+        // Check ownership: only kill our own processes.
+        // Use proc_pidinfo to get uid, but a simpler approach is to just
+        // check if we can signal it (kill -0) and verify the name.
+        if !process_is_running(pid_u32) {
+            continue;
+        }
+        // Verify the process is owned by us by checking euid via proc_pidinfo.
+        // For simplicity, rely on process_belongs_to_us which checks binary name,
+        // and kill() will fail with EPERM if it's not ours.
+        if process_belongs_to_us(pid_u32) {
+            // SIGTERM first
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
+        }
+    }
+
+    // Brief pause then SIGKILL any survivors.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    for &pid in &pids {
+        if pid <= 1 {
+            continue;
+        }
+        let pid_u32 = pid as u32;
+        if skip_pids.contains(&pid_u32) {
+            continue;
+        }
+        if process_is_running(pid_u32) && process_belongs_to_us(pid_u32) {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn sweep_orphaned_agent_processes(skip_pids: &[u32]) {
+    // On Linux, walk /proc to find matching processes.
+    let my_uid = unsafe { libc::getuid() };
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
+
+    let mut matching_pids = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid_str) = name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = pid_str.parse::<u32>() else {
+            continue;
+        };
+        if pid <= 1 || skip_pids.contains(&pid) {
+            continue;
+        }
+        // Check ownership via /proc/<pid>/status
+        let status_path = format!("/proc/{pid}/status");
+        let Ok(status) = std::fs::read_to_string(&status_path) else {
+            continue;
+        };
+        let is_ours = status.lines().any(|line| {
+            line.starts_with("Uid:")
+                && line
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|uid| uid.parse::<u32>().ok())
+                    == Some(my_uid)
+        });
+        if !is_ours {
+            continue;
+        }
+        if process_belongs_to_us(pid) {
+            matching_pids.push(pid as i32);
+        }
+    }
+
+    // SIGTERM all
+    for &pid in &matching_pids {
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+
+    // Brief pause then SIGKILL survivors
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    for &pid in &matching_pids {
+        if process_is_running(pid as u32) {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn sweep_orphaned_agent_processes(_skip_pids: &[u32]) {
+    // No-op on non-Unix platforms.
 }
 
 pub fn sync_managed_agent_processes(
