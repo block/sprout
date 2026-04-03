@@ -84,10 +84,24 @@ pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
-    // On Linux, read /proc/<pid>/comm
-    std::fs::read_to_string(format!("/proc/{pid}/comm"))
-        .map(|name| name_matches_known_binary(name.trim()))
-        .unwrap_or(false)
+    // First try /proc/<pid>/comm. Note: comm is truncated to 15 bytes on Linux,
+    // so binaries with names longer than 15 chars (e.g. "claude-agent-acp")
+    // will never match here.
+    if let Ok(name) = std::fs::read_to_string(format!("/proc/{pid}/comm")) {
+        if name_matches_known_binary(name.trim()) {
+            return true;
+        }
+    }
+
+    // Fallback: read /proc/<pid>/exe which is a symlink to the full binary path.
+    // This is not subject to the 15-byte truncation limit.
+    if let Ok(exe_path) = std::fs::read_link(format!("/proc/{pid}/exe")) {
+        if let Some(basename) = exe_path.file_name().and_then(|n| n.to_str()) {
+            return name_matches_known_binary(basename);
+        }
+    }
+
+    false
 }
 
 #[cfg(not(unix))]
@@ -558,7 +572,16 @@ pub fn stop_managed_agent_process(
         return Ok(());
     };
 
+    // On Unix, kill the entire process group via terminate_process.
+    // On non-Unix, fall back to Child::kill() since terminate_process
+    // is not implemented there.
+    #[cfg(unix)]
     terminate_process(runtime.child.id())?;
+    #[cfg(not(unix))]
+    runtime
+        .child
+        .kill()
+        .map_err(|error| format!("failed to kill agent process: {error}"))?;
     let status = runtime
         .child
         .wait()
