@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared test helpers for sprout-test-client integration tests.
 //!
 //! Import with:

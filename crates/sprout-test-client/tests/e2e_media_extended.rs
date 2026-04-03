@@ -6,7 +6,7 @@
 mod helpers;
 use helpers::*;
 
-use nostr::Keys;
+use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
 use reqwest::Client;
 use sha2::{Digest, Sha256};
 

@@ -55,12 +55,13 @@ const CHANNEL_GENERAL: &str = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 /// This makes workflow tests self-contained — no pre-seeded database required.
 async fn ensure_user_exists(client: &Client, keys: &Keys) {
     let pubkey_hex = keys.public_key().to_hex();
+    let pubkey_hex = pubkey_hex.as_str();
     let event = EventBuilder::new(Kind::Metadata, "{}", [])
         .sign_with_keys(keys)
         .expect("sign kind:0 event");
     let resp = client
         .post(format!("{}/api/events", relay_http_url()))
-        .header("X-Pubkey", &pubkey_hex)
+        .header("X-Pubkey", pubkey_hex)
         .header("Content-Type", "application/json")
         .body(serde_json::to_string(&event).expect("serialize event"))
         .send()
@@ -145,12 +146,13 @@ async fn test_list_workflows_empty_channel() {
     // Any authenticated user can list workflows in an open channel.
     let keys = Keys::generate();
     let pubkey_hex = keys.public_key().to_hex();
+    let pubkey_hex = pubkey_hex.as_str();
     let base = relay_http_url();
 
     let url = format!("{base}/api/channels/{CHANNEL_GENERAL}/workflows");
     let resp = client
         .get(&url)
-        .header("X-Pubkey", &pubkey_hex)
+        .header("X-Pubkey", pubkey_hex)
         .send()
         .await
         .unwrap_or_else(|e| panic!("GET {url} failed: {e}"));
@@ -182,6 +184,7 @@ async fn test_create_and_list_workflow() {
     let keys = Keys::generate();
     ensure_user_exists(&client, &keys).await;
     let pubkey_hex = keys.public_key().to_hex();
+    let pubkey_hex = pubkey_hex.as_str();
     let base = relay_http_url();
 
     let yaml = webhook_workflow_yaml("e2e-create-list-test");
@@ -239,6 +242,7 @@ async fn test_trigger_workflow_and_check_run() {
     let keys = Keys::generate();
     ensure_user_exists(&client, &keys).await;
     let pubkey_hex = keys.public_key().to_hex();
+    let pubkey_hex = pubkey_hex.as_str();
     let base = relay_http_url();
 
     let yaml = webhook_workflow_yaml("e2e-trigger-test");
@@ -334,6 +338,7 @@ async fn test_event_driven_workflow_execution() {
     let owner_keys = Keys::generate();
     ensure_user_exists(&client, &owner_keys).await;
     let pubkey_hex = owner_keys.public_key().to_hex();
+    let pubkey_hex = pubkey_hex.as_str();
     let base = relay_http_url();
 
     // ── Step 1: Create a message_posted workflow in the general channel ───────
@@ -431,6 +436,7 @@ async fn test_event_driven_workflow_with_filter() {
     ensure_user_exists(&client, &owner_keys).await;
     let pubkey_hex = owner_keys.public_key().to_hex();
     let base = relay_http_url();
+    let pubkey_hex = pubkey_hex.as_str();
 
     // ── Step 1: Create a filtered message_posted workflow ─────────────────────
     let workflow_yaml = r#"name: filtered-event-e2e-test
@@ -542,6 +548,7 @@ async fn test_workflow_update_and_delete() {
     let keys = Keys::generate();
     ensure_user_exists(&client, &keys).await;
     let pubkey_hex = keys.public_key().to_hex();
+    let pubkey_hex = pubkey_hex.as_str();
     let base = relay_http_url();
 
     // ── Step 1: Create ────────────────────────────────────────────────────────
@@ -644,6 +651,7 @@ async fn test_approval_gate_stub_fails_gracefully() {
     let keys = Keys::generate();
     ensure_user_exists(&client, &keys).await;
     let pubkey_hex = keys.public_key().to_hex();
+    let pubkey_hex = pubkey_hex.as_str();
     let base = relay_http_url();
 
     // ── Step 1: Create a workflow with a request_approval step ────────────────
