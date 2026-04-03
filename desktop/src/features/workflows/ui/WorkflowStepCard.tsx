@@ -13,21 +13,20 @@ import type { ActionType, StepFormState } from "./workflowFormTypes";
 
 function StepConfigFields({
   step,
-  index,
+  prefix,
   onUpdate,
 }: {
   step: StepFormState;
-  index: number;
+  prefix: string;
   onUpdate: (step: StepFormState) => void;
 }) {
-  const pfx = `wf-step-${index}`;
   switch (step.action) {
     case "delay":
       return (
         <div className="space-y-1.5">
-          <FieldLabel htmlFor={`${pfx}-duration`}>Duration</FieldLabel>
+          <FieldLabel htmlFor={`${prefix}-duration`}>Duration</FieldLabel>
           <Input
-            id={`${pfx}-duration`}
+            id={`${prefix}-duration`}
             onChange={(event) =>
               onUpdate({ ...step, duration: event.target.value })
             }
@@ -40,10 +39,10 @@ function StepConfigFields({
       return (
         <div className="space-y-2">
           <div className="space-y-1.5">
-            <FieldLabel htmlFor={`${pfx}-text`}>Message text</FieldLabel>
+            <FieldLabel htmlFor={`${prefix}-text`}>Message text</FieldLabel>
             <Textarea
               className="min-h-[60px] resize-y text-xs"
-              id={`${pfx}-text`}
+              id={`${prefix}-text`}
               onChange={(event) =>
                 onUpdate({ ...step, text: event.target.value })
               }
@@ -52,11 +51,11 @@ function StepConfigFields({
             />
           </div>
           <div className="space-y-1.5">
-            <FieldLabel htmlFor={`${pfx}-channel`}>
+            <FieldLabel htmlFor={`${prefix}-channel`}>
               Channel override (optional)
             </FieldLabel>
             <Input
-              id={`${pfx}-channel`}
+              id={`${prefix}-channel`}
               onChange={(event) =>
                 onUpdate({ ...step, channel: event.target.value })
               }
@@ -70,9 +69,9 @@ function StepConfigFields({
       return (
         <div className="space-y-2">
           <div className="space-y-1.5">
-            <FieldLabel htmlFor={`${pfx}-to`}>To (pubkey)</FieldLabel>
+            <FieldLabel htmlFor={`${prefix}-to`}>To (pubkey)</FieldLabel>
             <Input
-              id={`${pfx}-to`}
+              id={`${prefix}-to`}
               onChange={(event) =>
                 onUpdate({ ...step, to: event.target.value })
               }
@@ -81,10 +80,10 @@ function StepConfigFields({
             />
           </div>
           <div className="space-y-1.5">
-            <FieldLabel htmlFor={`${pfx}-text`}>Message text</FieldLabel>
+            <FieldLabel htmlFor={`${prefix}-text`}>Message text</FieldLabel>
             <Textarea
               className="min-h-[60px] resize-y text-xs"
-              id={`${pfx}-text`}
+              id={`${prefix}-text`}
               onChange={(event) =>
                 onUpdate({ ...step, text: event.target.value })
               }
@@ -98,9 +97,9 @@ function StepConfigFields({
       return (
         <div className="space-y-2">
           <div className="space-y-1.5">
-            <FieldLabel htmlFor={`${pfx}-url`}>URL</FieldLabel>
+            <FieldLabel htmlFor={`${prefix}-url`}>URL</FieldLabel>
             <Input
-              id={`${pfx}-url`}
+              id={`${prefix}-url`}
               onChange={(event) =>
                 onUpdate({ ...step, url: event.target.value })
               }
@@ -114,9 +113,11 @@ function StepConfigFields({
             ) : null}
           </div>
           <div className="space-y-1.5">
-            <FieldLabel htmlFor={`${pfx}-method`}>Method (optional)</FieldLabel>
+            <FieldLabel htmlFor={`${prefix}-method`}>
+              Method (optional)
+            </FieldLabel>
             <FormSelect
-              id={`${pfx}-method`}
+              id={`${prefix}-method`}
               onChange={(value) => onUpdate({ ...step, method: value })}
               value={step.method ?? "POST"}
             >
@@ -128,10 +129,10 @@ function StepConfigFields({
             </FormSelect>
           </div>
           <div className="space-y-1.5">
-            <FieldLabel htmlFor={`${pfx}-body`}>Body (optional)</FieldLabel>
+            <FieldLabel htmlFor={`${prefix}-body`}>Body (optional)</FieldLabel>
             <Textarea
               className="min-h-[60px] resize-y font-mono text-xs"
-              id={`${pfx}-body`}
+              id={`${prefix}-body`}
               onChange={(event) =>
                 onUpdate({ ...step, body: event.target.value })
               }
@@ -145,9 +146,9 @@ function StepConfigFields({
       return (
         <div className="space-y-2">
           <div className="space-y-1.5">
-            <FieldLabel htmlFor={`${pfx}-from`}>From (approver)</FieldLabel>
+            <FieldLabel htmlFor={`${prefix}-from`}>From (approver)</FieldLabel>
             <Input
-              id={`${pfx}-from`}
+              id={`${prefix}-from`}
               onChange={(event) =>
                 onUpdate({ ...step, from: event.target.value })
               }
@@ -156,9 +157,9 @@ function StepConfigFields({
             />
           </div>
           <div className="space-y-1.5">
-            <FieldLabel htmlFor={`${pfx}-message`}>Message</FieldLabel>
+            <FieldLabel htmlFor={`${prefix}-message`}>Message</FieldLabel>
             <Input
-              id={`${pfx}-message`}
+              id={`${prefix}-message`}
               onChange={(event) =>
                 onUpdate({ ...step, message: event.target.value })
               }
@@ -167,11 +168,11 @@ function StepConfigFields({
             />
           </div>
           <div className="space-y-1.5">
-            <FieldLabel htmlFor={`${pfx}-timeout`}>
+            <FieldLabel htmlFor={`${prefix}-timeout`}>
               Timeout (optional)
             </FieldLabel>
             <Input
-              id={`${pfx}-timeout`}
+              id={`${prefix}-timeout`}
               onChange={(event) =>
                 onUpdate({ ...step, timeout: event.target.value })
               }
@@ -184,9 +185,9 @@ function StepConfigFields({
     case "add_reaction":
       return (
         <div className="space-y-1.5">
-          <FieldLabel htmlFor={`${pfx}-emoji`}>Emoji</FieldLabel>
+          <FieldLabel htmlFor={`${prefix}-emoji`}>Emoji</FieldLabel>
           <Input
-            id={`${pfx}-emoji`}
+            id={`${prefix}-emoji`}
             onChange={(event) =>
               onUpdate({ ...step, emoji: event.target.value })
             }
@@ -198,9 +199,9 @@ function StepConfigFields({
     case "set_channel_topic":
       return (
         <div className="space-y-1.5">
-          <FieldLabel htmlFor={`${pfx}-topic`}>Topic</FieldLabel>
+          <FieldLabel htmlFor={`${prefix}-topic`}>Topic</FieldLabel>
           <Input
-            id={`${pfx}-topic`}
+            id={`${prefix}-topic`}
             onChange={(event) =>
               onUpdate({ ...step, topic: event.target.value })
             }
@@ -229,6 +230,8 @@ export function WorkflowStepCard({
   onUpdate: (step: StepFormState) => void;
   step: StepFormState;
 }) {
+  const prefix = `wf-step-${index}`;
+
   return (
     <div className="space-y-3 rounded-lg border border-border/70 bg-muted/10 p-3">
       <div className="flex items-center justify-between gap-2">
@@ -249,18 +252,18 @@ export function WorkflowStepCard({
 
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1.5">
-          <FieldLabel htmlFor={`wf-step-${index}-id`}>Step ID</FieldLabel>
+          <FieldLabel htmlFor={`${prefix}-id`}>Step ID</FieldLabel>
           <Input
-            id={`wf-step-${index}-id`}
+            id={`${prefix}-id`}
             onChange={(event) => onUpdate({ ...step, id: event.target.value })}
             placeholder="unique_step_id"
             value={step.id}
           />
         </div>
         <div className="space-y-1.5">
-          <FieldLabel htmlFor={`wf-step-${index}-action`}>Action</FieldLabel>
+          <FieldLabel htmlFor={`${prefix}-action`}>Action</FieldLabel>
           <FormSelect
-            id={`wf-step-${index}-action`}
+            id={`${prefix}-action`}
             onChange={(value) => {
               const next = { ...step, action: value as ActionType };
               if (value === "call_webhook" && !next.method) {
@@ -279,7 +282,7 @@ export function WorkflowStepCard({
         </div>
       </div>
 
-      <StepConfigFields index={index} onUpdate={onUpdate} step={step} />
+      <StepConfigFields onUpdate={onUpdate} prefix={prefix} step={step} />
     </div>
   );
 }
