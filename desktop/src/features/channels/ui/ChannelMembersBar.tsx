@@ -161,7 +161,7 @@ export function ChannelMembersBar({
           aria-label="Create workflow"
           className="h-9 w-9 rounded-full"
           data-testid="channel-create-workflow-trigger"
-          disabled={channel.archivedAt !== null}
+          disabled={channel.channelType === "dm" || channel.archivedAt !== null}
           onClick={() => {
             setIsCreateWorkflowOpen(true);
           }}
