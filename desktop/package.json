@@ -48,6 +48,7 @@
     "react-diff-view": "^3.3.2",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
+    "react-virtuoso": "^4.18.4",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.5.0"
