@@ -51,6 +51,9 @@ pub struct TaskMeta {
     pub channel_id: Option<Uuid>,
     /// Clone of batch for Queue mode panic recovery.
     pub recoverable_batch: Option<FlushBatch>,
+    /// Cancel signal for the in-flight prompt task.
+    /// `None` for heartbeat tasks (not cancellable) and after signal is consumed.
+    pub cancel_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 /// Agent-level model capabilities. Populated on first session creation.
@@ -157,6 +160,9 @@ pub enum PromptOutcome {
     Error(AcpError),
     AgentExited,
     Timeout,
+    /// Intentional cancel via `!cancel` command or interrupt mode.
+    /// Agent is healthy — no respawn, no retry penalty.
+    Cancelled,
 }
 
 /// Immutable config subset shared (via `Arc`) by all spawned prompt tasks.
@@ -590,6 +596,7 @@ pub async fn run_prompt_task(
     prompt_text: Option<String>,
     ctx: Arc<PromptContext>,
     result_tx: mpsc::UnboundedSender<PromptResult>,
+    cancel_rx: Option<tokio::sync::oneshot::Receiver<()>>,
 ) {
     // ── Determine source and resolve/create session ───────────────────────
 
@@ -851,15 +858,112 @@ pub async fn run_prompt_task(
 
     // ── Send the actual prompt ────────────────────────────────────────────
 
-    let prompt_result = agent
-        .acp
-        .session_prompt_with_idle_timeout(
-            &session_id,
-            &prompt_text,
-            ctx.idle_timeout,
-            ctx.max_turn_duration,
-        )
-        .await;
+    // ── Cancel-aware prompt dispatch ──────────────────────────────────────
+    // When cancel_rx is Some (channel tasks), wrap the prompt in select! so
+    // the main loop can interrupt it. Heartbeats (cancel_rx=None) take the
+    // simple await path — they are not cancellable.
+    let prompt_result = match cancel_rx {
+        None => {
+            // Heartbeat / non-cancellable path.
+            agent
+                .acp
+                .session_prompt_with_idle_timeout(
+                    &session_id,
+                    &prompt_text,
+                    ctx.idle_timeout,
+                    ctx.max_turn_duration,
+                )
+                .await
+        }
+        Some(rx) => {
+            tokio::select! {
+                biased;
+                result = agent.acp.session_prompt_with_idle_timeout(
+                    &session_id,
+                    &prompt_text,
+                    ctx.idle_timeout,
+                    ctx.max_turn_duration,
+                ) => result,
+                _ = rx => {
+                    // Cancel signal received. Guard against Race 1: the turn may
+                    // have completed naturally just as cancel fired.
+                    if agent.acp.has_in_flight_prompt() {
+                        // Prompt is genuinely in-flight — cancel it.
+                        match agent.acp.cancel_with_cleanup(&session_id, ctx.idle_timeout).await {
+                            Ok(stop_reason) => {
+                                log_stop_reason(&source, &stop_reason);
+                                agent.state.invalidate(&source);
+                                let _ = result_tx.send(PromptResult {
+                                    agent,
+                                    source,
+                                    outcome: PromptOutcome::Cancelled,
+                                    batch: requeue_batch_if_queue(&ctx, batch),
+                                });
+                                return;
+                            }
+                            Err(AcpError::AgentExited) => {
+                                agent.state.invalidate_all();
+                                let _ = result_tx.send(PromptResult {
+                                    agent,
+                                    source,
+                                    outcome: PromptOutcome::AgentExited,
+                                    batch: requeue_batch_if_queue(&ctx, batch),
+                                });
+                                return;
+                            }
+                            Err(AcpError::IdleTimeout(_) | AcpError::HardTimeout) => {
+                                // Cancel drain timed out — agent state uncertain.
+                                agent.state.invalidate(&source);
+                                let _ = result_tx.send(PromptResult {
+                                    agent,
+                                    source,
+                                    outcome: PromptOutcome::Timeout,
+                                    batch: requeue_batch_if_queue(&ctx, batch),
+                                });
+                                return;
+                            }
+                            Err(e) => {
+                                agent.state.invalidate(&source);
+                                let _ = result_tx.send(PromptResult {
+                                    agent,
+                                    source,
+                                    outcome: PromptOutcome::Error(e),
+                                    batch: requeue_batch_if_queue(&ctx, batch),
+                                });
+                                return;
+                            }
+                        }
+                    } else {
+                        // Race 1 resolution: turn completed naturally before cancel
+                        // could fire. last_prompt_id is None — cleared by
+                        // session_prompt_with_idle_timeout() on success. The prompt
+                        // future was dropped by select! — its Ok result is gone.
+                        //
+                        // Note: this `else` branch (last_prompt_id is None) cannot
+                        // fire during the pre-prompt phase because `biased` select!
+                        // polls the prompt arm first. That arm sets last_prompt_id
+                        // synchronously before its first yield point, so by the time
+                        // the cancel arm can win, last_prompt_id is already Some.
+                        // This branch only fires when the turn genuinely completed
+                        // and last_prompt_id was cleared by the success path.
+                        //
+                        // MUST send a PromptResult or the main loop deadlocks.
+                        tracing::debug!(
+                            target: "pool::prompt",
+                            "cancel signal arrived but turn already completed — treating as success"
+                        );
+                        let _ = result_tx.send(PromptResult {
+                            agent,
+                            source,
+                            outcome: PromptOutcome::Ok(StopReason::EndTurn),
+                            batch: None, // turn succeeded — batch was processed, no requeue
+                        });
+                        return;
+                    }
+                }
+            }
+        }
+    };
 
     match prompt_result {
         Ok(stop_reason) => {
@@ -1936,6 +2040,7 @@ mod tests {
                 prompt_tag: "@mention".into(),
                 received_at: std::time::Instant::now(),
             }],
+            cancelled_events: vec![],
         };
         let context = ConversationContext::Thread {
             messages: vec![ContextMessage {

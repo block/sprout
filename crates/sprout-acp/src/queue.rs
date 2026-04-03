@@ -65,6 +65,10 @@ pub struct BatchEvent {
 pub struct FlushBatch {
     pub channel_id: Uuid,
     pub events: Vec<BatchEvent>,
+    /// Events from a cancelled batch that triggered this re-prompt.
+    /// Empty for normal (non-cancel) batches. When non-empty, `format_prompt()`
+    /// produces a merged prompt with annotated sections.
+    pub cancelled_events: Vec<BatchEvent>,
 }
 
 // ── EventQueue ────────────────────────────────────────────────────────────────
@@ -125,6 +129,10 @@ pub struct EventQueue {
     /// Per-channel retry attempt counter for exponential backoff / dead-lettering.
     retry_counts: HashMap<Uuid, u32>,
     dedup_mode: DedupMode,
+    /// Events from cancelled batches, keyed by channel. Merged into the next
+    /// `FlushBatch` for that channel as `cancelled_events` so `format_prompt()`
+    /// can produce annotated "[Previous request — interrupted]" sections.
+    cancelled_batches: HashMap<Uuid, Vec<BatchEvent>>,
 }
 
 impl EventQueue {
@@ -138,6 +146,7 @@ impl EventQueue {
             retry_after: HashMap::new(),
             retry_counts: HashMap::new(),
             dedup_mode,
+            cancelled_batches: HashMap::new(),
         }
     }
 
@@ -211,7 +220,38 @@ impl EventQueue {
                     && self.retry_after.get(id).is_none_or(|&t| t <= now)
             })
             .min_by_key(|(_, q)| q.front().unwrap().received_at)
-            .map(|(id, _)| *id)?;
+            .map(|(id, _)| *id);
+
+        // Fallback: if no queued events are ready but a channel has cancelled
+        // events waiting (e.g., explicit !cancel with no new @mention), flush
+        // those as a regular batch (re-dispatch unchanged).
+        let channel_id = match channel_id {
+            Some(id) => id,
+            None => {
+                let cancelled_id = self
+                    .cancelled_batches
+                    .keys()
+                    .find(|id| !self.in_flight_channels.contains(id))
+                    .copied();
+                match cancelled_id {
+                    Some(id) => {
+                        // Move cancelled events into the regular events slot.
+                        // No new events to merge — re-dispatch the original batch.
+                        let cancelled = self.cancelled_batches.remove(&id).unwrap_or_default();
+                        self.in_flight_channels.insert(id);
+                        self.in_flight_deadlines
+                            .insert(id, now + Duration::from_secs(IN_FLIGHT_DEADLINE_SECS));
+                        self.in_flight_batch_sizes.insert(id, cancelled.len());
+                        return Some(FlushBatch {
+                            channel_id: id,
+                            events: cancelled,
+                            cancelled_events: vec![],
+                        });
+                    }
+                    None => return None,
+                }
+            }
+        };
 
         // Drain up to MAX_BATCH_EVENTS; leave any remainder in the queue.
         let queue = self.queues.entry(channel_id).or_default();
@@ -237,7 +277,17 @@ impl EventQueue {
         );
         self.in_flight_batch_sizes.insert(channel_id, events.len());
 
-        Some(FlushBatch { channel_id, events })
+        // Merge any cancelled events stored by requeue_as_cancelled().
+        let cancelled_events = self
+            .cancelled_batches
+            .remove(&channel_id)
+            .unwrap_or_default();
+
+        Some(FlushBatch {
+            channel_id,
+            events,
+            cancelled_events,
+        })
     }
 
     /// Mark the prompt for `channel_id` as complete.
@@ -387,6 +437,20 @@ impl EventQueue {
         }
     }
 
+    /// Requeue a cancelled batch so its events appear as `cancelled_events`
+    /// in the next `FlushBatch` for this channel (enabling the annotated
+    /// merged-prompt format in `format_prompt()`).
+    ///
+    /// Unlike `requeue_preserve_timestamps`, events are NOT pushed back into
+    /// the generic queue — they are stored separately and merged by
+    /// `flush_next()`. No retry throttle, no backoff.
+    pub fn requeue_as_cancelled(&mut self, batch: FlushBatch) {
+        let entry = self.cancelled_batches.entry(batch.channel_id).or_default();
+        // Preserve any already-cancelled events from a prior cancel (double-cancel).
+        entry.extend(batch.cancelled_events);
+        entry.extend(batch.events);
+    }
+
     /// Returns `true` if any channel has pending events that are not in-flight
     /// and not throttled by `retry_after`.
     ///
@@ -420,7 +484,10 @@ impl EventQueue {
             !q.is_empty()
                 && !self.in_flight_channels.contains(id)
                 && self.retry_after.get(id).is_none_or(|&t| t <= now)
-        })
+        }) || self
+            .cancelled_batches
+            .keys()
+            .any(|id| !self.in_flight_channels.contains(id))
     }
 
     /// Whether any prompt is currently in flight.
@@ -463,6 +530,7 @@ impl EventQueue {
             .unwrap_or_default();
         self.retry_after.remove(&channel_id);
         self.retry_counts.remove(&channel_id);
+        self.cancelled_batches.remove(&channel_id);
         // Preserve in_flight_channels AND in_flight_deadlines: the in-flight
         // task will eventually complete (calling mark_complete) or the deadline
         // will expire (auto-cleaning the channel). Removing deadlines without
@@ -905,16 +973,47 @@ pub fn format_prompt(
         sections.push(format_conversation_context(ctx, profile_lookup));
     }
 
-    // 4. Event block(s).
+    // 4a. Cancelled events section (cancel + re-prompt).
+    if !batch.cancelled_events.is_empty() {
+        let mut s = "[Previous request — interrupted before completion]".to_string();
+        for (i, be) in batch.cancelled_events.iter().enumerate() {
+            s.push_str(&format!(
+                "\n\n--- Event {} ({}) ---\n{}",
+                i + 1,
+                be.prompt_tag,
+                format_event_block(batch.channel_id, channel_info, be, profile_lookup)
+            ));
+        }
+        sections.push(s);
+    }
+
+    // 4b. Event block(s).
+    let has_cancelled = !batch.cancelled_events.is_empty();
     let event_section = if batch.events.len() == 1 {
         let be = &batch.events[0];
-        format!(
-            "[Sprout event: {}]\n{}",
-            be.prompt_tag,
-            format_event_block(batch.channel_id, channel_info, be, profile_lookup)
-        )
+        if has_cancelled {
+            format!(
+                "[New request — supersedes previous]\n\n--- Event 1 ({}) ---\n{}",
+                be.prompt_tag,
+                format_event_block(batch.channel_id, channel_info, be, profile_lookup)
+            )
+        } else {
+            format!(
+                "[Sprout event: {}]\n{}",
+                be.prompt_tag,
+                format_event_block(batch.channel_id, channel_info, be, profile_lookup)
+            )
+        }
     } else {
-        let mut s = format!("[Sprout events — {} events]", batch.events.len());
+        let header = if has_cancelled {
+            format!(
+                "[New request — supersedes previous — {} events]",
+                batch.events.len()
+            )
+        } else {
+            format!("[Sprout events — {} events]", batch.events.len())
+        };
+        let mut s = header;
         for (i, be) in batch.events.iter().enumerate() {
             s.push_str(&format!(
                 "\n\n--- Event {} ({}) ---\n{}",
@@ -926,6 +1025,16 @@ pub fn format_prompt(
         s
     };
     sections.push(event_section);
+
+    // Closing note for cancel + re-prompt.
+    if has_cancelled {
+        sections.push(
+            "Note: The previous request was interrupted. Please address the new request.\n\
+             If the new request is unrelated to the previous one, you may briefly acknowledge\n\
+             the interruption."
+                .to_string(),
+        );
+    }
 
     sections.join("\n\n")
 }
@@ -1160,6 +1269,7 @@ mod tests {
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
 
         let prompt = format_prompt(&batch, None, None, None, None);
@@ -1255,6 +1365,7 @@ mod tests {
                     received_at: Instant::now(),
                 },
             ],
+            cancelled_events: vec![],
         };
 
         let prompt = format_prompt(&batch, None, None, None, None);
@@ -1283,6 +1394,7 @@ mod tests {
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
 
         let prompt = format_prompt(&batch, Some("You are a triage bot."), None, None, None);
@@ -1758,6 +1870,7 @@ mod tests {
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
         let ci = PromptChannelInfo {
             name: "engineering".into(),
@@ -1780,6 +1893,7 @@ mod tests {
                 prompt_tag: "dm".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
         let ci = PromptChannelInfo {
             name: "DM".into(),
@@ -1809,6 +1923,7 @@ mod tests {
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
 
         let prompt = format_prompt(&batch, None, None, None, None);
@@ -1835,6 +1950,7 @@ mod tests {
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
         let ctx = ConversationContext::Thread {
             messages: vec![
@@ -1870,6 +1986,7 @@ mod tests {
                 prompt_tag: "dm".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
         let ci = PromptChannelInfo {
             name: "DM".into(),
@@ -1909,6 +2026,7 @@ mod tests {
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
         let ctx = ConversationContext::Thread {
             messages: vec![ContextMessage {
@@ -2014,6 +2132,7 @@ mod tests {
                 prompt_tag: "dm".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
         let ci = PromptChannelInfo {
             name: "DM".into(),
@@ -2061,6 +2180,7 @@ mod tests {
                 prompt_tag: "dm".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
         let ci = PromptChannelInfo {
             name: "DM".into(),
@@ -2092,6 +2212,7 @@ mod tests {
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
 
         let prompt = format_prompt(&batch, None, None, None, None);
@@ -2114,6 +2235,7 @@ mod tests {
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
 
         let prompt = format_prompt(&batch, None, None, None, None);
@@ -2135,6 +2257,7 @@ mod tests {
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
             }],
+            cancelled_events: vec![],
         };
 
         let prompt = format_prompt(&batch, None, None, None, None);
@@ -2293,6 +2416,150 @@ mod tests {
         assert!(
             q.retry_counts.contains_key(&ch),
             "retry_counts should survive when queue is non-empty"
+        );
+    }
+
+    // ── Test: requeue_as_cancelled merges into flush_next ────────────────────
+
+    #[test]
+    fn test_requeue_as_cancelled_merges_in_flush_next() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // Push 2 events, flush into a batch.
+        q.push(make_queued(ch, "old-1"));
+        q.push(make_queued(ch, "old-2"));
+        let batch = q.flush_next().unwrap();
+        assert_eq!(batch.events.len(), 2);
+
+        // Push 1 new event while channel is in-flight.
+        q.push(make_queued(ch, "new-1"));
+
+        // Cancel the original batch and release the channel.
+        q.requeue_as_cancelled(batch);
+        q.mark_complete(ch);
+
+        // flush_next should merge: events=[new-1], cancelled_events=[old-1, old-2].
+        let next = q.flush_next().unwrap();
+        assert_eq!(next.events.len(), 1, "should have 1 new event");
+        assert_eq!(
+            next.cancelled_events.len(),
+            2,
+            "should have 2 cancelled events"
+        );
+    }
+
+    // ── Test: requeue_as_cancelled fallback (no new events) ──────────────────
+
+    #[test]
+    fn test_requeue_as_cancelled_no_new_events_fallback() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // Push 1 event, flush into a batch.
+        q.push(make_queued(ch, "only-event"));
+        let batch = q.flush_next().unwrap();
+
+        // Cancel the batch (no new events pushed) and release the channel.
+        q.requeue_as_cancelled(batch);
+        q.mark_complete(ch);
+
+        // Fallback path: cancelled events become regular events, cancelled_events is empty.
+        let next = q.flush_next().unwrap();
+        assert_eq!(
+            next.events.len(),
+            1,
+            "cancelled event re-dispatched as regular event"
+        );
+        assert!(
+            next.cancelled_events.is_empty(),
+            "no merge needed — cancelled_events should be empty"
+        );
+    }
+
+    // ── Test: has_flushable_work accounts for cancelled_batches ──────────────
+
+    #[test]
+    fn test_has_flushable_work_with_cancelled_only() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // Push, flush, cancel — no new events queued.
+        q.push(make_queued(ch, "msg"));
+        let batch = q.flush_next().unwrap();
+        q.requeue_as_cancelled(batch);
+        q.mark_complete(ch);
+
+        // Channel has only cancelled events — should still be considered flushable.
+        assert!(
+            q.has_flushable_work(),
+            "cancelled-only channel should be flushable"
+        );
+    }
+
+    // ── Test: drain_channel clears cancelled_batches ──────────────────────────
+
+    #[test]
+    fn test_drain_channel_clears_cancelled_batches() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // Push, flush, cancel.
+        q.push(make_queued(ch, "msg"));
+        let batch = q.flush_next().unwrap();
+        q.requeue_as_cancelled(batch);
+        q.mark_complete(ch);
+
+        // drain_channel should clear cancelled_batches for the channel.
+        q.drain_channel(ch);
+
+        assert!(!q.has_flushable_work(), "nothing left after drain");
+        assert!(
+            q.flush_next().is_none(),
+            "flush_next should return None after drain"
+        );
+    }
+
+    // ── Test: double-cancel accumulates all events ────────────────────────────
+
+    #[test]
+    fn test_double_cancel_preserves_all_events() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // First flush: 2 events.
+        q.push(make_queued(ch, "orig-1"));
+        q.push(make_queued(ch, "orig-2"));
+        let batch1 = q.flush_next().unwrap();
+        assert_eq!(batch1.events.len(), 2);
+
+        // Push 1 new event while in-flight.
+        q.push(make_queued(ch, "new-1"));
+
+        // First cancel: store 2 cancelled events.
+        q.requeue_as_cancelled(batch1);
+        q.mark_complete(ch);
+
+        // Second flush: events=[new-1], cancelled_events=[orig-1, orig-2].
+        let batch2 = q.flush_next().unwrap();
+        assert_eq!(batch2.events.len(), 1);
+        assert_eq!(batch2.cancelled_events.len(), 2);
+
+        // Second cancel: requeue_as_cancelled should accumulate all 3 events
+        // (2 from cancelled_events + 1 from events).
+        q.requeue_as_cancelled(batch2);
+
+        // Push 1 more new event and release channel.
+        q.push(make_queued(ch, "new-2"));
+        q.mark_complete(ch);
+
+        // Third flush: events=[new-2], cancelled_events=[orig-1, orig-2, new-1].
+        let batch3 = q.flush_next().unwrap();
+        assert_eq!(batch3.events.len(), 1, "should have 1 newest event");
+        assert_eq!(
+            batch3.cancelled_events.len(),
+            3,
+            "should accumulate all 3 cancelled events"
         );
     }
 }
