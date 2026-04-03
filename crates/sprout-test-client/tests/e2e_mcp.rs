@@ -23,6 +23,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
+use tokio::time::timeout;
 
 use nostr::{EventBuilder, Keys, Kind, Tag, ToBech32};
 use serde_json::{json, Value};
@@ -138,7 +139,7 @@ fn spawn_mcp_server(keys: &Keys) -> Child {
         ])
         .env("SPROUT_RELAY_URL", relay_ws_url())
         .env("SPROUT_PRIVATE_KEY", &nsec)
-        // Tests exercise all 43 tools — enable every toolset.
+        // Tests exercise all 44 tools — enable every toolset.
         .env("SPROUT_TOOLSETS", "all")
         // Prevent a stale SPROUT_API_TOKEN from the host .env leaking into
         // the subprocess and causing NIP-42 auth failures against a fresh DB.
@@ -160,17 +161,54 @@ struct McpSession {
     next_id: u64,
 }
 
+impl Drop for McpSession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 impl McpSession {
     /// Spawn the MCP server with the given keypair and wait for it to connect.
+    ///
+    /// Reads stderr in a background thread scanning for the readiness line
+    /// `"connected and authenticated."` that the binary emits on startup.
+    /// Falls back after a 30-second timeout rather than blindly sleeping.
     async fn start(keys: &Keys) -> Self {
         let mut child = spawn_mcp_server(keys);
         let stdin = child.stdin.take().expect("stdin not piped");
         let stdout = child.stdout.take().expect("stdout not piped");
+        let stderr = child.stderr.take().expect("stderr not piped");
         let reader = BufReader::new(stdout);
 
-        // Give the server time to connect and authenticate with the relay.
-        // The binary prints "connected and authenticated." to stderr when ready.
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        // Scan stderr for the readiness signal in a blocking thread so we
+        // don't block the async runtime.
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+        std::thread::spawn(move || {
+            let mut ready_tx = Some(ready_tx);
+            let stderr_reader = BufReader::new(stderr);
+            for line in stderr_reader.lines() {
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => break,
+                };
+                if line.contains("connected and authenticated") {
+                    if let Some(tx) = ready_tx.take() {
+                        let _ = tx.send(());
+                    }
+                }
+                // Keep draining stderr so the pipe buffer doesn't fill.
+            }
+        });
+
+        // Wait up to 30 seconds for the server to signal readiness.
+        // If the oneshot sender is dropped (child crashed before emitting the
+        // readiness line), fail fast instead of returning a broken session.
+        match timeout(Duration::from_secs(30), ready_rx).await {
+            Ok(Ok(())) => {} // readiness signal received
+            Ok(Err(_)) => panic!("MCP server process crashed before becoming ready"),
+            Err(_) => panic!("MCP server did not become ready within 30 seconds"),
+        }
 
         McpSession {
             child,
@@ -287,7 +325,7 @@ impl McpSession {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// Spawn the MCP server, complete the initialize handshake, and verify that
-/// all 43 expected tools are listed by `tools/list`.
+/// all 44 expected tools are listed by `tools/list`.
 #[tokio::test]
 #[ignore]
 async fn test_mcp_initialize_and_list_tools() {

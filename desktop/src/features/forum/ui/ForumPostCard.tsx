@@ -67,14 +67,22 @@ export function ForumPostCard({
       : post.content;
 
   return (
-    <button
+    // biome-ignore lint/a11y/useSemanticElements: outer element cannot be <button> because it contains a DropdownMenu trigger (nested button is invalid HTML)
+    <div
       className={cn(
         "group w-full cursor-pointer rounded-xl border border-border/60 bg-card p-4 text-left transition-colors hover:border-border hover:bg-accent/40",
         isActive && "border-primary/40 bg-accent/60",
         isDeleting && "pointer-events-none opacity-50",
       )}
       onClick={() => onClick(post)}
-      type="button"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick(post);
+        }
+      }}
+      role="button"
+      tabIndex={0}
     >
       <div className="flex items-center gap-2">
         <ProfileAvatar
@@ -173,6 +181,6 @@ export function ForumPostCard({
           ) : null}
         </div>
       ) : null}
-    </button>
+    </div>
   );
 }

@@ -2,6 +2,17 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
+
+import {
   type AttachManagedAgentToChannelResult,
   personasQueryKey,
   useAcpProvidersQuery,
@@ -104,6 +115,10 @@ export function AgentsView() {
       refetchRelayAgents: () => void relayAgentsQuery.refetch(),
     },
   );
+  const [pendingDelete, setPendingDelete] = React.useState<{
+    pubkey: string;
+    message: string;
+  } | null>(null);
   const [batchImportResult, setBatchImportResult] =
     React.useState<ParsePersonaFilesResult | null>(null);
   const [batchImportFileName, setBatchImportFileName] = React.useState("");
@@ -225,17 +240,16 @@ export function AgentsView() {
     setActionNoticeMessage(null);
     setActionErrorMessage(null);
 
-    try {
-      // For remote agents, send !shutdown before deleting to avoid orphaning.
-      const agent = managedAgents.find((a) => a.pubkey === pubkey);
-      if (agent?.backend.type === "provider" && agent.backendAgentId) {
-        const presence =
-          managedPresenceQuery.data?.[pubkey.trim().toLowerCase()];
-        const channelId = resolveAgentChannelId(pubkey);
-        if (channelId) {
-          // If the agent is still online, send !shutdown and warn that
-          // deletion proceeds without waiting for confirmed exit.
-          if (presence === "online" || presence === "away") {
+    // For remote agents, send !shutdown before deleting to avoid orphaning,
+    // then confirm via dialog before proceeding.
+    const agent = managedAgents.find((a) => a.pubkey === pubkey);
+    if (agent?.backend.type === "provider" && agent.backendAgentId) {
+      const presence = managedPresenceQuery.data?.[pubkey.trim().toLowerCase()];
+      const channelId = resolveAgentChannelId(pubkey);
+      if (channelId) {
+        if (presence === "online" || presence === "away") {
+          // Send !shutdown first, then ask for confirmation.
+          try {
             await sendChannelMessage(
               channelId,
               "!shutdown",
@@ -243,36 +257,46 @@ export function AgentsView() {
               undefined,
               [pubkey],
             );
-            // eslint-disable-next-line no-alert
-            const confirmed = window.confirm(
-              "Shutdown command sent, but the agent may still be running. " +
-                "Deleting now removes the local record — the remote deployment " +
-                "will be orphaned if shutdown hasn't completed. Continue?",
+          } catch (error) {
+            setActionErrorMessage(
+              error instanceof Error
+                ? error.message
+                : "Failed to send shutdown command.",
             );
-            if (!confirmed) return;
-          } else {
-            // Offline presence means the process isn't connected, but the
-            // remote infrastructure (VM/container) may still exist. Confirm
-            // before removing the local record — it's the only management handle.
-            // eslint-disable-next-line no-alert
-            const confirmed = window.confirm(
-              "This agent is offline but the remote deployment may still exist. " +
-                "Deleting removes the local management record. Continue?",
-            );
-            if (!confirmed) return;
+            return;
           }
+          setPendingDelete({
+            pubkey,
+            message:
+              "Shutdown command sent, but the agent may still be running. " +
+              "Deleting now removes the local record — the remote deployment " +
+              "will be orphaned if shutdown hasn't completed. Continue?",
+          });
         } else {
-          // Can't send shutdown — warn user about orphaning.
-          // eslint-disable-next-line no-alert
-          const confirmed = window.confirm(
-            "This agent is deployed but not in any channel. " +
-              "Deleting will orphan the remote deployment (it will keep running). Continue?",
-          );
-          if (!confirmed) return;
+          setPendingDelete({
+            pubkey,
+            message:
+              "This agent is offline but the remote deployment may still exist. " +
+              "Deleting removes the local management record. Continue?",
+          });
         }
+      } else {
+        setPendingDelete({
+          pubkey,
+          message:
+            "This agent is deployed but not in any channel. " +
+            "Deleting will orphan the remote deployment (it will keep running). Continue?",
+        });
       }
-      // Pass forceRemoteDelete for deployed provider agents — the backend
-      // rejects deletion of deployed remote agents without this flag.
+      return;
+    }
+
+    await executeDelete(pubkey);
+  }
+
+  async function executeDelete(pubkey: string) {
+    try {
+      const agent = managedAgents.find((a) => a.pubkey === pubkey);
       const isDeployedRemote =
         agent?.backend.type === "provider" && agent?.backendAgentId;
       await deleteMutation.mutateAsync({
@@ -775,6 +799,34 @@ export function AgentsView() {
         open={teamActions.teamImportPreview !== null}
         preview={teamActions.teamImportPreview?.preview ?? null}
       />
+      <AlertDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete agent</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete?.message}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingDelete) {
+                  void executeDelete(pendingDelete.pubkey);
+                  setPendingDelete(null);
+                }
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

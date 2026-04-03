@@ -92,6 +92,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
       <div className="relative min-h-0 flex-1">
         {stickyDayLabel && !isAtBottom ? (
           <div
+            aria-hidden="true"
             className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center px-4 pt-2 sm:px-6"
             data-testid="message-timeline-sticky-day"
           >

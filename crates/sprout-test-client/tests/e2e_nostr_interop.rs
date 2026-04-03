@@ -19,6 +19,9 @@
 //! RELAY_URL=ws://relay.example.com cargo test --test e2e_nostr_interop -- --ignored
 //! ```
 
+mod helpers;
+use helpers::*;
+
 use std::time::Duration;
 
 use nostr::{Alphabet, EventBuilder, Filter, Keys, Kind, SingleLetterTag, Tag};
@@ -38,51 +41,9 @@ fn relay_http_url() -> String {
         .to_string()
 }
 
-fn sub_id(name: &str) -> String {
-    format!("e2e-{name}-{}", uuid::Uuid::new_v4())
-}
-
 /// Create a real channel in the DB via REST so the relay accepts events for it.
 async fn create_test_channel(keys: &Keys) -> String {
-    let client = reqwest::Client::new();
-    let pubkey_hex = keys.public_key().to_hex();
-    let channel_uuid = uuid::Uuid::new_v4();
-    let channel_name = format!("interop-e2e-{}", channel_uuid);
-
-    let event = EventBuilder::new(
-        Kind::Custom(9007),
-        "",
-        vec![
-            Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
-            Tag::parse(&["name", &channel_name]).unwrap(),
-            Tag::parse(&["channel_type", "stream"]).unwrap(),
-            Tag::parse(&["visibility", "open"]).unwrap(),
-        ],
-    )
-    .sign_with_keys(keys)
-    .unwrap();
-
-    let resp = client
-        .post(format!("{}/api/events", relay_http_url()))
-        .header("X-Pubkey", &pubkey_hex)
-        .header("Content-Type", "application/json")
-        .body(serde_json::to_string(&event).unwrap())
-        .send()
-        .await
-        .expect("submit create-channel event");
-    assert!(
-        resp.status().is_success(),
-        "channel creation event failed: {}",
-        resp.status()
-    );
-    let body: serde_json::Value = resp.json().await.expect("parse event response");
-    assert!(
-        body["accepted"].as_bool().unwrap_or(false),
-        "channel creation not accepted: {}",
-        body
-    );
-
-    channel_uuid.to_string()
+    helpers::create_test_channel(keys, &relay_http_url(), "interop-e2e").await
 }
 
 /// Send a message via a signed kind:9 event and return the event_id hex.

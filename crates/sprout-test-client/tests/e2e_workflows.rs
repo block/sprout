@@ -18,9 +18,12 @@
 //! `X-Pubkey: <hex>` header as authentication. Tests generate fresh
 //! [`nostr::Keys`] per test and pass the hex-encoded public key.
 
+mod helpers;
+use helpers::*;
+
 use std::time::Duration;
 
-use nostr::Keys;
+use nostr::{EventBuilder, Keys, Kind};
 use reqwest::Client;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -37,34 +40,38 @@ fn relay_http_url() -> String {
         .replace("ws://", "http://")
 }
 
-/// Build a `reqwest::Client` with a short timeout.
-fn http_client() -> Client {
-    Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("failed to build HTTP client")
-}
-
 /// Known open channel IDs seeded in the dev database.
 ///
 /// These are UUID5-derived from the channel name and are stable across relay
 /// restarts as long as the seed data uses the same namespace + name inputs.
 const CHANNEL_GENERAL: &str = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 
-/// A seeded user pubkey that exists in the `users` table.
+/// Ensure a user record exists in the `users` table for the given keypair.
 ///
-/// Workflow creation requires the owner pubkey to exist in `users` (FK constraint).
-/// The relay does not auto-create users on first auth — users are created via
-/// `sprout-admin mint-token` or WebSocket metadata events. This pubkey is present
-/// in the dev database after the initial seed.
+/// Workflow creation requires `workflows.owner_pubkey` to reference an existing
+/// row in `users` (FK constraint). The relay creates user rows as a side-effect
+/// of processing kind:0 (NIP-01 profile metadata) events, so we submit one here.
 ///
-/// If tests fail with 500 "FK constraint fails", run:
-/// ```
-/// DATABASE_URL=postgres://sprout:sprout_dev@localhost:5432/sprout \
-///   cargo run -p sprout-admin -- mint-token --name e2e-test --scopes messages:read \
-///   --pubkey 0b5c83782cf123e698131ac976179f8366224e03db932c9da0074512aed2388d
-/// ```
-const SEEDED_PUBKEY: &str = "0b5c83782cf123e698131ac976179f8366224e03db932c9da0074512aed2388d";
+/// This makes workflow tests self-contained — no pre-seeded database required.
+async fn ensure_user_exists(client: &Client, keys: &Keys) {
+    let pubkey_hex = keys.public_key().to_hex();
+    let event = EventBuilder::new(Kind::Metadata, "{}", [])
+        .sign_with_keys(keys)
+        .expect("sign kind:0 event");
+    let resp = client
+        .post(format!("{}/api/events", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).expect("serialize event"))
+        .send()
+        .await
+        .expect("submit kind:0 event");
+    assert!(
+        resp.status().is_success(),
+        "kind:0 user-creation event failed: {}",
+        resp.status()
+    );
+}
 
 /// A minimal webhook-triggered workflow YAML definition.
 ///
@@ -172,8 +179,9 @@ async fn test_list_workflows_empty_channel() {
 #[ignore]
 async fn test_create_and_list_workflow() {
     let client = http_client();
-    // Must use a pubkey that exists in `users` table (FK constraint on workflows.owner_pubkey).
-    let pubkey_hex: &str = SEEDED_PUBKEY;
+    let keys = Keys::generate();
+    ensure_user_exists(&client, &keys).await;
+    let pubkey_hex = keys.public_key().to_hex();
     let base = relay_http_url();
 
     let yaml = webhook_workflow_yaml("e2e-create-list-test");
@@ -228,7 +236,9 @@ async fn test_create_and_list_workflow() {
 #[ignore]
 async fn test_trigger_workflow_and_check_run() {
     let client = http_client();
-    let pubkey_hex: &str = SEEDED_PUBKEY;
+    let keys = Keys::generate();
+    ensure_user_exists(&client, &keys).await;
+    let pubkey_hex = keys.public_key().to_hex();
     let base = relay_http_url();
 
     let yaml = webhook_workflow_yaml("e2e-trigger-test");
@@ -313,8 +323,7 @@ async fn test_trigger_workflow_and_check_run() {
 /// Send a kind:9 message to a channel that has a `message_posted` workflow.
 /// Verify that the workflow engine creates a run record.
 ///
-/// NOTE: Uses `SEEDED_PUBKEY` for workflow ownership due to the FK constraint
-/// on `workflows.owner_pubkey`. The WebSocket sender uses fresh keys.
+/// The workflow owner uses fresh keys seeded via kind:0 — no pre-seeded DB required.
 #[tokio::test]
 #[ignore = "requires running relay"]
 async fn test_event_driven_workflow_execution() {
@@ -322,7 +331,9 @@ async fn test_event_driven_workflow_execution() {
     use sprout_test_client::SproutTestClient;
 
     let client = http_client();
-    let pubkey_hex: &str = SEEDED_PUBKEY;
+    let owner_keys = Keys::generate();
+    ensure_user_exists(&client, &owner_keys).await;
+    let pubkey_hex = owner_keys.public_key().to_hex();
     let base = relay_http_url();
 
     // ── Step 1: Create a message_posted workflow in the general channel ───────
@@ -416,7 +427,9 @@ async fn test_event_driven_workflow_with_filter() {
     use sprout_test_client::SproutTestClient;
 
     let client = http_client();
-    let pubkey_hex: &str = SEEDED_PUBKEY;
+    let owner_keys = Keys::generate();
+    ensure_user_exists(&client, &owner_keys).await;
+    let pubkey_hex = owner_keys.public_key().to_hex();
     let base = relay_http_url();
 
     // ── Step 1: Create a filtered message_posted workflow ─────────────────────
@@ -526,7 +539,9 @@ steps:
 #[ignore]
 async fn test_workflow_update_and_delete() {
     let client = http_client();
-    let pubkey_hex: &str = SEEDED_PUBKEY;
+    let keys = Keys::generate();
+    ensure_user_exists(&client, &keys).await;
+    let pubkey_hex = keys.public_key().to_hex();
     let base = relay_http_url();
 
     // ── Step 1: Create ────────────────────────────────────────────────────────
@@ -626,7 +641,9 @@ async fn test_workflow_update_and_delete() {
 #[ignore]
 async fn test_approval_gate_stub_fails_gracefully() {
     let client = http_client();
-    let pubkey_hex: &str = SEEDED_PUBKEY;
+    let keys = Keys::generate();
+    ensure_user_exists(&client, &keys).await;
+    let pubkey_hex = keys.public_key().to_hex();
     let base = relay_http_url();
 
     // ── Step 1: Create a workflow with a request_approval step ────────────────

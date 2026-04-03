@@ -18,6 +18,9 @@
 //! RELAY_URL=ws://relay.example.com cargo test --test e2e_relay -- --ignored
 //! ```
 
+mod helpers;
+use helpers::*;
+
 use std::time::Duration;
 
 use nostr::{Alphabet, EventBuilder, Filter, Keys, Kind, SingleLetterTag, Tag};
@@ -25,10 +28,6 @@ use sprout_test_client::{RelayMessage, SproutTestClient, TestClientError};
 
 fn relay_url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
-}
-
-fn sub_id(name: &str) -> String {
-    format!("e2e-{name}-{}", uuid::Uuid::new_v4())
 }
 
 fn relay_http_url() -> String {
@@ -41,45 +40,7 @@ fn relay_http_url() -> String {
 
 /// Create a real channel via a signed kind:9007 event submitted to POST /api/events.
 async fn create_test_channel(keys: &Keys) -> String {
-    let client = reqwest::Client::new();
-    let pubkey_hex = keys.public_key().to_hex();
-    let channel_uuid = uuid::Uuid::new_v4();
-    let channel_name = format!("relay-e2e-{}", channel_uuid);
-
-    let event = EventBuilder::new(
-        Kind::Custom(9007),
-        "",
-        vec![
-            Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
-            Tag::parse(&["name", &channel_name]).unwrap(),
-            Tag::parse(&["channel_type", "stream"]).unwrap(),
-            Tag::parse(&["visibility", "open"]).unwrap(),
-        ],
-    )
-    .sign_with_keys(keys)
-    .unwrap();
-
-    let resp = client
-        .post(format!("{}/api/events", relay_http_url()))
-        .header("X-Pubkey", &pubkey_hex)
-        .header("Content-Type", "application/json")
-        .body(serde_json::to_string(&event).unwrap())
-        .send()
-        .await
-        .expect("submit create-channel event");
-    assert!(
-        resp.status().is_success(),
-        "channel creation event failed: {}",
-        resp.status()
-    );
-    let body: serde_json::Value = resp.json().await.expect("parse event response");
-    assert!(
-        body["accepted"].as_bool().unwrap_or(false),
-        "channel creation not accepted: {}",
-        body
-    );
-
-    channel_uuid.to_string()
+    helpers::create_test_channel(keys, &relay_http_url(), "relay-e2e").await
 }
 
 #[tokio::test]

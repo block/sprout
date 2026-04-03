@@ -17,7 +17,6 @@ import {
   useTokensQuery,
 } from "@/features/tokens/hooks";
 import { TOKEN_SCOPE_OPTIONS } from "@/features/tokens/lib/scopeOptions";
-import { getChannelMembers } from "@/shared/api/tauri";
 import type { Channel, Token, TokenScope } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { formatRelativeTime } from "@/shared/lib/time";
@@ -632,27 +631,8 @@ export function TokenSettingsCard({
       currentPubkey?.toLowerCase() ?? "",
       ...channels.map((channel) => channel.id),
     ],
-    queryFn: async () => {
-      if (!currentPubkey) {
-        return [] as Channel[];
-      }
-
-      const memberships = await Promise.all(
-        channels.map(async (channel) => {
-          const members = await getChannelMembers(channel.id);
-          return {
-            channel,
-            isMember: members.some(
-              (member) =>
-                member.pubkey.toLowerCase() === currentPubkey.toLowerCase(),
-            ),
-          };
-        }),
-      );
-
-      return memberships
-        .filter((entry) => entry.isMember)
-        .map((entry) => entry.channel);
+    queryFn: () => {
+      return channels.filter((channel) => channel.isMember);
     },
     staleTime: 30_000,
   });
