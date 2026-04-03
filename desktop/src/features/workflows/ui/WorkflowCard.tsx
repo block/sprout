@@ -24,7 +24,7 @@ type WorkflowCardProps = {
   onTrigger: (workflowId: string) => void;
   onEdit: (workflow: Workflow) => void;
   onDuplicate: (workflow: Workflow) => void;
-  onDelete: (workflowId: string) => void;
+  onDelete: (workflow: Workflow) => void;
 };
 
 function StatusBadge({ status }: { status: Workflow["status"] }) {
@@ -109,7 +109,7 @@ export function WorkflowCard({
             </DropdownMenuItem>
             <DropdownMenuItem
               className="text-destructive"
-              onClick={() => onDelete(workflow.id)}
+              onClick={() => onDelete(workflow)}
             >
               <Trash2 className="mr-2 h-4 w-4" />
               Delete

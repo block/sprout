@@ -146,9 +146,15 @@ export function yamlToFormState(
       return { ok: false, error: "YAML must be an object" };
     }
 
-    const triggerOn = parsed.trigger?.on ?? (TRIGGER_TYPES[0] as TriggerType);
+    const triggerOn = parsed.trigger?.on;
+    if (triggerOn && !TRIGGER_TYPES.includes(triggerOn as TriggerType)) {
+      return {
+        ok: false,
+        error: `Unsupported trigger type "${triggerOn}" — use the YAML editor`,
+      };
+    }
     const trigger: TriggerConfig = {
-      on: TRIGGER_TYPES.includes(triggerOn) ? triggerOn : TRIGGER_TYPES[0],
+      on: (triggerOn as TriggerType) ?? TRIGGER_TYPES[0],
       filter: parsed.trigger?.filter ?? undefined,
       emoji: parsed.trigger?.emoji ?? undefined,
       cron: parsed.trigger?.cron ?? undefined,
@@ -160,12 +166,19 @@ export function yamlToFormState(
       return { ok: false, error: "steps must be a list" };
     }
 
+    for (const step of rawSteps) {
+      if (step.action && !ACTION_TYPES.includes(step.action as ActionType)) {
+        return {
+          ok: false,
+          error: `Unsupported action type "${step.action}" — use the YAML editor`,
+        };
+      }
+    }
+
     const steps: StepFormState[] = rawSteps.map(
       (step: Record<string, unknown>, index: number) => ({
         id: (step.id as string) ?? `step_${index + 1}`,
-        action: ACTION_TYPES.includes(step.action as ActionType)
-          ? (step.action as ActionType)
-          : ACTION_TYPES[0],
+        action: (step.action as ActionType) ?? ACTION_TYPES[0],
         duration: step.duration as string | undefined,
         text: step.text as string | undefined,
         channel: step.channel as string | undefined,

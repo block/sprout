@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { allWorkflowsQueryKey } from "@/features/workflows/hooks";
 import { WorkflowCard } from "@/features/workflows/ui/WorkflowCard";
+import { WorkflowDeleteDialog } from "@/features/workflows/ui/WorkflowDeleteDialog";
 import { WorkflowDetailPanel } from "@/features/workflows/ui/WorkflowDetailPanel";
 import { WorkflowDialog } from "@/features/workflows/ui/WorkflowDialog";
 import type { Channel, Workflow } from "@/shared/api/types";
@@ -33,6 +34,7 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
   const [dialogState, setDialogState] = React.useState<DialogState>({
     mode: "closed",
   });
+  const [deleteTarget, setDeleteTarget] = React.useState<Workflow | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = React.useState<
     string | null
   >(null);
@@ -92,9 +94,17 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
     [triggerOne],
   );
 
-  const deleteOne = deleteMutation.mutate;
   const handleDelete = React.useCallback(
-    (workflowId: string) => deleteOne(workflowId),
+    (workflow: Workflow) => setDeleteTarget(workflow),
+    [],
+  );
+
+  const deleteOne = deleteMutation.mutate;
+  const handleConfirmDelete = React.useCallback(
+    (workflow: Workflow) => {
+      deleteOne(workflow.id);
+      setDeleteTarget(null);
+    },
     [deleteOne],
   );
 
@@ -210,6 +220,15 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
             ? dialogState.workflow
             : null
         }
+      />
+
+      <WorkflowDeleteDialog
+        onConfirm={handleConfirmDelete}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        open={deleteTarget !== null}
+        workflow={deleteTarget}
       />
     </div>
   );
