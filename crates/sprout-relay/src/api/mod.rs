@@ -155,7 +155,11 @@ pub(crate) async fn extract_auth_context(
         // rather than falling through to a confusing "authentication failed".
         if auth_header.starts_with("Nostr ") {
             tracing::warn!("auth: NIP-98 auth header sent to non-token endpoint");
-            return Err(ApiError::Unauthorized);
+            return Err(ApiError::Custom(
+                StatusCode::UNAUTHORIZED,
+                "nip98_not_supported",
+                "NIP-98 auth is only valid for POST /api/tokens".into(),
+            ));
         }
 
         // ── 2. Bearer token path ──────────────────────────────────────────────
@@ -174,25 +178,25 @@ pub(crate) async fn extract_auth_context(
                     Ok(Some(r)) => r,
                     Ok(None) => {
                         tracing::warn!("auth: API token not found");
-                        return Err(ApiError::Unauthorized);
+                        return Err(ApiError::Unauthorized("authentication required".into()));
                     }
                     Err(e) => {
                         tracing::warn!("auth: API token lookup failed: {e}");
-                        return Err(ApiError::Unauthorized);
+                        return Err(ApiError::Unauthorized("authentication required".into()));
                     }
                 };
 
                 // Relay-layer revocation check (before hash verification).
                 if record.revoked_at.is_some() {
                     tracing::warn!("auth: API token is revoked");
-                    return Err(ApiError::Unauthorized);
+                    return Err(ApiError::Unauthorized("authentication required".into()));
                 }
 
                 // Relay-layer expiry check (before hash verification).
                 if let Some(exp) = record.expires_at {
                     if exp < chrono::Utc::now() {
                         tracing::warn!("auth: API token is expired");
-                        return Err(ApiError::Unauthorized);
+                        return Err(ApiError::Unauthorized("authentication required".into()));
                     }
                 }
 
@@ -200,7 +204,7 @@ pub(crate) async fn extract_auth_context(
                     Ok(pk) => pk,
                     Err(e) => {
                         tracing::warn!("auth: API token owner pubkey invalid: {e}");
-                        return Err(ApiError::Unauthorized);
+                        return Err(ApiError::Unauthorized("authentication required".into()));
                     }
                 };
 
@@ -244,7 +248,7 @@ pub(crate) async fn extract_auth_context(
                     }
                     Err(_) => {
                         tracing::warn!("auth: API token hash verification failed");
-                        return Err(ApiError::Unauthorized);
+                        return Err(ApiError::Unauthorized("authentication required".into()));
                     }
                 }
             }
@@ -268,7 +272,7 @@ pub(crate) async fn extract_auth_context(
                     }
                     Err(_) => {
                         tracing::warn!("auth: JWT validation failed");
-                        return Err(ApiError::Unauthorized);
+                        return Err(ApiError::Unauthorized("authentication required".into()));
                     }
                 }
             } else {
@@ -298,23 +302,25 @@ pub(crate) async fn extract_auth_context(
                                     }
                                     Err(_) => {
                                         tracing::warn!("auth: key derivation failed for username");
-                                        return Err(ApiError::Unauthorized);
+                                        return Err(ApiError::Unauthorized(
+                                            "authentication required".into(),
+                                        ));
                                     }
                                 }
                             }
                             tracing::warn!("auth: JWT missing preferred_username claim");
-                            return Err(ApiError::Unauthorized);
+                            return Err(ApiError::Unauthorized("authentication required".into()));
                         }
                         Err(_) => {
                             tracing::warn!("auth: malformed JWT");
-                            return Err(ApiError::Unauthorized);
+                            return Err(ApiError::Unauthorized("authentication required".into()));
                         }
                     }
                 }
                 #[cfg(not(any(test, feature = "dev")))]
                 {
                     tracing::warn!("auth: dev-mode JWT auth disabled in release builds");
-                    return Err(ApiError::Unauthorized);
+                    return Err(ApiError::Unauthorized("authentication required".into()));
                 }
             }
         }
@@ -342,13 +348,13 @@ pub(crate) async fn extract_auth_context(
                 }
                 Err(_) => {
                     tracing::warn!("auth: invalid X-Pubkey header value");
-                    return Err(ApiError::Unauthorized);
+                    return Err(ApiError::Unauthorized("authentication required".into()));
                 }
             }
         }
     }
 
-    Err(ApiError::Unauthorized)
+    Err(ApiError::Unauthorized("authentication required".into()))
 }
 
 // ── Step 8: Token-level channel access enforcement ────────────────────────────
@@ -398,7 +404,7 @@ pub(crate) fn api_error(status: StatusCode, msg: &str) -> ApiError {
         StatusCode::NOT_FOUND => ApiError::NotFound(msg.into()),
         StatusCode::FORBIDDEN => ApiError::Forbidden(msg.into()),
         StatusCode::BAD_REQUEST => ApiError::BadRequest(msg.into()),
-        StatusCode::UNAUTHORIZED => ApiError::Unauthorized,
+        StatusCode::UNAUTHORIZED => ApiError::Unauthorized(msg.into()),
         StatusCode::CONFLICT => ApiError::Conflict(msg.into()),
         StatusCode::GONE => ApiError::Gone(msg.into()),
         StatusCode::TOO_MANY_REQUESTS => ApiError::TooManyRequests(msg.into()),
@@ -706,7 +712,7 @@ mod tests {
     fn api_error_helper_maps_status_codes() {
         assert!(matches!(
             api_error(StatusCode::UNAUTHORIZED, "x"),
-            ApiError::Unauthorized
+            ApiError::Unauthorized("authentication required".into())
         ));
         assert!(matches!(
             api_error(StatusCode::NOT_FOUND, "x"),

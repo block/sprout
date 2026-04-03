@@ -1282,16 +1282,14 @@ impl Db {
             .await?;
         }
 
-        // Insert the new event. ON CONFLICT DO UPDATE handles the case where this
-        // event was previously inserted and soft-deleted — it un-deletes it rather
-        // than silently skipping. RETURNING xmax distinguishes fresh insert
-        // (xmax = 0) from conflict update (xmax != 0) for duplicate detection.
-        let row: Option<(i64,)> = sqlx::query_as(
+        // Insert the new event. The stale-replay guard above ensures we only
+        // reach this point for genuinely newer events, so ON CONFLICT DO NOTHING
+        // is safe — a conflict means the exact same event already exists.
+        let result = sqlx::query(
             r#"
             INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (created_at, id) DO UPDATE SET deleted_at = NULL
-            RETURNING xmax::bigint
+            ON CONFLICT DO NOTHING
             "#,
         )
         .bind(id_bytes.as_slice())
@@ -1303,13 +1301,12 @@ impl Db {
         .bind(sig_bytes.as_slice())
         .bind(received_at)
         .bind(channel_id)
-        .fetch_optional(&mut *tx)
+        .execute(&mut *tx)
         .await?;
 
         tx.commit().await?;
 
-        // xmax = 0 means fresh insert; xmax != 0 means conflict update (un-delete or duplicate).
-        let was_inserted = row.map(|(xmax,)| xmax == 0).unwrap_or(false);
+        let was_inserted = result.rows_affected() > 0;
         if was_inserted {
             if let Err(e) = insert_mentions(&self.pool, event, channel_id).await {
                 tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");

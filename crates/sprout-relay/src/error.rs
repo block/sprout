@@ -68,8 +68,8 @@ pub enum ApiError {
     #[error("bad request: {0}")]
     BadRequest(String),
     /// 401 Unauthorized.
-    #[error("unauthorized")]
-    Unauthorized,
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
     /// 409 Conflict.
     #[error("conflict: {0}")]
     Conflict(String),
@@ -82,6 +82,10 @@ pub enum ApiError {
     /// 422 Unprocessable Entity.
     #[error("unprocessable entity: {0}")]
     UnprocessableEntity(String),
+    /// Custom error with explicit status, code, and message.
+    /// Use for domain-specific error codes (e.g. "nip98_not_supported", "scope_escalation").
+    #[error("{2}")]
+    Custom(StatusCode, &'static str, String),
     /// 500 Internal Server Error (anyhow-wrapped).
     #[error("internal error: {0}")]
     Internal(#[from] anyhow::Error),
@@ -114,43 +118,51 @@ pub enum SideEffectError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, code, message) = match &self {
-            ApiError::NotFound(m) => (StatusCode::NOT_FOUND, "not_found", m.clone()),
-            ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, "forbidden", m.clone()),
-            ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, "bad_request", m.clone()),
-            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized", String::new()),
-            ApiError::Conflict(m) => (StatusCode::CONFLICT, "conflict", m.clone()),
-            ApiError::Gone(m) => (StatusCode::GONE, "gone", m.clone()),
-            ApiError::TooManyRequests(m) => (
-                StatusCode::TOO_MANY_REQUESTS,
-                "too_many_requests",
-                m.clone(),
-            ),
-            ApiError::UnprocessableEntity(m) => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "unprocessable_entity",
-                m.clone(),
-            ),
-            // Internal/Database errors: log the real error, return a generic message
-            // to avoid leaking implementation details to API clients.
+        // Custom variant uses a two-field envelope: {"error": domain_code, "message": text}
+        // All other variants use the original single-field format: {"error": text}
+        // This preserves backward compatibility with existing API consumers and tests.
+        match self {
+            ApiError::Custom(status, code, message) => {
+                let body = serde_json::json!({ "error": code, "message": message });
+                (status, Json(body)).into_response()
+            }
             ApiError::Internal(ref e) => {
                 tracing::error!("internal API error: {e}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "internal server error".to_string(),
-                )
+                let body = serde_json::json!({ "error": "internal server error" });
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
             }
             ApiError::Database(ref e) => {
                 tracing::error!("database API error: {e}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "database_error",
-                    "internal server error".to_string(),
-                )
+                let body = serde_json::json!({ "error": "internal server error" });
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
             }
-        };
-        let body = serde_json::json!({ "error": message, "code": code });
-        (status, Json(body)).into_response()
+            other => {
+                let status = match &other {
+                    ApiError::NotFound(_) => StatusCode::NOT_FOUND,
+                    ApiError::Forbidden(_) => StatusCode::FORBIDDEN,
+                    ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
+                    ApiError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+                    ApiError::Conflict(_) => StatusCode::CONFLICT,
+                    ApiError::Gone(_) => StatusCode::GONE,
+                    ApiError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
+                    ApiError::UnprocessableEntity(_) => StatusCode::UNPROCESSABLE_ENTITY,
+                    _ => unreachable!(),
+                };
+                // Extract the human-readable message from the variant.
+                let message = match other {
+                    ApiError::NotFound(m)
+                    | ApiError::Forbidden(m)
+                    | ApiError::BadRequest(m)
+                    | ApiError::Unauthorized(m)
+                    | ApiError::Conflict(m)
+                    | ApiError::Gone(m)
+                    | ApiError::TooManyRequests(m)
+                    | ApiError::UnprocessableEntity(m) => m,
+                    _ => unreachable!(),
+                };
+                let body = serde_json::json!({ "error": message });
+                (status, Json(body)).into_response()
+            }
+        }
     }
 }

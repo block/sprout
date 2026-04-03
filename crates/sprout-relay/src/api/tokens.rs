@@ -224,12 +224,12 @@ pub async fn post_tokens(
                 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
                 BASE64.decode(encoded).map_err(|_| {
                     tracing::warn!("post_tokens: NIP-98 base64 decode failed");
-                    ApiError::Unauthorized
+                    ApiError::Unauthorized("authentication required".into())
                 })?
             };
             let event_json = String::from_utf8(decoded_bytes).map_err(|_| {
                 tracing::warn!("post_tokens: NIP-98 decoded bytes are not valid UTF-8");
-                ApiError::Unauthorized
+                ApiError::Unauthorized("authentication required".into())
             })?;
 
             match sprout_auth::verify_nip98_event(&event_json, &canonical_url, "POST", Some(&body))
@@ -243,7 +243,7 @@ pub async fn post_tokens(
                     let has_payload = event.tags.find(nostr::TagKind::Payload).is_some();
                     if !has_payload {
                         tracing::warn!("post_tokens: NIP-98 event missing required payload tag");
-                        return Err(ApiError::Unauthorized);
+                        return Err(ApiError::Unauthorized("authentication required".into()));
                     }
                     let pubkey_bytes = pubkey.to_bytes().to_vec();
                     if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
@@ -260,7 +260,7 @@ pub async fn post_tokens(
                 }
                 Err(e) => {
                     tracing::warn!("post_tokens: NIP-98 verification failed: {e}");
-                    return Err(ApiError::Unauthorized);
+                    return Err(ApiError::Unauthorized("authentication required".into()));
                 }
             }
         } else {
@@ -279,8 +279,10 @@ pub async fn post_tokens(
 
     // ── Validate scopes ───────────────────────────────────────────────────────
     if req.scopes.is_empty() {
-        return Err(ApiError::BadRequest(
-            "invalid_scopes: scopes must not be empty".into(),
+        return Err(ApiError::Custom(
+            StatusCode::BAD_REQUEST,
+            "invalid_scopes",
+            "scopes must not be empty".into(),
         ));
     }
 
@@ -290,11 +292,19 @@ pub async fn post_tokens(
         let scope: Scope = s.parse().expect("SAFETY: Scope::from_str is infallible");
         match &scope {
             Scope::Unknown(_) => {
-                return Err(ApiError::BadRequest(format!("unknown scope: {s}")));
+                return Err(ApiError::Custom(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_scopes",
+                    format!("unknown scope: {s}"),
+                ));
             }
             _ => {
                 if !is_self_mintable(&scope) {
-                    return Err(ApiError::BadRequest(format!("scope requires admin: {s}")));
+                    return Err(ApiError::Custom(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_scopes",
+                        format!("scope requires admin: {s}"),
+                    ));
                 }
             }
         }
@@ -313,10 +323,11 @@ pub async fn post_tokens(
     if matches!(ctx.auth_method, RestAuthMethod::ApiToken) {
         for scope in &parsed_scopes {
             if !ctx.scopes.contains(scope) {
-                return Err(ApiError::Forbidden(format!(
-                    "scope_escalation: Cannot mint scope '{}' — not in your token's scopes",
-                    scope
-                )));
+                return Err(ApiError::Custom(
+                    StatusCode::FORBIDDEN,
+                    "scope_escalation",
+                    format!("Cannot mint scope '{}' — not in your token's scopes", scope),
+                ));
             }
         }
 
@@ -355,11 +366,15 @@ pub async fn post_tokens(
 
     if let Err(retry_after) = state.mint_rate_limiter.check_and_record(&pubkey_bytes_arr) {
         let retry_secs = retry_after.as_secs();
-        return Err(ApiError::TooManyRequests(format!(
-            "Mint limit exceeded: {} per hour. Try again in {} seconds.",
-            state.mint_rate_limiter.limit(),
-            retry_secs
-        )));
+        return Err(ApiError::Custom(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            format!(
+                "Mint limit exceeded: {} per hour. Try again in {} seconds.",
+                state.mint_rate_limiter.limit(),
+                retry_secs
+            ),
+        ));
     }
 
     // ── Validate and verify channel_ids ──────────────────────────────────────
@@ -591,7 +606,7 @@ pub async fn get_tokens(
 
     // NIP-98 bootstrap is not allowed for listing — caller must have a real token.
     if ctx.auth_method == RestAuthMethod::Nip98 {
-        return Err(ApiError::Unauthorized);
+        return Err(ApiError::Unauthorized("authentication required".into()));
     }
 
     let records = state
@@ -638,7 +653,7 @@ pub async fn delete_token(
     let ctx = extract_auth_context(&headers, &state).await?;
 
     if ctx.auth_method == RestAuthMethod::Nip98 {
-        return Err(ApiError::Unauthorized);
+        return Err(ApiError::Unauthorized("authentication required".into()));
     }
 
     // First, check if the token exists and is owned by the caller — to distinguish
@@ -663,10 +678,14 @@ pub async fn delete_token(
 
     let found = all_tokens.iter().find(|t| t.id == id);
     match found {
-        Some(t) if t.revoked_at.is_some() => Err(ApiError::Conflict(
-            "already_revoked: Token is already revoked".into(),
+        Some(t) if t.revoked_at.is_some() => Err(ApiError::Custom(
+            StatusCode::CONFLICT,
+            "already_revoked",
+            "Token is already revoked".into(),
         )),
-        _ => Err(ApiError::NotFound(
+        _ => Err(ApiError::Custom(
+            StatusCode::NOT_FOUND,
+            "not_found",
             "Token not found or not owned by caller".into(),
         )),
     }
@@ -684,7 +703,7 @@ pub async fn delete_all_tokens(
     let ctx = extract_auth_context(&headers, &state).await?;
 
     if ctx.auth_method == RestAuthMethod::Nip98 {
-        return Err(ApiError::Unauthorized);
+        return Err(ApiError::Unauthorized("authentication required".into()));
     }
 
     let revoked_count = state
