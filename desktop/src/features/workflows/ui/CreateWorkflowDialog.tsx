@@ -6,7 +6,6 @@ import { Button } from "@/shared/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
@@ -92,7 +91,7 @@ export function CreateWorkflowDialog({
           </div>
         </div>
 
-        <DialogFooter>
+        <div className="flex justify-end gap-2 pt-4">
           <Button
             onClick={() => onOpenChange(false)}
             type="button"
@@ -111,7 +110,7 @@ export function CreateWorkflowDialog({
           >
             {createMutation.isPending ? "Creating..." : "Create"}
           </Button>
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );
