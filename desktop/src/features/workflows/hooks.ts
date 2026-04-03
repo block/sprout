@@ -145,7 +145,8 @@ export function useApprovalMutation() {
       void queryClient.invalidateQueries({
         predicate: (query) =>
           query.queryKey[0] === "workflow-runs" ||
-          query.queryKey[0] === "workflow",
+          query.queryKey[0] === "workflow" ||
+          query.queryKey[0] === "run-approvals",
       });
     },
   });

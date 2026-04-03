@@ -389,7 +389,7 @@ pub async fn list_run_approvals(
 
     let approvals = state
         .db
-        .get_run_approvals(run_id)
+        .get_run_approvals(id, run_id)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
