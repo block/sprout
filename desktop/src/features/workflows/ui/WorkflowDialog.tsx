@@ -148,7 +148,7 @@ export function WorkflowDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 space-y-4 overflow-y-auto">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
           {showChannelSelector ? (
             <div className="space-y-1.5">
               <FieldLabel htmlFor="wf-channel-select">Channel</FieldLabel>

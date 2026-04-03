@@ -175,7 +175,13 @@ export function WorkflowFormBuilder({
 
   const addStep = React.useCallback(() => {
     const existingIds = new Set(formState.steps.map((s) => s.id));
-    let n = formState.steps.length + 1;
+    const stepPattern = /^step_(\d+)$/;
+    let maxN = 0;
+    for (const id of existingIds) {
+      const match = stepPattern.exec(id);
+      if (match) maxN = Math.max(maxN, Number(match[1]));
+    }
+    let n = maxN + 1;
     while (existingIds.has(`step_${n}`)) n++;
     updateFormState({
       ...formState,
@@ -242,6 +248,7 @@ export function WorkflowFormBuilder({
             <FieldLabel htmlFor="wf-name">Workflow name</FieldLabel>
             <Input
               autoCapitalize="off"
+              autoCorrect="off"
               disabled={disabled}
               id="wf-name"
               onChange={(event) =>
