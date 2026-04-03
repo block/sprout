@@ -71,6 +71,48 @@ pub(crate) fn append_log_marker(path: &Path, message: &str) -> Result<(), String
     writeln!(file, "{message}").map_err(|error| format!("failed to write log marker: {error}"))
 }
 
+fn agent_pids_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = managed_agents_base_dir(app)?.join("agent-pids");
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("failed to create agent-pids dir: {error}"))?;
+    Ok(dir)
+}
+
+/// Write a PID file for a spawned agent. The PID equals the PGID since we
+/// spawn with `process_group(0)`.
+pub fn write_agent_pid_file(app: &AppHandle, pubkey: &str, pid: u32) -> Result<(), String> {
+    let path = agent_pids_dir(app)?.join(format!("{pubkey}.pid"));
+    fs::write(&path, pid.to_string())
+        .map_err(|error| format!("failed to write PID file {}: {error}", path.display()))
+}
+
+/// Remove the PID file for an agent (e.g. on normal stop).
+pub fn remove_agent_pid_file(app: &AppHandle, pubkey: &str) {
+    if let Ok(dir) = agent_pids_dir(app) {
+        let _ = fs::remove_file(dir.join(format!("{pubkey}.pid")));
+    }
+}
+
+/// Read all PID files from `agent-pids/`, returning `(pubkey, pid)` pairs.
+pub fn read_all_agent_pid_files(app: &AppHandle) -> Vec<(String, u32)> {
+    let Ok(dir) = agent_pids_dir(app) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            let pubkey = name.strip_suffix(".pid")?;
+            let pid: u32 = fs::read_to_string(entry.path()).ok()?.trim().parse().ok()?;
+            Some((pubkey.to_string(), pid))
+        })
+        .collect()
+}
+
 pub fn read_log_tail(path: &Path, max_lines: usize) -> Result<String, String> {
     if !path.exists() {
         return Ok(String::new());
