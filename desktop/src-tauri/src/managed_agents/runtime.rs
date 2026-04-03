@@ -1,4 +1,4 @@
-use std::{collections::HashMap, process::Command};
+use std::collections::HashMap;
 
 use tauri::AppHandle;
 
@@ -12,17 +12,56 @@ use crate::{
 };
 
 #[cfg(unix)]
-fn process_is_running(pid: u32) -> bool {
-    Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .status()
-        .map(|status| status.success())
+pub(crate) fn process_is_running(pid: u32) -> bool {
+    // Use libc::kill with signal 0 instead of forking a subprocess.
+    // Returns true only if the process exists AND we can signal it.
+    // Returns false for non-existent PIDs (ESRCH) and PIDs owned by
+    // other users (EPERM) — callers should not interact with those.
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn process_is_running(_pid: u32) -> bool {
+    false
+}
+
+/// Check if a PID belongs to a sprout-acp process we spawned (macOS only).
+/// Returns false for recycled PIDs that now belong to other processes.
+#[cfg(target_os = "macos")]
+pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
+    // Use proc_name() from libproc to get the process name without spawning
+    // a subprocess.
+    extern "C" {
+        fn proc_name(pid: libc::c_int, buffer: *mut libc::c_void, buffersize: u32) -> libc::c_int;
+    }
+    let mut buf = [0u8; 1024];
+    let len = unsafe {
+        proc_name(
+            pid as i32,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            buf.len() as u32,
+        )
+    };
+    if len <= 0 {
+        return false;
+    }
+    let name = String::from_utf8_lossy(&buf[..len as usize]);
+    name.contains("sprout-acp") || name.contains("sprout_acp")
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
+    // On Linux, read /proc/<pid>/comm
+    std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .map(|name| {
+            let name = name.trim();
+            name.contains("sprout-acp") || name.contains("sprout_acp")
+        })
         .unwrap_or(false)
 }
 
 #[cfg(not(unix))]
-fn process_is_running(_pid: u32) -> bool {
+pub(crate) fn process_belongs_to_us(_pid: u32) -> bool {
     false
 }
 
