@@ -428,7 +428,6 @@ export function AppShell() {
     if (previousActiveChannelIdRef.current === activeChannelId) {
       return;
     }
-
     previousActiveChannelIdRef.current = activeChannelId;
     setReplyTargetId(null);
     requestedAncestorIdsRef.current.clear();
@@ -444,7 +443,10 @@ export function AppShell() {
     if (replyTargetId && !replyTargetMessage) {
       setReplyTargetId(null);
     }
-  }, [replyTargetId, replyTargetMessage]);
+    if (editTargetId && !editTargetMessage) {
+      setEditTargetId(null);
+    }
+  }, [editTargetId, editTargetMessage, replyTargetId, replyTargetMessage]);
   React.useEffect(() => {
     if (!activeChannel || activeChannel.channelType === "forum") {
       return;
