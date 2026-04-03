@@ -549,6 +549,9 @@ fn resolve_mode_id(
 
 /// per-tool auto-approval in `handle_permission_request`.
 ///
+/// Tries `session/set_config_option` first (Claude-style), and if the agent
+/// doesn't support it, falls back to `session/set_mode` (amp-acp style).
+///
 /// **Fatal exception:** if the agent process exits (e.g., goose crashes on
 /// unrecognized methods), returns `Err(AgentExited)` so the caller can respawn.
 async fn apply_permission_mode(
@@ -556,35 +559,59 @@ async fn apply_permission_mode(
     session_id: &str,
     mode_id: &str,
 ) -> Result<(), AcpError> {
-    let result = tokio::time::timeout(PERMISSION_MODE_TIMEOUT, async {
+    // Try session/set_config_option first (Claude-style).
+    let config_result = tokio::time::timeout(PERMISSION_MODE_TIMEOUT, async {
         acp.session_set_config_option(session_id, "mode", mode_id)
             .await
     })
     .await;
 
-    match result {
+    match config_result {
         Ok(Ok(_)) => {
             tracing::info!(
                 target: "pool::permission",
-                "applied permission mode {mode_id:?} on session {session_id}"
+                "applied permission mode {mode_id:?} via set_config_option on session {session_id}"
             );
+            return Ok(());
         }
-        // Transport-class errors may have corrupted the stdio stream — propagate
-        // so the caller can respawn the agent.
+        // Transport-class errors — propagate so the caller can respawn.
         Ok(Err(e @ AcpError::Io(_)))
         | Ok(Err(e @ AcpError::WriteTimeout(_)))
         | Ok(Err(e @ AcpError::Timeout(_)))
         | Ok(Err(e @ AcpError::AgentExited)) => {
-            tracing::error!(
-                target: "pool::permission",
-                "fatal error setting permission mode {mode_id:?}: {e}"
-            );
             return Err(e);
         }
-        // Application-level errors (including JSON-RPC error responses like
-        // "method not found" which surface as AcpError::Protocol) — agent is
-        // fine, just doesn't support this config method. Fall back to
-        // per-tool auto-approval.
+        Err(_) => {
+            return Err(AcpError::Timeout(PERMISSION_MODE_TIMEOUT));
+        }
+        // Application-level error (e.g. "method not found") — try set_mode.
+        Ok(Err(e)) => {
+            tracing::debug!(
+                target: "pool::permission",
+                "set_config_option not supported ({e}), trying session/set_mode"
+            );
+        }
+    }
+
+    // Fallback: session/set_mode (amp-acp style).
+    let mode_result = tokio::time::timeout(PERMISSION_MODE_TIMEOUT, async {
+        acp.session_set_mode(session_id, mode_id).await
+    })
+    .await;
+
+    match mode_result {
+        Ok(Ok(_)) => {
+            tracing::info!(
+                target: "pool::permission",
+                "applied permission mode {mode_id:?} via set_mode on session {session_id}"
+            );
+        }
+        Ok(Err(e @ AcpError::Io(_)))
+        | Ok(Err(e @ AcpError::WriteTimeout(_)))
+        | Ok(Err(e @ AcpError::Timeout(_)))
+        | Ok(Err(e @ AcpError::AgentExited)) => {
+            return Err(e);
+        }
         Ok(Err(e)) => {
             tracing::warn!(
                 target: "pool::permission",
@@ -592,11 +619,6 @@ async fn apply_permission_mode(
             );
         }
         Err(_) => {
-            // Outer timeout fired — stream may be in unknown state.
-            tracing::error!(
-                target: "pool::permission",
-                "permission mode set timed out ({PERMISSION_MODE_TIMEOUT:?}) — treating as fatal"
-            );
             return Err(AcpError::Timeout(PERMISSION_MODE_TIMEOUT));
         }
     }
