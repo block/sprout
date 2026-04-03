@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -71,18 +71,83 @@ pub(crate) fn append_log_marker(path: &Path, message: &str) -> Result<(), String
     writeln!(file, "{message}").map_err(|error| format!("failed to write log marker: {error}"))
 }
 
+/// Read the last `max_lines` lines from a log file by seeking from the end.
+///
+/// Instead of loading the entire file into memory, we read backwards in chunks
+/// until we've found enough newline characters (or reached the start of the file).
+/// This keeps memory usage proportional to the returned tail, not the file size.
 pub fn read_log_tail(path: &Path, max_lines: usize) -> Result<String, String> {
-    if !path.exists() {
+    if max_lines == 0 || !path.exists() {
         return Ok(String::new());
     }
 
-    let file = File::open(path)
+    let mut file = File::open(path)
         .map_err(|error| format!("failed to read log file {}: {error}", path.display()))?;
-    let reader = BufReader::new(file);
-    let lines = reader
-        .lines()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("failed to read log lines: {error}"))?;
+
+    let file_size = file
+        .seek(SeekFrom::End(0))
+        .map_err(|error| format!("failed to seek log file: {error}"))?;
+
+    if file_size == 0 {
+        return Ok(String::new());
+    }
+
+    // Read backwards in 8 KB chunks, collecting bytes until we have enough newlines.
+    const CHUNK_SIZE: u64 = 8 * 1024;
+    let mut buf = Vec::new();
+    let mut remaining = file_size;
+    let mut newline_count: usize = 0;
+    // We need max_lines+1 newlines to delimit max_lines lines (the leading newline
+    // before the first returned line acts as the boundary).
+    let target_newlines = max_lines + 1;
+
+    while remaining > 0 {
+        let chunk_len = remaining.min(CHUNK_SIZE);
+        remaining -= chunk_len;
+
+        file.seek(SeekFrom::Start(remaining))
+            .map_err(|error| format!("failed to seek log file: {error}"))?;
+
+        let mut chunk = vec![0u8; chunk_len as usize];
+        file.read_exact(&mut chunk)
+            .map_err(|error| format!("failed to read log chunk: {error}"))?;
+
+        // Count newlines in this chunk (iterate backwards so we can bail early).
+        for &byte in chunk.iter().rev() {
+            if byte == b'\n' {
+                newline_count += 1;
+                if newline_count >= target_newlines {
+                    break;
+                }
+            }
+        }
+
+        // Prepend this chunk to our buffer.
+        chunk.append(&mut buf);
+        buf = chunk;
+
+        if newline_count >= target_newlines {
+            break;
+        }
+    }
+
+    // Convert to a string. If we landed on a UTF-8 boundary mid-character,
+    // skip forward to the next valid boundary.
+    let text = match String::from_utf8(buf) {
+        Ok(s) => s,
+        Err(err) => {
+            let bytes = err.into_bytes();
+            // Find the first valid UTF-8 start by skipping continuation bytes.
+            let start = bytes
+                .iter()
+                .position(|b| (*b as i8) >= -64) // not a continuation byte (0b10xxxxxx)
+                .unwrap_or(0);
+            String::from_utf8_lossy(&bytes[start..]).into_owned()
+        }
+    };
+
+    // Extract the last max_lines lines from the text we read.
+    let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(max_lines);
     Ok(lines[start..].join("\n"))
 }
