@@ -80,8 +80,9 @@ export function CreateWorkflowDialog({
         <DialogHeader>
           <DialogTitle>Create Workflow</DialogTitle>
           <DialogDescription>
-            Pick a channel, paste YAML, and create a workflow scoped to that
-            channel.
+            {channels.length === 1
+              ? "Create a workflow scoped to this channel."
+              : "Pick a channel, paste YAML, and create a workflow scoped to that channel."}
           </DialogDescription>
         </DialogHeader>
 
