@@ -174,8 +174,9 @@ export function CreateAgentDialog({
           // Initialize config from schema defaults so unchanged defaults
           // are included in the submit payload (not silently dropped).
           if (result.config_schema) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const props = (result.config_schema as any)?.properties ?? {};
+            const props =
+              (result.config_schema as Record<string, unknown>)?.properties ??
+              {};
             const defaults: Record<string, string> = {};
             for (const [key, prop] of Object.entries(props) as [
               string,
@@ -291,8 +292,7 @@ export function CreateAgentDialog({
   // Check provider config required fields are filled.
   const providerConfigComplete = React.useMemo(() => {
     if (!isProviderMode || !probedProvider?.config_schema) return true;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const schema = probedProvider.config_schema as any;
+    const schema = probedProvider.config_schema as Record<string, unknown>;
     const required: string[] = schema?.required ?? [];
     return required.every(
       (key) => (providerConfig[key] ?? "").trim().length > 0,

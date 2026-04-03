@@ -8,8 +8,7 @@ export function coerceConfigValues(
   schema: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
   if (!schema) return { ...config };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const properties = (schema as any)?.properties ?? {};
+  const properties = (schema as Record<string, unknown>)?.properties ?? {};
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(config)) {
     const prop = properties[key] as Record<string, unknown> | undefined;
@@ -37,10 +36,10 @@ export function ProviderConfigFields({
   config: Record<string, string>;
   onChange: (config: Record<string, string>) => void;
 }) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const properties = (schema as any)?.properties ?? {};
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const required = new Set<string>((schema as any)?.required ?? []);
+  const properties = (schema as Record<string, unknown>)?.properties ?? {};
+  const required = new Set<string>(
+    ((schema as Record<string, unknown>)?.required as string[]) ?? [],
+  );
 
   const entries = Object.entries(properties) as [
     string,
