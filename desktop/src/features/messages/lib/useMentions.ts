@@ -3,56 +3,10 @@ import * as React from "react";
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
+import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
 import { escapeRegExp } from "@/shared/lib/mentionPattern";
 
 const MENTION_DEBOUNCE_MS = 120;
-
-function detectMentionQuery(
-  value: string,
-  cursorPosition: number,
-  knownNamesLower: string[],
-): { query: string; startIndex: number } | null {
-  const beforeCursor = value.slice(0, cursorPosition);
-
-  // Fast path: single-word mention query (no spaces after @)
-  const simpleMatch = beforeCursor.match(/(?:^|[\s])@([^\s]*)$/);
-  if (simpleMatch) {
-    const query = simpleMatch[1];
-    const startIndex = beforeCursor.length - query.length - 1; // -1 for @
-    return { query, startIndex };
-  }
-
-  // Multi-word path: scan backwards for an `@` and check if the text between
-  // `@` and the cursor is a prefix of any known multi-word display name.
-  const scanStart = Math.max(0, beforeCursor.length - 80);
-  for (let i = beforeCursor.length - 1; i >= scanStart; i--) {
-    const ch = beforeCursor[i];
-    if (ch === "@") {
-      // Ensure `@` is at start or preceded by whitespace
-      if (i > 0 && !/\s/.test(beforeCursor[i - 1])) {
-        continue;
-      }
-      const candidate = beforeCursor.slice(i + 1);
-      if (candidate.length === 0) {
-        break;
-      }
-      const lowerCandidate = candidate.toLowerCase();
-      const isPrefix = knownNamesLower.some((name) =>
-        name.startsWith(lowerCandidate),
-      );
-      if (isPrefix) {
-        return { query: candidate, startIndex: i };
-      }
-      break;
-    }
-    // Stop scanning if we hit a newline — mentions don't span lines
-    if (ch === "\n") {
-      break;
-    }
-  }
-
-  return null;
-}
 
 export function useMentions(channelId: string | null) {
   const [mentionQuery, setMentionQuery] = React.useState<string | null>(null);
@@ -88,7 +42,7 @@ export function useMentions(channelId: string | null) {
     return names;
   }, [members, managedAgentNamesByPubkey]);
 
-  /** Lower-cased version of knownNames, used for case-insensitive prefix matching in detectMentionQuery. */
+  /** Lower-cased version of knownNames, used for case-insensitive prefix matching. */
   const knownNamesLower = React.useMemo<string[]>(
     () => knownNames.map((n) => n.toLowerCase()),
     [knownNames],
@@ -190,7 +144,8 @@ export function useMentions(channelId: string | null) {
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
 
-        const mention = detectMentionQuery(
+        const mention = detectPrefixQuery(
+          "@",
           latestValueRef.current,
           latestCursorRef.current,
           knownNamesLowerRef.current,

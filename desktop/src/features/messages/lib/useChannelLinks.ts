@@ -1,59 +1,13 @@
 import * as React from "react";
 
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
+import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
 
 export type ChannelSuggestion = {
   id: string;
   name: string;
   channelType: "stream" | "forum";
 };
-
-function detectChannelQuery(
-  value: string,
-  cursorPosition: number,
-  knownNamesLower: string[],
-): { query: string; startIndex: number } | null {
-  const beforeCursor = value.slice(0, cursorPosition);
-
-  // Fast path: single-word channel query (no spaces after #)
-  const simpleMatch = beforeCursor.match(/(?:^|[\s])#([^\s]*)$/);
-  if (simpleMatch) {
-    const query = simpleMatch[1];
-    const startIndex = beforeCursor.length - query.length - 1; // -1 for #
-    return { query, startIndex };
-  }
-
-  // Multi-word path: scan backwards for a `#` and check if the text between
-  // `#` and the cursor is a prefix of any known multi-word channel name.
-  const scanStart = Math.max(0, beforeCursor.length - 80);
-  for (let i = beforeCursor.length - 1; i >= scanStart; i--) {
-    const ch = beforeCursor[i];
-    if (ch === "#") {
-      // Ensure `#` is at start or preceded by whitespace
-      if (i > 0 && !/\s/.test(beforeCursor[i - 1])) {
-        continue;
-      }
-      const candidate = beforeCursor.slice(i + 1);
-      if (candidate.length === 0) {
-        break;
-      }
-      const lowerCandidate = candidate.toLowerCase();
-      const isPrefix = knownNamesLower.some((name) =>
-        name.startsWith(lowerCandidate),
-      );
-      if (isPrefix) {
-        return { query: candidate, startIndex: i };
-      }
-      break;
-    }
-    // Stop scanning if we hit a newline
-    if (ch === "\n") {
-      break;
-    }
-  }
-
-  return null;
-}
 
 const CHANNEL_QUERY_DEBOUNCE_MS = 120;
 
@@ -154,7 +108,8 @@ export function useChannelLinks() {
 
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
-        const channel = detectChannelQuery(
+        const channel = detectPrefixQuery(
+          "#",
           latestValueRef.current,
           latestCursorRef.current,
           knownNamesLowerRef.current,
