@@ -96,10 +96,6 @@ function fromRawThreadReply(reply: RawThreadReply): ThreadReply {
   };
 }
 
-export async function deleteMessage(eventId: string): Promise<void> {
-  await invokeTauri("delete_message", { eventId });
-}
-
 export async function getForumPosts(
   channelId: string,
   limit?: number,

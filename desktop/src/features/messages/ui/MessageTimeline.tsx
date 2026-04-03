@@ -29,6 +29,7 @@ type MessageTimelineProps = {
   hasOlderMessages?: boolean;
   isFetchingOlder?: boolean;
   profiles?: UserProfileLookup;
+  onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
   onToggleReaction?: (
@@ -83,6 +84,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   hasOlderMessages = true,
   isFetchingOlder = false,
   profiles,
+  onDelete,
   onEdit,
   onReply,
   onToggleReaction,
@@ -257,6 +259,11 @@ export const MessageTimeline = React.memo(function MessageTimeline({
           activeReplyTargetId={activeReplyTargetId}
           highlighted={message.id === highlightedMessageId}
           message={message}
+          onDelete={
+            onDelete && currentPubkey && message.pubkey === currentPubkey
+              ? onDelete
+              : undefined
+          }
           onEdit={
             onEdit && currentPubkey && message.pubkey === currentPubkey
               ? onEdit

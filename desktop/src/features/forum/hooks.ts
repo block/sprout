@@ -1,11 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import {
-  deleteMessage,
-  getForumPosts,
-  getForumThread,
-} from "@/shared/api/forum";
-import { sendChannelMessage } from "@/shared/api/tauri";
+import { getForumPosts, getForumThread } from "@/shared/api/forum";
+import { deleteMessage, sendChannelMessage } from "@/shared/api/tauri";
 import type {
   Channel,
   ForumPostsResponse,

@@ -20,6 +20,7 @@ export const MessageRow = React.memo(
     activeReplyTargetId = null,
     highlighted = false,
     message,
+    onDelete,
     onEdit,
     onToggleReaction,
     onReply,
@@ -28,6 +29,7 @@ export const MessageRow = React.memo(
     activeReplyTargetId?: string | null;
     highlighted?: boolean;
     message: TimelineMessage;
+    onDelete?: (message: TimelineMessage) => void;
     onEdit?: (message: TimelineMessage) => void;
     onToggleReaction?: (
       message: TimelineMessage,
@@ -243,6 +245,7 @@ export const MessageRow = React.memo(
                 <MessageActionBar
                   activeReplyTargetId={activeReplyTargetId}
                   message={message}
+                  onDelete={onDelete}
                   onEdit={onEdit}
                   onReactionSelect={
                     canToggleReactions ? handleReactionSelect : undefined

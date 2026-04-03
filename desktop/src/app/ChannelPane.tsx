@@ -23,6 +23,7 @@ type ChannelPaneProps = {
   messages: TimelineMessage[];
   onCancelEdit?: () => void;
   onCancelReply: () => void;
+  onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onEditSave?: (content: string) => Promise<void>;
   onReply: (message: TimelineMessage) => void;
@@ -56,6 +57,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   messages,
   onCancelEdit,
   onCancelReply,
+  onDelete,
   onEdit,
   onEditSave,
   onReply,
@@ -92,6 +94,7 @@ export const ChannelPane = React.memo(function ChannelPane({
         }
         isLoading={isTimelineLoading}
         messages={messages}
+        onDelete={onDelete}
         onEdit={onEdit}
         onReply={onReply}
         onTargetReached={onTargetReached}

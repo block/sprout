@@ -16,6 +16,7 @@ type TimelineMessageListProps = {
   currentPubkey?: string;
   highlightedMessageId?: string | null;
   messages: TimelineMessage[];
+  onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
   onToggleReaction?: (
@@ -31,6 +32,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   currentPubkey,
   highlightedMessageId = null,
   messages,
+  onDelete,
   onEdit,
   onReply,
   onToggleReaction,
@@ -69,6 +71,11 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           activeReplyTargetId={activeReplyTargetId}
           highlighted={message.id === highlightedMessageId}
           message={message}
+          onDelete={
+            onDelete && currentPubkey && message.pubkey === currentPubkey
+              ? onDelete
+              : undefined
+          }
           onEdit={
             onEdit && currentPubkey && message.pubkey === currentPubkey
               ? onEdit
