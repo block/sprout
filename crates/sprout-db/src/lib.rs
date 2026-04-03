@@ -1223,6 +1223,8 @@ impl Db {
         //
         // The lock key is derived from a hash of the triple. Advisory locks are
         // automatically released when the transaction commits or rolls back.
+        // Note: hashtext is 32-bit, so collisions are possible — they cause
+        // false contention (extra serialization) but not correctness issues.
         let channel_id_str = channel_id.map(|id| id.to_string()).unwrap_or_default();
         let lock_key = format!(
             "addressable:{}:{}:{}",

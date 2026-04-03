@@ -114,21 +114,43 @@ pub enum SideEffectError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, code) = match &self {
-            ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
-            ApiError::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden"),
-            ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
-            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
-            ApiError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
-            ApiError::Gone(_) => (StatusCode::GONE, "gone"),
-            ApiError::TooManyRequests(_) => (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
-            ApiError::UnprocessableEntity(_) => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "unprocessable_entity")
+        let (status, code, message) = match &self {
+            ApiError::NotFound(m) => (StatusCode::NOT_FOUND, "not_found", m.clone()),
+            ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, "forbidden", m.clone()),
+            ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, "bad_request", m.clone()),
+            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized", String::new()),
+            ApiError::Conflict(m) => (StatusCode::CONFLICT, "conflict", m.clone()),
+            ApiError::Gone(m) => (StatusCode::GONE, "gone", m.clone()),
+            ApiError::TooManyRequests(m) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "too_many_requests",
+                m.clone(),
+            ),
+            ApiError::UnprocessableEntity(m) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unprocessable_entity",
+                m.clone(),
+            ),
+            // Internal/Database errors: log the real error, return a generic message
+            // to avoid leaking implementation details to API clients.
+            ApiError::Internal(ref e) => {
+                tracing::error!("internal API error: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "internal server error".to_string(),
+                )
             }
-            ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
-            ApiError::Database(_) => (StatusCode::INTERNAL_SERVER_ERROR, "database_error"),
+            ApiError::Database(ref e) => {
+                tracing::error!("database API error: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "database_error",
+                    "internal server error".to_string(),
+                )
+            }
         };
-        let body = serde_json::json!({ "error": self.to_string(), "code": code });
+        let body = serde_json::json!({ "error": message, "code": code });
         (status, Json(body)).into_response()
     }
 }

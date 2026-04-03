@@ -1515,7 +1515,7 @@ pub async fn ingest_event(
         return Ok(IngestResult {
             event_id: event_id_hex,
             accepted: true,
-            message: "duplicate:".into(),
+            message: "duplicate: event already exists".into(),
         });
     }
 
