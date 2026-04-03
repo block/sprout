@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import type {
+  useDeleteMessageMutation,
   useEditMessageMutation,
   useSendMessageMutation,
   useToggleReactionMutation,
@@ -15,6 +16,7 @@ import type {
  * rather than listing the whole mutation as a dependency.
  */
 export function useChannelPaneHandlers({
+  deleteMessageMutation,
   editMessageMutation,
   editTargetId,
   replyTargetId,
@@ -23,6 +25,7 @@ export function useChannelPaneHandlers({
   setReplyTargetId,
   toggleReactionMutation,
 }: {
+  deleteMessageMutation: ReturnType<typeof useDeleteMessageMutation>;
   editMessageMutation: ReturnType<typeof useEditMessageMutation>;
   editTargetId: string | null;
   replyTargetId: string | null;
@@ -41,6 +44,9 @@ export function useChannelPaneHandlers({
   const sendMutateRef = React.useRef(sendMessageMutation.mutateAsync);
   sendMutateRef.current = sendMessageMutation.mutateAsync;
 
+  const deleteMutateRef = React.useRef(deleteMessageMutation.mutateAsync);
+  deleteMutateRef.current = deleteMessageMutation.mutateAsync;
+
   const editMutateRef = React.useRef(editMessageMutation.mutateAsync);
   editMutateRef.current = editMessageMutation.mutateAsync;
 
@@ -54,6 +60,10 @@ export function useChannelPaneHandlers({
   const handleCancelEdit = React.useCallback(() => {
     setEditTargetId(null);
   }, [setEditTargetId]);
+
+  const handleDelete = React.useCallback(async (message: { id: string }) => {
+    await deleteMutateRef.current({ eventId: message.id });
+  }, []);
 
   const handleEdit = React.useCallback(
     (message: { id: string }) => {
@@ -121,6 +131,7 @@ export function useChannelPaneHandlers({
   return {
     handleCancelEdit,
     handleCancelReply,
+    handleDelete,
     handleEdit,
     handleEditSave,
     handleReply,

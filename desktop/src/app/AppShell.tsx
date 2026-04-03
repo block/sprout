@@ -22,6 +22,7 @@ import { HomeView } from "@/features/home/ui/HomeView";
 import {
   useChannelMessagesQuery,
   mergeMessages,
+  useDeleteMessageMutation,
   useEditMessageMutation,
   useSendMessageMutation,
   useChannelSubscription,
@@ -140,6 +141,7 @@ export function AppShell() {
     identityQuery.data,
   );
   const toggleReactionMutation = useToggleReactionMutation();
+  const deleteMessageMutation = useDeleteMessageMutation(activeChannel);
   const editMessageMutation = useEditMessageMutation(activeChannel);
   const availableChannelIds = React.useMemo(
     () => new Set(channels.map((channel) => channel.id)),
@@ -222,12 +224,14 @@ export function AppShell() {
   const {
     handleCancelEdit,
     handleCancelReply,
+    handleDelete,
     handleEdit,
     handleEditSave,
     handleReply,
     handleSend,
     handleToggleReaction,
   } = useChannelPaneHandlers({
+    deleteMessageMutation,
     editMessageMutation,
     editTargetId,
     replyTargetId,
@@ -424,7 +428,6 @@ export function AppShell() {
     if (previousActiveChannelIdRef.current === activeChannelId) {
       return;
     }
-
     previousActiveChannelIdRef.current = activeChannelId;
     setReplyTargetId(null);
     requestedAncestorIdsRef.current.clear();
@@ -440,7 +443,10 @@ export function AppShell() {
     if (replyTargetId && !replyTargetMessage) {
       setReplyTargetId(null);
     }
-  }, [replyTargetId, replyTargetMessage]);
+    if (editTargetId && !editTargetMessage) {
+      setEditTargetId(null);
+    }
+  }, [editTargetId, editTargetMessage, replyTargetId, replyTargetMessage]);
   React.useEffect(() => {
     if (!activeChannel || activeChannel.channelType === "forum") {
       return;
@@ -753,6 +759,7 @@ export function AppShell() {
                       messages={timelineMessages}
                       onCancelEdit={handleCancelEdit}
                       onCancelReply={handleCancelReply}
+                      onDelete={handleDelete}
                       onEdit={handleEdit}
                       onEditSave={handleEditSave}
                       onReply={handleReply}
