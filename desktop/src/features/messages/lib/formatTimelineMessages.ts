@@ -158,14 +158,11 @@ export function formatTimelineMessages(
     (event) => isTimelineContentEvent(event) && !deletedEventIds.has(event.id),
   );
   const eventsById = new Map(visibleEvents.map((event) => [event.id, event]));
-  const reactionPresence = new Map<
-    string,
-    {
-      targetId: string;
-      actorPubkey: string;
-      emoji: string;
-    }
-  >();
+  // Build reaction aggregations in a single pass, eliminating the intermediate
+  // reactionPresence Map. Deduplicate with a Set of composite keys and aggregate
+  // directly into reactionsByEventId to reduce allocation pressure.
+  const reactionsByEventId = new Map<string, Map<string, TimelineReaction>>();
+  const seenReactions = new Set<string>();
 
   for (const event of events) {
     if (event.kind !== KIND_REACTION || deletedEventIds.has(event.id)) {
@@ -184,17 +181,20 @@ export function formatTimelineMessages(
       requireChannelTagForPTags: true,
     }).toLowerCase();
     const emoji = event.content.trim() || "+";
-    reactionPresence.set(`${targetId}:${actorPubkey}:${emoji}`, {
-      targetId,
-      actorPubkey,
-      emoji,
-    });
-  }
+    const dedupeKey = `${targetId}:${actorPubkey}:${emoji}`;
 
-  const reactionsByEventId = new Map<string, Map<string, TimelineReaction>>();
-  for (const { targetId, actorPubkey, emoji } of reactionPresence.values()) {
-    const current = reactionsByEventId.get(targetId) ?? new Map();
-    const existing = current.get(emoji) ?? {
+    if (seenReactions.has(dedupeKey)) {
+      continue;
+    }
+    seenReactions.add(dedupeKey);
+
+    let emojiMap = reactionsByEventId.get(targetId);
+    if (!emojiMap) {
+      emojiMap = new Map();
+      reactionsByEventId.set(targetId, emojiMap);
+    }
+
+    const existing = emojiMap.get(emoji) ?? {
       emoji,
       count: 0,
       reactedByCurrentUser: false,
@@ -213,8 +213,7 @@ export function formatTimelineMessages(
       `${actorPubkey.slice(0, 8)}…`;
     existing.users.push({ pubkey: actorPubkey, displayName });
 
-    current.set(emoji, existing);
-    reactionsByEventId.set(targetId, current);
+    emojiMap.set(emoji, existing);
   }
 
   const authorPubkeyByEventId = new Map<string, string>();

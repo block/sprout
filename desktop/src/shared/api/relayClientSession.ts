@@ -23,6 +23,7 @@ const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 30_000;
 const RECONNECT_REPLAY_SKEW_SECS = 5;
 const EVENT_BATCH_MS = 16;
+const EVENT_BUFFER_MAX_SIZE = 1_000;
 
 export class RelayClient {
   private wsId: number | null = null;
@@ -529,10 +530,19 @@ export class RelayClient {
     );
 
     this.eventBuffer.push({ subId, event });
-    this.flushTimeout ??= window.setTimeout(
-      () => this.flushEventBuffer(),
-      EVENT_BATCH_MS,
-    );
+
+    if (this.eventBuffer.length >= EVENT_BUFFER_MAX_SIZE) {
+      if (this.flushTimeout !== null) {
+        window.clearTimeout(this.flushTimeout);
+        this.flushTimeout = null;
+      }
+      this.flushEventBuffer();
+    } else {
+      this.flushTimeout ??= window.setTimeout(
+        () => this.flushEventBuffer(),
+        EVENT_BATCH_MS,
+      );
+    }
   }
 
   private flushEventBuffer() {
