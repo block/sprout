@@ -8,10 +8,10 @@ import {
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
+import { CreateWorkflowDialog } from "@/features/workflows/ui/CreateWorkflowDialog";
 import type { Channel } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
-import { CreateWorkflowDialog } from "@/features/workflows/ui/CreateWorkflowDialog";
 import { AddChannelBotDialog } from "./AddChannelBotDialog";
 
 type ChannelMembersBarProps = {

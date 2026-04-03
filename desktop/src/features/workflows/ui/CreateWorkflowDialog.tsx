@@ -97,7 +97,7 @@ export function CreateWorkflowDialog({
               <div className="relative">
                 <select
                   className="flex h-11 w-full appearance-none rounded-xl border border-border/70 bg-muted/20 px-3 pr-10 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={channels.length === 0 || createMutation.isPending}
+                  disabled={createMutation.isPending}
                   id="wf-channel-select"
                   onChange={(event) => {
                     createMutation.reset();
@@ -105,9 +105,6 @@ export function CreateWorkflowDialog({
                   }}
                   value={selectedChannelId}
                 >
-                  {channels.length === 0 ? (
-                    <option value="">No channels available</option>
-                  ) : null}
                   {channels.map((channel) => (
                     <option key={channel.id} value={channel.id}>
                       {channel.name} · {channel.channelType} ·{" "}
