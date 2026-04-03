@@ -567,6 +567,10 @@ pub fn start_managed_agent_process(
         )
     })?;
 
+    // Write a PID file so the orphan sweep can find this process even if the
+    // record is stale or the app crashes before updating records.
+    let _ = super::write_agent_pid_file(app, &record.pubkey, child.id());
+
     let now = now_iso();
     record.updated_at = now.clone();
     record.runtime_pid = Some(child.id());
