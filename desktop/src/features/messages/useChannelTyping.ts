@@ -14,6 +14,7 @@ type TypingState = Record<string, number>;
 const TYPING_INDICATOR_TTL_MS = 8_000;
 const TYPING_PRUNE_INTERVAL_MS = 1_000;
 const TYPING_POST_MESSAGE_SUPPRESS_MS = 2_000;
+const LATEST_MESSAGE_MAX_AGE_S = 5 * 60; // 5 minutes in seconds
 
 function pruneTypingState(state: TypingState, now = Date.now()) {
   let changed = false;
@@ -110,6 +111,18 @@ export function useChannelTyping(
     }
 
     const authorPubkey = latestMessageEvent.pubkey.toLowerCase();
+
+    // Prune stale entries to prevent unbounded growth within a channel session
+    const nowS = Math.floor(Date.now() / 1_000);
+    const cutoff = nowS - LATEST_MESSAGE_MAX_AGE_S;
+    for (const [key, ts] of Object.entries(
+      latestMessageCreatedAtByPubkeyRef.current,
+    )) {
+      if (ts < cutoff) {
+        delete latestMessageCreatedAtByPubkeyRef.current[key];
+      }
+    }
+
     latestMessageCreatedAtByPubkeyRef.current[authorPubkey] = Math.max(
       latestMessageCreatedAtByPubkeyRef.current[authorPubkey] ?? 0,
       latestMessageEvent.created_at,
