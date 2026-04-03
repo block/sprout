@@ -574,7 +574,6 @@ async fn apply_permission_mode(
         Ok(Err(e @ AcpError::Io(_)))
         | Ok(Err(e @ AcpError::WriteTimeout(_)))
         | Ok(Err(e @ AcpError::Timeout(_)))
-        | Ok(Err(e @ AcpError::Protocol(_)))
         | Ok(Err(e @ AcpError::AgentExited)) => {
             tracing::error!(
                 target: "pool::permission",
@@ -582,7 +581,10 @@ async fn apply_permission_mode(
             );
             return Err(e);
         }
-        // Application-level errors — agent is fine, just uses default permission mode.
+        // Application-level errors (including JSON-RPC error responses like
+        // "method not found" which surface as AcpError::Protocol) — agent is
+        // fine, just doesn't support this config method. Fall back to
+        // per-tool auto-approval.
         Ok(Err(e)) => {
             tracing::warn!(
                 target: "pool::permission",
