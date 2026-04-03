@@ -14,7 +14,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tracing::debug;
 
-pub use sprout_mcp::relay_client::{parse_relay_message, OkResponse, RelayMessage};
+pub use sprout_core::relay_protocol::{parse_relay_message, OkResponse, RelayMessage};
 
 /// Errors returned by [`SproutTestClient`] operations.
 #[derive(Debug, Error)]
@@ -66,19 +66,13 @@ impl From<nostr::event::builder::Error> for TestClientError {
     }
 }
 
-// Map RelayClientError → TestClientError for parse_relay_message calls.
-impl From<sprout_mcp::relay_client::RelayClientError> for TestClientError {
-    fn from(e: sprout_mcp::relay_client::RelayClientError) -> Self {
-        use sprout_mcp::relay_client::RelayClientError as E;
+// Map RelayProtocolError → TestClientError for parse_relay_message calls.
+impl From<sprout_core::relay_protocol::RelayProtocolError> for TestClientError {
+    fn from(e: sprout_core::relay_protocol::RelayProtocolError) -> Self {
+        use sprout_core::relay_protocol::RelayProtocolError as E;
         match e {
-            E::WebSocket(e) => TestClientError::WebSocket(e),
             E::Json(e) => TestClientError::Json(e),
-            E::Timeout => TestClientError::Timeout,
-            E::ConnectionClosed => TestClientError::ConnectionClosed,
             E::UnexpectedMessage(m) => TestClientError::UnexpectedMessage(m),
-            E::AuthFailed(m) => TestClientError::AuthFailed(m),
-            E::NoAuthChallenge => TestClientError::NoAuthChallenge,
-            other => TestClientError::UnexpectedMessage(other.to_string()),
         }
     }
 }

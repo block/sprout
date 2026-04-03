@@ -38,6 +38,7 @@ use crate::queue::{
     PromptProfileLookup,
 };
 use crate::relay::{ChannelInfo, RestClient};
+use sprout_core::relay_protocol::pct_encode;
 
 // ── FlushBatch Clone note ─────────────────────────────────────────────────────
 // FlushBatch and BatchEvent derive Clone (added in queue.rs) so we can store
@@ -1487,24 +1488,6 @@ const REACTION_WORKING: &str = "💬";
 /// Best-effort timeout for a single reaction REST call.
 const REACTION_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Percent-encode a string for use in a URL path segment.
-/// Emoji bytes are not URL-safe; event IDs (hex) pass through unchanged.
-fn pct_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 3);
-    for byte in s.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            _ => {
-                use std::fmt::Write;
-                let _ = write!(out, "%{byte:02X}");
-            }
-        }
-    }
-    out
-}
-
 /// Best-effort: add a reaction via a signed Nostr kind-7 event (NIP-25).
 ///
 /// Builds a reaction event with `sprout_sdk::build_reaction`, signs it with
@@ -1993,43 +1976,6 @@ mod tests {
         let obj = json!({ "content": "hello" });
         let msg = json_to_context_message(&obj).expect("should parse");
         assert_eq!(msg.pubkey, "unknown");
-    }
-
-    // ── pct_encode tests ─────────────────────────────────────────────────
-
-    #[test]
-    fn test_pct_encode_hex_passthrough() {
-        let hex = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
-        assert_eq!(pct_encode(hex), hex);
-    }
-
-    #[test]
-    fn test_pct_encode_emoji() {
-        // 👀 = U+1F440 = F0 9F 91 80 in UTF-8
-        assert_eq!(pct_encode("👀"), "%F0%9F%91%80");
-    }
-
-    #[test]
-    fn test_pct_encode_emoji_speech_balloon() {
-        // 💬 = U+1F4AC = F0 9F 92 AC in UTF-8
-        assert_eq!(pct_encode("💬"), "%F0%9F%92%AC");
-    }
-
-    #[test]
-    fn test_pct_encode_empty() {
-        assert_eq!(pct_encode(""), "");
-    }
-
-    #[test]
-    fn test_pct_encode_unreserved_passthrough() {
-        assert_eq!(pct_encode("AZaz09-_.~"), "AZaz09-_.~");
-    }
-
-    #[test]
-    fn test_pct_encode_reserved_chars() {
-        assert_eq!(pct_encode("/"), "%2F");
-        assert_eq!(pct_encode("+"), "%2B");
-        assert_eq!(pct_encode(" "), "%20");
     }
 
     // ── SessionState tests ───────────────────────────────────────────────

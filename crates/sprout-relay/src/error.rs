@@ -90,6 +90,28 @@ pub enum ApiError {
     Database(#[from] sprout_db::DbError),
 }
 
+// ── Side-effect error type ────────────────────────────────────────────────────
+
+/// Typed error for post-ingest side effects.
+#[derive(Debug, thiserror::Error)]
+pub enum SideEffectError {
+    /// A database operation failed.
+    #[error("database error: {0}")]
+    Database(#[from] sprout_db::DbError),
+    /// A JSON serialization/deserialization error.
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+    /// A pub/sub operation failed.
+    #[error("pubsub error: {0}")]
+    PubSub(#[from] sprout_pubsub::PubSubError),
+    /// A nostr tag/event build error.
+    #[error("nostr error: {0}")]
+    Nostr(String),
+    /// A generic internal error (for cases that don't fit above).
+    #[error("{0}")]
+    Internal(String),
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, code) = match &self {

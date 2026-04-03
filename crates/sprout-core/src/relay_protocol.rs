@@ -25,6 +25,17 @@ pub enum RelayProtocolError {
 
 // ── RelayMessage ──────────────────────────────────────────────────────────────
 
+/// The relay's response to a published event (NIP-01 `OK` message).
+#[derive(Debug, Clone)]
+pub struct OkResponse {
+    /// Hex-encoded ID of the acknowledged event.
+    pub event_id: String,
+    /// Whether the relay accepted the event.
+    pub accepted: bool,
+    /// Human-readable reason (empty when accepted without comment).
+    pub message: String,
+}
+
 /// A parsed NIP-01 relay-to-client message.
 #[derive(Debug, Clone)]
 pub enum RelayMessage {
@@ -36,14 +47,7 @@ pub enum RelayMessage {
         event: Box<Event>,
     },
     /// Acknowledgement of a published event.
-    Ok {
-        /// Hex-encoded ID of the acknowledged event.
-        event_id: String,
-        /// Whether the relay accepted the event.
-        accepted: bool,
-        /// Human-readable reason (empty when accepted without comment).
-        message: String,
-    },
+    Ok(OkResponse),
     /// End-of-stored-events marker for a subscription.
     Eose {
         /// The subscription ID that has reached end-of-stored-events.
@@ -112,11 +116,11 @@ pub fn parse_relay_message(text: &str) -> Result<RelayMessage, RelayProtocolErro
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            Ok(RelayMessage::Ok {
+            Ok(RelayMessage::Ok(OkResponse {
                 event_id,
                 accepted,
                 message,
-            })
+            }))
         }
         "EOSE" => {
             let sub_id = arr
@@ -347,14 +351,10 @@ mod tests {
         let text = r#"["OK","abc123",true,""]"#;
         let msg = parse_relay_message(text).unwrap();
         match msg {
-            RelayMessage::Ok {
-                event_id,
-                accepted,
-                message,
-            } => {
-                assert_eq!(event_id, "abc123");
-                assert!(accepted);
-                assert_eq!(message, "");
+            RelayMessage::Ok(ok) => {
+                assert_eq!(ok.event_id, "abc123");
+                assert!(ok.accepted);
+                assert_eq!(ok.message, "");
             }
             _ => panic!("expected Ok"),
         }
@@ -365,14 +365,10 @@ mod tests {
         let text = r#"["OK","abc123",false,"blocked: spam"]"#;
         let msg = parse_relay_message(text).unwrap();
         match msg {
-            RelayMessage::Ok {
-                event_id,
-                accepted,
-                message,
-            } => {
-                assert_eq!(event_id, "abc123");
-                assert!(!accepted);
-                assert_eq!(message, "blocked: spam");
+            RelayMessage::Ok(ok) => {
+                assert_eq!(ok.event_id, "abc123");
+                assert!(!ok.accepted);
+                assert_eq!(ok.message, "blocked: spam");
             }
             _ => panic!("expected Ok"),
         }

@@ -17,7 +17,7 @@
 //! `HarnessRelay` communicates with the background task via a `RelayCommand`
 //! channel. `next_event()` reads from the event receiver.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 // ─── Named constants ──────────────────────────────────────────────────────────
@@ -66,6 +66,10 @@ use nostr::{Event, EventBuilder, Keys, Kind, Tag, Url as NostrUrl};
 use serde_json::{json, Value};
 use sprout_core::kind::{
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_TYPING_INDICATOR,
+};
+use sprout_core::relay_protocol::{
+    parse_relay_message, relay_ws_to_http, OkResponse, RelayMessage, RelayProtocolError,
+    TwoGenDedup,
 };
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -292,33 +296,13 @@ impl From<nostr::event::builder::Error> for RelayError {
     }
 }
 
-// ── Internal relay message types ──────────────────────────────────────────────
-
-/// A parsed NIP-01 relay message.
-#[derive(Debug, Clone)]
-enum RelayMessage {
-    Event {
-        subscription_id: String,
-        event: Box<Event>,
-    },
-    Ok {
-        event_id: String,
-        accepted: bool,
-        message: String,
-    },
-    Eose {
-        subscription_id: String,
-    },
-    Closed {
-        subscription_id: String,
-        message: String,
-    },
-    Notice {
-        message: String,
-    },
-    Auth {
-        challenge: String,
-    },
+impl From<RelayProtocolError> for RelayError {
+    fn from(e: RelayProtocolError) -> Self {
+        match e {
+            RelayProtocolError::Json(e) => RelayError::Json(e),
+            RelayProtocolError::UnexpectedMessage(m) => RelayError::UnexpectedMessage(m),
+        }
+    }
 }
 
 // ── Commands sent from HarnessRelay to the background task ───────────────────
@@ -630,54 +614,6 @@ impl Drop for HarnessRelay {
 
 /// Two-generation dedup set with bounded memory.
 ///
-/// Mitigates the "amnesia window" caused by clearing the entire set at once.
-/// When `current` reaches `limit/2` entries it is rotated into `previous`.
-/// At any point we remember between `limit/2` and `limit` recent IDs.
-/// The oldest `limit/2` IDs are forgotten on each rotation — this is the
-/// inherent tradeoff of bounded-memory dedup. For the default limit of
-/// 12,000, the worst case is that an ID seen 6,001+ inserts ago may be
-/// replayed as new. This is acceptable for Nostr event dedup where the
-/// `since` filter provides the primary replay protection.
-struct TwoGenDedup {
-    current: HashSet<String>,
-    previous: HashSet<String>,
-    limit: usize,
-}
-
-impl TwoGenDedup {
-    fn new(limit: usize) -> Self {
-        Self {
-            current: HashSet::new(),
-            previous: HashSet::new(),
-            limit,
-        }
-    }
-
-    fn contains(&self, id: &str) -> bool {
-        self.current.contains(id) || self.previous.contains(id)
-    }
-
-    /// Insert `id`. Returns `true` if it was new (not a duplicate).
-    fn insert(&mut self, id: String) -> bool {
-        if self.contains(&id) {
-            return false;
-        }
-        self.current.insert(id);
-        if self.current.len() >= self.limit / 2 {
-            // Rotate: current → previous, start fresh current.
-            self.previous = std::mem::take(&mut self.current);
-        }
-        true
-    }
-
-    /// Remove an ID (used to un-deduplicate a dropped event so it can be
-    /// replayed after reconnect).
-    fn remove(&mut self, id: &str) {
-        self.current.remove(id);
-        self.previous.remove(id);
-    }
-}
-
 /// State maintained by the background WebSocket task.
 struct BgState {
     /// Active subscriptions: channel_id → subscription_id string.
@@ -1590,11 +1526,11 @@ async fn handle_ws_message(
                         return false;
                     }
                 }
-                RelayMessage::Ok {
+                RelayMessage::Ok(OkResponse {
                     event_id,
                     accepted,
                     message,
-                } => {
+                }) => {
                     if !accepted && message.starts_with("auth") {
                         // Finding #18: AUTH OK with accepted=false means auth was rejected.
                         warn!("mid-session AUTH rejected (event {event_id}): {message} — triggering reconnect");
@@ -1661,11 +1597,11 @@ async fn process_handshake_buffer(
                 subscription_id,
                 message,
             } => serde_json::to_string(&json!(["CLOSED", subscription_id, message])).ok(),
-            RelayMessage::Ok {
+            RelayMessage::Ok(OkResponse {
                 event_id,
                 accepted,
                 message,
-            } => serde_json::to_string(&json!(["OK", event_id, accepted, message])).ok(),
+            }) => serde_json::to_string(&json!(["OK", event_id, accepted, message])).ok(),
             // AUTH in the buffer is stale — skip it.
             RelayMessage::Auth { .. } => None,
         };
@@ -2223,18 +2159,6 @@ async fn send_auth_response(
 
 // ── Free functions ────────────────────────────────────────────────────────────
 
-/// Convert a WebSocket URL to its HTTP equivalent.
-///
-/// `ws://host:port` → `http://host:port`
-/// `wss://host:port` → `https://host:port`
-/// Trailing slashes are stripped.
-pub(crate) fn relay_ws_to_http(url: &str) -> String {
-    url.replace("wss://", "https://")
-        .replace("ws://", "http://")
-        .trim_end_matches('/')
-        .to_string()
-}
-
 /// Build the subscription ID for a channel: `ch-<uuid>`.
 pub(crate) fn channel_sub_id(channel_id: Uuid) -> String {
     format!("ch-{channel_id}")
@@ -2258,99 +2182,6 @@ fn apply_auth(
         builder.header("Authorization", format!("Bearer {token}"))
     } else {
         builder.header("X-Pubkey", keys.public_key().to_hex())
-    }
-}
-
-/// Parse a raw relay text frame into a typed [`RelayMessage`].
-#[allow(private_interfaces)]
-pub(crate) fn parse_relay_message(text: &str) -> Result<RelayMessage, RelayError> {
-    let arr: Vec<Value> = serde_json::from_str(text)?;
-
-    let msg_type = arr
-        .first()
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?;
-
-    match msg_type {
-        "EVENT" => {
-            let sub_id = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?
-                .to_string();
-            let event: Event = serde_json::from_value(
-                arr.get(2)
-                    .cloned()
-                    .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?,
-            )?;
-            Ok(RelayMessage::Event {
-                subscription_id: sub_id,
-                event: Box::new(event),
-            })
-        }
-        "OK" => {
-            let event_id = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?
-                .to_string();
-            let accepted = arr.get(2).and_then(|v| v.as_bool()).unwrap_or(false);
-            let message = arr
-                .get(3)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            Ok(RelayMessage::Ok {
-                event_id,
-                accepted,
-                message,
-            })
-        }
-        "EOSE" => {
-            let sub_id = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?
-                .to_string();
-            Ok(RelayMessage::Eose {
-                subscription_id: sub_id,
-            })
-        }
-        "CLOSED" => {
-            let sub_id = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?
-                .to_string();
-            let message = arr
-                .get(2)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            Ok(RelayMessage::Closed {
-                subscription_id: sub_id,
-                message,
-            })
-        }
-        "NOTICE" => {
-            let message = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            Ok(RelayMessage::Notice { message })
-        }
-        "AUTH" => {
-            let challenge = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?
-                .to_string();
-            Ok(RelayMessage::Auth { challenge })
-        }
-        other => Err(RelayError::UnexpectedMessage(format!(
-            "unknown message type: {other}"
-        ))),
     }
 }
 
@@ -2453,13 +2284,6 @@ async fn wait_for_auth_challenge(
     }
 }
 
-/// Response from an `OK` relay message.
-struct OkResponse {
-    event_id: String,
-    accepted: bool,
-    message: String,
-}
-
 /// Wait for the first `OK` message from the relay (used after sending AUTH).
 async fn wait_for_any_ok(
     ws: &mut WsStream,
@@ -2467,21 +2291,9 @@ async fn wait_for_any_ok(
     timeout_dur: Duration,
 ) -> Result<OkResponse, RelayError> {
     // Check if there's already one buffered.
-    if let Some(idx) = buffer
-        .iter()
-        .position(|m| matches!(m, RelayMessage::Ok { .. }))
-    {
-        if let Some(RelayMessage::Ok {
-            event_id,
-            accepted,
-            message,
-        }) = buffer.remove(idx)
-        {
-            return Ok(OkResponse {
-                event_id,
-                accepted,
-                message,
-            });
+    if let Some(idx) = buffer.iter().position(|m| matches!(m, RelayMessage::Ok(_))) {
+        if let Some(RelayMessage::Ok(ok)) = buffer.remove(idx) {
+            return Ok(ok);
         }
     }
 
@@ -2506,16 +2318,8 @@ async fn wait_for_any_ok(
             Message::Text(text) => {
                 let msg = parse_relay_message(&text)?;
                 match msg {
-                    RelayMessage::Ok {
-                        event_id,
-                        accepted,
-                        message,
-                    } => {
-                        return Ok(OkResponse {
-                            event_id,
-                            accepted,
-                            message,
-                        });
+                    RelayMessage::Ok(ok) => {
+                        return Ok(ok);
                     }
                     other => buffer.push_back(other),
                 }
@@ -2536,48 +2340,6 @@ async fn wait_for_any_ok(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── relay_ws_to_http ──────────────────────────────────────────────────────
-
-    #[test]
-    fn relay_ws_to_http_plain() {
-        assert_eq!(
-            relay_ws_to_http("ws://localhost:3000"),
-            "http://localhost:3000"
-        );
-    }
-
-    #[test]
-    fn relay_ws_to_http_secure() {
-        assert_eq!(
-            relay_ws_to_http("wss://relay.example.com"),
-            "https://relay.example.com"
-        );
-    }
-
-    #[test]
-    fn relay_ws_to_http_strips_trailing_slash() {
-        assert_eq!(
-            relay_ws_to_http("ws://localhost:3000/"),
-            "http://localhost:3000"
-        );
-    }
-
-    #[test]
-    fn relay_ws_to_http_with_path() {
-        assert_eq!(
-            relay_ws_to_http("wss://relay.example.com/nostr"),
-            "https://relay.example.com/nostr"
-        );
-    }
-
-    #[test]
-    fn relay_ws_to_http_with_port_and_path() {
-        assert_eq!(
-            relay_ws_to_http("wss://relay.example.com:4000/ws"),
-            "https://relay.example.com:4000/ws"
-        );
-    }
 
     // ── channel_sub_id ────────────────────────────────────────────────────────
 
@@ -2611,170 +2373,6 @@ mod tests {
     #[test]
     fn channel_id_from_sub_id_empty() {
         assert!(channel_id_from_sub_id("").is_none());
-    }
-
-    // ── parse_relay_message ───────────────────────────────────────────────────
-
-    #[test]
-    fn parse_ok_accepted() {
-        let text = r#"["OK","abc123",true,""]"#;
-        let msg = parse_relay_message(text).unwrap();
-        match msg {
-            RelayMessage::Ok {
-                event_id,
-                accepted,
-                message,
-            } => {
-                assert_eq!(event_id, "abc123");
-                assert!(accepted);
-                assert_eq!(message, "");
-            }
-            _ => panic!("expected Ok"),
-        }
-    }
-
-    #[test]
-    fn parse_ok_rejected() {
-        let text = r#"["OK","abc123",false,"blocked: spam"]"#;
-        let msg = parse_relay_message(text).unwrap();
-        match msg {
-            RelayMessage::Ok {
-                event_id,
-                accepted,
-                message,
-            } => {
-                assert_eq!(event_id, "abc123");
-                assert!(!accepted);
-                assert_eq!(message, "blocked: spam");
-            }
-            _ => panic!("expected Ok"),
-        }
-    }
-
-    #[test]
-    fn parse_eose() {
-        let text = r#"["EOSE","sub-1"]"#;
-        let msg = parse_relay_message(text).unwrap();
-        match msg {
-            RelayMessage::Eose { subscription_id } => {
-                assert_eq!(subscription_id, "sub-1");
-            }
-            _ => panic!("expected Eose"),
-        }
-    }
-
-    #[test]
-    fn parse_notice() {
-        let text = r#"["NOTICE","hello from relay"]"#;
-        let msg = parse_relay_message(text).unwrap();
-        match msg {
-            RelayMessage::Notice { message } => {
-                assert_eq!(message, "hello from relay");
-            }
-            _ => panic!("expected Notice"),
-        }
-    }
-
-    #[test]
-    fn parse_notice_empty() {
-        let text = r#"["NOTICE"]"#;
-        let msg = parse_relay_message(text).unwrap();
-        match msg {
-            RelayMessage::Notice { message } => {
-                assert_eq!(message, "");
-            }
-            _ => panic!("expected Notice"),
-        }
-    }
-
-    #[test]
-    fn parse_auth() {
-        let text = r#"["AUTH","some-challenge-string"]"#;
-        let msg = parse_relay_message(text).unwrap();
-        match msg {
-            RelayMessage::Auth { challenge } => {
-                assert_eq!(challenge, "some-challenge-string");
-            }
-            _ => panic!("expected Auth"),
-        }
-    }
-
-    #[test]
-    fn parse_closed() {
-        let text = r#"["CLOSED","sub-2","error: rate-limited"]"#;
-        let msg = parse_relay_message(text).unwrap();
-        match msg {
-            RelayMessage::Closed {
-                subscription_id,
-                message,
-            } => {
-                assert_eq!(subscription_id, "sub-2");
-                assert_eq!(message, "error: rate-limited");
-            }
-            _ => panic!("expected Closed"),
-        }
-    }
-
-    #[test]
-    fn parse_closed_no_message() {
-        let text = r#"["CLOSED","sub-3"]"#;
-        let msg = parse_relay_message(text).unwrap();
-        match msg {
-            RelayMessage::Closed {
-                subscription_id,
-                message,
-            } => {
-                assert_eq!(subscription_id, "sub-3");
-                assert_eq!(message, "");
-            }
-            _ => panic!("expected Closed"),
-        }
-    }
-
-    #[test]
-    fn parse_unknown_type_returns_error() {
-        let text = r#"["UNKNOWN","data"]"#;
-        let result = parse_relay_message(text);
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            RelayError::UnexpectedMessage(msg) => {
-                assert!(msg.contains("unknown message type"));
-            }
-            e => panic!("expected UnexpectedMessage, got {e:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_invalid_json_returns_error() {
-        let text = "not json at all";
-        let result = parse_relay_message(text);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RelayError::Json(_)));
-    }
-
-    #[test]
-    fn parse_empty_array_returns_error() {
-        let text = "[]";
-        let result = parse_relay_message(text);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            RelayError::UnexpectedMessage(_)
-        ));
-    }
-
-    #[test]
-    fn parse_auth_missing_challenge_returns_error() {
-        let text = r#"["AUTH"]"#;
-        let result = parse_relay_message(text);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn parse_eose_missing_sub_id_returns_error() {
-        let text = r#"["EOSE"]"#;
-        let result = parse_relay_message(text);
-        assert!(result.is_err());
     }
 
     // ── channel_sub_id subscription format ───────────────────────────────────

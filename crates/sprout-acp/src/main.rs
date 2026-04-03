@@ -27,6 +27,7 @@ use sprout_core::kind::{
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
     KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
+use sprout_core::relay_protocol::TwoGenDedup;
 use tokio::sync::{mpsc, watch};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -847,8 +848,7 @@ async fn tokio_main() -> Result<()> {
     let mut membership_newest_ts: HashMap<Uuid, u64> = HashMap::new();
     // Two-generation dedup for membership event replays (bounded, no amnesia).
     // Rotates at 1000 entries instead of clearing the entire set at 2000.
-    let mut seen_membership_current: HashSet<String> = HashSet::new();
-    let mut seen_membership_previous: HashSet<String> = HashSet::new();
+    let mut seen_membership = TwoGenDedup::new(2000);
 
     // Channels the agent has been removed from. When a checked-out agent is
     // returned to the pool, its sessions for these channels are stripped, and
@@ -1008,22 +1008,14 @@ async fn tokio_main() -> Result<()> {
                                 // Why not `<=`? That would suppress legitimate live
                                 // add→remove (or remove→add) sequences in the same second,
                                 // leaving the harness in the wrong membership state.
-                                // Two-generation dedup: check both sets before inserting.
-                                if seen_membership_current.contains(&eid)
-                                    || seen_membership_previous.contains(&eid)
-                                {
+                                // Two-generation dedup: insert returns false if duplicate.
+                                if !seen_membership.insert(eid) {
                                     tracing::debug!(
                                         channel_id = %ch,
                                         kind = kind_u32,
                                         "skipping duplicate membership notification (same event_id)"
                                     );
                                     continue;
-                                }
-                                seen_membership_current.insert(eid);
-                                // Rotate at 1000: current → previous, no amnesia window.
-                                if seen_membership_current.len() >= 1000 {
-                                    seen_membership_previous =
-                                        std::mem::take(&mut seen_membership_current);
                                 }
                                 if let Some(&newest) = membership_newest_ts.get(&ch) {
                                     if ts < newest {
