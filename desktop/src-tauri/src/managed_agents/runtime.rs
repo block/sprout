@@ -142,8 +142,6 @@ pub(crate) fn sweep_orphaned_agent_processes(skip_pids: &[u32]) {
         fn proc_listallpids(buffer: *mut libc::pid_t, buffersize: libc::c_int) -> libc::c_int;
     }
 
-    let my_uid = unsafe { libc::getuid() };
-
     // First call with null to get the count.
     let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
     if count <= 0 {
