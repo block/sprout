@@ -8,3 +8,29 @@ pub mod ingest;
 pub mod req;
 /// NIP-29 and NIP-25 side-effect handlers.
 pub mod side_effects;
+
+/// Extract an optional TTL (in seconds) from a Nostr event's `ttl` tag,
+/// applying the server-side override when configured.
+///
+/// Returns `None` when the event carries no `ttl` tag — the channel is permanent.
+pub fn resolve_ttl(event: &nostr::Event, ephemeral_ttl_override: Option<i32>) -> Option<i32> {
+    let from_tag: Option<i32> = event.tags.iter().find_map(|t| {
+        if t.kind().to_string() == "ttl" {
+            t.content().and_then(|s| s.parse::<i32>().ok())
+        } else {
+            None
+        }
+    });
+
+    match (from_tag, ephemeral_ttl_override) {
+        (Some(original), Some(ovr)) => {
+            tracing::debug!(
+                original,
+                override_val = ovr,
+                "Applying SPROUT_EPHEMERAL_TTL_OVERRIDE"
+            );
+            Some(ovr)
+        }
+        (ttl, _) => ttl,
+    }
+}

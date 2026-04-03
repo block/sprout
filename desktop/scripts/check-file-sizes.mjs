@@ -48,7 +48,7 @@ const overrides = new Map([
   ["src/features/agents/ui/AgentsView.tsx", 790], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard + persona/team import + provider/model fields
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
-  ["src/shared/api/types.ts", 525], // persona provider/model fields + forum types + workflow type re-exports
+  ["src/shared/api/types.ts", 530], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields
 ]);
 
 async function walkFiles(directory) {

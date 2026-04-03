@@ -16,6 +16,8 @@ export type Channel = {
   participants: string[];
   participantPubkeys: string[];
   isMember: boolean;
+  ttlSeconds: number | null;
+  ttlDeadline: string | null;
 };
 
 export type ChannelDetail = Channel & {
@@ -43,6 +45,7 @@ export type CreateChannelInput = {
   channelType: Exclude<ChannelType, "dm">;
   visibility: ChannelVisibility;
   description?: string;
+  ttlSeconds?: number;
 };
 
 export type OpenDmInput = {

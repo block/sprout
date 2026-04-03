@@ -449,22 +449,34 @@ export function AppShell() {
           isOpeningDm={openDmMutation.isPending}
           isPresencePending={presenceSession.isPending}
           selfPresenceStatus={presenceSession.currentStatus}
-          onCreateChannel={async ({ description, name, visibility }) => {
+          onCreateChannel={async ({
+            description,
+            name,
+            visibility,
+            ttlSeconds,
+          }) => {
             const createdChannel = await createChannelMutation.mutateAsync({
               name,
               description,
               channelType: "stream",
               visibility,
+              ttlSeconds,
             });
 
             openChannelView(createdChannel.id);
           }}
-          onCreateForum={async ({ description, name, visibility }) => {
+          onCreateForum={async ({
+            description,
+            name,
+            visibility,
+            ttlSeconds,
+          }) => {
             const createdForum = await createForumMutation.mutateAsync({
               name,
               description,
               channelType: "forum",
               visibility,
+              ttlSeconds,
             });
 
             openChannelView(createdForum.id);

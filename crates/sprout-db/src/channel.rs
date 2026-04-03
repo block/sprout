@@ -58,6 +58,10 @@ pub struct ChannelRecord {
     pub purpose_set_by: Option<Vec<u8>>,
     /// When the purpose was last set.
     pub purpose_set_at: Option<DateTime<Utc>>,
+    /// TTL in seconds for ephemeral channels. `None` means permanent.
+    pub ttl_seconds: Option<i32>,
+    /// Deadline by which a new message must arrive or the channel is auto-archived.
+    pub ttl_deadline: Option<DateTime<Utc>>,
 }
 
 /// A channel membership row as returned from the database.
@@ -85,6 +89,7 @@ pub async fn create_channel(
     visibility: ChannelVisibility,
     description: Option<&str>,
     created_by: &[u8],
+    ttl_seconds: Option<i32>,
 ) -> Result<ChannelRecord> {
     if created_by.len() != 32 {
         return Err(DbError::InvalidData(format!(
@@ -99,8 +104,9 @@ pub async fn create_channel(
 
     sqlx::query(
         r#"
-        INSERT INTO channels (id, name, channel_type, visibility, description, created_by)
-        VALUES ($1, $2, $3::channel_type, $4::channel_visibility, $5, $6)
+        INSERT INTO channels (id, name, channel_type, visibility, description, created_by, ttl_seconds, ttl_deadline)
+        VALUES ($1, $2, $3::channel_type, $4::channel_visibility, $5, $6, $7,
+                CASE WHEN $7 IS NOT NULL THEN NOW() + ($7 || ' seconds')::interval ELSE NULL END)
         "#,
     )
     .bind(id)
@@ -109,6 +115,7 @@ pub async fn create_channel(
     .bind(visibility.as_str())
     .bind(description)
     .bind(created_by)
+    .bind(ttl_seconds)
     .execute(&mut *tx)
     .await?;
 
@@ -135,7 +142,8 @@ pub async fn create_channel(
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
-               purpose, purpose_set_by, purpose_set_at
+               purpose, purpose_set_by, purpose_set_at,
+               ttl_seconds, ttl_deadline
         FROM channels WHERE id = $1
         "#,
     )
@@ -152,6 +160,7 @@ pub async fn create_channel(
 ///
 /// Returns `(record, true)` if the channel was newly created, or `(record, false)` if a
 /// channel with `channel_id` already exists (duplicate — caller should reject the event).
+#[allow(clippy::too_many_arguments)]
 pub async fn create_channel_with_id(
     pool: &PgPool,
     channel_id: Uuid,
@@ -160,6 +169,7 @@ pub async fn create_channel_with_id(
     visibility: ChannelVisibility,
     description: Option<&str>,
     created_by: &[u8],
+    ttl_seconds: Option<i32>,
 ) -> Result<(ChannelRecord, bool)> {
     if created_by.len() != 32 {
         return Err(DbError::InvalidData(format!(
@@ -172,8 +182,9 @@ pub async fn create_channel_with_id(
 
     let rows_affected = sqlx::query(
         r#"
-        INSERT INTO channels (id, name, channel_type, visibility, description, created_by)
-        VALUES ($1, $2, $3::channel_type, $4::channel_visibility, $5, $6)
+        INSERT INTO channels (id, name, channel_type, visibility, description, created_by, ttl_seconds, ttl_deadline)
+        VALUES ($1, $2, $3::channel_type, $4::channel_visibility, $5, $6, $7,
+                CASE WHEN $7 IS NOT NULL THEN NOW() + ($7 || ' seconds')::interval ELSE NULL END)
         ON CONFLICT (id) DO NOTHING
         "#,
     )
@@ -183,6 +194,7 @@ pub async fn create_channel_with_id(
     .bind(visibility.as_str())
     .bind(description)
     .bind(created_by)
+    .bind(ttl_seconds)
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -215,7 +227,8 @@ pub async fn create_channel_with_id(
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
-               purpose, purpose_set_by, purpose_set_at
+               purpose, purpose_set_by, purpose_set_at,
+               ttl_seconds, ttl_deadline
         FROM channels WHERE id = $1
         "#,
     )
@@ -237,7 +250,8 @@ pub async fn get_channel(pool: &PgPool, channel_id: Uuid) -> Result<ChannelRecor
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
-               purpose, purpose_set_by, purpose_set_at
+               purpose, purpose_set_by, purpose_set_at,
+               ttl_seconds, ttl_deadline
         FROM channels WHERE id = $1 AND deleted_at IS NULL
         "#,
     )
@@ -535,7 +549,8 @@ pub async fn list_channels(pool: &PgPool, visibility: Option<&str>) -> Result<Ve
                    created_by, created_at, updated_at, archived_at, deleted_at,
                    nip29_group_id, topic_required, max_members,
                    topic, topic_set_by, topic_set_at,
-                   purpose, purpose_set_by, purpose_set_at
+                   purpose, purpose_set_by, purpose_set_at,
+                   ttl_seconds, ttl_deadline
             FROM channels
             WHERE deleted_at IS NULL AND visibility::text = $1
             ORDER BY created_at DESC
@@ -553,7 +568,8 @@ pub async fn list_channels(pool: &PgPool, visibility: Option<&str>) -> Result<Ve
                    created_by, created_at, updated_at, archived_at, deleted_at,
                    nip29_group_id, topic_required, max_members,
                    topic, topic_set_by, topic_set_at,
-                   purpose, purpose_set_by, purpose_set_at
+                   purpose, purpose_set_by, purpose_set_at,
+                   ttl_seconds, ttl_deadline
             FROM channels
             WHERE deleted_at IS NULL
             ORDER BY created_at DESC
@@ -596,7 +612,8 @@ async fn get_channel_tx(
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
-               purpose, purpose_set_by, purpose_set_at
+               purpose, purpose_set_by, purpose_set_at,
+               ttl_seconds, ttl_deadline
         FROM channels WHERE id = $1 AND deleted_at IS NULL
         "#,
     )
@@ -685,6 +702,7 @@ pub async fn get_accessible_channels(
                c.nip29_group_id, c.topic_required, c.max_members,
                c.topic, c.topic_set_by, c.topic_set_at,
                c.purpose, c.purpose_set_by, c.purpose_set_at,
+               c.ttl_seconds, c.ttl_deadline,
                (cm.channel_id IS NOT NULL) AS is_member
         FROM channels c
         LEFT JOIN channel_members cm
@@ -807,6 +825,8 @@ fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
     let purpose: Option<String> = row.try_get("purpose").unwrap_or(None);
     let purpose_set_by: Option<Vec<u8>> = row.try_get("purpose_set_by").unwrap_or(None);
     let purpose_set_at: Option<DateTime<Utc>> = row.try_get("purpose_set_at").unwrap_or(None);
+    let ttl_seconds: Option<i32> = row.try_get("ttl_seconds").unwrap_or(None);
+    let ttl_deadline: Option<DateTime<Utc>> = row.try_get("ttl_deadline").unwrap_or(None);
 
     Ok(ChannelRecord {
         id,
@@ -829,6 +849,8 @@ fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
         purpose,
         purpose_set_by,
         purpose_set_at,
+        ttl_seconds,
+        ttl_deadline,
     })
 }
 
@@ -1085,4 +1107,43 @@ pub async fn get_member_role(
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|r| r.try_get("role")).transpose()?)
+}
+
+/// Bump the TTL deadline for an ephemeral channel after a new message.
+///
+/// No-op for permanent channels or channels that are already archived/deleted.
+pub async fn bump_ttl_deadline(pool: &PgPool, channel_id: Uuid) -> Result<()> {
+    sqlx::query(
+        "UPDATE channels SET ttl_deadline = NOW() + (ttl_seconds || ' seconds')::interval \
+         WHERE id = $1 AND ttl_seconds IS NOT NULL AND archived_at IS NULL AND deleted_at IS NULL",
+    )
+    .bind(channel_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Archive ephemeral channels whose TTL deadline has passed.
+///
+/// Returns the list of channel IDs that were archived. Idempotent — the
+/// `archived_at IS NULL` guard prevents double-archiving even if called
+/// concurrently from multiple relay pods.
+pub async fn reap_expired_ephemeral_channels(pool: &PgPool) -> Result<Vec<Uuid>> {
+    let rows = sqlx::query(
+        "UPDATE channels SET archived_at = NOW() \
+         WHERE ttl_seconds IS NOT NULL \
+           AND ttl_deadline < NOW() \
+           AND archived_at IS NULL \
+           AND deleted_at IS NULL \
+         RETURNING id",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            let id: Uuid = row.try_get("id")?;
+            Ok(id)
+        })
+        .collect()
 }

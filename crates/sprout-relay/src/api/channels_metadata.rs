@@ -50,6 +50,8 @@ fn channel_detail_to_json(record: &ChannelRecord, member_count: i64) -> serde_js
         "topic_required": record.topic_required,
         "max_members": record.max_members,
         "nip29_group_id": record.nip29_group_id,
+        "ttl_seconds": record.ttl_seconds,
+        "ttl_deadline": record.ttl_deadline.map(|t| t.to_rfc3339()),
     })
 }
 
