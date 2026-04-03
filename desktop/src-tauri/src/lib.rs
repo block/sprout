@@ -88,8 +88,27 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let mut changed = sync_managed_agent_processes(&mut records, &mut runtimes);
 
+    // First pass: kill stale processes left from a previous session whose PID
+    // is still alive but not tracked in the current runtimes map.
     for record in records.iter_mut() {
-        // Only stop Local agents — Provider agents are managed externally.
+        if record.backend != BackendKind::Local {
+            continue;
+        }
+        let Some(pid) = record.runtime_pid else {
+            continue;
+        };
+        if !runtimes.contains_key(&record.pubkey) {
+            let _ = managed_agents::terminate_process(pid);
+            record.runtime_pid = None;
+            record.last_stopped_at = Some(util::now_iso());
+            record.updated_at = util::now_iso();
+            changed = true;
+        }
+    }
+
+    // Second pass: gracefully stop all tracked agents. Continue on error so
+    // one stuck agent doesn't prevent the rest from being cleaned up.
+    for record in records.iter_mut() {
         if record.backend != BackendKind::Local {
             continue;
         }
@@ -97,7 +116,12 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
             continue;
         }
 
-        stop_managed_agent_process(record, &mut runtimes)?;
+        if let Err(error) = stop_managed_agent_process(record, &mut runtimes) {
+            eprintln!(
+                "sprout-desktop: failed to stop agent {} ({}): {error}",
+                record.name, record.pubkey
+            );
+        }
         changed = true;
     }
 
@@ -317,10 +341,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app_handle, event| match event {
+    let shutdown_done = std::sync::atomic::AtomicBool::new(false);
+    app.run(move |app_handle, event| match event {
         RunEvent::ExitRequested { .. } | RunEvent::Exit => {
-            if let Err(error) = shutdown_managed_agents(app_handle) {
-                eprintln!("sprout-desktop: failed to stop managed agents: {error}");
+            if !shutdown_done.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                if let Err(error) = shutdown_managed_agents(app_handle) {
+                    eprintln!("sprout-desktop: failed to stop managed agents: {error}");
+                }
             }
         }
         _ => {}
