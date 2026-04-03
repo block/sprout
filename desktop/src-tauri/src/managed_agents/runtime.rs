@@ -192,7 +192,7 @@ pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, skip_pids: &[u32])
         if skip_pids.contains(pid) {
             continue;
         }
-        if !process_is_running(*pid) {
+        if !process_is_running(*pid) || !process_belongs_to_us(*pid) {
             super::remove_agent_pid_file(app, pubkey);
         }
     }
