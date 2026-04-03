@@ -293,7 +293,7 @@ export function CreateAgentDialog({
   const providerConfigComplete = React.useMemo(() => {
     if (!isProviderMode || !probedProvider?.config_schema) return true;
     const schema = probedProvider.config_schema as Record<string, unknown>;
-    const required: string[] = schema?.required ?? [];
+    const required: string[] = (schema?.required as string[] | undefined) ?? [];
     return required.every(
       (key) => (providerConfig[key] ?? "").trim().length > 0,
     );

@@ -1183,7 +1183,7 @@ mod tests {
         let now = Utc::now();
 
         let record = ApprovalRecord {
-            token: "abc123def456abc123def456abc123de".to_owned(),
+            token: b"abc123def456abc123def456abc123de".to_vec(),
             workflow_id,
             run_id,
             step_id: "request_approval".to_owned(),
@@ -1196,7 +1196,7 @@ mod tests {
             created_at: now,
         };
 
-        assert_eq!(record.token, "abc123def456abc123def456abc123de");
+        assert_eq!(record.token, b"abc123def456abc123def456abc123de");
         assert_eq!(record.workflow_id, workflow_id);
         assert_eq!(record.run_id, run_id);
         assert_eq!(record.step_id, "request_approval");
@@ -1213,7 +1213,7 @@ mod tests {
         let approver_pubkey = vec![0xca; 32];
 
         let record = ApprovalRecord {
-            token: "token-granted".to_owned(),
+            token: b"token-granted".to_vec(),
             workflow_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             step_id: "gate".to_owned(),
@@ -1236,7 +1236,7 @@ mod tests {
         let now = Utc::now();
 
         let record = ApprovalRecord {
-            token: "token-denied".to_owned(),
+            token: b"token-denied".to_vec(),
             workflow_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             step_id: "gate".to_owned(),
@@ -1257,7 +1257,7 @@ mod tests {
     fn approval_record_clone_is_independent() {
         let now = Utc::now();
         let record = ApprovalRecord {
-            token: "original-token".to_owned(),
+            token: b"original-token".to_vec(),
             workflow_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             step_id: "gate".to_owned(),
