@@ -6,7 +6,11 @@ import { useActiveChannelHeader } from "@/app/useActiveChannelHeader";
 import { useAncestorResolution } from "@/app/useAncestorResolution";
 import { useChannelPaneHandlers } from "@/app/useChannelPaneHandlers";
 import { useSearchSession } from "@/app/useSearchSession";
-import { useViewRouter } from "@/app/useViewRouter";
+import {
+  useViewRouter,
+  type AppView,
+  type MainView,
+} from "@/app/useViewRouter";
 import { AgentsView } from "@/features/agents/ui/AgentsView";
 import { ForumView } from "@/features/forum/ui/ForumView";
 import { WorkflowsView } from "@/features/workflows/ui/WorkflowsView";
