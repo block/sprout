@@ -5,6 +5,7 @@ import {
   deleteWorkflow,
   denyApproval,
   getChannelWorkflows,
+  getRunApprovals,
   getWorkflow,
   getWorkflowRuns,
   grantApproval,
@@ -20,6 +21,8 @@ export const workflowQueryKey = (workflowId: string) =>
   ["workflow", workflowId] as const;
 export const workflowRunsQueryKey = (workflowId: string) =>
   ["workflow-runs", workflowId] as const;
+export const runApprovalsQueryKey = (workflowId: string, runId: string) =>
+  ["run-approvals", workflowId, runId] as const;
 
 export function useChannelWorkflowsQuery(channelId: string | null) {
   return useQuery({
@@ -45,6 +48,19 @@ export function useWorkflowRunsQuery(workflowId: string | null) {
     queryKey: workflowRunsQueryKey(workflowId ?? ""),
     queryFn: () => getWorkflowRuns(workflowId!),
     enabled: workflowId !== null,
+    staleTime: 10_000,
+    refetchInterval: 10_000,
+  });
+}
+
+export function useRunApprovalsQuery(
+  workflowId: string | null,
+  runId: string | null,
+) {
+  return useQuery({
+    queryKey: runApprovalsQueryKey(workflowId ?? "", runId ?? ""),
+    queryFn: () => getRunApprovals(workflowId!, runId!),
+    enabled: workflowId !== null && runId !== null,
     staleTime: 10_000,
     refetchInterval: 10_000,
   });

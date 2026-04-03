@@ -2,6 +2,7 @@ import { Play, X } from "lucide-react";
 import * as React from "react";
 
 import {
+  useRunApprovalsQuery,
   useTriggerWorkflowMutation,
   useWorkflowQuery,
   useWorkflowRunsQuery,
@@ -28,6 +29,7 @@ export function WorkflowDetailPanel({
   const selectedRun = selectedRunId
     ? (runs.find((r) => r.id === selectedRunId) ?? null)
     : null;
+  const approvalsQuery = useRunApprovalsQuery(workflowId, selectedRunId);
 
   return (
     <div
@@ -118,7 +120,10 @@ export function WorkflowDetailPanel({
                 <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Execution Trace
                 </h4>
-                <WorkflowRunTrace run={selectedRun} />
+                <WorkflowRunTrace
+                  approvals={approvalsQuery.data}
+                  run={selectedRun}
+                />
               </div>
             ) : null}
           </div>

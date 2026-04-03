@@ -1126,6 +1126,14 @@ impl Db {
         workflow::get_approval(&self.pool, token).await
     }
 
+    /// Fetch all approvals for a workflow run.
+    pub async fn get_run_approvals(
+        &self,
+        run_id: uuid::Uuid,
+    ) -> Result<Vec<workflow::ApprovalRecord>> {
+        workflow::get_run_approvals(&self.pool, run_id).await
+    }
+
     /// Update an approval's status.
     pub async fn update_approval(
         &self,

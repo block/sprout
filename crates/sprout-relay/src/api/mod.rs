@@ -67,8 +67,8 @@ pub use users::{
     get_profile, get_user_profile, get_users_batch, put_channel_add_policy, search_users,
 };
 pub use workflows::{
-    create_workflow, delete_workflow, get_workflow, list_channel_workflows, list_workflow_runs,
-    trigger_workflow, update_workflow, workflow_webhook,
+    create_workflow, delete_workflow, get_workflow, list_channel_workflows, list_run_approvals,
+    list_workflow_runs, trigger_workflow, update_workflow, workflow_webhook,
 };
 
 // ── Shared helpers ────────────────────────────────────────────────────────────

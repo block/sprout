@@ -101,6 +101,17 @@ pub async fn trigger_workflow(
 
 // ── Approvals ───────────────────────────────────────────────────────────────
 
+#[tauri::command]
+pub async fn get_run_approvals(
+    workflow_id: String,
+    run_id: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let path = format!("/api/workflows/{workflow_id}/runs/{run_id}/approvals");
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
+    send_json_request(request).await
+}
+
 #[derive(Serialize)]
 struct ApprovalBody {
     #[serde(skip_serializing_if = "Option::is_none")]

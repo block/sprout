@@ -46,6 +46,25 @@ pub(crate) fn run_record_to_json(r: &sprout_db::workflow::WorkflowRunRecord) -> 
     })
 }
 
+/// Serialize an [`ApprovalRecord`] to a JSON value.
+pub(crate) fn approval_record_to_json(
+    a: &sprout_db::workflow::ApprovalRecord,
+) -> serde_json::Value {
+    serde_json::json!({
+        "token": a.token,
+        "workflow_id": a.workflow_id.to_string(),
+        "run_id": a.run_id.to_string(),
+        "step_id": a.step_id,
+        "step_index": a.step_index,
+        "approver_spec": a.approver_spec,
+        "status": a.status.to_string(),
+        "approver_pubkey": a.approver_pubkey.as_ref().map(|pk| nostr_hex::encode(pk)),
+        "note": a.note,
+        "expires_at": a.expires_at.to_rfc3339(),
+        "created_at": a.created_at.timestamp(),
+    })
+}
+
 // ── SSRF prevention ───────────────────────────────────────────────────────────
 
 /// Validate all CallWebhook URLs in a workflow definition.

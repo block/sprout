@@ -199,6 +199,17 @@ export async function getWorkflowRuns(
   return raw.map(fromRawWorkflowRun);
 }
 
+export async function getRunApprovals(
+  workflowId: string,
+  runId: string,
+): Promise<WorkflowApproval[]> {
+  const raw = await invokeTauri<RawWorkflowApproval[]>("get_run_approvals", {
+    workflowId,
+    runId,
+  });
+  return raw.map(fromRawApproval);
+}
+
 export async function triggerWorkflow(
   workflowId: string,
 ): Promise<TriggerWorkflowResponse> {

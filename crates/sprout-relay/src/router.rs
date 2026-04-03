@@ -83,6 +83,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                 .delete(api::delete_workflow),
         )
         .route("/api/workflows/{id}/runs", get(api::list_workflow_runs))
+        .route(
+            "/api/workflows/{id}/runs/{run_id}/approvals",
+            get(api::list_run_approvals),
+        )
         .route("/api/workflows/{id}/trigger", post(api::trigger_workflow))
         .route("/api/workflows/{id}/webhook", post(api::workflow_webhook))
         .route("/api/approvals/{token}/grant", post(api::grant_approval))

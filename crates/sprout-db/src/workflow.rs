@@ -661,6 +661,24 @@ pub async fn get_approval(pool: &PgPool, token: &str) -> Result<ApprovalRecord> 
     row_to_approval_record(row)
 }
 
+/// Fetch all approval records for a given workflow run.
+pub async fn get_run_approvals(pool: &PgPool, run_id: Uuid) -> Result<Vec<ApprovalRecord>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT token, workflow_id, run_id, step_id, step_index, approver_spec,
+               status::text AS status, approver_pubkey, note, expires_at, created_at
+        FROM workflow_approvals
+        WHERE run_id = $1
+        ORDER BY step_index, created_at
+        "#,
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter().map(row_to_approval_record).collect()
+}
+
 /// Update an approval's status, approver pubkey, and optional note.
 /// Also stamps `granted_at` or `denied_at` based on the new status.
 ///
