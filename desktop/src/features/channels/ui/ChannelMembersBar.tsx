@@ -1,4 +1,4 @@
-import { Bot, Plus, Settings2, UserRound } from "lucide-react";
+import { Bot, Plus, Settings2, UserRound, Zap } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -11,6 +11,7 @@ import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { Channel } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
+import { CreateWorkflowDialog } from "@/features/workflows/ui/CreateWorkflowDialog";
 import { AddChannelBotDialog } from "./AddChannelBotDialog";
 
 type ChannelMembersBarProps = {
@@ -47,6 +48,7 @@ export function ChannelMembersBar({
   onManageChannel,
 }: ChannelMembersBarProps) {
   const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
+  const [isCreateWorkflowOpen, setIsCreateWorkflowOpen] = React.useState(false);
   const membersQuery = useChannelMembersQuery(channel.id);
   const providersQuery = useAcpProvidersQuery();
   const backendProvidersQuery = useBackendProvidersQuery();
@@ -111,6 +113,7 @@ export function ChannelMembersBar({
 
     previousChannelIdRef.current = channel.id;
     setIsAddBotOpen(false);
+    setIsCreateWorkflowOpen(false);
   }, [channel.id]);
 
   const dialogErrorMessage =
@@ -155,6 +158,21 @@ export function ChannelMembersBar({
         </Button>
 
         <Button
+          aria-label="Create workflow"
+          className="h-9 w-9 rounded-full"
+          data-testid="channel-create-workflow-trigger"
+          disabled={channel.archivedAt !== null}
+          onClick={() => {
+            setIsCreateWorkflowOpen(true);
+          }}
+          size="icon"
+          type="button"
+          variant="outline"
+        >
+          <Zap className="h-4 w-4" />
+        </Button>
+
+        <Button
           aria-label="Manage channel"
           className="h-9 w-9 rounded-full"
           data-testid="channel-management-trigger"
@@ -166,6 +184,12 @@ export function ChannelMembersBar({
           <Settings2 className="h-4 w-4" />
         </Button>
       </div>
+
+      <CreateWorkflowDialog
+        channels={[channel]}
+        onOpenChange={setIsCreateWorkflowOpen}
+        open={isCreateWorkflowOpen}
+      />
 
       <AddChannelBotDialog
         backendProviders={backendProvidersQuery.data ?? []}

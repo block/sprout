@@ -86,42 +86,52 @@ export function CreateWorkflowDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-1.5">
-            <label
-              className="block text-sm font-medium"
-              htmlFor="wf-channel-select"
-            >
-              Channel
-            </label>
-            <div className="relative">
-              <select
-                className="flex h-11 w-full appearance-none rounded-xl border border-border/70 bg-muted/20 px-3 pr-10 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={channels.length === 0 || createMutation.isPending}
-                id="wf-channel-select"
-                onChange={(event) => {
-                  createMutation.reset();
-                  setSelectedChannelId(event.target.value);
-                }}
-                value={selectedChannelId}
+          {channels.length > 1 ? (
+            <div className="space-y-1.5">
+              <label
+                className="block text-sm font-medium"
+                htmlFor="wf-channel-select"
               >
-                {channels.length === 0 ? (
-                  <option value="">No channels available</option>
-                ) : null}
-                {channels.map((channel) => (
-                  <option key={channel.id} value={channel.id}>
-                    {channel.name} · {channel.channelType} ·{" "}
-                    {channel.visibility}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                Channel
+              </label>
+              <div className="relative">
+                <select
+                  className="flex h-11 w-full appearance-none rounded-xl border border-border/70 bg-muted/20 px-3 pr-10 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={channels.length === 0 || createMutation.isPending}
+                  id="wf-channel-select"
+                  onChange={(event) => {
+                    createMutation.reset();
+                    setSelectedChannelId(event.target.value);
+                  }}
+                  value={selectedChannelId}
+                >
+                  {channels.length === 0 ? (
+                    <option value="">No channels available</option>
+                  ) : null}
+                  {channels.map((channel) => (
+                    <option key={channel.id} value={channel.id}>
+                      {channel.name} · {channel.channelType} ·{" "}
+                      {channel.visibility}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {selectedChannel
+                  ? `New workflows will belong to ${selectedChannel.name}.`
+                  : "Join or create a channel before adding a workflow."}
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {selectedChannel
-                ? `New workflows will belong to ${selectedChannel.name}.`
-                : "Join or create a channel before adding a workflow."}
+          ) : selectedChannel ? (
+            <p className="text-sm text-muted-foreground">
+              This workflow will be created in{" "}
+              <span className="font-medium text-foreground">
+                {selectedChannel.name}
+              </span>
+              .
             </p>
-          </div>
+          ) : null}
 
           <div className="space-y-1.5">
             <label
