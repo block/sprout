@@ -466,6 +466,7 @@ export type UpdateTeamInput = {
 
 // ── Workflow types (re-exported from workflowTypes.ts) ────────────────────
 export type {
+  ApprovalActionResponse,
   Workflow,
   WorkflowApproval,
   WorkflowApprovalStatus,
@@ -473,6 +474,7 @@ export type {
   WorkflowRunStatus,
   WorkflowStatus,
   TraceEntry,
+  TriggerWorkflowResponse,
 } from "@/shared/api/workflowTypes";
 
 // ── Forum types ───────────────────────────────────────────────────────────────

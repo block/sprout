@@ -14,8 +14,7 @@ export function WorkflowApprovalCard({ approval }: WorkflowApprovalCardProps) {
   const [note, setNote] = React.useState("");
   const approvalMutation = useApprovalMutation();
 
-  const isExpired =
-    approval.expiresAt && new Date(approval.expiresAt) < new Date();
+  const isExpired = new Date(approval.expiresAt) < new Date();
 
   if (approval.status !== "pending" || isExpired) {
     return null;
@@ -30,11 +29,9 @@ export function WorkflowApprovalCard({ approval }: WorkflowApprovalCardProps) {
       <p className="mb-2 text-xs text-muted-foreground">
         Approver: {approval.approverSpec}
       </p>
-      {approval.expiresAt ? (
-        <p className="mb-2 text-xs text-muted-foreground">
-          Expires: {new Date(approval.expiresAt).toLocaleString()}
-        </p>
-      ) : null}
+      <p className="mb-2 text-xs text-muted-foreground">
+        Expires: {new Date(approval.expiresAt).toLocaleString()}
+      </p>
 
       <Textarea
         className="mb-2 h-16 resize-none text-xs"

@@ -24,11 +24,11 @@ function StepStatusIcon({ status }: { status: string }) {
   }
 }
 
-function formatDuration(startedAt: string | null, completedAt: string | null) {
-  if (!startedAt || !completedAt) return null;
-  const ms = new Date(completedAt).getTime() - new Date(startedAt).getTime();
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
+function formatDuration(startedAt: number | null, completedAt: number | null) {
+  if (startedAt === null || completedAt === null) return null;
+  const seconds = completedAt - startedAt;
+  if (seconds < 1) return `${Math.round(seconds * 1000)}ms`;
+  return `${seconds.toFixed(1)}s`;
 }
 
 export function WorkflowRunTrace({
@@ -67,9 +67,9 @@ export function WorkflowRunTrace({
                 </span>
               ) : null}
             </div>
-            {step.output ? (
+            {Object.keys(step.output).length > 0 ? (
               <pre className="ml-8 max-h-24 overflow-auto rounded bg-muted/30 px-2 py-1 font-mono text-xs text-muted-foreground">
-                {step.output}
+                {JSON.stringify(step.output, null, 2)}
               </pre>
             ) : null}
             {step.error ? (

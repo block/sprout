@@ -56,16 +56,11 @@ export function WorkflowCard({
             </span>
             <StatusBadge status={workflow.status} />
           </div>
-          {workflow.description ? (
-            <p className="mt-1 truncate pl-6 text-xs text-muted-foreground">
-              {workflow.description}
-            </p>
-          ) : null}
           <div className="mt-1.5 flex items-center gap-3 pl-6 text-[11px] text-muted-foreground">
             {channelName ? <span>{channelName}</span> : null}
             <span className="flex items-center gap-1">
               <Clock className="h-3 w-3" />
-              {new Date(workflow.updatedAt).toLocaleDateString()}
+              {new Date(workflow.updatedAt * 1000).toLocaleDateString()}
             </span>
           </div>
         </div>

@@ -3,15 +3,12 @@ export type WorkflowStatus = "active" | "disabled" | "archived";
 export type Workflow = {
   id: string;
   name: string;
-  description: string | null;
   ownerPubkey: string;
-  channelId: string;
-  definition: string;
-  definitionHash: string;
+  channelId: string | null;
+  definition: Record<string, unknown>;
   status: WorkflowStatus;
-  enabled: boolean;
-  createdAt: string;
-  updatedAt: string;
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type WorkflowRunStatus =
@@ -19,14 +16,15 @@ export type WorkflowRunStatus =
   | "running"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "waiting_approval";
 
 export type TraceEntry = {
   stepId: string;
   status: string;
-  output: string | null;
-  startedAt: string | null;
-  completedAt: string | null;
+  output: Record<string, unknown>;
+  startedAt: number | null;
+  completedAt: number | null;
   error: string | null;
 };
 
@@ -34,13 +32,12 @@ export type WorkflowRun = {
   id: string;
   workflowId: string;
   status: WorkflowRunStatus;
-  currentStep: string | null;
+  currentStep: number | null;
   executionTrace: TraceEntry[];
-  triggerContext: Record<string, unknown> | null;
-  startedAt: string | null;
-  completedAt: string | null;
+  startedAt: number | null;
+  completedAt: number | null;
   errorMessage: string | null;
-  createdAt: string;
+  createdAt: number;
 };
 
 export type WorkflowApprovalStatus =
@@ -59,6 +56,19 @@ export type WorkflowApproval = {
   status: WorkflowApprovalStatus;
   approverPubkey: string | null;
   note: string | null;
-  expiresAt: string | null;
-  createdAt: string;
+  expiresAt: string;
+  createdAt: number;
+};
+
+export type TriggerWorkflowResponse = {
+  runId: string;
+  workflowId: string;
+  status: string;
+};
+
+export type ApprovalActionResponse = {
+  token: string;
+  status: string;
+  runId: string;
+  workflowId: string;
 };

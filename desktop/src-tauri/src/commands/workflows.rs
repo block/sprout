@@ -4,7 +4,7 @@ use tauri::State;
 
 use crate::{
     app_state::AppState,
-    relay::{build_authed_request, send_json_request},
+    relay::{build_authed_request, send_empty_request, send_json_request},
 };
 
 // ── Reads ───────────────────────────────────────────────────────────────────
@@ -83,10 +83,10 @@ pub async fn update_workflow(
 pub async fn delete_workflow(
     workflow_id: String,
     state: State<'_, AppState>,
-) -> Result<serde_json::Value, String> {
+) -> Result<(), String> {
     let path = format!("/api/workflows/{workflow_id}");
     let request = build_authed_request(&state.http_client, Method::DELETE, &path, &state)?;
-    send_json_request(request).await
+    send_empty_request(request).await
 }
 
 #[tauri::command]

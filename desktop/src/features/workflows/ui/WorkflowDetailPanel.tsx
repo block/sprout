@@ -57,18 +57,12 @@ export function WorkflowDetailPanel({
       <div className="flex-1 overflow-y-auto">
         {workflow ? (
           <div className="space-y-4 p-4">
-            {workflow.description ? (
-              <p className="text-sm text-muted-foreground">
-                {workflow.description}
-              </p>
-            ) : null}
-
             <div>
               <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Definition
               </h4>
               <pre className="max-h-64 overflow-auto rounded-md bg-muted/50 p-3 font-mono text-xs leading-relaxed">
-                {workflow.definition}
+                {JSON.stringify(workflow.definition, null, 2)}
               </pre>
             </div>
 
@@ -98,7 +92,7 @@ export function WorkflowDetailPanel({
                         <RunStatusBadge status={run.status} />
                       </div>
                       <div className="mt-1 text-muted-foreground">
-                        {new Date(run.createdAt).toLocaleString()}
+                        {new Date(run.createdAt * 1000).toLocaleString()}
                       </div>
                     </button>
                   ))}
@@ -132,6 +126,7 @@ function RunStatusBadge({ status }: { status: string }) {
     running: "bg-blue-500/15 text-blue-500",
     pending: "bg-muted text-muted-foreground",
     cancelled: "bg-muted text-muted-foreground",
+    waiting_approval: "bg-amber-500/15 text-amber-500",
   };
 
   return (
