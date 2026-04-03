@@ -41,6 +41,8 @@ type MessageTimelineProps = {
   onTargetReached?: (messageId: string) => void;
 };
 
+const FIRST_ITEM_START = 100_000;
+
 /**
  * Compute day-based groups from a sorted messages array.
  * Returns { groupCounts, groupLabels } for GroupedVirtuoso.
@@ -101,7 +103,6 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   const previousMessageCountRef = React.useRef(0);
   const isFetchingOlderRef = React.useRef(false);
   const handledTargetMessageIdRef = React.useRef<string | null>(null);
-  const FIRST_ITEM_START = 100_000;
   const [firstItemIndex, setFirstItemIndex] = React.useState(FIRST_ITEM_START);
 
   const { groupCounts, groupLabels } = useTimelineGroups(messages);
