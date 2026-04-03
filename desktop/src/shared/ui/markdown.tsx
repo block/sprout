@@ -215,6 +215,17 @@ function MarkdownInner({
     [variant, channels, onOpenChannel],
   );
 
+  // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable
+  const remarkPlugins = React.useMemo<any[]>(
+    () => [
+      remarkGfm,
+      remarkBreaks,
+      [remarkMentions, { mentionNames }],
+      [remarkChannelLinks, { channelNames }],
+    ],
+    [mentionNames, channelNames],
+  );
+
   let processedContent = content;
 
   if (/^(?:\s{2}\n)+/.test(content)) {
@@ -236,15 +247,7 @@ function MarkdownInner({
         className,
       )}
     >
-      <ReactMarkdown
-        components={components}
-        remarkPlugins={[
-          remarkGfm,
-          remarkBreaks,
-          [remarkMentions, { mentionNames }],
-          [remarkChannelLinks, { channelNames }],
-        ]}
-      >
+      <ReactMarkdown components={components} remarkPlugins={remarkPlugins}>
         {processedContent}
       </ReactMarkdown>
     </div>
