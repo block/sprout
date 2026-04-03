@@ -28,6 +28,26 @@ fn restore_managed_agents_on_launch(app: &tauri::AppHandle) -> Result<(), String
         .lock()
         .map_err(|error| error.to_string())?;
     let mut changed = sync_managed_agent_processes(&mut records, &mut runtimes);
+
+    // Kill stale agent processes left over from a previous session (e.g. if the
+    // app was force-quit or crashed). sync_managed_agent_processes marks records
+    // whose PID is no longer running, but any PID that’s still alive and not in
+    // our runtimes map is an orphan from a previous launch — kill it now.
+    for record in records.iter_mut() {
+        if record.backend != BackendKind::Local {
+            continue;
+        }
+        let Some(pid) = record.runtime_pid else {
+            continue;
+        };
+        if !runtimes.contains_key(&record.pubkey) {
+            let _ = managed_agents::terminate_process(pid);
+            record.runtime_pid = None;
+            record.last_stopped_at = Some(util::now_iso());
+            record.updated_at = util::now_iso();
+            changed = true;
+        }
+    }
     let pubkeys_to_restore = records
         .iter()
         .filter(|record| record.start_on_app_launch && record.backend == BackendKind::Local)
@@ -297,12 +317,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app_handle, event| {
-        if matches!(event, RunEvent::ExitRequested { .. }) {
+    app.run(|app_handle, event| match event {
+        RunEvent::ExitRequested { .. } | RunEvent::Exit => {
             if let Err(error) = shutdown_managed_agents(app_handle) {
                 eprintln!("sprout-desktop: failed to stop managed agents: {error}");
             }
         }
+        _ => {}
     });
 }
 

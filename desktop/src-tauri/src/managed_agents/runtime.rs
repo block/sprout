@@ -27,7 +27,7 @@ fn process_is_running(_pid: u32) -> bool {
 }
 
 #[cfg(unix)]
-fn terminate_process(pid: u32) -> Result<(), String> {
+pub(crate) fn terminate_process(pid: u32) -> Result<(), String> {
     // The child was spawned with process_group(0), so pid == pgid.
     // Kill the entire process group to avoid orphaning MCP servers
     // and agent subprocesses.
@@ -63,7 +63,7 @@ fn terminate_process(pid: u32) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn terminate_process(_pid: u32) -> Result<(), String> {
+pub(crate) fn terminate_process(_pid: u32) -> Result<(), String> {
     Err("managed agent shutdown after app restart is only supported on Unix".to_string())
 }
 
