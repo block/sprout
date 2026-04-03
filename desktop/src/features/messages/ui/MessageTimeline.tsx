@@ -99,6 +99,8 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   const previousMessageCountRef = React.useRef(0);
   const isFetchingOlderRef = React.useRef(false);
   const handledTargetMessageIdRef = React.useRef<string | null>(null);
+  const FIRST_ITEM_START = 100_000;
+  const [firstItemIndex, setFirstItemIndex] = React.useState(FIRST_ITEM_START);
 
   const { groupCounts, groupLabels } = useTimelineGroups(messages);
 
@@ -108,6 +110,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     setIsAtBottom(true);
     setNewMessageCount(0);
     setHighlightedMessageId(null);
+    setFirstItemIndex(FIRST_ITEM_START);
     previousLastMessageIdRef.current = undefined;
     previousMessageCountRef.current = 0;
     handledTargetMessageIdRef.current = null;
@@ -125,16 +128,23 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     const latestMessage = messages[messages.length - 1];
     const previousLastMessageId = previousLastMessageIdRef.current;
     const previousMessageCount = previousMessageCountRef.current;
+    const countDelta = messages.length - previousMessageCount;
+
+    // Detect prepend: message count grew but the latest message didn't change
+    if (
+      countDelta > 0 &&
+      previousLastMessageId !== undefined &&
+      latestMessage.id === previousLastMessageId
+    ) {
+      setFirstItemIndex((prev) => prev - countDelta);
+    }
 
     if (
       latestMessage.id !== previousLastMessageId &&
       previousLastMessageId !== undefined
     ) {
       if (!isAtBottom && !latestMessage.accent) {
-        const addedMessages = Math.max(
-          1,
-          messages.length - previousMessageCount,
-        );
+        const addedMessages = Math.max(1, countDelta);
         setNewMessageCount((c) => c + addedMessages);
       }
     }
@@ -331,6 +341,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
             ref={virtuosoRef}
             className="h-full overflow-x-hidden overscroll-contain px-4 py-3 sm:px-6"
             data-testid="message-timeline"
+            firstItemIndex={firstItemIndex}
             groupCounts={groupCounts}
             groupContent={groupContent}
             itemContent={itemContent}
