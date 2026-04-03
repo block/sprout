@@ -24,6 +24,7 @@ export default defineConfig({
         "**/channel-browser.spec.ts",
         "**/messaging.spec.ts",
         "**/mentions.spec.ts",
+        "**/workflows.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
