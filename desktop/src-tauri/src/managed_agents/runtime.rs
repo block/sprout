@@ -11,12 +11,13 @@ use crate::{
     util::now_iso,
 };
 
-/// Binary name fragments for all known agent/harness processes that Sprout
-/// may spawn. Used by `process_belongs_to_us()` and the orphan sweep to
-/// identify processes we should clean up. Both hyphenated and underscored
-/// variants are listed because macOS `proc_name()` and Linux `/proc/comm`
-/// may report either form depending on how the binary was built.
-pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
+/// Binaries only Sprout spawns — safe to kill in the broad orphan sweep.
+const SPROUT_OWNED_BINARIES: &[&str] = &["sprout-acp", "sprout_acp", "sprout-mcp", "sprout_mcp"];
+
+/// Full set of agent binaries Sprout may manage (includes third-party like
+/// `goose`, `claude-agent-acp`). Used only by `process_belongs_to_us()` for
+/// tracked PIDs from our records — NOT for the broad sweep.
+const ALL_KNOWN_AGENT_BINARIES: &[&str] = &[
     "sprout-acp",
     "sprout_acp",
     "claude-agent-acp",
@@ -30,11 +31,9 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
     "sprout_mcp",
 ];
 
-/// Check if a process name matches any of our known agent binaries.
-/// Uses exact match or prefix-with-separator to avoid false positives
-/// (e.g. `"goose"` must not match `"mongoose"`).
-fn name_matches_known_binary(name: &str) -> bool {
-    KNOWN_AGENT_BINARIES.iter().any(|&binary| {
+/// Exact match or prefix-with-separator (avoids `"goose"` matching `"mongoose"`).
+fn name_matches_binary_list(name: &str, binaries: &[&str]) -> bool {
+    binaries.iter().any(|&binary| {
         name == binary || {
             name.starts_with(binary) && {
                 let rest = &name[binary.len()..];
@@ -42,6 +41,16 @@ fn name_matches_known_binary(name: &str) -> bool {
             }
         }
     })
+}
+
+/// Match against full list (tracked-agent path).
+fn name_matches_known_binary(name: &str) -> bool {
+    name_matches_binary_list(name, ALL_KNOWN_AGENT_BINARIES)
+}
+
+/// Match against Sprout-only list (orphan sweep path).
+fn name_matches_sprout_owned_binary(name: &str) -> bool {
+    name_matches_binary_list(name, SPROUT_OWNED_BINARIES)
 }
 
 #[cfg(unix)]
@@ -58,12 +67,8 @@ pub(crate) fn process_is_running(_pid: u32) -> bool {
     false
 }
 
-/// Check if a PID belongs to a known agent process we spawned.
-/// Returns false for recycled PIDs that now belong to other processes.
 #[cfg(target_os = "macos")]
-pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
-    // Use proc_name() from libproc to get the process name without spawning
-    // a subprocess.
+fn get_process_name(pid: u32) -> Option<String> {
     extern "C" {
         fn proc_name(pid: libc::c_int, buffer: *mut libc::c_void, buffersize: u32) -> libc::c_int;
     }
@@ -76,23 +81,37 @@ pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
         )
     };
     if len <= 0 {
-        return false;
+        return None;
     }
-    let name = String::from_utf8_lossy(&buf[..len as usize]);
-    name_matches_known_binary(&name)
+    Some(String::from_utf8_lossy(&buf[..len as usize]).into_owned())
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
-    // On Linux, read /proc/<pid>/comm
+fn get_process_name(pid: u32) -> Option<String> {
     std::fs::read_to_string(format!("/proc/{pid}/comm"))
-        .map(|name| name_matches_known_binary(name.trim()))
+        .ok()
+        .map(|name| name.trim().to_string())
+}
+
+/// Check if a PID belongs to a known agent process (full list, for tracked PIDs).
+#[cfg(unix)]
+pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
+    get_process_name(pid)
+        .map(|name| name_matches_known_binary(&name))
         .unwrap_or(false)
 }
 
 #[cfg(not(unix))]
 pub(crate) fn process_belongs_to_us(_pid: u32) -> bool {
     false
+}
+
+/// Check if a PID is a Sprout-owned binary (narrow list, for orphan sweep).
+#[cfg(unix)]
+fn process_is_sprout_owned(pid: u32) -> bool {
+    get_process_name(pid)
+        .map(|name| name_matches_sprout_owned_binary(&name))
+        .unwrap_or(false)
 }
 
 #[cfg(unix)]
@@ -142,9 +161,7 @@ pub(crate) fn terminate_process(_pid: u32) -> Result<(), String> {
 /// reaches its children too.
 #[cfg(unix)]
 fn sigterm_then_sigkill(pids: &[i32]) {
-    // Send SIGTERM to each process group. Track whether any signal was
-    // actually delivered so we can skip the sleep when everything is
-    // already gone.
+    // Track whether any SIGTERM lands so we can skip the sleep if not.
     let mut any_signalled = false;
     for &pid in pids {
         if unsafe { libc::kill(-pid, libc::SIGTERM) } == 0 {
@@ -168,7 +185,7 @@ fn sigterm_then_sigkill(pids: &[i32]) {
 }
 
 /// Enumerate all PIDs on the system that are owned by the current user and
-/// match a known agent binary name, excluding `skip_pids`.
+/// match a Sprout-owned binary name, excluding `skip_pids`.
 #[cfg(target_os = "macos")]
 fn enumerate_orphaned_agent_pids(skip_pids: &[u32]) -> Vec<i32> {
     extern "C" {
@@ -194,14 +211,14 @@ fn enumerate_orphaned_agent_pids(skip_pids: &[u32]) -> Vec<i32> {
                 let pid_u32 = pid as u32;
                 !skip_pids.contains(&pid_u32)
                     && process_is_running(pid_u32)
-                    && process_belongs_to_us(pid_u32)
+                    && process_is_sprout_owned(pid_u32)
             }
         })
         .collect()
 }
 
 /// Enumerate all PIDs on the system that are owned by the current user and
-/// match a known agent binary name, excluding `skip_pids`.
+/// match a Sprout-owned binary name, excluding `skip_pids`.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn enumerate_orphaned_agent_pids(skip_pids: &[u32]) -> Vec<i32> {
     let my_uid = unsafe { libc::getuid() };
@@ -225,7 +242,7 @@ fn enumerate_orphaned_agent_pids(skip_pids: &[u32]) -> Vec<i32> {
                         .and_then(|uid| uid.parse::<u32>().ok())
                         == Some(my_uid)
             });
-            if is_ours && process_belongs_to_us(pid) {
+            if is_ours && process_is_sprout_owned(pid) {
                 Some(pid as i32)
             } else {
                 None
