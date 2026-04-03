@@ -11,21 +11,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
-import { Textarea } from "@/shared/ui/textarea";
+import { WorkflowFormBuilder } from "./WorkflowFormBuilder";
 
 type CreateWorkflowDialogProps = {
   channels: Channel[];
   onOpenChange: (open: boolean) => void;
   open: boolean;
 };
-
-const WORKFLOW_PLACEHOLDER = `name: ui_smoke_delay
-trigger:
-  on: message_posted
-steps:
-  - id: wait_two_seconds
-    action: delay
-    duration: 2s`;
 
 export function CreateWorkflowDialog({
   channels,
@@ -76,13 +68,13 @@ export function CreateWorkflowDialog({
 
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Create Workflow</DialogTitle>
           <DialogDescription>
             {channels.length === 1
               ? "Create a workflow scoped to this channel."
-              : "Pick a channel, paste YAML, and create a workflow scoped to that channel."}
+              : "Define a workflow and assign it to a channel."}
           </DialogDescription>
         </DialogHeader>
 
@@ -131,29 +123,14 @@ export function CreateWorkflowDialog({
             </p>
           ) : null}
 
-          <div className="space-y-1.5">
-            <label
-              className="block text-sm font-medium"
-              htmlFor="wf-yaml-editor"
-            >
-              YAML Definition
-            </label>
-            <Textarea
-              className="min-h-[200px] resize-y font-mono text-xs"
-              id="wf-yaml-editor"
-              onChange={(event) => {
-                createMutation.reset();
-                setYamlDefinition(event.target.value);
-              }}
-              placeholder={WORKFLOW_PLACEHOLDER}
-              value={yamlDefinition}
-            />
-            <p className="text-xs text-muted-foreground">
-              Use <code>trigger.on</code> with values like{" "}
-              <code>message_posted</code>, <code>reaction_added</code>,{" "}
-              <code>webhook</code>, or <code>schedule</code>.
-            </p>
-          </div>
+          <WorkflowFormBuilder
+            disabled={createMutation.isPending}
+            onChange={(yaml) => {
+              createMutation.reset();
+              setYamlDefinition(yaml);
+            }}
+            yaml={yamlDefinition}
+          />
         </div>
 
         {createMutation.error instanceof Error ? (

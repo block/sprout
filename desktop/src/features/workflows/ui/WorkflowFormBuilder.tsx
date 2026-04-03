@@ -1,0 +1,355 @@
+import { ChevronDown, Code, Plus } from "lucide-react";
+import * as React from "react";
+
+import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
+import { Textarea } from "@/shared/ui/textarea";
+import { WorkflowStepCard } from "./WorkflowStepCard";
+import {
+  DEFAULT_FORM_STATE,
+  TRIGGER_LABELS,
+  TRIGGER_TYPES,
+  formStateToYaml,
+  yamlToFormState,
+} from "./workflowFormTypes";
+import type {
+  StepFormState,
+  TriggerConfig,
+  TriggerType,
+  WorkflowFormState,
+} from "./workflowFormTypes";
+
+// ---------------------------------------------------------------------------
+// Shared primitives
+// ---------------------------------------------------------------------------
+
+function FormSelect({
+  children,
+  disabled,
+  id,
+  onChange,
+  value,
+}: {
+  children: React.ReactNode;
+  disabled?: boolean;
+  id?: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <div className="relative">
+      <select
+        className="flex h-9 w-full appearance-none rounded-md border border-input bg-transparent px-3 pr-8 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={disabled}
+        id={id}
+        onChange={(event) => onChange(event.target.value)}
+        value={value}
+      >
+        {children}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+    </div>
+  );
+}
+
+function FieldLabel({
+  children,
+  htmlFor,
+}: {
+  children: React.ReactNode;
+  htmlFor?: string;
+}) {
+  return (
+    <label
+      className="block text-xs font-medium text-muted-foreground"
+      htmlFor={htmlFor}
+    >
+      {children}
+    </label>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Trigger config fields
+// ---------------------------------------------------------------------------
+
+function TriggerConfigFields({
+  trigger,
+  onUpdate,
+}: {
+  trigger: TriggerConfig;
+  onUpdate: (trigger: TriggerConfig) => void;
+}) {
+  switch (trigger.on) {
+    case "message_posted":
+      return (
+        <div className="space-y-1.5">
+          <FieldLabel htmlFor="wf-trigger-filter">
+            Filter expression (optional)
+          </FieldLabel>
+          <Input
+            id="wf-trigger-filter"
+            onChange={(event) =>
+              onUpdate({ ...trigger, filter: event.target.value })
+            }
+            placeholder='e.g. contains(text, "deploy")'
+            value={trigger.filter ?? ""}
+          />
+          <p className="text-xs text-muted-foreground">
+            Evalexpr filter — leave empty to trigger on all messages.
+          </p>
+        </div>
+      );
+    case "reaction_added":
+      return (
+        <div className="space-y-1.5">
+          <FieldLabel htmlFor="wf-trigger-emoji">
+            Emoji filter (optional)
+          </FieldLabel>
+          <Input
+            id="wf-trigger-emoji"
+            onChange={(event) =>
+              onUpdate({ ...trigger, emoji: event.target.value })
+            }
+            placeholder="e.g. thumbsup"
+            value={trigger.emoji ?? ""}
+          />
+          <p className="text-xs text-muted-foreground">
+            Leave empty to trigger on any reaction.
+          </p>
+        </div>
+      );
+    case "webhook":
+      return (
+        <p className="text-xs text-muted-foreground">
+          A unique webhook URL will be generated when the workflow is created.
+        </p>
+      );
+    case "schedule":
+      return (
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <FieldLabel htmlFor="wf-trigger-cron">
+              Cron expression (optional)
+            </FieldLabel>
+            <Input
+              id="wf-trigger-cron"
+              onChange={(event) =>
+                onUpdate({ ...trigger, cron: event.target.value })
+              }
+              placeholder="e.g. 0 9 * * 1-5 (weekdays at 9am UTC)"
+              value={trigger.cron ?? ""}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <FieldLabel htmlFor="wf-trigger-interval">
+              Interval (optional)
+            </FieldLabel>
+            <Input
+              id="wf-trigger-interval"
+              onChange={(event) =>
+                onUpdate({ ...trigger, interval: event.target.value })
+              }
+              placeholder="e.g. 1h, 30m"
+              value={trigger.interval ?? ""}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Provide either a cron expression or a simple interval.
+          </p>
+        </div>
+      );
+    default:
+      return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
+type WorkflowFormBuilderProps = {
+  disabled?: boolean;
+  onChange: (yaml: string) => void;
+  yaml: string;
+};
+
+export function WorkflowFormBuilder({
+  disabled,
+  onChange,
+  yaml,
+}: WorkflowFormBuilderProps) {
+  const [mode, setMode] = React.useState<"form" | "yaml">("form");
+  const [formState, setFormState] = React.useState<WorkflowFormState>(() => {
+    if (!yaml) return DEFAULT_FORM_STATE;
+    const result = yamlToFormState(yaml);
+    return result.ok ? result.state : DEFAULT_FORM_STATE;
+  });
+  const [parseError, setParseError] = React.useState<string | null>(null);
+
+  const updateFormState = React.useCallback(
+    (next: WorkflowFormState) => {
+      setFormState(next);
+      onChange(formStateToYaml(next));
+    },
+    [onChange],
+  );
+
+  const handleToggleMode = React.useCallback(() => {
+    if (mode === "form") {
+      setMode("yaml");
+      setParseError(null);
+    } else {
+      const result = yamlToFormState(yaml);
+      if (result.ok) {
+        setFormState(result.state);
+        setParseError(null);
+        setMode("form");
+      } else {
+        setParseError(result.error);
+      }
+    }
+  }, [mode, yaml]);
+
+  const addStep = React.useCallback(() => {
+    const nextIndex = formState.steps.length + 1;
+    updateFormState({
+      ...formState,
+      steps: [...formState.steps, { id: `step_${nextIndex}`, action: "delay" }],
+    });
+  }, [formState, updateFormState]);
+
+  const removeStep = React.useCallback(
+    (index: number) => {
+      updateFormState({
+        ...formState,
+        steps: formState.steps.filter((_, i) => i !== index),
+      });
+    },
+    [formState, updateFormState],
+  );
+
+  const updateStep = React.useCallback(
+    (index: number, step: StepFormState) => {
+      const next = [...formState.steps];
+      next[index] = step;
+      updateFormState({ ...formState, steps: next });
+    },
+    [formState, updateFormState],
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-end">
+        <Button
+          className="h-7 gap-1.5 text-xs"
+          disabled={disabled}
+          onClick={handleToggleMode}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          <Code className="h-3.5 w-3.5" />
+          {mode === "form" ? "Edit as YAML" : "Back to form"}
+        </Button>
+      </div>
+
+      {parseError ? (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          Cannot switch to form view: {parseError}
+        </p>
+      ) : null}
+
+      {mode === "yaml" ? (
+        <div className="space-y-1.5">
+          <Textarea
+            className="min-h-[240px] resize-y font-mono text-xs"
+            disabled={disabled}
+            onChange={(event) => onChange(event.target.value)}
+            value={yaml}
+          />
+          <p className="text-xs text-muted-foreground">
+            Edit the raw YAML definition directly.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <FieldLabel htmlFor="wf-name">Workflow name</FieldLabel>
+            <Input
+              disabled={disabled}
+              id="wf-name"
+              onChange={(event) =>
+                updateFormState({ ...formState, name: event.target.value })
+              }
+              placeholder="e.g. deploy_notifier"
+              value={formState.name}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <FieldLabel htmlFor="wf-trigger-type">Trigger</FieldLabel>
+              <FormSelect
+                disabled={disabled}
+                id="wf-trigger-type"
+                onChange={(value) =>
+                  updateFormState({
+                    ...formState,
+                    trigger: { on: value as TriggerType },
+                  })
+                }
+                value={formState.trigger.on}
+              >
+                {TRIGGER_TYPES.map((type) => (
+                  <option key={type} value={type}>
+                    {TRIGGER_LABELS[type]}
+                  </option>
+                ))}
+              </FormSelect>
+            </div>
+            <TriggerConfigFields
+              onUpdate={(trigger) => updateFormState({ ...formState, trigger })}
+              trigger={formState.trigger}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <FieldLabel>Steps</FieldLabel>
+              <Button
+                className="h-7 gap-1.5 text-xs"
+                disabled={disabled}
+                onClick={addStep}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add step
+              </Button>
+            </div>
+
+            {formState.steps.length === 0 ? (
+              <p className="py-4 text-center text-xs text-muted-foreground">
+                No steps yet — add one to get started.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {formState.steps.map((step, index) => (
+                  <WorkflowStepCard
+                    index={index}
+                    key={step.id}
+                    onRemove={() => removeStep(index)}
+                    onUpdate={(updated) => updateStep(index, updated)}
+                    step={step}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
