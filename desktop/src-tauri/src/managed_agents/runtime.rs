@@ -142,14 +142,18 @@ pub(crate) fn terminate_process(_pid: u32) -> Result<(), String> {
 /// reaches its children too.
 #[cfg(unix)]
 fn sigterm_then_sigkill(pids: &[i32]) {
-    if pids.is_empty() {
-        return;
+    // Send SIGTERM to each process group. Track whether any signal was
+    // actually delivered so we can skip the sleep when everything is
+    // already gone.
+    let mut any_signalled = false;
+    for &pid in pids {
+        if unsafe { libc::kill(-pid, libc::SIGTERM) } == 0 {
+            any_signalled = true;
+        }
     }
 
-    for &pid in pids {
-        unsafe {
-            libc::kill(-pid, libc::SIGTERM);
-        }
+    if !any_signalled {
+        return;
     }
 
     std::thread::sleep(std::time::Duration::from_millis(200));
