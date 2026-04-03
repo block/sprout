@@ -31,10 +31,17 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
 ];
 
 /// Check if a process name matches any of our known agent binaries.
+/// Uses exact match or prefix-with-separator to avoid false positives
+/// (e.g. `"goose"` must not match `"mongoose"`).
 fn name_matches_known_binary(name: &str) -> bool {
-    KNOWN_AGENT_BINARIES
-        .iter()
-        .any(|binary| name.contains(binary))
+    KNOWN_AGENT_BINARIES.iter().any(|&binary| {
+        name == binary || {
+            name.starts_with(binary) && {
+                let rest = &name[binary.len()..];
+                rest.starts_with('-') || rest.starts_with('_') || rest.starts_with('.')
+            }
+        }
+    })
 }
 
 #[cfg(unix)]
