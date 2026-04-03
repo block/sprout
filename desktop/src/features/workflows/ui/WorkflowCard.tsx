@@ -1,0 +1,109 @@
+import { Clock, MoreHorizontal, Play, Trash2, Zap } from "lucide-react";
+
+import type { Workflow } from "@/shared/api/types";
+import { Button } from "@/shared/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/shared/ui/dropdown-menu";
+
+type WorkflowCardProps = {
+  workflow: Workflow;
+  channelName?: string;
+  onSelect: (workflowId: string) => void;
+  onTrigger: (workflowId: string) => void;
+  onDelete: (workflowId: string) => void;
+};
+
+function StatusBadge({ status }: { status: Workflow["status"] }) {
+  const colors = {
+    active: "bg-green-500/15 text-green-500",
+    disabled: "bg-muted text-muted-foreground",
+    archived: "bg-amber-500/15 text-amber-500",
+  };
+
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${colors[status]}`}
+    >
+      {status}
+    </span>
+  );
+}
+
+export function WorkflowCard({
+  workflow,
+  channelName,
+  onSelect,
+  onTrigger,
+  onDelete,
+}: WorkflowCardProps) {
+  return (
+    <button
+      className="w-full cursor-pointer rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/50"
+      data-testid={`workflow-card-${workflow.id}`}
+      onClick={() => onSelect(workflow.id)}
+      type="button"
+    >
+      <div className="flex items-start justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <Zap className="h-4 w-4 shrink-0 text-amber-500" />
+            <span className="truncate text-sm font-medium">
+              {workflow.name}
+            </span>
+            <StatusBadge status={workflow.status} />
+          </div>
+          {workflow.description ? (
+            <p className="mt-1 truncate pl-6 text-xs text-muted-foreground">
+              {workflow.description}
+            </p>
+          ) : null}
+          <div className="mt-1.5 flex items-center gap-3 pl-6 text-[11px] text-muted-foreground">
+            {channelName ? <span>{channelName}</span> : null}
+            <span className="flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              {new Date(workflow.updatedAt).toLocaleDateString()}
+            </span>
+          </div>
+        </div>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              className="h-7 w-7 shrink-0"
+              onClick={(event) => event.stopPropagation()}
+              size="icon"
+              variant="ghost"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              onClick={(event) => {
+                event.stopPropagation();
+                onTrigger(workflow.id);
+              }}
+            >
+              <Play className="mr-2 h-4 w-4" />
+              Trigger
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="text-destructive"
+              onClick={(event) => {
+                event.stopPropagation();
+                onDelete(workflow.id);
+              }}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </button>
+  );
+}

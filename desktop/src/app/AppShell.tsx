@@ -6,6 +6,7 @@ import { useActiveChannelHeader } from "@/app/useActiveChannelHeader";
 import { useChannelPaneHandlers } from "@/app/useChannelPaneHandlers";
 import { AgentsView } from "@/features/agents/ui/AgentsView";
 import { ForumView } from "@/features/forum/ui/ForumView";
+import { WorkflowsView } from "@/features/workflows/ui/WorkflowsView";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
   channelsQueryKey,
@@ -63,7 +64,7 @@ import {
 } from "@/shared/ui/sidebar";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 
-type AppView = "home" | "channel" | "settings" | "agents";
+type AppView = "home" | "channel" | "settings" | "agents" | "workflows";
 type MainView = Exclude<AppView, "settings">;
 export function AppShell() {
   useWebviewZoomShortcuts();
@@ -630,6 +631,11 @@ export function AppShell() {
                   setSelectedView("agents");
                 });
               }}
+              onSelectWorkflows={() => {
+                React.startTransition(() => {
+                  setSelectedView("workflows");
+                });
+              }}
               onSelectHome={() => {
                 React.startTransition(() => {
                   setSelectedView("home");
@@ -657,6 +663,12 @@ export function AppShell() {
                   description="Create local ACP workers, mint agent tokens, and monitor the relay-visible agent directory."
                   mode="agents"
                   title="Agents"
+                />
+              ) : selectedView === "workflows" ? (
+                <ChatHeader
+                  description="Create, manage, and monitor automated workflows across your channels."
+                  mode="workflows"
+                  title="Workflows"
                 />
               ) : (
                 <ChatHeader
@@ -722,7 +734,18 @@ export function AppShell() {
                 </div>
                 <div
                   className={
-                    selectedView !== "home" && selectedView !== "agents"
+                    selectedView === "workflows"
+                      ? "flex min-h-0 flex-1 flex-col"
+                      : "hidden"
+                  }
+                >
+                  <WorkflowsView channels={memberChannels} />
+                </div>
+                <div
+                  className={
+                    selectedView !== "home" &&
+                    selectedView !== "agents" &&
+                    selectedView !== "workflows"
                       ? "flex min-h-0 flex-1 flex-col overflow-hidden"
                       : "hidden"
                   }
