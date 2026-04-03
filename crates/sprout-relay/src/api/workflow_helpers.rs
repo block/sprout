@@ -58,7 +58,7 @@ pub(crate) fn approval_record_to_json(
         "step_index": a.step_index,
         "approver_spec": a.approver_spec,
         "status": a.status.to_string(),
-        "approver_pubkey": a.approver_pubkey.as_ref().map(|pk| nostr_hex::encode(pk)),
+        "approver_pubkey": a.approver_pubkey.as_ref().map(nostr_hex::encode),
         "note": a.note,
         "expires_at": a.expires_at.to_rfc3339(),
         "created_at": a.created_at.timestamp(),
