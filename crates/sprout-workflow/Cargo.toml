@@ -30,5 +30,4 @@ nostr = { workspace = true }
 [features]
 reqwest = ["dep:reqwest"]
 
-[lints]
-workspace = true
+

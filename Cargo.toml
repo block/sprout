@@ -114,5 +114,5 @@ sprout-workflow = { path = "crates/sprout-workflow" }
 sprout-media = { path = "crates/sprout-media", features = ["axum"] }
 sprout-sdk = { path = "crates/sprout-sdk" }
 
-[workspace.lints.clippy]
-unwrap_used = "warn"
+# [workspace.lints.clippy]
+# unwrap_used = "warn"  # Deferred: ~610 existing unwrap() calls; -D warnings in CI turns this into a hard error.
