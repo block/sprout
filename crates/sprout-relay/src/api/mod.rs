@@ -712,7 +712,7 @@ mod tests {
     fn api_error_helper_maps_status_codes() {
         assert!(matches!(
             api_error(StatusCode::UNAUTHORIZED, "x"),
-            ApiError::Unauthorized("authentication required".into())
+            ApiError::Unauthorized(_)
         ));
         assert!(matches!(
             api_error(StatusCode::NOT_FOUND, "x"),
