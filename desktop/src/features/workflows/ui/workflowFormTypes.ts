@@ -155,7 +155,12 @@ export function yamlToFormState(
       interval: parsed.trigger?.interval ?? undefined,
     };
 
-    const steps: StepFormState[] = (parsed.steps ?? []).map(
+    const rawSteps = parsed.steps ?? [];
+    if (!Array.isArray(rawSteps)) {
+      return { ok: false, error: "steps must be a list" };
+    }
+
+    const steps: StepFormState[] = rawSteps.map(
       (step: Record<string, unknown>, index: number) => ({
         id: (step.id as string) ?? `step_${index + 1}`,
         action: ACTION_TYPES.includes(step.action as ActionType)
