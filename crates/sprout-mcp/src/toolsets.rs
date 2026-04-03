@@ -40,7 +40,7 @@ use std::sync::LazyLock;
 /// classification. `is_read = true` means the tool is safe to include under
 /// a `:ro` (read-only) mode restriction.
 ///
-/// 43 tools total. See [`DEFERRED_TOOLS`] for tools planned but not yet implemented.
+/// 44 tools total. See [`DEFERRED_TOOLS`] for tools planned but not yet implemented.
 pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     // ── default ─────────────────────────────────────────────────────────────
     ("send_message", "default", false),
@@ -74,6 +74,7 @@ pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     ("unarchive_channel", "channel_admin", false),
     ("add_channel_member", "channel_admin", false),
     ("remove_channel_member", "channel_admin", false),
+    ("delete_channel", "channel_admin", false),
     ("list_channel_members", "channel_admin", true),
     // ── dms ──────────────────────────────────────────────────────────────────
     ("add_dm_member", "dms", false),
@@ -371,8 +372,8 @@ mod tests {
     }
 
     #[test]
-    fn all_tools_count_is_43() {
-        assert_eq!(ALL_TOOLS.len(), 43);
+    fn all_tools_count_is_44() {
+        assert_eq!(ALL_TOOLS.len(), 44);
     }
 
     #[test]

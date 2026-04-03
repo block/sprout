@@ -59,10 +59,7 @@ async fn main() -> anyhow::Result<()> {
         error!("Failed to ensure partitions: {e}");
     }
 
-    let audit_pool = sqlx::PgPool::connect(&config.database_url)
-        .await
-        .map_err(|e| anyhow::anyhow!("Audit DB connection failed: {e}"))?;
-    let audit = AuditService::new(audit_pool);
+    let audit = AuditService::new(db.pool().clone());
     if let Err(e) = audit.ensure_schema().await {
         error!("Failed to ensure audit schema: {e}");
     }

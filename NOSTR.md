@@ -34,8 +34,8 @@ cargo run -p sprout-relay &          # relay on :3000
 
 # 4. Add a pubkey to the allowlist (if enabled)
 #    Insert directly — there is no CLI command for this yet.
-mysql -u sprout -psprout_dev sprout -e \
-  "INSERT INTO pubkey_allowlist (pubkey) VALUES (UNHEX('<64-char-hex-pubkey>'))"
+psql -U sprout -d sprout -c \
+  "INSERT INTO pubkey_allowlist (pubkey) VALUES (decode('<64-char-hex-pubkey>', 'hex'))"
 
 # 5. Connect any NIP-29 + NIP-42 client to ws://localhost:3000
 ```
@@ -92,9 +92,9 @@ relay to specific external Nostr identities without granting full Okta/API-token
 - Auth failure returns generic `auth-required: verification failed` (no allowlist-specific message).
 - Manage the allowlist via direct SQL (no CLI command yet):
   ```sql
-  INSERT INTO pubkey_allowlist (pubkey) VALUES (UNHEX('<64-char-hex-pubkey>'));
-  DELETE FROM pubkey_allowlist WHERE pubkey = UNHEX('<64-char-hex-pubkey>');
-  SELECT HEX(pubkey), added_at, note FROM pubkey_allowlist;
+  INSERT INTO pubkey_allowlist (pubkey) VALUES (decode('<64-char-hex-pubkey>', 'hex'));
+  DELETE FROM pubkey_allowlist WHERE pubkey = decode('<64-char-hex-pubkey>', 'hex');
+  SELECT encode(pubkey, 'hex'), added_at, note FROM pubkey_allowlist;
   ```
 
 ### Group Discovery

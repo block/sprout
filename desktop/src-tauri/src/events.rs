@@ -25,7 +25,7 @@ const MAX_EMOJI_CHARS: usize = 64;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn tag(parts: Vec<&str>) -> Result<Tag, String> {
+fn tag(parts: &[&str]) -> Result<Tag, String> {
     Tag::parse(parts).map_err(|e| format!("invalid tag: {e}"))
 }
 
@@ -50,11 +50,11 @@ fn thread_tags(tr: &ThreadRef) -> Result<Vec<Tag>, String> {
     let root = tr.root_event_id.to_hex();
     let parent = tr.parent_event_id.to_hex();
     if root == parent {
-        Ok(vec![tag(vec!["e", &root, "", "reply"])?])
+        Ok(vec![tag(&["e", &root, "", "reply"])?])
     } else {
         Ok(vec![
-            tag(vec!["e", &root, "", "root"])?,
-            tag(vec!["e", &parent, "", "reply"])?,
+            tag(&["e", &root, "", "root"])?,
+            tag(&["e", &parent, "", "reply"])?,
         ])
     }
 }
@@ -68,7 +68,7 @@ fn mention_tags(mentions: &[&str]) -> Result<Vec<Tag>, String> {
     for &hex in mentions {
         let lower = hex.to_ascii_lowercase();
         if seen.insert(lower.clone()) {
-            tags.push(tag(vec!["p", &lower])?);
+            tags.push(tag(&["p", &lower])?);
         }
     }
     Ok(tags)
@@ -85,7 +85,7 @@ fn imeta_tags(media_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), Str
             ));
         }
         let parts: Vec<&str> = mt.iter().map(String::as_str).collect();
-        tags.push(Tag::parse(parts).map_err(|e| format!("invalid imeta tag: {e}"))?);
+        tags.push(Tag::parse(&parts).map_err(|e| format!("invalid imeta tag: {e}"))?);
     }
     Ok(())
 }
@@ -112,27 +112,27 @@ pub fn build_create_channel(
     about: Option<&str>,
 ) -> Result<EventBuilder, String> {
     let mut tags = vec![
-        tag(vec!["h", &channel_id.to_string()])?,
-        tag(vec!["name", name])?,
-        tag(vec!["visibility", visibility])?,
-        tag(vec!["channel_type", channel_type])?,
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["name", name])?,
+        tag(&["visibility", visibility])?,
+        tag(&["channel_type", channel_type])?,
     ];
     if let Some(a) = about {
-        tags.push(tag(vec!["about", a])?);
+        tags.push(tag(&["about", a])?);
     }
-    Ok(EventBuilder::new(Kind::Custom(9007), "").tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(9007), "", tags))
 }
 
 /// Kind 9021 — join channel.
 pub fn build_join(channel_id: Uuid) -> Result<EventBuilder, String> {
-    let tags = vec![tag(vec!["h", &channel_id.to_string()])?];
-    Ok(EventBuilder::new(Kind::Custom(9021), "").tags(tags))
+    let tags = vec![tag(&["h", &channel_id.to_string()])?];
+    Ok(EventBuilder::new(Kind::Custom(9021), "", tags))
 }
 
 /// Kind 9022 — leave channel.
 pub fn build_leave(channel_id: Uuid) -> Result<EventBuilder, String> {
-    let tags = vec![tag(vec!["h", &channel_id.to_string()])?];
-    Ok(EventBuilder::new(Kind::Custom(9022), "").tags(tags))
+    let tags = vec![tag(&["h", &channel_id.to_string()])?];
+    Ok(EventBuilder::new(Kind::Custom(9022), "", tags))
 }
 
 /// Kind 9002 — update channel name/description.
@@ -144,56 +144,56 @@ pub fn build_update_channel(
     if name.is_none() && about.is_none() {
         return Err("at least one of name or about must be provided".into());
     }
-    let mut tags = vec![tag(vec!["h", &channel_id.to_string()])?];
+    let mut tags = vec![tag(&["h", &channel_id.to_string()])?];
     if let Some(n) = name {
-        tags.push(tag(vec!["name", n])?);
+        tags.push(tag(&["name", n])?);
     }
     if let Some(a) = about {
-        tags.push(tag(vec!["about", a])?);
+        tags.push(tag(&["about", a])?);
     }
-    Ok(EventBuilder::new(Kind::Custom(9002), "").tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(9002), "", tags))
 }
 
 /// Kind 9002 — set topic.
 pub fn build_set_topic(channel_id: Uuid, topic: &str) -> Result<EventBuilder, String> {
     let tags = vec![
-        tag(vec!["h", &channel_id.to_string()])?,
-        tag(vec!["topic", topic])?,
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["topic", topic])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(9002), "").tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(9002), "", tags))
 }
 
 /// Kind 9002 — set purpose.
 pub fn build_set_purpose(channel_id: Uuid, purpose: &str) -> Result<EventBuilder, String> {
     let tags = vec![
-        tag(vec!["h", &channel_id.to_string()])?,
-        tag(vec!["purpose", purpose])?,
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["purpose", purpose])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(9002), "").tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(9002), "", tags))
 }
 
 /// Kind 9002 — archive.
 pub fn build_archive(channel_id: Uuid) -> Result<EventBuilder, String> {
     let tags = vec![
-        tag(vec!["h", &channel_id.to_string()])?,
-        tag(vec!["archived", "true"])?,
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["archived", "true"])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(9002), "").tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(9002), "", tags))
 }
 
 /// Kind 9002 — unarchive.
 pub fn build_unarchive(channel_id: Uuid) -> Result<EventBuilder, String> {
     let tags = vec![
-        tag(vec!["h", &channel_id.to_string()])?,
-        tag(vec!["archived", "false"])?,
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["archived", "false"])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(9002), "").tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(9002), "", tags))
 }
 
 /// Kind 9008 — delete channel.
 pub fn build_delete_channel(channel_id: Uuid) -> Result<EventBuilder, String> {
-    let tags = vec![tag(vec!["h", &channel_id.to_string()])?];
-    Ok(EventBuilder::new(Kind::Custom(9008), "").tags(tags))
+    let tags = vec![tag(&["h", &channel_id.to_string()])?];
+    Ok(EventBuilder::new(Kind::Custom(9008), "", tags))
 }
 
 // ── Membership ───────────────────────────────────────────────────────────────
@@ -206,23 +206,23 @@ pub fn build_add_member(
 ) -> Result<EventBuilder, String> {
     check_pubkey(target_pubkey)?;
     let mut tags = vec![
-        tag(vec!["h", &channel_id.to_string()])?,
-        tag(vec!["p", &target_pubkey.to_ascii_lowercase()])?,
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["p", &target_pubkey.to_ascii_lowercase()])?,
     ];
     if let Some(r) = role {
-        tags.push(tag(vec!["role", r])?);
+        tags.push(tag(&["role", r])?);
     }
-    Ok(EventBuilder::new(Kind::Custom(9000), "").tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(9000), "", tags))
 }
 
 /// Kind 9001 — remove member.
 pub fn build_remove_member(channel_id: Uuid, target_pubkey: &str) -> Result<EventBuilder, String> {
     check_pubkey(target_pubkey)?;
     let tags = vec![
-        tag(vec!["h", &channel_id.to_string()])?,
-        tag(vec!["p", &target_pubkey.to_ascii_lowercase()])?,
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["p", &target_pubkey.to_ascii_lowercase()])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(9001), "").tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(9001), "", tags))
 }
 
 // ── Messages ─────────────────────────────────────────────────────────────────
@@ -236,13 +236,13 @@ pub fn build_message(
     media_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
-    let mut tags = vec![tag(vec!["h", &channel_id.to_string()])?];
+    let mut tags = vec![tag(&["h", &channel_id.to_string()])?];
     if let Some(tr) = thread_ref {
         tags.extend(thread_tags(tr)?);
     }
     tags.extend(mention_tags(mentions)?);
     imeta_tags(media_tags, &mut tags)?;
-    Ok(EventBuilder::new(Kind::Custom(9), content).tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(9), content, tags))
 }
 
 /// Kind 45001 — forum post.
@@ -253,10 +253,10 @@ pub fn build_forum_post(
     media_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
-    let mut tags = vec![tag(vec!["h", &channel_id.to_string()])?];
+    let mut tags = vec![tag(&["h", &channel_id.to_string()])?];
     tags.extend(mention_tags(mentions)?);
     imeta_tags(media_tags, &mut tags)?;
-    Ok(EventBuilder::new(Kind::Custom(45001), content).tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(45001), content, tags))
 }
 
 /// Kind 45003 — forum comment.
@@ -268,11 +268,11 @@ pub fn build_forum_comment(
     media_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
-    let mut tags = vec![tag(vec!["h", &channel_id.to_string()])?];
+    let mut tags = vec![tag(&["h", &channel_id.to_string()])?];
     tags.extend(thread_tags(thread_ref)?);
     tags.extend(mention_tags(mentions)?);
     imeta_tags(media_tags, &mut tags)?;
-    Ok(EventBuilder::new(Kind::Custom(45003), content).tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(45003), content, tags))
 }
 
 /// Kind 40003 — edit a message.
@@ -283,16 +283,16 @@ pub fn build_message_edit(
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
     let tags = vec![
-        tag(vec!["h", &channel_id.to_string()])?,
-        tag(vec!["e", &target_event_id.to_hex()])?,
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["e", &target_event_id.to_hex()])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(40003), content).tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(40003), content, tags))
 }
 
 /// Kind 5 — NIP-09 deletion (messages).
 pub fn build_delete_compat(target_event_id: EventId) -> Result<EventBuilder, String> {
-    let tags = vec![tag(vec!["e", &target_event_id.to_hex()])?];
-    Ok(EventBuilder::new(Kind::Custom(5), "").tags(tags))
+    let tags = vec![tag(&["e", &target_event_id.to_hex()])?];
+    Ok(EventBuilder::new(Kind::Custom(5), "", tags))
 }
 
 // ── Reactions ────────────────────────────────────────────────────────────────
@@ -304,14 +304,14 @@ pub fn build_reaction(target_event_id: EventId, emoji: &str) -> Result<EventBuil
             "emoji exceeds maximum length of {MAX_EMOJI_CHARS} characters"
         ));
     }
-    let tags = vec![tag(vec!["e", &target_event_id.to_hex()])?];
-    Ok(EventBuilder::new(Kind::Custom(7), emoji).tags(tags))
+    let tags = vec![tag(&["e", &target_event_id.to_hex()])?];
+    Ok(EventBuilder::new(Kind::Custom(7), emoji, tags))
 }
 
 /// Kind 5 — delete a reaction event.
 pub fn build_remove_reaction(reaction_event_id: EventId) -> Result<EventBuilder, String> {
-    let tags = vec![tag(vec!["e", &reaction_event_id.to_hex()])?];
-    Ok(EventBuilder::new(Kind::Custom(5), "").tags(tags))
+    let tags = vec![tag(&["e", &reaction_event_id.to_hex()])?];
+    Ok(EventBuilder::new(Kind::Custom(5), "", tags))
 }
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
@@ -319,8 +319,8 @@ pub fn build_remove_reaction(reaction_event_id: EventId) -> Result<EventBuilder,
 /// Kind 40100 — set canvas.
 pub fn build_set_canvas(channel_id: Uuid, content: &str) -> Result<EventBuilder, String> {
     check_content(content)?;
-    let tags = vec![tag(vec!["h", &channel_id.to_string()])?];
-    Ok(EventBuilder::new(Kind::Custom(40100), content).tags(tags))
+    let tags = vec![tag(&["h", &channel_id.to_string()])?];
+    Ok(EventBuilder::new(Kind::Custom(40100), content, tags))
 }
 
 // ── Profile ──────────────────────────────────────────────────────────────────
@@ -350,5 +350,5 @@ pub fn build_profile(
         map.insert("nip05".into(), serde_json::Value::String(v.into()));
     }
     let content = serde_json::Value::Object(map).to_string();
-    Ok(EventBuilder::new(Kind::Custom(0), content))
+    Ok(EventBuilder::new(Kind::Custom(0), content, []))
 }

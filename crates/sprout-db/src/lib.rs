@@ -189,6 +189,11 @@ impl Db {
         Self { pool }
     }
 
+    /// Returns a reference to the underlying connection pool.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     /// Returns `true` if the database is reachable (used by readiness probes).
     pub async fn ping(&self) -> bool {
         sqlx::query("SELECT 1").execute(&self.pool).await.is_ok()
@@ -1236,6 +1241,10 @@ impl Db {
 
     /// Replace an addressable event (NIP-33-like): soft-delete any existing
     /// event with the same (kind, pubkey, channel_id) and insert the new one.
+    ///
+    /// Both operations run in a single transaction to eliminate the TOCTOU race
+    /// where two concurrent events with the same (kind, pubkey, channel_id) could
+    /// both delete and both insert.
     pub async fn replace_addressable_event(
         &self,
         event: &nostr::Event,
@@ -1243,25 +1252,95 @@ impl Db {
     ) -> Result<(StoredEvent, bool)> {
         let kind_i32 = sprout_core::kind::event_kind_i32(event);
         let pubkey_bytes = event.pubkey.to_bytes();
+        let id_bytes = event.id.as_bytes();
+        let sig_bytes = event.sig.serialize();
+        let tags_json = serde_json::to_value(&event.tags)?;
+        let created_at_secs = event.created_at.as_u64() as i64;
+        let created_at = chrono::DateTime::from_timestamp(created_at_secs, 0)
+            .ok_or(crate::error::DbError::InvalidTimestamp(created_at_secs))?;
+        let received_at = Utc::now();
+
         let mut tx = self.pool.begin().await?;
 
-        // Soft-delete existing events with the same (kind, pubkey, channel_id).
-        // The idx_events_addressable index supports this lookup efficiently.
+        // Serialize concurrent replace_addressable_event calls for the same
+        // (kind, pubkey, channel_id) triple using an advisory lock. This handles
+        // both the existing-row case AND the first-insert case (where SELECT FOR
+        // UPDATE would return nothing and acquire no lock).
+        //
+        // The lock key is derived from a hash of the triple. Advisory locks are
+        // automatically released when the transaction commits or rolls back.
+        let channel_id_str = channel_id.map(|id| id.to_string()).unwrap_or_default();
+        let lock_key = format!(
+            "addressable:{}:{}:{}",
+            kind_i32,
+            hex::encode(pubkey_bytes),
+            channel_id_str
+        );
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+            .bind(&lock_key)
+            .execute(&mut *tx)
+            .await?;
+
+        // Soft-delete existing events with the same (kind, pubkey, channel_id),
+        // EXCLUDING the incoming event ID. Without the exclusion, re-ingesting
+        // the same event would tombstone the active row and then the INSERT
+        // would no-op (ON CONFLICT DO NOTHING on the PK), leaving zero active rows.
+        // Use IS NOT DISTINCT FROM for channel_id to correctly handle NULL
+        // (e.g. kind:0 profile events where channel_id is NULL).
         sqlx::query(
             "UPDATE events SET deleted_at = NOW() \
-             WHERE kind = $1 AND pubkey = $2 AND channel_id = $3 AND deleted_at IS NULL",
+             WHERE kind = $1 AND pubkey = $2 AND channel_id IS NOT DISTINCT FROM $3 \
+             AND deleted_at IS NULL AND id != $4",
         )
         .bind(kind_i32)
         .bind(pubkey_bytes.as_slice())
         .bind(channel_id)
+        .bind(id_bytes.as_slice())
         .execute(&mut *tx)
+        .await?;
+
+        // Insert the new event inside the same transaction — eliminates the race window.
+        // Use ON CONFLICT ... DO UPDATE to handle replaying a previously soft-deleted
+        // event: if the event already exists (same PK), un-delete it instead of
+        // silently skipping. Without this, replaying old event X after newer Y is
+        // active would tombstone Y and then no-op on X, leaving zero active rows.
+        //
+        // RETURNING xmax distinguishes fresh insert (xmax = 0) from conflict
+        // update (xmax != 0), so callers get correct duplicate detection.
+        let row: Option<(i64,)> = sqlx::query_as(
+            r#"
+            INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (created_at, id) DO UPDATE SET deleted_at = NULL
+            RETURNING xmax::bigint
+            "#,
+        )
+        .bind(id_bytes.as_slice())
+        .bind(pubkey_bytes.as_slice())
+        .bind(created_at)
+        .bind(kind_i32)
+        .bind(&tags_json)
+        .bind(&event.content)
+        .bind(sig_bytes.as_slice())
+        .bind(received_at)
+        .bind(channel_id)
+        .fetch_optional(&mut *tx)
         .await?;
 
         tx.commit().await?;
 
-        // Insert the new event (outside the tx — uses the standard path with
-        // dedup via ON CONFLICT DO NOTHING).
-        self.insert_event(event, channel_id).await
+        // xmax = 0 means fresh insert; xmax != 0 means conflict update (un-delete or duplicate).
+        let was_inserted = row.map(|(xmax,)| xmax == 0).unwrap_or(false);
+        if was_inserted {
+            if let Err(e) = insert_mentions(&self.pool, event, channel_id).await {
+                tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
+            }
+        }
+
+        Ok((
+            StoredEvent::with_received_at(event.clone(), received_at, channel_id, true),
+            was_inserted,
+        ))
     }
 }
 

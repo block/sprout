@@ -349,13 +349,11 @@ pub async fn mint_token_via_api(
         "https"
     };
     let tags = vec![
-        Tag::parse(vec!["u", &url]).map_err(|e| format!("url tag failed: {e}"))?,
-        Tag::parse(vec!["method", "POST"]).map_err(|e| format!("method tag failed: {e}"))?,
-        Tag::parse(vec!["payload", &payload_hash])
-            .map_err(|e| format!("payload tag failed: {e}"))?,
+        Tag::parse(&["u", &url]).map_err(|e| format!("url tag failed: {e}"))?,
+        Tag::parse(&["method", "POST"]).map_err(|e| format!("method tag failed: {e}"))?,
+        Tag::parse(&["payload", &payload_hash]).map_err(|e| format!("payload tag failed: {e}"))?,
     ];
-    let event = EventBuilder::new(Kind::HttpAuth, "")
-        .tags(tags)
+    let event = EventBuilder::new(Kind::HttpAuth, "", tags)
         .sign_with_keys(agent_keys)
         .map_err(|e| format!("sign failed: {e}"))?;
     let auth_header = format!("Nostr {}", BASE64.encode(event.as_json().as_bytes()));

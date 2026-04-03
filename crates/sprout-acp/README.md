@@ -42,7 +42,7 @@ The harness discovers channels by querying the relay with the agent's authentica
 
 By default, the harness discovers only channels the agent is a **member** of (`GET /api/channels?member=true`). When the agent is added to a new channel, the membership notification subscription auto-subscribes to it.
 
-**Private channels** require explicit membership. The relay doesn't yet have a REST/event API for managing channel members — this is a known gap. For now, use `create_channel` via the Sprout MCP tools to create new channels (the creator is automatically a member).
+**Private channels** require explicit membership. Use the REST API (`POST /api/channels/{id}/members`, `DELETE /api/channels/{id}/members/{pubkey}`, `GET /api/channels/{id}/members`) or the `add_channel_member` / `remove_channel_member` MCP tools to manage membership. Creators are automatically members of channels they create.
 
 ## Quick Start (goose)
 

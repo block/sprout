@@ -6,7 +6,7 @@ Sprout is a self-hosted team communication platform built on the Nostr protocol 
 
 The relay is the single source of truth. All reads and writes flow through it. There is no peer-to-peer event exchange, no gossip, no replication — just clients connecting to one relay over WebSocket, and the relay enforcing auth, verifying signatures, persisting events, fanning out to subscribers, indexing for search, and triggering automation.
 
-Sprout is a Rust monorepo (~22.7K LOC across 13 crates), licensed Apache 2.0 under Block, Inc.
+Sprout is a Rust monorepo (~71.4K LOC across 17 crates), licensed Apache 2.0 under Block, Inc.
 
 ---
 
@@ -53,7 +53,7 @@ Sprout is a Rust monorepo (~22.7K LOC across 13 crates), licensed Apache 2.0 und
      Redis PUBLISH occurs for channel-scoped events.
      PSUBSCRIBE subscriber loop runs and a consumer task
      fans out received events to local WS connections
-     (multi-node fan-out wired; local-echo dedup is TODO).
+     (multi-node fan-out wired; local-echo dedup via AppState.local_event_ids).
 
      ┌──────────────┐
      │  Typesense   │  ← sprout-search (async, spawned per event)
@@ -78,11 +78,14 @@ sprout-core  (zero I/O — types, verification, filter matching, kind registry)
          │
          └── sprout-relay       (ties everything together — the server)
 
-sprout-mcp          (agent API surface — stdio MCP server; no sprout-* Cargo deps)
+sprout-mcp          (agent API surface — stdio MCP server; depends on sprout-core and sprout-sdk)
 sprout-proxy        (NIP-28 compatibility proxy — translates standard Nostr clients ↔ Sprout relay)
 sprout-huddle       (LiveKit audio/video integration — standalone, not wired into relay)
 sprout-admin        (operator CLI: mint/list API tokens)
 sprout-test-client  (integration test harness + manual CLI)
+sprout-sdk          (typed Nostr event builders — used by sprout-mcp and sprout-cli)
+sprout-media        (Blossom/S3 media storage)
+sprout-cli          (agent-first CLI)
 ```
 
 **Key architectural principle:** The relay is the single source of truth. `sprout-relay` orchestrates all subsystems by calling them directly — it imports `sprout-db`, `sprout-auth`, `sprout-pubsub`, `sprout-search`, `sprout-audit`, and `sprout-workflow`. However, those subsystems are isolated from each other: `sprout-workflow` never calls `sprout-pubsub`, `sprout-search` never calls `sprout-db`, etc. Cross-subsystem coordination happens only through the relay. `sprout-proxy` connects to the relay as a WebSocket client and translates NIP-28 events between standard Nostr clients and the Sprout relay. `sprout-huddle` is a standalone crate not yet wired into the relay.
@@ -212,7 +215,7 @@ When the relay receives `["EVENT", <event>]`, the handler in `handlers/event.rs`
 4. EPHEMERAL ROUTE   — kind 20000–29999 → ephemeral sub-pipeline (see below)
 5. VERIFY            — spawn_blocking(verify_event) — Schnorr sig + ID hash
 6. MEMBERSHIP        — channel_id in event tags? → check_channel_membership
-7. DB INSERT         — db.insert_event (INSERT IGNORE — idempotent)
+7. DB INSERT         — db.insert_event (ON CONFLICT DO NOTHING — idempotent)
 8. REDIS PUBLISH     — pubsub.publish_event (if channel-scoped)
 9. FAN-OUT           — sub_registry.fan_out → conn_manager.send_to
 10. SEARCH INDEX     — search.index_event (spawned async, non-blocking)
@@ -249,7 +252,7 @@ Ephemeral events are never stored in Postgres and never appear in REQ historical
 
 ### Handler Semaphore
 
-Beyond the per-connection semaphore, a `handler_semaphore` (capacity 64) limits concurrent EVENT and REQ processing across all connections. CLOSE is not rate-limited.
+Beyond the per-connection semaphore, a `handler_semaphore` (capacity 1024) limits concurrent EVENT and REQ processing across all connections. CLOSE is not rate-limited.
 
 ---
 
@@ -312,7 +315,7 @@ After registering, the REQ handler queries Postgres for stored events matching t
 
 ### sprout-core — Shared Types and Verification
 
-**726 LOC. Zero I/O.** The foundation every other crate builds on. Explicitly prohibits tokio, sqlx, redis, and axum in its `Cargo.toml`.
+**1,196 LOC. Zero I/O.** The foundation every other crate builds on. Explicitly prohibits tokio, sqlx, redis, and axum in its `Cargo.toml`.
 
 **Key types:**
 
@@ -341,7 +344,7 @@ pub const ALL_KINDS: &[u32]  // 74 entries
 
 ### sprout-auth — Authentication and Authorization
 
-**1,810 LOC.** Handles all four authentication paths, JWKS caching, scope enforcement, and token operations.
+**2,310 LOC.** Handles all four authentication paths, JWKS caching, scope enforcement, and token operations.
 
 **Four auth paths:**
 
@@ -379,18 +382,23 @@ pub trait RateLimiter: Send + Sync { ... }
 
 ### sprout-db — Postgres Event Store
 
-**3,698 LOC.** All database access. Uses `sqlx::query()` (runtime, not compile-time macros) — no `.sqlx/` offline cache required.
+**7,328 LOC.** All database access. Uses `sqlx::query()` (runtime, not compile-time macros) — no `.sqlx/` offline cache required.
 
 **Key operations:**
 
 | Module | Responsibility |
 |--------|---------------|
-| `event.rs` | `insert_event` (INSERT IGNORE), `query_events` (QueryBuilder), `get_event_by_id` |
+| `event.rs` | `insert_event` (ON CONFLICT DO NOTHING), `query_events` (QueryBuilder), `get_event_by_id` |
 | `channel.rs` | Channel CRUD, membership management, role enforcement (transactional) |
-| `feed.rs` | `query_mentions` (JSON_CONTAINS), `query_needs_action`, `query_activity` |
+| `feed.rs` | `query_mentions` (INNER JOIN event_mentions), `query_needs_action`, `query_activity` |
 | `workflow.rs` | Full workflow/run/approval CRUD; SHA-256 hashed approval tokens |
 | `partition.rs` | Monthly range partitioning for `events` and `delivery_log` tables |
 | `api_token.rs` | Token creation; receives pre-hashed token from caller |
+| `dm.rs` | DM channel management |
+| `reaction.rs` | Reaction storage and retrieval |
+| `thread.rs` | Thread/reply tracking |
+| `user.rs` | User profile storage |
+| `error.rs` | Database error types |
 
 **Channel types:** `Stream`, `Forum`, `Dm`, `Workflow`  
 **Member roles:** `Owner`, `Admin`, `Member`, `Guest`, `Bot`  
@@ -398,12 +406,12 @@ pub trait RateLimiter: Send + Sync { ... }
 **Run statuses:** `Pending`, `Running`, `WaitingApproval`, `Completed`, `Failed`, `Cancelled`
 
 **Key behaviors:**
-- `INSERT IGNORE` for event dedup — returns `(StoredEvent, was_inserted: bool)`.
+- `ON CONFLICT DO NOTHING` for event dedup — returns `(StoredEvent, was_inserted: bool)`.
 - Rejects `KIND_AUTH` (22242) and ephemeral (20000–29999) with distinct error variants.
 - Transactional role enforcement in `add_member`/`remove_member`/`create_channel` — TOCTOU-safe.
 - Soft-delete for channel members: `remove_member` sets `removed_at`; re-adding reverses it.
 - Feed hard cap: `FEED_MAX_LIMIT = 100` rows regardless of caller-requested limit.
-- `query_mentions` uses `JSON_CONTAINS(tags, '["p","<pubkey>"]', '$')` — full table scan (no JSON index). Phase 2 plan: normalized `mentions` table with composite index on `(pubkey_hex, created_at)`.
+- `query_mentions` uses `INNER JOIN event_mentions` — normalized table with composite index on `(pubkey_hex, created_at)`.
 - Approval tokens: raw token never reaches the DB — caller hashes with SHA-256 before passing to `create_api_token`.
 - DDL injection protection in partition manager: allowlist of table names + strict suffix/date validators.
 
@@ -413,7 +421,7 @@ pub trait RateLimiter: Send + Sync { ... }
 
 ### sprout-pubsub — Redis Pub/Sub, Presence, Typing
 
-**735 LOC.** Manages Redis pub/sub fan-out, presence tracking, and typing indicators.
+**887 LOC.** Manages Redis pub/sub fan-out, presence tracking, and typing indicators.
 
 **Architecture:**
 
@@ -425,7 +433,7 @@ Subscriber → dedicated PubSub  → PSUBSCRIBE sprout:channel:*
 
 The subscriber uses a **dedicated** `redis::aio::PubSub` connection — not from the pool. This is intentional: pool connections cannot hold `PSUBSCRIBE` state.
 
-**Current state:** The subscriber loop is spawned in `sprout-relay/src/main.rs` and populates the broadcast channel. A consumer task subscribes via `pubsub.subscribe_local()`, calls `sub_registry.fan_out()` on each received event, and delivers matches to local WebSocket connections via `conn_manager.send_to()`. Multi-node fan-out is now wired end-to-end. Note: local-echo deduplication is not yet implemented — events published by the local relay instance are re-delivered to local subscribers via the Redis round-trip; NIP-01 client-side dedup handles this in practice (TODO: server-side dedup in a follow-up).
+**Current state:** The subscriber loop is spawned in `sprout-relay/src/main.rs` and populates the broadcast channel. A consumer task subscribes via `pubsub.subscribe_local()`, calls `sub_registry.fan_out()` on each received event, and delivers matches to local WebSocket connections via `conn_manager.send_to()`. Multi-node fan-out is now wired end-to-end. Local-echo deduplication is implemented via `AppState.local_event_ids` — events published by the local relay instance are tracked and skipped when received via the Redis round-trip.
 
 **Reconnection:** exponential backoff 1s → 30s (`backoff_secs * 2`). Backoff resets to 1s only after a clean stream end, not on each reconnect attempt.
 
@@ -445,7 +453,7 @@ EXPIRE sprout:typing:{channel_id} 60
 
 ### sprout-search — Typesense Integration
 
-**1,043 LOC.** Full-text search via Typesense. All HTTP calls use `reqwest` with `X-TYPESENSE-API-KEY`.
+**1,126 LOC.** Full-text search via Typesense. All HTTP calls use `reqwest` with `X-TYPESENSE-API-KEY`.
 
 **Collection schema (7 fields):** `id`, `content`, `kind` (int32), `pubkey` (facet), `channel_id` (facet, optional), `created_at` (int64, default sort), `tags_flat` (string[]).
 
@@ -463,13 +471,13 @@ EXPIRE sprout:typing:{channel_id} 60
 
 ### sprout-audit — Hash-Chain Audit Log
 
-**732 LOC.** Tamper-evident append-only log with SHA-256 hash chaining.
+**776 LOC.** Tamper-evident append-only log with SHA-256 hash chaining.
 
 **Hash chain:** each entry stores `prev_hash` (hash of the previous entry). `verify_chain()` walks entries and recomputes hashes to detect tampering. Genesis entry uses `GENESIS_HASH` (64 zeros).
 
 **Hash covers:** seq (big-endian bytes), timestamp (RFC3339), event_id, event_kind (big-endian), actor_pubkey, action string, channel_id (16 bytes or 16 zero bytes if None), canonical metadata JSON (BTreeMap for deterministic key ordering), prev_hash.
 
-**Single-writer guarantee:** `SELECT GET_LOCK("sprout_audit", 10)` before each transaction. Lock released via `DO RELEASE_LOCK(?)` in all branches including panic (`catch_unwind`).
+**Single-writer guarantee:** `pg_advisory_lock` before each transaction. Lock released in all branches including panic (`catch_unwind`).
 
 **10 audit actions:** `EventCreated`, `EventDeleted`, `ChannelCreated`, `ChannelUpdated`, `ChannelDeleted`, `MemberAdded`, `MemberRemoved`, `AuthSuccess`, `AuthFailure`, `RateLimitExceeded`.
 
@@ -479,7 +487,7 @@ EXPIRE sprout:typing:{channel_id} 60
 
 ### sprout-workflow — YAML-as-Code Automation Engine
 
-**2,717 LOC.** Parses, validates, and executes channel-scoped workflow definitions.
+**4,012 LOC.** Parses, validates, and executes channel-scoped workflow definitions.
 
 **Workflow definition structure:**
 ```yaml
@@ -530,7 +538,7 @@ Note: Both `TriggerDef` and `ActionDef` use serde internally-tagged enums. Trigg
 
 ### sprout-proxy — NIP-28 Compatibility Proxy
 
-**~4,500 LOC.** Lets standard Nostr clients (Coracle, nak, Amethyst, nostr-tools, nostr-sdk) read and write Sprout channels using the NIP-28 Public Chat Channels protocol. Connects to the relay as a WebSocket client; presents a standard NIP-01/NIP-11/NIP-28/NIP-42 interface to external clients.
+**4,937 LOC.** Lets standard Nostr clients (Coracle, nak, Amethyst, nostr-tools, nostr-sdk) read and write Sprout channels using the NIP-28 Public Chat Channels protocol. Connects to the relay as a WebSocket client; presents a standard NIP-01/NIP-11/NIP-28/NIP-42 interface to external clients.
 
 **Key modules:** `server.rs` (Axum WebSocket server, NIP-11, NIP-42 auth, filter splitting), `translate.rs` (bidirectional kind/tag translation), `upstream.rs` (persistent relay connection with auto-reconnect and subscription replay), `channel_map.rs` (bidirectional UUID ↔ kind:40 event ID mapping), `shadow_keys.rs` (deterministic keypair derivation), `guest_store.rs` (pubkey-based guest registry), `invite_store.rs` (token-based invite system).
 
@@ -571,7 +579,7 @@ Note: Both `TriggerDef` and `ActionDef` use serde internally-tagged enums. Trigg
 
 ### sprout-huddle — LiveKit Audio/Video Integration
 
-**659 LOC.** Mints LiveKit JWT tokens and parses LiveKit webhook events. In-memory session tracking.
+**728 LOC.** Mints LiveKit JWT tokens and parses LiveKit webhook events. In-memory session tracking.
 
 **JWT token:** HS256, 6-hour TTL (overridable). Claims: `iss` (api_key), `sub` (identity), `iat`, `exp`, `name`, `video` (VideoGrant: room, roomJoin, canPublish, canSubscribe).
 
@@ -589,7 +597,7 @@ Note: Both `TriggerDef` and `ActionDef` use serde internally-tagged enums. Trigg
 
 ### sprout-relay — The Server
 
-**4,852 LOC.** Axum WebSocket server. Ties all other crates together. The only crate that imports and orchestrates all subsystems.
+**14,161 LOC.** Axum WebSocket server. Ties all other crates together. The only crate that imports and orchestrates all subsystems.
 
 **`AppState`** (Arc-wrapped, shared across all connections):
 
@@ -604,7 +612,7 @@ pub struct AppState {
     conn_manager: Arc<ConnectionManager>,
     workflow_engine: WorkflowEngine,
     conn_semaphore: Arc<Semaphore>,       // connection limit
-    handler_semaphore: Arc<Semaphore>,    // 64 concurrent handlers
+    handler_semaphore: Arc<Semaphore>,    // 1024 concurrent handlers
 }
 ```
 
@@ -644,9 +652,9 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 | Constant | Value | Purpose |
 |----------|-------|---------|
 | `MAX_FRAME_BYTES` | 65,536 | Max WebSocket frame size |
-| `MAX_SUBSCRIPTIONS` | 100 | Per-connection subscription limit |
+| `MAX_SUBSCRIPTIONS` | 1024 | Per-connection subscription limit |
 | `MAX_HISTORICAL_LIMIT` | 500 | Per-filter historical query cap |
-| `handler_semaphore` capacity | 64 | Concurrent EVENT/REQ handlers |
+| `handler_semaphore` capacity | 1024 | Concurrent EVENT/REQ handlers |
 
 **Does NOT:** implement business logic — delegates to the appropriate crate for every operation.
 
@@ -654,25 +662,27 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 
 ### sprout-mcp — Agent API Surface
 
-**1,748 LOC.** stdio MCP server using the `rmcp` SDK. The interface through which AI agents interact with Sprout. Logs to stderr (stdout is the MCP JSON-RPC channel).
+**4,880 LOC.** stdio MCP server using the `rmcp` SDK. The interface through which AI agents interact with Sprout. Logs to stderr (stdout is the MCP JSON-RPC channel).
 
-**43 tools:**
+**44 tools:**
 
 | Category | Tools |
 |----------|-------|
-| Messaging | `send_message`, `get_channel_history` |
-| Channels | `list_channels`, `create_channel` |
+| Default | `send_message`, `send_diff_message`, `edit_message`, `delete_message`, `get_messages`, `get_thread`, `search`, `get_feed`, `add_reaction`, `remove_reaction`, `get_reactions`, `list_channels`, `get_channel`, `join_channel`, `leave_channel`, `update_channel`, `set_channel_topic`, `set_channel_purpose`, `open_dm`, `get_users`, `set_profile`, `get_presence`, `set_presence`, `trigger_workflow`, `approve_step` |
+| Channel admin | `create_channel`, `archive_channel`, `unarchive_channel`, `add_channel_member`, `remove_channel_member`, `list_channel_members`, `delete_channel` |
+| DMs | `add_dm_member`, `hide_dm`, `list_dms` |
 | Canvas | `get_canvas`, `set_canvas` |
-| Workflows | `list_workflows`, `create_workflow`, `update_workflow`, `delete_workflow`, `trigger_workflow`, `get_workflow_runs`, `approve_workflow_step` |
-| Feed | `get_feed`, `get_feed_mentions`, `get_feed_actions` |
+| Workflow admin | `list_workflows`, `create_workflow`, `update_workflow`, `delete_workflow`, `get_workflow_runs` |
+| Identity | `set_channel_add_policy` |
+| Forums | `vote_on_post` |
 
 **Key implementation details:**
 - Connects to relay via WebSocket (`tokio_tungstenite`). Handles NIP-42 auth automatically.
 - Ephemeral keypair generated if `SPROUT_PRIVATE_KEY` not set (printed to stderr).
 - Exponential backoff reconnection: 1s → 30s. Resubscribes all active subscriptions after reconnect.
 - REST calls use `Authorization: Bearer <token>` when `SPROUT_API_TOKEN` is set; falls back to `X-Pubkey: <hex>` in dev mode.
-- `create_channel` sends a signed Nostr kind 40 event (not a REST call).
-- `set_canvas` sends kind 40100 with `e` tag pointing to channel.
+- `create_channel` sends a signed Nostr kind 9007 event (NIP-29 group creation, not a REST call).
+- `set_canvas` sends kind 40100 with `h` tag pointing to channel UUID.
 - UUID validation at tool boundary before any network call.
 - `MAX_CONTENT_BYTES = 65,536` enforced in `send_message`.
 - `get_channel_history` caps at 200 results; `get_workflow_runs` caps at 100; `get_feed` max 50 per category.
@@ -683,7 +693,7 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 
 ### sprout-admin — Operator CLI
 
-**144 LOC.** Two subcommands:
+**213 LOC.** Two subcommands:
 
 | Subcommand | Purpose |
 |------------|---------|
@@ -698,7 +708,7 @@ Raw token is shown exactly once and never stored. Only the SHA-256 hash reaches 
 
 ### sprout-test-client — Integration Test Harness
 
-**3,362 LOC** (including `tests/` directory — 2,559 lines of e2e tests across 4 files).
+**832 LOC** (tests are in a separate `tests/` directory).
 
 **`SproutTestClient`** wraps a WebSocket connection with a `VecDeque<RelayMessage>` buffer for message interleaving. Methods: `connect`, `connect_unauthenticated`, `authenticate`, `send_event`, `send_text_message`, `subscribe`, `close_subscription`, `recv_event`, `collect_until_eose`, `disconnect`.
 
@@ -706,13 +716,16 @@ Raw token is shown exactly once and never stored. Only the SHA-256 hash reaches 
 
 | File | Tests | Scope |
 |------|-------|-------|
-| `tests/e2e_relay.rs` | 13 | WebSocket protocol (auth, subscriptions, filters, limits, NIP-11) |
-| `tests/e2e_rest_api.rs` | 18 | REST API (channels, search, presence, agents, feed) |
-| `tests/e2e_workflows.rs` | 4 | Workflow CRUD, trigger, and execution |
-| `tests/e2e_mcp.rs` | 7 | MCP tool integration (messaging, channels, canvas, feed) |
-| `src/lib.rs` | 4 | Unit tests (message parsing, event construction) |
+| `tests/e2e_relay.rs` | 27 | WebSocket protocol (auth, subscriptions, filters, limits, NIP-11) |
+| `tests/e2e_mcp.rs` | 14 | MCP tool integration (messaging, channels, canvas, feed) |
+| `tests/e2e_media.rs` | 7 | Media upload/download (Blossom) |
+| `tests/e2e_media_extended.rs` | 18 | Extended media scenarios |
+| `tests/e2e_nostr_interop.rs` | 15 | NIP-28 proxy interoperability |
+| `tests/e2e_rest_api.rs` | 40 | REST API (channels, search, presence, agents, feed) |
+| `tests/e2e_tokens.rs` | 20 | Token auth and scope enforcement |
+| `tests/e2e_workflows.rs` | 7 | Workflow CRUD, trigger, and execution |
 
-All e2e tests are `#[ignore]` — require a running relay. Total: **42 e2e tests + 4 unit tests**.
+All e2e tests are `#[ignore]` — require a running relay. Total: **148 e2e tests**.
 
 `src/main.rs` is a manual testing CLI (`sprout-test-cli`) with `--send`, `--subscribe`, `--channel`, `--url`, `--kind` flags.
 
@@ -759,7 +772,7 @@ Applied in: `sprout-workflow` (CallWebhook action), `sprout-core` (shared utilit
 
 - Hash chain: each entry's SHA-256 covers all fields including `prev_hash` — tampering any entry breaks all subsequent hashes
 - Canonical JSON: `BTreeMap` for deterministic key ordering — hash is reproducible
-- Single-writer lock: `GET_LOCK("sprout_audit", 10)` — prevents concurrent writes from breaking the chain
+- Single-writer lock: `pg_advisory_lock` — prevents concurrent writes from breaking the chain
 - Panic-safe: `catch_unwind` ensures lock release even on panic
 
 ### Access Control
@@ -788,14 +801,16 @@ Docker Compose provides the full local development stack. All services include h
 | Postgres | `postgres:17-alpine` | 5432 | Primary event store — events, channels, tokens, workflows, audit |
 | Redis | `redis:7-alpine` | 6379 | Pub/sub fan-out, presence (SET EX), typing (sorted sets) |
 | Typesense | `typesense/typesense:27.1` | 8108 | Full-text search index |
-| Adminer | `adminer` | 8080 | DB web UI (dev only) |
-| Keycloak | `quay.io/keycloak/keycloak:26` | 8443 | Local OAuth/OIDC stand-in for Okta |
+| Adminer | `adminer` | 8082 | DB web UI (dev only) |
+| Keycloak | `quay.io/keycloak/keycloak:26` | 8180 | Local OAuth/OIDC stand-in for Okta |
+| MinIO | `minio/minio` | 9000 (API), 9001 (console) | S3-compatible object storage (media) |
+| Prometheus | `prom/prometheus` | 9090 | Metrics collection |
 
 ### Postgres Schema (key tables)
 
 | Table | Purpose |
 |-------|---------|
-| `events` | All stored Nostr events; monthly range-partitioned by `TO_DAYS(created_at)` |
+| `events` | All stored Nostr events; monthly range-partitioned by `PARTITION BY RANGE` on `created_at` |
 | `channels` | Channel records (type, visibility, canvas, topic) |
 | `channel_members` | Membership with roles; soft-delete via `removed_at` |
 | `workflows` | Workflow definitions (YAML stored as canonical JSON) |
@@ -826,12 +841,11 @@ These are verified gaps in the current implementation — not design aspirations
 | # | Limitation | Detail |
 |---|-----------|--------|
 | 1 | **No sqlx offline query cache** | Uses `sqlx::query()` (runtime) not `sqlx::query!()` (compile-time). No `.sqlx/` directory. Queries are not validated at compile time. |
-| 2 | **Feed mentions: full table scan** | `query_mentions` uses `JSON_CONTAINS(tags, '["p","<pubkey>"]', '$')` — no index on JSON column. Phase 2 mitigation plan documented in `sprout-db/src/feed.rs`: normalized `mentions` table with composite index on `(pubkey_hex, created_at)`. |
+| 2 | **Feed mentions index** | `query_mentions` uses `INNER JOIN event_mentions` with composite index on `(pubkey_hex, created_at)`. Normalized mentions table implemented. |
 | 3 | **No rate limiting implementation** | `RateLimiter` trait exists in `sprout-auth`. Only implementation is `AlwaysAllowRateLimiter` (test stub, gated behind `#[cfg(any(test, feature = "test-utils"))]`). `RateLimitConfig` defines 4 tiers (human, agent-standard, agent-elevated, agent-platform) but none are enforced. |
-| 4 | **Local-echo deduplication** | Multi-node fan-out is wired: the Redis `PSUBSCRIBE` subscriber loop runs, and a consumer task fans out received events to local WebSocket connections. However, events published by the local relay instance are re-delivered to local subscribers via the Redis round-trip (no server-side dedup). NIP-01 client-side dedup handles this in practice. Server-side dedup is a TODO. |
-| 5 | **Cron scheduler is a stub** | `WorkflowEngine::run()` loops every 60 seconds but the loop body logs "not yet implemented" (TODO WF-07). Schedule-triggered workflows do not fire. |
-| 6 | **Typing indicators: cross-node only** | Typing events (kind 20002) are published to Redis via the ephemeral pipeline. The multi-node consumer task fans them out to local WS subscribers when received from Redis (cross-node path). However, there is no direct local fan-out for typing events on the originating node — they travel Redis → broadcast → WS rather than being fanned out in-process before the Redis round-trip. Typing state is also queryable via the REST `/api/presence` endpoint. |
-| 7 | **sprout-huddle is scaffolding** | `sprout-huddle` defines types, token generation, and webhook parsing, but relay-side lifecycle event emission is not implemented. Huddle state events are not wired into the relay's event pipeline. `sprout-proxy` is now functional — see its section above. |
+| 4 | **Typing indicators: cross-node only** | Typing events (kind 20002) are published to Redis via the ephemeral pipeline. The multi-node consumer task fans them out to local WS subscribers when received from Redis (cross-node path). However, there is no direct local fan-out for typing events on the originating node — they travel Redis → broadcast → WS rather than being fanned out in-process before the Redis round-trip. Typing state is also queryable via the REST `/api/presence` endpoint. |
+| 5 | **sprout-huddle is scaffolding** | `sprout-huddle` defines types, token generation, and webhook parsing, but relay-side lifecycle event emission is not implemented. Huddle state events are not wired into the relay's event pipeline. `sprout-proxy` is now functional — see its section above. |
+| 6 | **Approval gates not implemented** | `request_approval` action is defined in the workflow schema but not yet wired into the execution engine (🚧 WF-08). Workflows with `request_approval` steps will fail at runtime. |
 
 ---
 
@@ -839,21 +853,24 @@ These are verified gaps in the current implementation — not design aspirations
 
 | Crate | LOC | Layer |
 |-------|-----|-------|
-| sprout-core | 726 | Foundation |
-| sprout-auth | 1,810 | Foundation |
-| sprout-db | 3,698 | Foundation |
-| sprout-pubsub | 735 | Foundation |
-| sprout-search | 1,043 | Foundation |
-| sprout-audit | 732 | Foundation |
-| sprout-workflow | 2,717 | Foundation |
-| sprout-proxy | ~4,500 | Client compatibility |
-| sprout-huddle | 659 | Standalone |
-| sprout-relay | 4,852 | Server |
-| sprout-mcp | 1,748 | Agent API |
-| sprout-admin | 144 | Tooling |
-| sprout-test-client | 3,362 | Tooling |
-| **Total** | **~22,739** | |
+| sprout-core | 1,196 | Foundation |
+| sprout-auth | 2,310 | Foundation |
+| sprout-db | 7,328 | Foundation |
+| sprout-pubsub | 887 | Foundation |
+| sprout-search | 1,126 | Foundation |
+| sprout-audit | 776 | Foundation |
+| sprout-workflow | 4,012 | Foundation |
+| sprout-proxy | 4,937 | Client compatibility |
+| sprout-huddle | 728 | Standalone |
+| sprout-relay | 14,161 | Server |
+| sprout-mcp | 4,880 | Agent API |
+| sprout-sdk | 1,237 | Shared library |
+| sprout-media | 977 | Media storage |
+| sprout-cli | 2,919 | Tooling |
+| sprout-admin | 213 | Tooling |
+| sprout-test-client | 832 | Tooling |
+| **Total** | **~71,391** | |
 
-*LOC counted with `find crates -name '*.rs' | xargs wc -l`. Includes tests. Measured 2026-03-09.*
+*LOC counted with `find crates -name '*.rs' | xargs wc -l`. Includes tests. Measured 2026-04-03.*
 
 

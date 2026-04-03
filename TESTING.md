@@ -1,13 +1,13 @@
 # Sprout Testing Guide
 
-This guide enables an AI agent (the **operator**) to run the full Sprout test suite: automated `cargo test` suites and a three-agent multi-agent E2E run that exercises all 43 MCP tools against a live relay.
+This guide enables an AI agent (the **operator**) to run the full Sprout test suite: automated `cargo test` suites and a three-agent multi-agent E2E run that exercises all 44 MCP tools against a live relay.
 
 ## Two Test Modes
 
 | Mode | What It Does | When to Use |
 |------|-------------|-------------|
 | **Automated** (`cargo test`) | Unit tests + REST/WebSocket/MCP integration tests | Fast CI check; verify no unit regressions |
-| **Multi-Agent E2E** | Three agents (Alice, Bob, Charlie) run via `sprout-acp` harness, exercising all 43 MCP tools via real Nostr identities | Before merging relay/MCP/auth changes; full regression run; exploring new features |
+| **Multi-Agent E2E** | Three agents (Alice, Bob, Charlie) run via `sprout-acp` harness, exercising all 44 MCP tools via real Nostr identities | Before merging relay/MCP/auth changes; full regression run; exploring new features |
 
 Run both modes for a complete regression check. Run automated-only for a fast sanity check.
 
@@ -27,7 +27,7 @@ Run both modes for a complete regression check. Run automated-only for a fast sa
    - [3.7 Expected Results](#37-expected-results)
 4. [Advanced: ACP Harness Scenarios](#4-advanced-acp-harness-scenarios)
 5. [Workflow YAML Reference](#5-workflow-yaml-reference)
-6. [The 43 MCP Tools](#6-the-43-mcp-tools)
+6. [The 44 MCP Tools](#6-the-44-mcp-tools)
 7. [Cleanup](#7-cleanup)
 8. [Known Issues / Troubleshooting](#8-known-issues--troubleshooting)
 9. [Proxy Tests](#9-proxy-tests)
@@ -168,24 +168,49 @@ Then run the integration suites:
 RELAY_URL=ws://localhost:3000 \
   cargo test -p sprout-test-client --test e2e_rest_api -- --ignored
 
-# WebSocket relay integration tests (14 tests)
+# WebSocket relay integration tests (27 tests)
 RELAY_URL=ws://localhost:3000 \
   cargo test -p sprout-test-client --test e2e_relay -- --ignored
 
 # MCP server integration tests (14 tests)
 RELAY_URL=ws://localhost:3000 \
   cargo test -p sprout-test-client --test e2e_mcp -- --ignored
+
+# Media integration tests (7 tests)
+RELAY_URL=ws://localhost:3000 \
+  cargo test -p sprout-test-client --test e2e_media -- --ignored
+
+# Extended media tests (18 tests)
+RELAY_URL=ws://localhost:3000 \
+  cargo test -p sprout-test-client --test e2e_media_extended -- --ignored
+
+# Nostr interop tests (15 tests)
+RELAY_URL=ws://localhost:3000 \
+  cargo test -p sprout-test-client --test e2e_nostr_interop -- --ignored
+
+# Token auth tests (20 tests)
+RELAY_URL=ws://localhost:3000 \
+  cargo test -p sprout-test-client --test e2e_tokens -- --ignored
+
+# Workflow integration tests (7 tests)
+RELAY_URL=ws://localhost:3000 \
+  cargo test -p sprout-test-client --test e2e_workflows -- --ignored
 ```
 
 ### Expected Results
 
 ```
 test result: ok. 40 passed; 0 failed; 0 ignored   ← REST API
-test result: ok. 14 passed; 0 failed; 0 ignored   ← relay
+test result: ok. 27 passed; 0 failed; 0 ignored   ← relay
 test result: ok. 14 passed; 0 failed; 0 ignored   ← MCP
+test result: ok.  7 passed; 0 failed; 0 ignored   ← media
+test result: ok. 18 passed; 0 failed; 0 ignored   ← media extended
+test result: ok. 15 passed; 0 failed; 0 ignored   ← nostr interop
+test result: ok. 20 passed; 0 failed; 0 ignored   ← tokens
+test result: ok.  7 passed; 0 failed; 0 ignored   ← workflows
 ```
 
-All 68 integration tests pass (across the three suites above). An additional 7 workflow integration tests exist in `e2e_workflows.rs` — run them separately if workflow changes are involved. If any fail, check that the relay is running and Docker services are healthy before proceeding to E2E.
+All 148 integration tests pass across 8 test files. If any fail, check that the relay is running and Docker services are healthy before proceeding to E2E.
 
 ---
 
@@ -203,7 +228,7 @@ Operator (you)
 Sprout Relay  ──WS (NIP-01)──►  sprout-acp (harness)  ──stdio (ACP)──►  goose
                                                                             │
                                                                        sprout-mcp-server
-                                                                        (43 MCP tools)
+                                                                        (44 MCP tools)
                                                                             │
                                                                        Sprout Relay
                                                                     (send_message, etc.)
@@ -1012,9 +1037,9 @@ steps:
 
 ---
 
-## 6. The 43 MCP Tools
+## 6. The 44 MCP Tools
 
-The `sprout-mcp-server` exposes 43 tools covering the full Sprout feature surface. All are available to agents running via the `sprout-acp` harness.
+The `sprout-mcp-server` exposes 44 tools covering the full Sprout feature surface. All are available to agents running via the `sprout-acp` harness.
 
 ### Channels (8)
 

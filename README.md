@@ -29,11 +29,17 @@ append-only and audited.
 | NIP | Title | Status |
 |-----|-------|--------|
 | [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md) | Basic protocol flow — events, filters, subscriptions | ✅ Implemented |
+| [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) | Mapping Nostr keys to DNS-based internet identifiers | ✅ Implemented |
+| [NIP-09](https://github.com/nostr-protocol/nips/blob/master/09.md) | Event deletion | ✅ Implemented |
+| [NIP-10](https://github.com/nostr-protocol/nips/blob/master/10.md) | Conventions for clients' use of `e` and `p` tags in text events | ✅ Implemented |
 | [NIP-11](https://github.com/nostr-protocol/nips/blob/master/11.md) | Relay information document | ✅ Implemented |
+| [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) | Private Direct Messages | ✅ Implemented |
 | [NIP-25](https://github.com/nostr-protocol/nips/blob/master/25.md) | Reactions | ✅ Implemented |
 | [NIP-28](https://github.com/nostr-protocol/nips/blob/master/28.md) | Public chat channels | ✅ Via `sprout-proxy` (kind translation) |
 | [NIP-29](https://github.com/nostr-protocol/nips/blob/master/29.md) | Relay-based groups | ✅ Partial (kinds 9000–9008 implemented; 9009, 9021 deferred) |
 | [NIP-42](https://github.com/nostr-protocol/nips/blob/master/42.md) | Authentication of clients to relays | ✅ Implemented |
+| [NIP-50](https://github.com/nostr-protocol/nips/blob/master/50.md) | Search capability | ✅ Implemented |
+| [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) | HTTP Auth | ✅ Implemented |
 
 ## Architecture
 
@@ -96,7 +102,7 @@ append-only and audited.
 **Agent interface**
 | Crate | Role |
 |-------|------|
-| `sprout-mcp` | stdio MCP server — 43 tools for messages, channels, workflows, and feed |
+| `sprout-mcp` | stdio MCP server — 44 tools for messages, channels, workflows, and feed |
 | `sprout-acp` | ACP harness — bridges Sprout relay events to AI agents over stdio (goose, codex, claude code) |
 | `sprout-workflow` | YAML-as-code workflow engine — triggers, actions, approval gates, execution traces |
 | `sprout-huddle` | LiveKit integration — voice/video session tokens for channel participants |
@@ -106,9 +112,16 @@ append-only and audited.
 |-------|------|
 | `sprout-proxy` | NIP-28 compatibility proxy — standard Nostr clients (Coracle, nak, Amethyst) read/write Sprout channels via kind translation, shadow keypairs, and guest auth. See [NOSTR.md](NOSTR.md) |
 
+**Shared libraries**
+| Crate | Role |
+|-------|------|
+| `sprout-sdk` | Typed Nostr event builders — used by sprout-mcp and sprout-cli |
+| `sprout-media` | Blossom/S3 media storage |
+
 **Tooling**
 | Crate | Role |
 |-------|------|
+| `sprout-cli` | Agent-first CLI for interacting with the relay |
 | `sprout-admin` | CLI for minting API tokens and listing active credentials |
 | `sprout-test-client` | WebSocket test harness for integration tests |
 
@@ -227,10 +240,23 @@ Copy `.env.example` to `.env` and adjust as needed. All defaults work out of the
 | `SPROUT_PROXY_SALT` | — | Hex 32-byte salt for shadow key derivation |
 | `SPROUT_PROXY_API_TOKEN` | — | Sprout API token with `proxy:submit` scope |
 | `SPROUT_PROXY_ADMIN_SECRET` | — | Bearer secret for proxy admin endpoints (optional — omit for dev mode) |
+| `SPROUT_CORS_ORIGINS` | `*` | Allowed CORS origins for REST API |
+| `SPROUT_HEALTH_PORT` | — | Port for health check endpoint (separate from main bind) |
+| `SPROUT_MAX_CONCURRENT_HANDLERS` | `1024` | Max concurrent EVENT/REQ handlers |
+| `SPROUT_MAX_CONNECTIONS` | — | Max simultaneous WebSocket connections |
+| `SPROUT_MAX_GIF_BYTES` | — | Max GIF upload size (media) |
+| `SPROUT_MAX_IMAGE_BYTES` | — | Max image upload size (media) |
+| `SPROUT_MEDIA_BASE_URL` | — | Public base URL for media files |
+| `SPROUT_MEDIA_SERVER_DOMAIN` | — | Domain for media server |
+| `SPROUT_METRICS_PORT` | — | Port for Prometheus metrics endpoint |
+| `SPROUT_PUBKEY_ALLOWLIST` | — | Comma-separated pubkeys allowed to connect (empty = all) |
+| `SPROUT_SEND_BUFFER` | — | WebSocket send buffer size |
+| `SPROUT_UDS_PATH` | — | Unix domain socket path (alternative to TCP) |
+| `OKTA_JWKS_URI` | — | Okta JWKS endpoint URI for JWT verification |
 
 ## MCP Tools
 
-The `sprout-mcp` server exposes 43 tools over stdio, covering messaging, channels, threads,
+The `sprout-mcp` server exposes 44 tools over stdio, covering messaging, channels, threads,
 reactions, DMs, workflows, search, profiles, presence, and more. Agents discover tools
 automatically via the MCP protocol — see [AGENTS.md](AGENTS.md) for integration details.
 

@@ -111,16 +111,15 @@ fn detect_and_validate_mime(body: &[u8]) -> Result<String, String> {
 fn sign_blossom_upload_auth(keys: &Keys, sha256: &str) -> Result<nostr::Event, String> {
     let now = Timestamp::now().as_u64();
     let mut tags = vec![
-        Tag::parse(vec!["t", "upload"]).map_err(|e| e.to_string())?,
-        Tag::parse(vec!["x", sha256]).map_err(|e| e.to_string())?,
-        Tag::parse(vec!["expiration", &(now + 300).to_string()]).map_err(|e| e.to_string())?,
+        Tag::parse(&["t", "upload"]).map_err(|e| e.to_string())?,
+        Tag::parse(&["x", sha256]).map_err(|e| e.to_string())?,
+        Tag::parse(&["expiration", &(now + 300).to_string()]).map_err(|e| e.to_string())?,
     ];
     let base_url = relay_api_base_url();
     if let Some(domain) = extract_server_authority(&base_url) {
-        tags.push(Tag::parse(vec!["server".to_string(), domain]).map_err(|e| e.to_string())?);
+        tags.push(Tag::parse(&["server".to_string(), domain]).map_err(|e| e.to_string())?);
     }
-    EventBuilder::new(Kind::from(24242), "Upload sprout-media")
-        .tags(tags)
+    EventBuilder::new(Kind::from(24242), "Upload sprout-media", tags)
         .sign_with_keys(keys)
         .map_err(|e| e.to_string())
 }

@@ -74,7 +74,7 @@ membership.
 ### Append-Only Audit Log
 
 All events are written to a tamper-evident audit log (`sprout-audit`). Each
-log entry is chained to the previous one via an HMAC, making retroactive
+log entry is chained to the previous one via a SHA-256 hash, making retroactive
 modification detectable. The audit log is designed for SOX-grade compliance
 and eDiscovery.
 

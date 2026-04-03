@@ -102,7 +102,8 @@ ws://localhost:4869?token=<invite_token>
 | `SPROUT_PROXY_SALT` | ✅ | — | Hex 32-byte salt for shadow key derivation (keep stable) |
 | `SPROUT_PROXY_API_TOKEN` | ✅ | — | Sprout API token with `proxy:submit`, `channels:read`, and `messages:read` scopes |
 | `SPROUT_PROXY_BIND_ADDR` | ❌ | `0.0.0.0:4869` | Listen address |
-| `SPROUT_PROXY_ADMIN_SECRET` | ❌ | — | Bearer secret for `POST /admin/invite` (unset = dev mode, no auth) |
+| `SPROUT_RELAY_PUBKEY` | ✅ | — | Hex public key of the upstream relay (required; proxy exits on startup without it) |
+| `SPROUT_PROXY_ADMIN_SECRET` | ❌ | — | Bearer secret for admin endpoints (unset = dev mode, no auth) |
 | `RUST_LOG` | ❌ | `sprout_proxy=info` | Log level |
 
 ---
@@ -112,6 +113,26 @@ ws://localhost:4869?token=<invite_token>
 ### `GET /`
 - With `Accept: application/nostr+json` → NIP-11 relay info document
 - With `Upgrade: websocket` → WebSocket connection (requires `?token=<invite>`)
+
+### `GET /admin/guests`
+
+List all registered guests. Requires `Authorization: Bearer <SPROUT_PROXY_ADMIN_SECRET>` (if secret is set).
+
+### `POST /admin/guests`
+
+Register a guest by pubkey. Requires `Authorization: Bearer <SPROUT_PROXY_ADMIN_SECRET>` (if secret is set).
+
+**Request:**
+```json
+{
+  "pubkey": "<guest-hex-pubkey>",
+  "channels": "<channel-uuid1>,<channel-uuid2>"
+}
+```
+
+### `DELETE /admin/guests/{pubkey}`
+
+Remove a registered guest. Requires `Authorization: Bearer <SPROUT_PROXY_ADMIN_SECRET>` (if secret is set).
 
 ### `POST /admin/invite`
 
@@ -184,7 +205,7 @@ nak event -k 42 -c "Hello!" --tag "e=<kind40_event_id>" --sec <nsec> "ws://local
 - **Channel map:** Loaded at startup from the relay's REST API. kind:40/41 events are synthesized locally — never forwarded upstream.
 - **Invite tokens:** In-memory, scoped to specific channels, time-limited, use-limited. Lost on proxy restart.
 - **`proxy:submit` scope:** Allows the proxy's API token to submit shadow-signed events through the relay's pubkey enforcement.
-- **Pre-auth buffering:** REQ messages sent before NIP-42 auth completes are buffered (max 20 msgs / 64 KiB) and replayed after auth.
+- **Pre-auth REQ handling:** REQ messages sent before NIP-42 auth completes receive a `CLOSED` response with `"auth-required"`. Clients must complete NIP-42 authentication before sending REQ.
 
 ---
 

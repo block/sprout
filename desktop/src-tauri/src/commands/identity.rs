@@ -39,11 +39,10 @@ pub fn sign_event(
 
     let nostr_tags = tags
         .into_iter()
-        .map(|tag| Tag::parse(tag).map_err(|error| format!("invalid tag: {error}")))
+        .map(|tag| Tag::parse(&tag).map_err(|error| format!("invalid tag: {error}")))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let event = EventBuilder::new(Kind::Custom(kind), content)
-        .tags(nostr_tags)
+    let event = EventBuilder::new(Kind::Custom(kind), content, nostr_tags)
         .sign_with_keys(&keys)
         .map_err(|error| format!("sign failed: {error}"))?;
 
@@ -59,21 +58,19 @@ pub fn create_auth_event(
     let keys = state.keys.lock().map_err(|error| error.to_string())?;
 
     let mut tags = vec![
-        Tag::parse(vec!["relay", &relay_url])
-            .map_err(|error| format!("relay tag failed: {error}"))?,
-        Tag::parse(vec!["challenge", &challenge])
+        Tag::parse(&["relay", &relay_url]).map_err(|error| format!("relay tag failed: {error}"))?,
+        Tag::parse(&["challenge", &challenge])
             .map_err(|error| format!("challenge tag failed: {error}"))?,
     ];
 
     if let Some(token) = state.configured_api_token.as_deref() {
         tags.push(
-            Tag::parse(vec!["auth_token", token])
+            Tag::parse(&["auth_token", token])
                 .map_err(|error| format!("auth token tag failed: {error}"))?,
         );
     }
 
-    let event = EventBuilder::new(Kind::Custom(22242), "")
-        .tags(tags)
+    let event = EventBuilder::new(Kind::Custom(22242), "", tags)
         .sign_with_keys(&keys)
         .map_err(|error| format!("sign failed: {error}"))?;
 

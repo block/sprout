@@ -85,7 +85,7 @@ Auth is simple — authenticated or not. Channel membership gates content visibi
 
 ## Encryption
 
-One model. TLS in transit. At-rest encryption delegated to the storage layer (e.g., MySQL TDE, volume encryption). Server-managed encryption enables eDiscovery and compliance. End-to-end encryption (NIP-44) is a future consideration for DMs. Every channel, every DM, every event. eDiscovery works on everything.
+One model. TLS in transit. At-rest encryption delegated to the storage layer (e.g., Postgres TDE, volume encryption). Server-managed encryption enables eDiscovery and compliance. End-to-end encryption (NIP-44) is a future consideration for DMs. Every channel, every DM, every event. eDiscovery works on everything.
 
 ---
 
@@ -138,7 +138,7 @@ Not afterthoughts — ship blockers:
 |--------|--------|
 | Users | 10K humans + 50K agents |
 | Throughput | ~600K events/day (~7/sec avg) |
-| Event store | MySQL, partitioned monthly |
+| Event store | Postgres, partitioned monthly |
 | Fan-out | Redis pub/sub, <50ms p99 |
 | Search | Typesense, permission-aware, full-text |
 | Audit | Hash-chain audit log, tamper-evident |
@@ -157,14 +157,14 @@ Greenfield. Agent swarms build in parallel, integrating at the event store bound
 | | Area |
 |-|------|
 | ✅ | Core relay, auth, pub/sub, search, audit |
-| ✅ | MCP server — 43 tools, full feature surface |
+| ✅ | MCP server — 44 tools, full feature surface |
 | ✅ | ACP agent harness — goose, codex, claude code |
 | ✅ | Desktop client (Tauri) — Stream, Home, Search, Settings, Profiles, Presence |
 | ✅ | Channel features — messaging, threads, DMs, reactions, NIP-29, soft-delete |
-| ✅ | Workflow engine — YAML-as-code, approval gates, execution traces |
+| ✅ | Workflow engine — YAML-as-code, execution traces (approval gates: 🚧 WF-08) |
 | ✅ | Identity — NIP-05, public profiles, self-service token minting, agent protection |
 | ✅ | NIP-28 proxy — third-party Nostr clients (Coracle, nak, Amethyst) via `sprout-proxy` |
-| 🚧 | Desktop client — Forum view, DM UI |
+| 🚧 | Desktop client — Forum view |
 | 📋 | Mobile clients, developer portal, notifications, culture features |
 
 ---

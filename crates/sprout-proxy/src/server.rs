@@ -618,9 +618,8 @@ fn split_filters(filters: &[Filter]) -> (Vec<Filter>, Vec<Filter>) {
     let mut upstream_filters: Vec<Filter> = Vec::new();
 
     for filter in filters {
-        let kinds: Vec<u16> = filter
-            .kinds
-            .as_ref()
+        let kinds_opt = filter.kinds.as_ref();
+        let kinds: Vec<u16> = kinds_opt
             .map(|k| k.iter().map(|kind| kind.as_u16()).collect())
             .unwrap_or_default();
 
@@ -658,12 +657,17 @@ fn split_filters(filters: &[Filter]) -> (Vec<Filter>, Vec<Filter>) {
             upstream_filters.push(upstream_f);
         }
         if !has_local && !has_upstream {
-            // No kinds specified — "subscribe to everything".
-            // Forward upstream AND serve local kind:40/41 metadata.
-            upstream_filters.push(filter.clone());
-            let mut local_f = filter.clone();
-            local_f = local_f.kinds([Kind::ChannelCreation, Kind::ChannelMetadata]);
-            local_filters.push(local_f);
+            // Distinguish None (no kinds filter = subscribe to everything)
+            // from Some([]) (empty kinds = match nothing).
+            if kinds_opt.is_none() {
+                // No kinds specified — "subscribe to everything".
+                // Forward upstream AND serve local kind:40/41 metadata.
+                upstream_filters.push(filter.clone());
+                let mut local_f = filter.clone();
+                local_f = local_f.kinds([Kind::ChannelCreation, Kind::ChannelMetadata]);
+                local_filters.push(local_f);
+            }
+            // else: Some([]) — match nothing, push nothing (correct)
         }
     }
 
@@ -1181,6 +1185,21 @@ mod tests {
         assert!(local_k.contains(&40));
         assert!(local_k.contains(&41));
         assert!(upstream[0].kinds.is_none());
+    }
+
+    #[test]
+    fn split_filters_empty_kinds_matches_nothing() {
+        // Some(empty set) should produce no filters — match nothing
+        let f = Filter::new().kinds(Vec::<Kind>::new());
+        let (local, upstream) = split_filters(&[f]);
+        assert!(
+            local.is_empty(),
+            "Some([]) should not produce local filters"
+        );
+        assert!(
+            upstream.is_empty(),
+            "Some([]) should not produce upstream filters"
+        );
     }
 
     // ── collect_local_events tests ───────────────────────────────────────

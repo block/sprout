@@ -2595,32 +2595,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nostr"
-version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8aad4b767bbed24ac5eb4465bfb83bc1210522eb99d67cf4e547ec2ec7e47786"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "bech32",
- "bip39",
- "bitcoin",
- "cbc",
- "chacha20",
- "chacha20poly1305",
- "getrandom 0.2.17",
- "instant",
- "negentropy 0.3.1",
- "negentropy 0.4.3",
- "once_cell",
- "scrypt",
- "serde",
- "serde_json",
- "unicode-normalization",
- "url",
-]
-
-[[package]]
 name = "notify-rust"
 version = "4.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4332,7 +4306,7 @@ dependencies = [
  "hex",
  "infer 0.16.0",
  "libc",
- "nostr 0.37.0",
+ "nostr",
  "png 0.18.1",
  "reqwest 0.12.28",
  "serde",
@@ -4362,7 +4336,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "hex",
- "nostr 0.36.0",
+ "nostr",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

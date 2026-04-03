@@ -177,15 +177,14 @@ pub fn build_nip98_auth_header_for_keys(
 ) -> Result<String, String> {
     let payload_hash = format!("{:x}", Sha256::digest(body));
     let tags = vec![
-        Tag::parse(vec!["u", url]).map_err(|error| format!("url tag failed: {error}"))?,
-        Tag::parse(vec!["method", method.as_str()])
+        Tag::parse(&["u", url]).map_err(|error| format!("url tag failed: {error}"))?,
+        Tag::parse(&["method", method.as_str()])
             .map_err(|error| format!("method tag failed: {error}"))?,
-        Tag::parse(vec!["payload", &payload_hash])
+        Tag::parse(&["payload", &payload_hash])
             .map_err(|error| format!("payload tag failed: {error}"))?,
     ];
 
-    let event = EventBuilder::new(Kind::HttpAuth, "")
-        .tags(tags)
+    let event = EventBuilder::new(Kind::HttpAuth, "", tags)
         .sign_with_keys(keys)
         .map_err(|error| format!("sign failed: {error}"))?;
 
