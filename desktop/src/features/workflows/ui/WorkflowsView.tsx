@@ -86,14 +86,16 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
     },
   });
 
+  const triggerOne = triggerMutation.mutate;
   const handleTrigger = React.useCallback(
-    (workflowId: string) => triggerMutation.mutate(workflowId),
-    [triggerMutation],
+    (workflowId: string) => triggerOne(workflowId),
+    [triggerOne],
   );
 
+  const deleteOne = deleteMutation.mutate;
   const handleDelete = React.useCallback(
-    (workflowId: string) => deleteMutation.mutate(workflowId),
-    [deleteMutation],
+    (workflowId: string) => deleteOne(workflowId),
+    [deleteOne],
   );
 
   const handleEdit = React.useCallback(
