@@ -272,8 +272,10 @@ pub async fn post_tokens(
 
     // ── Validate name ─────────────────────────────────────────────────────────
     if req.name.is_empty() || req.name.len() > 100 {
-        return Err(ApiError::BadRequest(
-            "invalid_name: name must be 1–100 characters".into(),
+        return Err(ApiError::Custom(
+            StatusCode::BAD_REQUEST,
+            "invalid_name",
+            "name must be 1–100 characters".into(),
         ));
     }
 
@@ -336,8 +338,10 @@ pub async fn post_tokens(
         if let Some(ref caller_channels) = ctx.channel_ids {
             match &req.channel_ids {
                 None => {
-                    return Err(ApiError::Forbidden(
-                        "channel_escalation: Your token is channel-restricted; minted tokens must also specify channel_ids (subset of yours)".into(),
+                    return Err(ApiError::Custom(
+                        StatusCode::FORBIDDEN,
+                        "channel_escalation",
+                        "Your token is channel-restricted; minted tokens must also specify channel_ids (subset of yours)".into(),
                     ));
                 }
                 Some(requested_raw) => {
@@ -345,10 +349,11 @@ pub async fn post_tokens(
                     for raw in requested_raw {
                         if let Ok(cid) = raw.parse::<uuid::Uuid>() {
                             if !caller_channels.contains(&cid) {
-                                return Err(ApiError::Forbidden(format!(
-                                    "channel_escalation: Cannot mint access to channel {} — not in your token's channel_ids",
-                                    cid
-                                )));
+                                return Err(ApiError::Custom(
+                                    StatusCode::FORBIDDEN,
+                                    "channel_escalation",
+                                    format!("Cannot mint access to channel {} — not in your token's channel_ids", cid),
+                                ));
                             }
                         }
                     }
@@ -385,8 +390,10 @@ pub async fn post_tokens(
             // check above already rejects `None` for restricted callers, so we
             // must also reject empty arrays here.
             if matches!(ctx.auth_method, RestAuthMethod::ApiToken) && ctx.channel_ids.is_some() {
-                return Err(ApiError::Forbidden(
-                    "channel_escalation: Your token is channel-restricted; minted tokens must specify non-empty channel_ids (subset of yours)".into(),
+                return Err(ApiError::Custom(
+                    StatusCode::FORBIDDEN,
+                    "channel_escalation",
+                    "Your token is channel-restricted; minted tokens must specify non-empty channel_ids (subset of yours)".into(),
                 ));
             }
             None
@@ -394,12 +401,20 @@ pub async fn post_tokens(
             let mut uuids = Vec::with_capacity(raw_ids.len());
             for raw in raw_ids {
                 let cid: Uuid = raw.parse().map_err(|_| {
-                    ApiError::BadRequest(format!("invalid_channel_ids: malformed UUID: {raw}"))
+                    ApiError::Custom(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_channel_ids",
+                        format!("malformed UUID: {raw}"),
+                    )
                 })?;
 
                 // Verify channel exists.
                 state.db.get_channel(cid).await.map_err(|_| {
-                    ApiError::BadRequest(format!("invalid_channel_ids: channel not found: {cid}"))
+                    ApiError::Custom(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_channel_ids",
+                        format!("channel not found: {cid}"),
+                    )
                 })?;
 
                 // Verify caller is a member of the channel.
@@ -409,9 +424,11 @@ pub async fn post_tokens(
                     .await
                     .map_err(|e| internal_error(&format!("db error: {e}")))?;
                 if !is_member {
-                    return Err(ApiError::Forbidden(format!(
-                        "not_channel_member: not a member of channel: {cid}"
-                    )));
+                    return Err(ApiError::Custom(
+                        StatusCode::FORBIDDEN,
+                        "not_channel_member",
+                        format!("not a member of channel: {cid}"),
+                    ));
                 }
 
                 uuids.push(cid);
@@ -489,9 +506,11 @@ pub async fn post_tokens(
         let scope_strs: Vec<String> = parsed_scopes.iter().map(|s| s.to_string()).collect();
         for r in &required {
             if !scope_strs.iter().any(|s| s == r) {
-                return Err(ApiError::BadRequest(format!(
-                    "owned agents require the '{r}' scope for controllability"
-                )));
+                return Err(ApiError::Custom(
+                    StatusCode::BAD_REQUEST,
+                    "missing_required_scope",
+                    format!("owned agents require the '{r}' scope for controllability"),
+                ));
             }
         }
     }
@@ -560,8 +579,10 @@ pub async fn post_tokens(
     let token_id = match token_id {
         Some(id) => id,
         None => {
-            return Err(ApiError::Conflict(
-                "token_limit_exceeded: Maximum of 10 active tokens per pubkey".into(),
+            return Err(ApiError::Custom(
+                StatusCode::CONFLICT,
+                "token_limit_exceeded",
+                "Maximum of 10 active tokens per pubkey".into(),
             ));
         }
     };

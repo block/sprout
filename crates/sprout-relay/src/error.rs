@@ -120,7 +120,10 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         // Custom variant uses a two-field envelope: {"error": domain_code, "message": text}
         // All other variants use the original single-field format: {"error": text}
-        // This preserves backward compatibility with existing API consumers and tests.
+        // Standard variants restore the original single-field envelope: {"error": "text"}.
+        // Custom variants use the two-field envelope: {"error": "code", "message": "text"}.
+        // This matches the pre-refactor API contract where most endpoints returned
+        // single-field errors and token endpoints returned two-field errors.
         match self {
             ApiError::Custom(status, code, message) => {
                 let body = serde_json::json!({ "error": code, "message": message });
