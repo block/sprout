@@ -31,6 +31,15 @@ export function WorkflowDetailPanel({
     : null;
   const approvalsQuery = useRunApprovalsQuery(workflowId, selectedRunId);
 
+  async function handleTrigger() {
+    try {
+      const response = await triggerMutation.mutateAsync();
+      setSelectedRunId(response.runId);
+    } catch {
+      // React Query stores the error; keep the current selection unchanged.
+    }
+  }
+
   return (
     <div
       className="flex h-full flex-col border-l bg-background"
@@ -43,7 +52,7 @@ export function WorkflowDetailPanel({
         <div className="flex items-center gap-1">
           <Button
             disabled={triggerMutation.isPending}
-            onClick={() => triggerMutation.mutate()}
+            onClick={() => void handleTrigger()}
             size="sm"
             variant="outline"
           >

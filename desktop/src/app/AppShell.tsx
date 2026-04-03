@@ -93,6 +93,11 @@ export function AppShell() {
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
   const lastNonSettingsViewRef = React.useRef<MainView>("home");
   const queryClient = useQueryClient();
+  const selectView = React.useCallback((view: AppView | MainView) => {
+    React.startTransition(() => {
+      setSelectedView(view);
+    });
+  }, []);
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
   const presenceSession = usePresenceSession(identityQuery.data?.pubkey);
@@ -340,12 +345,10 @@ export function AppShell() {
         return;
       }
       if (selectedChannel?.id === channelId) {
-        React.startTransition(() => {
-          setSelectedView("home");
-        });
+        selectView("home");
       }
     },
-    [hideDmMutation, selectedChannel?.id],
+    [hideDmMutation, selectView, selectedChannel?.id],
   );
 
   const handleOpenSettings = React.useCallback(
@@ -367,10 +370,8 @@ export function AppShell() {
         ? "home"
         : lastNonSettingsViewRef.current;
 
-    React.startTransition(() => {
-      setSelectedView(nextView);
-    });
-  }, [selectedChannel]);
+    selectView(nextView);
+  }, [selectView, selectedChannel]);
 
   const handleOpenSearchResult = React.useCallback(
     (hit: SearchHit) => {
@@ -626,21 +627,10 @@ export function AppShell() {
                 });
                 openChannelView(directMessage.id);
               }}
-              onSelectAgents={() => {
-                React.startTransition(() => {
-                  setSelectedView("agents");
-                });
-              }}
-              onSelectWorkflows={() => {
-                React.startTransition(() => {
-                  setSelectedView("workflows");
-                });
-              }}
+              onSelectAgents={() => selectView("agents")}
+              onSelectWorkflows={() => selectView("workflows")}
               onSelectHome={() => {
-                React.startTransition(() => {
-                  setSelectedView("home");
-                });
-
+                selectView("home");
                 void homeFeedQuery.refetch();
               }}
               onSelectChannel={handleOpenChannel}
@@ -821,10 +811,8 @@ export function AppShell() {
           channel={activeChannel}
           currentPubkey={identityQuery.data?.pubkey}
           onDeleted={() => {
-            React.startTransition(() => {
-              setIsChannelManagementOpen(false);
-              setSelectedView("home");
-            });
+            setIsChannelManagementOpen(false);
+            selectView("home");
           }}
           onOpenChange={setIsChannelManagementOpen}
           open={isChannelManagementOpen && activeChannel !== null}

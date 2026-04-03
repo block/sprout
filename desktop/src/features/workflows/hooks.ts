@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import type { WorkflowRun, WorkflowRunStatus } from "@/shared/api/types";
 import {
   createWorkflow,
   deleteWorkflow,
@@ -24,10 +25,29 @@ export const workflowRunsQueryKey = (workflowId: string) =>
 export const runApprovalsQueryKey = (workflowId: string, runId: string) =>
   ["run-approvals", workflowId, runId] as const;
 
+function invalidateWorkflowListQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+) {
+  void queryClient.invalidateQueries({
+    predicate: (query) =>
+      query.queryKey[0] === "workflows" ||
+      query.queryKey[0] === "workflows-all",
+  });
+}
+
+function isActiveWorkflowRunStatus(status: WorkflowRunStatus) {
+  return (
+    status === "pending" ||
+    status === "running" ||
+    status === "waiting_approval"
+  );
+}
+
 export function useChannelWorkflowsQuery(channelId: string | null) {
   return useQuery({
     queryKey: workflowsQueryKey(channelId ?? ""),
-    queryFn: () => getChannelWorkflows(channelId!),
+    queryFn: ({ queryKey: [, resolvedChannelId] }) =>
+      getChannelWorkflows(resolvedChannelId),
     enabled: channelId !== null,
     staleTime: 30_000,
     refetchOnWindowFocus: true,
@@ -37,7 +57,8 @@ export function useChannelWorkflowsQuery(channelId: string | null) {
 export function useWorkflowQuery(workflowId: string | null) {
   return useQuery({
     queryKey: workflowQueryKey(workflowId ?? ""),
-    queryFn: () => getWorkflow(workflowId!),
+    queryFn: ({ queryKey: [, resolvedWorkflowId] }) =>
+      getWorkflow(resolvedWorkflowId),
     enabled: workflowId !== null,
     staleTime: 30_000,
   });
@@ -46,10 +67,16 @@ export function useWorkflowQuery(workflowId: string | null) {
 export function useWorkflowRunsQuery(workflowId: string | null) {
   return useQuery({
     queryKey: workflowRunsQueryKey(workflowId ?? ""),
-    queryFn: () => getWorkflowRuns(workflowId!),
+    queryFn: ({ queryKey: [, resolvedWorkflowId] }) =>
+      getWorkflowRuns(resolvedWorkflowId),
     enabled: workflowId !== null,
     staleTime: 10_000,
-    refetchInterval: 10_000,
+    refetchInterval: (query) => {
+      const runs = query.state.data as WorkflowRun[] | undefined;
+      return runs?.some((run) => isActiveWorkflowRunStatus(run.status))
+        ? 1_000
+        : false;
+    },
   });
 }
 
@@ -59,7 +86,8 @@ export function useRunApprovalsQuery(
 ) {
   return useQuery({
     queryKey: runApprovalsQueryKey(workflowId ?? "", runId ?? ""),
-    queryFn: () => getRunApprovals(workflowId!, runId!),
+    queryFn: ({ queryKey: [, resolvedWorkflowId, resolvedRunId] }) =>
+      getRunApprovals(resolvedWorkflowId, resolvedRunId),
     enabled: workflowId !== null && runId !== null,
     staleTime: 10_000,
     refetchInterval: 10_000,
@@ -73,17 +101,12 @@ export function useCreateWorkflowMutation(channelId: string) {
     mutationFn: (yamlDefinition: string) =>
       createWorkflow(channelId, yamlDefinition),
     onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: workflowsQueryKey(channelId),
-      });
+      invalidateWorkflowListQueries(queryClient);
     },
   });
 }
 
-export function useUpdateWorkflowMutation(
-  workflowId: string,
-  channelId: string,
-) {
+export function useUpdateWorkflowMutation(workflowId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -93,25 +116,18 @@ export function useUpdateWorkflowMutation(
       void queryClient.invalidateQueries({
         queryKey: workflowQueryKey(workflowId),
       });
-      void queryClient.invalidateQueries({
-        queryKey: workflowsQueryKey(channelId),
-      });
+      invalidateWorkflowListQueries(queryClient);
     },
   });
 }
 
-export function useDeleteWorkflowMutation(
-  workflowId: string,
-  channelId: string,
-) {
+export function useDeleteWorkflowMutation(workflowId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: () => deleteWorkflow(workflowId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: workflowsQueryKey(channelId),
-      });
+      invalidateWorkflowListQueries(queryClient);
     },
   });
 }
