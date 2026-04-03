@@ -416,13 +416,13 @@ async fn create_session_and_apply_model(
     }
 
     // Apply permission mode if not the agent's built-in default AND the agent
-    // advertises the requested mode in session/new. Agents that don't support
+    // advertises a compatible mode in session/new. Agents that don't support
     // the mode (e.g., goose crashes on unrecognized set_config_option values)
     // are safely skipped — the harness auto-approves via handle_permission_request.
-    if !ctx.permission_mode.is_default()
-        && agent_supports_mode(&resp.raw, ctx.permission_mode.as_wire_str())
-    {
-        apply_permission_mode(&mut agent.acp, &resp.session_id, &ctx.permission_mode).await?;
+    if !ctx.permission_mode.is_default() {
+        if let Some(mode_id) = resolve_mode_id(&resp.raw, &ctx.permission_mode) {
+            apply_permission_mode(&mut agent.acp, &resp.session_id, &mode_id).await?;
+        }
     }
 
     Ok(resp.session_id)
@@ -507,20 +507,44 @@ async fn apply_model_switch(
 ///
 /// Non-fatal for most errors: logs and proceeds. The agent falls back
 /// to its default permission mode (`"default"`), which still works via
-/// Check if the agent's `session/new` response advertises a given mode ID
-/// in `result.modes.availableModes[].id`. Returns `false` if the modes
-/// field is absent or the mode isn't listed.
-fn agent_supports_mode(session_new_result: &serde_json::Value, mode_wire: &str) -> bool {
-    session_new_result
-        .get("modes")
-        .and_then(|m| m.get("availableModes"))
-        .and_then(|a| a.as_array())
-        .map(|modes| {
-            modes
-                .iter()
-                .any(|m| m.get("id").and_then(|v| v.as_str()) == Some(mode_wire))
-        })
-        .unwrap_or(false)
+/// Find the agent's advertised mode ID that matches the requested permission
+/// mode.  Tries the canonical ACP wire string first (e.g. `"bypassPermissions"`),
+/// then falls back to known aliases used by other ACP adapters (e.g. amp-acp
+/// advertises `"bypass"` instead of `"bypassPermissions"`).
+///
+/// Returns `None` if the agent doesn't advertise a compatible mode.
+fn resolve_mode_id(
+    session_new_result: &serde_json::Value,
+    mode: &PermissionMode,
+) -> Option<String> {
+    let available = session_new_result
+        .get("modes")?
+        .get("availableModes")?
+        .as_array()?;
+
+    let ids: Vec<&str> = available
+        .iter()
+        .filter_map(|m| m.get("id")?.as_str())
+        .collect();
+
+    // Exact match on the canonical wire string.
+    let wire = mode.as_wire_str();
+    if ids.contains(&wire) {
+        return Some(wire.to_string());
+    }
+
+    // Fallback aliases for known variations across ACP adapters.
+    let aliases: &[&str] = match mode {
+        PermissionMode::BypassPermissions => &["bypass"],
+        PermissionMode::AcceptEdits => &["accept-edits", "accept_edits"],
+        PermissionMode::DontAsk => &["dont-ask", "dont_ask"],
+        _ => &[],
+    };
+
+    aliases
+        .iter()
+        .find(|a| ids.contains(a))
+        .map(|a| a.to_string())
 }
 
 /// per-tool auto-approval in `handle_permission_request`.
@@ -530,11 +554,10 @@ fn agent_supports_mode(session_new_result: &serde_json::Value, mode_wire: &str) 
 async fn apply_permission_mode(
     acp: &mut AcpClient,
     session_id: &str,
-    mode: &PermissionMode,
+    mode_id: &str,
 ) -> Result<(), AcpError> {
-    let wire = mode.as_wire_str();
     let result = tokio::time::timeout(PERMISSION_MODE_TIMEOUT, async {
-        acp.session_set_config_option(session_id, "mode", wire)
+        acp.session_set_config_option(session_id, "mode", mode_id)
             .await
     })
     .await;
@@ -543,7 +566,7 @@ async fn apply_permission_mode(
         Ok(Ok(_)) => {
             tracing::info!(
                 target: "pool::permission",
-                "applied permission mode {wire:?} on session {session_id}"
+                "applied permission mode {mode_id:?} on session {session_id}"
             );
         }
         // Transport-class errors may have corrupted the stdio stream — propagate
@@ -555,7 +578,7 @@ async fn apply_permission_mode(
         | Ok(Err(e @ AcpError::AgentExited)) => {
             tracing::error!(
                 target: "pool::permission",
-                "fatal error setting permission mode {wire:?}: {e}"
+                "fatal error setting permission mode {mode_id:?}: {e}"
             );
             return Err(e);
         }
@@ -563,7 +586,7 @@ async fn apply_permission_mode(
         Ok(Err(e)) => {
             tracing::warn!(
                 target: "pool::permission",
-                "failed to set permission mode {wire:?}: {e} — falling back to per-tool auto-approval"
+                "failed to set permission mode {mode_id:?}: {e} — falling back to per-tool auto-approval"
             );
         }
         Err(_) => {
