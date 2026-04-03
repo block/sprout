@@ -1,16 +1,33 @@
 /**
  * Remark plugin that detects #channel-name patterns in text nodes and wraps them
  * in custom HAST `channel-link` elements for styled rendering via react-markdown.
+ *
+ * When `channelNames` is provided, multi-word channel names (e.g. "my channel")
+ * are matched first (longest-first to avoid partial matches), then the plugin
+ * falls back to the generic `#\S+` pattern for unknown channels.
  */
-export default function remarkChannelLinks() {
-  // biome-ignore lint/suspicious/noExplicitAny: remark tree types are not available
-  return (tree: any) => {
-    walkChildren(tree);
+
+import { buildPrefixPattern } from "./mentionPattern";
+
+type RemarkChannelLinksOptions = {
+  channelNames?: string[];
+};
+
+export default function remarkChannelLinks(
+  options?: RemarkChannelLinksOptions,
+) {
+  const channelPattern = buildPrefixPattern("#", options?.channelNames ?? []);
+
+  return (
+    // biome-ignore lint/suspicious/noExplicitAny: remark tree types are not available
+    tree: any,
+  ) => {
+    walkChildren(tree, channelPattern);
   };
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: remark tree types are not available
-function walkChildren(node: any) {
+function walkChildren(node: any, channelPattern: RegExp) {
   if (!node?.children || !Array.isArray(node.children)) {
     return;
   }
@@ -19,18 +36,19 @@ function walkChildren(node: any) {
     const child = node.children[i];
 
     if (child.type === "text") {
-      const parts = splitChannelLinks(child.value);
+      const parts = splitChannelLinks(child.value, channelPattern);
       if (parts.length > 1) {
         node.children.splice(i, 1, ...parts);
       }
     } else {
-      walkChildren(child);
+      walkChildren(child, channelPattern);
     }
   }
 }
 
-function splitChannelLinks(text: string) {
-  const channelPattern = /#[a-zA-Z0-9][\w-]*/g;
+function splitChannelLinks(text: string, channelPattern: RegExp) {
+  // Reset lastIndex — the pattern is reused across text nodes with the `g` flag
+  channelPattern.lastIndex = 0;
   // biome-ignore lint/suspicious/noExplicitAny: building mdast-compatible nodes
   const parts: any[] = [];
   let lastIndex = 0;

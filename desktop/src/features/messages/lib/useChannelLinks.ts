@@ -11,16 +11,48 @@ export type ChannelSuggestion = {
 function detectChannelQuery(
   value: string,
   cursorPosition: number,
+  knownNamesLower: string[],
 ): { query: string; startIndex: number } | null {
   const beforeCursor = value.slice(0, cursorPosition);
-  const match = beforeCursor.match(/(?:^|[\s])#([^\s]*)$/);
-  if (!match) {
-    return null;
+
+  // Fast path: single-word channel query (no spaces after #)
+  const simpleMatch = beforeCursor.match(/(?:^|[\s])#([^\s]*)$/);
+  if (simpleMatch) {
+    const query = simpleMatch[1];
+    const startIndex = beforeCursor.length - query.length - 1; // -1 for #
+    return { query, startIndex };
   }
 
-  const query = match[1];
-  const startIndex = beforeCursor.length - query.length - 1; // -1 for #
-  return { query, startIndex };
+  // Multi-word path: scan backwards for a `#` and check if the text between
+  // `#` and the cursor is a prefix of any known multi-word channel name.
+  const scanStart = Math.max(0, beforeCursor.length - 80);
+  for (let i = beforeCursor.length - 1; i >= scanStart; i--) {
+    const ch = beforeCursor[i];
+    if (ch === "#") {
+      // Ensure `#` is at start or preceded by whitespace
+      if (i > 0 && !/\s/.test(beforeCursor[i - 1])) {
+        continue;
+      }
+      const candidate = beforeCursor.slice(i + 1);
+      if (candidate.length === 0) {
+        break;
+      }
+      const lowerCandidate = candidate.toLowerCase();
+      const isPrefix = knownNamesLower.some((name) =>
+        name.startsWith(lowerCandidate),
+      );
+      if (isPrefix) {
+        return { query: candidate, startIndex: i };
+      }
+      break;
+    }
+    // Stop scanning if we hit a newline
+    if (ch === "\n") {
+      break;
+    }
+  }
+
+  return null;
 }
 
 const CHANNEL_QUERY_DEBOUNCE_MS = 120;
@@ -37,6 +69,22 @@ export function useChannelLinks() {
   );
   const latestValueRef = React.useRef<string>("");
   const latestCursorRef = React.useRef<number>(0);
+
+  /** Lower-cased channel names for case-insensitive prefix matching. */
+  const knownNamesLower = React.useMemo<string[]>(
+    () =>
+      channels
+        .filter((ch) => ch.channelType !== "dm")
+        .map((ch) => ch.name.toLowerCase()),
+    [channels],
+  );
+
+  const knownNamesLowerRef = React.useRef<string[]>(knownNamesLower);
+
+  // Keep the known-names ref in sync so the debounced callback never reads stale data.
+  React.useEffect(() => {
+    knownNamesLowerRef.current = knownNamesLower;
+  }, [knownNamesLower]);
 
   // Clean up pending timeout on unmount
   React.useEffect(() => {
@@ -109,6 +157,7 @@ export function useChannelLinks() {
         const channel = detectChannelQuery(
           latestValueRef.current,
           latestCursorRef.current,
+          knownNamesLowerRef.current,
         );
         if (channel) {
           setChannelQuery(channel.query);

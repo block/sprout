@@ -205,6 +205,11 @@ function MarkdownInner({
       : "default";
   const { channels, onOpenChannel } = useChannelNavigation();
 
+  const channelNames = React.useMemo(
+    () => channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
+    [channels],
+  );
+
   const components = React.useMemo(
     () => createMarkdownComponents(variant, channels, onOpenChannel),
     [variant, channels, onOpenChannel],
@@ -237,7 +242,7 @@ function MarkdownInner({
           remarkGfm,
           remarkBreaks,
           [remarkMentions, { mentionNames }],
-          remarkChannelLinks,
+          [remarkChannelLinks, { channelNames }],
         ]}
       >
         {processedContent}
