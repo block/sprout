@@ -290,8 +290,9 @@ pub async fn post_tokens(
 
     let mut parsed_scopes: Vec<Scope> = Vec::with_capacity(req.scopes.len());
     for s in &req.scopes {
-        // SAFETY: Scope::from_str is infallible — unknown values map to Scope::Unknown(_)
-        let scope: Scope = s.parse().expect("SAFETY: Scope::from_str is infallible");
+        // Scope::from_str is infallible — unknown values map to Scope::Unknown(_).
+        // Use unwrap_or to avoid panicking in production even though this can't fail.
+        let scope: Scope = s.parse().unwrap_or(Scope::Unknown(s.clone()));
         match &scope {
             Scope::Unknown(_) => {
                 return Err(ApiError::Custom(
@@ -408,14 +409,20 @@ pub async fn post_tokens(
                     )
                 })?;
 
-                // Verify channel exists.
-                state.db.get_channel(cid).await.map_err(|_| {
-                    ApiError::Custom(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_channel_ids",
-                        format!("channel not found: {cid}"),
-                    )
-                })?;
+                // Verify channel exists. Distinguish "not found" from real DB errors.
+                match state.db.get_channel(cid).await {
+                    Ok(_) => {}
+                    Err(sprout_db::DbError::ChannelNotFound(_)) => {
+                        return Err(ApiError::Custom(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_channel_ids",
+                            format!("channel not found: {cid}"),
+                        ));
+                    }
+                    Err(e) => {
+                        return Err(internal_error(&format!("db error: {e}")));
+                    }
+                }
 
                 // Verify caller is a member of the channel.
                 let is_member = state

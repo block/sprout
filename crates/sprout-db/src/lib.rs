@@ -1242,10 +1242,14 @@ impl Db {
         // higher event ID as tiebreaker). If a stale event is replayed, skip it.
         // Use IS NOT DISTINCT FROM for channel_id to correctly handle NULL
         // (e.g. kind:0 profile events where channel_id is NULL).
+        // Fetch the newest active row for this addressable key. ORDER BY
+        // created_at DESC ensures we compare against the most recent event,
+        // even if legacy corruption left multiple active rows.
         let active: Option<(Vec<u8>, chrono::DateTime<Utc>)> = sqlx::query_as(
             "SELECT id, created_at FROM events \
              WHERE kind = $1 AND pubkey = $2 AND channel_id IS NOT DISTINCT FROM $3 \
              AND deleted_at IS NULL \
+             ORDER BY created_at DESC \
              LIMIT 1",
         )
         .bind(kind_i32)
