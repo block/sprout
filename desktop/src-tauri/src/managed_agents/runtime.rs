@@ -136,21 +136,28 @@ pub(crate) fn terminate_process(_pid: u32) -> Result<(), String> {
     Err("managed agent shutdown after app restart is only supported on Unix".to_string())
 }
 
-/// Send SIGTERM to all given PIDs, wait 500ms, then SIGKILL any survivors.
+/// Send SIGTERM to all given PIDs (as process groups), wait, then SIGKILL
+/// any survivors. Uses `-pid` to kill the entire process group — if an
+/// orphaned agent called `setsid()`, it IS the group leader, so this
+/// reaches its children too.
 #[cfg(unix)]
 fn sigterm_then_sigkill(pids: &[i32]) {
+    if pids.is_empty() {
+        return;
+    }
+
     for &pid in pids {
         unsafe {
-            libc::kill(pid, libc::SIGTERM);
+            libc::kill(-pid, libc::SIGTERM);
         }
     }
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::thread::sleep(std::time::Duration::from_millis(200));
 
     for &pid in pids {
         if process_is_running(pid as u32) {
             unsafe {
-                libc::kill(pid, libc::SIGKILL);
+                libc::kill(-pid, libc::SIGKILL);
             }
         }
     }
