@@ -2,6 +2,10 @@ import { Plus, Zap } from "lucide-react";
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+import {
+  allWorkflowsQueryKey,
+  workflowsQueryKey,
+} from "@/features/workflows/hooks";
 import { CreateWorkflowDialog } from "@/features/workflows/ui/CreateWorkflowDialog";
 import { WorkflowCard } from "@/features/workflows/ui/WorkflowCard";
 import { WorkflowDetailPanel } from "@/features/workflows/ui/WorkflowDetailPanel";
@@ -34,7 +38,7 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
   const channelIdKey = channelIds.join(",");
 
   const allWorkflowsQuery = useQuery({
-    queryKey: ["workflows-all", channelIdKey],
+    queryKey: allWorkflowsQueryKey(channelIdKey),
     queryFn: async () => {
       const results: WorkflowWithChannel[] = [];
       await Promise.all(
@@ -54,32 +58,38 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
 
   const allWorkflows = allWorkflowsQuery.data ?? [];
 
-  async function handleTrigger(workflowId: string) {
-    try {
-      await triggerWorkflow(workflowId);
-      void queryClient.invalidateQueries({
-        predicate: (query) => query.queryKey[0] === "workflow-runs",
-      });
-    } catch {
-      // TODO: surface error via toast or inline feedback
-    }
-  }
-
-  async function handleDelete(workflowId: string) {
-    try {
-      await deleteWorkflow(workflowId);
-      if (selectedWorkflowId === workflowId) {
-        setSelectedWorkflowId(null);
+  const handleTrigger = React.useCallback(
+    async (workflowId: string) => {
+      try {
+        await triggerWorkflow(workflowId);
+        void queryClient.invalidateQueries({
+          predicate: (query) => query.queryKey[0] === "workflow-runs",
+        });
+      } catch {
+        // TODO: surface error via toast or inline feedback
       }
-      void queryClient.invalidateQueries({
-        predicate: (query) =>
-          query.queryKey[0] === "workflows" ||
-          query.queryKey[0] === "workflows-all",
-      });
-    } catch {
-      // TODO: surface error via toast or inline feedback
-    }
-  }
+    },
+    [queryClient],
+  );
+
+  const handleDelete = React.useCallback(
+    async (workflowId: string) => {
+      try {
+        await deleteWorkflow(workflowId);
+        setSelectedWorkflowId((current) =>
+          current === workflowId ? null : current,
+        );
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === workflowsQueryKey("").at(0) ||
+            query.queryKey[0] === allWorkflowsQueryKey("").at(0),
+        });
+      } catch {
+        // TODO: surface error via toast or inline feedback
+      }
+    },
+    [queryClient],
+  );
 
   return (
     <div

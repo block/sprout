@@ -12,6 +12,8 @@ import {
   updateWorkflow,
 } from "@/shared/api/tauriWorkflows";
 
+export const allWorkflowsQueryKey = (channelIdKey: string) =>
+  ["workflows-all", channelIdKey] as const;
 export const workflowsQueryKey = (channelId: string) =>
   ["workflows", channelId] as const;
 export const workflowQueryKey = (workflowId: string) =>
