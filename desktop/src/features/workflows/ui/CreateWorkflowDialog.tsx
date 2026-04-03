@@ -1,4 +1,3 @@
-import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import { useCreateWorkflowMutation } from "@/features/workflows/hooks";
@@ -11,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { FieldLabel, FormSelect } from "./workflowFormPrimitives";
 import { WorkflowFormBuilder } from "./WorkflowFormBuilder";
 
 type CreateWorkflowDialogProps = {
@@ -32,11 +32,12 @@ export function CreateWorkflowDialog({
   const selectedChannel =
     channels.find((channel) => channel.id === selectedChannelId) ?? null;
 
+  const resetMutation = createMutation.reset;
   const reset = React.useCallback(() => {
     setSelectedChannelId(channels[0]?.id ?? "");
     setYamlDefinition("");
-    createMutation.reset();
-  }, [channels, createMutation]);
+    resetMutation();
+  }, [channels, resetMutation]);
 
   const handleOpenChange = React.useCallback(
     (nextOpen: boolean) => {
@@ -81,32 +82,23 @@ export function CreateWorkflowDialog({
         <div className="space-y-4">
           {channels.length > 1 ? (
             <div className="space-y-1.5">
-              <label
-                className="block text-sm font-medium"
-                htmlFor="wf-channel-select"
+              <FieldLabel htmlFor="wf-channel-select">Channel</FieldLabel>
+              <FormSelect
+                disabled={createMutation.isPending}
+                id="wf-channel-select"
+                onChange={(value) => {
+                  createMutation.reset();
+                  setSelectedChannelId(value);
+                }}
+                value={selectedChannelId}
               >
-                Channel
-              </label>
-              <div className="relative">
-                <select
-                  className="flex h-11 w-full appearance-none rounded-xl border border-border/70 bg-muted/20 px-3 pr-10 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={createMutation.isPending}
-                  id="wf-channel-select"
-                  onChange={(event) => {
-                    createMutation.reset();
-                    setSelectedChannelId(event.target.value);
-                  }}
-                  value={selectedChannelId}
-                >
-                  {channels.map((channel) => (
-                    <option key={channel.id} value={channel.id}>
-                      {channel.name} · {channel.channelType} ·{" "}
-                      {channel.visibility}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              </div>
+                {channels.map((channel) => (
+                  <option key={channel.id} value={channel.id}>
+                    {channel.name} · {channel.channelType} ·{" "}
+                    {channel.visibility}
+                  </option>
+                ))}
+              </FormSelect>
               <p className="text-xs text-muted-foreground">
                 {selectedChannel
                   ? `New workflows will belong to ${selectedChannel.name}.`
