@@ -167,49 +167,41 @@ async fn resume_workflow_after_approval(
     engine.finalize_run(run_id, result, existing_trace).await;
 }
 
-// ── POST /api/approvals/:token/grant ─────────────────────────────────────────
+// ── Shared approval validation ───────────────────────────────────────────────
 
-/// Grant a pending approval and resume the suspended workflow run.
-///
-/// Uses `AND status = 'pending'` in the DB update to prevent TOCTOU races.
-pub async fn grant_approval(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(token): Path<String>,
-    body: Option<Json<ApprovalBody>>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let ctx = extract_auth_context(&headers, &state).await?;
-    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
-        .map_err(scope_error)?;
-    let pubkey_bytes = ctx.pubkey_bytes.clone();
-
-    let approval = state
-        .db
-        .get_approval(&token)
-        .await
-        .map_err(|_| not_found("approval not found"))?;
-
+/// Validate that an approval is pending and not expired, and that the requester
+/// is allowed by the approver spec.
+fn validate_approval(
+    approval: &sprout_db::workflow::ApprovalRecord,
+    requester_hex: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if approval.status != sprout_db::workflow::ApprovalStatus::Pending {
         return Err(api_error(
             StatusCode::CONFLICT,
             &format!("approval already {}", approval.status),
         ));
     }
-
     if Utc::now() > approval.expires_at {
         return Err(api_error(StatusCode::GONE, "approval token has expired"));
     }
+    check_approver_spec(&approval.approver_spec, requester_hex)?;
+    Ok(())
+}
 
-    check_approver_spec(&approval.approver_spec, &ctx.pubkey.to_hex())?;
-
-    let note = body.as_ref().and_then(|b| b.note.as_deref());
-
+/// Execute the grant: update DB, spawn workflow resume, return response.
+async fn execute_grant(
+    state: &Arc<AppState>,
+    approval: &sprout_db::workflow::ApprovalRecord,
+    token_hash: &[u8],
+    pubkey_bytes: &[u8],
+    note: Option<&str>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let updated = state
         .db
-        .update_approval(
-            &token,
+        .update_approval_by_stored_hash(
+            token_hash,
             sprout_db::workflow::ApprovalStatus::Granted,
-            Some(&pubkey_bytes),
+            Some(pubkey_bytes),
             note,
         )
         .await
@@ -219,11 +211,9 @@ pub async fn grant_approval(
         return Err(api_error(StatusCode::CONFLICT, "approval already acted on"));
     }
 
-    // Resume workflow execution from the step after the approval gate.
     let run_id = approval.run_id;
     let workflow_id = approval.workflow_id;
     let resume_index = approval.step_index as usize + 1;
-
     let engine = Arc::clone(&state.workflow_engine);
     let db = state.db.clone();
 
@@ -234,7 +224,6 @@ pub async fn grant_approval(
     Ok((
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
-            "token": token,
             "status": "granted",
             "run_id": approval.run_id.to_string(),
             "workflow_id": approval.workflow_id.to_string(),
@@ -242,49 +231,21 @@ pub async fn grant_approval(
     ))
 }
 
-// ── POST /api/approvals/:token/deny ──────────────────────────────────────────
-
-/// Deny a pending approval and cancel the suspended workflow run.
-///
-/// Uses `AND status = 'pending'` in the DB update to prevent TOCTOU races.
-pub async fn deny_approval(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(token): Path<String>,
-    body: Option<Json<ApprovalBody>>,
+/// Execute the deny: update DB, spawn workflow cancellation, return response.
+async fn execute_deny(
+    state: &Arc<AppState>,
+    approval: &sprout_db::workflow::ApprovalRecord,
+    token_hash: &[u8],
+    pubkey_bytes: &[u8],
+    pubkey_hex: String,
+    note: Option<&str>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let ctx = extract_auth_context(&headers, &state).await?;
-    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
-        .map_err(scope_error)?;
-    let pubkey_bytes = ctx.pubkey_bytes.clone();
-
-    let approval = state
-        .db
-        .get_approval(&token)
-        .await
-        .map_err(|_| not_found("approval not found"))?;
-
-    if approval.status != sprout_db::workflow::ApprovalStatus::Pending {
-        return Err(api_error(
-            StatusCode::CONFLICT,
-            &format!("approval already {}", approval.status),
-        ));
-    }
-
-    if Utc::now() > approval.expires_at {
-        return Err(api_error(StatusCode::GONE, "approval token has expired"));
-    }
-
-    check_approver_spec(&approval.approver_spec, &ctx.pubkey.to_hex())?;
-
-    let note = body.as_ref().and_then(|b| b.note.as_deref());
-
     let updated = state
         .db
-        .update_approval(
-            &token,
+        .update_approval_by_stored_hash(
+            token_hash,
             sprout_db::workflow::ApprovalStatus::Denied,
-            Some(&pubkey_bytes),
+            Some(pubkey_bytes),
             note,
         )
         .await
@@ -294,11 +255,7 @@ pub async fn deny_approval(
         return Err(api_error(StatusCode::CONFLICT, "approval already acted on"));
     }
 
-    // Mark the workflow run as Cancelled — only if it's still WaitingApproval.
-    // A run that has already transitioned to Failed/Completed/Cancelled through
-    // another path (e.g., timeout, manual cancel) must not be overwritten.
     let run_id = approval.run_id;
-    let pubkey_for_msg = ctx.pubkey.to_hex();
     let db = state.db.clone();
     tokio::spawn(async move {
         let run = match db.get_workflow_run(run_id).await {
@@ -317,7 +274,7 @@ pub async fn deny_approval(
             return;
         }
 
-        let cancel_msg = format!("workflow cancelled: approval denied by {pubkey_for_msg}");
+        let cancel_msg = format!("workflow cancelled: approval denied by {pubkey_hex}");
         if let Err(e) = db
             .update_workflow_run(
                 run_id,
@@ -335,12 +292,146 @@ pub async fn deny_approval(
     Ok((
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
-            "token": token,
             "status": "denied",
             "run_id": approval.run_id.to_string(),
             "workflow_id": approval.workflow_id.to_string(),
         })),
     ))
+}
+
+// ── POST /api/approvals/:token/grant ─────────────────────────────────────────
+
+/// Grant a pending approval using the raw (plaintext) token.
+///
+/// Uses `AND status = 'pending'` in the DB update to prevent TOCTOU races.
+pub async fn grant_approval(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+    body: Option<Json<ApprovalBody>>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+
+    let approval = state
+        .db
+        .get_approval(&token)
+        .await
+        .map_err(|_| not_found("approval not found"))?;
+
+    validate_approval(&approval, &ctx.pubkey.to_hex())?;
+    let note = body.as_ref().and_then(|b| b.note.as_deref());
+    execute_grant(
+        &state,
+        &approval,
+        &approval.token.clone(),
+        &ctx.pubkey_bytes,
+        note,
+    )
+    .await
+}
+
+// ── POST /api/approvals/:token/deny ──────────────────────────────────────────
+
+/// Deny a pending approval using the raw (plaintext) token.
+///
+/// Uses `AND status = 'pending'` in the DB update to prevent TOCTOU races.
+pub async fn deny_approval(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+    body: Option<Json<ApprovalBody>>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+
+    let approval = state
+        .db
+        .get_approval(&token)
+        .await
+        .map_err(|_| not_found("approval not found"))?;
+
+    validate_approval(&approval, &ctx.pubkey.to_hex())?;
+    let note = body.as_ref().and_then(|b| b.note.as_deref());
+    execute_deny(
+        &state,
+        &approval,
+        &approval.token.clone(),
+        &ctx.pubkey_bytes,
+        ctx.pubkey.to_hex(),
+        note,
+    )
+    .await
+}
+
+// ── POST /api/approvals/by-hash/:hash/grant ─────────────────────────────────
+
+/// Grant a pending approval using the DB-stored token hash.
+///
+/// This endpoint is used by the UI, which receives the hash from the
+/// run-approvals listing. The hash is used directly without re-hashing.
+pub async fn grant_approval_by_hash(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(hash_hex): Path<String>,
+    body: Option<Json<ApprovalBody>>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+
+    let token_hash = hex::decode(&hash_hex)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid hex token hash"))?;
+
+    let approval = state
+        .db
+        .get_approval_by_stored_hash(&token_hash)
+        .await
+        .map_err(|_| not_found("approval not found"))?;
+
+    validate_approval(&approval, &ctx.pubkey.to_hex())?;
+    let note = body.as_ref().and_then(|b| b.note.as_deref());
+    execute_grant(&state, &approval, &token_hash, &ctx.pubkey_bytes, note).await
+}
+
+// ── POST /api/approvals/by-hash/:hash/deny ──────────────────────────────────
+
+/// Deny a pending approval using the DB-stored token hash.
+///
+/// This endpoint is used by the UI, which receives the hash from the
+/// run-approvals listing. The hash is used directly without re-hashing.
+pub async fn deny_approval_by_hash(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(hash_hex): Path<String>,
+    body: Option<Json<ApprovalBody>>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsWrite)
+        .map_err(scope_error)?;
+
+    let token_hash = hex::decode(&hash_hex)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid hex token hash"))?;
+
+    let approval = state
+        .db
+        .get_approval_by_stored_hash(&token_hash)
+        .await
+        .map_err(|_| not_found("approval not found"))?;
+
+    validate_approval(&approval, &ctx.pubkey.to_hex())?;
+    let note = body.as_ref().and_then(|b| b.note.as_deref());
+    execute_deny(
+        &state,
+        &approval,
+        &token_hash,
+        &ctx.pubkey_bytes,
+        ctx.pubkey.to_hex(),
+        note,
+    )
+    .await
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

@@ -125,7 +125,7 @@ export function MessageActionBar({
               ) : null}
               <Picker
                 data={data}
-                onEmojiSelect={(emoji: any) => {
+                onEmojiSelect={(emoji: { native: string }) => {
                   if (!onReactionSelect) {
                     return;
                   }

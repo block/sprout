@@ -13,6 +13,7 @@ mod personas;
 mod profile;
 mod teams;
 mod tokens;
+mod workflows;
 
 pub use agent_discovery::*;
 pub use agent_models::*;
@@ -28,3 +29,4 @@ pub use personas::*;
 pub use profile::*;
 pub use teams::*;
 pub use tokens::*;
+pub use workflows::*;
