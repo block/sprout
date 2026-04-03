@@ -11,6 +11,7 @@ import {
   TRIGGER_LABELS,
   TRIGGER_TYPES,
   formStateToYaml,
+  nextStepId,
   yamlToFormState,
 } from "./workflowFormTypes";
 import type {
@@ -117,24 +118,6 @@ function TriggerConfigFields({
     default:
       return null;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const STEP_ID_PATTERN = /^step_(\d+)$/;
-
-function nextStepId(existingSteps: StepFormState[]): string {
-  const existingIds = new Set(existingSteps.map((s) => s.id));
-  let maxN = 0;
-  for (const id of existingIds) {
-    const match = STEP_ID_PATTERN.exec(id);
-    if (match) maxN = Math.max(maxN, Number(match[1]));
-  }
-  let n = maxN + 1;
-  while (existingIds.has(`step_${n}`)) n++;
-  return `step_${n}`;
 }
 
 // ---------------------------------------------------------------------------
