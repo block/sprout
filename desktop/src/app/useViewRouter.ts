@@ -6,7 +6,7 @@ import {
 } from "@/features/settings/ui/SettingsView";
 import type { Channel } from "@/shared/api/types";
 
-type AppView = "home" | "channel" | "settings" | "agents";
+type AppView = "home" | "channel" | "settings" | "agents" | "workflows";
 type MainView = Exclude<AppView, "settings">;
 
 type UseViewRouterResult = {

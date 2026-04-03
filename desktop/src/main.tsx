@@ -79,6 +79,7 @@ const queryClient = new QueryClient({
       retry: 1,
       refetchOnWindowFocus: false,
       networkMode: "always",
+      gcTime: 5 * 60 * 1_000,
     },
     mutations: {
       networkMode: "always",

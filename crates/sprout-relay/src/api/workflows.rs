@@ -22,8 +22,8 @@ use serde::Deserialize;
 use crate::state::AppState;
 
 use super::workflow_helpers::{
-    definition_hash, ensure_webhook_secret, run_record_to_json, spawn_workflow_execution,
-    validate_webhook_urls, workflow_record_to_json,
+    approval_record_to_json, definition_hash, ensure_webhook_secret, run_record_to_json,
+    spawn_workflow_execution, validate_webhook_urls, workflow_record_to_json,
 };
 use super::{
     api_error, check_channel_access, check_token_channel_access, extract_auth_context, forbidden,
@@ -355,6 +355,49 @@ pub async fn list_workflow_runs(
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
     let result: Vec<serde_json::Value> = runs.iter().map(run_record_to_json).collect();
+    Ok(Json(serde_json::json!(result)))
+}
+
+// ── GET /api/workflows/:id/runs/:run_id/approvals ────────────────────────────
+
+/// List all approval records for a workflow run.
+pub async fn list_run_approvals(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((id_str, run_id_str)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+        .map_err(scope_error)?;
+    let pubkey_bytes = ctx.pubkey_bytes.clone();
+
+    let id = uuid::Uuid::parse_str(&id_str)
+        .map_err(|_| ApiError::BadRequest("invalid workflow UUID".into()))?;
+    let run_id = uuid::Uuid::parse_str(&run_id_str)
+        .map_err(|_| ApiError::BadRequest("invalid run UUID".into()))?;
+
+    let workflow = state
+        .db
+        .get_workflow(id)
+        .await
+        .map_err(|_| ApiError::NotFound("workflow not found".into()))?;
+
+    if let Some(channel_id) = workflow.channel_id {
+        check_token_channel_access(&ctx, &channel_id)?;
+        check_channel_access(&state, channel_id, &pubkey_bytes).await?;
+    } else if workflow.owner_pubkey != pubkey_bytes {
+        return Err(ApiError::Forbidden(
+            "not authorized to access this workflow".into(),
+        ));
+    }
+
+    let approvals = state
+        .db
+        .get_run_approvals(id, run_id)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    let result: Vec<serde_json::Value> = approvals.iter().map(approval_record_to_json).collect();
     Ok(Json(serde_json::json!(result)))
 }
 

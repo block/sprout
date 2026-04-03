@@ -214,8 +214,8 @@ pub struct WorkflowRunRecord {
 /// A pending or resolved approval gate for a workflow step.
 #[derive(Debug, Clone)]
 pub struct ApprovalRecord {
-    /// Unique approval token (hashed before storage).
-    pub token: String,
+    /// Token hash as stored in the DB (BYTEA).
+    pub token: Vec<u8>,
     /// The workflow this approval belongs to.
     pub workflow_id: Uuid,
     /// The run waiting on this approval.
@@ -644,7 +644,17 @@ pub async fn create_approval(pool: &PgPool, params: CreateApprovalParams<'_>) ->
 /// sent to the database layer.
 pub async fn get_approval(pool: &PgPool, token: &str) -> Result<ApprovalRecord> {
     let token_hash = hash_approval_token(token);
+    get_approval_by_stored_hash(pool, &token_hash).await
+}
 
+/// Fetch an approval record by its already-hashed token value.
+///
+/// Use this when you already have the hash stored in the DB (e.g., from
+/// `get_run_approvals`). The `token_hash` is used directly without re-hashing.
+pub async fn get_approval_by_stored_hash(
+    pool: &PgPool,
+    token_hash: &[u8],
+) -> Result<ApprovalRecord> {
     let row = sqlx::query(
         r#"
         SELECT token, workflow_id, run_id, step_id, step_index, approver_spec,
@@ -659,6 +669,29 @@ pub async fn get_approval(pool: &PgPool, token: &str) -> Result<ApprovalRecord> 
     .ok_or_else(|| DbError::NotFound("approval token (hashed)".to_string()))?;
 
     row_to_approval_record(row)
+}
+
+/// Fetch all approval records for a given workflow run.
+pub async fn get_run_approvals(
+    pool: &PgPool,
+    workflow_id: Uuid,
+    run_id: Uuid,
+) -> Result<Vec<ApprovalRecord>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT token, workflow_id, run_id, step_id, step_index, approver_spec,
+               status::text AS status, approver_pubkey, note, expires_at, created_at
+        FROM workflow_approvals
+        WHERE run_id = $1 AND workflow_id = $2
+        ORDER BY step_index, created_at
+        "#,
+    )
+    .bind(run_id)
+    .bind(workflow_id)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter().map(row_to_approval_record).collect()
 }
 
 /// Update an approval's status, approver pubkey, and optional note.
@@ -680,6 +713,22 @@ pub async fn update_approval(
     note: Option<&str>,
 ) -> Result<bool> {
     let token_hash = hash_approval_token(token);
+    update_approval_by_stored_hash(pool, &token_hash, status, approver_pubkey, note).await
+}
+
+/// Update an approval by its already-hashed token value.
+///
+/// Use this when you already have the hash stored in the DB (e.g., from
+/// `get_run_approvals`). The `token_hash` is used directly without re-hashing.
+///
+/// See [`update_approval`] for TOCTOU safety notes.
+pub async fn update_approval_by_stored_hash(
+    pool: &PgPool,
+    token_hash: &[u8],
+    status: ApprovalStatus,
+    approver_pubkey: Option<&[u8]>,
+    note: Option<&str>,
+) -> Result<bool> {
     let status_str = status.to_string();
     let affected = sqlx::query(
         r#"
@@ -1134,7 +1183,7 @@ mod tests {
         let now = Utc::now();
 
         let record = ApprovalRecord {
-            token: "abc123def456abc123def456abc123de".to_owned(),
+            token: b"abc123def456abc123def456abc123de".to_vec(),
             workflow_id,
             run_id,
             step_id: "request_approval".to_owned(),
@@ -1147,7 +1196,7 @@ mod tests {
             created_at: now,
         };
 
-        assert_eq!(record.token, "abc123def456abc123def456abc123de");
+        assert_eq!(record.token, b"abc123def456abc123def456abc123de");
         assert_eq!(record.workflow_id, workflow_id);
         assert_eq!(record.run_id, run_id);
         assert_eq!(record.step_id, "request_approval");
@@ -1164,7 +1213,7 @@ mod tests {
         let approver_pubkey = vec![0xca; 32];
 
         let record = ApprovalRecord {
-            token: "token-granted".to_owned(),
+            token: b"token-granted".to_vec(),
             workflow_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             step_id: "gate".to_owned(),
@@ -1187,7 +1236,7 @@ mod tests {
         let now = Utc::now();
 
         let record = ApprovalRecord {
-            token: "token-denied".to_owned(),
+            token: b"token-denied".to_vec(),
             workflow_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             step_id: "gate".to_owned(),
@@ -1208,7 +1257,7 @@ mod tests {
     fn approval_record_clone_is_independent() {
         let now = Utc::now();
         let record = ApprovalRecord {
-            token: "original-token".to_owned(),
+            token: b"original-token".to_vec(),
             workflow_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             step_id: "gate".to_owned(),

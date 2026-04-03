@@ -45,7 +45,9 @@ export const ComposerEmojiPicker = React.memo(function ComposerEmojiPicker({
       >
         <Picker
           data={data}
-          onEmojiSelect={(emoji: any) => onEmojiSelect(emoji.native)}
+          onEmojiSelect={(emoji: { native: string }) =>
+            onEmojiSelect(emoji.native)
+          }
           theme="auto"
           previewPosition="none"
           skinTonePosition="search"

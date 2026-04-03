@@ -9,6 +9,7 @@ import { useSearchSession } from "@/app/useSearchSession";
 import { useViewRouter } from "@/app/useViewRouter";
 import { AgentsView } from "@/features/agents/ui/AgentsView";
 import { ForumView } from "@/features/forum/ui/ForumView";
+import { WorkflowsView } from "@/features/workflows/ui/WorkflowsView";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
   channelsQueryKey,
@@ -90,6 +91,14 @@ export function AppShell() {
   const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
   const queryClient = useQueryClient();
+  const selectView = React.useCallback(
+    (view: AppView | MainView) => {
+      React.startTransition(() => {
+        setSelectedView(view);
+      });
+    },
+    [setSelectedView],
+  );
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
   const presenceSession = usePresenceSession(identityQuery.data?.pubkey);
@@ -335,12 +344,10 @@ export function AppShell() {
         return;
       }
       if (selectedChannel?.id === channelId) {
-        React.startTransition(() => {
-          setSelectedView("home");
-        });
+        selectView("home");
       }
     },
-    [hideDmMutation, selectedChannel?.id, setSelectedView],
+    [hideDmMutation, selectView, selectedChannel?.id],
   );
 
   const handleOpenSearchResult = React.useCallback(
@@ -503,16 +510,10 @@ export function AppShell() {
                 });
                 openChannelView(directMessage.id);
               }}
-              onSelectAgents={() => {
-                React.startTransition(() => {
-                  setSelectedView("agents");
-                });
-              }}
+              onSelectAgents={() => selectView("agents")}
+              onSelectWorkflows={() => selectView("workflows")}
               onSelectHome={() => {
-                React.startTransition(() => {
-                  setSelectedView("home");
-                });
-
+                selectView("home");
                 void homeFeedQuery.refetch();
               }}
               onSelectChannel={handleOpenChannel}
@@ -535,6 +536,12 @@ export function AppShell() {
                   description="Create local ACP workers, mint agent tokens, and monitor the relay-visible agent directory."
                   mode="agents"
                   title="Agents"
+                />
+              ) : selectedView === "workflows" ? (
+                <ChatHeader
+                  description="Create, manage, and monitor automated workflows across your channels."
+                  mode="workflows"
+                  title="Workflows"
                 />
               ) : (
                 <ChatHeader
@@ -600,7 +607,18 @@ export function AppShell() {
                 </div>
                 <div
                   className={
-                    selectedView !== "home" && selectedView !== "agents"
+                    selectedView === "workflows"
+                      ? "flex min-h-0 flex-1 flex-col"
+                      : "hidden"
+                  }
+                >
+                  <WorkflowsView channels={memberChannels} />
+                </div>
+                <div
+                  className={
+                    selectedView !== "home" &&
+                    selectedView !== "agents" &&
+                    selectedView !== "workflows"
                       ? "flex min-h-0 flex-1 flex-col overflow-hidden"
                       : "hidden"
                   }
@@ -677,10 +695,8 @@ export function AppShell() {
           channel={activeChannel}
           currentPubkey={identityQuery.data?.pubkey}
           onDeleted={() => {
-            React.startTransition(() => {
-              setIsChannelManagementOpen(false);
-              setSelectedView("home");
-            });
+            setIsChannelManagementOpen(false);
+            selectView("home");
           }}
           onOpenChange={setIsChannelManagementOpen}
           open={isChannelManagementOpen && activeChannel !== null}

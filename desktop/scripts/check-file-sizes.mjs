@@ -32,7 +32,7 @@ const rules = [
 const overrides = new Map([
   ["src-tauri/src/managed_agents/personas.rs", 600], // built-in persona system prompts (Solo, Ralph, Strategist) are long string literals
   ["src-tauri/src/managed_agents/persona_card.rs", 772], // PNG/ZIP persona card codec + provider/model fields + 27 unit tests (~350 lines of tests); rustfmt adds line breaks around long literals/builders
-  ["src/app/AppShell.tsx", 820], // message edit state + handlers + ChannelPane edit prop threading + scrollback pagination
+  ["src/app/AppShell.tsx", 860], // message edit state + handlers + ChannelPane edit prop threading + scrollback pagination + workflows view + memory-leak safeguards
   ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
   ["src/features/messages/hooks.ts", 500], // message query/mutation hooks + optimistic updates
@@ -47,7 +47,7 @@ const overrides = new Map([
   ["src/features/agents/ui/AgentsView.tsx", 840], // remote agent stop/delete + channel UUID resolution + presence-aware AlertDialog delete guard + persona/team import + provider/model fields
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
-  ["src/shared/api/types.ts", 515], // persona provider/model fields + forum types
+  ["src/shared/api/types.ts", 525], // persona provider/model fields + forum types + workflow type re-exports
 ]);
 
 async function walkFiles(directory) {

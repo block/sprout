@@ -188,6 +188,7 @@ migrate:
 # Remove build artifacts
 clean:
     cargo clean
+    cargo clean --manifest-path desktop/src-tauri/Cargo.toml
 
 # Check the Rust workspace compiles without producing binaries
 check-compile:

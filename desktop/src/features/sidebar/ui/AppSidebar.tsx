@@ -1,4 +1,4 @@
-import { Bot, Home, Lock, PenSquare, Plus, Search } from "lucide-react";
+import { Bot, Home, Lock, PenSquare, Plus, Search, Zap } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
@@ -61,7 +61,7 @@ type AppSidebarProps = {
   selfPresenceStatus: PresenceStatus;
   errorMessage?: string;
   selectedChannelId: string | null;
-  selectedView: "home" | "channel" | "settings" | "agents";
+  selectedView: "home" | "channel" | "settings" | "agents" | "workflows";
   unreadChannelIds: Set<string>;
   onCreateChannel: (input: {
     name: string;
@@ -79,6 +79,7 @@ type AppSidebarProps = {
   onHideDm: (channelId: string) => void;
   onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
   onSelectAgents: () => void;
+  onSelectWorkflows: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
   onSelectSettings: () => void;
@@ -443,6 +444,7 @@ export function AppSidebar({
   onHideDm,
   onOpenDm,
   onSelectAgents,
+  onSelectWorkflows,
   onSelectHome,
   onSelectChannel,
   onSelectSettings,
@@ -538,6 +540,18 @@ export function AppSidebar({
                 {totalAgentCount}
               </SidebarMenuBadge>
             ) : null}
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              data-testid="open-workflows-view"
+              isActive={selectedView === "workflows"}
+              onClick={onSelectWorkflows}
+              tooltip="Workflows"
+              type="button"
+            >
+              <Zap className="h-4 w-4" />
+              <span>Workflows</span>
+            </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>

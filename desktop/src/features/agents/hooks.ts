@@ -437,7 +437,7 @@ export function useManagedAgentLogQuery(
 ) {
   return useQuery({
     queryKey: ["managed-agent-log", pubkey, lineCount],
-    queryFn: () => getManagedAgentLog(pubkey!, lineCount),
+    queryFn: () => getManagedAgentLog(pubkey as string, lineCount),
     enabled: pubkey !== null,
     retry: false,
     staleTime: 3_000,

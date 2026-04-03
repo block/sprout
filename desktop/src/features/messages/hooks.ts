@@ -140,7 +140,7 @@ export function useChannelMessagesQuery(channel: Channel | null) {
       return mergedHistory;
     },
     staleTime: Number.POSITIVE_INFINITY,
-    gcTime: 30 * 60 * 1_000,
+    gcTime: 5 * 60 * 1_000,
   });
 }
 
