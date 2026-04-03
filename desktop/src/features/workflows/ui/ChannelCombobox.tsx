@@ -5,9 +5,14 @@ import type { Channel } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 
+function formatChannelLabel(ch: Channel): string {
+  return `${ch.name} · ${ch.channelType} · ${ch.visibility}`;
+}
+
 type ChannelComboboxProps = {
   channels: Channel[];
   disabled?: boolean;
+  id?: string;
   onChange: (value: string) => void;
   value: string;
 };
@@ -15,11 +20,13 @@ type ChannelComboboxProps = {
 export function ChannelCombobox({
   channels,
   disabled,
+  id,
   onChange,
   value,
 }: ChannelComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
+  const [highlightedIndex, setHighlightedIndex] = React.useState(0);
 
   const selected = channels.find((c) => c.id === value);
 
@@ -34,8 +41,49 @@ export function ChannelCombobox({
     );
   }, [channels, query]);
 
+  function handleOpenChange(next: boolean) {
+    setOpen(next);
+    if (!next) {
+      setQuery("");
+      setHighlightedIndex(0);
+    }
+  }
+
+  function selectChannel(channelId: string) {
+    onChange(channelId);
+    handleOpenChange(false);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (filtered.length === 0) return;
+
+    switch (e.key) {
+      case "ArrowDown": {
+        e.preventDefault();
+        setHighlightedIndex((i) => (i + 1) % filtered.length);
+        break;
+      }
+      case "ArrowUp": {
+        e.preventDefault();
+        setHighlightedIndex((i) => (i - 1 + filtered.length) % filtered.length);
+        break;
+      }
+      case "Enter": {
+        e.preventDefault();
+        const target = filtered[highlightedIndex];
+        if (target) selectChannel(target.id);
+        break;
+      }
+      case "Escape": {
+        e.preventDefault();
+        handleOpenChange(false);
+        break;
+      }
+    }
+  }
+
   return (
-    <Popover onOpenChange={setOpen} open={open}>
+    <Popover onOpenChange={handleOpenChange} open={open}>
       <PopoverTrigger asChild>
         <button
           aria-expanded={open}
@@ -44,13 +92,12 @@ export function ChannelCombobox({
             !selected && "text-muted-foreground",
           )}
           disabled={disabled}
+          id={id}
           role="combobox"
           type="button"
         >
           <span className="truncate">
-            {selected
-              ? `${selected.name} · ${selected.channelType} · ${selected.visibility}`
-              : "Select a channel..."}
+            {selected ? formatChannelLabel(selected) : "Select a channel..."}
           </span>
           <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         </button>
@@ -64,8 +111,13 @@ export function ChannelCombobox({
           <input
             autoCapitalize="off"
             autoComplete="off"
+            ref={(el) => el?.focus()}
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setHighlightedIndex(0);
+            }}
+            onKeyDown={handleKeyDown}
             placeholder="Search channels..."
             value={query}
           />
@@ -76,18 +128,16 @@ export function ChannelCombobox({
               No channels found.
             </p>
           ) : (
-            filtered.map((channel) => (
+            filtered.map((channel, index) => (
               <button
                 className={cn(
                   "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
                   channel.id === value && "bg-accent/50",
+                  index === highlightedIndex &&
+                    "bg-accent text-accent-foreground",
                 )}
                 key={channel.id}
-                onClick={() => {
-                  onChange(channel.id);
-                  setOpen(false);
-                  setQuery("");
-                }}
+                onClick={() => selectChannel(channel.id)}
                 type="button"
               >
                 <Check

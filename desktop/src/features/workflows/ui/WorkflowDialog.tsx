@@ -155,6 +155,7 @@ export function WorkflowDialog({
               <ChannelCombobox
                 channels={channels}
                 disabled={mutation.isPending}
+                id="wf-channel-select"
                 onChange={(value) => {
                   mutation.reset();
                   setSelectedChannelId(value);
@@ -167,17 +168,11 @@ export function WorkflowDialog({
                   : "Join or create a channel before adding a workflow."}
               </p>
             </div>
-          ) : showChannelInfo && selectedChannel ? (
+          ) : (showChannelInfo || mode === "edit") && selectedChannel ? (
             <p className="text-sm text-muted-foreground">
-              This workflow will be created in{" "}
-              <span className="font-medium text-foreground">
-                {selectedChannel.name}
-              </span>
-              .
-            </p>
-          ) : mode === "edit" && selectedChannel ? (
-            <p className="text-sm text-muted-foreground">
-              Editing workflow in{" "}
+              {mode === "edit"
+                ? "Editing workflow in"
+                : "This workflow will be created in"}{" "}
               <span className="font-medium text-foreground">
                 {selectedChannel.name}
               </span>

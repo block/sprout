@@ -120,6 +120,24 @@ function TriggerConfigFields({
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const STEP_ID_PATTERN = /^step_(\d+)$/;
+
+function nextStepId(existingSteps: StepFormState[]): string {
+  const existingIds = new Set(existingSteps.map((s) => s.id));
+  let maxN = 0;
+  for (const id of existingIds) {
+    const match = STEP_ID_PATTERN.exec(id);
+    if (match) maxN = Math.max(maxN, Number(match[1]));
+  }
+  let n = maxN + 1;
+  while (existingIds.has(`step_${n}`)) n++;
+  return `step_${n}`;
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -134,20 +152,23 @@ export function WorkflowFormBuilder({
   onChange,
   yaml,
 }: WorkflowFormBuilderProps) {
-  const [mode, setMode] = React.useState<"form" | "yaml">(() => {
-    if (!yaml) return "form";
-    return yamlToFormState(yaml).ok ? "form" : "yaml";
-  });
-  const [formState, setFormState] = React.useState<WorkflowFormState>(() => {
-    if (!yaml) return DEFAULT_FORM_STATE;
-    const result = yamlToFormState(yaml);
-    return result.ok ? result.state : DEFAULT_FORM_STATE;
-  });
-  const [parseError, setParseError] = React.useState<string | null>(() => {
-    if (!yaml) return null;
-    const result = yamlToFormState(yaml);
-    return result.ok ? null : result.error;
-  });
+  // Parse once on mount instead of calling yamlToFormState three times
+  const initialParseRef = React.useRef(yaml ? yamlToFormState(yaml) : null);
+  const [mode, setMode] = React.useState<"form" | "yaml">(
+    initialParseRef.current === null || initialParseRef.current.ok
+      ? "form"
+      : "yaml",
+  );
+  const [formState, setFormState] = React.useState<WorkflowFormState>(
+    initialParseRef.current?.ok
+      ? initialParseRef.current.state
+      : DEFAULT_FORM_STATE,
+  );
+  const [parseError, setParseError] = React.useState<string | null>(
+    initialParseRef.current !== null && !initialParseRef.current.ok
+      ? initialParseRef.current.error
+      : null,
+  );
 
   const updateFormState = React.useCallback(
     (next: WorkflowFormState) => {
@@ -174,18 +195,12 @@ export function WorkflowFormBuilder({
   }, [mode, yaml]);
 
   const addStep = React.useCallback(() => {
-    const existingIds = new Set(formState.steps.map((s) => s.id));
-    const stepPattern = /^step_(\d+)$/;
-    let maxN = 0;
-    for (const id of existingIds) {
-      const match = stepPattern.exec(id);
-      if (match) maxN = Math.max(maxN, Number(match[1]));
-    }
-    let n = maxN + 1;
-    while (existingIds.has(`step_${n}`)) n++;
     updateFormState({
       ...formState,
-      steps: [...formState.steps, { id: `step_${n}`, action: "delay" }],
+      steps: [
+        ...formState.steps,
+        { id: nextStepId(formState.steps), action: "delay" },
+      ],
     });
   }, [formState, updateFormState]);
 
