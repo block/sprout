@@ -26,6 +26,7 @@ function StepConfigFields({
         <div className="space-y-1.5">
           <FieldLabel htmlFor={`${prefix}-duration`}>Duration</FieldLabel>
           <Input
+            autoCapitalize="off"
             id={`${prefix}-duration`}
             onChange={(event) =>
               onUpdate({ ...step, duration: event.target.value })
@@ -55,6 +56,7 @@ function StepConfigFields({
               Channel override (optional)
             </FieldLabel>
             <Input
+              autoCapitalize="off"
               id={`${prefix}-channel`}
               onChange={(event) =>
                 onUpdate({ ...step, channel: event.target.value })
@@ -71,6 +73,7 @@ function StepConfigFields({
           <div className="space-y-1.5">
             <FieldLabel htmlFor={`${prefix}-to`}>To (pubkey)</FieldLabel>
             <Input
+              autoCapitalize="off"
               id={`${prefix}-to`}
               onChange={(event) =>
                 onUpdate({ ...step, to: event.target.value })
@@ -99,6 +102,7 @@ function StepConfigFields({
           <div className="space-y-1.5">
             <FieldLabel htmlFor={`${prefix}-url`}>URL</FieldLabel>
             <Input
+              autoCapitalize="off"
               id={`${prefix}-url`}
               onChange={(event) =>
                 onUpdate({ ...step, url: event.target.value })
@@ -148,6 +152,7 @@ function StepConfigFields({
           <div className="space-y-1.5">
             <FieldLabel htmlFor={`${prefix}-from`}>From (approver)</FieldLabel>
             <Input
+              autoCapitalize="off"
               id={`${prefix}-from`}
               onChange={(event) =>
                 onUpdate({ ...step, from: event.target.value })
@@ -187,6 +192,7 @@ function StepConfigFields({
         <div className="space-y-1.5">
           <FieldLabel htmlFor={`${prefix}-emoji`}>Emoji</FieldLabel>
           <Input
+            autoCapitalize="off"
             id={`${prefix}-emoji`}
             onChange={(event) =>
               onUpdate({ ...step, emoji: event.target.value })
@@ -254,6 +260,7 @@ export function WorkflowStepCard({
         <div className="space-y-1.5">
           <FieldLabel htmlFor={`${prefix}-id`}>Step ID</FieldLabel>
           <Input
+            autoCapitalize="off"
             id={`${prefix}-id`}
             onChange={(event) => onUpdate({ ...step, id: event.target.value })}
             placeholder="unique_step_id"

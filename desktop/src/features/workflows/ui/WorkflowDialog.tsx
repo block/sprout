@@ -14,8 +14,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { ChannelCombobox } from "./ChannelCombobox";
 import { WorkflowFormBuilder } from "./WorkflowFormBuilder";
-import { FieldLabel, FormSelect } from "./workflowFormPrimitives";
+import { FieldLabel } from "./workflowFormPrimitives";
 
 type DialogMode = "create" | "edit" | "duplicate";
 
@@ -135,8 +136,8 @@ export function WorkflowDialog({
 
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-lg">
+        <DialogHeader className="flex-shrink-0">
           <DialogTitle>{TITLES[mode]}</DialogTitle>
           <DialogDescription>
             {mode === "edit"
@@ -147,26 +148,19 @@ export function WorkflowDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="flex-1 space-y-4 overflow-y-auto">
           {showChannelSelector ? (
             <div className="space-y-1.5">
               <FieldLabel htmlFor="wf-channel-select">Channel</FieldLabel>
-              <FormSelect
+              <ChannelCombobox
+                channels={channels}
                 disabled={mutation.isPending}
-                id="wf-channel-select"
                 onChange={(value) => {
                   mutation.reset();
                   setSelectedChannelId(value);
                 }}
                 value={selectedChannelId}
-              >
-                {channels.map((channel) => (
-                  <option key={channel.id} value={channel.id}>
-                    {channel.name} · {channel.channelType} ·{" "}
-                    {channel.visibility}
-                  </option>
-                ))}
-              </FormSelect>
+              />
               <p className="text-xs text-muted-foreground">
                 {selectedChannel
                   ? `New workflows will belong to ${selectedChannel.name}.`
@@ -199,15 +193,15 @@ export function WorkflowDialog({
             }}
             yaml={yamlDefinition}
           />
+
+          {mutation.error instanceof Error ? (
+            <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {mutation.error.message}
+            </p>
+          ) : null}
         </div>
 
-        {mutation.error instanceof Error ? (
-          <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {mutation.error.message}
-          </p>
-        ) : null}
-
-        <div className="flex justify-end gap-2 pt-4">
+        <div className="flex flex-shrink-0 justify-end gap-2 border-t border-border pt-4">
           <Button
             onClick={() => handleOpenChange(false)}
             type="button"

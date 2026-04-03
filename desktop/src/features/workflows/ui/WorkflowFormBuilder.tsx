@@ -39,6 +39,7 @@ function TriggerConfigFields({
             Filter expression (optional)
           </FieldLabel>
           <Input
+            autoCapitalize="off"
             id="wf-trigger-filter"
             onChange={(event) =>
               onUpdate({ ...trigger, filter: event.target.value })
@@ -58,6 +59,7 @@ function TriggerConfigFields({
             Emoji filter (optional)
           </FieldLabel>
           <Input
+            autoCapitalize="off"
             id="wf-trigger-emoji"
             onChange={(event) =>
               onUpdate({ ...trigger, emoji: event.target.value })
@@ -84,6 +86,7 @@ function TriggerConfigFields({
               Cron expression (optional)
             </FieldLabel>
             <Input
+              autoCapitalize="off"
               id="wf-trigger-cron"
               onChange={(event) =>
                 onUpdate({ ...trigger, cron: event.target.value })
@@ -97,6 +100,7 @@ function TriggerConfigFields({
               Interval (optional)
             </FieldLabel>
             <Input
+              autoCapitalize="off"
               id="wf-trigger-interval"
               onChange={(event) =>
                 onUpdate({ ...trigger, interval: event.target.value })
@@ -170,9 +174,12 @@ export function WorkflowFormBuilder({
   }, [mode, yaml]);
 
   const addStep = React.useCallback(() => {
+    const existingIds = new Set(formState.steps.map((s) => s.id));
+    let n = formState.steps.length + 1;
+    while (existingIds.has(`step_${n}`)) n++;
     updateFormState({
       ...formState,
-      steps: [...formState.steps, { id: crypto.randomUUID(), action: "delay" }],
+      steps: [...formState.steps, { id: `step_${n}`, action: "delay" }],
     });
   }, [formState, updateFormState]);
 
@@ -234,6 +241,7 @@ export function WorkflowFormBuilder({
           <div className="space-y-1.5">
             <FieldLabel htmlFor="wf-name">Workflow name</FieldLabel>
             <Input
+              autoCapitalize="off"
               disabled={disabled}
               id="wf-name"
               onChange={(event) =>
