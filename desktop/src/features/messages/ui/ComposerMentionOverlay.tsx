@@ -46,23 +46,33 @@ type ComposerMentionOverlayProps = {
   scrollTop: number;
 };
 
-export function ComposerMentionOverlay({
-  content,
-  mentionNames,
-  scrollTop,
-}: ComposerMentionOverlayProps) {
-  const pattern = React.useMemo(
-    () => buildOverlayPattern(mentionNames),
-    [mentionNames],
-  );
-  const segments = parseSegments(content, pattern);
+/**
+ * Overlay that highlights @mentions and #channels in the composer text.
+ *
+ * Wrapped in React.memo so it skips re-renders when the parent re-renders
+ * without changing any of this component's props (e.g. focus state changes).
+ */
+export const ComposerMentionOverlay = React.memo(
+  function ComposerMentionOverlay({
+    content,
+    mentionNames,
+    scrollTop,
+  }: ComposerMentionOverlayProps) {
+    const pattern = React.useMemo(
+      () => buildOverlayPattern(mentionNames),
+      [mentionNames],
+    );
+    // Memoize regex parsing so it only re-runs when content or the mention
+    // pattern actually changes — avoids expensive matchAll on every render.
+    const segments = React.useMemo(
+      () => parseSegments(content, pattern),
+      [content, pattern],
+    );
 
-  return (
-    <div
-      className="whitespace-pre-wrap break-words px-0 py-0 text-sm leading-6"
-      style={{ transform: `translateY(-${scrollTop}px)` }}
-    >
-      {
+    // Memoize the rendered nodes so we don't rebuild the element array unless
+    // the parsed segments change.
+    const renderedNodes = React.useMemo(
+      () =>
         segments.reduce<{ offset: number; nodes: React.ReactNode[] }>(
           (acc, segment) => {
             const key = `${acc.offset}`;
@@ -86,8 +96,17 @@ export function ComposerMentionOverlay({
             return acc;
           },
           { offset: 0, nodes: [] },
-        ).nodes
-      }
-    </div>
-  );
-}
+        ).nodes,
+      [segments],
+    );
+
+    return (
+      <div
+        className="whitespace-pre-wrap break-words px-0 py-0 text-sm leading-6"
+        style={{ transform: `translateY(-${scrollTop}px)` }}
+      >
+        {renderedNodes}
+      </div>
+    );
+  },
+);

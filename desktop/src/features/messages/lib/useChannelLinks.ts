@@ -23,12 +23,29 @@ function detectChannelQuery(
   return { query, startIndex };
 }
 
+const CHANNEL_QUERY_DEBOUNCE_MS = 120;
+
 export function useChannelLinks() {
   const { channels } = useChannelNavigation();
 
   const [channelQuery, setChannelQuery] = React.useState<string | null>(null);
   const [channelStartIndex, setChannelStartIndex] = React.useState(0);
   const [channelSelectedIndex, setChannelSelectedIndex] = React.useState(0);
+
+  const debounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const latestValueRef = React.useRef<string>("");
+  const latestCursorRef = React.useRef<number>(0);
+
+  // Clean up pending timeout on unmount
+  React.useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current !== null) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
 
   const channelSuggestions = React.useMemo<ChannelSuggestion[]>(() => {
     if (channelQuery === null) {
@@ -57,6 +74,12 @@ export function useChannelLinks() {
       content: string,
       selectionEnd: number,
     ): { nextContent: string; nextCursor: number } => {
+      // Cancel any pending debounced detection — user already selected
+      if (debounceTimerRef.current !== null) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+
       const before = content.slice(0, channelStartIndex);
       const after = content.slice(selectionEnd);
       const inserted = `#${suggestion.name} `;
@@ -73,19 +96,37 @@ export function useChannelLinks() {
 
   const updateChannelQuery = React.useCallback(
     (value: string, cursorPosition: number) => {
-      const channel = detectChannelQuery(value, cursorPosition);
-      if (channel) {
-        setChannelQuery(channel.query);
-        setChannelStartIndex(channel.startIndex);
-        setChannelSelectedIndex(0);
-      } else {
-        setChannelQuery(null);
+      // Store latest values so the debounced callback always uses fresh data
+      latestValueRef.current = value;
+      latestCursorRef.current = cursorPosition;
+
+      if (debounceTimerRef.current !== null) {
+        clearTimeout(debounceTimerRef.current);
       }
+
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null;
+        const channel = detectChannelQuery(
+          latestValueRef.current,
+          latestCursorRef.current,
+        );
+        if (channel) {
+          setChannelQuery(channel.query);
+          setChannelStartIndex(channel.startIndex);
+          setChannelSelectedIndex(0);
+        } else {
+          setChannelQuery(null);
+        }
+      }, CHANNEL_QUERY_DEBOUNCE_MS);
     },
     [],
   );
 
   const clearChannels = React.useCallback(() => {
+    if (debounceTimerRef.current !== null) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
     setChannelQuery(null);
     setChannelSelectedIndex(0);
   }, []);

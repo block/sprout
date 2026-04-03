@@ -5,6 +5,8 @@ import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import { escapeRegExp } from "@/shared/lib/mentionPattern";
 
+const MENTION_DEBOUNCE_MS = 120;
+
 function detectMentionQuery(
   value: string,
   cursorPosition: number,
@@ -92,6 +94,28 @@ export function useMentions(channelId: string | null) {
     [knownNames],
   );
 
+  // --- Debounce infrastructure for updateMentionQuery ---
+  const debounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const latestValueRef = React.useRef<string>("");
+  const latestCursorRef = React.useRef<number>(0);
+  const knownNamesLowerRef = React.useRef<string[]>(knownNamesLower);
+
+  // Keep the known-names ref in sync so the debounced callback never reads stale data.
+  React.useEffect(() => {
+    knownNamesLowerRef.current = knownNamesLower;
+  }, [knownNamesLower]);
+
+  // Clean up any pending debounce timer on unmount.
+  React.useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current !== null) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
+
   const suggestions = React.useMemo<MentionSuggestion[]>(() => {
     if (mentionQuery === null) {
       return [];
@@ -130,6 +154,12 @@ export function useMentions(channelId: string | null) {
       content: string,
       selectionEnd: number,
     ): { nextContent: string; nextCursor: number } => {
+      // Cancel any pending debounced detection — user already selected
+      if (debounceTimerRef.current !== null) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+
       const displayName = suggestion.displayName;
       const before = content.slice(0, mentionStartIndex);
       const after = content.slice(selectionEnd);
@@ -148,20 +178,34 @@ export function useMentions(channelId: string | null) {
 
   const updateMentionQuery = React.useCallback(
     (value: string, cursorPosition: number) => {
-      const mention = detectMentionQuery(
-        value,
-        cursorPosition,
-        knownNamesLower,
-      );
-      if (mention) {
-        setMentionQuery(mention.query);
-        setMentionStartIndex(mention.startIndex);
-        setMentionSelectedIndex(0);
-      } else {
-        setMentionQuery(null);
+      // Stash the latest values so the debounced callback always uses fresh data.
+      latestValueRef.current = value;
+      latestCursorRef.current = cursorPosition;
+
+      // Clear any previously scheduled detection.
+      if (debounceTimerRef.current !== null) {
+        clearTimeout(debounceTimerRef.current);
       }
+
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null;
+
+        const mention = detectMentionQuery(
+          latestValueRef.current,
+          latestCursorRef.current,
+          knownNamesLowerRef.current,
+        );
+        if (mention) {
+          setMentionQuery(mention.query);
+          setMentionStartIndex(mention.startIndex);
+          setMentionSelectedIndex(0);
+        } else {
+          setMentionQuery(null);
+        }
+      }, MENTION_DEBOUNCE_MS);
     },
-    [knownNamesLower],
+    // Stable: refs are used inside the timeout, so no reactive deps needed.
+    [],
   );
 
   const extractMentionPubkeys = React.useCallback(
@@ -201,6 +245,10 @@ export function useMentions(channelId: string | null) {
   );
 
   const clearMentions = React.useCallback(() => {
+    if (debounceTimerRef.current !== null) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
     mentionMapRef.current.clear();
     setMentionQuery(null);
     setMentionSelectedIndex(0);
