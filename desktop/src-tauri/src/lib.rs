@@ -283,6 +283,15 @@ pub fn run() {
             parse_team_file,
             parse_persona_files,
             export_persona_to_json,
+            get_channel_workflows,
+            get_workflow,
+            create_workflow,
+            update_workflow,
+            delete_workflow,
+            get_workflow_runs,
+            trigger_workflow,
+            grant_approval,
+            deny_approval,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

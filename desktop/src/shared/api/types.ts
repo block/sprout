@@ -464,6 +464,17 @@ export type UpdateTeamInput = {
   personaIds: string[];
 };
 
+// ── Workflow types (re-exported from workflowTypes.ts) ────────────────────
+export type {
+  Workflow,
+  WorkflowApproval,
+  WorkflowApprovalStatus,
+  WorkflowRun,
+  WorkflowRunStatus,
+  WorkflowStatus,
+  TraceEntry,
+} from "@/shared/api/workflowTypes";
+
 // ── Forum types ───────────────────────────────────────────────────────────────
 
 export type ThreadSummary = {
