@@ -1,11 +1,8 @@
-import { Plus, Zap } from "lucide-react";
+import { Plus, RefreshCw, Zap } from "lucide-react";
 import * as React from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import {
-  allWorkflowsQueryKey,
-  workflowsQueryKey,
-} from "@/features/workflows/hooks";
+import { allWorkflowsQueryKey } from "@/features/workflows/hooks";
 import { CreateWorkflowDialog } from "@/features/workflows/ui/CreateWorkflowDialog";
 import { WorkflowCard } from "@/features/workflows/ui/WorkflowCard";
 import { WorkflowDetailPanel } from "@/features/workflows/ui/WorkflowDetailPanel";
@@ -53,42 +50,42 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
     },
     enabled: memberChannels.length > 0,
     staleTime: 30_000,
-    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
 
   const allWorkflows = allWorkflowsQuery.data ?? [];
 
-  const handleTrigger = React.useCallback(
-    async (workflowId: string) => {
-      try {
-        await triggerWorkflow(workflowId);
-        void queryClient.invalidateQueries({
-          predicate: (query) => query.queryKey[0] === "workflow-runs",
-        });
-      } catch {
-        // TODO: surface error via toast or inline feedback
-      }
+  const triggerMutation = useMutation({
+    mutationFn: (workflowId: string) => triggerWorkflow(workflowId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey[0] === "workflow-runs",
+      });
     },
-    [queryClient],
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (workflowId: string) => deleteWorkflow(workflowId),
+    onSuccess: (_data, workflowId) => {
+      setSelectedWorkflowId((current) =>
+        current === workflowId ? null : current,
+      );
+      void queryClient.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "workflows" ||
+          query.queryKey[0] === "workflows-all",
+      });
+    },
+  });
+
+  const handleTrigger = React.useCallback(
+    (workflowId: string) => triggerMutation.mutate(workflowId),
+    [triggerMutation],
   );
 
   const handleDelete = React.useCallback(
-    async (workflowId: string) => {
-      try {
-        await deleteWorkflow(workflowId);
-        setSelectedWorkflowId((current) =>
-          current === workflowId ? null : current,
-        );
-        void queryClient.invalidateQueries({
-          predicate: (query) =>
-            query.queryKey[0] === workflowsQueryKey("").at(0) ||
-            query.queryKey[0] === allWorkflowsQueryKey("").at(0),
-        });
-      } catch {
-        // TODO: surface error via toast or inline feedback
-      }
-    },
-    [queryClient],
+    (workflowId: string) => deleteMutation.mutate(workflowId),
+    [deleteMutation],
   );
 
   return (
@@ -98,7 +95,20 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
     >
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Workflows</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold">Workflows</h2>
+            <Button
+              aria-label="Refresh workflows"
+              disabled={allWorkflowsQuery.isFetching}
+              onClick={() => void allWorkflowsQuery.refetch()}
+              size="icon"
+              variant="ghost"
+            >
+              <RefreshCw
+                className={`h-4 w-4 ${allWorkflowsQuery.isFetching ? "animate-spin" : ""}`}
+              />
+            </Button>
+          </div>
           <Button onClick={() => setIsCreateOpen(true)} size="sm">
             <Plus className="mr-1 h-4 w-4" />
             Create Workflow

@@ -7,7 +7,6 @@ import {
   useWorkflowRunsQuery,
 } from "@/features/workflows/hooks";
 import { WorkflowRunTrace } from "@/features/workflows/ui/WorkflowRunTrace";
-import type { WorkflowRun } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 
 type WorkflowDetailPanelProps = {
@@ -22,12 +21,13 @@ export function WorkflowDetailPanel({
   const workflowQuery = useWorkflowQuery(workflowId);
   const runsQuery = useWorkflowRunsQuery(workflowId);
   const triggerMutation = useTriggerWorkflowMutation(workflowId);
-  const [selectedRun, setSelectedRun] = React.useState<WorkflowRun | null>(
-    null,
-  );
+  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
 
   const workflow = workflowQuery.data;
   const runs = runsQuery.data ?? [];
+  const selectedRun = selectedRunId
+    ? (runs.find((r) => r.id === selectedRunId) ?? null)
+    : null;
 
   return (
     <div
@@ -88,13 +88,15 @@ export function WorkflowDetailPanel({
                   {runs.map((run) => (
                     <button
                       className={`w-full rounded-md border px-3 py-2 text-left text-xs transition-colors hover:bg-muted/50 ${
-                        selectedRun?.id === run.id
+                        selectedRunId === run.id
                           ? "border-primary bg-primary/5"
                           : ""
                       }`}
                       key={run.id}
                       onClick={() =>
-                        setSelectedRun(selectedRun?.id === run.id ? null : run)
+                        setSelectedRunId(
+                          selectedRunId === run.id ? null : run.id,
+                        )
                       }
                       type="button"
                     >

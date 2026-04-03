@@ -27,7 +27,7 @@ export function useChannelWorkflowsQuery(channelId: string | null) {
     queryFn: () => getChannelWorkflows(channelId!),
     enabled: channelId !== null,
     staleTime: 30_000,
-    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
 }
 
