@@ -373,6 +373,19 @@ export function useFeedDesktopNotifications(
     for (const item of currentFeedItems) {
       nextSeenItemIds.add(item.id);
     }
+
+    // Prevent unbounded growth — keep only the most recent entries.
+    const MAX_SEEN_FEED_ITEMS = 500;
+    if (nextSeenItemIds.size > MAX_SEEN_FEED_ITEMS) {
+      const excess = nextSeenItemIds.size - MAX_SEEN_FEED_ITEMS;
+      let removed = 0;
+      for (const id of nextSeenItemIds) {
+        if (removed >= excess) break;
+        nextSeenItemIds.delete(id);
+        removed++;
+      }
+    }
+
     seenItemIdsRef.current = nextSeenItemIds;
 
     for (const item of newItems) {

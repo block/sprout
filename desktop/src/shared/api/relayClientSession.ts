@@ -44,6 +44,7 @@ export class RelayClient {
   private reconnectListeners = new Set<() => void>();
   private hasConnectedOnce = false;
   private notifyReconnectListeners = false;
+  private onMessageChannel: Channel<unknown> | null = null;
 
   async fetchChannelHistory(channelId: string, limit = 50) {
     return this.fetchHistory(this.buildChannelFilter(channelId, limit));
@@ -217,13 +218,13 @@ export class RelayClient {
       this.relayUrl = await getRelayWsUrl();
     }
 
-    const onMessageChannel = new Channel<unknown>((message) => {
+    this.onMessageChannel = new Channel<unknown>((message) => {
       void this.handleWsMessage(message);
     });
 
     this.wsId = await invoke<number>("plugin:websocket|connect", {
       url: this.relayUrl,
-      onMessage: onMessageChannel,
+      onMessage: this.onMessageChannel,
       config: {},
     });
 
@@ -700,6 +701,7 @@ export class RelayClient {
       reconnect?: boolean;
     },
   ) {
+    this.onMessageChannel = null;
     if (this.flushTimeout !== null) window.clearTimeout(this.flushTimeout);
     this.flushTimeout = null;
     this.eventBuffer = [];

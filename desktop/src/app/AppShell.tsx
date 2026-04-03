@@ -483,6 +483,21 @@ export function AppShell() {
       requestedAncestorIdsRef.current.add(eventId);
     }
 
+    // Prevent unbounded growth — evict oldest entries when the set exceeds
+    // a reasonable size. Since Set iteration is insertion-ordered we drop
+    // the first (oldest) entries.
+    const MAX_REQUESTED_ANCESTORS = 500;
+    if (requestedAncestorIdsRef.current.size > MAX_REQUESTED_ANCESTORS) {
+      const excess =
+        requestedAncestorIdsRef.current.size - MAX_REQUESTED_ANCESTORS;
+      let removed = 0;
+      for (const id of requestedAncestorIdsRef.current) {
+        if (removed >= excess) break;
+        requestedAncestorIdsRef.current.delete(id);
+        removed++;
+      }
+    }
+
     let isCancelled = false;
 
     void Promise.all(
