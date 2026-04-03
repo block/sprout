@@ -3,9 +3,9 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { allWorkflowsQueryKey } from "@/features/workflows/hooks";
-import { CreateWorkflowDialog } from "@/features/workflows/ui/CreateWorkflowDialog";
 import { WorkflowCard } from "@/features/workflows/ui/WorkflowCard";
 import { WorkflowDetailPanel } from "@/features/workflows/ui/WorkflowDetailPanel";
+import { WorkflowDialog } from "@/features/workflows/ui/WorkflowDialog";
 import type { Channel, Workflow } from "@/shared/api/types";
 import {
   deleteWorkflow,
@@ -23,8 +23,16 @@ type WorkflowWithChannel = {
   channelName: string;
 };
 
+type DialogState =
+  | { mode: "closed" }
+  | { mode: "create" }
+  | { mode: "edit"; workflow: Workflow }
+  | { mode: "duplicate"; workflow: Workflow };
+
 export function WorkflowsView({ channels }: WorkflowsViewProps) {
-  const [isCreateOpen, setIsCreateOpen] = React.useState(false);
+  const [dialogState, setDialogState] = React.useState<DialogState>({
+    mode: "closed",
+  });
   const [selectedWorkflowId, setSelectedWorkflowId] = React.useState<
     string | null
   >(null);
@@ -88,6 +96,22 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
     [deleteMutation],
   );
 
+  const handleEdit = React.useCallback(
+    (workflow: Workflow) => setDialogState({ mode: "edit", workflow }),
+    [],
+  );
+
+  const handleDuplicate = React.useCallback(
+    (workflow: Workflow) => setDialogState({ mode: "duplicate", workflow }),
+    [],
+  );
+
+  const handleDialogOpenChange = React.useCallback((open: boolean) => {
+    if (!open) {
+      setDialogState({ mode: "closed" });
+    }
+  }, []);
+
   return (
     <div
       className="flex min-h-0 flex-1 overflow-hidden"
@@ -109,7 +133,7 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
               />
             </Button>
           </div>
-          <Button onClick={() => setIsCreateOpen(true)} size="sm">
+          <Button onClick={() => setDialogState({ mode: "create" })} size="sm">
             <Plus className="mr-1 h-4 w-4" />
             Create Workflow
           </Button>
@@ -137,7 +161,7 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
             <Zap className="h-10 w-10 opacity-30" />
             <p className="text-sm">No workflows yet</p>
             <Button
-              onClick={() => setIsCreateOpen(true)}
+              onClick={() => setDialogState({ mode: "create" })}
               size="sm"
               variant="outline"
             >
@@ -152,6 +176,8 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
                 channelName={channelName}
                 key={workflow.id}
                 onDelete={handleDelete}
+                onDuplicate={handleDuplicate}
+                onEdit={handleEdit}
                 onSelect={setSelectedWorkflowId}
                 onTrigger={handleTrigger}
                 workflow={workflow}
@@ -166,15 +192,22 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
           <WorkflowDetailPanel
             key={selectedWorkflowId}
             onClose={() => setSelectedWorkflowId(null)}
+            onEdit={handleEdit}
             workflowId={selectedWorkflowId}
           />
         </div>
       ) : null}
 
-      <CreateWorkflowDialog
+      <WorkflowDialog
         channels={memberChannels}
-        onOpenChange={setIsCreateOpen}
-        open={isCreateOpen}
+        mode={dialogState.mode === "closed" ? "create" : dialogState.mode}
+        onOpenChange={handleDialogOpenChange}
+        open={dialogState.mode !== "closed"}
+        workflow={
+          dialogState.mode === "edit" || dialogState.mode === "duplicate"
+            ? dialogState.workflow
+            : null
+        }
       />
     </div>
   );
