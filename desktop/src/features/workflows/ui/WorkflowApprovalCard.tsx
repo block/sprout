@@ -34,6 +34,7 @@ export function WorkflowApprovalCard({ approval }: WorkflowApprovalCardProps) {
       </p>
 
       <Textarea
+        aria-label="Approval note"
         className="mb-2 h-16 resize-none text-xs"
         onChange={(event) => setNote(event.target.value)}
         placeholder="Optional note..."
@@ -57,7 +58,7 @@ export function WorkflowApprovalCard({ approval }: WorkflowApprovalCardProps) {
           Approve
         </Button>
         <Button
-          className="flex-1 bg-red-600 text-white hover:bg-red-700"
+          className="flex-1"
           disabled={approvalMutation.isPending}
           onClick={() =>
             approvalMutation.mutate({

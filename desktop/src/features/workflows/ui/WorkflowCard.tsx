@@ -41,12 +41,18 @@ export function WorkflowCard({
   onDelete,
 }: WorkflowCardProps) {
   return (
-    <button
-      className="w-full cursor-pointer rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/50"
+    <div
+      className="relative w-full rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/50"
       data-testid={`workflow-card-${workflow.id}`}
-      onClick={() => onSelect(workflow.id)}
-      type="button"
     >
+      <button
+        className="absolute inset-0 rounded-lg"
+        onClick={() => onSelect(workflow.id)}
+        type="button"
+      >
+        <span className="sr-only">View {workflow.name}</span>
+      </button>
+
       <div className="flex items-start justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -68,8 +74,8 @@ export function WorkflowCard({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
-              className="h-7 w-7 shrink-0"
-              onClick={(event) => event.stopPropagation()}
+              aria-label="Workflow actions"
+              className="relative z-10 h-7 w-7 shrink-0"
               size="icon"
               variant="ghost"
             >
@@ -77,21 +83,13 @@ export function WorkflowCard({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              onClick={(event) => {
-                event.stopPropagation();
-                onTrigger(workflow.id);
-              }}
-            >
+            <DropdownMenuItem onClick={() => onTrigger(workflow.id)}>
               <Play className="mr-2 h-4 w-4" />
               Trigger
             </DropdownMenuItem>
             <DropdownMenuItem
               className="text-destructive"
-              onClick={(event) => {
-                event.stopPropagation();
-                onDelete(workflow.id);
-              }}
+              onClick={() => onDelete(workflow.id)}
             >
               <Trash2 className="mr-2 h-4 w-4" />
               Delete
@@ -99,6 +97,6 @@ export function WorkflowCard({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-    </button>
+    </div>
   );
 }

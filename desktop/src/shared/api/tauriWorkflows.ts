@@ -109,6 +109,22 @@ function fromRawWorkflowRun(raw: RawWorkflowRun): WorkflowRun {
   };
 }
 
+export function fromRawApproval(raw: RawWorkflowApproval): WorkflowApproval {
+  return {
+    token: raw.token,
+    workflowId: raw.workflow_id,
+    runId: raw.run_id,
+    stepId: raw.step_id,
+    stepIndex: raw.step_index,
+    approverSpec: raw.approver_spec,
+    status: raw.status,
+    approverPubkey: raw.approver_pubkey,
+    note: raw.note,
+    expiresAt: raw.expires_at,
+    createdAt: raw.created_at,
+  };
+}
+
 function fromRawTriggerResponse(
   raw: RawTriggerWorkflowResponse,
 ): TriggerWorkflowResponse {

@@ -46,13 +46,24 @@ export function WorkflowDetailPanel({
             variant="outline"
           >
             <Play className="mr-1 h-3 w-3" />
-            Trigger
+            {triggerMutation.isPending ? "Triggering..." : "Trigger"}
           </Button>
-          <Button onClick={onClose} size="icon" variant="ghost">
+          <Button
+            aria-label="Close detail panel"
+            onClick={onClose}
+            size="icon"
+            variant="ghost"
+          >
             <X className="h-4 w-4" />
           </Button>
         </div>
       </div>
+
+      {triggerMutation.isError ? (
+        <div className="border-b px-4 py-2 text-xs text-red-400">
+          Failed to trigger workflow
+        </div>
+      ) : null}
 
       <div className="flex-1 overflow-y-auto">
         {workflow ? (
@@ -108,6 +119,10 @@ export function WorkflowDetailPanel({
                 <WorkflowRunTrace run={selectedRun} />
               </div>
             ) : null}
+          </div>
+        ) : workflowQuery.isError ? (
+          <div className="flex h-32 flex-col items-center justify-center gap-2">
+            <p className="text-sm text-red-400">Failed to load workflow</p>
           </div>
         ) : (
           <div className="flex h-32 items-center justify-center">

@@ -55,22 +55,30 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
   const allWorkflows = allWorkflowsQuery.data ?? [];
 
   async function handleTrigger(workflowId: string) {
-    await triggerWorkflow(workflowId);
-    void queryClient.invalidateQueries({
-      predicate: (query) => query.queryKey[0] === "workflow-runs",
-    });
+    try {
+      await triggerWorkflow(workflowId);
+      void queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey[0] === "workflow-runs",
+      });
+    } catch {
+      // TODO: surface error via toast or inline feedback
+    }
   }
 
   async function handleDelete(workflowId: string) {
-    await deleteWorkflow(workflowId);
-    if (selectedWorkflowId === workflowId) {
-      setSelectedWorkflowId(null);
+    try {
+      await deleteWorkflow(workflowId);
+      if (selectedWorkflowId === workflowId) {
+        setSelectedWorkflowId(null);
+      }
+      void queryClient.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "workflows" ||
+          query.queryKey[0] === "workflows-all",
+      });
+    } catch {
+      // TODO: surface error via toast or inline feedback
     }
-    void queryClient.invalidateQueries({
-      predicate: (query) =>
-        query.queryKey[0] === "workflows" ||
-        query.queryKey[0] === "workflows-all",
-    });
   }
 
   return (
@@ -92,6 +100,17 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
             <p className="text-sm text-muted-foreground">
               Loading workflows...
             </p>
+          </div>
+        ) : allWorkflowsQuery.isError ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-muted-foreground">
+            <p className="text-sm text-red-400">Failed to load workflows</p>
+            <Button
+              onClick={() => void allWorkflowsQuery.refetch()}
+              size="sm"
+              variant="outline"
+            >
+              Retry
+            </Button>
           </div>
         ) : allWorkflows.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
