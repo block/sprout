@@ -167,90 +167,40 @@ fn sigterm_then_sigkill(pids: &[i32]) {
     }
 }
 
-/// Enumerate all PIDs on the system that are owned by the current user and
-/// match a known agent binary name, excluding `skip_pids`.
-#[cfg(target_os = "macos")]
-fn enumerate_orphaned_agent_pids(skip_pids: &[u32]) -> Vec<i32> {
-    extern "C" {
-        fn proc_listallpids(buffer: *mut libc::pid_t, buffersize: libc::c_int) -> libc::c_int;
-    }
-
-    let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
-    if count <= 0 {
-        return Vec::new();
-    }
-
-    let mut pids = vec![0i32; (count as usize) * 2]; // over-allocate for safety
-    let actual =
-        unsafe { proc_listallpids(pids.as_mut_ptr(), (pids.len() * size_of::<i32>()) as i32) };
-    if actual <= 0 {
-        return Vec::new();
-    }
-    pids.truncate(actual as usize);
-
-    pids.into_iter()
-        .filter(|&pid| {
-            pid > 1 && {
-                let pid_u32 = pid as u32;
-                !skip_pids.contains(&pid_u32)
-                    && process_is_running(pid_u32)
-                    && process_belongs_to_us(pid_u32)
-            }
-        })
-        .collect()
-}
-
-/// Enumerate all PIDs on the system that are owned by the current user and
-/// match a known agent binary name, excluding `skip_pids`.
-#[cfg(all(unix, not(target_os = "macos")))]
-fn enumerate_orphaned_agent_pids(skip_pids: &[u32]) -> Vec<i32> {
-    let my_uid = unsafe { libc::getuid() };
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
-            if pid <= 1 || skip_pids.contains(&pid) {
-                return None;
-            }
-            let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-            let is_ours = status.lines().any(|line| {
-                line.starts_with("Uid:")
-                    && line
-                        .split_whitespace()
-                        .nth(1)
-                        .and_then(|uid| uid.parse::<u32>().ok())
-                        == Some(my_uid)
-            });
-            if is_ours && process_belongs_to_us(pid) {
-                Some(pid as i32)
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-/// Sweep all processes owned by the current user and kill any whose binary
-/// name matches a known agent binary. This catches processes that escaped
-/// process-group kills (e.g. via `setsid()`) or weren't tracked in records.
+/// Kill orphaned agent processes using PID file receipts. Reads all files from
+/// `agent-pids/`, verifies each PID still belongs to a known agent binary,
+/// then kills the process group. Deletes the PID file after killing.
 ///
-/// `skip_pids` contains PIDs we've already handled — no need to signal them
-/// again.
+/// `skip_pids` are PIDs already handled by the tracked-agent path.
 #[cfg(unix)]
-pub(crate) fn sweep_orphaned_agent_processes(skip_pids: &[u32]) {
-    let orphans = enumerate_orphaned_agent_pids(skip_pids);
+pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, skip_pids: &[u32]) {
+    let entries = super::read_all_agent_pid_files(app);
+    let orphans: Vec<i32> = entries
+        .iter()
+        .filter(|(_, pid)| {
+            !skip_pids.contains(pid) && process_is_running(*pid) && process_belongs_to_us(*pid)
+        })
+        .map(|(_, pid)| *pid as i32)
+        .collect();
+
     if !orphans.is_empty() {
         sigterm_then_sigkill(&orphans);
+    }
+
+    // Clean up PID files for processes we just killed or that are already gone.
+    for (pubkey, pid) in &entries {
+        if skip_pids.contains(pid) {
+            continue;
+        }
+        if !process_is_running(*pid) {
+            super::remove_agent_pid_file(app, pubkey);
+        }
     }
 }
 
 #[cfg(not(unix))]
-pub(crate) fn sweep_orphaned_agent_processes(_skip_pids: &[u32]) {
-    // No-op on non-Unix platforms.
+pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, _skip_pids: &[u32]) {
+    let _ = app;
 }
 
 /// Kill stale agent processes from a previous session whose PID is still alive

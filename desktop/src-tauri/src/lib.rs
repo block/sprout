@@ -30,14 +30,14 @@ fn restore_managed_agents_on_launch(app: &tauri::AppHandle) -> Result<(), String
     let mut changed = sync_managed_agent_processes(&mut records, &mut runtimes);
     changed |= kill_stale_tracked_processes(&mut records, &runtimes);
 
-    // Broad sweep: kill any orphaned agent processes owned by the current user
+    // PID-file sweep: kill any orphaned agent processes we have receipts for
     // that weren’t tracked in records (e.g. escaped process groups, double-forked).
     let tracked_pids: Vec<u32> = records
         .iter()
         .filter_map(|r| r.runtime_pid)
         .chain(runtimes.values().map(|rt| rt.child.id()))
         .collect();
-    managed_agents::sweep_orphaned_agent_processes(&tracked_pids);
+    managed_agents::sweep_orphaned_agent_processes(app, &tracked_pids);
 
     let pubkeys_to_restore = records
         .iter()
@@ -173,10 +173,10 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
         }
     }
 
-    // Final sweep: kill any orphaned agent processes that escaped process-group
-    // kills or weren't tracked in records (e.g. setsid'd children, double-forks).
+    // Final sweep: kill any orphaned agent processes we have PID file receipts
+    // for that escaped process-group kills or weren't tracked in records.
     // All tracked PIDs have already been killed above, so pass an empty skip list.
-    managed_agents::sweep_orphaned_agent_processes(&[]);
+    managed_agents::sweep_orphaned_agent_processes(app, &[]);
 
     if changed {
         save_managed_agents(app, &records)?;
