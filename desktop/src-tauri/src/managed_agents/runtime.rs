@@ -5,8 +5,8 @@ use tauri::AppHandle;
 use crate::{
     managed_agents::{
         append_log_marker, managed_agent_log_path, missing_command_message, normalize_agent_args,
-        open_log_file, resolve_command, ManagedAgentProcess, ManagedAgentRecord,
-        ManagedAgentSummary,
+        open_log_file, resolve_command, rotate_log_if_needed, ManagedAgentProcess,
+        ManagedAgentRecord, ManagedAgentSummary,
     },
     util::now_iso,
 };
@@ -260,6 +260,7 @@ pub fn start_managed_agent_process(
     }
 
     let log_path = managed_agent_log_path(app, &record.pubkey)?;
+    rotate_log_if_needed(&log_path)?;
     append_log_marker(
         &log_path,
         &format!(

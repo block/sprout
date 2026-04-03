@@ -58,6 +58,43 @@ pub fn save_managed_agents(app: &AppHandle, records: &[ManagedAgentRecord]) -> R
     fs::write(&path, payload).map_err(|error| format!("failed to write agent store: {error}"))
 }
 
+const LOG_ROTATION_THRESHOLD: u64 = 10 * 1024 * 1024; // 10 MB
+const LOG_ROTATION_KEEP: u32 = 3;
+
+/// Rotate the log file if it exceeds the size threshold.
+///
+/// Called BEFORE the agent process starts (before `open_log_file`) so the child
+/// process gets a fresh fd. Existing rotations shift: `.log` → `.log.1`,
+/// `.log.1` → `.log.2`, `.log.2` → `.log.3`. Keeps the last 3 rotations.
+pub(crate) fn rotate_log_if_needed(path: &Path) -> Result<(), String> {
+    let metadata = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return Ok(()), // File doesn't exist yet — nothing to rotate.
+    };
+
+    if metadata.len() < LOG_ROTATION_THRESHOLD {
+        return Ok(());
+    }
+
+    let path_str = path.display().to_string();
+
+    // Shift older rotations: .3 is dropped, .2→.3, .1→.2, current→.1
+    for i in (1..LOG_ROTATION_KEEP).rev() {
+        let src = format!("{path_str}.{i}");
+        let dst = format!("{path_str}.{}", i + 1);
+        if Path::new(&src).exists() {
+            let _ = fs::rename(&src, &dst);
+        }
+    }
+
+    // Rotate current log to .1
+    let rotated = format!("{path_str}.1");
+    fs::rename(path, &rotated)
+        .map_err(|error| format!("failed to rotate log file {}: {error}", path.display()))?;
+
+    Ok(())
+}
+
 pub(crate) fn open_log_file(path: &Path) -> Result<File, String> {
     OpenOptions::new()
         .create(true)
