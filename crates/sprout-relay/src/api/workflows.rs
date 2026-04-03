@@ -385,6 +385,8 @@ pub async fn list_run_approvals(
     if let Some(channel_id) = workflow.channel_id {
         check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
+    } else if workflow.owner_pubkey != pubkey_bytes {
+        return Err(forbidden("not authorized to access this workflow"));
     }
 
     let approvals = state

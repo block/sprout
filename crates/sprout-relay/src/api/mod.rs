@@ -51,7 +51,7 @@ pub mod workflows;
 
 // Re-export all public handlers so router.rs can use `api::*_handler` unchanged.
 pub use agents::agents_handler;
-pub use approvals::{deny_approval, grant_approval};
+pub use approvals::{deny_approval, deny_approval_by_hash, grant_approval, grant_approval_by_hash};
 pub use canvas::get_canvas;
 pub use channels::channels_handler;
 pub use channels_metadata::get_channel_handler;

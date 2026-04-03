@@ -124,7 +124,7 @@ pub async fn grant_approval(
     note: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let path = format!("/api/approvals/{token}/grant");
+    let path = format!("/api/approvals/by-hash/{token}/grant");
     let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?
         .json(&ApprovalBody { note });
     send_json_request(request).await
@@ -136,7 +136,7 @@ pub async fn deny_approval(
     note: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let path = format!("/api/approvals/{token}/deny");
+    let path = format!("/api/approvals/by-hash/{token}/deny");
     let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?
         .json(&ApprovalBody { note });
     send_json_request(request).await

@@ -214,8 +214,8 @@ pub struct WorkflowRunRecord {
 /// A pending or resolved approval gate for a workflow step.
 #[derive(Debug, Clone)]
 pub struct ApprovalRecord {
-    /// Unique approval token (hashed before storage).
-    pub token: String,
+    /// Token hash as stored in the DB (BYTEA).
+    pub token: Vec<u8>,
     /// The workflow this approval belongs to.
     pub workflow_id: Uuid,
     /// The run waiting on this approval.
@@ -644,7 +644,17 @@ pub async fn create_approval(pool: &PgPool, params: CreateApprovalParams<'_>) ->
 /// sent to the database layer.
 pub async fn get_approval(pool: &PgPool, token: &str) -> Result<ApprovalRecord> {
     let token_hash = hash_approval_token(token);
+    get_approval_by_stored_hash(pool, &token_hash).await
+}
 
+/// Fetch an approval record by its already-hashed token value.
+///
+/// Use this when you already have the hash stored in the DB (e.g., from
+/// `get_run_approvals`). The `token_hash` is used directly without re-hashing.
+pub async fn get_approval_by_stored_hash(
+    pool: &PgPool,
+    token_hash: &[u8],
+) -> Result<ApprovalRecord> {
     let row = sqlx::query(
         r#"
         SELECT token, workflow_id, run_id, step_id, step_index, approver_spec,
@@ -703,6 +713,22 @@ pub async fn update_approval(
     note: Option<&str>,
 ) -> Result<bool> {
     let token_hash = hash_approval_token(token);
+    update_approval_by_stored_hash(pool, &token_hash, status, approver_pubkey, note).await
+}
+
+/// Update an approval by its already-hashed token value.
+///
+/// Use this when you already have the hash stored in the DB (e.g., from
+/// `get_run_approvals`). The `token_hash` is used directly without re-hashing.
+///
+/// See [`update_approval`] for TOCTOU safety notes.
+pub async fn update_approval_by_stored_hash(
+    pool: &PgPool,
+    token_hash: &[u8],
+    status: ApprovalStatus,
+    approver_pubkey: Option<&[u8]>,
+    note: Option<&str>,
+) -> Result<bool> {
     let status_str = status.to_string();
     let affected = sqlx::query(
         r#"

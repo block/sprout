@@ -91,6 +91,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/workflows/{id}/webhook", post(api::workflow_webhook))
         .route("/api/approvals/{token}/grant", post(api::grant_approval))
         .route("/api/approvals/{token}/deny", post(api::deny_approval))
+        .route(
+            "/api/approvals/by-hash/{hash}/grant",
+            post(api::grant_approval_by_hash),
+        )
+        .route(
+            "/api/approvals/by-hash/{hash}/deny",
+            post(api::deny_approval_by_hash),
+        )
         // Membership routes
         .route("/api/channels/{channel_id}/members", get(api::list_members))
         // Channel detail + metadata routes

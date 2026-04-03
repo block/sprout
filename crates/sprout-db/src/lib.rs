@@ -1126,6 +1126,14 @@ impl Db {
         workflow::get_approval(&self.pool, token).await
     }
 
+    /// Fetch an approval by its already-hashed token (no re-hashing).
+    pub async fn get_approval_by_stored_hash(
+        &self,
+        token_hash: &[u8],
+    ) -> Result<workflow::ApprovalRecord> {
+        workflow::get_approval_by_stored_hash(&self.pool, token_hash).await
+    }
+
     /// Fetch all approvals for a workflow run.
     pub async fn get_run_approvals(
         &self,
@@ -1144,6 +1152,24 @@ impl Db {
         note: Option<&str>,
     ) -> Result<bool> {
         workflow::update_approval(&self.pool, token, status, approver_pubkey, note).await
+    }
+
+    /// Update an approval by its already-hashed token (no re-hashing).
+    pub async fn update_approval_by_stored_hash(
+        &self,
+        token_hash: &[u8],
+        status: workflow::ApprovalStatus,
+        approver_pubkey: Option<&[u8]>,
+        note: Option<&str>,
+    ) -> Result<bool> {
+        workflow::update_approval_by_stored_hash(
+            &self.pool,
+            token_hash,
+            status,
+            approver_pubkey,
+            note,
+        )
+        .await
     }
 
     // ── Partitions ──────────────────────────────────────────────────────────

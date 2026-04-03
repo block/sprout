@@ -51,7 +51,7 @@ pub(crate) fn approval_record_to_json(
     a: &sprout_db::workflow::ApprovalRecord,
 ) -> serde_json::Value {
     serde_json::json!({
-        "token": a.token,
+        "token": hex::encode(&a.token),
         "workflow_id": a.workflow_id.to_string(),
         "run_id": a.run_id.to_string(),
         "step_id": a.step_id,
