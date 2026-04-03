@@ -840,11 +840,27 @@ async fn create_invite(
         return err;
     }
 
-    let channel_ids: Vec<Uuid> = req
-        .channels
-        .split(',')
-        .filter_map(|s| s.trim().parse().ok())
-        .collect();
+    let mut channel_ids = Vec::new();
+    let mut invalid = Vec::new();
+    for s in req.channels.split(',') {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match trimmed.parse::<Uuid>() {
+            Ok(id) => channel_ids.push(id),
+            Err(_) => invalid.push(trimmed.to_string()),
+        }
+    }
+    if !invalid.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({
+                "error": format!("invalid channel UUID(s): {}", invalid.join(", "))
+            })),
+        )
+            .into_response();
+    }
 
     if channel_ids.is_empty() {
         return (
@@ -944,11 +960,27 @@ async fn register_guest(
         }
     };
 
-    let channel_ids: Vec<Uuid> = req
-        .channels
-        .split(',')
-        .filter_map(|s| s.trim().parse().ok())
-        .collect();
+    let mut channel_ids = Vec::new();
+    let mut invalid = Vec::new();
+    for s in req.channels.split(',') {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match trimmed.parse::<Uuid>() {
+            Ok(id) => channel_ids.push(id),
+            Err(_) => invalid.push(trimmed.to_string()),
+        }
+    }
+    if !invalid.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({
+                "error": format!("invalid channel UUID(s): {}", invalid.join(", "))
+            })),
+        )
+            .into_response();
+    }
 
     if channel_ids.is_empty() {
         return (

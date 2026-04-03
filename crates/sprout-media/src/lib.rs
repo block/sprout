@@ -2,6 +2,8 @@
 //!
 //! Library crate — no Axum dependency for handlers. Axum handlers live in `sprout-relay`.
 
+#![deny(unsafe_code)]
+
 pub mod auth;
 pub mod config;
 pub mod error;

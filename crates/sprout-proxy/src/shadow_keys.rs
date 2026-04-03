@@ -1,6 +1,6 @@
 //! Shadow keypair management — deterministic internal keys derived from external pubkeys.
 //!
-//! HMAC-SHA256(key=server_salt, msg=external_pubkey_bytes) → secp256k1 secret key. Cached in DashMap.
+//! HMAC-SHA256(key=server_salt, msg=external_pubkey_bytes) → secp256k1 secret key. Cached in moka.
 //! A server-side salt is required to prevent offline derivation by anyone who knows only
 //! the external public key.
 //!
@@ -9,18 +9,16 @@
 //! ever changed, all existing shadow keys will differ — acceptable for MVP (no persistent
 //! state), but must be coordinated with a migration for production deployments.
 //!
-//! # Cache size limit
+//! # Cache eviction
 //!
-//! The in-memory cache is bounded to `MAX_CACHE_SIZE` entries. When the limit
-//! is reached the entire cache is cleared before inserting the new entry. This
-//! is a simple "flush on full" strategy: it trades a brief cold-cache period
-//! for zero dependency on an external LRU crate. Because shadow keys are
-//! deterministically re-derivable from the salt and the public key, eviction
-//! is always safe — the next lookup simply re-derives and re-caches the key.
+//! The in-memory cache is bounded to `MAX_CACHE_SIZE` entries using `moka::sync::Cache`,
+//! which provides proper LRU eviction. Individual entries are evicted as capacity is
+//! reached, avoiding the thundering-herd problem of the previous "flush on full" strategy.
+//! Because shadow keys are deterministically re-derivable from the salt and the public key,
+//! eviction is always safe — the next lookup simply re-derives and re-caches the key.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use moka::sync::Cache;
 
-use dashmap::DashMap;
 use hmac::{Hmac, Mac};
 use nostr::util::hex;
 use nostr::{Keys, SecretKey};
@@ -31,18 +29,14 @@ use crate::error::ProxyError;
 type HmacSha256 = Hmac<Sha256>;
 
 /// Maximum number of shadow keys held in the in-memory cache at one time.
-/// Exceeding this limit triggers a full cache flush before the new entry is
-/// inserted, bounding worst-case memory use to roughly
-/// `MAX_CACHE_SIZE × ~200 bytes` ≈ 2 MB at the default.
+/// Entries are evicted via LRU when this limit is reached.
+/// Worst-case memory: `MAX_CACHE_SIZE × ~200 bytes` ≈ 2 MB at the default.
 pub const MAX_CACHE_SIZE: usize = 10_000;
 
 /// Manages deterministic shadow keypairs derived from external Nostr public keys.
 pub struct ShadowKeyManager {
     salt: Vec<u8>,
-    cache: DashMap<String, Keys>,
-    /// Approximate entry count. May briefly exceed `MAX_CACHE_SIZE` under
-    /// concurrent inserts; the bound is soft but close in practice.
-    cache_len: AtomicUsize,
+    cache: Cache<String, Keys>,
 }
 
 impl ShadowKeyManager {
@@ -57,40 +51,23 @@ impl ShadowKeyManager {
         }
         Ok(Self {
             salt: salt.to_vec(),
-            cache: DashMap::new(),
-            cache_len: AtomicUsize::new(0),
+            cache: Cache::builder().max_capacity(MAX_CACHE_SIZE as u64).build(),
         })
     }
 
     /// Return the shadow [`Keys`] for `external_pubkey`, deriving and caching them if needed.
     pub fn get_or_create(&self, external_pubkey: &str) -> Result<Keys, ProxyError> {
-        if let Some(entry) = self.cache.get(external_pubkey) {
-            return Ok(entry.clone());
+        if let Some(keys) = self.cache.get(external_pubkey) {
+            return Ok(keys);
         }
-
         let keys = self.derive(external_pubkey)?;
-        self.insert_bounded(external_pubkey.to_string(), keys.clone());
+        self.cache.insert(external_pubkey.to_string(), keys.clone());
         Ok(keys)
     }
 
     /// Return cached shadow keys for `external_pubkey` without deriving new ones.
     pub fn lookup(&self, external_pubkey: &str) -> Option<Keys> {
-        self.cache.get(external_pubkey).map(|e| e.clone())
-    }
-
-    /// Returns the current number of cached entries.
-    pub fn cache_len(&self) -> usize {
-        self.cache_len.load(Ordering::Relaxed)
-    }
-
-    /// Insert a key, evicting the entire cache first if it is at capacity.
-    fn insert_bounded(&self, pubkey: String, keys: Keys) {
-        if self.cache_len.load(Ordering::Relaxed) >= MAX_CACHE_SIZE {
-            self.cache.clear();
-            self.cache_len.store(0, Ordering::Relaxed);
-        }
-        self.cache.insert(pubkey, keys);
-        self.cache_len.fetch_add(1, Ordering::Relaxed);
+        self.cache.get(external_pubkey)
     }
 
     fn derive(&self, external_pubkey: &str) -> Result<Keys, ProxyError> {
@@ -198,25 +175,14 @@ mod tests {
     }
 
     #[test]
-    fn cache_is_bounded_and_evicts_on_overflow() {
-        // Use a tiny limit to exercise the eviction path without inserting 10k entries.
-        // We test the logic by directly calling insert_bounded in a loop.
+    fn cache_hit_returns_same_key() {
         let m = mgr();
-
-        // Fill up to MAX_CACHE_SIZE - 1 using synthetic keys (we bypass derive to
-        // keep the test fast; we just need to verify the counter and eviction).
-        // Instead, insert PUBKEY_A and PUBKEY_B repeatedly to verify that after
-        // eviction the key is still derivable (deterministic re-derive).
         let k_before = m.get_or_create(PUBKEY_A).unwrap();
-        assert_eq!(m.cache_len(), 1);
-
+        // Second call should hit the cache and return the same key.
         let k_after = m.get_or_create(PUBKEY_A).unwrap();
         assert_eq!(
             k_before.public_key().to_hex(),
             k_after.public_key().to_hex()
         );
-
-        // Verify cache_len never goes negative after a clear.
-        assert!(m.cache_len() <= MAX_CACHE_SIZE);
     }
 }
