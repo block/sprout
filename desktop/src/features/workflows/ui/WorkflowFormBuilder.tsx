@@ -130,13 +130,20 @@ export function WorkflowFormBuilder({
   onChange,
   yaml,
 }: WorkflowFormBuilderProps) {
-  const [mode, setMode] = React.useState<"form" | "yaml">("form");
+  const [mode, setMode] = React.useState<"form" | "yaml">(() => {
+    if (!yaml) return "form";
+    return yamlToFormState(yaml).ok ? "form" : "yaml";
+  });
   const [formState, setFormState] = React.useState<WorkflowFormState>(() => {
     if (!yaml) return DEFAULT_FORM_STATE;
     const result = yamlToFormState(yaml);
     return result.ok ? result.state : DEFAULT_FORM_STATE;
   });
-  const [parseError, setParseError] = React.useState<string | null>(null);
+  const [parseError, setParseError] = React.useState<string | null>(() => {
+    if (!yaml) return null;
+    const result = yamlToFormState(yaml);
+    return result.ok ? null : result.error;
+  });
 
   const updateFormState = React.useCallback(
     (next: WorkflowFormState) => {
