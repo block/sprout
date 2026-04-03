@@ -537,6 +537,7 @@ pub fn start_managed_agent_process(
 }
 
 pub fn stop_managed_agent_process(
+    app: &AppHandle,
     record: &mut ManagedAgentRecord,
     runtimes: &mut HashMap<String, ManagedAgentProcess>,
 ) -> Result<(), String> {
@@ -553,12 +554,10 @@ pub fn stop_managed_agent_process(
             record.last_exit_code = None;
             record.last_error = None;
         }
+        super::remove_agent_pid_file(app, &record.pubkey);
         return Ok(());
     };
 
-    // Kill the entire process group (harness + MCP servers + agent
-    // subprocesses). The child was spawned with process_group(0), so
-    // its PID == its PGID.
     terminate_process(runtime.child.id())?;
     let status = runtime
         .child
@@ -570,6 +569,8 @@ pub fn stop_managed_agent_process(
     record.last_stopped_at = Some(now);
     record.last_exit_code = status.code();
     record.last_error = None;
+
+    super::remove_agent_pid_file(app, &record.pubkey);
 
     append_log_marker(
         &runtime.log_path,
