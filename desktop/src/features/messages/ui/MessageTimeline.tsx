@@ -214,7 +214,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     onTargetReached?.(targetMessageId);
 
     virtuosoRef.current?.scrollToIndex({
-      index: targetIndex,
+      index: firstItemIndex + targetIndex,
       align: "center",
       behavior: "smooth",
     });
@@ -228,7 +228,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [isLoading, messages, onTargetReached, targetMessageId]);
+  }, [firstItemIndex, isLoading, messages, onTargetReached, targetMessageId]);
 
   const groupContent = React.useCallback(
     (index: number) => <DayDivider label={groupLabels[index]} />,
@@ -237,7 +237,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
   const itemContent = React.useCallback(
     (index: number) => {
-      const message = messages[index];
+      const message = messages[index - firstItemIndex];
       if (!message) {
         return null;
       }
@@ -277,9 +277,11 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     },
     [
       messages,
+      firstItemIndex,
       activeReplyTargetId,
       currentPubkey,
       highlightedMessageId,
+      onDelete,
       onEdit,
       onReply,
       onToggleReaction,

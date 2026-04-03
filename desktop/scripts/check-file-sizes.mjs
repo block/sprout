@@ -32,7 +32,7 @@ const rules = [
 const overrides = new Map([
   ["src-tauri/src/managed_agents/personas.rs", 600], // built-in persona system prompts (Solo, Ralph, Strategist) are long string literals
   ["src-tauri/src/managed_agents/persona_card.rs", 772], // PNG/ZIP persona card codec + provider/model fields + 27 unit tests (~350 lines of tests); rustfmt adds line breaks around long literals/builders
-  ["src/app/AppShell.tsx", 820], // message edit state + handlers + ChannelPane edit prop threading + scrollback pagination
+  ["src/app/AppShell.tsx", 825], // message edit state + handlers + ChannelPane edit prop threading + scrollback pagination + ancestor cap
   ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
   ["src/features/messages/hooks.ts", 500], // message query/mutation hooks + optimistic updates

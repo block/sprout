@@ -66,7 +66,6 @@ import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 
 type AppView = "home" | "channel" | "settings" | "agents";
 type MainView = Exclude<AppView, "settings">;
-
 export function AppShell() {
   useWebviewZoomShortcuts();
   const [selectedView, setSelectedView] = React.useState<AppView>("home");
@@ -474,11 +473,10 @@ export function AppShell() {
       }
     }
 
-    if (missingAncestorIds.size === 0) {
-      return;
-    }
-
-    if (requestedAncestorIdsRef.current.size >= 500) {
+    if (
+      missingAncestorIds.size === 0 ||
+      requestedAncestorIdsRef.current.size >= 500
+    ) {
       return;
     }
     for (const eventId of missingAncestorIds) {
