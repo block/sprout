@@ -472,8 +472,8 @@ export function AppShell() {
       return;
     }
 
-    if (requestedAncestorIdsRef.current.size + missingAncestorIds.size > 500) {
-      requestedAncestorIdsRef.current.clear();
+    if (requestedAncestorIdsRef.current.size >= 500) {
+      return;
     }
     for (const eventId of missingAncestorIds) {
       requestedAncestorIdsRef.current.add(eventId);
