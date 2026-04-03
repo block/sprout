@@ -414,33 +414,7 @@ pub async fn unhide_dm(pool: &PgPool, channel_id: Uuid, pubkey: &[u8]) -> Result
 
 // -- Row mapping --------------------------------------------------------------
 
-fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
-    let id: Uuid = row.try_get("id")?;
-    let topic_required: bool = row.try_get("topic_required")?;
-
-    Ok(ChannelRecord {
-        id,
-        name: row.try_get("name")?,
-        channel_type: row.try_get("channel_type")?,
-        visibility: row.try_get("visibility")?,
-        description: row.try_get("description")?,
-        canvas: row.try_get("canvas")?,
-        created_by: row.try_get("created_by")?,
-        created_at: row.try_get("created_at")?,
-        updated_at: row.try_get("updated_at")?,
-        archived_at: row.try_get("archived_at")?,
-        deleted_at: row.try_get("deleted_at")?,
-        nip29_group_id: row.try_get("nip29_group_id")?,
-        topic_required,
-        max_members: row.try_get("max_members")?,
-        topic: row.try_get("topic").unwrap_or(None),
-        topic_set_by: row.try_get("topic_set_by").unwrap_or(None),
-        topic_set_at: row.try_get("topic_set_at").unwrap_or(None),
-        purpose: row.try_get("purpose").unwrap_or(None),
-        purpose_set_by: row.try_get("purpose_set_by").unwrap_or(None),
-        purpose_set_at: row.try_get("purpose_set_at").unwrap_or(None),
-    })
-}
+use crate::channel::row_to_channel_record;
 
 // -- Tests --------------------------------------------------------------------
 

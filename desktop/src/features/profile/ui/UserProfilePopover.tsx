@@ -5,19 +5,12 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
+import { truncatePubkey } from "@/shared/lib/pubkey";
 
 type UserProfilePopoverProps = {
   children: React.ReactNode;
   pubkey: string;
 };
-
-function truncatePubkey(pubkey: string) {
-  if (pubkey.length <= 16) {
-    return pubkey;
-  }
-
-  return `${pubkey.slice(0, 8)}…${pubkey.slice(-8)}`;
-}
 
 export function UserProfilePopover({
   children,
@@ -55,7 +48,7 @@ export function UserProfilePopover({
 
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold">
-                {profile?.displayName ?? truncatePubkey(pubkey)}
+                {profile?.displayName ?? truncatePubkey(pubkey, 8)}
               </p>
               {profile?.nip05Handle ? (
                 <p className="truncate text-xs text-muted-foreground">
@@ -74,7 +67,7 @@ export function UserProfilePopover({
           ) : null}
 
           <p className="truncate font-mono text-[10px] text-muted-foreground/60">
-            {truncatePubkey(pubkey)}
+            {truncatePubkey(pubkey, 8)}
           </p>
         </div>
       </PopoverContent>

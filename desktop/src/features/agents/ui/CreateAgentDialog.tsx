@@ -8,9 +8,8 @@ import {
   useManagedAgentPrereqsQuery,
 } from "@/features/agents/hooks";
 import { DEFAULT_MANAGED_AGENT_SCOPES } from "@/features/tokens/lib/scopeOptions";
-import { probeBackendProvider } from "@/shared/api/tauri";
+import { useBackendProviderProbe } from "@/shared/hooks/useBackendProviderProbe";
 import type {
-  BackendProviderProbeResult,
   CreateManagedAgentInput,
   CreateManagedAgentResponse,
   TokenScope,
@@ -74,12 +73,6 @@ export function CreateAgentDialog({
 
   // ── Backend provider ("Run on") state ──────────────────────────────────────
   const [runOn, setRunOn] = React.useState<"local" | string>("local");
-  const [providerConfig, setProviderConfig] = React.useState<
-    Record<string, string>
-  >({});
-  const [probedProvider, setProbedProvider] =
-    React.useState<BackendProviderProbeResult | null>(null);
-  const [probeError, setProbeError] = React.useState<string | null>(null);
 
   const providers = providersQuery.data ?? [];
   const backendProviders = backendProvidersQuery.data ?? [];
@@ -94,6 +87,9 @@ export function CreateAgentDialog({
     [backendProviders, runOn],
   );
   const isProviderMode = runOn !== "local";
+
+  const { probedProvider, probeError, providerConfig, setProviderConfig } =
+    useBackendProviderProbe(isProviderMode, selectedBackendProvider);
   // Provider agents always mint — ownership is established during mint.
   // Use this everywhere instead of raw `mintToken` for validation/rendering.
   const effectiveMintToken = isProviderMode || mintToken;
@@ -155,51 +151,6 @@ export function CreateAgentDialog({
     }
   }, [prereqsQuery.error, providersQuery.error]);
 
-  // Probe the backend provider when runOn changes to a non-local value
-  React.useEffect(() => {
-    if (!isProviderMode || !selectedBackendProvider) {
-      setProbedProvider(null);
-      setProbeError(null);
-      return;
-    }
-
-    let cancelled = false;
-    setProbeError(null);
-    setProbedProvider(null);
-
-    probeBackendProvider(selectedBackendProvider.binaryPath)
-      .then((result) => {
-        if (!cancelled) {
-          setProbedProvider(result);
-          // Initialize config from schema defaults so unchanged defaults
-          // are included in the submit payload (not silently dropped).
-          if (result.config_schema) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const props = (result.config_schema as any)?.properties ?? {};
-            const defaults: Record<string, string> = {};
-            for (const [key, prop] of Object.entries(props) as [
-              string,
-              Record<string, unknown>,
-            ][]) {
-              if (prop.default != null) {
-                defaults[key] = String(prop.default);
-              }
-            }
-            setProviderConfig(defaults);
-          }
-        }
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setProbeError(err instanceof Error ? err.message : String(err));
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isProviderMode, selectedBackendProvider]);
-
   function reset() {
     setName("");
     setRelayUrl("");
@@ -220,8 +171,6 @@ export function CreateAgentDialog({
     setShowAdvanced(false);
     setRunOn("local");
     setProviderConfig({});
-    setProbedProvider(null);
-    setProbeError(null);
     createMutation.reset();
   }
 
@@ -284,8 +233,6 @@ export function CreateAgentDialog({
   function handleRunOnChange(value: string) {
     setRunOn(value);
     setProviderConfig({});
-    setProbedProvider(null);
-    setProbeError(null);
   }
 
   // Check provider config required fields are filled.

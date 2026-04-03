@@ -10,19 +10,11 @@ import { getChannelIdFromTags } from "@/features/messages/lib/threading";
 import { mergeTimelineCacheMessages } from "@/features/messages/hooks";
 import { relayClient } from "@/shared/api/relayClient";
 import type { Channel, RelayEvent } from "@/shared/api/types";
+import { parseTimestamp } from "@/shared/lib/time";
 
 const CHANNEL_READ_STATE_STORAGE_KEY = "sprout.channel-read-state.v1";
 
 type ChannelReadState = Record<string, string | null>;
-
-function parseTimestamp(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  const timestamp = Date.parse(value);
-  return Number.isNaN(timestamp) ? null : timestamp;
-}
 
 function normalizeTimestamp(value: string | null | undefined) {
   const timestamp = parseTimestamp(value);

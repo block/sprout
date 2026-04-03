@@ -97,13 +97,11 @@ pub async fn feed_handler(
     let (mentions_res, needs_action_res, activity_res) = tokio::join!(
         state
             .db
-            .query_feed_mentions(&pubkey_bytes, &accessible_ids, Some(since), limit),
+            .query_mentions(&pubkey_bytes, &accessible_ids, Some(since), limit),
         state
             .db
-            .query_feed_needs_action(&pubkey_bytes, &accessible_ids, Some(since), limit),
-        state
-            .db
-            .query_feed_activity(&accessible_ids, Some(since), limit),
+            .query_needs_action(&pubkey_bytes, &accessible_ids, Some(since), limit),
+        state.db.query_activity(&accessible_ids, Some(since), limit),
     );
 
     // I10: Return 500 for critical feed query failures instead of masking with empty.

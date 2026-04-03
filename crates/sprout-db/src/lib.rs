@@ -772,52 +772,6 @@ impl Db {
     // ── Feed ─────────────────────────────────────────────────────────────────
 
     /// Find events that @mention the given pubkey.
-    pub async fn query_feed_mentions(
-        &self,
-        pubkey_bytes: &[u8],
-        accessible_channel_ids: &[Uuid],
-        since: Option<DateTime<Utc>>,
-        limit: i64,
-    ) -> Result<Vec<StoredEvent>> {
-        feed::query_mentions(
-            &self.pool,
-            pubkey_bytes,
-            accessible_channel_ids,
-            since,
-            limit,
-        )
-        .await
-    }
-
-    /// Find events that require action from the given pubkey.
-    pub async fn query_feed_needs_action(
-        &self,
-        pubkey_bytes: &[u8],
-        accessible_channel_ids: &[Uuid],
-        since: Option<DateTime<Utc>>,
-        limit: i64,
-    ) -> Result<Vec<StoredEvent>> {
-        feed::query_needs_action(
-            &self.pool,
-            pubkey_bytes,
-            accessible_channel_ids,
-            since,
-            limit,
-        )
-        .await
-    }
-
-    /// Find recent activity across accessible channels.
-    pub async fn query_feed_activity(
-        &self,
-        accessible_channel_ids: &[Uuid],
-        since: Option<DateTime<Utc>>,
-        limit: i64,
-    ) -> Result<Vec<StoredEvent>> {
-        feed::query_activity(&self.pool, accessible_channel_ids, since, limit).await
-    }
-
-    /// Find events that @mention the given pubkey (alias).
     pub async fn query_mentions(
         &self,
         pubkey_bytes: &[u8],
@@ -925,7 +879,7 @@ impl Db {
 
         match row {
             None => Ok(None),
-            Some(r) => parse_api_token_row(r).map(Some),
+            Some(r) => api_token::parse_api_token_row(r).map(Some),
         }
     }
 
@@ -1380,39 +1334,4 @@ pub struct AllowlistEntry {
     pub added_at: DateTime<Utc>,
     /// Optional note.
     pub note: Option<String>,
-}
-
-fn parse_api_token_row(row: sqlx::postgres::PgRow) -> Result<ApiTokenRecord> {
-    let id: Uuid = row.try_get("id")?;
-
-    let scopes_json: serde_json::Value = row.try_get("scopes")?;
-    let scopes: Vec<String> = serde_json::from_value(scopes_json)
-        .map_err(|e| DbError::InvalidData(format!("scopes JSON: {e}")))?;
-
-    let channel_ids: Option<Vec<Uuid>> = {
-        let raw: Option<serde_json::Value> = row.try_get("channel_ids")?;
-        match raw {
-            None => None,
-            Some(v) => {
-                let strings: Vec<String> = serde_json::from_value(v)
-                    .map_err(|e| DbError::InvalidData(format!("channel_ids JSON: {e}")))?;
-                let uuids: std::result::Result<Vec<Uuid>, _> =
-                    strings.iter().map(|s| s.parse::<Uuid>()).collect();
-                Some(uuids.map_err(|e| DbError::InvalidData(format!("channel_ids UUID: {e}")))?)
-            }
-        }
-    };
-
-    Ok(ApiTokenRecord {
-        id,
-        token_hash: row.try_get("token_hash")?,
-        owner_pubkey: row.try_get("owner_pubkey")?,
-        name: row.try_get("name")?,
-        scopes,
-        channel_ids,
-        created_at: row.try_get("created_at")?,
-        expires_at: row.try_get("expires_at")?,
-        last_used_at: row.try_get("last_used_at")?,
-        revoked_at: row.try_get("revoked_at")?,
-    })
 }

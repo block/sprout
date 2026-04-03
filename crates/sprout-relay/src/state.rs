@@ -104,6 +104,22 @@ impl ConnectionManager {
             false
         }
     }
+
+    /// Send an EVENT message to all matching connections. Returns the number of dropped sends.
+    pub fn send_event_to_matches(
+        &self,
+        matches: &[(crate::subscription::ConnId, crate::subscription::SubId)],
+        event_json: &str,
+    ) -> usize {
+        let mut drop_count = 0;
+        for (conn_id, sub_id) in matches {
+            let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
+            if !self.send_to(*conn_id, msg) {
+                drop_count += 1;
+            }
+        }
+        drop_count
+    }
 }
 
 impl Default for ConnectionManager {

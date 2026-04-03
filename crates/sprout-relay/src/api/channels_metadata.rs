@@ -27,29 +27,41 @@ fn parse_channel_id(raw: &str) -> Result<uuid::Uuid, ApiError> {
     uuid::Uuid::parse_str(raw).map_err(|_| ApiError::BadRequest("invalid channel_id".into()))
 }
 
-/// Serialize a `ChannelRecord` to JSON, including topic, purpose, and member_count.
+/// Serialize a `ChannelRecord` to JSON for the detail endpoint.
+///
+/// Extends [`super::channels::channel_base_to_json`] with metadata-specific fields:
+/// topic/purpose provenance, topic_required, max_members, nip29_group_id.
 fn channel_detail_to_json(record: &ChannelRecord, member_count: i64) -> serde_json::Value {
-    serde_json::json!({
-        "id": record.id.to_string(),
-        "name": record.name,
-        "channel_type": record.channel_type,
-        "visibility": record.visibility,
-        "description": record.description,
-        "topic": record.topic,
-        "topic_set_by": record.topic_set_by.as_deref().map(nostr_hex::encode),
-        "topic_set_at": record.topic_set_at.map(|t| t.to_rfc3339()),
-        "purpose": record.purpose,
-        "purpose_set_by": record.purpose_set_by.as_deref().map(nostr_hex::encode),
-        "purpose_set_at": record.purpose_set_at.map(|t| t.to_rfc3339()),
-        "created_by": nostr_hex::encode(&record.created_by),
-        "created_at": record.created_at.to_rfc3339(),
-        "updated_at": record.updated_at.to_rfc3339(),
-        "archived_at": record.archived_at.map(|t| t.to_rfc3339()),
-        "member_count": member_count,
-        "topic_required": record.topic_required,
-        "max_members": record.max_members,
-        "nip29_group_id": record.nip29_group_id,
-    })
+    let mut obj = super::channels::channel_base_to_json(record, member_count);
+    let map = obj
+        .as_object_mut()
+        .expect("channel_base_to_json returns object");
+    map.insert(
+        "topic_set_by".into(),
+        serde_json::json!(record.topic_set_by.as_deref().map(nostr_hex::encode)),
+    );
+    map.insert(
+        "topic_set_at".into(),
+        serde_json::json!(record.topic_set_at.map(|t| t.to_rfc3339())),
+    );
+    map.insert(
+        "purpose_set_by".into(),
+        serde_json::json!(record.purpose_set_by.as_deref().map(nostr_hex::encode)),
+    );
+    map.insert(
+        "purpose_set_at".into(),
+        serde_json::json!(record.purpose_set_at.map(|t| t.to_rfc3339())),
+    );
+    map.insert(
+        "topic_required".into(),
+        serde_json::json!(record.topic_required),
+    );
+    map.insert("max_members".into(), serde_json::json!(record.max_members));
+    map.insert(
+        "nip29_group_id".into(),
+        serde_json::json!(record.nip29_group_id),
+    );
+    obj
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────

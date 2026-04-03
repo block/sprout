@@ -202,8 +202,8 @@ static FILTER_EVAL_SEMAPHORE: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
 /// - When a pre-compiled `node` is provided (via `Arc`), uses
 ///   `node.eval_boolean_with_context()` instead of re-parsing the expression
 ///   string on every call (finding #34).
-/// - Registers custom string helpers: `str_contains`, `str_starts_with`,
-///   `str_ends_with`, `str_len` (duplicated intentionally from sprout-workflow).
+/// - Registers custom string helpers via `sprout_core::evalexpr_helpers`:
+///   `str_contains`, `str_starts_with`, `str_ends_with`, `str_len`.
 pub async fn evaluate_filter(
     expr: &str,
     ctx: &FilterContext,
@@ -277,53 +277,7 @@ fn build_eval_context(ctx: &FilterContext) -> Result<evalexpr::HashMapContext, S
     let mut eval_ctx = HashMapContext::new();
 
     // ── Custom string functions ───────────────────────────────────────────────
-    // evalexpr v11 does not ship these helpers; register them manually.
-
-    eval_ctx
-        .set_function(
-            "str_contains".into(),
-            Function::new(|args| {
-                let args = args.as_fixed_len_tuple(2)?;
-                let haystack = args[0].as_string()?;
-                let needle = args[1].as_string()?;
-                Ok(Value::Boolean(haystack.contains(needle.as_str())))
-            }),
-        )
-        .map_err(|e| e.to_string())?;
-
-    eval_ctx
-        .set_function(
-            "str_starts_with".into(),
-            Function::new(|args| {
-                let args = args.as_fixed_len_tuple(2)?;
-                let s = args[0].as_string()?;
-                let prefix = args[1].as_string()?;
-                Ok(Value::Boolean(s.starts_with(prefix.as_str())))
-            }),
-        )
-        .map_err(|e| e.to_string())?;
-
-    eval_ctx
-        .set_function(
-            "str_ends_with".into(),
-            Function::new(|args| {
-                let args = args.as_fixed_len_tuple(2)?;
-                let s = args[0].as_string()?;
-                let suffix = args[1].as_string()?;
-                Ok(Value::Boolean(s.ends_with(suffix.as_str())))
-            }),
-        )
-        .map_err(|e| e.to_string())?;
-
-    eval_ctx
-        .set_function(
-            "str_len".into(),
-            Function::new(|arg| {
-                let s = arg.as_string()?;
-                Ok(Value::Int(s.len() as i64))
-            }),
-        )
-        .map_err(|e| e.to_string())?;
+    sprout_core::evalexpr_helpers::register_string_helpers(&mut eval_ctx);
 
     // ── Event variables ───────────────────────────────────────────────────────
 

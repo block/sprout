@@ -3,7 +3,10 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { ChannelPane } from "@/app/ChannelPane";
 import { useActiveChannelHeader } from "@/app/useActiveChannelHeader";
+import { useAncestorResolution } from "@/app/useAncestorResolution";
 import { useChannelPaneHandlers } from "@/app/useChannelPaneHandlers";
+import { useSearchSession } from "@/app/useSearchSession";
+import { useViewRouter } from "@/app/useViewRouter";
 import { AgentsView } from "@/features/agents/ui/AgentsView";
 import { ForumView } from "@/features/forum/ui/ForumView";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
@@ -28,17 +31,14 @@ import {
   useChannelSubscription,
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
-import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
+
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import {
   collectMessageAuthorPubkeys,
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
-import {
-  getChannelIdFromTags,
-  getThreadReference,
-} from "@/features/messages/lib/threading";
+
 import { usePresenceSession } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useHomeFeedNotifications } from "@/features/notifications/hooks";
@@ -46,16 +46,12 @@ import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
 import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
 import { ChannelBrowserDialog } from "@/features/channels/ui/ChannelBrowserDialog";
 import { SearchDialog } from "@/features/search/ui/SearchDialog";
-import {
-  DEFAULT_SETTINGS_SECTION,
-  SettingsView,
-  type SettingsSection,
-} from "@/features/settings/ui/SettingsView";
+import { SettingsView } from "@/features/settings/ui/SettingsView";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { relayClient } from "@/shared/api/relayClient";
-import { getEventById, joinChannel } from "@/shared/api/tauri";
+import { joinChannel } from "@/shared/api/tauri";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import type { Channel, RelayEvent, SearchHit } from "@/shared/api/types";
+import type { Channel, SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
 import {
   SidebarInset,
@@ -64,34 +60,35 @@ import {
 } from "@/shared/ui/sidebar";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 
-type AppView = "home" | "channel" | "settings" | "agents";
-type MainView = Exclude<AppView, "settings">;
 export function AppShell() {
   useWebviewZoomShortcuts();
-  const [selectedView, setSelectedView] = React.useState<AppView>("home");
-  const [settingsSection, setSettingsSection] = React.useState<SettingsSection>(
-    DEFAULT_SETTINGS_SECTION,
-  );
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
-  const [isSearchOpen, setIsSearchOpen] = React.useState(false);
+  const {
+    isSearchOpen,
+    setIsSearchOpen,
+    searchAnchor,
+    searchAnchorChannelId,
+    searchAnchorEvent,
+    handleOpenSearchResult: _handleOpenSearchResult,
+    handleSearchTargetReached: handleTargetReached,
+  } = useSearchSession();
+  const {
+    selectedView,
+    setSelectedView,
+    settingsSection,
+    setSettingsSection,
+    handleOpenSettings,
+    handleCloseSettings: _handleCloseSettings,
+  } = useViewRouter(setIsSearchOpen, setIsChannelManagementOpen);
   const [browseDialogType, setBrowseDialogType] = React.useState<
     "stream" | "forum" | null
   >(null);
   const handleBrowseDialogOpenChange = React.useCallback((open: boolean) => {
     setBrowseDialogType(open ? "stream" : null);
   }, []);
-  const [searchAnchor, setSearchAnchor] = React.useState<SearchHit | null>(
-    null,
-  );
-  const [searchAnchorChannelId, setSearchAnchorChannelId] = React.useState<
-    string | null
-  >(null);
-  const [searchAnchorEvent, setSearchAnchorEvent] =
-    React.useState<RelayEvent | null>(null);
   const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
-  const lastNonSettingsViewRef = React.useRef<MainView>("home");
   const queryClient = useQueryClient();
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
@@ -241,12 +238,6 @@ export function AppShell() {
     toggleReactionMutation,
   });
 
-  const handleTargetReached = React.useCallback((messageId: string) => {
-    setSearchAnchor((current) =>
-      current?.eventId === messageId ? null : current,
-    );
-  }, []);
-
   const canReact = activeChannel !== null && activeChannel.archivedAt === null;
   const effectiveToggleReaction = React.useMemo(
     () => (canReact ? handleToggleReaction : undefined),
@@ -274,10 +265,11 @@ export function AppShell() {
     (messagesQuery.isPending ||
       (messagesQuery.isFetching && resolvedMessages.length === 0));
 
-  const requestedAncestorIdsRef = React.useRef<Set<string>>(new Set());
   const previousActiveChannelIdRef = React.useRef<string | null>(
     activeChannelId,
   );
+
+  useAncestorResolution(activeChannel, resolvedMessages);
 
   const resolveChannel = React.useCallback(
     async (channelId: string): Promise<Channel | null> => {
@@ -306,7 +298,7 @@ export function AppShell() {
         setSelectedView("channel");
       });
     },
-    [setSelectedChannelId],
+    [setSelectedChannelId, setSelectedView],
   );
 
   const handleOpenChannel = React.useCallback(
@@ -348,68 +340,19 @@ export function AppShell() {
         });
       }
     },
-    [hideDmMutation, selectedChannel?.id],
+    [hideDmMutation, selectedChannel?.id, setSelectedView],
   );
-
-  const handleOpenSettings = React.useCallback(
-    (section: SettingsSection = DEFAULT_SETTINGS_SECTION) => {
-      setIsSearchOpen(false);
-      setIsChannelManagementOpen(false);
-      setSettingsSection(section);
-
-      React.startTransition(() => {
-        setSelectedView("settings");
-      });
-    },
-    [],
-  );
-
-  const handleCloseSettings = React.useCallback(() => {
-    const nextView: MainView =
-      lastNonSettingsViewRef.current === "channel" && !selectedChannel
-        ? "home"
-        : lastNonSettingsViewRef.current;
-
-    React.startTransition(() => {
-      setSelectedView(nextView);
-    });
-  }, [selectedChannel]);
 
   const handleOpenSearchResult = React.useCallback(
     (hit: SearchHit) => {
-      setSearchAnchor(hit);
-      setSearchAnchorChannelId(hit.channelId);
-      setSearchAnchorEvent({
-        id: hit.eventId,
-        pubkey: hit.pubkey,
-        created_at: hit.createdAt,
-        kind: hit.kind,
-        tags: [["h", hit.channelId]],
-        content: hit.content,
-        sig: "",
-      });
-      void handleOpenChannel(hit.channelId);
-
-      void getEventById(hit.eventId)
-        .then((event) => {
-          setSearchAnchorEvent((current) => {
-            if (current?.id !== hit.eventId) {
-              return current;
-            }
-
-            return event;
-          });
-        })
-        .catch((error) => {
-          console.error(
-            "Failed to load search result event",
-            hit.eventId,
-            error,
-          );
-        });
+      _handleOpenSearchResult(hit, handleOpenChannel);
     },
-    [handleOpenChannel],
+    [_handleOpenSearchResult, handleOpenChannel],
   );
+
+  const handleCloseSettings = React.useCallback(() => {
+    _handleCloseSettings(selectedChannel);
+  }, [_handleCloseSettings, selectedChannel]);
 
   React.useEffect(() => {
     let isCancelled = false;
@@ -430,15 +373,7 @@ export function AppShell() {
     }
     previousActiveChannelIdRef.current = activeChannelId;
     setReplyTargetId(null);
-    requestedAncestorIdsRef.current.clear();
   }, [activeChannelId]);
-  React.useEffect(() => {
-    if (selectedView === "settings") {
-      return;
-    }
-
-    lastNonSettingsViewRef.current = selectedView;
-  }, [selectedView]);
   React.useEffect(() => {
     if (replyTargetId && !replyTargetMessage) {
       setReplyTargetId(null);
@@ -447,69 +382,6 @@ export function AppShell() {
       setEditTargetId(null);
     }
   }, [editTargetId, editTargetMessage, replyTargetId, replyTargetMessage]);
-  React.useEffect(() => {
-    if (!activeChannel || activeChannel.channelType === "forum") {
-      return;
-    }
-
-    const knownEvents = new Map(
-      resolvedMessages.map((message) => [message.id, message]),
-    );
-    const missingAncestorIds = new Set<string>();
-
-    for (const message of resolvedMessages) {
-      const thread = getThreadReference(message.tags);
-
-      for (const eventId of [thread.parentId, thread.rootId]) {
-        if (
-          !eventId ||
-          knownEvents.has(eventId) ||
-          requestedAncestorIdsRef.current.has(eventId)
-        ) {
-          continue;
-        }
-
-        missingAncestorIds.add(eventId);
-      }
-    }
-
-    if (missingAncestorIds.size === 0) {
-      return;
-    }
-
-    for (const eventId of missingAncestorIds) {
-      requestedAncestorIdsRef.current.add(eventId);
-    }
-
-    let isCancelled = false;
-
-    void Promise.all(
-      [...missingAncestorIds].map(async (eventId) => {
-        try {
-          const event = await getEventById(eventId);
-
-          if (
-            isCancelled ||
-            getChannelIdFromTags(event.tags) !== activeChannel.id
-          ) {
-            return;
-          }
-
-          queryClient.setQueryData<RelayEvent[]>(
-            channelMessagesKey(activeChannel.id),
-            (current = []) => mergeMessages(current, event),
-          );
-        } catch (error) {
-          console.error("Failed to load ancestor event", eventId, error);
-        }
-      }),
-    );
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [activeChannel, queryClient, resolvedMessages]);
-
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       const isSettingsShortcut =

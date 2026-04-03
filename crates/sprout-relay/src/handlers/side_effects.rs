@@ -67,7 +67,8 @@ pub async fn validate_standard_deletion_event(
     event: &Event,
     state: &Arc<AppState>,
 ) -> Result<(), SideEffectError> {
-    let actor_bytes = effective_message_author(event, &state.relay_keypair.public_key());
+    let actor_bytes =
+        super::ingest::effective_message_author(event, &state.relay_keypair.public_key());
     let target_ids = extract_target_event_ids(event);
 
     if target_ids.is_empty() {
@@ -83,8 +84,10 @@ pub async fn validate_standard_deletion_event(
             .await?
             .ok_or_else(|| SideEffectError::Internal("target event not found".into()))?;
 
-        let target_author =
-            effective_message_author(&target_event.event, &state.relay_keypair.public_key());
+        let target_author = super::ingest::effective_message_author(
+            &target_event.event,
+            &state.relay_keypair.public_key(),
+        );
         if target_author != actor_bytes {
             return Err(SideEffectError::Internal("must be event author".into()));
         }
@@ -320,8 +323,10 @@ pub async fn validate_admin_event(
 
             // Check if actor is the event author.
             // For relay-signed REST messages, the real author is in the p tag.
-            let author =
-                effective_message_author(&target_event.event, &state.relay_keypair.public_key());
+            let author = super::ingest::effective_message_author(
+                &target_event.event,
+                &state.relay_keypair.public_key(),
+            );
             if author == actor_bytes {
                 return Ok(()); // Author can always delete their own messages
             }
@@ -460,10 +465,9 @@ pub async fn emit_membership_notification(
                 return Ok(());
             }
         };
-        for (target_conn_id, sub_id) in &matches {
-            let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
-            state.conn_manager.send_to(*target_conn_id, msg);
-        }
+        state
+            .conn_manager
+            .send_event_to_matches(&matches, &event_json);
     }
 
     info!(
@@ -1354,34 +1358,6 @@ fn extract_p_tag(event: &Event) -> Option<Vec<u8>> {
 }
 
 /// Extract the effective message author from a stored event.
-///
-/// REST-created messages are signed by the relay keypair and attribute the real
-/// sender via a `p` tag. For user-signed events (WebSocket), `event.pubkey` is
-/// the author. Returns the correct author bytes in both cases.
-fn effective_message_author(event: &Event, relay_pubkey: &nostr::PublicKey) -> Vec<u8> {
-    if event.pubkey == *relay_pubkey {
-        if let Some(actor_hex) = extract_tag_value(event, "actor") {
-            if let Ok(bytes) = hex::decode(actor_hex) {
-                if bytes.len() == 32 {
-                    return bytes;
-                }
-            }
-        }
-        for tag in event.tags.iter() {
-            if tag.kind().to_string() == "p" {
-                if let Some(hex) = tag.content() {
-                    if let Ok(bytes) = hex::decode(hex) {
-                        if bytes.len() == 32 {
-                            return bytes;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    event.pubkey.serialize().to_vec()
-}
-
 fn extract_target_event_ids(event: &Event) -> Vec<Vec<u8>> {
     event
         .tags

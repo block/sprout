@@ -234,12 +234,9 @@ fn apply_filter(value: String, filter: &str) -> Result<String, WorkflowError> {
 /// | `trigger.message_id`              | `trigger_message_id`      |
 /// | `steps.STEP_ID.output.FIELD`      | `steps_STEP_ID_output_FIELD` |
 ///
-/// Also registers string helper functions that the `cron` crate's `evalexpr` v11
-/// does not include by default:
-/// - `str_contains(haystack, needle)` → bool
-/// - `str_starts_with(s, prefix)` → bool
-/// - `str_ends_with(s, suffix)` → bool
-/// - `str_len(s)` → int
+/// Also registers string helper functions via `sprout_core::evalexpr_helpers`
+/// (evalexpr v11 does not include these by default):
+/// `str_contains`, `str_starts_with`, `str_ends_with`, `str_len`.
 pub fn build_eval_context(
     trigger_ctx: &TriggerContext,
     step_outputs: &HashMap<String, JsonValue>,
@@ -249,50 +246,7 @@ pub fn build_eval_context(
     let mut ctx = HashMapContext::new();
 
     // ── Custom string functions ───────────────────────────────────────────────
-    // evalexpr v11 does not ship str_contains / str_starts_with / str_ends_with.
-    // Register them as custom functions so workflow YAML can use them.
-
-    ctx.set_function(
-        "str_contains".into(),
-        Function::new(|args| {
-            let args = args.as_fixed_len_tuple(2)?;
-            let haystack = args[0].as_string()?;
-            let needle = args[1].as_string()?;
-            Ok(Value::Boolean(haystack.contains(needle.as_str())))
-        }),
-    )
-    .map_err(|e| WorkflowError::ConditionError(e.to_string()))?;
-
-    ctx.set_function(
-        "str_starts_with".into(),
-        Function::new(|args| {
-            let args = args.as_fixed_len_tuple(2)?;
-            let s = args[0].as_string()?;
-            let prefix = args[1].as_string()?;
-            Ok(Value::Boolean(s.starts_with(prefix.as_str())))
-        }),
-    )
-    .map_err(|e| WorkflowError::ConditionError(e.to_string()))?;
-
-    ctx.set_function(
-        "str_ends_with".into(),
-        Function::new(|args| {
-            let args = args.as_fixed_len_tuple(2)?;
-            let s = args[0].as_string()?;
-            let suffix = args[1].as_string()?;
-            Ok(Value::Boolean(s.ends_with(suffix.as_str())))
-        }),
-    )
-    .map_err(|e| WorkflowError::ConditionError(e.to_string()))?;
-
-    ctx.set_function(
-        "str_len".into(),
-        Function::new(|arg| {
-            let s = arg.as_string()?;
-            Ok(Value::Int(s.len() as i64))
-        }),
-    )
-    .map_err(|e| WorkflowError::ConditionError(e.to_string()))?;
+    sprout_core::evalexpr_helpers::register_string_helpers(&mut ctx);
 
     // ── Trigger fields ────────────────────────────────────────────────────────
 

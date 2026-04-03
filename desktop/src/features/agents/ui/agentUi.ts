@@ -1,6 +1,4 @@
-export function truncatePubkey(pubkey: string) {
-  return `${pubkey.slice(0, 8)}…${pubkey.slice(-6)}`;
-}
+export { truncatePubkey } from "@/shared/lib/pubkey";
 
 function commandLooksLikePath(command: string) {
   const trimmed = command.trim();

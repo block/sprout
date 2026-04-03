@@ -311,35 +311,11 @@ fn is_local_media_url(url: &str, media_base_url: &str) -> bool {
     }
 }
 
-/// Extract the effective message author from a stored event.
-///
-/// REST-created messages are signed by the relay keypair and attribute the real
-/// sender via a `p` tag. For user-signed events (WebSocket), `event.pubkey` is
-/// the author. This helper returns the correct author bytes in both cases.
-fn effective_author(event: &nostr::Event, relay_pubkey: &nostr::PublicKey) -> Vec<u8> {
-    if event.pubkey == *relay_pubkey {
-        // Relay-signed: real author is in the first p tag.
-        for tag in event.tags.iter() {
-            if tag.kind().to_string() == "p" {
-                if let Some(hex) = tag.content() {
-                    if let Ok(bytes) = nostr_hex::decode(hex) {
-                        if bytes.len() == 32 {
-                            return bytes;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // User-signed or no p tag found: pubkey is the author.
-    event.pubkey.serialize().to_vec()
-}
-
 /// Resolve the effective author pubkey from stored (non-Event) data.
 ///
 /// REST-created messages are signed by the relay keypair and carry the real
-/// sender in the first `p` tag. This helper mirrors `effective_author` but
-/// works with raw bytes + stored tags JSON rather than a `nostr::Event`.
+/// sender in the first `p` tag. Works with raw bytes + stored tags JSON
+/// rather than a `nostr::Event` (see `crate::handlers::ingest::effective_message_author`).
 fn effective_author_bytes(
     msg_pubkey: &[u8],
     tags: &serde_json::Value,
@@ -637,7 +613,8 @@ pub async fn get_thread(
     let root_created_at = root_event.event.created_at.as_u64() as i64;
     let relay_pk = state.relay_keypair.public_key();
     let relay_pk_bytes = relay_pk.serialize().to_vec();
-    let root_author = effective_author(&root_event.event, &relay_pk);
+    let root_author =
+        crate::handlers::ingest::effective_message_author(&root_event.event, &relay_pk);
     let root_tags =
         serde_json::to_value(&root_event.event.tags).unwrap_or(serde_json::Value::Array(vec![]));
     let mut root_obj = serde_json::json!({

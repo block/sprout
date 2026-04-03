@@ -3400,6 +3400,7 @@ name = "sprout-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "evalexpr",
  "hex",
  "nostr",
  "schemars",

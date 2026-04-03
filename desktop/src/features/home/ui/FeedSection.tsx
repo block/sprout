@@ -6,43 +6,9 @@ import {
 } from "@/features/profile/lib/identity";
 import type { FeedItem } from "@/shared/api/types";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
+import { formatRelativeTime } from "@/shared/lib/time";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
-
-const relativeTimeFormatter = new Intl.RelativeTimeFormat("en-US", {
-  numeric: "auto",
-});
-
-function formatRelativeTime(unixSeconds: number) {
-  const diff = unixSeconds - Math.floor(Date.now() / 1_000);
-  const absoluteDiff = Math.abs(diff);
-
-  if (absoluteDiff < 60) {
-    return relativeTimeFormatter.format(diff, "second");
-  }
-
-  if (absoluteDiff < 60 * 60) {
-    return relativeTimeFormatter.format(Math.round(diff / 60), "minute");
-  }
-
-  if (absoluteDiff < 60 * 60 * 24) {
-    return relativeTimeFormatter.format(Math.round(diff / (60 * 60)), "hour");
-  }
-
-  if (absoluteDiff < 60 * 60 * 24 * 7) {
-    return relativeTimeFormatter.format(
-      Math.round(diff / (60 * 60 * 24)),
-      "day",
-    );
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(unixSeconds * 1_000));
-}
 
 function feedHeadline(item: FeedItem) {
   switch (item.kind) {

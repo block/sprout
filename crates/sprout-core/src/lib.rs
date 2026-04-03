@@ -9,6 +9,8 @@
 pub mod channel;
 /// Relay-side error types.
 pub mod error;
+/// Shared evalexpr string helper registration (str_contains, str_starts_with, etc.).
+pub mod evalexpr_helpers;
 /// Relay-side event wrapper with verification tracking.
 pub mod event;
 /// NIP-01 subscription filter matching.

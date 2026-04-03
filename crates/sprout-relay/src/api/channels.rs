@@ -87,13 +87,13 @@ pub async fn channels_handler(
     Ok(Json(serde_json::json!(result)))
 }
 
-fn channel_record_to_json(
+/// Core channel fields shared by all channel serializers.
+///
+/// Returns a JSON object with the fields common to every channel response.
+/// Callers extend it with endpoint-specific fields.
+pub(super) fn channel_base_to_json(
     channel: &ChannelRecord,
-    participants: Vec<String>,
-    participant_pubkeys: Vec<String>,
     member_count: i64,
-    last_message_at: Option<chrono::DateTime<chrono::Utc>>,
-    is_member: bool,
 ) -> serde_json::Value {
     serde_json::json!({
         "id": channel.id.to_string(),
@@ -108,11 +108,32 @@ fn channel_record_to_json(
         "updated_at": channel.updated_at.to_rfc3339(),
         "archived_at": channel.archived_at.map(|t| t.to_rfc3339()),
         "member_count": member_count,
-        "last_message_at": last_message_at.map(|t| t.to_rfc3339()),
-        "participants": participants,
-        "participant_pubkeys": participant_pubkeys,
-        "is_member": is_member,
     })
+}
+
+fn channel_record_to_json(
+    channel: &ChannelRecord,
+    participants: Vec<String>,
+    participant_pubkeys: Vec<String>,
+    member_count: i64,
+    last_message_at: Option<chrono::DateTime<chrono::Utc>>,
+    is_member: bool,
+) -> serde_json::Value {
+    let mut obj = channel_base_to_json(channel, member_count);
+    let map = obj
+        .as_object_mut()
+        .expect("channel_base_to_json returns object");
+    map.insert(
+        "last_message_at".into(),
+        serde_json::json!(last_message_at.map(|t| t.to_rfc3339())),
+    );
+    map.insert("participants".into(), serde_json::json!(participants));
+    map.insert(
+        "participant_pubkeys".into(),
+        serde_json::json!(participant_pubkeys),
+    );
+    map.insert("is_member".into(), serde_json::json!(is_member));
+    obj
 }
 
 /// Fetch DM participants and resolve their display names.

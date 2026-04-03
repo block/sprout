@@ -683,6 +683,712 @@ fn validate_diff_event(event: &Event) -> Result<(), String> {
     Ok(())
 }
 
+// ── Pipeline step functions ───────────────────────────────────────────────────
+
+/// Step 1 + 1b: Reject relay-internal kinds and transport-restricted kinds.
+///
+/// AUTH and membership notification events are relay-signed only.
+/// Gift-wrap and presence updates are WebSocket-only.
+pub(crate) fn check_blocked_kinds(kind_u32: u32, is_http: bool) -> Result<(), IngestError> {
+    if kind_u32 == KIND_AUTH {
+        return Err(IngestError::Rejected(
+            "invalid: AUTH events cannot be submitted".into(),
+        ));
+    }
+    if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION || kind_u32 == KIND_MEMBER_REMOVED_NOTIFICATION {
+        return Err(IngestError::Rejected(
+            "invalid: membership notifications are relay-signed only".into(),
+        ));
+    }
+    if is_http && (kind_u32 == KIND_GIFT_WRAP || kind_u32 == KIND_PRESENCE_UPDATE) {
+        return Err(IngestError::Rejected(format!(
+            "invalid: kind {kind_u32} is only accepted via WebSocket"
+        )));
+    }
+    Ok(())
+}
+
+/// Step 2: Verify the event's cryptographic signature (runs in a blocking thread).
+pub(crate) async fn verify_signature(event: &Event) -> Result<(), IngestError> {
+    let event_clone = event.clone();
+    match tokio::task::spawn_blocking(move || verify_event(&event_clone)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(IngestError::Rejected(format!("invalid: {e}"))),
+        Err(e) => {
+            error!("spawn_blocking panicked: {e}");
+            Err(IngestError::Internal(
+                "error: internal verification error".into(),
+            ))
+        }
+    }
+}
+
+/// Step 2b: Reject events whose timestamp drifts more than ±15 minutes from server time.
+///
+/// Skipped for `proxy:submit` — proxied events may carry historical timestamps.
+pub(crate) fn check_timestamp(event: &Event, has_proxy_scope: bool) -> Result<(), IngestError> {
+    if has_proxy_scope {
+        return Ok(());
+    }
+    const MAX_TIMESTAMP_DRIFT_SECS: i64 = 900;
+    let now = chrono::Utc::now().timestamp();
+    let event_ts = event.created_at.as_u64() as i64;
+    if (event_ts - now).abs() > MAX_TIMESTAMP_DRIFT_SECS {
+        return Err(IngestError::Rejected(
+            "invalid: event timestamp too far from server time".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Step 2c: Reject events whose content exceeds 256 KB.
+pub(crate) fn check_content_size(event: &Event) -> Result<(), IngestError> {
+    const MAX_EVENT_CONTENT_BYTES: usize = 256 * 1024;
+    if event.content.len() > MAX_EVENT_CONTENT_BYTES {
+        return Err(IngestError::Rejected(format!(
+            "invalid: content exceeds maximum size of {} bytes (got {})",
+            MAX_EVENT_CONTENT_BYTES,
+            event.content.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Step 3: Confirm the event's pubkey matches the authenticated identity.
+///
+/// Skipped for gift-wrap (sealed-sender) and proxy submissions.
+pub(crate) fn check_pubkey_match(
+    event: &Event,
+    auth: &IngestAuth,
+    kind_u32: u32,
+) -> Result<(), IngestError> {
+    let is_gift_wrap = kind_u32 == KIND_GIFT_WRAP;
+    if event.pubkey != *auth.pubkey() && !auth.has_proxy_scope() && !is_gift_wrap {
+        return Err(IngestError::AuthFailed(
+            "invalid: event pubkey does not match authenticated identity".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Step 5: Resolve the channel UUID for this event.
+///
+/// Reactions derive their channel from the target event; deletions look up the
+/// target's channel; gift-wraps are channel-less; everything else reads the `h` tag.
+pub(crate) async fn resolve_channel_id(
+    db: &sprout_db::Db,
+    event: &Event,
+    kind_u32: u32,
+) -> Result<Option<Uuid>, IngestError> {
+    if kind_u32 == KIND_REACTION {
+        return match derive_reaction_channel(db, event).await {
+            ReactionChannelResult::Channel(ch_id) => Ok(Some(ch_id)),
+            ReactionChannelResult::NoChannel => Ok(None),
+            ReactionChannelResult::NotFound => Err(IngestError::Rejected(
+                "invalid: reaction target event not found".into(),
+            )),
+            ReactionChannelResult::NoTarget => Err(IngestError::Rejected(
+                "invalid: reaction must reference a target event via e tag".into(),
+            )),
+            ReactionChannelResult::DbError(e) => Err(IngestError::Internal(format!(
+                "error: internal error looking up reaction target: {e}"
+            ))),
+        };
+    }
+    if kind_u32 == KIND_GIFT_WRAP {
+        return Ok(None);
+    }
+    if kind_u32 == KIND_DELETION {
+        // kind:5 has no h-tag; derive channel from the target event.
+        let target_hex = event.tags.iter().find_map(|t| {
+            if t.kind().to_string() == "e" {
+                t.content().and_then(|v| {
+                    if v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()) {
+                        Some(v.to_string())
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        });
+        return match target_hex {
+            Some(hex) => {
+                let target_bytes = hex::decode(&hex).map_err(|_| {
+                    IngestError::Rejected("invalid: malformed deletion target id".into())
+                })?;
+                match db.get_event_by_id(&target_bytes).await {
+                    Ok(Some(target)) => Ok(target.channel_id),
+                    Ok(None) => Ok(None), // validate_standard_deletion will catch missing target
+                    Err(e) => Err(IngestError::Internal(format!(
+                        "error: looking up deletion target: {e}"
+                    ))),
+                }
+            }
+            None => Ok(None), // no e-tag — caught by single-target enforcement (step 12)
+        };
+    }
+    Ok(extract_channel_id(event))
+}
+
+/// Step 6: Require an `h` tag for channel-scoped event kinds.
+pub(crate) fn check_h_tag_required(
+    kind_u32: u32,
+    channel_id: Option<Uuid>,
+) -> Result<(), IngestError> {
+    if requires_h_channel_scope(kind_u32) && channel_id.is_none() {
+        return Err(IngestError::Rejected(
+            "invalid: channel-scoped events must include an h tag".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Step 7: Enforce token-level channel restrictions.
+///
+/// Channel-scoped tokens may only submit events to their allowed channels.
+pub(crate) fn check_token_channel_scope(
+    auth: &IngestAuth,
+    kind_u32: u32,
+    channel_id: Option<Uuid>,
+) -> Result<(), IngestError> {
+    if let Some(ch_id) = channel_id {
+        check_token_channel_access(auth, ch_id).map_err(IngestError::AuthFailed)?;
+    } else if kind_u32 == KIND_NIP29_CREATE_GROUP && auth.channel_ids().is_some() {
+        return Err(IngestError::AuthFailed(
+            "restricted: channel-scoped tokens must include an h tag for create-group".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Step 8: Verify the submitter is a member of the target channel (or the channel is open).
+///
+/// Skipped for join requests, channel creation, and proxy submissions.
+pub(crate) async fn check_membership(
+    state: &AppState,
+    auth: &IngestAuth,
+    kind_u32: u32,
+    channel_id: Option<Uuid>,
+) -> Result<(), IngestError> {
+    if let Some(ch_id) = channel_id {
+        let skip = kind_u32 == KIND_NIP29_JOIN_REQUEST
+            || kind_u32 == KIND_NIP29_CREATE_GROUP
+            || auth.has_proxy_scope();
+        if !skip {
+            let pubkey_bytes = auth.pubkey().serialize().to_vec();
+            check_channel_membership(state, ch_id, &pubkey_bytes)
+                .await
+                .map_err(IngestError::Rejected)?;
+        }
+    }
+    Ok(())
+}
+
+/// Step 9: Run admin-kind validation (kinds 9000–9022).
+pub(crate) async fn check_admin_event(
+    state: &Arc<AppState>,
+    event: &Event,
+    kind_u32: u32,
+) -> Result<(), IngestError> {
+    if crate::handlers::side_effects::is_admin_kind(kind_u32) {
+        crate::handlers::side_effects::validate_admin_event(kind_u32, event, state)
+            .await
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Step 10: Validate kind:5 standard deletion events.
+pub(crate) async fn check_standard_deletion(
+    state: &Arc<AppState>,
+    event: &Event,
+    kind_u32: u32,
+) -> Result<(), IngestError> {
+    if kind_u32 == KIND_DELETION {
+        crate::handlers::side_effects::validate_standard_deletion_event(event, state)
+            .await
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Step 11: Reject events targeting an archived channel.
+///
+/// Exception: kind:9002 with `archived=false` is the unarchive operation itself.
+pub(crate) async fn check_channel_not_archived(
+    state: &AppState,
+    event: &Event,
+    kind_u32: u32,
+    channel_id: Option<Uuid>,
+) -> Result<(), IngestError> {
+    if let Some(ch_id) = channel_id {
+        let is_unarchive = kind_u32 == KIND_NIP29_EDIT_METADATA
+            && event.tags.iter().any(|t| {
+                let parts = t.as_slice();
+                parts.len() >= 2 && parts[0] == "archived" && parts[1] == "false"
+            });
+        if !is_unarchive {
+            if let Ok(channel) = state.db.get_channel(ch_id).await {
+                if channel.archived_at.is_some() {
+                    return Err(IngestError::Rejected("invalid: channel is archived".into()));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Step 12: Enforce exactly-one-target rule for deletion events (kind:9005 and kind:5).
+pub(crate) fn check_single_deletion_target(
+    event: &Event,
+    kind_u32: u32,
+) -> Result<(), IngestError> {
+    if kind_u32 == KIND_NIP29_DELETE_EVENT || kind_u32 == KIND_DELETION {
+        let e_count = count_e_tags(event);
+        if e_count != 1 {
+            return Err(IngestError::Rejected(format!(
+                "invalid: deletion events must reference exactly one target (got {e_count})"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Step 13: Verify the submitter is the original author of the edit target (kind:40003).
+pub(crate) async fn check_edit_ownership(
+    state: &AppState,
+    event: &Event,
+    kind_u32: u32,
+) -> Result<(), IngestError> {
+    if kind_u32 == KIND_STREAM_MESSAGE_EDIT {
+        validate_edit_ownership(event, state)
+            .await
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Step 14: Verify a forum vote targets a post or comment (kind:45002).
+pub(crate) async fn check_forum_vote_target(
+    state: &AppState,
+    event: &Event,
+    kind_u32: u32,
+) -> Result<(), IngestError> {
+    if kind_u32 == KIND_FORUM_VOTE {
+        validate_forum_vote_target(event, state)
+            .await
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Step 15: Validate diff event metadata tags (kind:40008).
+pub(crate) fn check_diff_event(event: &Event, kind_u32: u32) -> Result<(), IngestError> {
+    if kind_u32 == KIND_STREAM_MESSAGE_DIFF {
+        validate_diff_event(event).map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Outcome of the create-group step (step 16).
+pub(crate) enum CreateGroupOutcome {
+    /// Channel was created; UUID is tracked for compensation on later failure.
+    Created(Uuid),
+    /// No h-tag — server will assign UUID at insert time; nothing to track.
+    NoClientUuid,
+    /// Channel already exists — return a duplicate result immediately.
+    Duplicate,
+}
+
+/// Step 16: For kind:9007, validate channel metadata and pre-create the channel row.
+///
+/// Returns `CreateGroupOutcome` so the caller can short-circuit on `Duplicate`
+/// and track the pre-created UUID for compensation on DB insert failure.
+pub(crate) async fn create_group_if_needed(
+    state: &AppState,
+    event: &Event,
+    kind_u32: u32,
+    channel_id: Option<Uuid>,
+) -> Result<CreateGroupOutcome, IngestError> {
+    if kind_u32 != KIND_NIP29_CREATE_GROUP {
+        return Ok(CreateGroupOutcome::NoClientUuid);
+    }
+
+    // Name tag must be present and non-empty.
+    let create_name = event.tags.iter().find_map(|t| {
+        if t.kind().to_string() == "name" {
+            t.content().map(|s| s.to_string())
+        } else {
+            None
+        }
+    });
+    if create_name
+        .as_ref()
+        .map(|n| n.trim().is_empty())
+        .unwrap_or(true)
+    {
+        return Err(IngestError::Rejected(
+            "invalid: channel name is required".into(),
+        ));
+    }
+
+    // Validate visibility and channel_type enums before any DB work.
+    let visibility_str = event
+        .tags
+        .iter()
+        .find_map(|t| {
+            if t.kind().to_string() == "visibility" {
+                t.content().map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "open".to_string());
+    let channel_type_str = event
+        .tags
+        .iter()
+        .find_map(|t| {
+            if t.kind().to_string() == "channel_type" {
+                t.content().map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "stream".to_string());
+
+    let visibility: sprout_db::channel::ChannelVisibility = visibility_str
+        .parse()
+        .map_err(|_| IngestError::Rejected(format!("invalid visibility: {visibility_str}")))?;
+    let channel_type: sprout_db::channel::ChannelType = channel_type_str
+        .parse()
+        .map_err(|_| IngestError::Rejected(format!("invalid channel_type: {channel_type_str}")))?;
+
+    let Some(client_uuid) = channel_id else {
+        return Ok(CreateGroupOutcome::NoClientUuid);
+    };
+
+    let name = create_name.unwrap_or_default();
+    let description = event.tags.iter().find_map(|t| {
+        if t.kind().to_string() == "about" {
+            t.content().map(|s| s.to_string())
+        } else {
+            None
+        }
+    });
+    let actor_bytes = event.pubkey.serialize().to_vec();
+
+    let (_, was_created) = state
+        .db
+        .create_channel_with_id(
+            client_uuid,
+            &name,
+            channel_type,
+            visibility,
+            description.as_deref(),
+            &actor_bytes,
+        )
+        .await
+        .map_err(|e| IngestError::Internal(format!("error: {e}")))?;
+
+    if !was_created {
+        return Ok(CreateGroupOutcome::Duplicate);
+    }
+    Ok(CreateGroupOutcome::Created(client_uuid))
+}
+
+/// Step 17: Reject join requests (kind:9021) to private channels.
+pub(crate) async fn check_join_open_channel(
+    state: &AppState,
+    kind_u32: u32,
+    channel_id: Option<Uuid>,
+) -> Result<(), IngestError> {
+    if kind_u32 != KIND_NIP29_JOIN_REQUEST {
+        return Ok(());
+    }
+    let Some(ch_id) = channel_id else {
+        return Err(IngestError::Rejected(
+            "invalid: join request must include an h tag".into(),
+        ));
+    };
+    match state.db.get_channel(ch_id).await {
+        Ok(ch) if ch.visibility == "private" => Err(IngestError::Rejected(
+            "restricted: channel is private".into(),
+        )),
+        Err(_) => Err(IngestError::Rejected("invalid: channel not found".into())),
+        _ => Ok(()),
+    }
+}
+
+/// Step 18: Validate `imeta` tags and verify referenced blobs exist in media storage.
+pub(crate) async fn check_imeta_tags(state: &AppState, event: &Event) -> Result<(), IngestError> {
+    let imeta_tags: Vec<Vec<String>> = event
+        .tags
+        .iter()
+        .filter(|t| t.kind().to_string() == "imeta")
+        .map(|t| t.as_slice().iter().map(|s| s.to_string()).collect())
+        .collect();
+    if imeta_tags.is_empty() {
+        return Ok(());
+    }
+    crate::api::validate_imeta_tags(&imeta_tags, &state.config.media.public_base_url)
+        .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    crate::api::verify_imeta_blobs(&imeta_tags, &state.media_storage)
+        .await
+        .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    Ok(())
+}
+
+/// Step 19: Resolve NIP-10 thread ancestry for channel-scoped events.
+pub(crate) async fn resolve_thread_metadata(
+    state: &AppState,
+    event: &Event,
+    kind_u32: u32,
+    channel_id: Option<Uuid>,
+) -> Result<Option<ThreadMetadataOwned>, IngestError> {
+    if !requires_h_channel_scope(kind_u32) {
+        return Ok(None);
+    }
+    let Some(ch_id) = channel_id else {
+        return Ok(None);
+    };
+    resolve_nip10_thread_meta(event, ch_id, state)
+        .await
+        .map_err(|msg| IngestError::Rejected(format!("invalid: {msg}")))
+}
+
+/// Step 20 pre-check: Reject kind:0 events with non-JSON content before storage.
+pub(crate) fn check_profile_json(event: &Event, kind_u32: u32) -> Result<(), IngestError> {
+    if kind_u32 == KIND_PROFILE
+        && serde_json::from_str::<serde_json::Value>(&event.content).is_err()
+    {
+        return Err(IngestError::Rejected(
+            "invalid: kind:0 content must be valid JSON".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Step 20a: Reaction-specific insert path (kind:7).
+///
+/// Inserts the reaction row first (dedup via ON CONFLICT), then stores the event.
+/// On event insert failure, compensates by removing the reaction row.
+/// Returns `Some(IngestResult)` to short-circuit the pipeline, or `None` if this
+/// event is not a reaction (caller should continue to the normal insert path).
+pub(crate) async fn insert_reaction_event(
+    state: &Arc<AppState>,
+    event: &Event,
+    event_id_hex: &str,
+    kind_u32: u32,
+    channel_id: Option<Uuid>,
+    thread_meta: &Option<ThreadMetadataOwned>,
+    auth_pubkey_hex: &str,
+) -> Result<Option<IngestResult>, IngestError> {
+    if kind_u32 != KIND_REACTION {
+        return Ok(None);
+    }
+
+    let target_hex = event
+        .tags
+        .iter()
+        .rev()
+        .find_map(|tag| {
+            if tag.kind().to_string() == "e" {
+                tag.content().and_then(|v| {
+                    if v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()) {
+                        Some(v.to_string())
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            IngestError::Rejected(
+                "invalid: reaction must reference a target event via e tag".into(),
+            )
+        })?;
+
+    let target_id = hex::decode(&target_hex)
+        .map_err(|_| IngestError::Rejected("invalid: malformed reaction target id".into()))?;
+
+    let target_event = state
+        .db
+        .get_event_by_id(&target_id)
+        .await
+        .map_err(|e| IngestError::Internal(format!("error: {e}")))?
+        .ok_or_else(|| IngestError::Rejected("invalid: reaction target event not found".into()))?;
+
+    let target_created_at =
+        chrono::DateTime::from_timestamp(target_event.event.created_at.as_u64() as i64, 0)
+            .unwrap_or_else(chrono::Utc::now);
+
+    let actor_bytes = effective_message_author(event, &state.relay_keypair.public_key());
+    let emoji = if event.content.is_empty() {
+        "+"
+    } else {
+        &event.content
+    };
+
+    const MAX_REACTION_EMOJI_CHARS: usize = 64;
+    let emoji_char_count = emoji.chars().count();
+    if emoji_char_count > MAX_REACTION_EMOJI_CHARS {
+        return Err(IngestError::Rejected(format!(
+            "invalid: reaction emoji exceeds {} characters (got {})",
+            MAX_REACTION_EMOJI_CHARS, emoji_char_count
+        )));
+    }
+
+    let inserted = state
+        .db
+        .add_reaction(&target_id, target_created_at, &actor_bytes, emoji, None)
+        .await
+        .map_err(|e| IngestError::Internal(format!("error: {e}")))?;
+
+    if !inserted {
+        return Ok(Some(IngestResult {
+            event_id: event_id_hex.to_string(),
+            accepted: false,
+            message: "duplicate: reaction already exists".into(),
+        }));
+    }
+
+    let thread_params = thread_meta.as_ref().map(|m| m.as_params());
+    let (stored_event, was_inserted) = match state
+        .db
+        .insert_event_with_thread_metadata(event, channel_id, thread_params)
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            if let Err(re) = state
+                .db
+                .remove_reaction(&target_id, target_created_at, &actor_bytes, emoji)
+                .await
+            {
+                warn!(event_id = %event_id_hex, "reaction compensation failed: {re}");
+            }
+            return Err(IngestError::Internal(format!("error: database error: {e}")));
+        }
+    };
+
+    if was_inserted {
+        if let Err(e) = state
+            .db
+            .set_reaction_event_id(
+                &target_id,
+                target_created_at,
+                &actor_bytes,
+                emoji,
+                event.id.as_bytes(),
+            )
+            .await
+        {
+            warn!(event_id = %event_id_hex, "set_reaction_event_id failed: {e}");
+        }
+    }
+
+    dispatch_persistent_event(state, &stored_event, kind_u32, auth_pubkey_hex).await;
+    info!(event_id = %event_id_hex, kind = kind_u32, "Event ingested via pipeline");
+    Ok(Some(IngestResult {
+        event_id: event_id_hex.to_string(),
+        accepted: true,
+        message: String::new(),
+    }))
+}
+
+/// Step 20 (normal path): Store the event in the database.
+///
+/// kind:0 uses addressable (replaceable) storage; all others use insert-with-thread-metadata.
+/// On failure, compensates by soft-deleting any pre-created channel row.
+pub(crate) async fn store_event(
+    state: &Arc<AppState>,
+    event: &Event,
+    event_id_hex: &str,
+    kind_u32: u32,
+    channel_id: Option<Uuid>,
+    thread_meta: &Option<ThreadMetadataOwned>,
+    pre_created_channel: Option<Uuid>,
+) -> Result<(sprout_core::StoredEvent, bool), IngestError> {
+    if kind_u32 == KIND_PROFILE {
+        return state
+            .db
+            .replace_addressable_event(event, None)
+            .await
+            .map_err(|e| IngestError::Internal(format!("error: {e}")));
+    }
+
+    let thread_params = thread_meta.as_ref().map(|m| m.as_params());
+    match state
+        .db
+        .insert_event_with_thread_metadata(event, channel_id, thread_params)
+        .await
+    {
+        Ok(result) => Ok(result),
+        Err(e) => {
+            if let Some(ch_id) = pre_created_channel {
+                if let Err(re) = state.db.soft_delete_channel(ch_id).await {
+                    warn!(event_id = %event_id_hex, "channel compensation failed: {re}");
+                }
+            }
+            Err(match e {
+                sprout_db::DbError::AuthEventRejected => {
+                    IngestError::Rejected("invalid: AUTH events cannot be stored".into())
+                }
+                other => IngestError::Internal(format!("error: database error: {other}")),
+            })
+        }
+    }
+}
+
+/// Step 21: Run post-storage side effects (membership updates, profile sync, etc.).
+pub(crate) async fn run_side_effects(
+    state: &Arc<AppState>,
+    event: &Event,
+    event_id_hex: &str,
+    kind_u32: u32,
+) {
+    if crate::handlers::side_effects::is_side_effect_kind(kind_u32) {
+        if let Err(e) =
+            crate::handlers::side_effects::handle_side_effects(kind_u32, event, state).await
+        {
+            warn!(event_id = %event_id_hex, kind = kind_u32, "Side effect failed: {e}");
+        }
+    }
+}
+
+/// Step 22: Fan out the stored event to all matching WebSocket subscribers.
+pub(crate) async fn fan_out_event(
+    state: &Arc<AppState>,
+    stored_event: &sprout_core::StoredEvent,
+    kind_u32: u32,
+    pubkey_hex: &str,
+) {
+    dispatch_persistent_event(state, stored_event, kind_u32, pubkey_hex).await;
+}
+
+/// Step 4: Confirm the auth context holds the required scope for this event kind.
+pub(crate) fn check_kind_scope(
+    event: &Event,
+    auth: &IngestAuth,
+    kind_u32: u32,
+) -> Result<(), IngestError> {
+    let required = match required_scope_for_kind(kind_u32, event) {
+        Ok(scope) => scope,
+        Err(msg) => return Err(IngestError::Rejected(msg.into())),
+    };
+    if !auth.has_proxy_scope() && !auth.scopes().contains(&required) {
+        return Err(IngestError::AuthFailed(format!(
+            "restricted: insufficient scope (need {})",
+            required
+        )));
+    }
+    Ok(())
+}
+
 // ── The pipeline ─────────────────────────────────────────────────────────────
 
 /// Ingest a signed Nostr event through the full validation pipeline.
@@ -699,559 +1405,111 @@ pub async fn ingest_event(
     let kind_u32 = event_kind_u32(&event);
     debug!(event_id = %event_id_hex, kind = kind_u32, "ingest_event");
 
-    // ── 1. Blocked kinds ─────────────────────────────────────────────────
-    if kind_u32 == KIND_AUTH {
-        return Err(IngestError::Rejected(
-            "invalid: AUTH events cannot be submitted".into(),
-        ));
-    }
-    if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION || kind_u32 == KIND_MEMBER_REMOVED_NOTIFICATION {
-        return Err(IngestError::Rejected(
-            "invalid: membership notifications are relay-signed only".into(),
-        ));
-    }
-
-    // ── 1b. HTTP-only kind gate ─────────────────────────────────────────
-    if auth.is_http() && (kind_u32 == KIND_GIFT_WRAP || kind_u32 == KIND_PRESENCE_UPDATE) {
-        return Err(IngestError::Rejected(format!(
-            "invalid: kind {kind_u32} is only accepted via WebSocket"
-        )));
-    }
+    // ── 1 + 1b. Blocked kinds ────────────────────────────────────────────
+    check_blocked_kinds(kind_u32, auth.is_http())?;
 
     // ── 2. Signature verification ────────────────────────────────────────
-    let event_clone = event.clone();
-    let verify_result = tokio::task::spawn_blocking(move || verify_event(&event_clone)).await;
-    match verify_result {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            return Err(IngestError::Rejected(format!("invalid: {e}")));
-        }
-        Err(e) => {
-            error!("spawn_blocking panicked: {e}");
-            return Err(IngestError::Internal(
-                "error: internal verification error".into(),
-            ));
-        }
-    }
+    verify_signature(&event).await?;
 
     // ── 2b. Timestamp sanity ─────────────────────────────────────────────
-    // Skip for proxy:submit — proxy-translated events preserve upstream
-    // created_at timestamps which may be historical (backfill/replay).
-    if !auth.has_proxy_scope() {
-        const MAX_TIMESTAMP_DRIFT_SECS: i64 = 900; // ±15 minutes
-        let now = chrono::Utc::now().timestamp();
-        let event_ts = event.created_at.as_u64() as i64;
-        if (event_ts - now).abs() > MAX_TIMESTAMP_DRIFT_SECS {
-            return Err(IngestError::Rejected(
-                "invalid: event timestamp too far from server time".into(),
-            ));
-        }
-    }
+    check_timestamp(&event, auth.has_proxy_scope())?;
 
     // ── 2c. Content size guard ───────────────────────────────────────────
-    const MAX_EVENT_CONTENT_BYTES: usize = 256 * 1024; // 256 KB
-    if event.content.len() > MAX_EVENT_CONTENT_BYTES {
-        return Err(IngestError::Rejected(format!(
-            "invalid: content exceeds maximum size of {} bytes (got {})",
-            MAX_EVENT_CONTENT_BYTES,
-            event.content.len()
-        )));
-    }
+    check_content_size(&event)?;
 
     // ── 3. Pubkey match ──────────────────────────────────────────────────
-    let is_gift_wrap = kind_u32 == KIND_GIFT_WRAP;
-    if event.pubkey != *auth.pubkey() && !auth.has_proxy_scope() && !is_gift_wrap {
-        return Err(IngestError::AuthFailed(
-            "invalid: event pubkey does not match authenticated identity".into(),
-        ));
-    }
+    check_pubkey_match(&event, &auth, kind_u32)?;
 
     // ── 4. Per-kind scope allowlist ──────────────────────────────────────
-    let required = match required_scope_for_kind(kind_u32, &event) {
-        Ok(scope) => scope,
-        Err(msg) => return Err(IngestError::Rejected(msg.into())),
-    };
-    if !auth.has_proxy_scope() && !auth.scopes().contains(&required) {
-        return Err(IngestError::AuthFailed(format!(
-            "restricted: insufficient scope (need {})",
-            required
-        )));
-    }
+    check_kind_scope(&event, &auth, kind_u32)?;
 
     // ── 5. Channel resolution ────────────────────────────────────────────
-    let channel_id = if kind_u32 == KIND_REACTION {
-        match derive_reaction_channel(&state.db, &event).await {
-            ReactionChannelResult::Channel(ch_id) => Some(ch_id),
-            ReactionChannelResult::NoChannel => None,
-            ReactionChannelResult::NotFound => {
-                return Err(IngestError::Rejected(
-                    "invalid: reaction target event not found".into(),
-                ));
-            }
-            ReactionChannelResult::NoTarget => {
-                return Err(IngestError::Rejected(
-                    "invalid: reaction must reference a target event via e tag".into(),
-                ));
-            }
-            ReactionChannelResult::DbError(e) => {
-                return Err(IngestError::Internal(format!(
-                    "error: internal error looking up reaction target: {e}"
-                )));
-            }
-        }
-    } else if is_gift_wrap {
-        None
-    } else if kind_u32 == KIND_DELETION {
-        // Standard deletion (kind:5): derive channel from the target event.
-        // kind:5 events don't carry an h-tag, so we look up the target event
-        // and use its channel_id. This ensures token-channel, membership, and
-        // archived checks run against the correct channel.
-        let target_hex = event.tags.iter().find_map(|t| {
-            if t.kind().to_string() == "e" {
-                t.content().and_then(|v| {
-                    if v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()) {
-                        Some(v.to_string())
-                    } else {
-                        None
-                    }
-                })
-            } else {
-                None
-            }
-        });
-        match target_hex {
-            Some(hex) => {
-                let target_bytes = hex::decode(&hex).map_err(|_| {
-                    IngestError::Rejected("invalid: malformed deletion target id".into())
-                })?;
-                match state.db.get_event_by_id(&target_bytes).await {
-                    Ok(Some(target)) => target.channel_id,
-                    Ok(None) => None, // target not found — validate_standard_deletion will catch this
-                    Err(e) => {
-                        return Err(IngestError::Internal(format!(
-                            "error: looking up deletion target: {e}"
-                        )));
-                    }
-                }
-            }
-            None => None, // no e-tag — will be caught by single-target enforcement (step 12)
-        }
-    } else {
-        extract_channel_id(&event)
-    };
+    let channel_id = resolve_channel_id(&state.db, &event, kind_u32).await?;
 
     // ── 6. h-tag requirement ─────────────────────────────────────────────
-    if requires_h_channel_scope(kind_u32) && channel_id.is_none() {
-        return Err(IngestError::Rejected(
-            "invalid: channel-scoped events must include an h tag".into(),
-        ));
-    }
+    check_h_tag_required(kind_u32, channel_id)?;
 
     // ── 7. Token channel access ──────────────────────────────────────────
-    if let Some(ch_id) = channel_id {
-        check_token_channel_access(&auth, ch_id).map_err(IngestError::AuthFailed)?;
-    } else if kind_u32 == KIND_NIP29_CREATE_GROUP && auth.channel_ids().is_some() {
-        // Channel-scoped tokens cannot create channels outside their scope.
-        // kind:9007 without an h-tag would auto-create a server-assigned UUID,
-        // bypassing the token's channel restriction.
-        return Err(IngestError::AuthFailed(
-            "restricted: channel-scoped tokens must include an h tag for create-group".into(),
-        ));
-    }
+    check_token_channel_scope(&auth, kind_u32, channel_id)?;
 
     // ── 8. Membership check ──────────────────────────────────────────────
-    let pubkey_bytes = auth.pubkey().serialize().to_vec();
-    if let Some(ch_id) = channel_id {
-        // kind:9021 (join) doesn't require prior membership.
-        // kind:9007 (create) — channel doesn't exist yet; creator becomes owner in step 16.
-        let skip_membership = kind_u32 == KIND_NIP29_JOIN_REQUEST
-            || kind_u32 == KIND_NIP29_CREATE_GROUP
-            || auth.has_proxy_scope();
-        if !skip_membership {
-            check_channel_membership(state, ch_id, &pubkey_bytes)
-                .await
-                .map_err(IngestError::Rejected)?;
-        }
-    }
+    check_membership(state, &auth, kind_u32, channel_id).await?;
 
     // ── 9. Admin validation (kinds 9000–9022) ────────────────────────────
-    if crate::handlers::side_effects::is_admin_kind(kind_u32) {
-        crate::handlers::side_effects::validate_admin_event(kind_u32, &event, state)
-            .await
-            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
-    }
+    check_admin_event(state, &event, kind_u32).await?;
 
     // ── 10. Standard deletion validation (kind:5) ────────────────────────
-    if kind_u32 == KIND_DELETION {
-        crate::handlers::side_effects::validate_standard_deletion_event(&event, state)
-            .await
-            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
-    }
+    check_standard_deletion(state, &event, kind_u32).await?;
 
     // ── 11. Archived channel check ───────────────────────────────────────
-    if let Some(ch_id) = channel_id {
-        // Allow kind:9002 with archived=false (unarchive operation)
-        let is_unarchive = kind_u32 == KIND_NIP29_EDIT_METADATA
-            && event.tags.iter().any(|t| {
-                let parts = t.as_slice();
-                parts.len() >= 2 && parts[0] == "archived" && parts[1] == "false"
-            });
-
-        if !is_unarchive {
-            if let Ok(channel) = state.db.get_channel(ch_id).await {
-                if channel.archived_at.is_some() {
-                    return Err(IngestError::Rejected("invalid: channel is archived".into()));
-                }
-            }
-        }
-    }
+    check_channel_not_archived(state, &event, kind_u32, channel_id).await?;
 
     // ── 12. Single-target enforcement (kind:9005, kind:5) ────────────────
-    if kind_u32 == KIND_NIP29_DELETE_EVENT || kind_u32 == KIND_DELETION {
-        let e_count = count_e_tags(&event);
-        if e_count != 1 {
-            return Err(IngestError::Rejected(format!(
-                "invalid: deletion events must reference exactly one target (got {e_count})"
-            )));
-        }
-    }
+    check_single_deletion_target(&event, kind_u32)?;
 
     // ── 13. Edit ownership (kind:40003) ──────────────────────────────────
-    if kind_u32 == KIND_STREAM_MESSAGE_EDIT {
-        validate_edit_ownership(&event, state)
-            .await
-            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
-    }
+    check_edit_ownership(state, &event, kind_u32).await?;
 
     // ── 14. Forum vote target-kind (kind:45002) ──────────────────────────
-    if kind_u32 == KIND_FORUM_VOTE {
-        validate_forum_vote_target(&event, state)
-            .await
-            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
-    }
+    check_forum_vote_target(state, &event, kind_u32).await?;
 
     // ── 15. Diff validation (kind:40008) ─────────────────────────────────
-    if kind_u32 == KIND_STREAM_MESSAGE_DIFF {
-        validate_diff_event(&event).map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
-    }
-
-    // Track pre-created channel UUID for compensation on insert failure.
-    let mut pre_created_channel: Option<Uuid> = None;
+    check_diff_event(&event, kind_u32)?;
 
     // ── 16. kind:9007 UUID dedup (create channel with client UUID) ───────
-    if kind_u32 == KIND_NIP29_CREATE_GROUP {
-        // Validate name tag is present and non-empty before any DB work.
-        let create_name = event.tags.iter().find_map(|t| {
-            if t.kind().to_string() == "name" {
-                t.content().map(|s| s.to_string())
-            } else {
-                None
-            }
-        });
-        if create_name
-            .as_ref()
-            .map(|n| n.trim().is_empty())
-            .unwrap_or(true)
-        {
-            return Err(IngestError::Rejected(
-                "invalid: channel name is required".into(),
-            ));
-        }
-
-        // Validate visibility/channel_type for ALL kind:9007 events (with or without h-tag).
-        // This runs pre-storage so invalid enums are rejected before the event is persisted.
-        let visibility_str = event
-            .tags
-            .iter()
-            .find_map(|t| {
-                if t.kind().to_string() == "visibility" {
-                    t.content().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "open".to_string());
-        let channel_type_str = event
-            .tags
-            .iter()
-            .find_map(|t| {
-                if t.kind().to_string() == "channel_type" {
-                    t.content().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "stream".to_string());
-
-        let visibility: sprout_db::channel::ChannelVisibility = visibility_str
-            .parse()
-            .map_err(|_| IngestError::Rejected(format!("invalid visibility: {visibility_str}")))?;
-        let channel_type: sprout_db::channel::ChannelType =
-            channel_type_str.parse().map_err(|_| {
-                IngestError::Rejected(format!("invalid channel_type: {channel_type_str}"))
-            })?;
-
-        if let Some(client_uuid) = channel_id {
-            let name = create_name.unwrap_or_default();
-
-            let description = event.tags.iter().find_map(|t| {
-                if t.kind().to_string() == "about" {
-                    t.content().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            });
-
-            let actor_bytes = event.pubkey.serialize().to_vec();
-            let (_, was_created) = state
-                .db
-                .create_channel_with_id(
-                    client_uuid,
-                    &name,
-                    channel_type,
-                    visibility,
-                    description.as_deref(),
-                    &actor_bytes,
-                )
-                .await
-                .map_err(|e| IngestError::Internal(format!("error: {e}")))?;
-
-            if !was_created {
+    // Track pre-created channel UUID for compensation on insert failure.
+    let pre_created_channel =
+        match create_group_if_needed(state, &event, kind_u32, channel_id).await? {
+            CreateGroupOutcome::Duplicate => {
                 return Ok(IngestResult {
                     event_id: event_id_hex,
                     accepted: false,
                     message: "duplicate: channel already exists".into(),
                 });
             }
-            pre_created_channel = Some(client_uuid);
-        }
-    }
+            CreateGroupOutcome::Created(uuid) => Some(uuid),
+            CreateGroupOutcome::NoClientUuid => None,
+        };
 
     // ── 17. kind:9021 open-only check ────────────────────────────────────
-    if kind_u32 == KIND_NIP29_JOIN_REQUEST {
-        // A join without an h-tag is meaningless — reject early.
-        if channel_id.is_none() {
-            return Err(IngestError::Rejected(
-                "invalid: join request must include an h tag".into(),
-            ));
-        }
-        if let Some(ch_id) = channel_id {
-            match state.db.get_channel(ch_id).await {
-                Ok(ch) if ch.visibility == "private" => {
-                    return Err(IngestError::Rejected(
-                        "restricted: channel is private".into(),
-                    ));
-                }
-                Err(_) => {
-                    return Err(IngestError::Rejected("invalid: channel not found".into()));
-                }
-                _ => {} // open — OK
-            }
-        }
-    }
+    check_join_open_channel(state, kind_u32, channel_id).await?;
 
     // ── 18. imeta tag validation ─────────────────────────────────────────
-    let imeta_tags: Vec<Vec<String>> = event
-        .tags
-        .iter()
-        .filter(|t| t.kind().to_string() == "imeta")
-        .map(|t| t.as_slice().iter().map(|s| s.to_string()).collect())
-        .collect();
-    if !imeta_tags.is_empty() {
-        crate::api::validate_imeta_tags(&imeta_tags, &state.config.media.public_base_url)
-            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
-        crate::api::verify_imeta_blobs(&imeta_tags, &state.media_storage)
-            .await
-            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
-    }
+    check_imeta_tags(state, &event).await?;
 
     // ── 19. NIP-10 thread resolution ─────────────────────────────────────
-    let thread_meta = if requires_h_channel_scope(kind_u32) {
-        if let Some(ch_id) = channel_id {
-            resolve_nip10_thread_meta(&event, ch_id, state)
-                .await
-                .map_err(|msg| IngestError::Rejected(format!("invalid: {msg}")))?
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let thread_meta = resolve_thread_metadata(state, &event, kind_u32, channel_id).await?;
 
     // ── 20. DB insert ────────────────────────────────────────────────────
+    check_profile_json(&event, kind_u32)?;
 
-    // Pre-validate kind:0 content before storage so we don't store an event
-    // whose profile sync will silently fail in the side-effect handler.
-    if kind_u32 == KIND_PROFILE
-        && serde_json::from_str::<serde_json::Value>(&event.content).is_err()
+    // ── 20a. Reaction insert (kind:7) ────────────────────────────────────
+    let pubkey_hex = auth.pubkey().to_hex();
+    if let Some(result) = insert_reaction_event(
+        state,
+        &event,
+        &event_id_hex,
+        kind_u32,
+        channel_id,
+        &thread_meta,
+        &pubkey_hex,
+    )
+    .await?
     {
-        return Err(IngestError::Rejected(
-            "invalid: kind:0 content must be valid JSON".into(),
-        ));
+        return Ok(result);
     }
 
-    // ── 20a. Reaction dedup (kind:7) — before storage ────────────────────
-    // Resolve target event, insert the reaction row (dedup via ON CONFLICT),
-    // store the event, then backfill the reaction_event_id. If the event insert
-    // fails, compensate by removing the reaction row so state stays consistent.
-    // This replaces the post-storage side-effect handler for kind:7.
-    if kind_u32 == KIND_REACTION {
-        // Extract target event hex from last e-tag (NIP-25).
-        let target_hex = event
-            .tags
-            .iter()
-            .rev()
-            .find_map(|tag| {
-                if tag.kind().to_string() == "e" {
-                    tag.content().and_then(|v| {
-                        if v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()) {
-                            Some(v.to_string())
-                        } else {
-                            None
-                        }
-                    })
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| {
-                IngestError::Rejected(
-                    "invalid: reaction must reference a target event via e tag".into(),
-                )
-            })?;
-
-        let target_id = hex::decode(&target_hex)
-            .map_err(|_| IngestError::Rejected("invalid: malformed reaction target id".into()))?;
-
-        let target_event = state
-            .db
-            .get_event_by_id(&target_id)
-            .await
-            .map_err(|e| IngestError::Internal(format!("error: {e}")))?
-            .ok_or_else(|| {
-                IngestError::Rejected("invalid: reaction target event not found".into())
-            })?;
-
-        let target_created_at =
-            chrono::DateTime::from_timestamp(target_event.event.created_at.as_u64() as i64, 0)
-                .unwrap_or_else(chrono::Utc::now);
-
-        let actor_bytes = effective_message_author(&event, &state.relay_keypair.public_key());
-        let emoji = if event.content.is_empty() {
-            "+"
-        } else {
-            &event.content
-        };
-
-        // Mirror the SDK's 64-character emoji limit server-side so raw clients
-        // cannot bypass it. Uses chars().count() (not byte len) to match the
-        // SDK's check_emoji_len, which also counts Unicode characters.
-        const MAX_REACTION_EMOJI_CHARS: usize = 64;
-        let emoji_char_count = emoji.chars().count();
-        if emoji_char_count > MAX_REACTION_EMOJI_CHARS {
-            return Err(IngestError::Rejected(format!(
-                "invalid: reaction emoji exceeds {} characters (got {})",
-                MAX_REACTION_EMOJI_CHARS, emoji_char_count
-            )));
-        }
-
-        // add_reaction returns false if the (target, actor, emoji) tuple already
-        // exists — short-circuit without storing the event.
-        let inserted = state
-            .db
-            .add_reaction(&target_id, target_created_at, &actor_bytes, emoji, None)
-            .await
-            .map_err(|e| IngestError::Internal(format!("error: {e}")))?;
-
-        if !inserted {
-            return Ok(IngestResult {
-                event_id: event_id_hex,
-                accepted: false,
-                message: "duplicate: reaction already exists".into(),
-            });
-        }
-
-        // Store the event; on failure compensate by removing the reaction row.
-        let thread_params = thread_meta.as_ref().map(|m| m.as_params());
-        let (stored_event, was_inserted) = match state
-            .db
-            .insert_event_with_thread_metadata(&event, channel_id, thread_params)
-            .await
-        {
-            Ok(result) => result,
-            Err(e) => {
-                // Compensate: undo the reaction row so state stays consistent.
-                if let Err(re) = state
-                    .db
-                    .remove_reaction(&target_id, target_created_at, &actor_bytes, emoji)
-                    .await
-                {
-                    warn!(event_id = %event_id_hex, "reaction compensation failed: {re}");
-                }
-                return Err(IngestError::Internal(format!("error: database error: {e}")));
-            }
-        };
-
-        if was_inserted {
-            // Backfill the reaction_event_id so the row is fully linked.
-            if let Err(e) = state
-                .db
-                .set_reaction_event_id(
-                    &target_id,
-                    target_created_at,
-                    &actor_bytes,
-                    emoji,
-                    event.id.as_bytes(),
-                )
-                .await
-            {
-                warn!(event_id = %event_id_hex, "set_reaction_event_id failed: {e}");
-            }
-        }
-
-        let pubkey_hex = auth.pubkey().to_hex();
-        dispatch_persistent_event(state, &stored_event, kind_u32, &pubkey_hex).await;
-
-        info!(event_id = %event_id_hex, kind = kind_u32, "Event ingested via pipeline");
-        return Ok(IngestResult {
-            event_id: event_id_hex,
-            accepted: true,
-            message: String::new(),
-        });
-    }
-
-    let (stored_event, was_inserted) = if kind_u32 == KIND_PROFILE {
-        // kind:0 is replaceable — use addressable event storage.
-        state
-            .db
-            .replace_addressable_event(&event, None)
-            .await
-            .map_err(|e| IngestError::Internal(format!("error: {e}")))?
-    } else {
-        let thread_params = thread_meta.as_ref().map(|m| m.as_params());
-        match state
-            .db
-            .insert_event_with_thread_metadata(&event, channel_id, thread_params)
-            .await
-        {
-            Ok(result) => result,
-            Err(e) => {
-                // Compensate: if we pre-created a channel for kind:9007,
-                // soft-delete it so no orphaned channel row remains.
-                if let Some(ch_id) = pre_created_channel {
-                    if let Err(re) = state.db.soft_delete_channel(ch_id).await {
-                        warn!(event_id = %event_id_hex, "channel compensation failed: {re}");
-                    }
-                }
-                return Err(match e {
-                    sprout_db::DbError::AuthEventRejected => {
-                        IngestError::Rejected("invalid: AUTH events cannot be stored".into())
-                    }
-                    other => IngestError::Internal(format!("error: database error: {other}")),
-                });
-            }
-        }
-    };
+    // ── 20. DB insert (non-reaction path) ────────────────────────────────
+    let (stored_event, was_inserted) = store_event(
+        state,
+        &event,
+        &event_id_hex,
+        kind_u32,
+        channel_id,
+        &thread_meta,
+        pre_created_channel,
+    )
+    .await?;
 
     if !was_inserted {
         return Ok(IngestResult {
@@ -1262,17 +1520,10 @@ pub async fn ingest_event(
     }
 
     // ── 21. Side effects ─────────────────────────────────────────────────
-    if crate::handlers::side_effects::is_side_effect_kind(kind_u32) {
-        if let Err(e) =
-            crate::handlers::side_effects::handle_side_effects(kind_u32, &event, state).await
-        {
-            warn!(event_id = %event_id_hex, kind = kind_u32, "Side effect failed: {e}");
-        }
-    }
+    run_side_effects(state, &event, &event_id_hex, kind_u32).await;
 
     // ── 22. Fan-out ──────────────────────────────────────────────────────
-    let pubkey_hex = auth.pubkey().to_hex();
-    dispatch_persistent_event(state, &stored_event, kind_u32, &pubkey_hex).await;
+    fan_out_event(state, &stored_event, kind_u32, &pubkey_hex).await;
 
     info!(event_id = %event_id_hex, kind = kind_u32, "Event ingested via pipeline");
 

@@ -27,6 +27,7 @@ import {
   updateChannel,
 } from "@/shared/api/tauri";
 import { cleanupChannelAgents } from "@/features/channels/cleanupChannelAgents";
+import { parseTimestamp } from "@/shared/lib/time";
 import type {
   AddChannelMembersInput,
   Channel,
@@ -66,15 +67,6 @@ function sortChannels(channels: Channel[]) {
 
     return left.name.localeCompare(right.name);
   });
-}
-
-function parseTimestamp(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  const timestamp = Date.parse(value);
-  return Number.isNaN(timestamp) ? null : timestamp;
 }
 
 function isNewerTimestamp(

@@ -6,6 +6,42 @@ use uuid::Uuid;
 
 use crate::error::{DbError, Result};
 
+/// Parse a `PgRow` from the `api_tokens` table into an [`crate::ApiTokenRecord`].
+pub(crate) fn parse_api_token_row(row: sqlx::postgres::PgRow) -> Result<crate::ApiTokenRecord> {
+    let id: Uuid = row.try_get("id")?;
+
+    let scopes_json: serde_json::Value = row.try_get("scopes")?;
+    let scopes: Vec<String> = serde_json::from_value(scopes_json)
+        .map_err(|e| DbError::InvalidData(format!("scopes JSON: {e}")))?;
+
+    let channel_ids: Option<Vec<Uuid>> = {
+        let raw: Option<serde_json::Value> = row.try_get("channel_ids")?;
+        match raw {
+            None => None,
+            Some(v) => {
+                let strings: Vec<String> = serde_json::from_value(v)
+                    .map_err(|e| DbError::InvalidData(format!("channel_ids JSON: {e}")))?;
+                let uuids: std::result::Result<Vec<Uuid>, _> =
+                    strings.iter().map(|s| s.parse::<Uuid>()).collect();
+                Some(uuids.map_err(|e| DbError::InvalidData(format!("channel_ids UUID: {e}")))?)
+            }
+        }
+    };
+
+    Ok(crate::ApiTokenRecord {
+        id,
+        token_hash: row.try_get("token_hash")?,
+        owner_pubkey: row.try_get("owner_pubkey")?,
+        name: row.try_get("name")?,
+        scopes,
+        channel_ids,
+        created_at: row.try_get("created_at")?,
+        expires_at: row.try_get("expires_at")?,
+        last_used_at: row.try_get("last_used_at")?,
+        revoked_at: row.try_get("revoked_at")?,
+    })
+}
+
 /// Create a new API token record. The caller is responsible for generating
 /// the raw token and computing its SHA-256 hash.
 pub async fn create_api_token(
@@ -133,43 +169,10 @@ pub async fn get_api_token_by_hash_including_revoked(
     .fetch_optional(pool)
     .await?;
 
-    let row = match row {
-        None => return Ok(None),
-        Some(r) => r,
-    };
-
-    let id: Uuid = row.try_get("id")?;
-
-    let scopes_json: serde_json::Value = row.try_get("scopes")?;
-    let scopes: Vec<String> = serde_json::from_value(scopes_json)
-        .map_err(|e| DbError::InvalidData(format!("scopes JSON: {e}")))?;
-
-    let channel_ids: Option<Vec<Uuid>> = {
-        let raw: Option<serde_json::Value> = row.try_get("channel_ids")?;
-        match raw {
-            None => None,
-            Some(v) => {
-                let strings: Vec<String> = serde_json::from_value(v)
-                    .map_err(|e| DbError::InvalidData(format!("channel_ids JSON: {e}")))?;
-                let uuids: std::result::Result<Vec<Uuid>, _> =
-                    strings.iter().map(|s| s.parse::<Uuid>()).collect();
-                Some(uuids.map_err(|e| DbError::InvalidData(format!("channel_ids UUID: {e}")))?)
-            }
-        }
-    };
-
-    Ok(Some(crate::ApiTokenRecord {
-        id,
-        token_hash: row.try_get("token_hash")?,
-        owner_pubkey: row.try_get("owner_pubkey")?,
-        name: row.try_get("name")?,
-        scopes,
-        channel_ids,
-        created_at: row.try_get("created_at")?,
-        expires_at: row.try_get("expires_at")?,
-        last_used_at: row.try_get("last_used_at")?,
-        revoked_at: row.try_get("revoked_at")?,
-    }))
+    match row {
+        None => Ok(None),
+        Some(r) => parse_api_token_row(r).map(Some),
+    }
 }
 
 /// List all tokens (including revoked) for a pubkey, ordered by creation time descending.
@@ -195,45 +198,7 @@ pub async fn list_tokens_by_owner(
     .fetch_all(pool)
     .await?;
 
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        let id: Uuid = row.try_get("id")?;
-
-        let scopes_json: serde_json::Value = row.try_get("scopes")?;
-        let scopes: Vec<String> = serde_json::from_value(scopes_json)
-            .map_err(|e| DbError::InvalidData(format!("scopes JSON: {e}")))?;
-
-        let channel_ids: Option<Vec<Uuid>> = {
-            let raw: Option<serde_json::Value> = row.try_get("channel_ids")?;
-            match raw {
-                None => None,
-                Some(v) => {
-                    let strings: Vec<String> = serde_json::from_value(v)
-                        .map_err(|e| DbError::InvalidData(format!("channel_ids JSON: {e}")))?;
-                    let uuids: std::result::Result<Vec<Uuid>, _> =
-                        strings.iter().map(|s| s.parse::<Uuid>()).collect();
-                    Some(
-                        uuids
-                            .map_err(|e| DbError::InvalidData(format!("channel_ids UUID: {e}")))?,
-                    )
-                }
-            }
-        };
-
-        out.push(crate::ApiTokenRecord {
-            id,
-            token_hash: row.try_get("token_hash")?,
-            owner_pubkey: row.try_get("owner_pubkey")?,
-            name: row.try_get("name")?,
-            scopes,
-            channel_ids,
-            created_at: row.try_get("created_at")?,
-            expires_at: row.try_get("expires_at")?,
-            last_used_at: row.try_get("last_used_at")?,
-            revoked_at: row.try_get("revoked_at")?,
-        });
-    }
-    Ok(out)
+    rows.into_iter().map(parse_api_token_row).collect()
 }
 
 /// Revoke a single token by ID, scoped to the owner.

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import type { Channel } from "@/shared/api/types";
+import { formatRelativeTime } from "@/shared/lib/time";
 import {
   Dialog,
   DialogContent,
@@ -23,29 +24,8 @@ import { Button } from "@/shared/ui/button";
 const BROWSE_CHANNELS_SHORTCUT_KEY = "o";
 const BROWSE_CHANNELS_SHORTCUT_HINT = "\u21E7\u2318O";
 
-function formatRelativeTime(isoString: string | null) {
-  if (!isoString) {
-    return "No activity";
-  }
-
-  const diff = Math.floor((Date.now() - new Date(isoString).getTime()) / 1_000);
-
-  if (diff < 60) {
-    return "just now";
-  }
-
-  if (diff < 60 * 60) {
-    return `${Math.floor(diff / 60)}m ago`;
-  }
-
-  if (diff < 60 * 60 * 24) {
-    return `${Math.floor(diff / (60 * 60))}h ago`;
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(isoString));
+function formatChannelActivity(isoString: string | null): string {
+  return formatRelativeTime(isoString) ?? "No activity";
 }
 
 function BrowseState({
@@ -407,7 +387,7 @@ function ChannelCard({
                 {channel.memberCount}
               </span>
               <span className="text-xs text-muted-foreground">
-                {formatRelativeTime(channel.lastMessageAt)}
+                {formatChannelActivity(channel.lastMessageAt)}
               </span>
             </div>
           </div>

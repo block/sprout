@@ -70,13 +70,9 @@ pub(crate) async fn dispatch_persistent_event(
 
     let event_json = serde_json::to_string(&stored_event.event)
         .expect("nostr::Event serialization is infallible for well-formed events");
-    let mut drop_count = 0u32;
-    for (target_conn_id, sub_id) in &matches {
-        let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
-        if !state.conn_manager.send_to(*target_conn_id, msg) {
-            drop_count += 1;
-        }
-    }
+    let drop_count = state
+        .conn_manager
+        .send_event_to_matches(&matches, &event_json);
     if drop_count > 0 {
         tracing::warn!(
             event_id = %event_id_hex,
@@ -332,13 +328,9 @@ async fn handle_ephemeral_event(
         let matches = state.sub_registry.fan_out(&stored_event);
         let event_json = serde_json::to_string(&event)
             .expect("nostr::Event serialization is infallible for well-formed events");
-        let mut drop_count = 0u32;
-        for (target_conn_id, sub_id) in &matches {
-            let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
-            if !state.conn_manager.send_to(*target_conn_id, msg) {
-                drop_count += 1;
-            }
-        }
+        let drop_count = state
+            .conn_manager
+            .send_event_to_matches(&matches, &event_json);
         if drop_count > 0 {
             tracing::warn!(
                 event_id = %event_id_hex,
@@ -375,13 +367,9 @@ async fn handle_ephemeral_event(
         let matches = state.sub_registry.fan_out(&stored_event);
         let event_json = serde_json::to_string(&event)
             .expect("nostr::Event serialization is infallible for well-formed events");
-        let mut drop_count = 0u32;
-        for (target_conn_id, sub_id) in &matches {
-            let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
-            if !state.conn_manager.send_to(*target_conn_id, msg) {
-                drop_count += 1;
-            }
-        }
+        let drop_count = state
+            .conn_manager
+            .send_event_to_matches(&matches, &event_json);
         if drop_count > 0 {
             tracing::warn!(
                 event_id = %event_id_hex,

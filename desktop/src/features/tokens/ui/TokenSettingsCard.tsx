@@ -20,6 +20,7 @@ import { TOKEN_SCOPE_OPTIONS } from "@/features/tokens/lib/scopeOptions";
 import { getChannelMembers } from "@/shared/api/tauri";
 import type { Channel, Token, TokenScope } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { formatRelativeTime } from "@/shared/lib/time";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -73,17 +74,9 @@ function ScopeBadge({ scope }: { scope: string }) {
 }
 
 function formatRelativeDate(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60_000);
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 30) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
+  return (
+    formatRelativeTime(dateString) ?? new Date(dateString).toLocaleDateString()
+  );
 }
 
 function formatDate(dateString: string): string {

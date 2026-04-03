@@ -1,5 +1,6 @@
 import { DEFAULT_MANAGED_AGENT_SCOPES } from "@/features/tokens/lib/scopeOptions";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import { parseTimestamp as parseTimestampOrNull } from "@/shared/lib/time";
 import {
   addChannelMembers,
   createManagedAgent,
@@ -95,13 +96,8 @@ function commandsMatch(left: string, right: string) {
   return normalizeCommandIdentity(left) === normalizeCommandIdentity(right);
 }
 
-function parseTimestamp(value: string | null | undefined) {
-  if (!value) {
-    return 0;
-  }
-
-  const timestamp = Date.parse(value);
-  return Number.isNaN(timestamp) ? 0 : timestamp;
+function parseTimestamp(value: string | null | undefined): number {
+  return parseTimestampOrNull(value) ?? 0;
 }
 
 export async function attachManagedAgentToChannel(

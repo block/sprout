@@ -11,11 +11,10 @@ import { useInChannelPersonaIds } from "@/features/channels/ui/useInChannelPerso
 import { AddChannelBotGenericSection } from "@/features/channels/ui/AddChannelBotGenericSection";
 import { AddChannelBotPersonasSection } from "@/features/channels/ui/AddChannelBotPersonasSection";
 import { AddChannelBotTeamsSection } from "@/features/channels/ui/AddChannelBotTeamsSection";
-import { probeBackendProvider } from "@/shared/api/tauri";
+import { useBackendProviderProbe } from "@/shared/hooks/useBackendProviderProbe";
 import type {
   AcpProvider,
   BackendProviderCandidate,
-  BackendProviderProbeResult,
   ManagedAgentBackend,
 } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
@@ -129,12 +128,6 @@ export function AddChannelBotDialog({
   const resolvedBackendProvidersLoading = backendProvidersLoading ?? false;
 
   const [runOn, setRunOn] = React.useState<"local" | string>("local");
-  const [providerConfig, setProviderConfig] = React.useState<
-    Record<string, string>
-  >({});
-  const [probedProvider, setProbedProvider] =
-    React.useState<BackendProviderProbeResult | null>(null);
-  const [probeError, setProbeError] = React.useState<string | null>(null);
 
   const selectedProvider = React.useMemo(
     () =>
@@ -166,6 +159,10 @@ export function AddChannelBotDialog({
     () => resolvedBackendProviders.find((p) => p.id === runOn) ?? null,
     [resolvedBackendProviders, runOn],
   );
+
+  const { probedProvider, probeError, providerConfig, setProviderConfig } =
+    useBackendProviderProbe(isProviderMode, selectedBackendProvider);
+
   const providerConfigComplete = React.useMemo(() => {
     if (!isProviderMode || !probedProvider?.config_schema) return true;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -200,48 +197,6 @@ export function AddChannelBotDialog({
     );
   }, [personas]);
 
-  React.useEffect(() => {
-    if (!isProviderMode || !selectedBackendProvider) {
-      setProbedProvider(null);
-      setProbeError(null);
-      return;
-    }
-
-    let cancelled = false;
-    setProbeError(null);
-    setProbedProvider(null);
-
-    probeBackendProvider(selectedBackendProvider.binaryPath)
-      .then((result) => {
-        if (!cancelled) {
-          setProbedProvider(result);
-          if (result.config_schema) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const props = (result.config_schema as any)?.properties ?? {};
-            const defaults: Record<string, string> = {};
-            for (const [key, prop] of Object.entries(props) as [
-              string,
-              Record<string, unknown>,
-            ][]) {
-              if (prop.default != null) {
-                defaults[key] = String(prop.default);
-              }
-            }
-            setProviderConfig(defaults);
-          }
-        }
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setProbeError(err instanceof Error ? err.message : String(err));
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isProviderMode, selectedBackendProvider]);
-
   function reset() {
     setSelectedProviderId(providers[0]?.id ?? "");
     setSelectedPersonaIds([]);
@@ -253,8 +208,6 @@ export function AddChannelBotDialog({
     setSubmissionError(null);
     setRunOn("local");
     setProviderConfig({});
-    setProbedProvider(null);
-    setProbeError(null);
     createBotsMutation.reset();
   }
 
@@ -282,8 +235,6 @@ export function AddChannelBotDialog({
   function handleRunOnChange(value: string) {
     setRunOn(value);
     setProviderConfig({});
-    setProbedProvider(null);
-    setProbeError(null);
     setSubmissionNotice(null);
     setSubmissionError(null);
   }

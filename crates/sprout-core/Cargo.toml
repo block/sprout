@@ -20,5 +20,6 @@ uuid       = { workspace = true }
 chrono     = { workspace = true }
 hex        = { workspace = true }
 schemars   = { workspace = true, optional = true }
+evalexpr   = { workspace = true }
 
 # NO tokio, NO sqlx, NO redis, NO axum — zero I/O dependencies
