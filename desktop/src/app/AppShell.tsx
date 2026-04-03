@@ -22,6 +22,7 @@ import { HomeView } from "@/features/home/ui/HomeView";
 import {
   useChannelMessagesQuery,
   mergeMessages,
+  useDeleteMessageMutation,
   useEditMessageMutation,
   useSendMessageMutation,
   useChannelSubscription,
@@ -140,6 +141,7 @@ export function AppShell() {
     identityQuery.data,
   );
   const toggleReactionMutation = useToggleReactionMutation();
+  const deleteMessageMutation = useDeleteMessageMutation(activeChannel);
   const editMessageMutation = useEditMessageMutation(activeChannel);
   const availableChannelIds = React.useMemo(
     () => new Set(channels.map((channel) => channel.id)),
@@ -222,12 +224,14 @@ export function AppShell() {
   const {
     handleCancelEdit,
     handleCancelReply,
+    handleDelete,
     handleEdit,
     handleEditSave,
     handleReply,
     handleSend,
     handleToggleReaction,
   } = useChannelPaneHandlers({
+    deleteMessageMutation,
     editMessageMutation,
     editTargetId,
     replyTargetId,
@@ -753,6 +757,7 @@ export function AppShell() {
                       messages={timelineMessages}
                       onCancelEdit={handleCancelEdit}
                       onCancelReply={handleCancelReply}
+                      onDelete={handleDelete}
                       onEdit={handleEdit}
                       onEditSave={handleEditSave}
                       onReply={handleReply}

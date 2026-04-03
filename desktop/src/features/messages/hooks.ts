@@ -16,6 +16,7 @@ import {
 import { relayClient } from "@/shared/api/relayClient";
 import {
   addReaction,
+  deleteMessage,
   editMessage,
   removeReaction,
   sendChannelMessage,
@@ -417,6 +418,23 @@ export function useToggleReactionMutation() {
       }
 
       await addReaction(eventId, emoji);
+    },
+  });
+}
+
+export function useDeleteMessageMutation(channel: Channel | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, { eventId: string }>({
+    mutationFn: async ({ eventId }) => {
+      await deleteMessage(eventId);
+    },
+    onSuccess: (_data, { eventId }) => {
+      if (!channel) return;
+      queryClient.setQueryData<RelayEvent[]>(
+        channelMessagesKey(channel.id),
+        (current = []) => current.filter((message) => message.id !== eventId),
+      );
     },
   });
 }
