@@ -180,12 +180,17 @@ pub fn parse_relay_message(text: &str) -> Result<RelayMessage, RelayProtocolErro
 /// # use sprout_core::relay_protocol::relay_ws_to_http;
 /// assert_eq!(relay_ws_to_http("wss://relay.example.com/"), "https://relay.example.com");
 /// assert_eq!(relay_ws_to_http("ws://localhost:8080"),       "http://localhost:8080");
+/// assert_eq!(relay_ws_to_http("wss://relay.example.com/custom/path"), "https://relay.example.com/custom/path");
 /// ```
 pub fn relay_ws_to_http(url: &str) -> String {
-    url.replace("wss://", "https://")
-        .replace("ws://", "http://")
-        .trim_end_matches('/')
-        .to_string()
+    let converted = if let Some(rest) = url.strip_prefix("wss://") {
+        format!("https://{rest}")
+    } else if let Some(rest) = url.strip_prefix("ws://") {
+        format!("http://{rest}")
+    } else {
+        url.to_string()
+    };
+    converted.trim_end_matches('/').to_string()
 }
 
 // ── pct_encode ────────────────────────────────────────────────────────────────
@@ -236,12 +241,15 @@ pub struct TwoGenDedup {
 impl TwoGenDedup {
     /// Create a new dedup set with the given capacity limit.
     ///
-    /// Rotation occurs when `current` reaches `limit / 2`.
+    /// Rotation occurs when `current` reaches `limit / 2`. The minimum
+    /// effective limit is 2 (values below 2 are clamped). Small limits
+    /// rotate frequently, giving minimal retention — use ≥ 100 for
+    /// production dedup windows.
     pub fn new(limit: usize) -> Self {
         Self {
             current: HashSet::new(),
             previous: HashSet::new(),
-            limit,
+            limit: limit.max(2),
         }
     }
 
@@ -311,6 +319,22 @@ mod tests {
         assert_eq!(
             relay_ws_to_http("wss://relay.example.com/nostr"),
             "https://relay.example.com/nostr"
+        );
+    }
+
+    #[test]
+    fn relay_ws_to_http_path_with_trailing_slash() {
+        assert_eq!(
+            relay_ws_to_http("wss://relay.example.com/relay/"),
+            "https://relay.example.com/relay"
+        );
+    }
+
+    #[test]
+    fn relay_ws_to_http_preserves_non_ws_scheme() {
+        assert_eq!(
+            relay_ws_to_http("http://already-http.com"),
+            "http://already-http.com"
         );
     }
 
@@ -501,6 +525,18 @@ mod tests {
         for i in 6..12u32 {
             assert!(d.contains(&i.to_string()), "id {i} should still be present");
         }
+    }
+
+    #[test]
+    fn dedup_limit_clamped_to_minimum() {
+        let d = TwoGenDedup::new(0);
+        assert_eq!(d.limit, 2); // clamped from 0
+        let d = TwoGenDedup::new(1);
+        assert_eq!(d.limit, 2); // clamped from 1
+        let d = TwoGenDedup::new(2);
+        assert_eq!(d.limit, 2); // already at minimum
+        let d = TwoGenDedup::new(100);
+        assert_eq!(d.limit, 100); // no clamping
     }
 
     #[test]

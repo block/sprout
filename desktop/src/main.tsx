@@ -50,7 +50,7 @@ class AppErrorBoundary extends Component<
             Something went wrong
           </h1>
           <p style={{ color: "#666", marginBottom: "1rem", maxWidth: "400px" }}>
-            {this.state.error?.message || "An unexpected error occurred."}
+            An unexpected error occurred. Please reload the app.
           </p>
           <button
             type="button"

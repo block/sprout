@@ -1237,32 +1237,55 @@ impl Db {
             .execute(&mut *tx)
             .await?;
 
-        // Soft-delete existing events with the same (kind, pubkey, channel_id),
-        // EXCLUDING the incoming event ID. Without the exclusion, re-ingesting
-        // the same event would tombstone the active row and then the INSERT
-        // would no-op (ON CONFLICT DO NOTHING on the PK), leaving zero active rows.
+        // Only replace if the incoming event is strictly newer than the active one.
+        // Per NIP-01, addressable events are replaced by higher `created_at` (or
+        // higher event ID as tiebreaker). If a stale event is replayed, skip it.
         // Use IS NOT DISTINCT FROM for channel_id to correctly handle NULL
         // (e.g. kind:0 profile events where channel_id is NULL).
-        sqlx::query(
-            "UPDATE events SET deleted_at = NOW() \
+        let active: Option<(Vec<u8>, chrono::DateTime<Utc>)> = sqlx::query_as(
+            "SELECT id, created_at FROM events \
              WHERE kind = $1 AND pubkey = $2 AND channel_id IS NOT DISTINCT FROM $3 \
-             AND deleted_at IS NULL AND id != $4",
+             AND deleted_at IS NULL \
+             LIMIT 1",
         )
         .bind(kind_i32)
         .bind(pubkey_bytes.as_slice())
         .bind(channel_id)
-        .bind(id_bytes.as_slice())
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
 
-        // Insert the new event inside the same transaction — eliminates the race window.
-        // Use ON CONFLICT ... DO UPDATE to handle replaying a previously soft-deleted
-        // event: if the event already exists (same PK), un-delete it instead of
-        // silently skipping. Without this, replaying old event X after newer Y is
-        // active would tombstone Y and then no-op on X, leaving zero active rows.
-        //
-        // RETURNING xmax distinguishes fresh insert (xmax = 0) from conflict
-        // update (xmax != 0), so callers get correct duplicate detection.
+        if let Some((active_id, active_created)) = &active {
+            // Skip if incoming is older, or same timestamp with lower/equal ID.
+            if created_at < *active_created
+                || (created_at == *active_created && id_bytes.as_slice() <= active_id.as_slice())
+            {
+                tx.commit().await?;
+                return Ok((
+                    StoredEvent::with_received_at(event.clone(), received_at, channel_id, true),
+                    false, // not inserted — stale replay
+                ));
+            }
+        }
+
+        // Soft-delete the active row (if any). We already verified the incoming
+        // event is strictly newer, so this is safe.
+        if active.is_some() {
+            sqlx::query(
+                "UPDATE events SET deleted_at = NOW() \
+                 WHERE kind = $1 AND pubkey = $2 AND channel_id IS NOT DISTINCT FROM $3 \
+                 AND deleted_at IS NULL",
+            )
+            .bind(kind_i32)
+            .bind(pubkey_bytes.as_slice())
+            .bind(channel_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        // Insert the new event. ON CONFLICT DO UPDATE handles the case where this
+        // event was previously inserted and soft-deleted — it un-deletes it rather
+        // than silently skipping. RETURNING xmax distinguishes fresh insert
+        // (xmax = 0) from conflict update (xmax != 0) for duplicate detection.
         let row: Option<(i64,)> = sqlx::query_as(
             r#"
             INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id)
