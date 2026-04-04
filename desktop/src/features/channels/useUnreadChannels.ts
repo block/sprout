@@ -14,6 +14,10 @@ import type { Channel, RelayEvent } from "@/shared/api/types";
 const CHANNEL_READ_STATE_STORAGE_KEY = "sprout.channel-read-state.v1";
 
 type ChannelReadState = Record<string, string | null>;
+type UseUnreadChannelsOptions = {
+  currentPubkey?: string;
+  onLiveMention?: () => void;
+};
 
 function parseTimestamp(value: string | null | undefined) {
   if (!value) {
@@ -75,15 +79,28 @@ function getMessageTimestamp(event: RelayEvent) {
   return new Date(event.created_at * 1_000).toISOString();
 }
 
+function eventMentionsPubkey(event: RelayEvent, pubkey: string) {
+  if (pubkey.length === 0 || event.pubkey.toLowerCase() === pubkey) {
+    return false;
+  }
+
+  return event.tags.some(
+    (tag) => tag[0] === "p" && tag[1]?.toLowerCase() === pubkey,
+  );
+}
+
 export function useUnreadChannels(
   channels: Channel[],
   activeChannel: Channel | null,
   activeReadAt?: string | null,
+  options: UseUnreadChannelsOptions = {},
 ) {
   const queryClient = useQueryClient();
   const [lastReadByChannel, setLastReadByChannel] =
     React.useState<ChannelReadState>(readStoredChannelReadState);
   const hasInitializedChannelsRef = React.useRef(false);
+  const normalizedCurrentPubkey =
+    options.currentPubkey?.trim().toLowerCase() ?? "";
   const activeChannelId = activeChannel?.id ?? null;
   const activeChannelLastMessageAt = activeChannel?.lastMessageAt ?? null;
   const effectiveActiveReadAt = activeReadAt ?? activeChannelLastMessageAt;
@@ -183,6 +200,10 @@ export function useUnreadChannels(
   );
 
   const handleIncomingMessage = React.useEffectEvent((event: RelayEvent) => {
+    if (eventMentionsPubkey(event, normalizedCurrentPubkey)) {
+      options.onLiveMention?.();
+    }
+
     const channelId = getChannelIdFromTags(event.tags);
     if (!channelId || channelId === activeChannelId) {
       return;
