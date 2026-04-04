@@ -1178,6 +1178,58 @@ function getThreadReferenceFromTags(tags: string[][]) {
   };
 }
 
+function appendMentionTags(
+  tags: string[][],
+  mentionPubkeys: string[] | undefined,
+  selfPubkey: string,
+) {
+  const selfLower = selfPubkey.toLowerCase();
+  const seen = new Set<string>([selfLower]);
+  for (const pk of mentionPubkeys ?? []) {
+    const lower = pk.toLowerCase();
+    if (seen.has(lower)) {
+      continue;
+    }
+    seen.add(lower);
+    tags.push(["p", lower]);
+  }
+}
+
+function buildTopLevelMessageTags(
+  channelId: string,
+  mentionPubkeys: string[] | undefined,
+  selfPubkey: string,
+) {
+  const tags: string[][] = [["h", channelId]];
+  appendMentionTags(tags, mentionPubkeys, selfPubkey);
+  return tags;
+}
+
+function buildReplyMessageTags(
+  channelId: string,
+  authorPubkey: string,
+  parentEventId: string,
+  rootEventId: string,
+  mentionPubkeys: string[] | undefined,
+) {
+  // Preserve the reply tag ordering that the desktop message hooks already
+  // expect locally: author p, h, mention ps, then thread e-tags.
+  const tags: string[][] = [
+    ["p", authorPubkey],
+    ["h", channelId],
+  ];
+  appendMentionTags(tags, mentionPubkeys, authorPubkey);
+
+  if (parentEventId === rootEventId) {
+    tags.push(["e", rootEventId, "", "reply"]);
+    return tags;
+  }
+
+  tags.push(["e", rootEventId, "", "root"]);
+  tags.push(["e", parentEventId, "", "reply"]);
+  return tags;
+}
+
 function getMockMessageStore(channelId: string): RelayEvent[] {
   const existing = mockMessages.get(channelId);
   if (existing) {
@@ -2854,20 +2906,18 @@ async function handleSendChannelMessage(
   const identity = getIdentity(config);
   if (!identity) {
     const createdAt = Math.floor(Date.now() / 1000);
+    const mockPubkey = getMockMemberPubkey(config);
 
     if (!args.parentEventId) {
-      const selfLower = getMockMemberPubkey(config).toLowerCase();
-      const seen = new Set<string>([selfLower]);
-      const tags: string[][] = [["h", args.channelId]];
-      for (const pk of args.mentionPubkeys ?? []) {
-        const lower = pk.toLowerCase();
-        if (!seen.has(lower)) {
-          seen.add(lower);
-          tags.push(["p", lower]);
-        }
-      }
-
-      const event = createMockEvent(kind, args.content, tags);
+      const event = createMockEvent(
+        kind,
+        args.content,
+        buildTopLevelMessageTags(
+          args.channelId,
+          args.mentionPubkeys,
+          mockPubkey,
+        ),
+      );
       recordMockMessage(args.channelId, event);
       emitMockLiveEvent(args.channelId, event);
 
@@ -2914,30 +2964,16 @@ async function handleSendChannelMessage(
 
     const event: RelayEvent = {
       id: crypto.randomUUID().replace(/-/g, ""),
-      pubkey: getMockMemberPubkey(config),
+      pubkey: mockPubkey,
       created_at: createdAt,
       kind,
-      tags: (() => {
-        const authorPubkey = getMockMemberPubkey(config);
-        const tags: string[][] = [["h", args.channelId]];
-        // Best-effort client-side normalization (relay is authoritative).
-        const selfLower = authorPubkey.toLowerCase();
-        const seen = new Set<string>([selfLower]);
-        if (rootEventId === args.parentEventId) {
-          tags.push(["e", rootEventId, "", "reply"]);
-        } else {
-          tags.push(["e", rootEventId, "", "root"]);
-          tags.push(["e", args.parentEventId, "", "reply"]);
-        }
-        for (const pk of args.mentionPubkeys ?? []) {
-          const lower = pk.toLowerCase();
-          if (!seen.has(lower)) {
-            seen.add(lower);
-            tags.push(["p", lower]);
-          }
-        }
-        return tags;
-      })(),
+      tags: buildReplyMessageTags(
+        args.channelId,
+        mockPubkey,
+        args.parentEventId,
+        rootEventId,
+        args.mentionPubkeys,
+      ),
       content: args.content.trim(),
       sig: "mocksig".repeat(20).slice(0, 128),
     };
@@ -2955,23 +2991,19 @@ async function handleSendChannelMessage(
   }
 
   const relayIdentity = getRelayIdentity(config);
-  const tags: string[][] = [["h", args.channelId]];
-
-  const selfLower = relayIdentity.pubkey.toLowerCase();
-  const seen = new Set<string>([selfLower]);
-
-  if (args.parentEventId) {
-    tags.push(["e", args.parentEventId, "", "root"]);
-    tags.push(["e", args.parentEventId, "", "reply"]);
-  }
-
-  for (const pk of args.mentionPubkeys ?? []) {
-    const lower = pk.toLowerCase();
-    if (!seen.has(lower)) {
-      seen.add(lower);
-      tags.push(["p", lower]);
-    }
-  }
+  const tags = args.parentEventId
+    ? buildReplyMessageTags(
+        args.channelId,
+        relayIdentity.pubkey,
+        args.parentEventId,
+        args.parentEventId,
+        args.mentionPubkeys,
+      )
+    : buildTopLevelMessageTags(
+        args.channelId,
+        args.mentionPubkeys,
+        relayIdentity.pubkey,
+      );
 
   const result = await submitSignedEvent(config, {
     kind,
