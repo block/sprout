@@ -1,4 +1,4 @@
-import { Play, X } from "lucide-react";
+import { Pencil, Play, X } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -8,16 +8,19 @@ import {
   useWorkflowRunsQuery,
 } from "@/features/workflows/hooks";
 import { WorkflowRunTrace } from "@/features/workflows/ui/WorkflowRunTrace";
+import type { Workflow } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 
 type WorkflowDetailPanelProps = {
   workflowId: string;
   onClose: () => void;
+  onEdit: (workflow: Workflow) => void;
 };
 
 export function WorkflowDetailPanel({
   workflowId,
   onClose,
+  onEdit,
 }: WorkflowDetailPanelProps) {
   const workflowQuery = useWorkflowQuery(workflowId);
   const runsQuery = useWorkflowRunsQuery(workflowId);
@@ -50,6 +53,16 @@ export function WorkflowDetailPanel({
           {workflow?.name ?? "Loading..."}
         </h3>
         <div className="flex items-center gap-1">
+          {workflow ? (
+            <Button
+              onClick={() => onEdit(workflow)}
+              size="sm"
+              variant="outline"
+            >
+              <Pencil className="mr-1 h-3 w-3" />
+              Edit
+            </Button>
+          ) : null}
           <Button
             disabled={triggerMutation.isPending}
             onClick={() => void handleTrigger()}

@@ -999,6 +999,95 @@ let mockRelayAgents: RawRelayAgent[] = [
     status: "away",
   },
 ];
+
+// ── Workflow mocks ─────────────────────────────────────────────────────────
+
+type MockWorkflow = {
+  id: string;
+  name: string;
+  owner_pubkey: string;
+  channel_id: string | null;
+  definition: Record<string, unknown>;
+  status: "active" | "disabled" | "archived";
+  created_at: number;
+  updated_at: number;
+};
+
+const mockWorkflows: MockWorkflow[] = [];
+let mockWorkflowIdCounter = 0;
+
+function handleGetChannelWorkflows(args: { channelId: string }) {
+  return mockWorkflows.filter((w) => w.channel_id === args.channelId);
+}
+
+function handleGetWorkflow(args: { workflowId: string }) {
+  const workflow = mockWorkflows.find((w) => w.id === args.workflowId);
+  if (!workflow) throw new Error(`Workflow ${args.workflowId} not found`);
+  return workflow;
+}
+
+function handleCreateWorkflow(args: {
+  channelId: string;
+  yamlDefinition: string;
+}) {
+  mockWorkflowIdCounter += 1;
+  const now = Math.floor(Date.now() / 1000);
+  // Parse the name from the YAML definition (simple extraction)
+  const nameMatch = args.yamlDefinition.match(/^name:\s*(.+)$/m);
+  const name = nameMatch
+    ? nameMatch[1].trim()
+    : `workflow_${mockWorkflowIdCounter}`;
+  const workflow: MockWorkflow = {
+    id: `mock-wf-${mockWorkflowIdCounter}`,
+    name,
+    owner_pubkey: MOCK_IDENTITY_PUBKEY,
+    channel_id: args.channelId,
+    definition: { raw: args.yamlDefinition },
+    status: "active",
+    created_at: now,
+    updated_at: now,
+  };
+  mockWorkflows.push(workflow);
+  return workflow;
+}
+
+function handleUpdateWorkflow(args: {
+  workflowId: string;
+  yamlDefinition: string;
+}) {
+  const workflow = mockWorkflows.find((w) => w.id === args.workflowId);
+  if (!workflow) throw new Error(`Workflow ${args.workflowId} not found`);
+  const nameMatch = args.yamlDefinition.match(/^name:\s*(.+)$/m);
+  if (nameMatch) workflow.name = nameMatch[1].trim();
+  workflow.definition = { raw: args.yamlDefinition };
+  workflow.updated_at = Math.floor(Date.now() / 1000);
+  return workflow;
+}
+
+function handleDeleteWorkflow(args: { workflowId: string }) {
+  const index = mockWorkflows.findIndex((w) => w.id === args.workflowId);
+  if (index === -1) throw new Error(`Workflow ${args.workflowId} not found`);
+  mockWorkflows.splice(index, 1);
+}
+
+function handleTriggerWorkflow(args: { workflowId: string }) {
+  const workflow = mockWorkflows.find((w) => w.id === args.workflowId);
+  if (!workflow) throw new Error(`Workflow ${args.workflowId} not found`);
+  return {
+    run_id: `mock-run-${Date.now()}`,
+    workflow_id: workflow.id,
+    status: "pending",
+  };
+}
+
+function handleGetWorkflowRuns(_args: { workflowId: string }) {
+  return [];
+}
+
+function handleGetRunApprovals(_args: { workflowId: string; runId: string }) {
+  return [];
+}
+
 const mockProfiles = new Map<string, RawProfile>([
   [
     MOCK_IDENTITY_PUBKEY,
@@ -1176,6 +1265,58 @@ function getThreadReferenceFromTags(tags: string[][]) {
     parentEventId: replyTag[1] ?? null,
     rootEventId: rootTag?.[1] ?? replyTag[1] ?? null,
   };
+}
+
+function appendMentionTags(
+  tags: string[][],
+  mentionPubkeys: string[] | undefined,
+  selfPubkey: string,
+) {
+  const selfLower = selfPubkey.toLowerCase();
+  const seen = new Set<string>([selfLower]);
+  for (const pk of mentionPubkeys ?? []) {
+    const lower = pk.toLowerCase();
+    if (seen.has(lower)) {
+      continue;
+    }
+    seen.add(lower);
+    tags.push(["p", lower]);
+  }
+}
+
+function buildTopLevelMessageTags(
+  channelId: string,
+  mentionPubkeys: string[] | undefined,
+  selfPubkey: string,
+) {
+  const tags: string[][] = [["h", channelId]];
+  appendMentionTags(tags, mentionPubkeys, selfPubkey);
+  return tags;
+}
+
+function buildReplyMessageTags(
+  channelId: string,
+  authorPubkey: string,
+  parentEventId: string,
+  rootEventId: string,
+  mentionPubkeys: string[] | undefined,
+) {
+  // Preserve the reply tag ordering that the desktop message hooks already
+  // expect locally: author p, h, mention ps, then thread e-tags.
+  const tags: string[][] = [
+    ["p", authorPubkey],
+    ["h", channelId],
+  ];
+  appendMentionTags(tags, mentionPubkeys, authorPubkey);
+
+  if (parentEventId === rootEventId) {
+    tags.push(["e", rootEventId, "", "reply"]);
+    return tags;
+  }
+
+  tags.push(["e", rootEventId, "", "root"]);
+  tags.push(["e", parentEventId, "", "reply"]);
+  return tags;
 }
 
 function getMockMessageStore(channelId: string): RelayEvent[] {
@@ -2845,16 +2986,27 @@ async function handleSendChannelMessage(
     channelId: string;
     content: string;
     parentEventId?: string | null;
+    kind?: number | null;
     mentionPubkeys?: string[];
   },
   config: E2eConfig | undefined,
 ): Promise<RawSendChannelMessageResponse> {
+  const kind = args.kind ?? 9;
   const identity = getIdentity(config);
   if (!identity) {
     const createdAt = Math.floor(Date.now() / 1000);
+    const mockPubkey = getMockMemberPubkey(config);
 
     if (!args.parentEventId) {
-      const event = createMockEvent(9, args.content, [["h", args.channelId]]);
+      const event = createMockEvent(
+        kind,
+        args.content,
+        buildTopLevelMessageTags(
+          args.channelId,
+          args.mentionPubkeys,
+          mockPubkey,
+        ),
+      );
       recordMockMessage(args.channelId, event);
       emitMockLiveEvent(args.channelId, event);
 
@@ -2901,35 +3053,16 @@ async function handleSendChannelMessage(
 
     const event: RelayEvent = {
       id: crypto.randomUUID().replace(/-/g, ""),
-      pubkey: getMockMemberPubkey(config),
+      pubkey: mockPubkey,
       created_at: createdAt,
-      kind: 9,
-      tags: (() => {
-        const authorPubkey = getMockMemberPubkey(config);
-        // Match production tag ordering: author p, h, mention ps, then e-tags.
-        const tags: string[][] = [
-          ["p", authorPubkey],
-          ["h", args.channelId],
-        ];
-        // Best-effort client-side normalization (relay is authoritative).
-        const selfLower = authorPubkey.toLowerCase();
-        const seen = new Set<string>([selfLower]);
-        for (const pk of args.mentionPubkeys ?? []) {
-          const lower = pk.toLowerCase();
-          if (!seen.has(lower)) {
-            seen.add(lower);
-            tags.push(["p", lower]);
-          }
-        }
-        // Thread e-tags come after mention p-tags.
-        if (rootEventId === args.parentEventId) {
-          tags.push(["e", rootEventId, "", "reply"]);
-        } else {
-          tags.push(["e", rootEventId, "", "root"]);
-          tags.push(["e", args.parentEventId, "", "reply"]);
-        }
-        return tags;
-      })(),
+      kind,
+      tags: buildReplyMessageTags(
+        args.channelId,
+        mockPubkey,
+        args.parentEventId,
+        rootEventId,
+        args.mentionPubkeys,
+      ),
       content: args.content.trim(),
       sig: "mocksig".repeat(20).slice(0, 128),
     };
@@ -2947,32 +3080,22 @@ async function handleSendChannelMessage(
   }
 
   const relayIdentity = getRelayIdentity(config);
-  const tags: string[][] = [
-    ["p", relayIdentity.pubkey],
-    ["h", args.channelId],
-  ];
-
-  // Add mention p-tags (deduplicated, excluding self).
-  const selfLower = relayIdentity.pubkey.toLowerCase();
-  const seen = new Set<string>([selfLower]);
-  for (const pk of args.mentionPubkeys ?? []) {
-    const lower = pk.toLowerCase();
-    if (!seen.has(lower)) {
-      seen.add(lower);
-      tags.push(["p", lower]);
-    }
-  }
-
-  // Add thread e-tags if replying.
-  if (args.parentEventId) {
-    // Simplified: treat parent as both root and reply for direct replies.
-    // The relay's NIP-10 resolver handles ancestry validation.
-    tags.push(["e", args.parentEventId, "", "root"]);
-    tags.push(["e", args.parentEventId, "", "reply"]);
-  }
+  const tags = args.parentEventId
+    ? buildReplyMessageTags(
+        args.channelId,
+        relayIdentity.pubkey,
+        args.parentEventId,
+        args.parentEventId,
+        args.mentionPubkeys,
+      )
+    : buildTopLevelMessageTags(
+        args.channelId,
+        args.mentionPubkeys,
+        relayIdentity.pubkey,
+      );
 
   const result = await submitSignedEvent(config, {
-    kind: 9,
+    kind,
     content: args.content.trim(),
     tags,
   });
@@ -3552,6 +3675,38 @@ export function maybeInstallE2eTauriMocks() {
         }
 
         return disconnectMockSocket((payload as { id: number }).id);
+      case "get_channel_workflows":
+        return handleGetChannelWorkflows(
+          payload as Parameters<typeof handleGetChannelWorkflows>[0],
+        );
+      case "get_workflow":
+        return handleGetWorkflow(
+          payload as Parameters<typeof handleGetWorkflow>[0],
+        );
+      case "create_workflow":
+        return handleCreateWorkflow(
+          payload as Parameters<typeof handleCreateWorkflow>[0],
+        );
+      case "update_workflow":
+        return handleUpdateWorkflow(
+          payload as Parameters<typeof handleUpdateWorkflow>[0],
+        );
+      case "delete_workflow":
+        return handleDeleteWorkflow(
+          payload as Parameters<typeof handleDeleteWorkflow>[0],
+        );
+      case "trigger_workflow":
+        return handleTriggerWorkflow(
+          payload as Parameters<typeof handleTriggerWorkflow>[0],
+        );
+      case "get_workflow_runs":
+        return handleGetWorkflowRuns(
+          payload as Parameters<typeof handleGetWorkflowRuns>[0],
+        );
+      case "get_run_approvals":
+        return handleGetRunApprovals(
+          payload as Parameters<typeof handleGetRunApprovals>[0],
+        );
       case "plugin:webview|set_webview_zoom":
         window.__SPROUT_E2E_WEBVIEW_ZOOM__ = (
           payload as { value: number }

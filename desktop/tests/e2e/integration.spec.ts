@@ -1,6 +1,6 @@
 import { expect, test, type Browser } from "@playwright/test";
 
-import { installRelayBridge } from "../helpers/bridge";
+import { installRelayBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { assertRelaySeeded } from "../helpers/seed";
 
 async function createStream(
@@ -13,7 +13,10 @@ async function createStream(
   if (description !== undefined) {
     await page.getByTestId("create-stream-description").fill(description);
   }
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -29,6 +32,130 @@ async function closeChannelManagement(page: import("@playwright/test").Page) {
   await expect(page.getByTestId("channel-management-sheet")).not.toBeVisible();
 }
 
+async function enableDesktopNotifications(
+  page: import("@playwright/test").Page,
+) {
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("settings-view")).toBeVisible();
+  await page.getByTestId("settings-nav-notifications").click();
+  await expect(page.getByTestId("settings-notifications")).toBeVisible();
+  await page.getByTestId("notifications-desktop-toggle").click();
+  await expect(page.getByTestId("notifications-desktop-state")).toContainText(
+    "On",
+  );
+  await page.getByTestId("settings-close").click();
+}
+
+async function sendChannelMessage(
+  page: import("@playwright/test").Page,
+  {
+    channelName,
+    content,
+    kind,
+    mentionPubkeys,
+  }: {
+    channelName: string;
+    content: string;
+    kind?: number | null;
+    mentionPubkeys?: string[];
+  },
+) {
+  await page.evaluate(
+    async ({
+      channelName: targetChannelName,
+      content,
+      kind,
+      mentionPubkeys,
+    }) => {
+      const tauriWindow = window as Window & {
+        __TAURI_INTERNALS__?: {
+          invoke: (
+            command: string,
+            payload?: Record<string, unknown>,
+          ) => Promise<unknown>;
+        };
+      };
+
+      const invoke = tauriWindow.__TAURI_INTERNALS__?.invoke;
+      if (!invoke) {
+        throw new Error("Tauri invoke bridge is unavailable.");
+      }
+
+      const channels = (await invoke("get_channels")) as Array<{
+        id: string;
+        name: string;
+      }>;
+      const channel = channels.find(({ name }) => name === targetChannelName);
+      if (!channel) {
+        throw new Error(`Channel not found: ${targetChannelName}`);
+      }
+
+      await invoke("send_channel_message", {
+        channelId: channel.id,
+        content,
+        parentEventId: null,
+        mediaTags: null,
+        mentionPubkeys: mentionPubkeys ?? null,
+        kind: kind ?? null,
+      });
+    },
+    { channelName, content, kind, mentionPubkeys },
+  );
+}
+
+async function joinChannel(
+  page: import("@playwright/test").Page,
+  channelName: string,
+) {
+  await page.evaluate(async (targetChannelName) => {
+    const tauriWindow = window as Window & {
+      __TAURI_INTERNALS__?: {
+        invoke: (
+          command: string,
+          payload?: Record<string, unknown>,
+        ) => Promise<unknown>;
+      };
+    };
+
+    const invoke = tauriWindow.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) {
+      throw new Error("Tauri invoke bridge is unavailable.");
+    }
+
+    const channels = (await invoke("get_channels")) as Array<{
+      id: string;
+      name: string;
+    }>;
+    const channel = channels.find(({ name }) => name === targetChannelName);
+    if (!channel) {
+      throw new Error(`Channel not found: ${targetChannelName}`);
+    }
+
+    await invoke("join_channel", {
+      channelId: channel.id,
+    });
+  }, channelName);
+}
+
+async function getLoggedNotifications(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    const win = window as Window & {
+      __SPROUT_E2E_NOTIFICATIONS__?: Array<{
+        body: string | null;
+        title: string;
+      }>;
+    };
+
+    return win.__SPROUT_E2E_NOTIFICATIONS__ ?? [];
+  });
+}
+
+async function getLoggedNotificationCount(
+  page: import("@playwright/test").Page,
+) {
+  return (await getLoggedNotifications(page)).length;
+}
+
 test.beforeAll(async () => {
   await assertRelaySeeded();
 });
@@ -40,7 +167,10 @@ test("create channel and verify in sidebar", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Create a stream" }).click();
   await page.getByTestId("create-stream-name").fill(channelName);
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -64,7 +194,10 @@ test("two users see the same channel", async ({
     await pageOne.goto("/");
     await pageOne.getByRole("button", { name: "Create a stream" }).click();
     await pageOne.getByTestId("create-stream-name").fill(channelName);
-    await pageOne.getByRole("button", { name: "Create" }).click();
+    await pageOne
+      .getByTestId("create-stream-form")
+      .getByRole("button", { name: "Create" })
+      .click();
     await expect(pageOne.getByTestId("stream-list")).toContainText(channelName);
 
     await pageTwo.goto("/");
@@ -113,6 +246,134 @@ test("message delivery across users", async ({
   } finally {
     await contextOne.close();
     await contextTwo.close();
+  }
+});
+
+test("live mentions refetch the home feed without waiting for polling", async ({
+  browser,
+}: {
+  browser: Browser;
+}) => {
+  const stamp = Date.now();
+  const targetContext = await browser.newContext();
+  const senderContext = await browser.newContext();
+  const targetPage = await targetContext.newPage();
+  const senderPage = await senderContext.newPage();
+
+  try {
+    await installRelayBridge(targetPage, "tyler");
+    await installRelayBridge(senderPage, "alice");
+
+    await targetPage.goto("/");
+    await senderPage.goto("/");
+    await enableDesktopNotifications(targetPage);
+
+    await targetPage.getByTestId("channel-general").click();
+    await expect(targetPage.getByTestId("chat-title")).toHaveText("general");
+
+    const message = `Heads up @tyler live mention ${stamp}`;
+    await sendChannelMessage(senderPage, {
+      channelName: "general",
+      content: message,
+      mentionPubkeys: [TEST_IDENTITIES.tyler.pubkey],
+    });
+
+    await expect(targetPage.getByTestId("message-timeline")).toContainText(
+      message,
+    );
+    await expect(targetPage.getByTestId("sidebar-home-count")).toHaveText("1", {
+      timeout: 5_000,
+    });
+
+    await expect
+      .poll(() => getLoggedNotificationCount(targetPage), { timeout: 5_000 })
+      .toBe(1);
+
+    const notifications = await getLoggedNotifications(targetPage);
+
+    expect(notifications).toEqual([
+      {
+        body: message,
+        title: "@Mention in #general",
+      },
+    ]);
+
+    await targetPage.getByRole("button", { name: "Home" }).click();
+    await expect(targetPage.getByTestId("chat-title")).toHaveText("Home");
+    await expect(targetPage.getByTestId("sidebar-home-count")).toHaveCount(0);
+    await expect
+      .poll(() => getLoggedNotificationCount(targetPage), { timeout: 3_000 })
+      .toBe(1);
+  } finally {
+    await targetContext.close();
+    await senderContext.close();
+  }
+});
+
+test("live forum mentions refetch the home feed without waiting for polling", async ({
+  browser,
+}: {
+  browser: Browser;
+}) => {
+  const stamp = Date.now();
+  const targetContext = await browser.newContext();
+  const senderContext = await browser.newContext();
+  const targetPage = await targetContext.newPage();
+  const senderPage = await senderContext.newPage();
+
+  try {
+    await installRelayBridge(targetPage, "tyler");
+    await installRelayBridge(senderPage, "alice");
+
+    await targetPage.goto("/");
+    await senderPage.goto("/");
+    await enableDesktopNotifications(targetPage);
+
+    await targetPage.getByTestId("channel-general").click();
+    await expect(targetPage.getByTestId("chat-title")).toHaveText("general");
+    await joinChannel(senderPage, "watercooler");
+
+    const message = `Forum ping @tyler ${stamp}`;
+    await sendChannelMessage(senderPage, {
+      channelName: "watercooler",
+      content: message,
+      kind: 45001,
+      mentionPubkeys: [TEST_IDENTITIES.tyler.pubkey],
+    });
+
+    await expect(targetPage.getByTestId("sidebar-home-count")).toHaveText("1", {
+      timeout: 5_000,
+    });
+
+    await expect
+      .poll(() => getLoggedNotificationCount(targetPage), { timeout: 5_000 })
+      .toBe(1);
+
+    const notifications = await getLoggedNotifications(targetPage);
+
+    expect(notifications).toEqual([
+      {
+        body: message,
+        title: "@Mention in #watercooler",
+      },
+    ]);
+
+    await targetPage.getByRole("button", { name: "Home" }).click();
+    await expect(targetPage.getByTestId("chat-title")).toHaveText("Home");
+    await expect(
+      targetPage.getByRole("heading", { name: "Mentions" }),
+    ).toBeVisible();
+    const mentionsSection = targetPage.locator("section").filter({
+      has: targetPage.getByRole("heading", { name: "Mentions" }),
+    });
+    await expect(mentionsSection).toContainText(message);
+    await expect(targetPage.getByTestId("sidebar-home-count")).toHaveCount(0);
+    await expect
+      .poll(() => getLoggedNotificationCount(targetPage), { timeout: 3_000 })
+      .toBe(1);
+  } finally {
+    await targetContext.close();
+    await senderContext.close();
   }
 });
 
@@ -166,13 +427,19 @@ test("multiple channels independent", async ({ page }) => {
   // Create channel A
   await page.getByRole("button", { name: "Create a stream" }).click();
   await page.getByTestId("create-stream-name").fill(channelA);
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelA);
 
   // Create channel B
   await page.getByRole("button", { name: "Create a stream" }).click();
   await page.getByTestId("create-stream-name").fill(channelB);
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelB);
 
   // Navigate to channel A and send a message

@@ -1,17 +1,19 @@
 import React from "react";
 
-import { buildMentionPattern } from "@/shared/lib/mentionPattern";
+import { buildPrefixPattern } from "@/shared/lib/mentionPattern";
 
 type Segment = { type: "text" | "mention" | "channel"; value: string };
-
-const CHANNEL_RE_PART = "#[a-zA-Z0-9][\\w-]*";
 
 /**
  * Extends the shared mention pattern to also match `#channel-name` references.
  */
-function buildOverlayPattern(mentionNames: string[]): RegExp {
-  const mentionSource = buildMentionPattern(mentionNames).source;
-  return new RegExp(`${mentionSource}|${CHANNEL_RE_PART}`, "g");
+function buildOverlayPattern(
+  mentionNames: string[],
+  channelNames: string[],
+): RegExp {
+  const mentionSource = buildPrefixPattern("@", mentionNames).source;
+  const channelSource = buildPrefixPattern("#", channelNames).source;
+  return new RegExp(`${mentionSource}|${channelSource}`, "gi");
 }
 
 function parseSegments(text: string, pattern: RegExp): Segment[] {
@@ -41,6 +43,7 @@ function parseSegments(text: string, pattern: RegExp): Segment[] {
 }
 
 type ComposerMentionOverlayProps = {
+  channelNames: string[];
   content: string;
   mentionNames: string[];
   scrollTop: number;
@@ -54,13 +57,14 @@ type ComposerMentionOverlayProps = {
  */
 export const ComposerMentionOverlay = React.memo(
   function ComposerMentionOverlay({
+    channelNames,
     content,
     mentionNames,
     scrollTop,
   }: ComposerMentionOverlayProps) {
     const pattern = React.useMemo(
-      () => buildOverlayPattern(mentionNames),
-      [mentionNames],
+      () => buildOverlayPattern(mentionNames, channelNames),
+      [mentionNames, channelNames],
     );
     // Memoize regex parsing so it only re-runs when content or the mention
     // pattern actually changes — avoids expensive matchAll on every render.

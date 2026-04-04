@@ -8,6 +8,7 @@ import {
 } from "@/features/profile/lib/identity";
 import type { ForumThreadResponse, ThreadReply } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import {
   AlertDialog,
@@ -96,11 +97,13 @@ function ReplyRow({
   reply,
   currentPubkey,
   profiles,
+  channelNames,
   onDelete,
 }: {
   reply: ThreadReply;
   currentPubkey?: string;
   profiles?: UserProfileLookup;
+  channelNames?: string[];
   onDelete?: (eventId: string) => void;
 }) {
   const [isDeleteOpen, setIsDeleteOpen] = React.useState(false);
@@ -163,6 +166,7 @@ function ReplyRow({
       </div>
       <div className="mt-1.5 pl-8">
         <Markdown
+          channelNames={channelNames}
           compact
           content={reply.content}
           mentionNames={replyMentionNames}
@@ -188,6 +192,11 @@ export function ForumThreadPanel({
 }: ForumThreadPanelProps) {
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const [isDeletePostOpen, setIsDeletePostOpen] = React.useState(false);
+  const { channels } = useChannelNavigation();
+  const channelNames = React.useMemo(
+    () => channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
+    [channels],
+  );
 
   if (isLoading || !thread) {
     return (
@@ -292,7 +301,11 @@ export function ForumThreadPanel({
             ) : null}
           </div>
           <div className="mt-3">
-            <Markdown content={post.content} mentionNames={postMentionNames} />
+            <Markdown
+              channelNames={channelNames}
+              content={post.content}
+              mentionNames={postMentionNames}
+            />
           </div>
         </div>
 
@@ -306,6 +319,7 @@ export function ForumThreadPanel({
         <div className="divide-y divide-border/40">
           {replies.map((reply) => (
             <ReplyRow
+              channelNames={channelNames}
               currentPubkey={currentPubkey}
               key={reply.eventId}
               onDelete={onDeleteReply}

@@ -1,20 +1,15 @@
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
-
 import {
-  channelsQueryKey,
-  updateChannelLastMessageAt,
-} from "@/features/channels/hooks";
-import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
-import { getChannelIdFromTags } from "@/features/messages/lib/threading";
-import { mergeTimelineCacheMessages } from "@/features/messages/hooks";
-import { relayClient } from "@/shared/api/relayClient";
-import type { Channel, RelayEvent } from "@/shared/api/types";
+  useLiveChannelUpdates,
+  type UseLiveChannelUpdatesOptions,
+} from "@/features/channels/useLiveChannelUpdates";
+import type { Channel } from "@/shared/api/types";
 import { parseTimestamp } from "@/shared/lib/time";
 
 const CHANNEL_READ_STATE_STORAGE_KEY = "sprout.channel-read-state.v1";
 
 type ChannelReadState = Record<string, string | null>;
+type UseUnreadChannelsOptions = UseLiveChannelUpdatesOptions;
 
 function normalizeTimestamp(value: string | null | undefined) {
   const timestamp = parseTimestamp(value);
@@ -63,16 +58,12 @@ function readStoredChannelReadState(): ChannelReadState {
   }
 }
 
-function getMessageTimestamp(event: RelayEvent) {
-  return new Date(event.created_at * 1_000).toISOString();
-}
-
 export function useUnreadChannels(
   channels: Channel[],
   activeChannel: Channel | null,
   activeReadAt?: string | null,
+  options: UseUnreadChannelsOptions = {},
 ) {
-  const queryClient = useQueryClient();
   const [lastReadByChannel, setLastReadByChannel] =
     React.useState<ChannelReadState>(readStoredChannelReadState);
   const hasInitializedChannelsRef = React.useRef(false);
@@ -163,82 +154,7 @@ export function useUnreadChannels(
 
     markChannelRead(activeChannelId, effectiveActiveReadAt);
   }, [activeChannelId, effectiveActiveReadAt, markChannelRead]);
-
-  const liveChannelIds = React.useMemo(
-    () =>
-      new Set(
-        channels
-          .filter((channel) => channel.channelType !== "forum")
-          .map((channel) => channel.id),
-      ),
-    [channels],
-  );
-
-  const handleIncomingMessage = React.useEffectEvent((event: RelayEvent) => {
-    const channelId = getChannelIdFromTags(event.tags);
-    if (!channelId || channelId === activeChannelId) {
-      return;
-    }
-
-    if (!liveChannelIds.has(channelId)) {
-      void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
-      return;
-    }
-
-    const messageTimestamp = getMessageTimestamp(event);
-
-    updateChannelLastMessageAt(queryClient, channelId, messageTimestamp);
-    queryClient.setQueryData<RelayEvent[]>(
-      channelMessagesKey(channelId),
-      (current) => {
-        if (!current) {
-          return current;
-        }
-
-        return mergeTimelineCacheMessages(current, event);
-      },
-    );
-  });
-
-  React.useEffect(() => {
-    return relayClient.subscribeToReconnects(() => {
-      void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
-    });
-  }, [queryClient]);
-
-  React.useEffect(() => {
-    if (liveChannelIds.size === 0) {
-      return;
-    }
-
-    let isDisposed = false;
-    let cleanup: (() => Promise<void>) | undefined;
-
-    relayClient
-      .subscribeToAllStreamMessages((event) => {
-        if (!isDisposed) {
-          handleIncomingMessage(event);
-        }
-      })
-      .then((dispose) => {
-        if (isDisposed) {
-          void dispose();
-          return;
-        }
-
-        cleanup = dispose;
-      })
-      .catch((error) => {
-        console.error("Failed to subscribe to unread channel updates", error);
-      });
-
-    return () => {
-      isDisposed = true;
-      if (cleanup) {
-        void cleanup();
-      }
-    };
-  }, [liveChannelIds]);
+  useLiveChannelUpdates(channels, activeChannelId, options);
 
   const unreadChannelIds = React.useMemo(
     () =>

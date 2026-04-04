@@ -1,4 +1,12 @@
-import { Clock, MoreHorizontal, Play, Trash2, Zap } from "lucide-react";
+import {
+  Clock,
+  Copy,
+  MoreHorizontal,
+  Pencil,
+  Play,
+  Trash2,
+  Zap,
+} from "lucide-react";
 
 import type { Workflow } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
@@ -14,7 +22,9 @@ type WorkflowCardProps = {
   channelName?: string;
   onSelect: (workflowId: string) => void;
   onTrigger: (workflowId: string) => void;
-  onDelete: (workflowId: string) => void;
+  onEdit: (workflow: Workflow) => void;
+  onDuplicate: (workflow: Workflow) => void;
+  onDelete: (workflow: Workflow) => void;
 };
 
 function StatusBadge({ status }: { status: Workflow["status"] }) {
@@ -38,6 +48,8 @@ export function WorkflowCard({
   channelName,
   onSelect,
   onTrigger,
+  onEdit,
+  onDuplicate,
   onDelete,
 }: WorkflowCardProps) {
   return (
@@ -87,9 +99,17 @@ export function WorkflowCard({
               <Play className="mr-2 h-4 w-4" />
               Trigger
             </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onEdit(workflow)}>
+              <Pencil className="mr-2 h-4 w-4" />
+              Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onDuplicate(workflow)}>
+              <Copy className="mr-2 h-4 w-4" />
+              Duplicate
+            </DropdownMenuItem>
             <DropdownMenuItem
               className="text-destructive"
-              onClick={() => onDelete(workflow.id)}
+              onClick={() => onDelete(workflow)}
             >
               <Trash2 className="mr-2 h-4 w-4" />
               Delete

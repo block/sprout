@@ -611,7 +611,7 @@ pub fn stop_managed_agent(
                 "remote agents are stopped via !shutdown message, not this command".to_string(),
             );
         }
-        stop_managed_agent_process(record, &mut runtimes)?;
+        stop_managed_agent_process(&app, record, &mut runtimes)?;
     }
     save_managed_agents(&app, &records)?;
     let record = records
@@ -662,7 +662,7 @@ pub fn delete_managed_agent(
     if let Some(record) = records.iter_mut().find(|record| record.pubkey == pubkey) {
         // For local agents: kills the process. For remote agents: no-op (the frontend
         // sends !shutdown via WebSocket before calling delete). Either way, safe.
-        stop_managed_agent_process(record, &mut runtimes)?;
+        stop_managed_agent_process(&app, record, &mut runtimes)?;
     }
     let initial_len = records.len();
     records.retain(|record| record.pubkey != pubkey);

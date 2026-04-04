@@ -9,6 +9,14 @@ export const KIND_FORUM_POST = 45001;
 export const KIND_FORUM_COMMENT = 45003;
 export const KIND_TYPING_INDICATOR = 20002;
 
+// Keep this in sync with the Home-feed mention query in sprout-db.
+export const HOME_MENTION_EVENT_KINDS = [
+  KIND_STREAM_MESSAGE,
+  KIND_STREAM_MESSAGE_V2,
+  KIND_FORUM_POST,
+  KIND_FORUM_COMMENT,
+] as const;
+
 export const CHANNEL_EVENT_KINDS = [
   KIND_DELETION, // 5 — NIP-09 event deletions
   KIND_REACTION, // 7 — NIP-25 reactions

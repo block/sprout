@@ -8,6 +8,7 @@ import {
 import type { PresenceStatus, RelayEvent } from "@/shared/api/types";
 import {
   CHANNEL_EVENT_KINDS,
+  HOME_MENTION_EVENT_KINDS,
   KIND_STREAM_MESSAGE,
   KIND_TYPING_INDICATOR,
 } from "@/shared/constants/kinds";
@@ -174,6 +175,17 @@ export class RelayClient {
     return this.subscribe(this.buildGlobalStreamFilter(50), onEvent);
   }
 
+  async subscribeToChannelMentionEvents(
+    channelId: string,
+    pubkey: string,
+    onEvent: (event: RelayEvent) => void,
+  ) {
+    return this.subscribe(
+      this.buildChannelMentionFilter(channelId, pubkey, 50),
+      onEvent,
+    );
+  }
+
   async preconnect() {
     this.keepAliveRequested = true;
     await this.ensureConnected();
@@ -272,6 +284,20 @@ export class RelayClient {
     return {
       kinds: [...CHANNEL_EVENT_KINDS],
       limit,
+    };
+  }
+
+  private buildChannelMentionFilter(
+    channelId: string,
+    pubkey: string,
+    limit: number,
+  ): RelaySubscriptionFilter {
+    return {
+      kinds: [...HOME_MENTION_EVENT_KINDS],
+      "#h": [channelId],
+      "#p": [pubkey],
+      limit,
+      since: Math.floor(Date.now() / 1_000),
     };
   }
 

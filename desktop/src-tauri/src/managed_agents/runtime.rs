@@ -1,4 +1,4 @@
-use std::{collections::HashMap, process::Command};
+use std::collections::HashMap;
 
 use tauri::AppHandle;
 
@@ -11,58 +11,240 @@ use crate::{
     util::now_iso,
 };
 
+/// Binary name fragments for all known agent/harness processes that Sprout
+/// may spawn. Used by `process_belongs_to_us()` and the orphan sweep to
+/// identify processes we should clean up. Both hyphenated and underscored
+/// variants are listed because macOS `proc_name()` and Linux `/proc/comm`
+/// may report either form depending on how the binary was built.
+pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
+    "sprout-acp",
+    "sprout_acp",
+    "claude-agent-acp",
+    "claude_agent_acp",
+    "claude-code-acp",
+    "claude_code_acp",
+    "codex-acp",
+    "codex_acp",
+    "goose",
+    "sprout-mcp",
+    "sprout_mcp",
+];
+
+/// Check if a process name matches any of our known agent binaries.
+/// Uses exact match or prefix-with-separator to avoid false positives
+/// (e.g. `"goose"` must not match `"mongoose"`).
+fn name_matches_known_binary(name: &str) -> bool {
+    KNOWN_AGENT_BINARIES.iter().any(|&binary| {
+        name == binary || {
+            name.starts_with(binary) && {
+                let rest = &name[binary.len()..];
+                rest.starts_with('-') || rest.starts_with('_') || rest.starts_with('.')
+            }
+        }
+    })
+}
+
 #[cfg(unix)]
-fn process_is_running(pid: u32) -> bool {
-    Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+pub(crate) fn process_is_running(pid: u32) -> bool {
+    // Use libc::kill with signal 0 instead of forking a subprocess.
+    // Returns true only if the process exists AND we can signal it.
+    // Returns false for non-existent PIDs (ESRCH) and PIDs owned by
+    // other users (EPERM) — callers should not interact with those.
+    unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
 #[cfg(not(unix))]
-fn process_is_running(_pid: u32) -> bool {
+pub(crate) fn process_is_running(_pid: u32) -> bool {
+    false
+}
+
+/// Check if a PID belongs to a known agent process we spawned.
+/// Returns false for recycled PIDs that now belong to other processes.
+#[cfg(target_os = "macos")]
+pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
+    // Use proc_name() from libproc to get the process name without spawning
+    // a subprocess.
+    extern "C" {
+        fn proc_name(pid: libc::c_int, buffer: *mut libc::c_void, buffersize: u32) -> libc::c_int;
+    }
+    let mut buf = [0u8; 1024];
+    let len = unsafe {
+        proc_name(
+            pid as i32,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            buf.len() as u32,
+        )
+    };
+    if len <= 0 {
+        return false;
+    }
+    let name = String::from_utf8_lossy(&buf[..len as usize]);
+    name_matches_known_binary(&name)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
+    // First try /proc/<pid>/comm. Note: comm is truncated to 15 bytes on Linux,
+    // so binaries with names longer than 15 chars (e.g. "claude-agent-acp")
+    // will never match here.
+    if let Ok(name) = std::fs::read_to_string(format!("/proc/{pid}/comm")) {
+        if name_matches_known_binary(name.trim()) {
+            return true;
+        }
+    }
+
+    // Fallback: read /proc/<pid>/exe which is a symlink to the full binary path.
+    // This is not subject to the 15-byte truncation limit.
+    if let Ok(exe_path) = std::fs::read_link(format!("/proc/{pid}/exe")) {
+        if let Some(basename) = exe_path.file_name().and_then(|n| n.to_str()) {
+            return name_matches_known_binary(basename);
+        }
+    }
+
+    false
+}
+
+#[cfg(not(unix))]
+pub(crate) fn process_belongs_to_us(_pid: u32) -> bool {
     false
 }
 
 #[cfg(unix)]
-fn terminate_process(pid: u32) -> Result<(), String> {
-    let pid_arg = pid.to_string();
-    let status = Command::new("kill")
-        .arg("-TERM")
-        .arg(&pid_arg)
-        .status()
-        .map_err(|error| format!("failed to terminate process {pid}: {error}"))?;
-    if !status.success() && process_is_running(pid) {
-        return Err(format!(
-            "failed to terminate process {pid}: signal was rejected"
-        ));
+pub(crate) fn terminate_process(pid: u32) -> Result<(), String> {
+    // The child was spawned with process_group(0), so pid == pgid.
+    // Kill the entire process group to avoid orphaning MCP servers
+    // and agent subprocesses.
+    let pgid = -(pid as i32);
+
+    // Try graceful shutdown first (SIGTERM to the group).
+    if unsafe { libc::kill(pgid, libc::SIGTERM) } != 0 {
+        // ESRCH means the process is already gone — that's fine.
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::ESRCH) && process_is_running(pid) {
+            return Err(format!("failed to terminate process group {pid}: {err}"));
+        }
+        return Ok(());
     }
 
+    // Wait up to 1s for graceful exit.
     for _ in 0..10 {
         if !process_is_running(pid) {
             return Ok(());
         }
-
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    let kill_status = Command::new("kill")
-        .arg("-KILL")
-        .arg(&pid_arg)
-        .status()
-        .map_err(|error| format!("failed to kill process {pid}: {error}"))?;
-    if !kill_status.success() && process_is_running(pid) {
-        return Err(format!("failed to kill process {pid}: signal was rejected"));
+    // Escalate to SIGKILL on the entire group.
+    if unsafe { libc::kill(pgid, libc::SIGKILL) } != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::ESRCH) && process_is_running(pid) {
+            return Err(format!("failed to kill process group {pid}: {err}"));
+        }
     }
 
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn terminate_process(_pid: u32) -> Result<(), String> {
+pub(crate) fn terminate_process(_pid: u32) -> Result<(), String> {
     Err("managed agent shutdown after app restart is only supported on Unix".to_string())
+}
+
+/// Send SIGTERM to all given PIDs (as process groups), wait, then SIGKILL
+/// any survivors. Uses `-pid` to kill the entire process group — if an
+/// orphaned agent called `setsid()`, it IS the group leader, so this
+/// reaches its children too.
+#[cfg(unix)]
+fn sigterm_then_sigkill(pids: &[i32]) {
+    // Send SIGTERM to each process group. Track whether any signal was
+    // actually delivered so we can skip the sleep when everything is
+    // already gone.
+    let mut any_signalled = false;
+    for &pid in pids {
+        if unsafe { libc::kill(-pid, libc::SIGTERM) } == 0 {
+            any_signalled = true;
+        }
+    }
+
+    if !any_signalled {
+        return;
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    for &pid in pids {
+        if process_is_running(pid as u32) {
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+/// Kill orphaned agent processes using PID file receipts. Reads all files from
+/// `agent-pids/`, verifies each PID still belongs to a known agent binary,
+/// then kills the process group. Deletes the PID file after killing.
+///
+/// `skip_pids` are PIDs already handled by the tracked-agent path.
+#[cfg(unix)]
+pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, skip_pids: &[u32]) {
+    let entries = super::read_all_agent_pid_files(app);
+    let orphans: Vec<i32> = entries
+        .iter()
+        .filter(|(_, pid)| {
+            !skip_pids.contains(pid) && process_is_running(*pid) && process_belongs_to_us(*pid)
+        })
+        .map(|(_, pid)| *pid as i32)
+        .collect();
+
+    if !orphans.is_empty() {
+        sigterm_then_sigkill(&orphans);
+    }
+
+    // Clean up PID files for processes we just killed or that are already gone.
+    for (pubkey, pid) in &entries {
+        if skip_pids.contains(pid) {
+            continue;
+        }
+        if !process_is_running(*pid) || !process_belongs_to_us(*pid) {
+            super::remove_agent_pid_file(app, pubkey);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, _skip_pids: &[u32]) {
+    let _ = app;
+}
+
+/// Kill stale agent processes from a previous session whose PID is still alive
+/// but not tracked in the current `runtimes` map. Updates the record fields and
+/// returns `true` if any records were modified.
+pub fn kill_stale_tracked_processes(
+    records: &mut [ManagedAgentRecord],
+    runtimes: &HashMap<String, ManagedAgentProcess>,
+) -> bool {
+    use crate::managed_agents::BackendKind;
+
+    let mut changed = false;
+    for record in records.iter_mut() {
+        if record.backend != BackendKind::Local {
+            continue;
+        }
+        let Some(pid) = record.runtime_pid else {
+            continue;
+        };
+        if !runtimes.contains_key(&record.pubkey) {
+            if process_belongs_to_us(pid) {
+                let _ = terminate_process(pid);
+            }
+            record.runtime_pid = None;
+            record.last_stopped_at = Some(crate::util::now_iso());
+            record.updated_at = crate::util::now_iso();
+            changed = true;
+        }
+    }
+    changed
 }
 
 pub fn sync_managed_agent_processes(
@@ -333,6 +515,14 @@ pub fn start_managed_agent_process(
         command.env_remove("SPROUT_API_TOKEN");
     }
 
+    // Spawn the harness in its own process group so we can kill the entire
+    // tree (harness + MCP servers + agent subprocesses) on shutdown.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
     let child = command.spawn().map_err(|error| {
         format!(
             "failed to spawn `{}` for agent {}: {error}",
@@ -340,6 +530,10 @@ pub fn start_managed_agent_process(
             record.name
         )
     })?;
+
+    // Write a PID file so the orphan sweep can find this process even if the
+    // record is stale or the app crashes before updating records.
+    let _ = super::write_agent_pid_file(app, &record.pubkey, child.id());
 
     let now = now_iso();
     record.updated_at = now.clone();
@@ -357,6 +551,7 @@ pub fn start_managed_agent_process(
 }
 
 pub fn stop_managed_agent_process(
+    app: &AppHandle,
     record: &mut ManagedAgentRecord,
     runtimes: &mut HashMap<String, ManagedAgentProcess>,
 ) -> Result<(), String> {
@@ -373,10 +568,20 @@ pub fn stop_managed_agent_process(
             record.last_exit_code = None;
             record.last_error = None;
         }
+        super::remove_agent_pid_file(app, &record.pubkey);
         return Ok(());
     };
 
-    let _ = runtime.child.kill();
+    // On Unix, kill the entire process group via terminate_process.
+    // On non-Unix, fall back to Child::kill() since terminate_process
+    // is not implemented there.
+    #[cfg(unix)]
+    terminate_process(runtime.child.id())?;
+    #[cfg(not(unix))]
+    runtime
+        .child
+        .kill()
+        .map_err(|error| format!("failed to kill agent process: {error}"))?;
     let status = runtime
         .child
         .wait()
@@ -387,6 +592,8 @@ pub fn stop_managed_agent_process(
     record.last_stopped_at = Some(now);
     record.last_exit_code = status.code();
     record.last_error = None;
+
+    super::remove_agent_pid_file(app, &record.pubkey);
 
     append_log_marker(
         &runtime.log_path,

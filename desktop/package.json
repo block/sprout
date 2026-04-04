@@ -50,7 +50,8 @@
     "react-markdown": "^10.1.0",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
-    "tailwind-merge": "^3.5.0"
+    "tailwind-merge": "^3.5.0",
+    "yaml": "^2.8.3"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",
