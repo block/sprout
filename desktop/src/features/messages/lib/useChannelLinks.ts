@@ -1,27 +1,13 @@
 import * as React from "react";
 
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
+import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
 
 export type ChannelSuggestion = {
   id: string;
   name: string;
   channelType: "stream" | "forum";
 };
-
-function detectChannelQuery(
-  value: string,
-  cursorPosition: number,
-): { query: string; startIndex: number } | null {
-  const beforeCursor = value.slice(0, cursorPosition);
-  const match = beforeCursor.match(/(?:^|[\s])#([^\s]*)$/);
-  if (!match) {
-    return null;
-  }
-
-  const query = match[1];
-  const startIndex = beforeCursor.length - query.length - 1; // -1 for #
-  return { query, startIndex };
-}
 
 const CHANNEL_QUERY_DEBOUNCE_MS = 120;
 
@@ -37,6 +23,25 @@ export function useChannelLinks() {
   );
   const latestValueRef = React.useRef<string>("");
   const latestCursorRef = React.useRef<number>(0);
+
+  /** Channel names (original casing) for overlay highlighting. */
+  const knownChannelNames = React.useMemo<string[]>(
+    () => channels.filter((ch) => ch.channelType !== "dm").map((ch) => ch.name),
+    [channels],
+  );
+
+  /** Lower-cased channel names for case-insensitive prefix matching. */
+  const knownNamesLower = React.useMemo<string[]>(
+    () => knownChannelNames.map((n) => n.toLowerCase()),
+    [knownChannelNames],
+  );
+
+  const knownNamesLowerRef = React.useRef<string[]>(knownNamesLower);
+
+  // Keep the known-names ref in sync so the debounced callback never reads stale data.
+  React.useEffect(() => {
+    knownNamesLowerRef.current = knownNamesLower;
+  }, [knownNamesLower]);
 
   // Clean up pending timeout on unmount
   React.useEffect(() => {
@@ -106,9 +111,11 @@ export function useChannelLinks() {
 
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
-        const channel = detectChannelQuery(
+        const channel = detectPrefixQuery(
+          "#",
           latestValueRef.current,
           latestCursorRef.current,
+          knownNamesLowerRef.current,
         );
         if (channel) {
           setChannelQuery(channel.query);
@@ -189,6 +196,7 @@ export function useChannelLinks() {
     handleChannelKeyDown,
     insertChannel,
     isChannelOpen,
+    knownChannelNames,
     updateChannelQuery,
   };
 }

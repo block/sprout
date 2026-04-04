@@ -11,6 +11,7 @@ import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext"
 import type { Channel } from "@/shared/api/types";
 
 type MarkdownProps = {
+  channelNames?: string[];
   className?: string;
   compact?: boolean;
   content: string;
@@ -192,6 +193,7 @@ function shallowArrayEqual(a?: string[], b?: string[]): boolean {
 }
 
 function MarkdownInner({
+  channelNames,
   className,
   compact = false,
   content,
@@ -208,6 +210,17 @@ function MarkdownInner({
   const components = React.useMemo(
     () => createMarkdownComponents(variant, channels, onOpenChannel),
     [variant, channels, onOpenChannel],
+  );
+
+  // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable
+  const remarkPlugins = React.useMemo<any[]>(
+    () => [
+      remarkGfm,
+      remarkBreaks,
+      [remarkMentions, { mentionNames }],
+      [remarkChannelLinks, { channelNames }],
+    ],
+    [mentionNames, channelNames],
   );
 
   let processedContent = content;
@@ -231,15 +244,7 @@ function MarkdownInner({
         className,
       )}
     >
-      <ReactMarkdown
-        components={components}
-        remarkPlugins={[
-          remarkGfm,
-          remarkBreaks,
-          [remarkMentions, { mentionNames }],
-          remarkChannelLinks,
-        ]}
-      >
+      <ReactMarkdown components={components} remarkPlugins={remarkPlugins}>
         {processedContent}
       </ReactMarkdown>
     </div>
@@ -253,7 +258,8 @@ export const Markdown = React.memo(
     prev.className === next.className &&
     prev.compact === next.compact &&
     prev.tight === next.tight &&
-    shallowArrayEqual(prev.mentionNames, next.mentionNames),
+    shallowArrayEqual(prev.mentionNames, next.mentionNames) &&
+    shallowArrayEqual(prev.channelNames, next.channelNames),
 );
 
 Markdown.displayName = "Markdown";
