@@ -26,7 +26,10 @@ async function createWorkflow(
   await page.getByRole("button", { name: "Add step" }).click();
 
   // Submit
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Create" })
+    .click();
 
   // Wait for dialog to close
   await expect(page.getByRole("dialog")).not.toBeVisible();

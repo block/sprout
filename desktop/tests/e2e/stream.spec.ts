@@ -52,7 +52,10 @@ async function createAndJoinSharedStream(
 ) {
   await ownerPage.getByRole("button", { name: "Create a stream" }).click();
   await ownerPage.getByTestId("create-stream-name").fill(channelName);
-  await ownerPage.getByRole("button", { name: "Create" }).click();
+  await ownerPage
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
   await expect(ownerPage.getByTestId("stream-list")).toContainText(channelName);
   await expect(ownerPage.getByTestId("chat-title")).toHaveText(channelName);
 
@@ -121,7 +124,10 @@ test("creates a relay-backed stream", async ({ page }) => {
   await page
     .getByTestId("create-stream-description")
     .fill("Created from Playwright");
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
