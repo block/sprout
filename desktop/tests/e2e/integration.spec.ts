@@ -70,7 +70,10 @@ test("two users see the same channel", async ({
     await pageOne.goto("/");
     await pageOne.getByRole("button", { name: "Create a stream" }).click();
     await pageOne.getByTestId("create-stream-name").fill(channelName);
-    await pageOne.getByRole("button", { name: "Create" }).click();
+    await pageOne
+      .getByTestId("create-stream-form")
+      .getByRole("button", { name: "Create" })
+      .click();
     await expect(pageOne.getByTestId("stream-list")).toContainText(channelName);
 
     await pageTwo.goto("/");
