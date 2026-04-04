@@ -24,13 +24,16 @@ export function useChannelLinks() {
   const latestValueRef = React.useRef<string>("");
   const latestCursorRef = React.useRef<number>(0);
 
+  /** Channel names (original casing) for overlay highlighting. */
+  const knownChannelNames = React.useMemo<string[]>(
+    () => channels.filter((ch) => ch.channelType !== "dm").map((ch) => ch.name),
+    [channels],
+  );
+
   /** Lower-cased channel names for case-insensitive prefix matching. */
   const knownNamesLower = React.useMemo<string[]>(
-    () =>
-      channels
-        .filter((ch) => ch.channelType !== "dm")
-        .map((ch) => ch.name.toLowerCase()),
-    [channels],
+    () => knownChannelNames.map((n) => n.toLowerCase()),
+    [knownChannelNames],
   );
 
   const knownNamesLowerRef = React.useRef<string[]>(knownNamesLower);
@@ -193,6 +196,7 @@ export function useChannelLinks() {
     handleChannelKeyDown,
     insertChannel,
     isChannelOpen,
+    knownChannelNames,
     updateChannelQuery,
   };
 }
