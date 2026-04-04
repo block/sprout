@@ -42,6 +42,23 @@ pub enum DedupMode {
     Queue,
 }
 
+/// How to handle new @mentions while a turn is already in-flight for that channel.
+#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
+pub enum MultipleEventHandling {
+    /// Queue new events while a turn is in-flight. Deliver after current turn
+    /// completes. Existing behavior — zero code change in this path.
+    Queue,
+    /// Cancel the in-flight turn and re-dispatch a merged prompt combining
+    /// the original events with the new ones, for ANY new @mention.
+    /// Requires DedupMode::Queue.
+    Interrupt,
+    /// Cancel the in-flight turn only when the new @mention is from the agent
+    /// owner (resolved via owner_cache). All other authors queue normally.
+    /// Requires DedupMode::Queue.
+    #[value(name = "owner-interrupt")]
+    OwnerInterrupt,
+}
+
 /// Inbound author gate: which authors' events the harness forwards to the agent.
 ///
 /// - `owner-only` — only the agent's registered owner (default).
@@ -265,6 +282,17 @@ pub struct CliArgs {
     #[arg(long, env = "SPROUT_ACP_DEDUP", default_value = "queue", value_enum)]
     pub dedup: DedupMode,
 
+    /// How to handle new @mentions while a turn is already in-flight.
+    /// queue: events wait (default). interrupt: cancel+re-prompt on any mention.
+    /// owner-interrupt: cancel only for agent owner's mentions.
+    #[arg(
+        long,
+        env = "SPROUT_ACP_MULTIPLE_EVENT_HANDLING",
+        default_value = "queue",
+        value_enum
+    )]
+    pub multiple_event_handling: MultipleEventHandling,
+
     #[arg(long, env = "SPROUT_ACP_NO_IGNORE_SELF")]
     pub no_ignore_self: bool,
 
@@ -353,6 +381,7 @@ pub struct Config {
     pub initial_message: Option<String>,
     pub subscribe_mode: SubscribeMode,
     pub dedup_mode: DedupMode,
+    pub multiple_event_handling: MultipleEventHandling,
     pub ignore_self: bool,
     pub kinds_override: Option<Vec<u32>>,
     pub channels_override: Option<Vec<String>>,
@@ -613,6 +642,20 @@ impl Config {
             HashSet::new()
         };
 
+        // ── Multiple-event-handling validation ──────────────────────────────
+        if matches!(
+            args.multiple_event_handling,
+            MultipleEventHandling::Interrupt | MultipleEventHandling::OwnerInterrupt
+        ) && matches!(args.dedup, DedupMode::Drop)
+        {
+            return Err(ConfigError::ConfigFile(
+                "--multiple-event-handling=interrupt (or owner-interrupt) requires --dedup=queue. \
+                 DedupMode::Drop discards events during the cancel drain window, \
+                 producing incomplete merged prompts."
+                    .into(),
+            ));
+        }
+
         let config = Config {
             keys,
             api_token: args.api_token,
@@ -629,6 +672,7 @@ impl Config {
             initial_message: args.initial_message,
             subscribe_mode: args.subscribe,
             dedup_mode: args.dedup,
+            multiple_event_handling: args.multiple_event_handling,
             ignore_self: !args.no_ignore_self,
             kinds_override: args.kinds,
             channels_override: args.channels,
@@ -656,7 +700,7 @@ impl Config {
             other => format!("respond_to={other}"),
         };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} model={} permission_mode={} {}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} model={} permission_mode={} {}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -668,6 +712,7 @@ impl Config {
             self.heartbeat_interval_secs,
             self.subscribe_mode,
             self.dedup_mode,
+            self.multiple_event_handling,
             self.ignore_self,
             self.context_message_limit,
             self.max_turns_per_session,
@@ -986,6 +1031,7 @@ mod tests {
             initial_message: None,
             subscribe_mode: mode,
             dedup_mode: DedupMode::Queue,
+            multiple_event_handling: MultipleEventHandling::Queue,
             ignore_self: true,
             kinds_override: None,
             channels_override: None,

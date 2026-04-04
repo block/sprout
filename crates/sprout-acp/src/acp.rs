@@ -376,6 +376,11 @@ impl AcpClient {
         self.send_notification("session/cancel", params).await
     }
 
+    /// Returns `true` if a `session/prompt` request is currently in flight.
+    pub fn has_in_flight_prompt(&self) -> bool {
+        self.last_prompt_id.is_some()
+    }
+
     /// Cancel a turn cleanly, handling any pending permission request first.
     ///
     /// Steps:

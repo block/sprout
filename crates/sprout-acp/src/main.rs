@@ -14,7 +14,7 @@ use std::time::Duration;
 use acp::{AcpClient, EnvVar, McpServer};
 use anyhow::Result;
 use clap::Parser;
-use config::{Config, DedupMode, ModelsArgs, RespondTo, SubscribeMode};
+use config::{Config, DedupMode, ModelsArgs, MultipleEventHandling, RespondTo, SubscribeMode};
 use filter::SubscriptionRule;
 use futures_util::FutureExt;
 use nostr::ToBech32;
@@ -1132,6 +1132,40 @@ async fn tokio_main() -> Result<()> {
                             }
                             // ── End shutdown command handling ──────────────────
 
+                            // ── Cancel command handling ──────────────────────
+                            // Mirrors !shutdown: kind:9, content "!cancel", from
+                            // owner, mentions THIS agent. Must be BEFORE
+                            // queue.push() — the event content is moved by push.
+                            //
+                            // Mode-independent: !cancel fires regardless of
+                            // --multiple-event-handling. It is explicit user
+                            // intent, not an automatic policy decision.
+                            let is_cancel = kind_u32 == KIND_STREAM_MESSAGE
+                                && sprout_event.event.content.trim() == "!cancel"
+                                && sprout_event.event.tags.iter().any(|t| {
+                                    t.as_slice().first().map(|s| s.as_str()) == Some("p")
+                                        && t.as_slice().get(1).map(|s| s.as_str()) == Some(pubkey_hex.as_str())
+                                });
+                            if is_cancel {
+                                let owner = owner_cache
+                                    .get_or_resolve(&rest_client_for_presence, &pubkey_hex)
+                                    .await;
+                                if let Some(owner) = owner {
+                                    if sprout_event.event.pubkey.to_hex() == *owner {
+                                        let fired = cancel_in_flight_task(&mut pool, sprout_event.channel_id);
+                                        if !fired {
+                                            tracing::warn!(
+                                                channel_id = %sprout_event.channel_id,
+                                                "!cancel received but no in-flight task — no-op"
+                                            );
+                                        }
+                                        continue; // consume event — do NOT push to queue
+                                    }
+                                }
+                                // Not from owner — fall through to normal prompt handling.
+                            }
+                            // ── End cancel command handling ───────────────────
+
                             // ── Inbound author gate ──────────────────────────
                             // Coarse security policy: drop events from disallowed
                             // authors before they reach subscription rules or the
@@ -1189,6 +1223,9 @@ async fn tokio_main() -> Result<()> {
                                     continue;
                                 }
                             };
+                            // Capture author pubkey before queue.push() moves
+                            // sprout_event.event (needed for mode gate below).
+                            let author_hex = sprout_event.event.pubkey.to_hex();
                             let event_id_hex = sprout_event.event.id.to_hex();
                             let accepted = queue.push(QueuedEvent {
                                 channel_id: sprout_event.channel_id,
@@ -1207,6 +1244,28 @@ async fn tokio_main() -> Result<()> {
                                     pool::reaction_add(&rc, &event_id_hex, "👀").await;
                                 });
                             }
+                            // ── Multiple-event-handling mode gate ─────────────
+                            // Event is already queued. If mode requires it AND
+                            // the channel has an in-flight task, fire cancel.
+                            if accepted && queue.is_channel_in_flight(sprout_event.channel_id) {
+                                let should_cancel = match config.multiple_event_handling {
+                                    MultipleEventHandling::Queue => false,
+                                    MultipleEventHandling::Interrupt => true,
+                                    MultipleEventHandling::OwnerInterrupt => {
+                                        let owner = owner_cache
+                                            .get_or_resolve(&rest_client_for_presence, &pubkey_hex)
+                                            .await;
+                                        match owner {
+                                            Some(o) => author_hex == *o,
+                                            None => false,
+                                        }
+                                    }
+                                };
+                                if should_cancel {
+                                    cancel_in_flight_task(&mut pool, sprout_event.channel_id);
+                                }
+                            }
+                            // ── End mode gate ────────────────────────────────
                             typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
                         }
                         None => {
@@ -1448,6 +1507,26 @@ enum LoopAction {
     Exit,
 }
 
+// ── cancel_in_flight_task ─────────────────────────────────────────────────────
+
+/// Send a cancel signal to the in-flight task for `channel_id`.
+/// Returns `true` if a signal was sent, `false` if no in-flight task was found.
+fn cancel_in_flight_task(pool: &mut AgentPool, channel_id: uuid::Uuid) -> bool {
+    let entry = pool
+        .task_map_mut()
+        .values_mut()
+        .find(|m| m.channel_id == Some(channel_id));
+
+    if let Some(meta) = entry {
+        if let Some(tx) = meta.cancel_tx.take() {
+            let _ = tx.send(());
+            tracing::info!(channel = %channel_id, "cancel signal sent to in-flight task");
+            return true;
+        }
+    }
+    false
+}
+
 // ── dispatch_pending ──────────────────────────────────────────────────────────
 
 /// Flush queued work to available agents.
@@ -1487,8 +1566,18 @@ fn dispatch_pending(
 
         // Prompt text is now built inside run_prompt_task (needs async for
         // context fetching). Pass None for prompt_text; batch carries the data.
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
         let abort_handle = pool.join_set.spawn(async move {
-            pool::run_prompt_task(agent, Some(batch), None, ctx_clone, result_tx).await;
+            pool::run_prompt_task(
+                agent,
+                Some(batch),
+                None,
+                ctx_clone,
+                result_tx,
+                Some(cancel_rx),
+            )
+            .await;
         });
 
         pool.task_map_mut().insert(
@@ -1497,6 +1586,7 @@ fn dispatch_pending(
                 agent_index,
                 channel_id: Some(channel_id),
                 recoverable_batch,
+                cancel_tx: Some(cancel_tx),
             },
         );
         dispatched_channels.push(channel_id);
@@ -1538,7 +1628,14 @@ fn handle_prompt_result(
         // Don't requeue batches for channels the agent was removed from —
         // those events are stale and should be silently dropped.
         if !removed_channels.contains(&batch.channel_id) {
-            queue.requeue(batch);
+            if matches!(result.outcome, PromptOutcome::Cancelled) {
+                // Cancel re-prompt: store as cancelled events so flush_next()
+                // merges them into the next FlushBatch.cancelled_events,
+                // enabling the annotated merged-prompt format.
+                queue.requeue_as_cancelled(batch);
+            } else {
+                queue.requeue(batch);
+            }
         } else {
             tracing::debug!(
                 channel_id = %batch.channel_id,
@@ -1565,6 +1662,7 @@ fn handle_prompt_result(
         PromptOutcome::Error(_) => "error",
         PromptOutcome::Timeout => "timeout",
         PromptOutcome::AgentExited => "exited",
+        PromptOutcome::Cancelled => "cancelled",
     };
     let agent_index = result.agent.index;
 
@@ -1611,6 +1709,19 @@ fn handle_prompt_result(
         // 2. Application-class (IdleTimeout, HardTimeout, Json): the pipe is
         //    intact but the prompt failed. Return the agent to the pool so it
         //    can be reused for the next event.
+
+        // Intentional cancel — agent is healthy, return it to the pool.
+        // No respawn, no retry penalty. The cancelled batch was already stored
+        // via requeue_as_cancelled() above and will be merged into the next
+        // FlushBatch by flush_next().
+        PromptOutcome::Cancelled => {
+            tracing::debug!(
+                agent = agent_index,
+                outcome = outcome_label,
+                "agent_returned (cancelled)"
+            );
+            pool.return_agent(result.agent);
+        }
         PromptOutcome::Error(ref e) => {
             let is_transport_error = matches!(
                 e,
@@ -1797,7 +1908,7 @@ fn dispatch_heartbeat(
     let agent_index = agent.index;
 
     let abort_handle = pool.join_set.spawn(async move {
-        pool::run_prompt_task(agent, None, Some(prompt_text), ctx_clone, result_tx).await;
+        pool::run_prompt_task(agent, None, Some(prompt_text), ctx_clone, result_tx, None).await;
     });
 
     pool.task_map_mut().insert(
@@ -1806,6 +1917,7 @@ fn dispatch_heartbeat(
             agent_index,
             channel_id: None,
             recoverable_batch: None,
+            cancel_tx: None,
         },
     );
     *heartbeat_in_flight = true;
