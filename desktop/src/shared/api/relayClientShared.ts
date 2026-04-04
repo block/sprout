@@ -2,11 +2,10 @@ import type { RelayEvent } from "@/shared/api/types";
 
 export type RelaySubscriptionFilter = {
   kinds: number[];
-  "#h"?: string[];
   limit: number;
   since?: number;
   until?: number;
-};
+} & Partial<Record<`#${string}`, string[]>>;
 
 type HistorySubscription = {
   mode: "history";

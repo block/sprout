@@ -107,6 +107,9 @@ export function AppShell() {
       identityQuery.data?.pubkey,
       selectedView === "home",
     );
+  const refetchHomeFeedOnLiveMention = React.useEffectEvent(() => {
+    void homeFeedQuery.refetch();
+  });
   const channelsQuery = useChannelsQuery();
   const { refetch: refetchChannels } = channelsQuery;
   const channels = channelsQuery.data ?? [];
@@ -137,6 +140,10 @@ export function AppShell() {
     channels,
     activeChannel,
     activeReadAt,
+    {
+      currentPubkey: identityQuery.data?.pubkey,
+      onLiveMention: refetchHomeFeedOnLiveMention,
+    },
   );
   const { activeChannelTitle, activeDmPresenceStatus } = useActiveChannelHeader(
     activeChannel,
