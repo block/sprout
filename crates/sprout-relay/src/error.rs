@@ -123,7 +123,16 @@ pub enum ValidationError {
 
 impl From<sprout_db::DbError> for ValidationError {
     fn from(e: sprout_db::DbError) -> Self {
-        Self::Infra(format!("database error: {e}"))
+        match &e {
+            // Client-state errors: the event references something that doesn't exist
+            // or the caller lacks permission. These are rejections, not infra failures.
+            sprout_db::DbError::ChannelNotFound(_)
+            | sprout_db::DbError::MemberNotFound(_)
+            | sprout_db::DbError::NotFound(_)
+            | sprout_db::DbError::AccessDenied(_) => Self::Rejected(e.to_string()),
+            // Everything else (Sqlx, Serde, InvalidData, etc.) is infrastructure.
+            _ => Self::Infra(format!("database error: {e}")),
+        }
     }
 }
 
