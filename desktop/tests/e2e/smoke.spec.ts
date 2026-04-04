@@ -62,7 +62,10 @@ test("creates a new mocked stream", async ({ page }) => {
   await page
     .getByTestId("create-stream-description")
     .fill("Release coordination");
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);

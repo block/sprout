@@ -102,7 +102,10 @@ test("create stream with name and description", async ({ page }) => {
   await page
     .getByTestId("create-stream-description")
     .fill("A stream for testing channel creation");
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -117,7 +120,10 @@ test("create stream with special characters", async ({ page }) => {
   await page
     .getByTestId("create-stream-description")
     .fill("Stream with spaces and hyphens");
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -456,7 +462,10 @@ test("manage channel can delete an owned stream", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Create a stream" }).click();
   await page.getByTestId("create-stream-name").fill(channelName);
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 
   await page.getByTestId("channel-management-trigger").click();
@@ -477,7 +486,10 @@ test("canceling channel deletion keeps the owned stream", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Create a stream" }).click();
   await page.getByTestId("create-stream-name").fill(channelName);
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 
   await page.getByTestId("channel-management-trigger").click();

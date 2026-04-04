@@ -13,7 +13,10 @@ async function createStream(
   if (description !== undefined) {
     await page.getByTestId("create-stream-description").fill(description);
   }
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -40,7 +43,10 @@ test("create channel and verify in sidebar", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Create a stream" }).click();
   await page.getByTestId("create-stream-name").fill(channelName);
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -64,7 +70,10 @@ test("two users see the same channel", async ({
     await pageOne.goto("/");
     await pageOne.getByRole("button", { name: "Create a stream" }).click();
     await pageOne.getByTestId("create-stream-name").fill(channelName);
-    await pageOne.getByRole("button", { name: "Create" }).click();
+    await pageOne
+      .getByTestId("create-stream-form")
+      .getByRole("button", { name: "Create" })
+      .click();
     await expect(pageOne.getByTestId("stream-list")).toContainText(channelName);
 
     await pageTwo.goto("/");
@@ -166,13 +175,19 @@ test("multiple channels independent", async ({ page }) => {
   // Create channel A
   await page.getByRole("button", { name: "Create a stream" }).click();
   await page.getByTestId("create-stream-name").fill(channelA);
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelA);
 
   // Create channel B
   await page.getByRole("button", { name: "Create a stream" }).click();
   await page.getByTestId("create-stream-name").fill(channelB);
-  await page.getByRole("button", { name: "Create" }).click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelB);
 
   // Navigate to channel A and send a message
