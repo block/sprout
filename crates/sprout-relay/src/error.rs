@@ -82,11 +82,20 @@ pub enum ApiError {
     /// 422 Unprocessable Entity.
     #[error("unprocessable entity: {0}")]
     UnprocessableEntity(String),
-    /// Custom error with explicit status, code, and message.
+    /// Coded error with explicit status, code, and message.
     /// Use for domain-specific error codes (e.g. "nip98_not_supported", "scope_escalation").
-    /// The optional fourth field is merged into the JSON response body (must be an object).
-    #[error("{2}")]
-    Custom(StatusCode, &'static str, String, Option<serde_json::Value>),
+    /// The optional `extra` field is merged into the JSON response body (must be an object).
+    #[error("{message}")]
+    Coded {
+        /// HTTP status code for the response.
+        status: StatusCode,
+        /// Machine-readable error code (e.g. `"nip98_not_supported"`).
+        code: &'static str,
+        /// Human-readable error message.
+        message: String,
+        /// Optional extra fields merged into the JSON response body (must be an object).
+        extra: Option<serde_json::Value>,
+    },
     /// 500 Internal Server Error (anyhow-wrapped).
     #[error("internal error: {0}")]
     Internal(#[from] anyhow::Error),
@@ -126,7 +135,12 @@ impl IntoResponse for ApiError {
         // This matches the pre-refactor API contract where most endpoints returned
         // single-field errors and token endpoints returned two-field errors.
         match self {
-            ApiError::Custom(status, code, message, extra) => {
+            ApiError::Coded {
+                status,
+                code,
+                message,
+                extra,
+            } => {
                 let mut body = serde_json::json!({ "error": code, "message": message });
                 if let Some(extra_obj) = extra {
                     if let (Some(base), Some(ext)) = (body.as_object_mut(), extra_obj.as_object()) {

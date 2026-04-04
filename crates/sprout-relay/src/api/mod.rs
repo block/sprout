@@ -155,12 +155,12 @@ pub(crate) async fn extract_auth_context(
         // rather than falling through to a confusing "authentication failed".
         if auth_header.starts_with("Nostr ") {
             tracing::warn!("auth: NIP-98 auth header sent to non-token endpoint");
-            return Err(ApiError::Custom(
-                StatusCode::UNAUTHORIZED,
-                "nip98_not_supported",
-                "NIP-98 auth is only supported for POST /api/tokens".into(),
-                None,
-            ));
+            return Err(ApiError::Coded {
+                status: StatusCode::UNAUTHORIZED,
+                code: "nip98_not_supported",
+                message: "NIP-98 auth is only supported for POST /api/tokens".into(),
+                extra: None,
+            });
         }
 
         // ── 2. Bearer token path ──────────────────────────────────────────────
@@ -375,12 +375,12 @@ pub fn check_token_channel_access(
 ) -> Result<(), ApiError> {
     if let Some(ref allowed) = ctx.channel_ids {
         if !allowed.contains(channel_id) {
-            return Err(ApiError::Custom(
-                axum::http::StatusCode::FORBIDDEN,
-                "channel_not_permitted",
-                "Token does not have access to this channel".into(),
-                None,
-            ));
+            return Err(ApiError::Coded {
+                status: axum::http::StatusCode::FORBIDDEN,
+                code: "channel_not_permitted",
+                message: "Token does not have access to this channel".into(),
+                extra: None,
+            });
         }
     }
     Ok(())
@@ -391,12 +391,12 @@ pub fn check_token_channel_access(
 /// Used by handlers to propagate `require_scope` errors via `?`.
 pub(crate) fn scope_error(e: sprout_auth::AuthError) -> ApiError {
     match e {
-        sprout_auth::AuthError::InsufficientScope { required, .. } => ApiError::Custom(
-            axum::http::StatusCode::FORBIDDEN,
-            "insufficient_scope",
-            format!("token missing required scope: {required}"),
-            None,
-        ),
+        sprout_auth::AuthError::InsufficientScope { required, .. } => ApiError::Coded {
+            status: axum::http::StatusCode::FORBIDDEN,
+            code: "insufficient_scope",
+            message: format!("token missing required scope: {required}"),
+            extra: None,
+        },
         other => {
             tracing::warn!("scope_error: unexpected auth error: {other}");
             ApiError::Forbidden("insufficient_scope".into())
