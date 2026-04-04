@@ -64,6 +64,19 @@ export function useAncestorResolution(
       requestedAncestorIdsRef.current.add(eventId);
     }
 
+    // Cap the dedup set to prevent unbounded growth in long sessions.
+    const MAX_REQUESTED_ANCESTORS = 500;
+    if (requestedAncestorIdsRef.current.size > MAX_REQUESTED_ANCESTORS) {
+      const excess =
+        requestedAncestorIdsRef.current.size - MAX_REQUESTED_ANCESTORS;
+      let removed = 0;
+      for (const id of requestedAncestorIdsRef.current) {
+        if (removed >= excess) break;
+        requestedAncestorIdsRef.current.delete(id);
+        removed++;
+      }
+    }
+
     let isCancelled = false;
 
     void Promise.all(

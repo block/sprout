@@ -224,12 +224,22 @@ pub async fn post_tokens(
                 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
                 BASE64.decode(encoded).map_err(|_| {
                     tracing::warn!("post_tokens: NIP-98 base64 decode failed");
-                    ApiError::Unauthorized("authentication required".into())
+                    ApiError::Custom(
+                        StatusCode::UNAUTHORIZED,
+                        "invalid_auth",
+                        "NIP-98 verification failed".into(),
+                        None,
+                    )
                 })?
             };
             let event_json = String::from_utf8(decoded_bytes).map_err(|_| {
                 tracing::warn!("post_tokens: NIP-98 decoded bytes are not valid UTF-8");
-                ApiError::Unauthorized("authentication required".into())
+                ApiError::Custom(
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_auth",
+                    "NIP-98 verification failed".into(),
+                    None,
+                )
             })?;
 
             match sprout_auth::verify_nip98_event(&event_json, &canonical_url, "POST", Some(&body))
@@ -243,7 +253,12 @@ pub async fn post_tokens(
                     let has_payload = event.tags.find(nostr::TagKind::Payload).is_some();
                     if !has_payload {
                         tracing::warn!("post_tokens: NIP-98 event missing required payload tag");
-                        return Err(ApiError::Unauthorized("authentication required".into()));
+                        return Err(ApiError::Custom(
+                            StatusCode::UNAUTHORIZED,
+                            "invalid_auth",
+                            "NIP-98 payload tag required for POST /api/tokens".into(),
+                            None,
+                        ));
                     }
                     let pubkey_bytes = pubkey.to_bytes().to_vec();
                     if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
@@ -260,7 +275,12 @@ pub async fn post_tokens(
                 }
                 Err(e) => {
                     tracing::warn!("post_tokens: NIP-98 verification failed: {e}");
-                    return Err(ApiError::Unauthorized("authentication required".into()));
+                    return Err(ApiError::Custom(
+                        StatusCode::UNAUTHORIZED,
+                        "invalid_auth",
+                        "NIP-98 verification failed".into(),
+                        None,
+                    ));
                 }
             }
         } else {
@@ -276,6 +296,7 @@ pub async fn post_tokens(
             StatusCode::BAD_REQUEST,
             "invalid_name",
             "name must be 1–100 characters".into(),
+            None,
         ));
     }
 
@@ -285,6 +306,7 @@ pub async fn post_tokens(
             StatusCode::BAD_REQUEST,
             "invalid_scopes",
             "scopes must not be empty".into(),
+            None,
         ));
     }
 
@@ -299,6 +321,7 @@ pub async fn post_tokens(
                     StatusCode::BAD_REQUEST,
                     "invalid_scopes",
                     format!("unknown scope: {s}"),
+                    None,
                 ));
             }
             _ => {
@@ -307,6 +330,7 @@ pub async fn post_tokens(
                         StatusCode::BAD_REQUEST,
                         "invalid_scopes",
                         format!("scope requires admin: {s}"),
+                        None,
                     ));
                 }
             }
@@ -330,6 +354,7 @@ pub async fn post_tokens(
                     StatusCode::FORBIDDEN,
                     "scope_escalation",
                     format!("Cannot mint scope '{}' — not in your token's scopes", scope),
+                    None,
                 ));
             }
         }
@@ -343,6 +368,7 @@ pub async fn post_tokens(
                         StatusCode::FORBIDDEN,
                         "channel_escalation",
                         "Your token is channel-restricted; minted tokens must also specify channel_ids (subset of yours)".into(),
+                        None,
                     ));
                 }
                 Some(requested_raw) => {
@@ -354,6 +380,7 @@ pub async fn post_tokens(
                                     StatusCode::FORBIDDEN,
                                     "channel_escalation",
                                     format!("Cannot mint access to channel {} — not in your token's channel_ids", cid),
+                                    None,
                                 ));
                             }
                         }
@@ -380,6 +407,7 @@ pub async fn post_tokens(
                 state.mint_rate_limiter.limit(),
                 retry_secs
             ),
+            Some(serde_json::json!({ "retry_after_seconds": retry_secs })),
         ));
     }
 
@@ -395,6 +423,7 @@ pub async fn post_tokens(
                     StatusCode::FORBIDDEN,
                     "channel_escalation",
                     "Your token is channel-restricted; minted tokens must specify non-empty channel_ids (subset of yours)".into(),
+                    None,
                 ));
             }
             None
@@ -406,6 +435,7 @@ pub async fn post_tokens(
                         StatusCode::BAD_REQUEST,
                         "invalid_channel_ids",
                         format!("malformed UUID: {raw}"),
+                        None,
                     )
                 })?;
 
@@ -417,6 +447,7 @@ pub async fn post_tokens(
                             StatusCode::BAD_REQUEST,
                             "invalid_channel_ids",
                             format!("channel not found: {cid}"),
+                            None,
                         ));
                     }
                     Err(e) => {
@@ -435,6 +466,7 @@ pub async fn post_tokens(
                         StatusCode::FORBIDDEN,
                         "not_channel_member",
                         format!("not a member of channel: {cid}"),
+                        None,
                     ));
                 }
 
@@ -517,6 +549,7 @@ pub async fn post_tokens(
                     StatusCode::BAD_REQUEST,
                     "missing_required_scope",
                     format!("owned agents require the '{r}' scope for controllability"),
+                    None,
                 ));
             }
         }
@@ -590,6 +623,7 @@ pub async fn post_tokens(
                 StatusCode::CONFLICT,
                 "token_limit_exceeded",
                 "Maximum of 10 active tokens per pubkey".into(),
+                None,
             ));
         }
     };
@@ -634,7 +668,9 @@ pub async fn get_tokens(
 
     // NIP-98 bootstrap is not allowed for listing — caller must have a real token.
     if ctx.auth_method == RestAuthMethod::Nip98 {
-        return Err(ApiError::Unauthorized("authentication required".into()));
+        return Err(ApiError::Unauthorized(
+            "Bearer token required to list tokens".into(),
+        ));
     }
 
     let records = state
@@ -681,7 +717,9 @@ pub async fn delete_token(
     let ctx = extract_auth_context(&headers, &state).await?;
 
     if ctx.auth_method == RestAuthMethod::Nip98 {
-        return Err(ApiError::Unauthorized("authentication required".into()));
+        return Err(ApiError::Unauthorized(
+            "Bearer token required to revoke tokens".into(),
+        ));
     }
 
     // First, check if the token exists and is owned by the caller — to distinguish
@@ -710,11 +748,13 @@ pub async fn delete_token(
             StatusCode::CONFLICT,
             "already_revoked",
             "Token is already revoked".into(),
+            None,
         )),
         _ => Err(ApiError::Custom(
             StatusCode::NOT_FOUND,
             "not_found",
             "Token not found or not owned by caller".into(),
+            None,
         )),
     }
 }
@@ -731,7 +771,9 @@ pub async fn delete_all_tokens(
     let ctx = extract_auth_context(&headers, &state).await?;
 
     if ctx.auth_method == RestAuthMethod::Nip98 {
-        return Err(ApiError::Unauthorized("authentication required".into()));
+        return Err(ApiError::Unauthorized(
+            "Bearer token required to revoke tokens".into(),
+        ));
     }
 
     let revoked_count = state

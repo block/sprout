@@ -158,7 +158,8 @@ pub(crate) async fn extract_auth_context(
             return Err(ApiError::Custom(
                 StatusCode::UNAUTHORIZED,
                 "nip98_not_supported",
-                "NIP-98 auth is only valid for POST /api/tokens".into(),
+                "NIP-98 auth is only supported for POST /api/tokens".into(),
+                None,
             ));
         }
 
@@ -168,8 +169,8 @@ pub(crate) async fn extract_auth_context(
             if token.starts_with("sprout_") {
                 let hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
 
-                // Use the new including-revoked query so we can return distinct
-                // token_revoked vs invalid_token errors.
+                // Use the including-revoked query so we can preserve distinct
+                // token_revoked vs invalid_token error codes per the API contract.
                 let record = match state
                     .db
                     .get_api_token_by_hash_including_revoked(&hash)
@@ -178,25 +179,25 @@ pub(crate) async fn extract_auth_context(
                     Ok(Some(r)) => r,
                     Ok(None) => {
                         tracing::warn!("auth: API token not found");
-                        return Err(ApiError::Unauthorized("authentication required".into()));
+                        return Err(ApiError::Unauthorized("invalid_token".into()));
                     }
                     Err(e) => {
                         tracing::warn!("auth: API token lookup failed: {e}");
-                        return Err(ApiError::Unauthorized("authentication required".into()));
+                        return Err(ApiError::Unauthorized("invalid_token".into()));
                     }
                 };
 
                 // Relay-layer revocation check (before hash verification).
                 if record.revoked_at.is_some() {
                     tracing::warn!("auth: API token is revoked");
-                    return Err(ApiError::Unauthorized("authentication required".into()));
+                    return Err(ApiError::Unauthorized("token_revoked".into()));
                 }
 
                 // Relay-layer expiry check (before hash verification).
                 if let Some(exp) = record.expires_at {
                     if exp < chrono::Utc::now() {
                         tracing::warn!("auth: API token is expired");
-                        return Err(ApiError::Unauthorized("authentication required".into()));
+                        return Err(ApiError::Unauthorized("token_expired".into()));
                     }
                 }
 
@@ -204,7 +205,7 @@ pub(crate) async fn extract_auth_context(
                     Ok(pk) => pk,
                     Err(e) => {
                         tracing::warn!("auth: API token owner pubkey invalid: {e}");
-                        return Err(ApiError::Unauthorized("authentication required".into()));
+                        return Err(ApiError::Unauthorized("invalid_token".into()));
                     }
                 };
 
@@ -248,7 +249,7 @@ pub(crate) async fn extract_auth_context(
                     }
                     Err(_) => {
                         tracing::warn!("auth: API token hash verification failed");
-                        return Err(ApiError::Unauthorized("authentication required".into()));
+                        return Err(ApiError::Unauthorized("invalid_token".into()));
                     }
                 }
             }
@@ -272,7 +273,7 @@ pub(crate) async fn extract_auth_context(
                     }
                     Err(_) => {
                         tracing::warn!("auth: JWT validation failed");
-                        return Err(ApiError::Unauthorized("authentication required".into()));
+                        return Err(ApiError::Unauthorized("authentication failed".into()));
                     }
                 }
             } else {
@@ -303,24 +304,24 @@ pub(crate) async fn extract_auth_context(
                                     Err(_) => {
                                         tracing::warn!("auth: key derivation failed for username");
                                         return Err(ApiError::Unauthorized(
-                                            "authentication required".into(),
+                                            "authentication failed".into(),
                                         ));
                                     }
                                 }
                             }
                             tracing::warn!("auth: JWT missing preferred_username claim");
-                            return Err(ApiError::Unauthorized("authentication required".into()));
+                            return Err(ApiError::Unauthorized("authentication failed".into()));
                         }
                         Err(_) => {
                             tracing::warn!("auth: malformed JWT");
-                            return Err(ApiError::Unauthorized("authentication required".into()));
+                            return Err(ApiError::Unauthorized("authentication failed".into()));
                         }
                     }
                 }
                 #[cfg(not(any(test, feature = "dev")))]
                 {
                     tracing::warn!("auth: dev-mode JWT auth disabled in release builds");
-                    return Err(ApiError::Unauthorized("authentication required".into()));
+                    return Err(ApiError::Unauthorized("authentication failed".into()));
                 }
             }
         }
@@ -348,7 +349,7 @@ pub(crate) async fn extract_auth_context(
                 }
                 Err(_) => {
                     tracing::warn!("auth: invalid X-Pubkey header value");
-                    return Err(ApiError::Unauthorized("authentication required".into()));
+                    return Err(ApiError::Unauthorized("authentication failed".into()));
                 }
             }
         }
@@ -374,7 +375,12 @@ pub fn check_token_channel_access(
 ) -> Result<(), ApiError> {
     if let Some(ref allowed) = ctx.channel_ids {
         if !allowed.contains(channel_id) {
-            return Err(ApiError::Forbidden("channel_not_permitted".into()));
+            return Err(ApiError::Custom(
+                axum::http::StatusCode::FORBIDDEN,
+                "channel_not_permitted",
+                "Token does not have access to this channel".into(),
+                None,
+            ));
         }
     }
     Ok(())
@@ -385,9 +391,12 @@ pub fn check_token_channel_access(
 /// Used by handlers to propagate `require_scope` errors via `?`.
 pub(crate) fn scope_error(e: sprout_auth::AuthError) -> ApiError {
     match e {
-        sprout_auth::AuthError::InsufficientScope { required, .. } => ApiError::Forbidden(format!(
-            "insufficient_scope: token missing required scope: {required}"
-        )),
+        sprout_auth::AuthError::InsufficientScope { required, .. } => ApiError::Custom(
+            axum::http::StatusCode::FORBIDDEN,
+            "insufficient_scope",
+            format!("token missing required scope: {required}"),
+            None,
+        ),
         other => {
             tracing::warn!("scope_error: unexpected auth error: {other}");
             ApiError::Forbidden("insufficient_scope".into())
@@ -414,8 +423,7 @@ pub(crate) fn api_error(status: StatusCode, msg: &str) -> ApiError {
 }
 
 pub(crate) fn internal_error(msg: &str) -> ApiError {
-    tracing::error!("Internal error: {msg}");
-    ApiError::Internal(anyhow::anyhow!("internal server error"))
+    ApiError::Internal(anyhow::anyhow!("{msg}"))
 }
 
 pub(crate) fn not_found(msg: &str) -> ApiError {

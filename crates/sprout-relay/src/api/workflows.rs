@@ -506,11 +506,14 @@ pub async fn workflow_webhook(
         Some(secret) => {
             if !crate::webhook_secret::verify_secret(&provided_secret, secret) {
                 tracing::warn!("webhook: invalid secret for workflow {id}");
-                return Err(ApiError::Unauthorized("authentication required".into()));
+                return Err(ApiError::Unauthorized("authentication failed".into()));
             }
         }
         None => {
-            return Err(ApiError::Unauthorized("authentication required".into()));
+            return Err(ApiError::Unauthorized(
+                "webhook secret required but not configured — re-save the workflow to generate one"
+                    .into(),
+            ));
         }
     }
 
