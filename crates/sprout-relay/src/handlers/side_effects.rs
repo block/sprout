@@ -13,7 +13,7 @@ use sprout_core::kind::{
 use sprout_db::channel::MemberRole;
 
 use super::event::dispatch_persistent_event;
-use crate::error::SideEffectError;
+use crate::error::{SideEffectError, ValidationError};
 use crate::state::AppState;
 
 /// Check if a kind is an admin kind (9000-9022) that needs pre-storage validation.
@@ -66,13 +66,13 @@ pub async fn handle_side_effects(
 pub async fn validate_standard_deletion_event(
     event: &Event,
     state: &Arc<AppState>,
-) -> Result<(), SideEffectError> {
+) -> Result<(), ValidationError> {
     let actor_bytes =
         super::ingest::effective_message_author(event, &state.relay_keypair.public_key());
     let target_ids = extract_target_event_ids(event);
 
     if target_ids.is_empty() {
-        return Err(SideEffectError::Internal(
+        return Err(ValidationError::Rejected(
             "missing e tag for target event".into(),
         ));
     }
@@ -82,14 +82,14 @@ pub async fn validate_standard_deletion_event(
             .db
             .get_event_by_id_including_deleted(&target_id)
             .await?
-            .ok_or_else(|| SideEffectError::Internal("target event not found".into()))?;
+            .ok_or_else(|| ValidationError::Rejected("target event not found".into()))?;
 
         let target_author = super::ingest::effective_message_author(
             &target_event.event,
             &state.relay_keypair.public_key(),
         );
         if target_author != actor_bytes {
-            return Err(SideEffectError::Internal("must be event author".into()));
+            return Err(ValidationError::Rejected("must be event author".into()));
         }
     }
 
@@ -101,7 +101,7 @@ pub async fn validate_admin_event(
     kind: u32,
     event: &Event,
     state: &Arc<AppState>,
-) -> Result<(), SideEffectError> {
+) -> Result<(), ValidationError> {
     // CREATE_GROUP doesn't need an existing channel — skip h-tag extraction
     if kind == 9007 {
         return Ok(());
@@ -109,24 +109,20 @@ pub async fn validate_admin_event(
 
     // Extract channel from h tag
     let channel_id = extract_h_tag_channel(event)
-        .ok_or_else(|| SideEffectError::Internal("missing or invalid h tag".into()))?;
+        .ok_or_else(|| ValidationError::Rejected("missing or invalid h tag".into()))?;
 
     let actor_bytes = event.pubkey.serialize().to_vec();
 
     // Reject mutations on archived channels — except kind:9002 with archived=false
     // (unarchive), which must be allowed through so the channel can be restored.
-    let channel = state
-        .db
-        .get_channel(channel_id)
-        .await
-        .map_err(|_| SideEffectError::Internal("channel not found".into()))?;
+    let channel = state.db.get_channel(channel_id).await?;
     let is_unarchive_request = kind == 9002
         && event.tags.iter().any(|t| {
             let parts = t.as_slice();
             parts.len() >= 2 && parts[0] == "archived" && parts[1] == "false"
         });
     if channel.archived_at.is_some() && !is_unarchive_request {
-        return Err(SideEffectError::Internal("channel is archived".into()));
+        return Err(ValidationError::Rejected("channel is archived".into()));
     }
 
     match kind {
@@ -134,7 +130,7 @@ pub async fn validate_admin_event(
             // Validate role tag if present
             let role_str = extract_tag_value(event, "role").unwrap_or_else(|| "member".to_string());
             if role_str.parse::<sprout_db::channel::MemberRole>().is_err() {
-                return Err(SideEffectError::Internal(format!(
+                return Err(ValidationError::Rejected(format!(
                     "invalid role: {role_str}"
                 )));
             }
@@ -146,13 +142,13 @@ pub async fn validate_admin_event(
                 let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
                 match actor_member {
                     Some(m) if m.role == "owner" || m.role == "admin" => {}
-                    _ => return Err(SideEffectError::Internal("actor not authorized".into())),
+                    _ => return Err(ValidationError::Rejected("actor not authorized".into())),
                 }
             }
 
             // Extract target pubkey from p tag
             let target_pubkey = extract_p_tag(event)
-                .ok_or_else(|| SideEffectError::Internal("missing p tag".into()))?;
+                .ok_or_else(|| ValidationError::Rejected("missing p tag".into()))?;
 
             // Self-add: always allowed regardless of policy.
             if target_pubkey == actor_bytes {
@@ -165,19 +161,19 @@ pub async fn validate_admin_event(
                 match policy.as_str() {
                     "owner_only" => {
                         let owner_bytes = owner.ok_or_else(|| {
-                            SideEffectError::Internal(
+                            ValidationError::Rejected(
                                 "policy:owner_only — agent has no owner set".into(),
                             )
                         })?;
                         if actor_bytes != owner_bytes {
-                            return Err(SideEffectError::Internal(
+                            return Err(ValidationError::Rejected(
                                 "policy:owner_only — only the agent owner can add this agent"
                                     .into(),
                             ));
                         }
                     }
                     "nobody" => {
-                        return Err(SideEffectError::Internal(
+                        return Err(ValidationError::Rejected(
                             "policy:nobody — this agent has disabled external channel additions"
                                 .into(),
                         ));
@@ -194,21 +190,21 @@ pub async fn validate_admin_event(
         9001 => {
             // REMOVE_USER: self-remove allowed unless actor is the last owner; removing others requires owner/admin
             let target_pubkey = extract_p_tag(event)
-                .ok_or_else(|| SideEffectError::Internal("missing p tag".into()))?;
+                .ok_or_else(|| ValidationError::Rejected("missing p tag".into()))?;
             if target_pubkey == actor_bytes {
                 // Self-removal: must be an active member, and cannot be the last owner.
                 let members = state.db.get_members(channel_id).await?;
                 let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
                 match actor_member {
                     None => {
-                        return Err(SideEffectError::Internal(
+                        return Err(ValidationError::Rejected(
                             "actor is not an active member".into(),
                         ));
                     }
                     Some(m) if m.role == "owner" => {
                         let owner_count = members.iter().filter(|m| m.role == "owner").count();
                         if owner_count <= 1 {
-                            return Err(SideEffectError::Internal(
+                            return Err(ValidationError::Rejected(
                                 "cannot remove the last owner".into(),
                             ));
                         }
@@ -221,7 +217,7 @@ pub async fn validate_admin_event(
                 let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
                 match actor_member {
                     Some(m) if m.role == "owner" || m.role == "admin" => Ok(()),
-                    _ => Err(SideEffectError::Internal("actor not authorized".into())),
+                    _ => Err(ValidationError::Rejected("actor not authorized".into())),
                 }
             }
         }
@@ -233,7 +229,7 @@ pub async fn validate_admin_event(
                 .iter()
                 .any(|t| RECOGNIZED_TAGS.contains(&t.kind().to_string().as_str()));
             if !has_recognized {
-                return Err(SideEffectError::Internal(
+                return Err(ValidationError::Rejected(
                     "kind:9002 must include at least one metadata tag (name, about, archived, topic, purpose)".into(),
                 ));
             }
@@ -244,12 +240,12 @@ pub async fn validate_admin_event(
                     match t.content() {
                         Some("true") | Some("false") => {}
                         Some(v) => {
-                            return Err(SideEffectError::Internal(format!(
+                            return Err(ValidationError::Rejected(format!(
                                 "invalid archived value: {v} (must be \"true\" or \"false\")"
                             )));
                         }
                         None => {
-                            return Err(SideEffectError::Internal(
+                            return Err(ValidationError::Rejected(
                                 "archived tag must have a value".into(),
                             ));
                         }
@@ -267,7 +263,7 @@ pub async fn validate_admin_event(
                 let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
                 match actor_member {
                     Some(m) if m.role == "owner" || m.role == "admin" => Ok(()),
-                    _ => Err(SideEffectError::Internal(
+                    _ => Err(ValidationError::Rejected(
                         "actor not authorized for name/about/archived changes".into(),
                     )),
                 }
@@ -277,7 +273,7 @@ pub async fn validate_admin_event(
                 if is_member {
                     Ok(())
                 } else {
-                    Err(SideEffectError::Internal("not a member".into()))
+                    Err(ValidationError::Rejected("not a member".into()))
                 }
             }
         }
@@ -295,7 +291,7 @@ pub async fn validate_admin_event(
                     }
                 })
                 .ok_or_else(|| {
-                    SideEffectError::Internal("missing e tag for target event".into())
+                    ValidationError::Rejected("missing e tag for target event".into())
                 })?;
 
             // Verify the target event exists and belongs to the h-tag channel
@@ -303,18 +299,17 @@ pub async fn validate_admin_event(
             let target_event = state
                 .db
                 .get_event_by_id(&target_id)
-                .await
-                .map_err(|e| SideEffectError::Internal(format!("db error looking up target: {e}")))?
-                .ok_or_else(|| SideEffectError::Internal("target event not found".into()))?;
+                .await?
+                .ok_or_else(|| ValidationError::Rejected("target event not found".into()))?;
 
             match target_event.channel_id {
                 Some(target_ch) if target_ch != channel_id => {
-                    return Err(SideEffectError::Internal(
+                    return Err(ValidationError::Rejected(
                         "target event belongs to a different channel".into(),
                     ));
                 }
                 None => {
-                    return Err(SideEffectError::Internal(
+                    return Err(ValidationError::Rejected(
                         "target event has no channel".into(),
                     ));
                 }
@@ -336,7 +331,7 @@ pub async fn validate_admin_event(
             let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
             match actor_member {
                 Some(m) if m.role == "owner" || m.role == "admin" => Ok(()),
-                _ => Err(SideEffectError::Internal(
+                _ => Err(ValidationError::Rejected(
                     "must be event author or channel owner/admin".into(),
                 )),
             }
@@ -347,7 +342,7 @@ pub async fn validate_admin_event(
             let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
             match actor_member {
                 Some(m) if m.role == "owner" => Ok(()),
-                _ => Err(SideEffectError::Internal(
+                _ => Err(ValidationError::Rejected(
                     "only owner can delete group".into(),
                 )),
             }
@@ -358,14 +353,14 @@ pub async fn validate_admin_event(
             let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
             match actor_member {
                 None => {
-                    return Err(SideEffectError::Internal(
+                    return Err(ValidationError::Rejected(
                         "actor is not an active member".into(),
                     ));
                 }
                 Some(m) if m.role == "owner" => {
                     let owner_count = members.iter().filter(|m| m.role == "owner").count();
                     if owner_count <= 1 {
-                        return Err(SideEffectError::Internal(
+                        return Err(ValidationError::Rejected(
                             "cannot remove the last owner".into(),
                         ));
                     }

@@ -895,7 +895,14 @@ pub(crate) async fn check_admin_event(
     if crate::handlers::side_effects::is_admin_kind(kind_u32) {
         crate::handlers::side_effects::validate_admin_event(kind_u32, event, state)
             .await
-            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+            .map_err(|e| match e {
+                crate::error::ValidationError::Rejected(msg) => {
+                    IngestError::Rejected(format!("invalid: {msg}"))
+                }
+                crate::error::ValidationError::Infra(msg) => {
+                    IngestError::Internal(format!("error: {msg}"))
+                }
+            })?;
     }
     Ok(())
 }
@@ -909,7 +916,14 @@ pub(crate) async fn check_standard_deletion(
     if kind_u32 == KIND_DELETION {
         crate::handlers::side_effects::validate_standard_deletion_event(event, state)
             .await
-            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+            .map_err(|e| match e {
+                crate::error::ValidationError::Rejected(msg) => {
+                    IngestError::Rejected(format!("invalid: {msg}"))
+                }
+                crate::error::ValidationError::Infra(msg) => {
+                    IngestError::Internal(format!("error: {msg}"))
+                }
+            })?;
     }
     Ok(())
 }
@@ -930,9 +944,17 @@ pub(crate) async fn check_channel_not_archived(
                 parts.len() >= 2 && parts[0] == "archived" && parts[1] == "false"
             });
         if !is_unarchive {
-            if let Ok(channel) = state.db.get_channel(ch_id).await {
-                if channel.archived_at.is_some() {
-                    return Err(IngestError::Rejected("invalid: channel is archived".into()));
+            match state.db.get_channel(ch_id).await {
+                Ok(channel) => {
+                    if channel.archived_at.is_some() {
+                        return Err(IngestError::Rejected("invalid: channel is archived".into()));
+                    }
+                }
+                Err(e) => {
+                    // Fail-closed: DB errors are infrastructure failures, not client errors.
+                    // Letting events through on DB failure could violate archive invariants.
+                    tracing::warn!(channel_id = %ch_id, error = %e, "DB error checking archived status");
+                    return Err(IngestError::Internal(format!("error: database error: {e}")));
                 }
             }
         }

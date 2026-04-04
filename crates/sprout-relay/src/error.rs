@@ -104,9 +104,34 @@ pub enum ApiError {
     Database(#[from] sprout_db::DbError),
 }
 
-// ── Side-effect error type ────────────────────────────────────────────────────
+// ── Pre-storage validation error type ─────────────────────────────────────────
 
-/// Typed error for post-ingest side effects.
+/// Error from pre-storage validation (admin events, standard deletions).
+///
+/// Separates client errors (bad event) from infrastructure errors (DB down)
+/// so the ingest pipeline can map them to the correct transport response:
+/// `Rejected` → NIP-01 OK false / HTTP 400, `Infra` → HTTP 500.
+#[derive(Debug, thiserror::Error)]
+pub enum ValidationError {
+    /// The event is invalid — client error.
+    #[error("{0}")]
+    Rejected(String),
+    /// An infrastructure failure (DB, etc.) — not the client's fault.
+    #[error("{0}")]
+    Infra(String),
+}
+
+impl From<sprout_db::DbError> for ValidationError {
+    fn from(e: sprout_db::DbError) -> Self {
+        Self::Infra(format!("database error: {e}"))
+    }
+}
+
+// ── Post-storage side-effect error type ───────────────────────────────────────
+
+/// Typed error for post-ingest side effects (fire-and-forget).
+///
+/// These errors are logged and swallowed — the event is already committed.
 #[derive(Debug, thiserror::Error)]
 pub enum SideEffectError {
     /// A database operation failed.
