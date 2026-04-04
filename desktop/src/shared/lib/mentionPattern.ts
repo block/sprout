@@ -20,11 +20,15 @@ export function buildPrefixPattern(
   const escapedPrefix = escapeRegExp(prefix);
 
   if (sorted.length === 0) {
-    return new RegExp(`${escapedPrefix}\\S+`, "g");
+    return new RegExp(`${escapedPrefix}\\S+`, "gi");
   }
 
   const nameAlternatives = sorted.map((name) => escapeRegExp(name)).join("|");
-  return new RegExp(`${escapedPrefix}(?:${nameAlternatives}|\\S+)`, "g");
+  const boundary = "(?=[\\s,;.!?:)\\]}]|$)";
+  return new RegExp(
+    `${escapedPrefix}(?:(?:${nameAlternatives})${boundary}|\\S+)`,
+    "gi",
+  );
 }
 
 /**
