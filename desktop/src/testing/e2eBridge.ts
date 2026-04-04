@@ -2845,16 +2845,29 @@ async function handleSendChannelMessage(
     channelId: string;
     content: string;
     parentEventId?: string | null;
+    kind?: number | null;
     mentionPubkeys?: string[];
   },
   config: E2eConfig | undefined,
 ): Promise<RawSendChannelMessageResponse> {
+  const kind = args.kind ?? 9;
   const identity = getIdentity(config);
   if (!identity) {
     const createdAt = Math.floor(Date.now() / 1000);
 
     if (!args.parentEventId) {
-      const event = createMockEvent(9, args.content, [["h", args.channelId]]);
+      const selfLower = getMockMemberPubkey(config).toLowerCase();
+      const seen = new Set<string>([selfLower]);
+      const tags: string[][] = [["h", args.channelId]];
+      for (const pk of args.mentionPubkeys ?? []) {
+        const lower = pk.toLowerCase();
+        if (!seen.has(lower)) {
+          seen.add(lower);
+          tags.push(["p", lower]);
+        }
+      }
+
+      const event = createMockEvent(kind, args.content, tags);
       recordMockMessage(args.channelId, event);
       emitMockLiveEvent(args.channelId, event);
 
@@ -2903,30 +2916,25 @@ async function handleSendChannelMessage(
       id: crypto.randomUUID().replace(/-/g, ""),
       pubkey: getMockMemberPubkey(config),
       created_at: createdAt,
-      kind: 9,
+      kind,
       tags: (() => {
         const authorPubkey = getMockMemberPubkey(config);
-        // Match production tag ordering: author p, h, mention ps, then e-tags.
-        const tags: string[][] = [
-          ["p", authorPubkey],
-          ["h", args.channelId],
-        ];
+        const tags: string[][] = [["h", args.channelId]];
         // Best-effort client-side normalization (relay is authoritative).
         const selfLower = authorPubkey.toLowerCase();
         const seen = new Set<string>([selfLower]);
+        if (rootEventId === args.parentEventId) {
+          tags.push(["e", rootEventId, "", "reply"]);
+        } else {
+          tags.push(["e", rootEventId, "", "root"]);
+          tags.push(["e", args.parentEventId, "", "reply"]);
+        }
         for (const pk of args.mentionPubkeys ?? []) {
           const lower = pk.toLowerCase();
           if (!seen.has(lower)) {
             seen.add(lower);
             tags.push(["p", lower]);
           }
-        }
-        // Thread e-tags come after mention p-tags.
-        if (rootEventId === args.parentEventId) {
-          tags.push(["e", rootEventId, "", "reply"]);
-        } else {
-          tags.push(["e", rootEventId, "", "root"]);
-          tags.push(["e", args.parentEventId, "", "reply"]);
         }
         return tags;
       })(),
@@ -2947,14 +2955,16 @@ async function handleSendChannelMessage(
   }
 
   const relayIdentity = getRelayIdentity(config);
-  const tags: string[][] = [
-    ["p", relayIdentity.pubkey],
-    ["h", args.channelId],
-  ];
+  const tags: string[][] = [["h", args.channelId]];
 
-  // Add mention p-tags (deduplicated, excluding self).
   const selfLower = relayIdentity.pubkey.toLowerCase();
   const seen = new Set<string>([selfLower]);
+
+  if (args.parentEventId) {
+    tags.push(["e", args.parentEventId, "", "root"]);
+    tags.push(["e", args.parentEventId, "", "reply"]);
+  }
+
   for (const pk of args.mentionPubkeys ?? []) {
     const lower = pk.toLowerCase();
     if (!seen.has(lower)) {
@@ -2963,16 +2973,8 @@ async function handleSendChannelMessage(
     }
   }
 
-  // Add thread e-tags if replying.
-  if (args.parentEventId) {
-    // Simplified: treat parent as both root and reply for direct replies.
-    // The relay's NIP-10 resolver handles ancestry validation.
-    tags.push(["e", args.parentEventId, "", "root"]);
-    tags.push(["e", args.parentEventId, "", "reply"]);
-  }
-
   const result = await submitSignedEvent(config, {
-    kind: 9,
+    kind,
     content: args.content.trim(),
     tags,
   });
