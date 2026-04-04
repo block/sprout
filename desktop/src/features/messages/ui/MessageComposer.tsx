@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
+import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
 import { useDrafts } from "@/features/messages/lib/useDrafts";
 import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
@@ -74,6 +75,11 @@ export function MessageComposer({
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
+  const { channels } = useChannelNavigation();
+  const channelNames = React.useMemo(
+    () => channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
+    [channels],
+  );
   const notifyTyping = useTypingBroadcast(channelId);
 
   const media = useMediaUpload(setContent);
@@ -586,6 +592,7 @@ export function MessageComposer({
               className="pointer-events-none absolute inset-0 overflow-hidden"
             >
               <ComposerMentionOverlay
+                channelNames={channelNames}
                 content={content}
                 mentionNames={mentions.knownNames}
                 scrollTop={composerScrollTop}
