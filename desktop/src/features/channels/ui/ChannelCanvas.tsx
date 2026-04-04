@@ -5,6 +5,7 @@ import {
   useCanvasQuery,
   useSetCanvasMutation,
 } from "@/features/channels/hooks";
+import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
 import { Textarea } from "@/shared/ui/textarea";
@@ -22,6 +23,11 @@ export function ChannelCanvas({
 }: ChannelCanvasProps) {
   const canvasQuery = useCanvasQuery(channelId, channelId !== null);
   const setCanvasMutation = useSetCanvasMutation(channelId);
+  const { channels } = useChannelNavigation();
+  const channelNames = React.useMemo(
+    () => channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
+    [channels],
+  );
   const [isEditing, setIsEditing] = React.useState(false);
   const [draft, setDraft] = React.useState("");
 
@@ -109,7 +115,11 @@ export function ChannelCanvas({
           className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3"
           data-testid="channel-canvas-content"
         >
-          <Markdown compact content={canvasContent} />
+          <Markdown
+            channelNames={channelNames}
+            compact
+            content={canvasContent}
+          />
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">

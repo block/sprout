@@ -11,6 +11,7 @@ import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext"
 import type { Channel } from "@/shared/api/types";
 
 type MarkdownProps = {
+  channelNames?: string[];
   className?: string;
   compact?: boolean;
   content: string;
@@ -192,6 +193,7 @@ function shallowArrayEqual(a?: string[], b?: string[]): boolean {
 }
 
 function MarkdownInner({
+  channelNames,
   className,
   compact = false,
   content,
@@ -204,11 +206,6 @@ function MarkdownInner({
       ? "compact"
       : "default";
   const { channels, onOpenChannel } = useChannelNavigation();
-
-  const channelNames = React.useMemo(
-    () => channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
-    [channels],
-  );
 
   const components = React.useMemo(
     () => createMarkdownComponents(variant, channels, onOpenChannel),
@@ -261,7 +258,8 @@ export const Markdown = React.memo(
     prev.className === next.className &&
     prev.compact === next.compact &&
     prev.tight === next.tight &&
-    shallowArrayEqual(prev.mentionNames, next.mentionNames),
+    shallowArrayEqual(prev.mentionNames, next.mentionNames) &&
+    shallowArrayEqual(prev.channelNames, next.channelNames),
 );
 
 Markdown.displayName = "Markdown";
