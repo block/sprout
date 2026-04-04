@@ -48,15 +48,22 @@ async function sendChannelMessage(
   {
     channelName,
     content,
+    kind,
     mentionPubkeys,
   }: {
     channelName: string;
     content: string;
+    kind?: number | null;
     mentionPubkeys?: string[];
   },
 ) {
   await page.evaluate(
-    async ({ channelName: targetChannelName, content, mentionPubkeys }) => {
+    async ({
+      channelName: targetChannelName,
+      content,
+      kind,
+      mentionPubkeys,
+    }) => {
       const tauriWindow = window as Window & {
         __TAURI_INTERNALS__?: {
           invoke: (
@@ -86,11 +93,45 @@ async function sendChannelMessage(
         parentEventId: null,
         mediaTags: null,
         mentionPubkeys: mentionPubkeys ?? null,
-        kind: null,
+        kind: kind ?? null,
       });
     },
-    { channelName, content, mentionPubkeys },
+    { channelName, content, kind, mentionPubkeys },
   );
+}
+
+async function joinChannel(
+  page: import("@playwright/test").Page,
+  channelName: string,
+) {
+  await page.evaluate(async (targetChannelName) => {
+    const tauriWindow = window as Window & {
+      __TAURI_INTERNALS__?: {
+        invoke: (
+          command: string,
+          payload?: Record<string, unknown>,
+        ) => Promise<unknown>;
+      };
+    };
+
+    const invoke = tauriWindow.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) {
+      throw new Error("Tauri invoke bridge is unavailable.");
+    }
+
+    const channels = (await invoke("get_channels")) as Array<{
+      id: string;
+      name: string;
+    }>;
+    const channel = channels.find(({ name }) => name === targetChannelName);
+    if (!channel) {
+      throw new Error(`Channel not found: ${targetChannelName}`);
+    }
+
+    await invoke("join_channel", {
+      channelId: channel.id,
+    });
+  }, channelName);
 }
 
 async function getLoggedNotifications(page: import("@playwright/test").Page) {
@@ -250,6 +291,73 @@ test("live mentions refetch the home feed without waiting for polling", async ({
 
     await targetPage.getByRole("button", { name: "Home" }).click();
     await expect(targetPage.getByTestId("chat-title")).toHaveText("Home");
+    await expect(targetPage.getByTestId("sidebar-home-count")).toHaveCount(0);
+    await expect
+      .poll(() => getLoggedNotificationCount(targetPage), { timeout: 3_000 })
+      .toBe(1);
+  } finally {
+    await targetContext.close();
+    await senderContext.close();
+  }
+});
+
+test("live forum mentions refetch the home feed without waiting for polling", async ({
+  browser,
+}: {
+  browser: Browser;
+}) => {
+  const stamp = Date.now();
+  const targetContext = await browser.newContext();
+  const senderContext = await browser.newContext();
+  const targetPage = await targetContext.newPage();
+  const senderPage = await senderContext.newPage();
+
+  try {
+    await installRelayBridge(targetPage, "tyler");
+    await installRelayBridge(senderPage, "alice");
+
+    await targetPage.goto("/");
+    await senderPage.goto("/");
+    await enableDesktopNotifications(targetPage);
+
+    await targetPage.getByTestId("channel-general").click();
+    await expect(targetPage.getByTestId("chat-title")).toHaveText("general");
+    await joinChannel(senderPage, "watercooler");
+
+    const message = `Forum ping @tyler ${stamp}`;
+    await sendChannelMessage(senderPage, {
+      channelName: "watercooler",
+      content: message,
+      kind: 45001,
+      mentionPubkeys: [TEST_IDENTITIES.tyler.pubkey],
+    });
+
+    await expect(targetPage.getByTestId("sidebar-home-count")).toHaveText("1", {
+      timeout: 5_000,
+    });
+
+    await expect
+      .poll(() => getLoggedNotificationCount(targetPage), { timeout: 5_000 })
+      .toBe(1);
+
+    const notifications = await getLoggedNotifications(targetPage);
+
+    expect(notifications).toEqual([
+      {
+        body: message,
+        title: "@Mention in #watercooler",
+      },
+    ]);
+
+    await targetPage.getByRole("button", { name: "Home" }).click();
+    await expect(targetPage.getByTestId("chat-title")).toHaveText("Home");
+    await expect(
+      targetPage.getByRole("heading", { name: "Mentions" }),
+    ).toBeVisible();
+    const mentionsSection = targetPage.locator("section").filter({
+      has: targetPage.getByRole("heading", { name: "Mentions" }),
+    });
+    await expect(mentionsSection).toContainText(message);
     await expect(targetPage.getByTestId("sidebar-home-count")).toHaveCount(0);
     await expect
       .poll(() => getLoggedNotificationCount(targetPage), { timeout: 3_000 })
