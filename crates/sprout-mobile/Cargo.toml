@@ -1,0 +1,62 @@
+[package]
+name = "sprout-mobile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "UniFFI-exposed Rust core for Sprout iOS/Android apps"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "sprout_mobile"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[dependencies]
+# Workspace crates
+sprout-core = { workspace = true }
+sprout-sdk  = { workspace = true }
+
+# UniFFI
+uniffi = { version = "0.29", features = ["cli"] }
+
+# Nostr
+nostr = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# WebSocket
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+
+# HTTP
+reqwest = { workspace = true }
+
+# Local storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Auth
+base64 = "0.22"
+sha2 = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+url = { workspace = true }
+hex = { workspace = true }
+tracing = { workspace = true }
+urlencoding = "2"
+
+[build-dependencies]
+uniffi = { version = "0.29", features = ["build", "cli"] }

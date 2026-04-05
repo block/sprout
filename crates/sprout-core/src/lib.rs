@@ -19,6 +19,8 @@ pub mod kind;
 pub mod network;
 /// Presence status types shared across crates.
 pub mod presence;
+/// NIP-01 relay-to-client message parsing.
+pub mod protocol;
 /// Schnorr signature and event ID verification.
 pub mod verification;
 

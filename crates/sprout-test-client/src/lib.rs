@@ -66,7 +66,18 @@ impl From<nostr::event::builder::Error> for TestClientError {
     }
 }
 
-// Map RelayClientError → TestClientError for parse_relay_message calls.
+// Map ProtocolError → TestClientError for parse_relay_message calls.
+impl From<sprout_core::protocol::ProtocolError> for TestClientError {
+    fn from(e: sprout_core::protocol::ProtocolError) -> Self {
+        use sprout_core::protocol::ProtocolError as PE;
+        match e {
+            PE::Json(e) => TestClientError::Json(e),
+            PE::UnexpectedMessage(m) => TestClientError::UnexpectedMessage(m),
+        }
+    }
+}
+
+// Map RelayClientError → TestClientError for relay client calls.
 impl From<sprout_mcp::relay_client::RelayClientError> for TestClientError {
     fn from(e: sprout_mcp::relay_client::RelayClientError) -> Self {
         use sprout_mcp::relay_client::RelayClientError as E;

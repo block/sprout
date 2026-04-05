@@ -10,6 +10,8 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tracing::{debug, warn};
 
+pub use sprout_core::protocol::{parse_relay_message, OkResponse, RelayMessage};
+
 // ── Timeouts ──────────────────────────────────────────────────────────────────
 
 /// How long to wait for an OK acknowledgement after sending an event.
@@ -69,54 +71,18 @@ impl From<nostr::event::builder::Error> for RelayClientError {
     }
 }
 
-// ── Public relay message type ─────────────────────────────────────────────────
-
-/// A message received from a Nostr relay.
-#[derive(Debug, Clone)]
-pub enum RelayMessage {
-    /// An event matching an active subscription.
-    Event {
-        /// The subscription ID this event belongs to.
-        subscription_id: String,
-        /// The Nostr event payload.
-        event: Box<Event>,
-    },
-    /// Acknowledgement of a published event.
-    Ok(OkResponse),
-    /// End-of-stored-events marker for a subscription.
-    Eose {
-        /// The subscription ID that has reached end-of-stored-events.
-        subscription_id: String,
-    },
-    /// The relay closed a subscription, usually with an error.
-    Closed {
-        /// The subscription ID that was closed.
-        subscription_id: String,
-        /// Human-readable reason for the closure.
-        message: String,
-    },
-    /// A human-readable notice from the relay.
-    Notice {
-        /// The notice text.
-        message: String,
-    },
-    /// A NIP-42 authentication challenge from the relay.
-    Auth {
-        /// The challenge string to sign.
-        challenge: String,
-    },
+impl From<sprout_core::protocol::ProtocolError> for RelayClientError {
+    fn from(e: sprout_core::protocol::ProtocolError) -> Self {
+        use sprout_core::protocol::ProtocolError as PE;
+        match e {
+            PE::Json(je) => RelayClientError::Json(je),
+            PE::UnexpectedMessage(m) => RelayClientError::UnexpectedMessage(m),
+        }
+    }
 }
 
-/// The relay's response to a published event (NIP-01 `OK` message).
-#[derive(Debug, Clone)]
-pub struct OkResponse {
-    /// Hex-encoded ID of the event that was acknowledged.
-    pub event_id: String,
-    /// Whether the relay accepted the event.
-    pub accepted: bool,
-    /// Human-readable reason string (empty when accepted without comment).
-    pub message: String,
-}
+// RelayMessage, OkResponse, and parse_relay_message are re-exported from
+// sprout_core::protocol (see the `pub use` at the top of this file).
 
 // ── Internal types ────────────────────────────────────────────────────────────
 
@@ -925,98 +891,8 @@ pub(crate) fn relay_ws_to_http(url: &str) -> String {
         .to_string()
 }
 
-/// Parse a raw relay text frame into a typed [`RelayMessage`].
-#[allow(clippy::result_large_err)]
-pub fn parse_relay_message(text: &str) -> Result<RelayMessage, RelayClientError> {
-    let arr: Vec<Value> = serde_json::from_str(text)?;
-
-    let msg_type = arr
-        .first()
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| RelayClientError::UnexpectedMessage(text.to_string()))?;
-
-    match msg_type {
-        "EVENT" => {
-            let sub_id = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayClientError::UnexpectedMessage(text.to_string()))?
-                .to_string();
-            let event: Event = serde_json::from_value(
-                arr.get(2)
-                    .cloned()
-                    .ok_or_else(|| RelayClientError::UnexpectedMessage(text.to_string()))?,
-            )?;
-            Ok(RelayMessage::Event {
-                subscription_id: sub_id,
-                event: Box::new(event),
-            })
-        }
-        "OK" => {
-            let event_id = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayClientError::UnexpectedMessage(text.to_string()))?
-                .to_string();
-            let accepted = arr.get(2).and_then(|v| v.as_bool()).unwrap_or(false);
-            let message = arr
-                .get(3)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            Ok(RelayMessage::Ok(OkResponse {
-                event_id,
-                accepted,
-                message,
-            }))
-        }
-        "EOSE" => {
-            let sub_id = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayClientError::UnexpectedMessage(text.to_string()))?
-                .to_string();
-            Ok(RelayMessage::Eose {
-                subscription_id: sub_id,
-            })
-        }
-        "CLOSED" => {
-            let sub_id = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayClientError::UnexpectedMessage(text.to_string()))?
-                .to_string();
-            let message = arr
-                .get(2)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            Ok(RelayMessage::Closed {
-                subscription_id: sub_id,
-                message,
-            })
-        }
-        "NOTICE" => {
-            let message = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            Ok(RelayMessage::Notice { message })
-        }
-        "AUTH" => {
-            let challenge = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayClientError::UnexpectedMessage(text.to_string()))?
-                .to_string();
-            Ok(RelayMessage::Auth { challenge })
-        }
-        other => Err(RelayClientError::UnexpectedMessage(format!(
-            "unknown message type: {other}"
-        ))),
-    }
-}
+// parse_relay_message is re-exported from sprout_core::protocol at the top of
+// this file. The local tests below exercise it through that re-export.
 
 #[cfg(test)]
 mod tests {
@@ -1169,11 +1045,12 @@ mod tests {
 
     #[test]
     fn parse_unknown_type_returns_error() {
+        use sprout_core::protocol::ProtocolError;
         let text = r#"["UNKNOWN","data"]"#;
         let result = parse_relay_message(text);
         assert!(result.is_err());
         match result.unwrap_err() {
-            RelayClientError::UnexpectedMessage(msg) => {
+            ProtocolError::UnexpectedMessage(msg) => {
                 assert!(msg.contains("unknown message type"));
             }
             e => panic!("expected UnexpectedMessage, got {e:?}"),
@@ -1182,19 +1059,21 @@ mod tests {
 
     #[test]
     fn parse_invalid_json_returns_error() {
+        use sprout_core::protocol::ProtocolError;
         let text = "not json at all";
         let result = parse_relay_message(text);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RelayClientError::Json(_)));
+        assert!(matches!(result.unwrap_err(), ProtocolError::Json(_)));
     }
 
     #[test]
     fn parse_empty_array_returns_error() {
+        use sprout_core::protocol::ProtocolError;
         let text = "[]";
         let result = parse_relay_message(text);
         assert!(result.is_err());
         match result.unwrap_err() {
-            RelayClientError::UnexpectedMessage(_) => {}
+            ProtocolError::UnexpectedMessage(_) => {}
             e => panic!("expected UnexpectedMessage, got {e:?}"),
         }
     }
