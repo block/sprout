@@ -186,6 +186,40 @@ function useCreateForm(
   };
 }
 
+function useDeferredSidebarLoad(
+  activateImmediately: boolean,
+  timeoutMs: number,
+) {
+  const [shouldLoad, setShouldLoad] = React.useState(activateImmediately);
+
+  React.useEffect(() => {
+    if (shouldLoad || activateImmediately) {
+      if (!shouldLoad) {
+        setShouldLoad(true);
+      }
+      return;
+    }
+
+    const load = () => {
+      setShouldLoad(true);
+    };
+
+    if ("requestIdleCallback" in window) {
+      const idleId = window.requestIdleCallback(load, { timeout: timeoutMs });
+      return () => {
+        window.cancelIdleCallback(idleId);
+      };
+    }
+
+    const timeoutId = globalThis.setTimeout(load, timeoutMs);
+    return () => {
+      globalThis.clearTimeout(timeoutId);
+    };
+  }, [activateImmediately, shouldLoad, timeoutMs]);
+
+  return shouldLoad;
+}
+
 // ---------------------------------------------------------------------------
 // SectionHeaderActions — search + create icon buttons for section headers
 // ---------------------------------------------------------------------------
@@ -464,17 +498,31 @@ export function AppSidebar({
   const directMessages = channels.filter(
     (channel) => channel.channelType === "dm",
   );
+  const isSelectedDirectMessage =
+    selectedView === "channel" &&
+    directMessages.some((channel) => channel.id === selectedChannelId);
+  const shouldLoadDmMetadata = useDeferredSidebarLoad(
+    isSelectedDirectMessage,
+    400,
+  );
   const { dmChannelLabels, dmParticipantsByChannelId, dmPresenceByChannelId } =
     useDmSidebarMetadata({
       currentPubkey,
       directMessages,
+      enabled: shouldLoadDmMetadata,
       fallbackDisplayName,
       profileDisplayName: profile?.displayName,
     });
-  const managedAgentsQuery = useManagedAgentsQuery();
+  const shouldLoadAgentCount = useDeferredSidebarLoad(
+    selectedView === "agents",
+    250,
+  );
+  const managedAgentsQuery = useManagedAgentsQuery({
+    enabled: shouldLoadAgentCount,
+  });
   const totalAgentCount = managedAgentsQuery.data?.length ?? 0;
   const shouldShowAgentCount =
-    totalAgentCount > 0 || !managedAgentsQuery.isLoading;
+    totalAgentCount > 0 || managedAgentsQuery.isFetched;
   const resolvedDisplayName =
     profile?.displayName?.trim() ||
     fallbackDisplayName?.trim() ||

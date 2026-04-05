@@ -300,9 +300,13 @@ pub fn run() {
             resolve_persisted_identity(&app_handle, &state)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-            if let Err(error) = restore_managed_agents_on_launch(&app_handle) {
-                eprintln!("sprout-desktop: failed to restore managed agents: {error}");
-            }
+            // Keep launch-time agent restoration off the synchronous setup path
+            // so the frontend can mount and reveal the window promptly.
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = restore_managed_agents_on_launch(&app_handle) {
+                    eprintln!("sprout-desktop: failed to restore managed agents: {error}");
+                }
+            });
 
             Ok(())
         })
