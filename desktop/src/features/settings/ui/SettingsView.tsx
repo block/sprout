@@ -1,7 +1,8 @@
+import * as React from "react";
+import { FocusScope } from "@radix-ui/react-focus-scope";
 import { X } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
-import { Button } from "@/shared/ui/button";
 import {
   renderSettingsSection,
   settingsSections,
@@ -22,10 +23,14 @@ type SettingsViewProps = SettingsPanelProps & {
 
 function SettingsSectionButton({
   active,
+  index,
+  isLoaded,
   onSelect,
   section,
 }: {
   active: boolean;
+  index: number;
+  isLoaded: boolean;
   onSelect: (section: SettingsSection) => void;
   section: (typeof settingsSections)[number];
 }) {
@@ -35,13 +40,15 @@ function SettingsSectionButton({
     <button
       aria-pressed={active}
       className={cn(
-        "group inline-flex min-w-fit items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:w-full lg:justify-start",
+        "group inline-flex min-w-fit items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium whitespace-nowrap motion-safe:transition-all motion-safe:duration-300 motion-safe:ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         active
           ? "border-border bg-background text-foreground shadow-sm"
           : "border-transparent bg-transparent text-muted-foreground hover:bg-background/70 hover:text-foreground",
+        isLoaded ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-2",
       )}
       data-testid={`settings-nav-${section.value}`}
       onClick={() => onSelect(section.value)}
+      style={{ transitionDelay: isLoaded ? "0ms" : `${index * 40 + 300}ms` }}
       type="button"
     >
       <Icon
@@ -77,84 +84,146 @@ export function SettingsView({
   presenceStatus,
   section,
 }: SettingsViewProps) {
+  // Entrance animation state
+  const [isLoaded, setIsLoaded] = React.useState(false);
+  React.useEffect(() => {
+    const timer = setTimeout(() => setIsLoaded(true), 50);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Section transition animation
+  const [isTransitioning, setIsTransitioning] = React.useState(false);
+  const prevSectionRef = React.useRef(section);
+  React.useEffect(() => {
+    if (prevSectionRef.current === section) return;
+    prevSectionRef.current = section;
+    setIsTransitioning(true);
+    const timer = setTimeout(() => setIsTransitioning(false), 150);
+    return () => clearTimeout(timer);
+  }, [section]);
+
+  // Escape key to close
+  React.useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   return (
     <div
-      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
-      data-testid="settings-view"
+      className={cn(
+        "fixed inset-0 z-50 flex items-center justify-center motion-safe:transition-opacity motion-safe:duration-300",
+        isLoaded ? "opacity-100" : "opacity-0",
+      )}
+      data-testid="settings-overlay"
     >
-      <header
-        className="flex items-start justify-between gap-4 border-b border-border/80 bg-background px-4 pb-4 pt-8 sm:px-6"
-        data-tauri-drag-region
-      >
-        <div className="min-w-0 pt-0.5">
-          <h1
-            className="text-lg font-semibold tracking-tight"
-            data-testid="settings-title"
-          >
-            Settings
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Manage your relay identity, desktop preferences, and local access
-            tokens.
-          </p>
-        </div>
+      {/* Backdrop — click to close */}
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+        onClick={onClose}
+      />
 
-        <Button
-          aria-label="Close settings"
-          className="shrink-0 text-muted-foreground hover:text-foreground"
-          data-testid="settings-close"
-          onClick={onClose}
-          size="icon"
-          title="Close settings"
-          type="button"
-          variant="ghost"
+      {/* Modal container */}
+      <FocusScope trapped loop>
+        {/* biome-ignore lint/a11y/useKeyWithClickEvents: Click stops propagation to backdrop; keyboard dismiss handled by Escape key */}
+        <div
+          aria-labelledby="settings-title"
+          aria-modal="true"
+          className={cn(
+            "relative mx-auto flex h-[min(600px,calc(100vh-8rem))] w-[calc(100%-4rem)] max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-lg motion-safe:transition-all motion-safe:duration-500 motion-safe:ease-out",
+            isLoaded ? "opacity-100 scale-100" : "opacity-0 scale-95",
+          )}
+          data-testid="settings-view"
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
         >
-          <X className="h-4 w-4" />
-        </Button>
-      </header>
-
-      <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden lg:grid-cols-[260px_minmax(0,1fr)] lg:grid-rows-1">
-        <aside className="border-b border-border/70 bg-muted/20 lg:border-b-0 lg:border-r">
-          <nav
-            aria-label="Settings sections"
-            className="flex gap-2 overflow-x-auto px-3 py-4 lg:flex-col lg:overflow-y-auto"
+          {/* Close button */}
+          <button
+            aria-label="Close settings"
+            className="absolute top-3 right-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="settings-close"
+            onClick={onClose}
+            type="button"
           >
-            {settingsSections.map((entry) => (
-              <SettingsSectionButton
-                active={entry.value === section}
-                key={entry.value}
-                onSelect={onSectionChange}
-                section={entry}
-              />
-            ))}
-          </nav>
-        </aside>
+            <X className="h-4 w-4" />
+          </button>
 
-        <section className="min-h-0 overflow-y-auto px-4 py-4 sm:px-6">
-          <div
-            className="mx-auto flex w-full max-w-4xl flex-col gap-4"
-            data-testid={`settings-panel-${section}`}
-          >
-            {renderSettingsSection(section, {
-              currentPubkey,
-              fallbackDisplayName,
-              isUpdatingDesktopNotifications,
-              isPresenceLoading,
-              isUpdatingPresence,
-              notificationErrorMessage,
-              notificationPermission,
-              notificationSettings,
-              onSetDesktopNotificationsEnabled,
-              onSetHomeBadgeEnabled,
-              onSetMentionNotificationsEnabled,
-              onSetNeedsActionNotificationsEnabled,
-              onSetPresence,
-              presenceError,
-              presenceStatus,
-            })}
+          {/* Two-column layout */}
+          <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)] lg:grid-rows-1">
+            {/* Sidebar nav */}
+            <aside
+              className={cn(
+                "border-b border-border/70 bg-muted/20 motion-safe:transition-all motion-safe:duration-700 motion-safe:ease-out lg:border-b-0 lg:border-r",
+                isLoaded
+                  ? "opacity-100 translate-x-0"
+                  : "opacity-0 -translate-x-2",
+              )}
+            >
+              <div className="px-4 pt-5 pb-2 lg:block hidden">
+                <h2
+                  className="text-sm font-semibold tracking-tight text-foreground"
+                  id="settings-title"
+                >
+                  Settings
+                </h2>
+              </div>
+              <nav
+                aria-label="Settings sections"
+                className="flex gap-1 overflow-x-auto px-3 py-3 lg:flex-col lg:overflow-y-auto lg:pt-1"
+              >
+                {settingsSections.map((entry, index) => (
+                  <SettingsSectionButton
+                    active={entry.value === section}
+                    index={index}
+                    isLoaded={isLoaded}
+                    key={entry.value}
+                    onSelect={onSectionChange}
+                    section={entry}
+                  />
+                ))}
+              </nav>
+            </aside>
+
+            {/* Content area */}
+            <section className="min-h-0 overflow-y-auto px-4 py-4 sm:px-6">
+              <div
+                className={cn(
+                  "mx-auto flex w-full max-w-4xl flex-col gap-4 motion-safe:transition-all motion-safe:duration-200",
+                  isTransitioning
+                    ? "opacity-0 translate-y-1"
+                    : "opacity-100 translate-y-0",
+                )}
+                data-testid={`settings-panel-${section}`}
+              >
+                {renderSettingsSection(section, {
+                  currentPubkey,
+                  fallbackDisplayName,
+                  isUpdatingDesktopNotifications,
+                  isPresenceLoading,
+                  isUpdatingPresence,
+                  notificationErrorMessage,
+                  notificationPermission,
+                  notificationSettings,
+                  onSetDesktopNotificationsEnabled,
+                  onSetHomeBadgeEnabled,
+                  onSetMentionNotificationsEnabled,
+                  onSetNeedsActionNotificationsEnabled,
+                  onSetPresence,
+                  presenceError,
+                  presenceStatus,
+                })}
+              </div>
+            </section>
           </div>
-        </section>
-      </div>
+        </div>
+      </FocusScope>
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import { ProfilePopover } from "@/features/profile/ui/ProfilePopover";
 import { useDmSidebarMetadata } from "@/features/sidebar/useDmSidebarMetadata";
 import {
   ChannelMenuButton,
@@ -61,7 +62,7 @@ type AppSidebarProps = {
   selfPresenceStatus: PresenceStatus;
   errorMessage?: string;
   selectedChannelId: string | null;
-  selectedView: "home" | "channel" | "settings" | "agents" | "workflows";
+  selectedView: "home" | "channel" | "agents" | "workflows";
   unreadChannelIds: Set<string>;
   onCreateChannel: (input: {
     name: string;
@@ -83,6 +84,9 @@ type AppSidebarProps = {
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
   onSelectSettings: () => void;
+  onSetPresenceStatus?: (status: "online" | "away" | "offline") => void;
+  onSignOut?: () => void;
+  isPresencePending?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -448,9 +452,13 @@ export function AppSidebar({
   onSelectHome,
   onSelectChannel,
   onSelectSettings,
+  onSetPresenceStatus,
+  onSignOut,
+  isPresencePending,
 }: AppSidebarProps) {
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
   const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
+  const [profilePopoverOpen, setProfilePopoverOpen] = React.useState(false);
 
   const streamForm = useCreateForm(onCreateChannel, "stream");
   const forumForm = useCreateForm(onCreateForum, "forum");
@@ -661,48 +669,58 @@ export function AppSidebar({
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton
-              aria-pressed={selectedView === "settings"}
-              className="h-auto gap-3 rounded-xl px-2 py-2"
-              data-testid="open-settings"
-              isActive={selectedView === "settings"}
-              onClick={() => onSelectSettings()}
-              type="button"
+            <ProfilePopover
+              open={profilePopoverOpen}
+              onOpenChange={setProfilePopoverOpen}
+              displayName={resolvedDisplayName}
+              nip05={profile?.nip05Handle}
+              avatarUrl={profile?.avatarUrl ?? null}
+              currentStatus={selfPresenceStatus}
+              isStatusPending={isPresencePending}
+              onSetStatus={onSetPresenceStatus ?? (() => {})}
+              onOpenSettings={onSelectSettings}
+              onSignOut={onSignOut ?? (() => {})}
             >
-              <div
-                className="flex min-w-0 flex-1 items-center gap-3"
-                data-testid="sidebar-profile-card"
+              <SidebarMenuButton
+                className="h-auto gap-3 rounded-xl px-2 py-2"
+                data-testid="open-settings"
+                type="button"
               >
-                <div className="relative shrink-0">
-                  <ProfileAvatar
-                    avatarUrl={profile?.avatarUrl ?? null}
-                    className="h-10 w-10 rounded-2xl text-sm"
-                    iconClassName="h-5 w-5"
-                    label={resolvedDisplayName}
-                    testId="sidebar-profile-avatar"
-                  />
-                  <span
-                    aria-label={getPresenceLabel(selfPresenceStatus)}
-                    className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-sidebar"
-                    data-testid="self-presence-badge"
-                    role="img"
-                  >
-                    <PresenceDot
-                      className="h-2.5 w-2.5"
-                      status={selfPresenceStatus}
+                <div
+                  className="flex min-w-0 flex-1 items-center gap-3"
+                  data-testid="sidebar-profile-card"
+                >
+                  <div className="relative shrink-0">
+                    <ProfileAvatar
+                      avatarUrl={profile?.avatarUrl ?? null}
+                      className="h-10 w-10 rounded-2xl text-sm"
+                      iconClassName="h-5 w-5"
+                      label={resolvedDisplayName}
+                      testId="sidebar-profile-avatar"
                     />
-                  </span>
+                    <span
+                      aria-label={getPresenceLabel(selfPresenceStatus)}
+                      className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-sidebar"
+                      data-testid="self-presence-badge"
+                      role="img"
+                    >
+                      <PresenceDot
+                        className="h-2.5 w-2.5"
+                        status={selfPresenceStatus}
+                      />
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <p
+                      className="truncate text-sm font-semibold text-current"
+                      data-testid="sidebar-profile-name"
+                    >
+                      {resolvedDisplayName}
+                    </p>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <p
-                    className="truncate text-sm font-semibold text-current"
-                    data-testid="sidebar-profile-name"
-                  >
-                    {resolvedDisplayName}
-                  </p>
-                </div>
-              </div>
-            </SidebarMenuButton>
+              </SidebarMenuButton>
+            </ProfilePopover>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
