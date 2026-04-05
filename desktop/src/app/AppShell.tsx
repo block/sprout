@@ -615,9 +615,6 @@ export function AppShell() {
           onSelectChannel={handleOpenChannel}
           onSelectSettings={handleOpenSettings}
           onSetPresenceStatus={(status) => presenceSession.setStatus(status)}
-          onSignOut={() => {
-            /* TODO: implement sign out */
-          }}
           isPresencePending={presenceSession.isPending}
           profile={profileQuery.data}
           selectedChannelId={selectedChannel?.id ?? null}
@@ -807,8 +804,6 @@ export function AppShell() {
             isUpdatingDesktopNotifications={
               notificationSettings.isUpdatingDesktopEnabled
             }
-            isPresenceLoading={presenceSession.isLoading}
-            isUpdatingPresence={presenceSession.isPending}
             notificationErrorMessage={notificationSettings.errorMessage}
             notificationPermission={notificationSettings.permission}
             notificationSettings={notificationSettings.settings}
@@ -824,9 +819,6 @@ export function AppShell() {
             onSetNeedsActionNotificationsEnabled={
               notificationSettings.setNeedsActionEnabled
             }
-            onSetPresence={presenceSession.setStatus}
-            presenceError={presenceSession.error}
-            presenceStatus={presenceSession.currentStatus}
             section={settingsSection}
           />
         )}

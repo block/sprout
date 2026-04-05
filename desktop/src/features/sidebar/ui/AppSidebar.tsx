@@ -85,7 +85,6 @@ type AppSidebarProps = {
   onSelectChannel: (channelId: string) => void;
   onSelectSettings: () => void;
   onSetPresenceStatus?: (status: "online" | "away" | "offline") => void;
-  onSignOut?: () => void;
   isPresencePending?: boolean;
 };
 
@@ -453,7 +452,6 @@ export function AppSidebar({
   onSelectChannel,
   onSelectSettings,
   onSetPresenceStatus,
-  onSignOut,
   isPresencePending,
 }: AppSidebarProps) {
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
@@ -679,7 +677,6 @@ export function AppSidebar({
               isStatusPending={isPresencePending}
               onSetStatus={onSetPresenceStatus ?? (() => {})}
               onOpenSettings={onSelectSettings}
-              onSignOut={onSignOut ?? (() => {})}
             >
               <SidebarMenuButton
                 className="h-auto gap-3 rounded-xl px-2 py-2"

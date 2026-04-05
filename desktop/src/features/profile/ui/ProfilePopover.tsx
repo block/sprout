@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { Settings, LogOut } from "lucide-react";
+import { Settings } from "lucide-react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -23,7 +23,6 @@ interface ProfilePopoverProps {
   isStatusPending?: boolean;
   onSetStatus: (status: PresenceStatus) => void;
   onOpenSettings: () => void;
-  onSignOut: () => void;
   children: React.ReactNode;
 }
 
@@ -32,7 +31,7 @@ interface ProfilePopoverProps {
 // ---------------------------------------------------------------------------
 
 const MENU_ITEM_CLASS =
-  "flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-accent cursor-pointer transition-colors";
+  "flex w-full items-center gap-3 px-3 py-2.5 rounded-lg text-left hover:bg-accent cursor-pointer transition-colors";
 
 const ALL_STATUSES: PresenceStatus[] = ["online", "away", "offline"];
 
@@ -56,7 +55,6 @@ export function ProfilePopover({
   isStatusPending,
   onSetStatus,
   onOpenSettings,
-  onSignOut,
   children,
 }: ProfilePopoverProps) {
   const otherStatuses = ALL_STATUSES.filter((s) => s !== currentStatus);
@@ -144,24 +142,6 @@ export function ProfilePopover({
               <kbd className="text-xs text-muted-foreground">
                 {isMac ? "⌘," : "Ctrl+,"}
               </kbd>
-            </button>
-          </div>
-
-          <hr className="my-1 h-px border-0 bg-border" />
-
-          {/* ── Sign out ───────────────────────────────────────── */}
-          <div className="px-1.5 py-1">
-            <button
-              className={MENU_ITEM_CLASS}
-              onClick={() => {
-                onSignOut();
-                onOpenChange(false);
-              }}
-              role="menuitem"
-              type="button"
-            >
-              <LogOut className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm text-popover-foreground">Sign out</span>
             </button>
           </div>
         </div>

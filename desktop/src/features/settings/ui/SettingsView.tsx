@@ -68,8 +68,6 @@ export function SettingsView({
   currentPubkey,
   fallbackDisplayName,
   isUpdatingDesktopNotifications,
-  isPresenceLoading,
-  isUpdatingPresence,
   notificationErrorMessage,
   notificationPermission,
   notificationSettings,
@@ -79,9 +77,6 @@ export function SettingsView({
   onSetHomeBadgeEnabled,
   onSetMentionNotificationsEnabled,
   onSetNeedsActionNotificationsEnabled,
-  onSetPresence,
-  presenceError,
-  presenceStatus,
   section,
 }: SettingsViewProps) {
   // Entrance animation state
@@ -144,16 +139,24 @@ export function SettingsView({
           onClick={(e) => e.stopPropagation()}
           role="dialog"
         >
-          {/* Close button */}
-          <button
-            aria-label="Close settings"
-            className="absolute top-3 right-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            data-testid="settings-close"
-            onClick={onClose}
-            type="button"
+          {/* Header with title and close button */}
+          <header
+            className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"
+            data-tauri-drag-region
           >
-            <X className="h-4 w-4" />
-          </button>
+            <h2 className="text-base font-semibold" id="settings-title">
+              Settings
+            </h2>
+            <button
+              aria-label="Close settings"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              data-testid="settings-close"
+              onClick={onClose}
+              type="button"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </header>
 
           {/* Two-column layout */}
           <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)] lg:grid-rows-1">
@@ -166,14 +169,6 @@ export function SettingsView({
                   : "opacity-0 -translate-x-2",
               )}
             >
-              <div className="px-4 pt-5 pb-2 lg:block hidden">
-                <h2
-                  className="text-sm font-semibold tracking-tight text-foreground"
-                  id="settings-title"
-                >
-                  Settings
-                </h2>
-              </div>
               <nav
                 aria-label="Settings sections"
                 className="flex gap-1 overflow-x-auto px-3 py-3 lg:flex-col lg:overflow-y-auto lg:pt-1"
@@ -206,8 +201,6 @@ export function SettingsView({
                   currentPubkey,
                   fallbackDisplayName,
                   isUpdatingDesktopNotifications,
-                  isPresenceLoading,
-                  isUpdatingPresence,
                   notificationErrorMessage,
                   notificationPermission,
                   notificationSettings,
@@ -215,9 +208,6 @@ export function SettingsView({
                   onSetHomeBadgeEnabled,
                   onSetMentionNotificationsEnabled,
                   onSetNeedsActionNotificationsEnabled,
-                  onSetPresence,
-                  presenceError,
-                  presenceStatus,
                 })}
               </div>
             </section>
