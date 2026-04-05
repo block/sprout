@@ -86,17 +86,6 @@ export function SettingsView({
     return () => clearTimeout(timer);
   }, []);
 
-  // Section transition animation
-  const [isTransitioning, setIsTransitioning] = React.useState(false);
-  const prevSectionRef = React.useRef(section);
-  React.useEffect(() => {
-    if (prevSectionRef.current === section) return;
-    prevSectionRef.current = section;
-    setIsTransitioning(true);
-    const timer = setTimeout(() => setIsTransitioning(false), 150);
-    return () => clearTimeout(timer);
-  }, [section]);
-
   // Escape key to close
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -189,12 +178,7 @@ export function SettingsView({
             {/* Content area */}
             <section className="min-h-0 overflow-y-auto px-4 py-4 sm:px-6">
               <div
-                className={cn(
-                  "mx-auto flex w-full max-w-4xl flex-col gap-4 motion-safe:transition-all motion-safe:duration-200",
-                  isTransitioning
-                    ? "opacity-0 translate-y-1"
-                    : "opacity-100 translate-y-0",
-                )}
+                className="mx-auto flex w-full max-w-4xl flex-col gap-4"
                 data-testid={`settings-panel-${section}`}
               >
                 {renderSettingsSection(section, {
