@@ -495,10 +495,37 @@ pub enum StepResult {
 
 // ── Action dispatch ───────────────────────────────────────────────────────────
 
+/// Resolve the hex-encoded owner pubkey for a workflow run.
+///
+/// Loads the run → workflow → `owner_pubkey` and hex-encodes it. Used by
+/// action branches that need to attribute events to the workflow owner.
+async fn resolve_owner_pubkey(
+    engine: &WorkflowEngine,
+    run_id: Uuid,
+    action_label: &str,
+) -> Result<String, WorkflowError> {
+    let wf_run = engine.db.get_workflow_run(run_id).await.map_err(|e| {
+        WorkflowError::WebhookError(format!(
+            "{action_label}: failed to load workflow run {run_id}: {e}"
+        ))
+    })?;
+    let workflow = engine
+        .db
+        .get_workflow(wf_run.workflow_id)
+        .await
+        .map_err(|e| {
+            WorkflowError::WebhookError(format!(
+                "{action_label}: failed to load workflow {}: {e}",
+                wf_run.workflow_id
+            ))
+        })?;
+    Ok(hex::encode(&workflow.owner_pubkey))
+}
+
 /// Dispatch a resolved action and return its output.
 ///
-/// For MVP, most actions log their intent and return a success output.
-/// Real event emission is wired in WF-07/08 (relay integration).
+/// Actions that produce Nostr events (`SendMessage`, `AddReaction`) delegate
+/// to the [`ActionSink`] for direct DB/event persistence.
 ///
 /// `RequestApproval` returns `StepResult::Suspended` — the caller must
 /// persist state and stop the execution loop.
@@ -536,22 +563,7 @@ pub async fn dispatch_action(
             }
 
             // Look up workflow owner for message attribution.
-            let wf_run = engine.db.get_workflow_run(run_id).await.map_err(|e| {
-                WorkflowError::WebhookError(format!(
-                    "SendMessage: failed to load workflow run {run_id}: {e}"
-                ))
-            })?;
-            let workflow = engine
-                .db
-                .get_workflow(wf_run.workflow_id)
-                .await
-                .map_err(|e| {
-                    WorkflowError::WebhookError(format!(
-                        "SendMessage: failed to load workflow {}: {e}",
-                        wf_run.workflow_id
-                    ))
-                })?;
-            let owner_pubkey_hex = hex::encode(&workflow.owner_pubkey);
+            let owner_pubkey_hex = resolve_owner_pubkey(engine, run_id, "SendMessage").await?;
 
             let event_id = engine
                 .action_sink()?
@@ -586,22 +598,7 @@ pub async fn dispatch_action(
             }
 
             // Look up workflow owner for reaction attribution.
-            let wf_run = engine.db.get_workflow_run(run_id).await.map_err(|e| {
-                WorkflowError::WebhookError(format!(
-                    "AddReaction: failed to load workflow run {run_id}: {e}"
-                ))
-            })?;
-            let workflow = engine
-                .db
-                .get_workflow(wf_run.workflow_id)
-                .await
-                .map_err(|e| {
-                    WorkflowError::WebhookError(format!(
-                        "AddReaction: failed to load workflow {}: {e}",
-                        wf_run.workflow_id
-                    ))
-                })?;
-            let owner_pubkey_hex = hex::encode(&workflow.owner_pubkey);
+            let owner_pubkey_hex = resolve_owner_pubkey(engine, run_id, "AddReaction").await?;
 
             let event_id = engine
                 .action_sink()?

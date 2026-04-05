@@ -27,12 +27,6 @@ pub enum ActionSinkError {
     /// Message content is empty or whitespace-only.
     #[error("empty message content")]
     EmptyContent,
-    /// The target event for a reaction does not exist.
-    #[error("target event not found: {0}")]
-    TargetEventNotFound(String),
-    /// The reaction already exists (duplicate).
-    #[error("duplicate reaction")]
-    DuplicateReaction,
 }
 
 impl From<ActionSinkError> for crate::WorkflowError {

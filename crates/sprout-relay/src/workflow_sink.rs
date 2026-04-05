@@ -37,7 +37,55 @@ impl RelayActionSink {
             state: Arc::downgrade(state),
         }
     }
+
+    /// Upgrade the weak `AppState` reference, returning an error during shutdown.
+    fn upgrade_state(&self) -> Result<Arc<AppState>, ActionSinkError> {
+        self.state
+            .upgrade()
+            .ok_or_else(|| ActionSinkError::Database("relay is shutting down".into()))
+    }
 }
+
+// ── Shared helpers ─────────────────────────────────────────────────────────────
+
+/// Parse a single Nostr tag, mapping parse failures to [`ActionSinkError::EventBuild`].
+fn parse_tag(values: &[&str]) -> Result<Tag, ActionSinkError> {
+    Tag::parse(values).map_err(|e| ActionSinkError::EventBuild(format!("{} tag: {e}", values[0])))
+}
+
+/// Build the common tag set shared by every workflow-originated event:
+///   `p` (owner attribution), `h` (channel scope), `sprout:workflow` (loop guard).
+///
+/// Callers can prepend action-specific tags (e.g. `e` for reactions) before
+/// passing the full vec to [`sign_workflow_event`].
+fn base_workflow_tags(author_pubkey: &str, channel_id: &str) -> Result<Vec<Tag>, ActionSinkError> {
+    Ok(vec![
+        parse_tag(&["p", author_pubkey])?,
+        parse_tag(&["h", channel_id])?,
+        parse_tag(&["sprout:workflow", "true"])?,
+    ])
+}
+
+/// Build and sign a Nostr event with the relay keypair.
+fn sign_workflow_event(
+    state: &AppState,
+    kind: u32,
+    content: &str,
+    tags: Vec<Tag>,
+) -> Result<nostr::Event, ActionSinkError> {
+    let kind = Kind::from(kind as u16);
+    EventBuilder::new(kind, content, tags)
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| ActionSinkError::EventBuild(format!("signing: {e}")))
+}
+
+/// Extract a `DateTime<Utc>` from a Nostr event timestamp.
+fn event_created_at(event: &nostr::Event) -> chrono::DateTime<Utc> {
+    let ts = event.created_at.as_u64() as i64;
+    chrono::DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)
+}
+
+// ── ActionSink impl ───────────────────────────────────────────────────────────
 
 impl ActionSink for RelayActionSink {
     fn send_message(
@@ -51,18 +99,14 @@ impl ActionSink for RelayActionSink {
         let author_pubkey = author_pubkey.to_owned();
 
         Box::pin(async move {
-            // 0. Upgrade weak reference — fails only during shutdown.
-            let state = self
-                .state
-                .upgrade()
-                .ok_or_else(|| ActionSinkError::Database("relay is shutting down".into()))?;
+            let state = self.upgrade_state()?;
 
-            // 1. Validate content is not empty/whitespace-only
+            // 1. Validate content is not empty/whitespace-only.
             if text.trim().is_empty() {
                 return Err(ActionSinkError::EmptyContent);
             }
 
-            // 2. Parse and validate channel — canonicalize UUID immediately
+            // 2. Parse and validate channel — canonicalize UUID immediately.
             let channel_uuid = Uuid::parse_str(&channel_id)
                 .map_err(|e| ActionSinkError::InvalidInput(format!("invalid UUID: {e}")))?;
             let channel_id_canonical = channel_uuid.to_string();
@@ -84,39 +128,19 @@ impl ActionSink for RelayActionSink {
                 ));
             }
 
-            // 3. Build kind:9 Nostr event
-            //    - Signed by relay keypair (event.pubkey = relay pubkey)
-            //    - `p` tag attributes the message to the workflow owner
-            //    - `h` tag scopes to the channel (NIP-29, canonical UUID)
-            //    - `sprout:workflow` tag prevents recursive workflow triggering
-            let tags = vec![
-                Tag::parse(&["p", &author_pubkey])
-                    .map_err(|e| ActionSinkError::EventBuild(format!("p tag: {e}")))?,
-                Tag::parse(&["h", &channel_id_canonical])
-                    .map_err(|e| ActionSinkError::EventBuild(format!("h tag: {e}")))?,
-                Tag::parse(&["sprout:workflow", "true"])
-                    .map_err(|e| ActionSinkError::EventBuild(format!("workflow tag: {e}")))?,
-            ];
-
-            let kind = Kind::from(KIND_STREAM_MESSAGE as u16);
-            let event = EventBuilder::new(kind, &text, tags)
-                .sign_with_keys(&state.relay_keypair)
-                .map_err(|e| ActionSinkError::EventBuild(format!("signing: {e}")))?;
+            // 3. Build kind:9 Nostr event.
+            let tags = base_workflow_tags(&author_pubkey, &channel_id_canonical)?;
+            let event = sign_workflow_event(&state, KIND_STREAM_MESSAGE, &text, tags)?;
 
             let event_id_hex = event.id.to_hex();
             let event_id_bytes = event.id.as_bytes().to_vec();
-            let kind_u32 = KIND_STREAM_MESSAGE;
-
-            let event_created_at = {
-                let ts = event.created_at.as_u64() as i64;
-                chrono::DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)
-            };
+            let event_created_at = event_created_at(&event);
 
             info!(
                 event_id = %event_id_hex,
                 channel_id = %channel_id_canonical,
                 author = %author_pubkey,
-                "Workflow SendMessage: posting kind {kind_u32} event"
+                "Workflow SendMessage: posting kind {KIND_STREAM_MESSAGE} event"
             );
 
             // 4. Persist event with thread metadata (matches REST handler path).
@@ -139,11 +163,16 @@ impl ActionSink for RelayActionSink {
                 .await
                 .map_err(|e| ActionSinkError::Database(e.to_string()))?;
 
-            // 5. Post-persist side effects (fan-out, search, audit)
+            // 5. Post-persist side effects (fan-out, search, audit).
             //    Only if actually inserted (idempotency guard).
             if was_inserted {
-                let _ = dispatch_persistent_event(&state, &stored_event, kind_u32, &author_pubkey)
-                    .await;
+                let _ = dispatch_persistent_event(
+                    &state,
+                    &stored_event,
+                    KIND_STREAM_MESSAGE,
+                    &author_pubkey,
+                )
+                .await;
             }
 
             Ok(event_id_hex)
@@ -163,17 +192,21 @@ impl ActionSink for RelayActionSink {
         let author_pubkey = author_pubkey.to_owned();
 
         Box::pin(async move {
-            // 0. Upgrade weak reference — fails only during shutdown.
-            let state = self
-                .state
-                .upgrade()
-                .ok_or_else(|| ActionSinkError::Database("relay is shutting down".into()))?;
+            let state = self.upgrade_state()?;
 
             // 1. Validate inputs.
             if emoji.is_empty() {
                 return Err(ActionSinkError::InvalidInput(
                     "emoji must not be empty".into(),
                 ));
+            }
+            // Mirror the ingest handler's 64-character emoji limit (chars, not bytes)
+            // to stay consistent with the SDK's check_emoji_len.
+            const MAX_REACTION_EMOJI_CHARS: usize = 64;
+            if emoji.chars().count() > MAX_REACTION_EMOJI_CHARS {
+                return Err(ActionSinkError::InvalidInput(format!(
+                    "emoji exceeds {MAX_REACTION_EMOJI_CHARS} character limit"
+                )));
             }
             if message_id.len() != 64 || !message_id.chars().all(|c| c.is_ascii_hexdigit()) {
                 return Err(ActionSinkError::InvalidInput(format!(
@@ -196,9 +229,7 @@ impl ActionSink for RelayActionSink {
                     ))
                 })?;
 
-            let target_created_at =
-                chrono::DateTime::from_timestamp(target_event.event.created_at.as_u64() as i64, 0)
-                    .unwrap_or_else(Utc::now);
+            let target_created_at = event_created_at(&target_event.event);
 
             // 3. Resolve channel UUID — use provided channel_id if non-empty,
             //    otherwise derive from the target event.
@@ -212,29 +243,24 @@ impl ActionSink for RelayActionSink {
                     )
                 })?
             };
+            let channel_id_canonical = channel_uuid.to_string();
 
-            // 4. Decode author pubkey.
-            let actor_bytes = hex::decode(&author_pubkey).map_err(|e| {
+            // 4. Decode and validate author pubkey (must be 32 bytes).
+            let author_bytes = hex::decode(&author_pubkey).map_err(|e| {
                 ActionSinkError::InvalidInput(format!("invalid author_pubkey hex: {e}"))
             })?;
+            if author_bytes.len() != 32 {
+                return Err(ActionSinkError::InvalidInput(format!(
+                    "author_pubkey must be 32 bytes, got {}",
+                    author_bytes.len()
+                )));
+            }
 
             // 5. Build NIP-25 kind:7 reaction event.
-            let tags = vec![
-                Tag::parse(&["e", &message_id])
-                    .map_err(|e| ActionSinkError::EventBuild(format!("e tag: {e}")))?,
-                Tag::parse(&["p", &author_pubkey])
-                    .map_err(|e| ActionSinkError::EventBuild(format!("p tag: {e}")))?,
-                Tag::parse(&["h", &channel_uuid.to_string()])
-                    .map_err(|e| ActionSinkError::EventBuild(format!("h tag: {e}")))?,
-                Tag::parse(&["sprout:workflow", "true"])
-                    .map_err(|e| ActionSinkError::EventBuild(format!("workflow tag: {e}")))?,
-            ];
+            let mut tags = vec![parse_tag(&["e", &message_id])?];
+            tags.extend(base_workflow_tags(&author_pubkey, &channel_id_canonical)?);
 
-            let kind = Kind::from(KIND_REACTION as u16);
-            let event = EventBuilder::new(kind, &emoji, tags)
-                .sign_with_keys(&state.relay_keypair)
-                .map_err(|e| ActionSinkError::EventBuild(format!("signing: {e}")))?;
-
+            let event = sign_workflow_event(&state, KIND_REACTION, &emoji, tags)?;
             let event_id_hex = event.id.to_hex();
 
             info!(
@@ -252,7 +278,7 @@ impl ActionSink for RelayActionSink {
                 .add_reaction(
                     &target_id_bytes,
                     target_created_at,
-                    &actor_bytes,
+                    &author_bytes,
                     &emoji,
                     None,
                 )
@@ -274,7 +300,7 @@ impl ActionSink for RelayActionSink {
                     // Compensate: undo the reaction row so state stays consistent.
                     if let Err(re) = state
                         .db
-                        .remove_reaction(&target_id_bytes, target_created_at, &actor_bytes, &emoji)
+                        .remove_reaction(&target_id_bytes, target_created_at, &author_bytes, &emoji)
                         .await
                     {
                         tracing::warn!(
@@ -293,7 +319,7 @@ impl ActionSink for RelayActionSink {
                     .set_reaction_event_id(
                         &target_id_bytes,
                         target_created_at,
-                        &actor_bytes,
+                        &author_bytes,
                         &emoji,
                         event.id.as_bytes(),
                     )
