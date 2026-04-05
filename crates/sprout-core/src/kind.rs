@@ -11,6 +11,8 @@ pub const KIND_PROFILE: u32 = 0;
 pub const KIND_TEXT_NOTE: u32 = 1;
 /// NIP-02: Contact list / follow list.
 pub const KIND_CONTACT_LIST: u32 = 3;
+/// NIP-01: Channel metadata (replaceable). Not used by Sprout today.
+pub const KIND_CHANNEL_METADATA: u32 = 41;
 /// NIP-09: Event deletion request.
 pub const KIND_DELETION: u32 = 5;
 /// NIP-25: Content is emoji char or `+`/`-`.
@@ -59,6 +61,11 @@ pub const KIND_NIP29_GROUP_ADMINS: u32 = 39001;
 pub const KIND_NIP29_GROUP_MEMBERS: u32 = 39002;
 /// NIP-29: Addressable group roles definition.
 pub const KIND_NIP29_GROUP_ROLES: u32 = 39003;
+
+/// Lower bound of the NIP-33 parameterized replaceable range (30000–39999).
+pub const PARAM_REPLACEABLE_KIND_MIN: u32 = 30000;
+/// Upper bound of the NIP-33 parameterized replaceable range (30000–39999).
+pub const PARAM_REPLACEABLE_KIND_MAX: u32 = 39999;
 
 /// Lower bound of the ephemeral event range (20000–29999). Never stored.
 pub const EPHEMERAL_KIND_MIN: u32 = 20000;
@@ -218,6 +225,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_PROFILE,
     KIND_TEXT_NOTE,
     KIND_CONTACT_LIST,
+    KIND_CHANNEL_METADATA,
     KIND_DELETION,
     KIND_REACTION,
     KIND_GIFT_WRAP,
@@ -304,8 +312,17 @@ pub const fn is_ephemeral(kind: u32) -> bool {
 }
 
 /// Returns `true` if `kind` is replaceable (NIP-01: kinds 0, 3, 41, 10000–19999).
+/// NIP-33 parameterized-replaceable kinds (30000–39999) use a different replacement
+/// key (includes `d`-tag) and are handled separately via `replace_parameterized_event`.
 pub const fn is_replaceable(kind: u32) -> bool {
-    matches!(kind, 0 | 3 | 41 | 10000..=19999)
+    matches!(kind, 0 | 3 | KIND_CHANNEL_METADATA | 10000..=19999)
+}
+
+/// Returns `true` if `kind` is in the NIP-33 parameterized replaceable range (30000–39999).
+///
+/// These events are keyed by `(pubkey, kind, d_tag)` — the latest `created_at` wins.
+pub const fn is_parameterized_replaceable(kind: u32) -> bool {
+    kind >= PARAM_REPLACEABLE_KIND_MIN && kind <= PARAM_REPLACEABLE_KIND_MAX
 }
 
 /// Returns `true` if `kind` is a workflow execution event (46001–46012).
@@ -341,6 +358,26 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for &k in ALL_KINDS {
             assert!(seen.insert(k), "duplicate kind value: {k}");
+        }
+    }
+
+    #[test]
+    fn parameterized_replaceable_range() {
+        assert!(!is_parameterized_replaceable(29999));
+        assert!(is_parameterized_replaceable(30000));
+        assert!(is_parameterized_replaceable(30023)); // NIP-23 long-form
+        assert!(is_parameterized_replaceable(39000)); // NIP-29 group metadata
+        assert!(is_parameterized_replaceable(39999));
+        assert!(!is_parameterized_replaceable(40000));
+    }
+
+    #[test]
+    fn replaceable_and_parameterized_are_disjoint() {
+        for kind in 0..=65535u32 {
+            assert!(
+                !(is_replaceable(kind) && is_parameterized_replaceable(kind)),
+                "kind {kind} is both replaceable and parameterized replaceable"
+            );
         }
     }
 }

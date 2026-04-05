@@ -469,6 +469,33 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
         }
     });
 
+    // Push single-value #d tag into SQL via the d_tag column (NIP-33).
+    // Critical for parameterized replaceable lookups (authors + kinds + #d)
+    // where many events from the same author would push the target past LIMIT.
+    //
+    // Only push when the filter exclusively targets NIP-33 kinds (30000–39999),
+    // because `d_tag` is only populated for those kinds. Non-NIP-33 events have
+    // `d_tag = NULL`, so pushing `AND d_tag = $N` for a mixed-kind or kindless
+    // filter would silently exclude non-NIP-33 rows that match via their tags.
+    let filter_is_nip33_only = kinds.as_ref().is_some_and(|ks| {
+        !ks.is_empty()
+            && ks
+                .iter()
+                .all(|&k| sprout_core::kind::is_parameterized_replaceable(k as u32))
+    });
+    let d_tag_key = nostr::SingleLetterTag::lowercase(nostr::Alphabet::D);
+    let d_tag = if filter_is_nip33_only {
+        filter.generic_tags.get(&d_tag_key).and_then(|values| {
+            if values.len() == 1 {
+                values.iter().next().map(|v| v.to_string())
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
+
     EventQuery {
         channel_id,
         kinds,
@@ -477,6 +504,7 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
         until,
         limit: Some(limit),
         p_tag_hex,
+        d_tag,
         ..Default::default()
     }
 }
@@ -600,5 +628,36 @@ mod tests {
         let has_non_search = filters.iter().any(|f| f.search.is_none());
         assert!(has_search);
         assert!(!has_non_search, "all-search filters should not be mixed");
+    }
+
+    #[test]
+    fn d_tag_pushdown_only_for_nip33_kinds() {
+        let d_tag = SingleLetterTag::lowercase(Alphabet::D);
+
+        // NIP-33 kind with #d → pushdown active
+        let nip33_filter = Filter::new()
+            .kind(nostr::Kind::Custom(30023))
+            .custom_tag(d_tag, ["my-slug"]);
+        let q = filter_to_query_params(&nip33_filter, None);
+        assert_eq!(q.d_tag, Some("my-slug".to_string()));
+
+        // Non-NIP-33 kind with #d → pushdown NOT active (would miss rows with d_tag=NULL)
+        let non_nip33_filter = Filter::new()
+            .kind(nostr::Kind::Custom(1))
+            .custom_tag(d_tag, ["some-value"]);
+        let q2 = filter_to_query_params(&non_nip33_filter, None);
+        assert_eq!(q2.d_tag, None);
+
+        // Mixed kinds (one NIP-33, one not) → pushdown NOT active
+        let mixed_filter = Filter::new()
+            .kinds([nostr::Kind::Custom(30023), nostr::Kind::Custom(1)])
+            .custom_tag(d_tag, ["slug"]);
+        let q3 = filter_to_query_params(&mixed_filter, None);
+        assert_eq!(q3.d_tag, None);
+
+        // No kinds specified → pushdown NOT active
+        let no_kinds_filter = Filter::new().custom_tag(d_tag, ["slug"]);
+        let q4 = filter_to_query_params(&no_kinds_filter, None);
+        assert_eq!(q4.d_tag, None);
     }
 }

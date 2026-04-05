@@ -151,6 +151,17 @@ else
       sleep 2
     done
     success "Migrations applied via pgschema"
+
+    # Run data backfills (idempotent — safe to re-run).
+    BACKFILL_DIR="${REPO_ROOT}/scripts"
+    if [[ -f "${BACKFILL_DIR}/backfill-d-tag.sql" ]]; then
+      log "Running d_tag backfill for NIP-33 events..."
+      if psql "${DATABASE_URL}" -f "${BACKFILL_DIR}/backfill-d-tag.sql" 2>/dev/null; then
+        success "d_tag backfill complete"
+      else
+        warn "d_tag backfill failed (relay startup will retry automatically)"
+      fi
+    fi
   else
     error "pgschema not found at ${PGSCHEMA}. Run: ./bin/hermit install pgschema"
     exit 1

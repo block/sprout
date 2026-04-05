@@ -1179,6 +1179,25 @@ impl Db {
         partition::ensure_future_partitions(&self.pool, months_ahead).await
     }
 
+    /// Backfill `d_tag` for existing NIP-33 events (kind 30000–39999) that have `d_tag IS NULL`.
+    ///
+    /// Idempotent — safe to call on every startup. No-ops when all rows are already populated.
+    /// Runs a single UPDATE touching only NIP-33 rows with NULL d_tag.
+    pub async fn backfill_d_tags(&self) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE events \
+             SET d_tag = COALESCE( \
+                 (SELECT elem->>1 FROM jsonb_array_elements(tags) AS elem \
+                  WHERE elem->>0 = 'd' LIMIT 1), \
+                 '' \
+             ) \
+             WHERE kind BETWEEN 30000 AND 39999 AND d_tag IS NULL",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     // ── Pubkey Allowlist ─────────────────────────────────────────────────────
 
     /// Check if a pubkey is in the allowlist.
@@ -1289,6 +1308,7 @@ impl Db {
 
         // Stable advisory-lock key: hash (kind, pubkey, channel_id) to i64.
         // Uses FNV-1a for determinism — Rust's DefaultHasher is NOT stable across processes.
+        // Collisions cause extra serialization, not incorrect behavior.
         let lock_key = {
             let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
             for b in kind_i32.to_le_bytes() {
@@ -1366,10 +1386,11 @@ impl Db {
         let sig_bytes = event.sig.serialize();
         let tags_json = serde_json::to_value(&event.tags)?;
         let received_at = chrono::Utc::now();
+        let d_tag = crate::event::extract_d_tag(event);
 
         let insert_result = sqlx::query(
-            "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+            "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT DO NOTHING",
         )
         .bind(event.id.as_bytes().as_slice())
@@ -1381,6 +1402,7 @@ impl Db {
         .bind(sig_bytes.as_slice())
         .bind(received_at)
         .bind(channel_id)
+        .bind(d_tag.as_deref())
         .execute(&mut *tx)
         .await?;
 
@@ -1399,6 +1421,144 @@ impl Db {
 
         // Mentions are a denormalized index — safe outside the transaction.
         // insert_event() normally handles this, but we inlined the INSERT above.
+        if let Err(e) = crate::insert_mentions(&self.pool, event, channel_id).await {
+            tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
+        }
+
+        Ok((
+            StoredEvent::with_received_at(event.clone(), received_at, channel_id, true),
+            true,
+        ))
+    }
+
+    /// Atomically replace a NIP-33 parameterized replaceable event (kind 30000–39999).
+    ///
+    /// Keeps only the event with the highest `created_at` per `(kind, pubkey, d_tag)`.
+    /// Same-second ties are broken by lowest event `id` (deterministic ordering).
+    /// The entire check → soft-delete → insert runs in a single transaction with
+    /// an advisory lock to prevent concurrent-insert races.
+    ///
+    /// **Channel policy:** NIP-33 replacement keys on `(kind, pubkey, d_tag)` globally —
+    /// `channel_id` is NOT part of the replacement key. This matches the Nostr spec:
+    /// an author's parameterized replaceable event is a single global resource identified
+    /// by its d-tag, regardless of which channel it was submitted to. The `channel_id`
+    /// parameter is stored on the new row for query scoping but does not affect replacement.
+    ///
+    /// Note: `replace_addressable_event()` keys on `channel_id` because it serves
+    /// relay-signed NIP-29 group metadata (kind 39000–39002) where the relay is the
+    /// author and channel_id distinguishes groups. User-submitted NIP-33 events use
+    /// this function instead, where the author's pubkey + d-tag is the natural key.
+    pub async fn replace_parameterized_event(
+        &self,
+        event: &nostr::Event,
+        d_tag: &str,
+        channel_id: Option<Uuid>,
+    ) -> Result<(StoredEvent, bool)> {
+        let kind_i32 = sprout_core::kind::event_kind_i32(event);
+        let pubkey_bytes = event.pubkey.to_bytes();
+        let created_at_secs = event.created_at.as_u64() as i64;
+        let created_at = chrono::DateTime::from_timestamp(created_at_secs, 0)
+            .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
+
+        // Stable advisory-lock key: FNV-1a over (kind, pubkey, d_tag).
+        // Same algorithm as replace_addressable_event — deterministic across processes.
+        let lock_key = {
+            let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
+            for b in kind_i32.to_le_bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            for b in pubkey_bytes.as_slice() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            for b in d_tag.as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            h as i64
+        };
+
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(lock_key)
+            .execute(&mut *tx)
+            .await?;
+
+        // Check for existing event with same (kind, pubkey, d_tag).
+        let existing: Option<(chrono::DateTime<chrono::Utc>, Vec<u8>)> = sqlx::query_as(
+            "SELECT created_at, id FROM events \
+             WHERE kind = $1 AND pubkey = $2 AND d_tag = $3 AND deleted_at IS NULL \
+             ORDER BY created_at DESC, id ASC LIMIT 1",
+        )
+        .bind(kind_i32)
+        .bind(pubkey_bytes.as_slice())
+        .bind(d_tag)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        // Stale-write protection: reject if incoming is not newer.
+        let incoming_id = event.id.as_bytes().as_slice();
+        if let Some((existing_ts, existing_id)) = existing {
+            let dominated = created_at < existing_ts
+                || (created_at == existing_ts && incoming_id >= existing_id.as_slice());
+            if dominated {
+                tx.rollback().await?;
+                let received_at = chrono::Utc::now();
+                return Ok((
+                    StoredEvent::with_received_at(event.clone(), received_at, channel_id, false),
+                    false,
+                ));
+            }
+
+            // Soft-delete the older event(s).
+            sqlx::query(
+                "UPDATE events SET deleted_at = NOW() \
+                 WHERE kind = $1 AND pubkey = $2 AND d_tag = $3 AND deleted_at IS NULL",
+            )
+            .bind(kind_i32)
+            .bind(pubkey_bytes.as_slice())
+            .bind(d_tag)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        // Insert the new event inside the transaction.
+        let sig_bytes = event.sig.serialize();
+        let tags_json = serde_json::to_value(&event.tags)?;
+        let received_at = chrono::Utc::now();
+
+        let insert_result = sqlx::query(
+            "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(event.id.as_bytes().as_slice())
+        .bind(pubkey_bytes.as_slice())
+        .bind(created_at)
+        .bind(kind_i32)
+        .bind(&tags_json)
+        .bind(&event.content)
+        .bind(sig_bytes.as_slice())
+        .bind(received_at)
+        .bind(channel_id)
+        .bind(d_tag)
+        .execute(&mut *tx)
+        .await?;
+
+        let was_inserted = insert_result.rows_affected() > 0;
+        if !was_inserted {
+            tx.rollback().await?;
+            return Ok((
+                StoredEvent::with_received_at(event.clone(), received_at, channel_id, false),
+                false,
+            ));
+        }
+
+        tx.commit().await?;
+
+        // Mentions are a denormalized index — safe outside the transaction.
         if let Err(e) = crate::insert_mentions(&self.pool, event, channel_id).await {
             tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
         }
