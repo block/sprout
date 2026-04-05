@@ -1289,6 +1289,7 @@ impl Db {
 
         // Stable advisory-lock key: hash (kind, pubkey, channel_id) to i64.
         // Uses FNV-1a for determinism — Rust's DefaultHasher is NOT stable across processes.
+        // Collisions cause extra serialization, not incorrect behavior.
         let lock_key = {
             let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
             for b in kind_i32.to_le_bytes() {

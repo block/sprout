@@ -11,6 +11,8 @@ pub const KIND_PROFILE: u32 = 0;
 pub const KIND_TEXT_NOTE: u32 = 1;
 /// NIP-02: Contact list / follow list.
 pub const KIND_CONTACT_LIST: u32 = 3;
+/// NIP-01: Channel metadata (replaceable). Not used by Sprout today.
+pub const KIND_CHANNEL_METADATA: u32 = 41;
 /// NIP-09: Event deletion request.
 pub const KIND_DELETION: u32 = 5;
 /// NIP-25: Content is emoji char or `+`/`-`.
@@ -218,6 +220,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_PROFILE,
     KIND_TEXT_NOTE,
     KIND_CONTACT_LIST,
+    KIND_CHANNEL_METADATA,
     KIND_DELETION,
     KIND_REACTION,
     KIND_GIFT_WRAP,
@@ -304,8 +307,10 @@ pub const fn is_ephemeral(kind: u32) -> bool {
 }
 
 /// Returns `true` if `kind` is replaceable (NIP-01: kinds 0, 3, 41, 10000–19999).
+/// NIP-33 parameterized-replaceable kinds (30000–39999) use a different replacement
+/// key (includes `d`-tag) and are handled separately via `replace_addressable_event`.
 pub const fn is_replaceable(kind: u32) -> bool {
-    matches!(kind, 0 | 3 | 41 | 10000..=19999)
+    matches!(kind, 0 | 3 | KIND_CHANNEL_METADATA | 10000..=19999)
 }
 
 /// Returns `true` if `kind` is a workflow execution event (46001–46012).

@@ -56,7 +56,7 @@ impl RelayInfo {
             description: "Sprout — private team communication relay".to_string(),
             pubkey: None,
             contact: None,
-            supported_nips: vec![1, 2, 10, 11, 17, 25, 29, 42, 50],
+            supported_nips: vec![1, 2, 10, 11, 16, 17, 25, 29, 42, 50],
             software: "https://github.com/sprout-rs/sprout".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             limitation: Some(RelayLimitation {
