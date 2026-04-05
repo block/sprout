@@ -56,7 +56,7 @@ Sprout is a Rust monorepo (~72K LOC across 17 crates), licensed Apache 2.0 under
      (multi-node fan-out wired; local-echo dedup via AppState.local_event_ids).
 
      ┌──────────────┐
-     │  Typesense   │  ← sprout-search (async, spawned per event)
+     │  Typesense   │  ← sprout-search (bounded worker queue)
      │ (full-text   │
      │   search)    │
      └──────────────┘
@@ -176,7 +176,7 @@ The client must respond with `["AUTH", <signed-event>]` before submitting events
 | Path | Mechanism | Use Case |
 |------|-----------|---------|
 | NIP-42 only | Signed challenge, pubkey verified | Dev mode / open relay |
-| NIP-42 + Okta JWT | Challenge + JWKS-validated JWT in `auth` tag | Human SSO via Okta |
+| NIP-42 + Okta JWT | Challenge + JWKS-validated JWT in `auth_token` tag | Human SSO via Okta |
 | NIP-42 + API token | Challenge + `auth_token` tag, constant-time hash verify | Agent/service accounts |
 | HTTP Bearer JWT | `Authorization: Bearer <jwt>` header on REST endpoints | REST API clients |
 
@@ -339,7 +339,7 @@ pub const ALL_KINDS: &[u32]  // 80 entries (KIND_AUTH excluded — never stored)
 |----------|---------|
 | `filters_match(filters, event)` | OR across filters, AND within each filter. Includes NIP-01 prefix matching on event IDs. |
 | `verify_event(event)` | Schnorr signature + SHA-256 ID check. CPU-bound — callers use `spawn_blocking`. |
-| `is_private_ip(ip)` | SSRF protection: IPv4 loopback/private/link-local/CGNAT/benchmarking + IPv6 loopback/ULA/link-local/multicast + IPv4-mapped IPv6. |
+| `is_private_ip(ip)` | SSRF protection: IPv4 unspecified/loopback/private/link-local/CGNAT/benchmarking/broadcast + IPv6 loopback/ULA/link-local/multicast/documentation + IPv4-mapped IPv6. |
 
 **Does NOT:** store events, make network calls, spawn tasks, or depend on any async runtime.
 
@@ -353,9 +353,9 @@ pub const ALL_KINDS: &[u32]  // 80 entries (KIND_AUTH excluded — never stored)
 
 | Path | Entry Point | Notes |
 |------|-------------|-------|
-| NIP-42 only | `verify_auth_event()` | Dev mode; grants `[MessagesRead, MessagesWrite]` |
-| NIP-42 + Okta JWT | `verify_auth_event()` | JWT in `auth` tag; JWKS-validated |
-| NIP-42 + API token | `verify_auth_event()` | `auth_token` tag; constant-time hash compare |
+| NIP-42 only | `verify_auth_event()` | Dev mode; grants `Scope::all_known()` (all 14 scopes) |
+| NIP-42 + Okta JWT | `verify_auth_event()` | JWT in `auth_token` tag; JWKS-validated |
+| NIP-42 + API token | Relay AUTH handler → DB lookup | `auth_token` tag with `sprout_` prefix; relay intercepts before `verify_auth_event()` (which has no DB access) |
 | HTTP Bearer JWT | `validate_bearer_jwt()` | REST endpoints; skips pubkey cross-check; always adds `ChannelsRead` |
 
 **Key types:**
@@ -602,20 +602,24 @@ Note: Both `TriggerDef` and `ActionDef` use serde internally-tagged enums. Trigg
 
 **14,327 LOC.** Axum WebSocket server. Ties all other crates together. The only crate that imports and orchestrates all subsystems.
 
-**`AppState`** (Arc-wrapped, shared across all connections):
+**`AppState`** (Arc-wrapped, shared across all connections — key fields shown, not exhaustive):
 
 ```rust
 pub struct AppState {
-    db: Db,
-    audit: AuditService,
-    pubsub: Arc<PubSubManager>,
-    auth: AuthService,
-    search: SearchService,
-    sub_registry: Arc<SubscriptionRegistry>,
-    conn_manager: Arc<ConnectionManager>,
-    workflow_engine: WorkflowEngine,
-    conn_semaphore: Arc<Semaphore>,       // connection limit
-    handler_semaphore: Arc<Semaphore>,    // 1024 concurrent handlers
+    pub db: Db,
+    pub audit: Arc<AuditService>,
+    pub pubsub: Arc<PubSubManager>,
+    pub auth: Arc<AuthService>,
+    pub search: Arc<SearchService>,
+    pub sub_registry: Arc<SubscriptionRegistry>,
+    pub conn_manager: Arc<ConnectionManager>,
+    pub workflow_engine: Arc<WorkflowEngine>,
+    pub conn_semaphore: Arc<Semaphore>,       // connection limit
+    pub handler_semaphore: Arc<Semaphore>,    // 1024 concurrent handlers
+    pub relay_keypair: nostr::Keys,           // relay identity
+    pub local_event_ids: moka::sync::Cache,   // local-echo dedup
+    pub search_index_tx: mpsc::Sender,        // bounded search worker queue
+    // + config, redis_pool, membership_cache, media_storage, shutdown state
 }
 ```
 
