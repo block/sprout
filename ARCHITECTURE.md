@@ -415,7 +415,8 @@ pub trait RateLimiter: Send + Sync { ... }
 - Soft-delete for channel members: `remove_member` sets `removed_at`; re-adding reverses it.
 - Feed hard cap: `FEED_MAX_LIMIT = 100` rows regardless of caller-requested limit.
 - `query_mentions` uses `INNER JOIN event_mentions` — normalized table with composite index on `(pubkey_hex, created_at)`.
-- Approval tokens: raw token never reaches the DB — caller hashes with SHA-256 before passing to `create_api_token`.
+- API tokens: raw token never reaches the DB — caller hashes with SHA-256 before passing to `create_api_token`.
+- Approval tokens: separate path — `create_approval` receives the raw token and hashes it internally.
 - DDL injection protection in partition manager: allowlist of table names + strict suffix/date validators.
 
 **Does NOT:** cache queries, implement connection pooling logic (delegated to sqlx), or make network calls outside Postgres.
@@ -549,24 +550,27 @@ Note: Both `TriggerDef` and `ActionDef` use serde internally-tagged enums. Trigg
 
 **Kind translation (lossy):**
 
-*Inbound (client → relay):*
+`KindTranslator` defines the full mapping between standard Nostr kinds and Sprout kinds. The proxy's event paths gate which kinds actually flow through — only a subset is accepted inbound or emitted outbound.
+
+*Inbound (client → relay) — accepted kinds:*
 
 | Standard Kind | Sprout Kind | Note |
 |--------------|-------------|------|
-| 1, 40, 42 | KIND_STREAM_MESSAGE | Multiple → one (lossy) |
-| 41, 44 | KIND_STREAM_MESSAGE_EDIT | Multiple → one (lossy) |
-| 4 | KIND_DM_CREATED | Encrypted DM |
-| 43 | KIND_NIP29_DELETE_EVENT | NIP-29 delete |
+| 1, 42 | KIND_STREAM_MESSAGE | Multiple → one (lossy) |
+| 41 | KIND_STREAM_MESSAGE_EDIT | Channel message edit |
+| 7 | KIND_REACTION | Reaction (pass-through kind) |
 
-*Outbound (relay → client):*
+Kind 5 (deletion) is intentionally blocked inbound — the relay's deletion handler lacks author-match authorization for proxy clients. Kinds 4, 40, 43, 44 are defined in `KindTranslator` but not accepted by the proxy's inbound path.
+
+*Outbound (relay → client) — emitted kinds:*
 
 | Sprout Kind | Standard Kind | Note |
 |-------------|--------------|------|
 | KIND_STREAM_MESSAGE | 42 | NIP-28 channel message |
 | KIND_STREAM_MESSAGE_V2 | 42 | Rich format collapses to plain kind:42 |
 | KIND_STREAM_MESSAGE_EDIT | 41 | NIP-28 channel message edit |
-| KIND_DM_CREATED | 4 | Encrypted DM |
-| KIND_NIP29_DELETE_EVENT | 43 | NIP-29 delete |
+| KIND_REACTION | 7 | Reaction |
+| KIND_DELETION | 5 | Standard NIP-09 deletion |
 
 `to_sprout(to_standard(k))` is NOT lossless for secondary mappings (e.g., kind:1 → KIND_STREAM_MESSAGE → kind:42). Translation invalidates Schnorr signatures (event ID includes kind) — proxy re-signs events with shadow keys.
 
@@ -582,7 +586,7 @@ Note: Both `TriggerDef` and `ActionDef` use serde internally-tagged enums. Trigg
 
 ### sprout-huddle — LiveKit Audio/Video Integration
 
-**728 LOC.** Mints LiveKit JWT tokens and parses LiveKit webhook events. In-memory session tracking.
+**728 LOC.** Mints LiveKit JWT tokens and parses LiveKit webhook events. Defines session/participant data structures (no active registry — types only).
 
 **JWT token:** HS256, 6-hour TTL (overridable). Claims: `iss` (api_key), `sub` (identity), `iat`, `exp`, `name`, `video` (VideoGrant: room, roomJoin, canPublish, canSubscribe).
 
@@ -590,7 +594,7 @@ Note: Both `TriggerDef` and `ActionDef` use serde internally-tagged enums. Trigg
 
 **5 webhook event types:** `RoomStarted`, `RoomFinished`, `ParticipantJoined`, `ParticipantLeft`, `TrackPublished`.
 
-**Session tracking:** `HuddleSession` with `Vec<HuddleParticipant>`. Participants tracked with `joined_at`, `left_at`, and `Vec<TrackInfo>`. **Sessions are lost on process restart** — in-memory only.
+**Session types:** `HuddleSession` with `Vec<HuddleParticipant>`. Participants have `joined_at`, `left_at`, and `Vec<TrackInfo>`. These are data structures and helpers only — no session registry or lifecycle manager exists in the crate.
 
 **Room naming:** `"sprout-{uuid}"` format via `create_room_name(channel_id)`.
 
