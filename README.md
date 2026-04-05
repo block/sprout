@@ -22,7 +22,7 @@ append-only and audited.
 | ✅ | **Tamper-evident audit log** — hash-chain, SOX-grade compliance |
 | ✅ | **Permission-aware full-text search** — Typesense, respects channel membership |
 | ✅ | **Enterprise SSO bridge** — NIP-42 authentication with OIDC |
-| ✅ | **All Rust** — memory safe, single binary, no GC pauses |
+| ✅ | **Pure Rust backend** — memory safe, no GC pauses |
 
 ## Supported NIPs
 
@@ -36,7 +36,7 @@ append-only and audited.
 | [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) | Private Direct Messages | ✅ Implemented |
 | [NIP-25](https://github.com/nostr-protocol/nips/blob/master/25.md) | Reactions | ✅ Implemented |
 | [NIP-28](https://github.com/nostr-protocol/nips/blob/master/28.md) | Public chat channels | ✅ Via `sprout-proxy` (kind translation) |
-| [NIP-29](https://github.com/nostr-protocol/nips/blob/master/29.md) | Relay-based groups | ✅ Partial (kinds 9000–9008, 9021–9022 implemented; 9009 deferred) |
+| [NIP-29](https://github.com/nostr-protocol/nips/blob/master/29.md) | Relay-based groups | ✅ Partial (kinds 9000–9002, 9005, 9007–9008, 9021–9022 implemented; 9009 stubbed) |
 | [NIP-42](https://github.com/nostr-protocol/nips/blob/master/42.md) | Authentication of clients to relays | ✅ Implemented |
 | [NIP-50](https://github.com/nostr-protocol/nips/blob/master/50.md) | Search capability | ✅ Implemented |
 | [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) | HTTP Auth | ✅ Partial (`POST /api/tokens` bootstrap only) |
@@ -111,7 +111,7 @@ append-only and audited.
 **Shared libraries**
 | Crate | Role |
 |-------|------|
-| `sprout-sdk` | Typed Nostr event builders — used by sprout-mcp and sprout-cli |
+| `sprout-sdk` | Typed Nostr event builders — used by sprout-mcp, sprout-acp, and sprout-cli |
 | `sprout-media` | Blossom/S3 media storage, validation, and thumbnail generation |
 
 **Tooling**
@@ -119,7 +119,7 @@ append-only and audited.
 |-------|------|
 | `sprout-cli` | Agent-first CLI for interacting with the relay |
 | `sprout-admin` | CLI for minting API tokens and listing active credentials |
-| `sprout-test-client` | Integration test client and E2E test suite — relay, REST API, tokens, MCP, media, Nostr interop, and workflows |
+| `sprout-test-client` | Integration test client and E2E test suite — relay, REST API, tokens, MCP, media, media extended, Nostr interop, and workflows |
 
 ## Quick Start
 
@@ -145,7 +145,7 @@ just build
 
 `just setup` does the heavy lifting:
 - Starts Docker services (Postgres, Redis, Typesense, Adminer, Keycloak, MinIO, Prometheus)
-- Waits for all services to be healthy
+- Waits for core services (Postgres, Redis, Typesense) to be healthy
 - Runs database migrations
 - Installs desktop dependencies (`pnpm install`)
 
@@ -254,6 +254,7 @@ Copy `.env.example` to `.env` and adjust as needed. All defaults work out of the
 | `SPROUT_UDS_PATH` | — | Unix domain socket path (alternative to TCP) |
 | `OKTA_JWKS_URI` | — | Okta JWKS endpoint URI for JWT verification |
 | `SPROUT_TOOLSETS` | `default` | MCP toolsets to enable (comma-separated: `default`, `channel_admin`, `dms`, `canvas`, `workflow_admin`, `identity`, `forums`, `all`, `none`; append `:ro` for read-only) |
+| `SPROUT_MINT_RATE_LIMIT` | `50` | Max API token mints per pubkey per hour |
 | `SPROUT_RELAY_PUBKEY` | — | Relay's hex pubkey — required by `sprout-proxy`; also used as fallback auth by `sprout-workflow` when no API token is set |
 
 ## MCP Tools
@@ -311,8 +312,8 @@ cargo run -p sprout-proxy
 Run `just test-unit` for unit tests (no infra required) or `just test` for the full suite.
 See [TESTING.md](TESTING.md) for the multi-agent E2E suite (Alice/Bob/Charlie via `sprout-acp`).
 
-**Database schema** lives in `schema/schema.sql`. The relay applies it automatically on startup.
-To run manually: `just migrate`.
+**Database schema** lives in `schema/schema.sql`. Apply it with `just migrate`; `just setup`
+runs migrations automatically as part of environment setup.
 
 ## License
 
