@@ -3,7 +3,7 @@
 
 use crate::converters::json_to_feed_item;
 use crate::error::SproutError;
-use crate::types::{FeedCategory, FeedItem, HomeFeed};
+use crate::types::{FeedCategory, HomeFeed};
 
 use super::HttpClient;
 
@@ -16,7 +16,10 @@ impl HttpClient {
 
         let mut items = Vec::new();
 
-        if let Some(mentions) = feed.and_then(|f| f.get("mentions")).and_then(|m| m.as_array()) {
+        if let Some(mentions) = feed
+            .and_then(|f| f.get("mentions"))
+            .and_then(|m| m.as_array())
+        {
             for v in mentions {
                 if let Some(item) = json_to_feed_item(v, FeedCategory::Mention) {
                     items.push(item);
@@ -35,7 +38,10 @@ impl HttpClient {
             }
         }
 
-        if let Some(activity) = feed.and_then(|f| f.get("activity")).and_then(|m| m.as_array()) {
+        if let Some(activity) = feed
+            .and_then(|f| f.get("activity"))
+            .and_then(|m| m.as_array())
+        {
             for v in activity {
                 if let Some(item) = json_to_feed_item(v, FeedCategory::Activity) {
                     items.push(item);

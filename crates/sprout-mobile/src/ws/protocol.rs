@@ -1,5 +1,6 @@
-// ABOUTME: Client-to-relay message formatting for outgoing WebSocket frames.
-// ABOUTME: Formats EVENT, REQ, CLOSE, and AUTH messages as NIP-01 JSON arrays.
+//! Client-to-relay message formatting for outgoing WebSocket frames.
+//! Formats EVENT, REQ, CLOSE, and AUTH messages as NIP-01 JSON arrays.
+#![allow(dead_code)]
 
 use nostr::{Event, Filter};
 use serde_json::{json, Value};

@@ -18,6 +18,7 @@ pub(crate) struct KeyManager {
 
 impl KeyManager {
     /// Generate a fresh random keypair.
+    #[allow(dead_code)]
     pub fn generate() -> Self {
         Self {
             keys: Keys::generate(),

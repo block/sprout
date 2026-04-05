@@ -1,5 +1,6 @@
-// ABOUTME: SQLite cache queries for channel data.
-// ABOUTME: Insert, update, list, and lookup channels in the local cache.
+//! SQLite cache queries for channel data.
+//! Insert, update, list, and lookup channels in the local cache.
+#![allow(dead_code)]
 
 use rusqlite::params;
 
@@ -43,20 +44,19 @@ impl Store {
             )
             .map_err(sqlite_err)?;
 
-        let result = stmt
-            .query_row([id], |row| {
-                Ok(Channel {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    about: row.get(2)?,
-                    topic: row.get(3)?,
-                    channel_type: parse_channel_type(row.get::<_, String>(4)?.as_str()),
-                    visibility: parse_visibility(row.get::<_, String>(5)?.as_str()),
-                    member_count: row.get(6)?,
-                    last_message_at: row.get(8)?,
-                    is_member: row.get(7)?,
-                })
-            });
+        let result = stmt.query_row([id], |row| {
+            Ok(Channel {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                about: row.get(2)?,
+                topic: row.get(3)?,
+                channel_type: parse_channel_type(row.get::<_, String>(4)?.as_str()),
+                visibility: parse_visibility(row.get::<_, String>(5)?.as_str()),
+                member_count: row.get(6)?,
+                last_message_at: row.get(8)?,
+                is_member: row.get(7)?,
+            })
+        });
 
         match result {
             Ok(ch) => Ok(Some(ch)),

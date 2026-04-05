@@ -9,11 +9,7 @@ use super::HttpClient;
 
 impl HttpClient {
     /// GET /api/search — full-text search.
-    pub async fn search(
-        &self,
-        token: &str,
-        query: &str,
-    ) -> Result<Vec<SearchResult>, SproutError> {
+    pub async fn search(&self, token: &str, query: &str) -> Result<Vec<SearchResult>, SproutError> {
         let path = format!("/api/search?q={}&limit=50", urlencoding::encode(query));
         let json = self.get_with_token(&path, token).await?;
         let hits = json

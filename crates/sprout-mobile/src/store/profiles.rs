@@ -1,5 +1,6 @@
-// ABOUTME: SQLite cache queries for user profile data.
-// ABOUTME: Insert, batch lookup, and search profiles in the local cache.
+//! SQLite cache queries for user profile data.
+//! Insert, batch lookup, and search profiles in the local cache.
+#![allow(dead_code)]
 
 use rusqlite::params;
 
@@ -64,9 +65,13 @@ impl Store {
 
         let conn = self.lock()?;
         let mut stmt = conn.prepare(&sql).map_err(sqlite_err)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            pubkeys.iter().map(|p| p as &dyn rusqlite::types::ToSql).collect();
-        let rows = stmt.query_map(params.as_slice(), row_to_profile).map_err(sqlite_err)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = pubkeys
+            .iter()
+            .map(|p| p as &dyn rusqlite::types::ToSql)
+            .collect();
+        let rows = stmt
+            .query_map(params.as_slice(), row_to_profile)
+            .map_err(sqlite_err)?;
 
         let mut profiles = Vec::new();
         for row in rows {

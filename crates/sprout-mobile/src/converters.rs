@@ -10,8 +10,14 @@ pub(crate) fn json_to_channel(v: &Value) -> Option<Channel> {
     Some(Channel {
         id: v.get("id")?.as_str()?.to_string(),
         name: v.get("name")?.as_str()?.to_string(),
-        about: v.get("description").and_then(|d| d.as_str()).map(|s| s.to_string()),
-        topic: v.get("topic").and_then(|t| t.as_str()).map(|s| s.to_string()),
+        about: v
+            .get("description")
+            .and_then(|d| d.as_str())
+            .map(|s| s.to_string()),
+        topic: v
+            .get("topic")
+            .and_then(|t| t.as_str())
+            .map(|s| s.to_string()),
         channel_type: match v.get("channel_type").and_then(|c| c.as_str()) {
             Some("forum") => ChannelType::Forum,
             Some("dm") => ChannelType::Dm,
@@ -21,10 +27,7 @@ pub(crate) fn json_to_channel(v: &Value) -> Option<Channel> {
             Some("private") => ChannelVisibility::Private,
             _ => ChannelVisibility::Open,
         },
-        member_count: v
-            .get("member_count")
-            .and_then(|m| m.as_u64())
-            .unwrap_or(0) as u32,
+        member_count: v.get("member_count").and_then(|m| m.as_u64()).unwrap_or(0) as u32,
         last_message_at: v
             .get("last_message_at")
             .and_then(|t| t.as_str())
@@ -41,10 +44,22 @@ pub(crate) fn json_to_channel(v: &Value) -> Option<Channel> {
 pub(crate) fn json_to_profile(v: &Value) -> Option<UserProfile> {
     Some(UserProfile {
         pubkey: v.get("pubkey")?.as_str()?.to_string(),
-        display_name: v.get("display_name").and_then(|d| d.as_str()).map(|s| s.to_string()),
-        picture: v.get("avatar_url").and_then(|p| p.as_str()).map(|s| s.to_string()),
-        about: v.get("about").and_then(|a| a.as_str()).map(|s| s.to_string()),
-        nip05: v.get("nip05_handle").and_then(|n| n.as_str()).map(|s| s.to_string()),
+        display_name: v
+            .get("display_name")
+            .and_then(|d| d.as_str())
+            .map(|s| s.to_string()),
+        picture: v
+            .get("avatar_url")
+            .and_then(|p| p.as_str())
+            .map(|s| s.to_string()),
+        about: v
+            .get("about")
+            .and_then(|a| a.as_str())
+            .map(|s| s.to_string()),
+        nip05: v
+            .get("nip05_handle")
+            .and_then(|n| n.as_str())
+            .map(|s| s.to_string()),
     })
 }
 
@@ -62,7 +77,10 @@ pub(crate) fn json_to_member(v: &Value) -> Option<ChannelMember> {
         profile: v.get("display_name").and_then(|_| {
             Some(UserProfile {
                 pubkey: v.get("pubkey")?.as_str()?.to_string(),
-                display_name: v.get("display_name").and_then(|d| d.as_str()).map(|s| s.to_string()),
+                display_name: v
+                    .get("display_name")
+                    .and_then(|d| d.as_str())
+                    .map(|s| s.to_string()),
                 picture: None,
                 about: None,
                 nip05: None,
@@ -91,17 +109,18 @@ pub(crate) fn json_to_search_result(v: &Value) -> Option<SearchResult> {
             .and_then(|p| p.as_str())
             .unwrap_or("")
             .to_string(),
-        created_at: v
-            .get("created_at")
-            .and_then(|c| c.as_i64())
-            .unwrap_or(0),
+        created_at: v.get("created_at").and_then(|c| c.as_i64()).unwrap_or(0),
     })
 }
 
 /// Convert a feed item JSON object to an FFI FeedItem.
 pub(crate) fn json_to_feed_item(v: &Value, category: FeedCategory) -> Option<FeedItem> {
     Some(FeedItem {
-        event_id: v.get("id").or_else(|| v.get("event_id"))?.as_str()?.to_string(),
+        event_id: v
+            .get("id")
+            .or_else(|| v.get("event_id"))?
+            .as_str()?
+            .to_string(),
         channel_id: v
             .get("channel_id")
             .and_then(|c| c.as_str())
@@ -122,14 +141,8 @@ pub(crate) fn json_to_feed_item(v: &Value, category: FeedCategory) -> Option<Fee
             .and_then(|p| p.as_str())
             .unwrap_or("")
             .to_string(),
-        created_at: v
-            .get("created_at")
-            .and_then(|c| c.as_i64())
-            .unwrap_or(0),
-        kind: v
-            .get("kind")
-            .and_then(|k| k.as_u64())
-            .unwrap_or(9) as u32,
+        created_at: v.get("created_at").and_then(|c| c.as_i64()).unwrap_or(0),
+        kind: v.get("kind").and_then(|k| k.as_u64()).unwrap_or(9) as u32,
         category,
     })
 }

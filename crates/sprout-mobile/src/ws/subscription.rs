@@ -1,5 +1,5 @@
-// ABOUTME: Subscription lifecycle management — REQ, EOSE, event routing.
-// ABOUTME: Routes incoming events to the appropriate SproutEventListener callbacks.
+//! Subscription lifecycle helpers — REQ, EOSE, event routing.
+//! Routes incoming events to the appropriate SproutEventListener callbacks.
 
 use nostr::{Filter, Kind};
 use uuid::Uuid;
@@ -19,14 +19,19 @@ pub(crate) fn channel_message_filter(channel_id: &str) -> Filter {
             Kind::Custom(7),     // Reaction
             Kind::Custom(40099), // System message
         ])
-        .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::H), [channel_id])
+        .custom_tag(
+            nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+            [channel_id],
+        )
 }
 
 /// Build a filter for typing indicators in a channel.
+#[allow(dead_code)]
 pub(crate) fn typing_indicator_filter(channel_id: &str) -> Filter {
-    Filter::new()
-        .kind(Kind::Custom(20002))
-        .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::H), [channel_id])
+    Filter::new().kind(Kind::Custom(20002)).custom_tag(
+        nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+        [channel_id],
+    )
 }
 
 #[cfg(test)]

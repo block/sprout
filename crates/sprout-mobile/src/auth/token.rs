@@ -1,8 +1,6 @@
 // ABOUTME: API token management — mint, cache, refresh, and revoke.
 // ABOUTME: Tokens are cached in SQLite with expiry tracking.
 
-use nostr::Keys;
-
 use crate::error::SproutError;
 use crate::store::Store;
 

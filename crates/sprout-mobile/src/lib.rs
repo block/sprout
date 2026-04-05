@@ -13,15 +13,20 @@
 
 uniffi::setup_scaffolding!();
 
-pub mod error;
-pub mod types;
-mod runtime;
 mod converters;
+/// Error type used across the mobile core.
+pub mod error;
+mod runtime;
+/// Data transfer types exposed over FFI.
+pub mod types;
 
 pub mod auth;
-pub mod ws;
+/// REST API client surface.
 pub mod http;
+/// Local SQLite cache surface.
 pub mod store;
+/// WebSocket connection and subscriptions.
+pub mod ws;
 
 use std::sync::Arc;
 
@@ -48,7 +53,6 @@ pub struct SproutClient {
     store: Arc<Store>,
     key_manager: RwLock<Option<KeyManager>>,
     api_token: RwLock<Option<String>>,
-    relay_url: String,
 }
 
 #[uniffi::export]
@@ -83,7 +87,6 @@ impl SproutClient {
             store,
             key_manager: RwLock::new(key_manager),
             api_token: RwLock::new(api_token),
-            relay_url: config.relay_url,
         }))
     }
 
@@ -360,8 +363,7 @@ impl SproutClient {
         let uuid = parse_uuid(&channel_id)?;
         let target = parse_event_id(&event_id)?;
 
-        let builder =
-            sprout_sdk::build_delete_message(uuid, target).map_err(sdk_err)?;
+        let builder = sprout_sdk::build_delete_message(uuid, target).map_err(sdk_err)?;
         let event = builder.sign_with_keys(&keys).map_err(sign_err)?;
         self.http.submit_event(&token, &event).await?;
         Ok(())
@@ -370,11 +372,7 @@ impl SproutClient {
     // ── Reactions ────────────────────────────────────────────────────────────
 
     /// Add an emoji reaction to a message.
-    pub async fn add_reaction(
-        &self,
-        event_id: String,
-        emoji: String,
-    ) -> Result<(), SproutError> {
+    pub async fn add_reaction(&self, event_id: String, emoji: String) -> Result<(), SproutError> {
         let token = self.require_token().await?;
         let keys = self.require_keys().await?;
         let target = parse_event_id(&event_id)?;
@@ -491,7 +489,9 @@ impl SproutClient {
     ) -> Result<MediaUploadResult, SproutError> {
         let token = self.require_token().await?;
         let keys = self.require_keys().await?;
-        self.http.upload_media_bytes(&token, &keys, file_bytes).await
+        self.http
+            .upload_media_bytes(&token, &keys, file_bytes)
+            .await
     }
 
     // ── Real-time subscriptions ──────────────────────────────────────────────
@@ -551,7 +551,10 @@ impl SproutClient {
 
         // Auto-mint a token via NIP-98.
         let body = token::mint_token_body("sprout-mobile");
-        let resp = self.http.post_with_nip98("/api/tokens", keys, &body).await?;
+        let resp = self
+            .http
+            .post_with_nip98("/api/tokens", keys, &body)
+            .await?;
         let (token_str, expires_at) = token::parse_mint_response(&resp)?;
 
         TokenCache::save(&self.store, &token_str, expires_at)?;

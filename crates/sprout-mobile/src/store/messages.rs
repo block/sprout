@@ -1,5 +1,6 @@
-// ABOUTME: SQLite cache queries for message data.
-// ABOUTME: Insert, list by channel, and lookup messages with thread metadata.
+//! SQLite cache queries for message data.
+//! Insert, list by channel, and lookup messages with thread metadata.
+#![allow(dead_code)]
 
 use rusqlite::params;
 
@@ -41,8 +42,7 @@ impl Store {
         before: Option<i64>,
         limit: u32,
     ) -> Result<Vec<Message>, SproutError> {
-        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(ts) = before
-        {
+        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(ts) = before {
             (
                 "SELECT event_id, channel_id, author_pubkey, content, kind, created_at, reply_to, thread_root, reply_count
                  FROM messages WHERE channel_id = ?1 AND created_at < ?2
@@ -64,7 +64,8 @@ impl Store {
 
         let conn = self.lock()?;
         let mut stmt = conn.prepare_cached(sql).map_err(sqlite_err)?;
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt
             .query_map(param_refs.as_slice(), row_to_message)
             .map_err(sqlite_err)?;

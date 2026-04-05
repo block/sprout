@@ -1,19 +1,27 @@
-// ABOUTME: Base HTTP client for Sprout relay REST API calls.
-// ABOUTME: Handles auth headers (Bearer token or NIP-98), error mapping, and request dispatch.
+//! HTTP client modules for Sprout relay REST API calls.
+//! Handles auth headers (Bearer token or NIP-98), error mapping, and request dispatch.
 
+/// Channel endpoints client.
 pub mod channels;
-pub mod messages;
+/// Direct-messages endpoints client.
 pub mod dms;
-pub mod users;
-pub mod search;
+/// Home feed endpoint client.
 pub mod feed;
-pub mod presence;
+/// Media upload endpoint client.
 pub mod media;
+/// Message and thread endpoints client.
+pub mod messages;
+/// Presence endpoints client.
+pub mod presence;
+/// Search endpoints client.
+pub mod search;
+/// Users endpoints client.
+pub mod users;
 
 use std::time::Duration;
 
 use nostr::Keys;
-use reqwest::{Client, Method, Response, StatusCode};
+use reqwest::{Client, Response, StatusCode};
 use serde_json::Value;
 
 use crate::auth::nip98::build_nip98_auth_header;
@@ -43,11 +51,7 @@ impl HttpClient {
     }
 
     /// Make a GET request with Bearer token auth.
-    pub async fn get_with_token(
-        &self,
-        path: &str,
-        token: &str,
-    ) -> Result<Value, SproutError> {
+    pub async fn get_with_token(&self, path: &str, token: &str) -> Result<Value, SproutError> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
             .client
@@ -98,11 +102,8 @@ impl HttpClient {
     }
 
     /// Make a DELETE request with Bearer token auth.
-    pub async fn delete_with_token(
-        &self,
-        path: &str,
-        token: &str,
-    ) -> Result<(), SproutError> {
+    #[allow(dead_code)]
+    pub async fn delete_with_token(&self, path: &str, token: &str) -> Result<(), SproutError> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
             .client
@@ -159,10 +160,9 @@ impl HttpClient {
         event: &nostr::Event,
     ) -> Result<Value, SproutError> {
         let url = format!("{}/api/events", self.base_url);
-        let event_json =
-            serde_json::to_value(event).map_err(|e| SproutError::InternalError {
-                message: e.to_string(),
-            })?;
+        let event_json = serde_json::to_value(event).map_err(|e| SproutError::InternalError {
+            message: e.to_string(),
+        })?;
         let resp = self
             .client
             .post(&url)
@@ -197,6 +197,7 @@ impl HttpClient {
     }
 
     /// Get the base URL (for NIP-98 URL construction).
+    #[allow(dead_code)]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -264,7 +265,10 @@ mod tests {
 
     #[test]
     fn normalize_ws_to_http() {
-        assert_eq!(normalize_relay_url("ws://localhost:3000"), "http://localhost:3000");
+        assert_eq!(
+            normalize_relay_url("ws://localhost:3000"),
+            "http://localhost:3000"
+        );
         assert_eq!(
             normalize_relay_url("wss://relay.example.com"),
             "https://relay.example.com"

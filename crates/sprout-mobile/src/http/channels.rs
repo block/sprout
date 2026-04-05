@@ -1,8 +1,6 @@
 // ABOUTME: REST client for /api/channels endpoints.
 // ABOUTME: List, create, update, archive, join, and leave channels.
 
-use serde_json::Value;
-
 use crate::converters::{json_to_channel, json_to_member};
 use crate::error::SproutError;
 use crate::types::{Channel, ChannelMember};

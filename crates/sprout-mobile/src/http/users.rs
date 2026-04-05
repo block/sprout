@@ -29,7 +29,9 @@ impl HttpClient {
         pubkeys: &[String],
     ) -> Result<Vec<UserProfile>, SproutError> {
         let body = serde_json::json!({ "pubkeys": pubkeys });
-        let json = self.post_with_token("/api/users/batch", token, &body).await?;
+        let json = self
+            .post_with_token("/api/users/batch", token, &body)
+            .await?;
 
         let profiles = json
             .get("profiles")

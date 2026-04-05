@@ -1,7 +1,9 @@
-// ABOUTME: WebSocket connection manager for real-time relay communication.
-// ABOUTME: Handles connect, NIP-42 auth, reconnect, subscriptions, and event dispatch.
+//! WebSocket connection manager for real-time relay communication.
+//! Handles connect, NIP-42 auth, reconnect, subscriptions, and event dispatch.
 
+/// Relay protocol message definitions.
 pub mod protocol;
+/// Helpers for building subscription filters and IDs.
 pub mod subscription;
 
 use std::collections::HashMap;
@@ -44,6 +46,7 @@ pub(crate) struct WsManager {
     /// Active subscriptions: sub_id → filters (for reconnect replay).
     subscriptions: Arc<RwLock<HashMap<String, Vec<nostr::Filter>>>>,
     /// Pending OK responses: event_id → oneshot sender.
+    #[allow(clippy::type_complexity)]
     pending_ok:
         Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<Result<OkResponse, SproutError>>>>>,
 }
@@ -76,6 +79,7 @@ impl WsManager {
     }
 
     /// Set the event listener.
+    #[allow(dead_code)]
     pub async fn set_listener(&self, listener: Box<dyn SproutEventListener>) {
         *self.listener.write().await = Some(listener);
     }
@@ -87,7 +91,12 @@ impl WsManager {
 
     /// Connect to the relay (spawns a background task).
     pub async fn connect(&self) -> Result<(), SproutError> {
-        let keys = self.keys.read().await.clone().ok_or(SproutError::AuthRequired)?;
+        let keys = self
+            .keys
+            .read()
+            .await
+            .clone()
+            .ok_or(SproutError::AuthRequired)?;
 
         // Shut down existing task if any.
         self.disconnect().await;
@@ -126,15 +135,8 @@ impl WsManager {
     }
 
     /// Subscribe to events matching the given filters.
-    pub async fn subscribe(
-        &self,
-        sub_id: String,
-        filters: Vec<nostr::Filter>,
-    ) {
-        self.subscriptions
-            .write()
-            .await
-            .insert(sub_id, filters);
+    pub async fn subscribe(&self, sub_id: String, filters: Vec<nostr::Filter>) {
+        self.subscriptions.write().await.insert(sub_id, filters);
     }
 
     /// Unsubscribe from a subscription.
@@ -143,6 +145,7 @@ impl WsManager {
     }
 
     /// Send a signed event and wait for the OK response.
+    #[allow(dead_code)]
     pub async fn send_event(&self, event: nostr::Event) -> Result<OkResponse, SproutError> {
         let event_id = event.id.to_hex();
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -170,6 +173,7 @@ impl WsManager {
 }
 
 /// Long-running connection loop with reconnect logic.
+#[allow(clippy::type_complexity)]
 async fn connection_loop(
     relay_url: String,
     keys: Keys,
@@ -177,7 +181,9 @@ async fn connection_loop(
     listener: Arc<RwLock<Option<Box<dyn SproutEventListener>>>>,
     state_tx: watch::Sender<ConnectionState>,
     subscriptions: Arc<RwLock<HashMap<String, Vec<nostr::Filter>>>>,
-    pending_ok: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<Result<OkResponse, SproutError>>>>>,
+    #[allow(clippy::type_complexity)] pending_ok: Arc<
+        Mutex<HashMap<String, tokio::sync::oneshot::Sender<Result<OkResponse, SproutError>>>>,
+    >,
 ) {
     let mut backoff = INITIAL_BACKOFF;
     let mut attempt: u32 = 0;
@@ -235,6 +241,7 @@ async fn connection_loop(
 }
 
 /// Single connection attempt: connect, auth, subscribe, and process messages.
+#[allow(clippy::type_complexity)]
 async fn connect_and_run(
     relay_url: &str,
     keys: &Keys,
@@ -242,13 +249,16 @@ async fn connect_and_run(
     listener: &Arc<RwLock<Option<Box<dyn SproutEventListener>>>>,
     state_tx: &watch::Sender<ConnectionState>,
     subscriptions: &Arc<RwLock<HashMap<String, Vec<nostr::Filter>>>>,
-    pending_ok: &Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<Result<OkResponse, SproutError>>>>>,
+    #[allow(clippy::type_complexity)] pending_ok: &Arc<
+        Mutex<HashMap<String, tokio::sync::oneshot::Sender<Result<OkResponse, SproutError>>>>,
+    >,
 ) -> Result<(), SproutError> {
-    let url: url::Url = relay_url
-        .parse()
-        .map_err(|e: url::ParseError| SproutError::WebSocketError {
-            message: format!("invalid relay URL: {e}"),
-        })?;
+    let url: url::Url =
+        relay_url
+            .parse()
+            .map_err(|e: url::ParseError| SproutError::WebSocketError {
+                message: format!("invalid relay URL: {e}"),
+            })?;
 
     let (ws, _) = connect_async(url.as_str())
         .await
@@ -295,9 +305,14 @@ async fn connect_and_run(
     // Sign and send AUTH response.
     let token = api_token.read().await.clone();
     let auth_event = build_auth_event(keys, &challenge, relay_url, token.as_deref())?;
-    let auth_msg = json!(["AUTH", serde_json::to_value(&auth_event).map_err(|e| {
-        SproutError::InternalError { message: e.to_string() }
-    })?]);
+    let auth_msg = json!([
+        "AUTH",
+        serde_json::to_value(&auth_event).map_err(|e| {
+            SproutError::InternalError {
+                message: e.to_string(),
+            }
+        })?
+    ]);
     sink.send(Message::Text(auth_msg.to_string().into()))
         .await
         .map_err(|e| SproutError::WebSocketError {

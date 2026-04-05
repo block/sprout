@@ -15,11 +15,12 @@ pub(crate) fn build_auth_event(
     relay_url: &str,
     api_token: Option<&str>,
 ) -> Result<nostr::Event, SproutError> {
-    let relay: Url = relay_url
-        .parse()
-        .map_err(|e: url::ParseError| SproutError::InternalError {
-            message: format!("invalid relay URL: {e}"),
-        })?;
+    let relay: Url =
+        relay_url
+            .parse()
+            .map_err(|e: url::ParseError| SproutError::InternalError {
+                message: format!("invalid relay URL: {e}"),
+            })?;
 
     let mut tags = vec![
         Tag::parse(&["relay", relay.as_str()]).map_err(tag_err)?,
@@ -61,7 +62,9 @@ mod tests {
             .map(|t| t.as_slice().iter().map(|s| s.to_string()).collect())
             .collect();
 
-        assert!(tags.iter().any(|t| t[0] == "challenge" && t[1] == "test-challenge"));
+        assert!(tags
+            .iter()
+            .any(|t| t[0] == "challenge" && t[1] == "test-challenge"));
         assert!(tags.iter().any(|t| t[0] == "relay"));
     }
 
@@ -82,6 +85,8 @@ mod tests {
             .map(|t| t.as_slice().iter().map(|s| s.to_string()).collect())
             .collect();
 
-        assert!(tags.iter().any(|t| t[0] == "auth_token" && t[1] == "sprout_abc123"));
+        assert!(tags
+            .iter()
+            .any(|t| t[0] == "auth_token" && t[1] == "sprout_abc123"));
     }
 }

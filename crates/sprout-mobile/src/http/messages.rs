@@ -29,10 +29,7 @@ impl HttpClient {
 
         let has_more = messages.len() == limit as usize;
 
-        Ok(MessagePage {
-            messages,
-            has_more,
-        })
+        Ok(MessagePage { messages, has_more })
     }
 
     /// GET /api/channels/{id}/threads/{event_id} — fetch a full thread.
@@ -60,6 +57,7 @@ impl HttpClient {
     }
 
     /// GET /api/messages/{event_id}/reactions — list reactions on a message.
+    #[allow(dead_code)]
     pub async fn get_reactions(
         &self,
         token: &str,

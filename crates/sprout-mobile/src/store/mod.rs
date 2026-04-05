@@ -1,10 +1,14 @@
-// ABOUTME: SQLite local cache facade for offline-capable mobile experience.
-// ABOUTME: Write-through on all data; stale-while-revalidate reads for messages and profiles.
+//! SQLite local cache facade for offline-capable mobile experience.
+//! Write-through on all data; stale-while-revalidate reads for messages and profiles.
 
-pub mod schema;
+/// Channel cache queries and helpers.
 pub mod channels;
+/// Message cache queries and helpers.
 pub mod messages;
+/// Profile cache queries and helpers.
 pub mod profiles;
+/// Database schema migrations.
+pub mod schema;
 
 use std::path::Path;
 
@@ -87,9 +91,7 @@ impl Store {
     }
 
     /// Lock the mutex and return the connection guard.
-    pub(crate) fn lock(
-        &self,
-    ) -> Result<std::sync::MutexGuard<'_, Connection>, SproutError> {
+    pub(crate) fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, SproutError> {
         self.conn.lock().map_err(|e| SproutError::StorageError {
             message: format!("lock poisoned: {e}"),
         })
