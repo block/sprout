@@ -8,7 +8,8 @@ repository.workspace = true
 description = "UniFFI-exposed Rust core for Sprout iOS/Android apps"
 
 [lib]
-crate-type = ["cdylib", "lib"]
+# staticlib → iOS XCFramework (.a) ; cdylib → Android (.so) ; lib → host tests & bindgen binary
+crate-type = ["staticlib", "cdylib", "lib"]
 name = "sprout_mobile"
 
 [[bin]]

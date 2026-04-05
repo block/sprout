@@ -194,6 +194,113 @@ clean:
 check-compile:
     cargo check --workspace --all-targets
 
+# ─── Mobile (iOS / Android) ───────────────────────────────────────────────────
+
+mobile_crate := "sprout-mobile"
+mobile_lib_name := "libsprout_mobile"
+ios_targets := "aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios"
+android_targets := "aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android"
+ios_out := "ios/Frameworks/SproutCore.xcframework"
+ios_swift_out := "ios/Sources/SproutMobile"
+android_jni_root := "android/sproutmobile/src/main/jniLibs"
+android_kotlin_out := "android/sproutmobile/src/main/java"
+
+# Install all iOS and Android rustup targets needed for mobile builds
+mobile-targets:
+    rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+    rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+
+# Build the Rust core for all iOS targets and assemble an XCFramework
+mobile-ios:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "==> Building sprout-mobile for iOS targets…"
+    for t in {{ios_targets}}; do
+        echo "  • $t"
+        cargo build -p {{mobile_crate}} --release --target "$t"
+    done
+
+    # Combine the two simulator slices (arm64 + x86_64) into a single fat lib.
+    mkdir -p target/ios-sim-universal/release
+    lipo -create \
+        "target/aarch64-apple-ios-sim/release/{{mobile_lib_name}}.a" \
+        "target/x86_64-apple-ios/release/{{mobile_lib_name}}.a" \
+        -output "target/ios-sim-universal/release/{{mobile_lib_name}}.a"
+
+    # Assemble the XCFramework (one slice per platform variant).
+    rm -rf "{{ios_out}}"
+    mkdir -p "$(dirname {{ios_out}})"
+    xcodebuild -create-xcframework \
+        -library "target/aarch64-apple-ios/release/{{mobile_lib_name}}.a" \
+        -library "target/ios-sim-universal/release/{{mobile_lib_name}}.a" \
+        -output "{{ios_out}}"
+
+    just mobile-swift-bindings
+    echo "==> iOS XCFramework built at {{ios_out}}"
+
+# Generate Swift UniFFI bindings from the built Rust library
+mobile-swift-bindings:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "==> Generating Swift bindings…"
+    mkdir -p "{{ios_swift_out}}"
+    cargo run -p {{mobile_crate}} --bin uniffi-bindgen --release -- \
+        generate --library "target/aarch64-apple-ios/release/{{mobile_lib_name}}.a" \
+        --language swift \
+        --out-dir "{{ios_swift_out}}"
+    echo "==> Swift bindings written to {{ios_swift_out}}"
+
+# Build the Rust core for all Android ABIs and copy .so files into jniLibs
+mobile-android:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -z "${NDK_HOME:-}" ]; then
+        echo "error: ANDROID_NDK_HOME or NDK_HOME must be set" >&2
+        exit 1
+    fi
+    NDK="${ANDROID_NDK_HOME:-$NDK_HOME}"
+    TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/$(uname -s | tr '[:upper:]' '[:lower:]')-x86_64/bin"
+    export PATH="$TOOLCHAIN:$PATH"
+
+    echo "==> Building sprout-mobile for Android targets…"
+    for t in {{android_targets}}; do
+        echo "  • $t"
+        cargo build -p {{mobile_crate}} --release --target "$t"
+    done
+
+    # Copy the built .so files into the Gradle jniLibs layout.
+    declare -A abi_map=(
+        [aarch64-linux-android]=arm64-v8a
+        [armv7-linux-androideabi]=armeabi-v7a
+        [x86_64-linux-android]=x86_64
+        [i686-linux-android]=x86
+    )
+    for t in {{android_targets}}; do
+        abi="${abi_map[$t]}"
+        dest="{{android_jni_root}}/$abi"
+        mkdir -p "$dest"
+        cp "target/$t/release/{{mobile_lib_name}}.so" "$dest/"
+    done
+
+    just mobile-kotlin-bindings
+    echo "==> Android .so files copied to {{android_jni_root}}"
+
+# Generate Kotlin UniFFI bindings from the built Rust library
+mobile-kotlin-bindings:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "==> Generating Kotlin bindings…"
+    mkdir -p "{{android_kotlin_out}}"
+    cargo run -p {{mobile_crate}} --bin uniffi-bindgen --release -- \
+        generate --library "target/aarch64-linux-android/release/{{mobile_lib_name}}.so" \
+        --language kotlin \
+        --out-dir "{{android_kotlin_out}}"
+    echo "==> Kotlin bindings written to {{android_kotlin_out}}"
+
+# Run the sprout-mobile Rust unit tests
+mobile-test:
+    cargo test -p {{mobile_crate}}
+
 # ─── Agent Harness ────────────────────────────────────────────────────────────
 
 # Run a goose agent connected to a Sprout relay (foreground)

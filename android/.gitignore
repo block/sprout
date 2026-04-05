@@ -1,0 +1,14 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+# Generated Rust artifacts (rebuilt via `just mobile-android`)
+sproutmobile/src/main/jniLibs/arm64-v8a/
+sproutmobile/src/main/jniLibs/armeabi-v7a/
+sproutmobile/src/main/jniLibs/x86_64/
+sproutmobile/src/main/jniLibs/x86/
+sproutmobile/src/main/java/uniffi/
