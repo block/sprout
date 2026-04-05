@@ -229,8 +229,8 @@ pub struct SearchHitInfo {
     pub content: String,
     pub kind: u32,
     pub pubkey: String,
-    pub channel_id: String,
-    pub channel_name: String,
+    pub channel_id: Option<String>,
+    pub channel_name: Option<String>,
     pub created_at: u64,
     pub score: f64,
 }

@@ -169,8 +169,8 @@ type RawSearchHit = {
   content: string;
   kind: number;
   pubkey: string;
-  channel_id: string;
-  channel_name: string;
+  channel_id: string | null;
+  channel_name: string | null;
   created_at: number;
   score: number;
 };

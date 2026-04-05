@@ -182,7 +182,7 @@ fn parse_response(ts_resp: TypesenseSearchResponse) -> Result<SearchResult, Sear
                 content: hit.document.content,
                 kind: u16::try_from(hit.document.kind).unwrap_or(0),
                 pubkey: hit.document.pubkey,
-                channel_id: hit.document.channel_id,
+                channel_id: hit.document.channel_id.filter(|id| id != "__global__"),
                 created_at: hit.document.created_at,
                 score,
             }

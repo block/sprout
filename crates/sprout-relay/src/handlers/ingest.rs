@@ -12,14 +12,14 @@ use uuid::Uuid;
 use nostr::Event;
 use sprout_auth::Scope;
 use sprout_core::kind::{
-    event_kind_u32, KIND_AUTH, KIND_CANVAS, KIND_DELETION, KIND_FORUM_COMMENT, KIND_FORUM_POST,
-    KIND_FORUM_VOTE, KIND_GIFT_WRAP, KIND_MEMBER_ADDED_NOTIFICATION,
+    event_kind_u32, KIND_AUTH, KIND_CANVAS, KIND_CONTACT_LIST, KIND_DELETION, KIND_FORUM_COMMENT,
+    KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP, KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT,
     KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST,
     KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_PRESENCE_UPDATE,
     KIND_PROFILE, KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
     KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
-    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
+    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE,
 };
 use sprout_core::verification::verify_event;
 
@@ -141,6 +141,8 @@ pub enum IngestError {
 fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static str> {
     match kind {
         KIND_PROFILE => Ok(Scope::UsersWrite),
+        KIND_TEXT_NOTE => Ok(Scope::MessagesWrite),
+        KIND_CONTACT_LIST => Ok(Scope::UsersWrite),
         KIND_DELETION
         | KIND_REACTION
         | KIND_GIFT_WRAP
@@ -779,7 +781,7 @@ pub async fn ingest_event(
     }
 
     // ── 5. Channel resolution ────────────────────────────────────────────
-    let channel_id = if kind_u32 == KIND_REACTION {
+    let mut channel_id = if kind_u32 == KIND_REACTION {
         match derive_reaction_channel(&state.db, &event).await {
             ReactionChannelResult::Channel(ch_id) => Some(ch_id),
             ReactionChannelResult::NoChannel => None,
@@ -840,6 +842,13 @@ pub async fn ingest_event(
         extract_channel_id(&event)
     };
 
+    // ── 5b. Global-only kinds ignore h-tags ─────────────────────────────
+    // kind:0 (profile), kind:1 (text note), kind:3 (contact list) are always global.
+    // If a client includes a stray h-tag, ignore it — these kinds are never channel-scoped.
+    if matches!(kind_u32, KIND_PROFILE | KIND_TEXT_NOTE | KIND_CONTACT_LIST) {
+        channel_id = None;
+    }
+
     // ── 6. h-tag requirement ─────────────────────────────────────────────
     if requires_h_channel_scope(kind_u32) && channel_id.is_none() {
         return Err(IngestError::Rejected(
@@ -850,12 +859,13 @@ pub async fn ingest_event(
     // ── 7. Token channel access ──────────────────────────────────────────
     if let Some(ch_id) = channel_id {
         check_token_channel_access(&auth, ch_id).map_err(IngestError::AuthFailed)?;
-    } else if kind_u32 == KIND_NIP29_CREATE_GROUP && auth.channel_ids().is_some() {
-        // Channel-scoped tokens cannot create channels outside their scope.
-        // kind:9007 without an h-tag would auto-create a server-assigned UUID,
-        // bypassing the token's channel restriction.
+    } else if auth.channel_ids().is_some() {
+        // Channel-scoped tokens cannot publish global events — that would bypass
+        // the token's channel restriction. This covers kind:1 (global text notes),
+        // kind:3 (contact lists), kind:0 (profiles), and kind:9007 (create-group
+        // without an h-tag, which would auto-assign a server UUID).
         return Err(IngestError::AuthFailed(
-            "restricted: channel-scoped tokens must include an h tag for create-group".into(),
+            "restricted: channel-scoped tokens cannot publish global events".into(),
         ));
     }
 
@@ -1220,11 +1230,12 @@ pub async fn ingest_event(
         });
     }
 
-    let (stored_event, was_inserted) = if kind_u32 == KIND_PROFILE {
-        // kind:0 is replaceable — use addressable event storage.
+    let (stored_event, was_inserted) = if sprout_core::kind::is_replaceable(kind_u32) {
+        // NIP-16 replaceable event — atomic replace with stale-write protection.
+        // channel_id is None for global kinds (0, 1, 3) due to step 5b above.
         state
             .db
-            .replace_addressable_event(&event, None)
+            .replace_addressable_event(&event, channel_id)
             .await
             .map_err(|e| IngestError::Internal(format!("error: {e}")))?
     } else {

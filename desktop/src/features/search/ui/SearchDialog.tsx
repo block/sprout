@@ -317,7 +317,9 @@ export function SearchDialog({
 
               <div className="space-y-2">
                 {results.map((hit, index) => {
-                  const channel = channelLookup.get(hit.channelId);
+                  const channel = hit.channelId
+                    ? channelLookup.get(hit.channelId)
+                    : undefined;
                   const authorLabel = resolveUserLabel({
                     pubkey: hit.pubkey,
                     currentPubkey,

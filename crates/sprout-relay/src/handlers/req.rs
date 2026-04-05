@@ -242,17 +242,19 @@ async fn handle_search_req(
     conn: &ConnectionState,
     state: &AppState,
 ) {
-    if accessible_channels.is_empty() {
-        conn.send(RelayMessage::eose(sub_id));
-        return;
-    }
-
     let all_channels_filter = {
-        let ids: Vec<String> = accessible_channels
-            .iter()
-            .map(|id| id.to_string())
-            .collect();
-        format!("channel_id:=[{}]", ids.join(","))
+        if accessible_channels.is_empty() {
+            "channel_id:=__global__".to_string()
+        } else {
+            let ids: Vec<String> = accessible_channels
+                .iter()
+                .map(|id| id.to_string())
+                .collect();
+            format!(
+                "(channel_id:=[{}] || channel_id:=__global__)",
+                ids.join(",")
+            )
+        }
     };
 
     let mut seen_ids: HashSet<nostr::EventId> = HashSet::new();
@@ -354,7 +356,6 @@ async fn handle_search_req(
             let hit_ids: Vec<Vec<u8>> = search_result
                 .hits
                 .into_iter()
-                .filter(|h| h.channel_id.is_some())
                 .filter_map(|h| hex::decode(&h.event_id).ok())
                 .filter(|bytes| bytes.len() == 32)
                 .collect();

@@ -213,8 +213,8 @@ export type SearchHit = {
   content: string;
   kind: number;
   pubkey: string;
-  channelId: string;
-  channelName: string;
+  channelId: string | null;
+  channelName: string | null;
   createdAt: number;
   score: number;
 };

@@ -154,8 +154,9 @@ impl FromStr for Scope {
 /// `SubscriptionsRead`, `SubscriptionsWrite`) are intentionally excluded — they require
 /// `sprout-admin mint-token`.
 ///
-/// `UsersWrite` is included because it only guards self-profile endpoints
-/// (`PUT /api/users/me/profile`, `PUT /api/users/me/channel-add-policy`).
+/// `UsersWrite` is included because it guards self-profile endpoints
+/// (`PUT /api/users/me/profile`, `PUT /api/users/me/channel-add-policy`)
+/// and contact list (kind:3) publishing.
 pub const SELF_MINTABLE_SCOPES: &[Scope] = &[
     Scope::MessagesRead,
     Scope::MessagesWrite,

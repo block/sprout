@@ -461,12 +461,14 @@ async fn emit_addressable_discovery_event(
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign kind:{kind}: {e}"))?;
 
-    let (stored, _) = state
+    let (stored, was_inserted) = state
         .db
         .replace_addressable_event(&event, Some(channel_id))
         .await?;
-    let kind_u32 = event_kind_u32(&stored.event);
-    dispatch_persistent_event(state, &stored, kind_u32, relay_pubkey_hex).await;
+    if was_inserted {
+        let kind_u32 = event_kind_u32(&stored.event);
+        dispatch_persistent_event(state, &stored, kind_u32, relay_pubkey_hex).await;
+    }
     Ok(())
 }
 
