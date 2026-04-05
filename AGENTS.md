@@ -12,7 +12,7 @@ code style, PR process, architecture), see [CONTRIBUTING.md](CONTRIBUTING.md).
 crates/
   sprout-relay        # WebSocket relay server — main entry point
   sprout-core         # Core types, event verification, filter matching
-  sprout-db           # MySQL event store and data access layer
+  sprout-db           # Postgres event store and data access layer
   sprout-auth         # Authentication and authorization
   sprout-pubsub       # Redis pub/sub fan-out, presence, typing indicators
   sprout-mcp          # MCP server providing AI agent tools
@@ -24,6 +24,9 @@ crates/
   sprout-proxy        # Nostr client compatibility proxy
   sprout-admin        # Operator CLI for relay administration
   sprout-test-client  # Integration test client and E2E test suite
+  sprout-sdk          # Typed Nostr event builders (used by sprout-mcp and sprout-cli)
+  sprout-media        # Blossom/S3 media storage
+  sprout-cli          # Agent-first CLI
 
 desktop/              # Tauri 2 + React 19 desktop app
 migrations/           # SQL migrations (auto-applied on relay startup)
@@ -49,15 +52,15 @@ See CONTRIBUTING.md for full setup details and dependency requirements.
 
 ## Quality Gates
 
-Run `just ci` before every PR. It runs: `fmt`, `clippy`, unit tests, desktop
-build, and Tauri check. All must pass.
+Run `just ci` before every PR. It runs: Rust `fmt` + `clippy`, desktop lint
+(Biome), unit tests, desktop build, and Tauri check. All must pass.
 
 Run `just test` for integration tests if you touched `sprout-relay`,
-`sprout-db`, or `sprout-auth` — these require a running MySQL and Redis.
+`sprout-db`, or `sprout-auth` — these require a running Postgres and Redis.
 
 Additional rules:
 - No `unsafe` code
-- No `unwrap()` or `expect()` in production paths — use `?` and proper error types
+- Do not introduce new `unwrap()` or `expect()` in production paths — use `?` and proper error types
 - New public API must have doc comments
 
 ---
@@ -75,9 +78,11 @@ first, then implement handling in the relay.
 **Channel scoping**: Channels use `h` tags (NIP-29 group tag), not `e` tags.
 Filters and queries must scope to `h` tags when operating within a channel.
 
-**MCP tools proxy REST**: The MCP server in `sprout-mcp` wraps REST endpoints.
-Add the REST endpoint first, then add the MCP tool that calls it. Do not
-implement logic directly in MCP handlers.
+**MCP tools — dual transport**: The MCP server in `sprout-mcp` uses two
+patterns: write operations send signed Nostr events over WebSocket; read
+operations call REST endpoints (see `relay_client.rs` for the HTTP helpers).
+Add the REST endpoint or event handler first, then add the MCP tool that calls
+it. Do not implement logic directly in MCP handlers.
 
 **Workflow conditions**: `sprout-workflow` uses
 [evalexpr](https://docs.rs/evalexpr) for condition evaluation. Keep expressions
@@ -93,15 +98,18 @@ check existing reply handlers for the pattern.
 
 ```bash
 just test-unit    # unit tests, no infrastructure needed
-just test         # full integration suite (requires MySQL + Redis)
+just test         # full integration suite (requires Postgres + Redis)
 ```
 
 E2E tests live in `crates/sprout-test-client/tests/`:
-- `e2e_rest_api.rs` — REST endpoint coverage
 - `e2e_relay.rs` — WebSocket relay protocol
+- `e2e_rest_api.rs` — REST endpoint coverage
 - `e2e_mcp.rs` — MCP tool surface
 - `e2e_tokens.rs` — auth token flows
 - `e2e_workflows.rs` — workflow engine
+- `e2e_media.rs` — media upload/download (Blossom)
+- `e2e_media_extended.rs` — extended media scenarios
+- `e2e_nostr_interop.rs` — Nostr interop (NIP-50 search, NIP-10 threads, NIP-17 gift wraps)
 
 Desktop E2E: `cd desktop && pnpm exec playwright test`
 
