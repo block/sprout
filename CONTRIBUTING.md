@@ -41,10 +41,10 @@ unacceptable behavior to **conduct@sprout-relay.org**.
 | Rust | 1.88+ | Install via [rustup](https://rustup.rs/) |
 | Node.js | 24+ | Required for desktop app commands and `just ci` |
 | pnpm | 10+ | Required for desktop app commands and `just ci` |
-| Docker | 24+ | For MySQL, Redis, Typesense |
+| Docker | 24+ | For Postgres, Redis, Typesense |
 | `just` | latest | Task runner — `cargo install just` |
 | `lefthook` | latest | Optional; run `lefthook install` for local Git hooks |
-| `sqlx-cli` | latest | Optional; `just migrate` falls back to `docker exec` |
+| `pgschema` | latest | Schema tool — `just migrate` applies `schema/schema.sql` declaratively |
 
 This repo uses [Hermit](https://cashapp.github.io/hermit/) for toolchain
 pinning. Activate it once per shell session:
@@ -60,7 +60,7 @@ don't use Hermit, make sure your Rust toolchain meets the minimum version.
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/sprout-rs/sprout.git
+git clone https://github.com/block/sprout.git
 cd sprout
 
 # 2. Activate Hermit (optional but recommended)
@@ -76,9 +76,10 @@ just setup
 lefthook install
 ```
 
-`just setup` starts Docker services (MySQL on `:3306`, Redis on `:6379`,
+`just setup` starts Docker services (Postgres on `:5432`, Redis on `:6379`,
 Typesense on `:8108`, Adminer on `:8082`, Keycloak on `:8180` for local
-OAuth/OIDC testing) and runs all pending database migrations.
+OAuth/OIDC testing, MinIO on `:9000` for media storage, and Prometheus on
+`:9090` for metrics) and runs all pending database migrations.
 
 ### Running the Relay
 
@@ -128,7 +129,10 @@ End-to-end tests live in `crates/sprout-test-client/tests/`:
 - `e2e_rest_api.rs` — REST API tests
 - `e2e_relay.rs` — WebSocket relay tests
 - `e2e_mcp.rs` — MCP tool tests
+- `e2e_nostr_interop.rs` — Nostr protocol interoperability tests
 - `e2e_tokens.rs` — token management tests
+- `e2e_media.rs` — media upload/download tests
+- `e2e_media_extended.rs` — extended media tests (GIF, image processing)
 - `e2e_workflows.rs` — workflow tests
 
 Run them with (requires running infrastructure):
@@ -280,7 +284,7 @@ The short version:
 ```
 sprout-relay      ← WebSocket server, REST API, event ingestion
 sprout-core       ← Shared types, event verification, filter matching
-sprout-db         ← MySQL access layer (sqlx)
+sprout-db         ← Postgres access layer (sqlx)
 sprout-auth       ← NIP-42 + OIDC JWT + API token scopes
 sprout-pubsub     ← Redis fan-out
 sprout-search     ← Typesense full-text search
@@ -289,7 +293,10 @@ sprout-workflow   ← YAML-as-code workflow engine
 sprout-mcp        ← stdio MCP server (agent API surface)
 sprout-acp        ← ACP harness (bridges Sprout relay events to AI agents via stdio)
 sprout-proxy      ← Nostr client compatibility layer
+sprout-sdk        ← Typed Nostr event builders (used by sprout-mcp and sprout-cli)
+sprout-media      ← Blossom/S3 media storage
 sprout-huddle     ← LiveKit integration
+sprout-cli        ← Agent-first CLI for interacting with the relay
 sprout-admin      ← Operator CLI
 sprout-test-client← Integration test harness
 desktop/          ← Desktop app (Tauri 2 + React 19 + Vite + Tailwind)
@@ -331,35 +338,44 @@ to existing clients.
    }
    ```
 
-3. **Handle the kind in the relay** by adding a match arm in
-   `crates/sprout-relay/src/handlers/side_effects.rs` inside the
-   `handle_side_effects()` function:
+3. **Register the kind's required scope** in
+   `crates/sprout-relay/src/handlers/ingest.rs` inside
+   `required_scope_for_kind()`. This controls which auth scope a caller
+   needs to submit the event:
 
    ```rust
-   KIND_MY_FEATURE => handle_my_feature(&state, &event).await?,
+   KIND_MY_FEATURE => Ok(Scope::MessagesWrite),
    ```
 
-   This is the central dispatch point for event side-effects. If the new
-   kind also needs a REST surface (e.g., a query endpoint for clients), add
-   a handler in `crates/sprout-relay/src/api/` and register it in
-   `crates/sprout-relay/src/router.rs` — that's separate from event
-   dispatch.
+4. **Handle post-storage side effects** by adding a match arm in
+   `crates/sprout-relay/src/handlers/side_effects.rs` inside
+   `handle_side_effects()`:
 
-4. **Persist to the database** — if the event needs to be queryable, add a
+   ```rust
+   KIND_MY_FEATURE => handle_my_feature(event, state).await?,
+   ```
+
+   `handle_side_effects()` runs after the event is stored — use it for
+   notifications, cache invalidation, or derived data. If the new kind
+   also needs a REST surface (e.g., a query endpoint for clients), add a
+   handler in `crates/sprout-relay/src/api/` and register it in
+   `crates/sprout-relay/src/router.rs`.
+
+5. **Persist to the database** — if the event needs to be queryable, add a
    handler in `sprout-db/src/` (e.g., `sprout-db/src/my_feature.rs`) with
    the appropriate `INSERT` and `SELECT` queries.
 
-5. **Index for search** (if applicable) — add the kind to the Typesense
+6. **Index for search** (if applicable) — add the kind to the Typesense
    indexing logic in `sprout-search/src/index.rs`.
 
-6. **Audit** — the audit log captures all events automatically; no changes
+7. **Audit** — the audit log captures all events automatically; no changes
    needed unless you need custom audit metadata.
 
-7. **Write tests** — add a unit test for payload serialization in
+8. **Write tests** — add a unit test for payload serialization in
    `sprout-core` and an integration test in `sprout-test-client` that sends
    the new event kind and verifies the expected behavior.
 
-8. **Document** — `kind.rs` is the authoritative registry of all kind numbers.
+9. **Document** — `kind.rs` is the authoritative registry of all kind numbers.
    Update `README.md` if it's a user-facing feature.
 
 ---
@@ -397,7 +413,7 @@ provides the `#[tool]` and `#[tool_router]` macros.
        if uuid::Uuid::parse_str(&p.channel_id).is_err() {
            return format!("Error: channel_id '{}' is not a valid UUID", p.channel_id);
        }
-       // Call the relay via self.client
+       // Read tools call the relay REST API
        match self.client.get(&format!("/api/channels/{}/my-resource", p.channel_id)).await {
            Ok(body) => body,
            Err(e) => format!("Error: {e}"),
@@ -405,10 +421,14 @@ provides the `#[tool]` and `#[tool_router]` macros.
    }
    ```
 
+   **Read vs. write tools:** Read tools use `self.client.get()` (REST).
+   Write tools build a signed Nostr event and call
+   `self.client.send_event(event)` — see `send_message` for the canonical
+   pattern.
+
 3. **The `#[tool_router]` macro** on the `impl SproutMcpServer` block
-   automatically discovers all `#[tool]`-annotated methods and registers
-   them. The MCP server auto-discovers `#[tool]`-annotated methods — no
-   manual registration or doc updates needed.
+   automatically discovers all `#[tool]`-annotated methods — no manual
+   registration or doc updates needed.
 
 4. **Write a test** — add an integration test in
    `crates/sprout-test-client/tests/e2e_mcp.rs` that exercises the new tool end-to-end.
@@ -425,15 +445,22 @@ are registered in `crates/sprout-relay/src/router.rs`.
 
    ```rust
    pub async fn get_my_resource(
-       State(state): State<AppState>,
-       AuthenticatedUser(user): AuthenticatedUser,
-       Path(channel_id): Path<Uuid>,
-   ) -> Result<Json<MyResourceResponse>, ApiError> {
-       // Check channel membership
-       state.db.assert_channel_member(channel_id, user.pubkey).await?;
+       State(state): State<Arc<AppState>>,
+       headers: HeaderMap,
+       Path(channel_id_str): Path<String>,
+   ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+       let channel_id = uuid::Uuid::parse_str(&channel_id_str)
+           .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid channel_id"))?;
+       let ctx = extract_auth_context(&headers, &state).await?;
+       sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::ChannelsRead)
+           .map_err(scope_error)?;
+       let pubkey_bytes = ctx.pubkey_bytes.clone();
+       check_token_channel_access(&ctx, &channel_id)?;
+       check_channel_access(&state, channel_id, &pubkey_bytes).await?;
        // Fetch data
-       let data = state.db.get_my_resource(channel_id).await?;
-       Ok(Json(data))
+       let data = state.db.get_my_resource(channel_id).await
+           .map_err(|e| internal_error(&e.to_string()))?;
+       Ok(Json(serde_json::json!(data)))
    }
    ```
 
@@ -446,8 +473,8 @@ are registered in `crates/sprout-relay/src/router.rs`.
 3. **Add the database query** in `sprout-db/src/` — follow the existing
    patterns in `channel.rs`, `event.rs`, etc.
 
-4. **Handle errors** — use the `ApiError` type in `sprout-relay/src/error.rs`.
-   Map database errors and not-found cases to appropriate HTTP status codes.
+4. **Handle errors** — use the `api_error()` and `internal_error()` helpers in
+   `sprout-relay/src/api/mod.rs`. Return `(StatusCode, Json<Value>)` tuples.
 
 5. **Write tests** — add an integration test using the `sprout-test-client`
    harness in `crates/sprout-test-client/tests/e2e_rest_api.rs`.
