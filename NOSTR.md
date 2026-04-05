@@ -34,8 +34,8 @@ cargo run -p sprout-relay &          # relay on :3000
 
 # 4. Add a pubkey to the allowlist (if enabled)
 #    Insert directly — there is no CLI command for this yet.
-mysql -u sprout -psprout_dev sprout -e \
-  "INSERT INTO pubkey_allowlist (pubkey) VALUES (UNHEX('<64-char-hex-pubkey>'))"
+PGPASSWORD=sprout_dev psql -h localhost -U sprout -d sprout -c \
+  "INSERT INTO pubkey_allowlist (pubkey) VALUES (decode('<64-char-hex-pubkey>', 'hex'))"
 
 # 5. Connect any NIP-29 + NIP-42 client to ws://localhost:3000
 ```
@@ -68,6 +68,7 @@ mysql -u sprout -psprout_dev sprout -e \
 | **NIP-10 threads** | ✅ | WS-submitted replies with `["e","<root>","","reply"]` tags create `thread_metadata` atomically. Visible in REST thread queries. Unknown parents rejected. |
 | **NIP-17 DMs (gift wrap)** | ✅ | kind:1059 accepted with ephemeral signing keys. Stored globally (channel_id=None). Delivered via `#p`-filtered subscriptions. Not indexed in search. |
 | **DM discovery** | ✅ | DM creation emits kind:39000 (with `hidden` tag) + kind:44100 membership notifications. NIP-29 clients discover DMs via standard group discovery flow. |
+| **Join request (kind:9021)** | ✅ | Open channels only. Adds member, emits system message + group discovery events + kind:44100 membership notification. Private channels rejected at ingest. |
 | **Edits (kind:40003)** | ⚠️ | Works on the wire but Sprout-only — no standard NIP-29 client renders these |
 | **Rich content (kind:40002)** | ⚠️ | Works on the wire but Sprout-only — no standard NIP-29 client renders these |
 
@@ -76,7 +77,6 @@ mysql -u sprout -psprout_dev sprout -e \
 | Feature | Status | Why |
 |---------|:------:|-----|
 | **Create invite (kind:9009)** | ⚠️ | Accepted and stored, but side-effect handler is deferred (no-op with warning log) |
-| **Join request (kind:9021)** | ⚠️ | Accepted and stored, but side-effect handler is deferred (no-op with warning log) |
 | **Group roles (kind:39003)** | ❌ | Defined in kind registry but not emitted by the relay |
 | **DMs** | ⚠️ | NIP-17 gift wraps supported; NIP-04/NIP-44 not implemented. kind:10050 (DM relay list) deferred. |
 
@@ -92,9 +92,9 @@ relay to specific external Nostr identities without granting full Okta/API-token
 - Auth failure returns generic `auth-required: verification failed` (no allowlist-specific message).
 - Manage the allowlist via direct SQL (no CLI command yet):
   ```sql
-  INSERT INTO pubkey_allowlist (pubkey) VALUES (UNHEX('<64-char-hex-pubkey>'));
-  DELETE FROM pubkey_allowlist WHERE pubkey = UNHEX('<64-char-hex-pubkey>');
-  SELECT HEX(pubkey), added_at, note FROM pubkey_allowlist;
+  INSERT INTO pubkey_allowlist (pubkey) VALUES (decode('<64-char-hex-pubkey>', 'hex'));
+  DELETE FROM pubkey_allowlist WHERE pubkey = decode('<64-char-hex-pubkey>', 'hex');
+  SELECT encode(pubkey, 'hex'), added_at, note FROM pubkey_allowlist;
   ```
 
 ### Group Discovery
@@ -136,10 +136,10 @@ Stored globally (`channel_id = None`) so agents and clients can subscribe withou
 UUIDs in advance. Client-submitted kind:44100/44101 events are rejected — only the relay keypair
 may sign these.
 
-> **Subscription constraint:** Global REQs that can match kind:44100/44101 **must** include a `#p`
-> filter where **all** `#p` values match the authenticated pubkey. The relay rejects subscriptions
-> that omit `#p` or include other pubkeys (prevents eavesdropping on others' membership changes).
-> Error: `restricted: membership notifications require #p matching your pubkey`.
+> **Subscription constraint:** Global REQs that can match p-gated kinds (44100, 44101, 1059) **must**
+> include a `#p` filter where **all** `#p` values match the authenticated pubkey. The relay rejects
+> subscriptions that omit `#p` or include other pubkeys (prevents eavesdropping on others' membership
+> changes and DMs). Error: `restricted: p-gated events require #p matching your pubkey`.
 
 ```bash
 nak req -k 44100 -k 44101 --tag "p=<your-hex-pubkey>" \
@@ -448,7 +448,7 @@ Test script: `scripts/test-proxy-nostr-sdk-python.py`.
 **Direct path:** Clients speak kind:9 natively. No translation, no shadow keys, no proxy. The relay
 handles NIP-42 auth, channel scoping via `#h` tags, group discovery (kind:39000–39002), membership
 notifications (kind:44100/44101), NIP-29 admin commands (kind:9000, 9001, 9002, 9005, 9007, 9008,
-9022; plus deferred 9009, 9021), and standard deletions/reactions (kind:5/7).
+9021, 9022; plus deferred 9009), and standard deletions/reactions (kind:5/7).
 
 **Proxy path:** Translates kind:42 ↔ kind:9 (also accepts kind:1 inbound), kind:41 ↔ kind:40003
 (edits), kind:7 (reactions, bidirectional), and kind:5 (deletions, outbound only — standard kind:5
