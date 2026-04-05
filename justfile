@@ -210,6 +210,97 @@ mobile-targets:
     rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
     rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
 
+# Verify and install prerequisites for mobile builds (cargo-ndk, SDK, NDK, JDK, Gradle wrapper)
+mobile-setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "==> Checking mobile build prerequisites…"
+
+    missing=0
+
+    # Rust targets — easy, install unconditionally.
+    just mobile-targets
+
+    # cargo-ndk — required for the Android build.
+    if ! command -v cargo-ndk >/dev/null 2>&1; then
+        echo "• cargo-ndk not found — installing…"
+        cargo install cargo-ndk
+    else
+        echo "• cargo-ndk: $(cargo ndk --version 2>/dev/null | tail -1)"
+    fi
+
+    # Android SDK / NDK — look in common locations.
+    if [ -z "${ANDROID_HOME:-}" ]; then
+        for p in \
+            "/opt/homebrew/share/android-commandlinetools" \
+            "$HOME/Library/Android/sdk" \
+            "/usr/local/share/android-commandlinetools"; do
+            if [ -d "$p" ]; then
+                echo "• Found Android SDK at $p"
+                echo "  → export ANDROID_HOME=\"$p\""
+                break
+            fi
+        done
+    else
+        echo "• ANDROID_HOME=$ANDROID_HOME"
+    fi
+
+    if [ -z "${ANDROID_NDK_HOME:-}" ]; then
+        sdk_root="${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}"
+        ndk_dir="$sdk_root/ndk"
+        if [ -d "$ndk_dir" ]; then
+            latest_ndk=$(ls -1 "$ndk_dir" 2>/dev/null | sort -V | tail -1 || true)
+            if [ -n "$latest_ndk" ]; then
+                echo "• Found NDK $latest_ndk at $ndk_dir/$latest_ndk"
+                echo "  → export ANDROID_NDK_HOME=\"$ndk_dir/$latest_ndk\""
+            else
+                echo "• NDK directory exists but is empty — run 'sdkmanager --install \"ndk;25.1.8937393\"'"
+                missing=1
+            fi
+        else
+            echo "• NDK not found — run 'sdkmanager --install \"ndk;25.1.8937393\"'"
+            missing=1
+        fi
+    else
+        echo "• ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+    fi
+
+    # JDK — AGP 8.5.2 needs JDK 17. Look via java_home first (Oracle/Temurin pkgs),
+    # then check brew's openjdk@17, then fall back to whatever 'java' resolves to.
+    if [ -x /usr/libexec/java_home ] && /usr/libexec/java_home -v 17 >/dev/null 2>&1; then
+        jdk17_path=$(/usr/libexec/java_home -v 17)
+        echo "• JDK 17 available at $jdk17_path"
+        echo "  → export JAVA_HOME=\"$jdk17_path\""
+    elif [ -x /opt/homebrew/opt/openjdk@17/bin/java ]; then
+        echo "• JDK 17 available at /opt/homebrew/opt/openjdk@17"
+        echo "  → export JAVA_HOME=\"/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home\""
+    elif command -v java >/dev/null 2>&1; then
+        jver=$(java -version 2>&1 | head -1)
+        echo "• java found ($jver) — install JDK 17 with 'brew install openjdk@17' if Gradle complains"
+    else
+        echo "• java not found — install with 'brew install openjdk@17'"
+        missing=1
+    fi
+
+    # Gradle wrapper — check whether android/gradlew exists.
+    if [ -x "android/gradlew" ]; then
+        echo "• Gradle wrapper: android/gradlew"
+    elif command -v gradle >/dev/null 2>&1; then
+        echo "• Gradle wrapper missing — generating from installed gradle…"
+        (cd android && gradle wrapper --gradle-version 8.10.2 --distribution-type bin)
+    else
+        echo "• Gradle wrapper missing and gradle not installed — run 'brew install gradle' then 'just mobile-setup' again"
+        missing=1
+    fi
+
+    if [ "$missing" -ne 0 ]; then
+        echo ""
+        echo "⚠  Some prerequisites need manual action — see messages above."
+        exit 1
+    fi
+    echo ""
+    echo "✓ Mobile build prerequisites OK."
+
 # Build the Rust core for all iOS targets and assemble an XCFramework
 mobile-ios:
     #!/usr/bin/env bash
@@ -250,37 +341,29 @@ mobile-swift-bindings:
         --out-dir "{{ios_swift_out}}"
     echo "==> Swift bindings written to {{ios_swift_out}}"
 
-# Build the Rust core for all Android ABIs and copy .so files into jniLibs
+# Build sprout-mobile for all Android ABIs via cargo-ndk and copy into jniLibs
 mobile-android:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -z "${NDK_HOME:-}" ]; then
-        echo "error: ANDROID_NDK_HOME or NDK_HOME must be set" >&2
+    if ! command -v cargo-ndk >/dev/null 2>&1; then
+        echo "error: cargo-ndk is not installed — run 'just mobile-setup' first" >&2
         exit 1
     fi
-    NDK="${ANDROID_NDK_HOME:-$NDK_HOME}"
-    TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/$(uname -s | tr '[:upper:]' '[:lower:]')-x86_64/bin"
-    export PATH="$TOOLCHAIN:$PATH"
+    if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -z "${NDK_HOME:-}" ] && [ -z "${ANDROID_HOME:-}" ]; then
+        echo "error: set ANDROID_NDK_HOME, NDK_HOME, or ANDROID_HOME" >&2
+        exit 1
+    fi
 
-    echo "==> Building sprout-mobile for Android targets…"
-    for t in {{android_targets}}; do
-        echo "  • $t"
-        cargo build -p {{mobile_crate}} --release --target "$t"
-    done
-
-    # Copy the built .so files into the Gradle jniLibs layout.
-    declare -A abi_map=(
-        [aarch64-linux-android]=arm64-v8a
-        [armv7-linux-androideabi]=armeabi-v7a
-        [x86_64-linux-android]=x86_64
-        [i686-linux-android]=x86
-    )
-    for t in {{android_targets}}; do
-        abi="${abi_map[$t]}"
-        dest="{{android_jni_root}}/$abi"
-        mkdir -p "$dest"
-        cp "target/$t/release/{{mobile_lib_name}}.so" "$dest/"
-    done
+    echo "==> Building sprout-mobile for Android targets via cargo-ndk…"
+    # cargo-ndk writes .so files directly into the jniLibs layout via -o,
+    # mapping each Rust target triple to its Android ABI automatically.
+    cargo ndk \
+        -t arm64-v8a \
+        -t armeabi-v7a \
+        -t x86_64 \
+        -t x86 \
+        -o "{{android_jni_root}}" \
+        build --release -p {{mobile_crate}}
 
     just mobile-kotlin-bindings
     echo "==> Android .so files copied to {{android_jni_root}}"

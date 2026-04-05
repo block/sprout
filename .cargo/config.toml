@@ -1,5 +1,5 @@
-# ABOUTME: Cross-compilation rustflags for iOS and Android mobile targets.
-# ABOUTME: Used by `just mobile-ios` and `just mobile-android` to build sprout-mobile.
+# ABOUTME: Cross-compilation rustflags for iOS mobile targets.
+# ABOUTME: Android linker setup is handled by cargo-ndk (see `just mobile-android`).
 
 # iOS — device (arm64)
 [target.aarch64-apple-ios]
@@ -18,23 +18,3 @@ rustflags = [
 rustflags = [
     "-C", "link-arg=-Wl,-application_extension",
 ]
-
-# Android — arm64 (primary)
-[target.aarch64-linux-android]
-ar = "llvm-ar"
-linker = "aarch64-linux-android21-clang"
-
-# Android — armv7 (older devices)
-[target.armv7-linux-androideabi]
-ar = "llvm-ar"
-linker = "armv7a-linux-androideabi21-clang"
-
-# Android — x86_64 emulator
-[target.x86_64-linux-android]
-ar = "llvm-ar"
-linker = "x86_64-linux-android21-clang"
-
-# Android — i686 emulator (legacy)
-[target.i686-linux-android]
-ar = "llvm-ar"
-linker = "i686-linux-android21-clang"

@@ -2,7 +2,14 @@
 // ABOUTME: Derives uniffi::Error so it crosses the FFI boundary to Swift/Kotlin.
 
 /// Errors returned by [`SproutClient`](crate::SproutClient) methods.
+///
+/// Uses `flat_error` so the FFI layer exposes only the variant discriminant;
+/// field values are rendered into the `Display` message that foreign languages
+/// see as the exception's `.message` / `localizedDescription`. This avoids a
+/// UniFFI Kotlin codegen clash where a `message: String` field on a variant
+/// collides with `kotlin.Throwable.message`.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
+#[uniffi(flat_error)]
 pub enum SproutError {
     /// Not connected to a relay.
     #[error("not connected to relay")]

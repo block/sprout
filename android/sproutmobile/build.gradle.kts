@@ -8,7 +8,7 @@ plugins {
 android {
     namespace = "video.divine.sprout.mobile"
     compileSdk = 34
-    ndkVersion = "26.1.10909125"
+    ndkVersion = "25.1.8937393"
 
     defaultConfig {
         minSdk = 24
