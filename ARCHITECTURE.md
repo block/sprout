@@ -660,10 +660,10 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 | GET | `/api/workflows/{id}/runs/{run_id}/approvals` | List run approvals |
 | POST | `/api/workflows/{id}/trigger` | Manual trigger |
 | POST | `/api/workflows/{id}/webhook` | Webhook trigger (HMAC-verified) |
-| POST | `/api/approvals/{token}/grant` | Approve a workflow step |
-| POST | `/api/approvals/{token}/deny` | Deny a workflow step |
-| POST | `/api/approvals/by-hash/{hash}/grant` | Approve by hash (email links) |
-| POST | `/api/approvals/by-hash/{hash}/deny` | Deny by hash (email links) |
+| POST | `/api/approvals/{token}/grant` | Approve a workflow step (🚧 unreachable — see WF-08) |
+| POST | `/api/approvals/{token}/deny` | Deny a workflow step (🚧 unreachable — see WF-08) |
+| POST | `/api/approvals/by-hash/{hash}/grant` | Approve by hash (🚧 unreachable — see WF-08) |
+| POST | `/api/approvals/by-hash/{hash}/deny` | Deny by hash (🚧 unreachable — see WF-08) |
 | GET/POST/DELETE | `/api/tokens` | List/create/delete all API tokens |
 | DELETE | `/api/tokens/{id}` | Delete specific API token |
 | GET | `/api/dms` | List DM channels |
