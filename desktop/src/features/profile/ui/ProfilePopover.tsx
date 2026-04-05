@@ -71,6 +71,7 @@ export function ProfilePopover({
         align="start"
         sideOffset={8}
         className="w-[280px] rounded-xl border border-border bg-popover p-0 shadow-lg"
+        data-testid="profile-popover"
       >
         <div aria-label="Profile menu" role="menu">
           {/* ── Identity block ─────────────────────────────────── */}
@@ -92,6 +93,7 @@ export function ProfilePopover({
                 {nip05 ? <span aria-hidden="true">·</span> : null}
                 <PresenceBadge
                   className="border-0 bg-transparent px-0 py-0 text-xs"
+                  data-testid="profile-popover-current-status"
                   status={currentStatus}
                 />
               </div>
@@ -106,6 +108,7 @@ export function ProfilePopover({
               <button
                 key={status}
                 className={MENU_ITEM_CLASS}
+                data-testid={`profile-popover-status-${status}`}
                 disabled={isStatusPending}
                 onClick={() => {
                   onSetStatus(status);
@@ -128,6 +131,7 @@ export function ProfilePopover({
           <div className="px-1.5 py-1">
             <button
               className={MENU_ITEM_CLASS}
+              data-testid="profile-popover-settings"
               onClick={() => {
                 onOpenSettings();
                 onOpenChange(false);

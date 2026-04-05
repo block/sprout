@@ -115,7 +115,7 @@ export function SettingsView({
       />
 
       {/* Modal container */}
-      <FocusScope trapped loop>
+      <FocusScope loop>
         {/* biome-ignore lint/a11y/useKeyWithClickEvents: Click stops propagation to backdrop; keyboard dismiss handled by Escape key */}
         <div
           aria-labelledby="settings-title"
@@ -133,7 +133,11 @@ export function SettingsView({
             className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"
             data-tauri-drag-region
           >
-            <h2 className="text-base font-semibold" id="settings-title">
+            <h2
+              className="text-base font-semibold"
+              data-testid="settings-title"
+              id="settings-title"
+            >
               Settings
             </h2>
             <button
