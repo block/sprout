@@ -192,7 +192,7 @@ Three concurrent tasks run for the lifetime of the connection:
 
 A `CancellationToken` coordinates shutdown across all three loops.
 
-Slow clients: `ConnectionState::send()` uses `try_send` — if the send buffer is full, the connection is cancelled immediately (no backpressure, no queuing).
+Slow clients: `ConnectionState::send()` uses `try_send` — if the send buffer is full, a grace counter increments. After `SLOW_CLIENT_GRACE_LIMIT` (3) consecutive full-buffer events, the connection is cancelled. A successful send resets the counter.
 
 ### Step 5: Cleanup
 
@@ -219,16 +219,16 @@ When the relay receives `["EVENT", <event>]`, the handler in `handlers/event.rs`
 7. DB INSERT         — db.insert_event (ON CONFLICT DO NOTHING — idempotent)
 8. REDIS PUBLISH     — pubsub.publish_event (if channel-scoped)
 9. FAN-OUT           — sub_registry.fan_out → conn_manager.send_to
-10. SEARCH INDEX     — search.index_event (spawned async, non-blocking)
+10. SEARCH INDEX     — search_index_tx.send (bounded worker queue, non-blocking)
 11. AUDIT LOG        — audit.log (spawned async, non-blocking)
 12. WORKFLOW TRIGGER — wf.on_event (spawned async, excludes kinds 46001–46012)
 ```
 
-Steps 10–12 are fire-and-forget: they are spawned as independent async tasks. A failure in search indexing or audit logging does not fail the event submission. The client receives `["OK", <id>, true, ""]` at the end of the pipeline (after all spawns), not immediately after DB insert.
+Steps 10–12 are fire-and-forget. Search indexing is sent to a bounded worker queue (`search_index_tx`, capacity 1000); audit and workflow triggers are spawned as independent async tasks. A failure in any of these does not fail the event submission. The client receives `["OK", <id>, true, ""]` at the end of the pipeline, not immediately after DB insert.
 
 Step 9 (fan-out) explicitly **excludes** global subscriptions (no `channel_id` constraint) from channel-scoped events — global subscriptions do NOT receive events from private channels, regardless of filter match. This is a deliberate security boundary: only subscriptions scoped to an accessible `channel_id` receive those events.
 
-Workflow loop prevention: kinds 46001–46012 (workflow execution events) are excluded from triggering workflows. Exception: stream message kind 9 (`KIND_STREAM_MESSAGE`) always triggers regardless of other exclusion rules. Kind 40002 (`KIND_STREAM_MESSAGE_V2`) does not trigger workflows.
+Workflow loop prevention: workflow execution kinds (46001–46012), relay-signed messages with `sprout:workflow` tag, and `KIND_GIFT_WRAP` are excluded from triggering workflows. All other stored events (including kind 9 stream messages) trigger workflow evaluation.
 
 ### Ephemeral Sub-Pipeline (kinds 20000–29999)
 
@@ -246,7 +246,9 @@ Presence events skip membership checks and use local-only fan-out. Multi-node pr
 ```
 1. VERIFY            — spawn_blocking(verify_event)
 2. MEMBERSHIP        — check_channel_membership (if channel-scoped)
-3. REDIS PUBLISH     — pubsub.publish_event (no DB write)
+3. MARK LOCAL        — state.mark_local_event (dedup before Redis round-trip)
+4. REDIS PUBLISH     — pubsub.publish_event (no DB write)
+5. LOCAL FAN-OUT     — sub_registry.fan_out → conn_manager.send_to
 ```
 
 Ephemeral events are never stored in Postgres and never appear in REQ historical queries.
@@ -823,8 +825,8 @@ Every security-sensitive operation uses an explicit, verified pattern. No implic
 ### SSRF Protection
 
 `is_private_ip()` in `sprout-core` covers:
-- IPv4: loopback (127.0.0.0/8), private (10/8, 172.16/12, 192.168/16), link-local (169.254/16), CGNAT (100.64/10), benchmarking (198.18/15)
-- IPv6: loopback (::1), ULA (fc00::/7), link-local (fe80::/10), multicast (ff00::/8)
+- IPv4: unspecified (0.0.0.0/8), loopback (127.0.0.0/8), private (10/8, 172.16/12, 192.168/16), link-local (169.254/16), CGNAT (100.64/10), benchmarking (198.18/15), broadcast (255.255.255.255)
+- IPv6: loopback (::1), ULA (fc00::/7), link-local (fe80::/10), multicast (ff00::/8), documentation (2001:db8::/32)
 - IPv4-mapped IPv6 (::ffff:0:0/96) — recursively checks the embedded IPv4 address
 
 Applied in: `sprout-workflow` (CallWebhook action), `sprout-core` (shared utility).
@@ -846,7 +848,7 @@ Applied in: `sprout-workflow` (CallWebhook action), `sprout-core` (shared utilit
 ### Webhook Security
 
 - LiveKit webhooks: HMAC-SHA256 of raw body bytes, hex-encoded, constant-time comparison
-- Workflow webhooks: HMAC-SHA256 secret verification before processing
+- Workflow webhooks: constant-time XOR comparison of stored UUID secret (not HMAC — compares the secret directly, not a body MAC)
 - Outbound webhooks (CallWebhook): SSRF protection + redirects disabled + 1 MiB response cap
 
 ---
@@ -903,7 +905,7 @@ These are verified gaps in the current implementation — not design aspirations
 |---|-----------|--------|
 | 1 | **No sqlx offline query cache** | Uses `sqlx::query()` (runtime) not `sqlx::query!()` (compile-time). No `.sqlx/` directory. Queries are not validated at compile time. |
 | 2 | **No rate limiting implementation** | `RateLimiter` trait exists in `sprout-auth`. Only implementation is `AlwaysAllowRateLimiter` (test stub, gated behind `#[cfg(any(test, feature = "test-utils"))]`). `RateLimitConfig` defines 4 tiers (human, agent-standard, agent-elevated, agent-platform) but none are enforced. |
-| 3 | **Typing indicators: cross-node only** | Typing events (kind 20002) are published to Redis via the ephemeral pipeline. The multi-node consumer task fans them out to local WS subscribers when received from Redis (cross-node path). However, there is no direct local fan-out for typing events on the originating node — they travel Redis → broadcast → WS rather than being fanned out in-process before the Redis round-trip. Typing state is also queryable via the REST `/api/presence` endpoint. |
+| 3 | **No dedicated typing REST endpoint** | Typing indicators (kind 20002) are delivered via both local fan-out and Redis pub/sub (cross-node). There is no REST endpoint to query current typers — `/api/presence` returns online/away status only, not typing state. |
 | 4 | **sprout-huddle is scaffolding** | `sprout-huddle` defines types, token generation, and webhook parsing, but relay-side lifecycle event emission is not implemented. Huddle state events are not wired into the relay's event pipeline. `sprout-proxy` is now functional — see its section above. |
 | 5 | **Approval gates not wired end-to-end** | The executor returns `StepResult::Suspended` and the relay has grant/deny API endpoints with DB CRUD, but the engine intercepts before creating `WaitingApproval` rows — runs that hit an approval gate are marked as Failed (🚧 WF-08). |
 | 6 | **Workflow actions partially stubbed** | `send_dm` and `set_channel_topic` actions log intent but do not emit events (🚧 WF-07). |
