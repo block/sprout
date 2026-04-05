@@ -186,7 +186,9 @@ impl ActionSink for RelayActionSink {
         emoji: &str,
         author_pubkey: &str,
     ) -> Pin<Box<dyn Future<Output = Result<String, ActionSinkError>> + Send + '_>> {
-        let channel_id = channel_id.to_owned();
+        // `channel_id` is intentionally ignored — per NIP-25 and NOSTR.md,
+        // kind:7 reactions always derive the channel from the target event.
+        let _ = channel_id;
         let message_id = message_id.to_owned();
         let emoji = emoji.to_owned();
         let author_pubkey = author_pubkey.to_owned();
@@ -231,21 +233,32 @@ impl ActionSink for RelayActionSink {
 
             let target_created_at = event_created_at(&target_event.event);
 
-            // 3. Resolve channel UUID — use provided channel_id if non-empty,
-            //    otherwise derive from the target event.
-            let channel_uuid = if !channel_id.is_empty() {
-                Uuid::parse_str(&channel_id)
-                    .map_err(|e| ActionSinkError::InvalidInput(format!("invalid UUID: {e}")))?
-            } else {
-                target_event.channel_id.ok_or_else(|| {
-                    ActionSinkError::InvalidInput(
-                        "no channel_id provided and target event has no channel".into(),
-                    )
-                })?
-            };
+            // 3. Derive channel from target event (NIP-25: kind:7 always derives
+            //    channel from the target, ignoring any caller-supplied channel_id).
+            let channel_uuid = target_event.channel_id.ok_or_else(|| {
+                ActionSinkError::InvalidInput("reaction target event has no channel".into())
+            })?;
             let channel_id_canonical = channel_uuid.to_string();
 
-            // 4. Decode and validate author pubkey (must be 32 bytes).
+            // 4. Verify channel is not archived.
+            let channel = state
+                .db
+                .get_channel(channel_uuid)
+                .await
+                .map_err(|e| match &e {
+                    sprout_db::DbError::ChannelNotFound(_) | sprout_db::DbError::NotFound(_) => {
+                        ActionSinkError::ChannelNotFound(channel_id_canonical.clone())
+                    }
+                    _ => ActionSinkError::Database(e.to_string()),
+                })?;
+
+            if channel.archived_at.is_some() {
+                return Err(ActionSinkError::ChannelArchived(
+                    channel_id_canonical.clone(),
+                ));
+            }
+
+            // 5. Decode and validate author pubkey (must be 32 bytes).
             let author_bytes = hex::decode(&author_pubkey).map_err(|e| {
                 ActionSinkError::InvalidInput(format!("invalid author_pubkey hex: {e}"))
             })?;
@@ -256,7 +269,11 @@ impl ActionSink for RelayActionSink {
                 )));
             }
 
-            // 5. Build NIP-25 kind:7 reaction event.
+            // 6. Build NIP-25 kind:7 reaction event.
+            // NOTE: The `p` tag attributes the reaction to the workflow owner,
+            // not the target event's author. This diverges from NIP-25 (which uses
+            // `p` for notification routing to the target author) but is consistent
+            // with Sprout's `effective_message_author` convention for relay-signed events.
             let mut tags = vec![parse_tag(&["e", &message_id])?];
             tags.extend(base_workflow_tags(&author_pubkey, &channel_id_canonical)?);
 
@@ -272,7 +289,7 @@ impl ActionSink for RelayActionSink {
                 "Workflow AddReaction: posting kind {KIND_REACTION} event"
             );
 
-            // 6. Dedup — add_reaction returns false if already exists.
+            // 7. Dedup — add_reaction returns false if already exists.
             let inserted = state
                 .db
                 .add_reaction(
@@ -289,7 +306,7 @@ impl ActionSink for RelayActionSink {
                 return Ok(event_id_hex);
             }
 
-            // 7. Persist the event — no thread metadata needed for reactions.
+            // 8. Persist the event — no thread metadata needed for reactions.
             let (stored_event, was_inserted) = match state
                 .db
                 .insert_event_with_thread_metadata(&event, Some(channel_uuid), None)
@@ -312,7 +329,7 @@ impl ActionSink for RelayActionSink {
                 }
             };
 
-            // 8. Backfill reaction_event_id.
+            // 9. Backfill reaction_event_id.
             if was_inserted {
                 if let Err(e) = state
                     .db
@@ -332,7 +349,7 @@ impl ActionSink for RelayActionSink {
                 }
             }
 
-            // 9. Fan-out side effects.
+            // 10. Fan-out side effects.
             if was_inserted {
                 let _ =
                     dispatch_persistent_event(&state, &stored_event, KIND_REACTION, &author_pubkey)
