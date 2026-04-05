@@ -27,6 +27,12 @@ pub enum ActionSinkError {
     /// Message content is empty or whitespace-only.
     #[error("empty message content")]
     EmptyContent,
+    /// The target event for a reaction does not exist.
+    #[error("target event not found: {0}")]
+    TargetEventNotFound(String),
+    /// The reaction already exists (duplicate).
+    #[error("duplicate reaction")]
+    DuplicateReaction,
 }
 
 impl From<ActionSinkError> for crate::WorkflowError {
@@ -56,6 +62,23 @@ pub trait ActionSink: Send + Sync {
         &self,
         channel_id: &str,
         text: &str,
+        author_pubkey: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, ActionSinkError>> + Send + '_>>;
+
+    /// Add an emoji reaction to a message on behalf of a workflow owner.
+    ///
+    /// - `channel_id`: UUID string of the channel (may be empty — implementation
+    ///   should derive from the target event if so)
+    /// - `message_id`: hex-encoded event ID of the target message
+    /// - `emoji`: emoji character or shortcode
+    /// - `author_pubkey`: hex-encoded pubkey of the workflow owner
+    ///
+    /// Returns the reaction event ID hex string on success.
+    fn add_reaction(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        emoji: &str,
         author_pubkey: &str,
     ) -> Pin<Box<dyn Future<Output = Result<String, ActionSinkError>> + Send + '_>>;
 }
