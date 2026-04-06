@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { installMockBridge } from "../helpers/bridge";
+import { openSettings } from "../helpers/settings";
 
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
@@ -244,8 +245,7 @@ test("shows your avatar on your own message when profile avatar is set", async (
     'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"%3E%3Crect width="16" height="16" rx="4" fill="%2300a36c"/%3E%3C/svg%3E';
 
   await page.goto("/");
-  await page.getByTestId("open-settings").click();
-  await page.getByTestId("settings-nav-profile").click();
+  await openSettings(page, "profile");
   await page.getByTestId("profile-avatar-url").fill(avatarUrl);
   await page.getByTestId("profile-save").click();
   await page.getByTestId("settings-close").click();

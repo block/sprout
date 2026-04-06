@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { installMockBridge } from "../helpers/bridge";
+import { openProfileMenu, openSettings } from "../helpers/settings";
 
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
@@ -13,11 +14,8 @@ test("updates the relay-backed profile from settings", async ({ page }) => {
   const about = `Coordinating relay profile setup ${stamp}`;
   await page.goto("/");
 
-  await page.getByTestId("open-settings").click();
-  await expect(page.getByTestId("settings-view")).toBeVisible();
-  await page.getByTestId("settings-nav-profile").click();
+  await openSettings(page, "profile");
   await expect(page.getByTestId("settings-title")).toHaveText("Settings");
-  await expect(page.getByTestId("open-settings")).toHaveCount(0);
 
   await expect(page.getByTestId("profile-pubkey")).toContainText("deadbeef");
   await expect(page.getByTestId("profile-nip05")).toContainText("Not set");
@@ -38,9 +36,7 @@ test("updates the relay-backed profile from settings", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText("Home");
   await expect(page.getByTestId("open-settings")).toBeVisible();
 
-  await page.getByTestId("open-settings").click();
-  await expect(page.getByTestId("settings-view")).toBeVisible();
-  await page.getByTestId("settings-nav-profile").click();
+  await openSettings(page, "profile");
   await expect(page.getByTestId("profile-display-name")).toHaveValue(
     displayName,
   );
@@ -49,34 +45,25 @@ test("updates the relay-backed profile from settings", async ({ page }) => {
   await expect(page.getByTestId("profile-about")).toHaveValue(about);
 });
 
-test("updates presence from settings", async ({ page }) => {
+test("updates presence from the profile menu", async ({ page }) => {
   await page.goto("/");
 
-  await page.getByTestId("open-settings").click();
-  await expect(page.getByTestId("settings-view")).toBeVisible();
-  await page.getByTestId("settings-nav-presence").click();
-  await expect(page.getByTestId("presence-current-status")).toContainText(
-    "Offline",
-  );
+  await openProfileMenu(page);
+  await expect(
+    page.getByTestId("profile-popover-current-status"),
+  ).toContainText("Offline");
 
-  await page.getByTestId("presence-option-away").click();
-  await expect(page.getByTestId("presence-current-status")).toContainText(
-    "Away",
-  );
+  await page.getByTestId("profile-popover-status-away").click();
+  await openProfileMenu(page);
+  await expect(
+    page.getByTestId("profile-popover-current-status"),
+  ).toContainText("Away");
 
-  await page.getByTestId("settings-close").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("Home");
-
-  await page.getByTestId("open-settings").click();
-  await page.getByTestId("settings-nav-presence").click();
-  await expect(page.getByTestId("presence-current-status")).toContainText(
-    "Away",
-  );
-
-  await page.getByTestId("presence-option-offline").click();
-  await expect(page.getByTestId("presence-current-status")).toContainText(
-    "Offline",
-  );
+  await page.getByTestId("profile-popover-status-offline").click();
+  await openProfileMenu(page);
+  await expect(
+    page.getByTestId("profile-popover-current-status"),
+  ).toContainText("Offline");
 });
 
 test("notification settings drive the Home badge and desktop alerts", async ({
@@ -85,9 +72,7 @@ test("notification settings drive the Home badge and desktop alerts", async ({
   await page.goto("/");
   await expect(page.getByTestId("sidebar-home-count")).toHaveCount(0);
 
-  await page.getByTestId("open-settings").click();
-  await expect(page.getByTestId("settings-view")).toBeVisible();
-  await page.getByTestId("settings-nav-notifications").click();
+  await openSettings(page, "notifications");
   await expect(page.getByTestId("settings-notifications")).toBeVisible();
   await expect(page.getByTestId("notifications-desktop-state")).toContainText(
     "Off",
@@ -171,15 +156,13 @@ test("notification settings drive the Home badge and desktop alerts", async ({
     },
   ]);
 
-  await page.getByTestId("open-settings").click();
-  await page.getByTestId("settings-nav-notifications").click();
+  await openSettings(page, "notifications");
   await page.getByTestId("notifications-home-badge-toggle").click();
   await page.getByTestId("settings-close").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await expect(page.getByTestId("sidebar-home-count")).toHaveCount(0);
 
-  await page.getByTestId("open-settings").click();
-  await page.getByTestId("settings-nav-notifications").click();
+  await openSettings(page, "notifications");
   await page.getByTestId("notifications-home-badge-toggle").click();
   await page.getByTestId("settings-close").click();
   await expect(page.getByTestId("sidebar-home-count")).toHaveText("1");
@@ -257,9 +240,7 @@ test("supports webview zoom keyboard shortcuts", async ({ page }) => {
 test("shows doctor checks for local sprout tooling", async ({ page }) => {
   await page.goto("/");
 
-  await page.getByTestId("open-settings").click();
-  await expect(page.getByTestId("settings-view")).toBeVisible();
-  await page.getByTestId("settings-nav-doctor").click();
+  await openSettings(page, "doctor");
 
   await expect(page.getByTestId("settings-doctor")).toBeVisible();
   await expect(page.getByTestId("doctor-check-admin")).toContainText(
