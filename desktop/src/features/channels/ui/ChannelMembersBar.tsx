@@ -1,4 +1,4 @@
-import { Bot, Plus, Settings2, UserRound, Zap } from "lucide-react";
+import { Bot, Plus, UserRound, Users, Zap } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -17,7 +17,7 @@ import { AddChannelBotDialog } from "./AddChannelBotDialog";
 type ChannelMembersBarProps = {
   channel: Channel;
   currentPubkey?: string;
-  onManageChannel: () => void;
+  onToggleMembers: () => void;
 };
 
 function CountStat({
@@ -45,7 +45,7 @@ function CountStat({
 export function ChannelMembersBar({
   channel,
   currentPubkey,
-  onManageChannel,
+  onToggleMembers,
 }: ChannelMembersBarProps) {
   const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
   const [isCreateWorkflowOpen, setIsCreateWorkflowOpen] = React.useState(false);
@@ -128,19 +128,26 @@ export function ChannelMembersBar({
   return (
     <React.Fragment>
       <div className="flex items-center gap-2">
-        <CountStat
-          count={peopleCount}
-          icon={UserRound}
-          label="people"
-          loading={membersQuery.isLoading}
-        />
+        <button
+          className="flex items-center gap-2 rounded-full transition-colors hover:opacity-80"
+          data-testid="channel-members-stats"
+          onClick={onToggleMembers}
+          type="button"
+        >
+          <CountStat
+            count={peopleCount}
+            icon={UserRound}
+            label="people"
+            loading={membersQuery.isLoading}
+          />
 
-        <CountStat
-          count={botCount}
-          icon={Bot}
-          label="bots"
-          loading={membersQuery.isLoading}
-        />
+          <CountStat
+            count={botCount}
+            icon={Bot}
+            label="bots"
+            loading={membersQuery.isLoading}
+          />
+        </button>
 
         <Button
           aria-label="Add agent"
@@ -173,15 +180,15 @@ export function ChannelMembersBar({
         </Button>
 
         <Button
-          aria-label="Manage channel"
+          aria-label="View members"
           className="h-9 w-9 rounded-full"
-          data-testid="channel-management-trigger"
-          onClick={onManageChannel}
+          data-testid="channel-members-trigger"
+          onClick={onToggleMembers}
           size="icon"
           type="button"
           variant="outline"
         >
-          <Settings2 className="h-4 w-4" />
+          <Users className="h-4 w-4" />
         </Button>
       </div>
 
