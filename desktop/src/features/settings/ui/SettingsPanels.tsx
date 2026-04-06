@@ -86,7 +86,6 @@ function formatThemeLabel(name: string): string {
     .join(" ");
 }
 
-
 function ThemeSettingsCard() {
   const { setTheme, themeName } = useTheme();
   const [search, setSearch] = useState("");

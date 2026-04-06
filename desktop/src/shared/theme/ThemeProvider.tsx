@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { createAdaptiveTheme, themeToShadcnVarMap } from "./adaptive-theme";
+import { createThemeVars } from "./adaptive-theme";
 import {
   SYNTAX_THEMES,
   type SyntaxThemeName,
@@ -66,16 +66,15 @@ function applyCachedVars(): string | null {
   }
 }
 
-/** Apply a theme: load data, create adaptive palette, set CSS vars. */
+/** Apply a theme: load data, derive CSS vars, set them on :root. */
 async function applyTheme(name: SyntaxThemeName): Promise<{ isDark: boolean }> {
   const themeData = await loadThemeData(name);
   const info = extractThemeInfo(name, themeData);
-  const adaptive = createAdaptiveTheme(info.bg, info.fg, info.comment, {
+  const { isDark, vars } = createThemeVars(info.bg, info.fg, info.comment, {
     added: info.added,
     deleted: info.deleted,
     modified: info.modified,
   });
-  const vars = themeToShadcnVarMap(adaptive);
 
   const root = document.documentElement;
   for (const [key, value] of Object.entries(vars)) {
@@ -83,19 +82,19 @@ async function applyTheme(name: SyntaxThemeName): Promise<{ isDark: boolean }> {
   }
 
   root.classList.remove("light", "dark");
-  root.classList.add(adaptive.isDark ? "dark" : "light");
+  root.classList.add(isDark ? "dark" : "light");
 
   // Cache for FOUC prevention
   try {
     window.localStorage.setItem(
       CACHE_KEY,
-      JSON.stringify({ themeName: name, vars, isDark: adaptive.isDark }),
+      JSON.stringify({ themeName: name, vars, isDark }),
     );
   } catch {
     // Storage full — non-critical
   }
 
-  return { isDark: adaptive.isDark };
+  return { isDark };
 }
 
 export function ThemeProvider({

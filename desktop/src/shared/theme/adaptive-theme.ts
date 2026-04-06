@@ -1,69 +1,12 @@
 /**
  * Adaptive Theme Engine
  *
- * Derives a full UI palette from a syntax theme's key colors (bg, fg, comment, git).
+ * Derives shadcn CSS variables from a syntax theme's key colors (bg, fg, comment, git).
  * Detects light vs dark from background luminance and adjusts accordingly.
  *
- * Ported from builderbot/apps/staged/src/lib/theme.ts, trimmed for sprout's needs.
- * Adds hexToHslComponents() + themeToShadcnVarMap() for Tailwind/shadcn compatibility.
+ * Ported from builderbot/apps/staged/src/lib/theme.ts, flattened to emit
+ * shadcn CSS vars directly (no intermediate Theme object).
  */
-
-// =============================================================================
-// Theme Interface (trimmed for sprout)
-// =============================================================================
-
-export interface Theme {
-  isDark: boolean;
-
-  bg: {
-    primary: string; // Main background (same as syntax theme)
-    chrome: string; // Sidebar chrome
-    deepest: string; // Deepest level
-    elevated: string; // Floating elements
-    hover: string; // Hover states
-  };
-
-  border: {
-    subtle: string;
-    muted: string;
-    emphasis: string;
-  };
-
-  text: {
-    primary: string;
-    muted: string; // Subdued text (comment color)
-    faint: string;
-    accent: string;
-  };
-
-  status: {
-    modified: string;
-    added: string;
-    deleted: string;
-    renamed: string;
-    untracked: string;
-  };
-
-  ui: {
-    accent: string;
-    accentHover: string;
-    danger: string;
-    dangerBg: string;
-    warning: string;
-    warningBg: string;
-    selection: string;
-  };
-
-  scrollbar: {
-    thumb: string;
-    thumbHover: string;
-  };
-
-  shadow: {
-    overlay: string;
-    elevated: string;
-  };
-}
 
 // =============================================================================
 // Color Utilities
@@ -170,140 +113,32 @@ function findColorWithLuminance(baseColor: string, targetLum: number): string {
   return mix(baseColor, target, (lo + hi) / 2);
 }
 
-interface ChromeColors {
+function calculateChromeColors(syntaxBg: string): {
   chrome: string;
-  deepest: string;
   primary: string;
-}
-
-function calculateChromeColors(syntaxBg: string): ChromeColors {
+} {
   const bgLum = luminance(syntaxBg);
   const lumDiff = calculateLumDiff(bgLum);
   const targetChromeLum = bgLum - lumDiff;
-  const deepestLumDiff = lumDiff * 2;
-  const targetDeepestLum = bgLum - deepestLumDiff;
 
   if (targetChromeLum >= 0) {
     return {
       chrome: findColorWithLuminance(syntaxBg, targetChromeLum),
-      deepest: findColorWithLuminance(syntaxBg, Math.max(0, targetDeepestLum)),
       primary: syntaxBg,
     };
   }
 
   return {
     chrome: findColorWithLuminance(syntaxBg, 0),
-    deepest: findColorWithLuminance(syntaxBg, 0),
     primary: findColorWithLuminance(syntaxBg, lumDiff),
   };
 }
 
 // =============================================================================
-// Adaptive Theme Generator
+// Hex → HSL component format ("H S% L%") for Tailwind's hsl() wrappers
 // =============================================================================
 
-export interface ThemeGitColors {
-  added: string | null;
-  deleted: string | null;
-  modified: string | null;
-}
-
-export function createAdaptiveTheme(
-  syntaxBg: string,
-  syntaxFg: string,
-  syntaxComment: string,
-  gitColors?: ThemeGitColors,
-): Theme {
-  const isDark = luminance(syntaxBg) < 0.5;
-
-  const {
-    chrome: chromeColor,
-    deepest: deepestColor,
-    primary: primaryBg,
-  } = calculateChromeColors(syntaxBg);
-
-  const dir = isDark ? 1 : -1;
-  const elevate = (amount: number) => adjust(primaryBg, dir * amount);
-
-  const fallbackBlue = isDark ? "#58a6ff" : "#0969da";
-  const fallbackGreen = isDark ? "#3fb950" : "#1a7f37";
-  const fallbackRed = isDark ? "#f85149" : "#cf222e";
-  const fallbackOrange = isDark ? "#d29922" : "#9a6700";
-
-  const accentGreen = gitColors?.added ?? fallbackGreen;
-  const accentRed = gitColors?.deleted ?? fallbackRed;
-  const accentBlue = gitColors?.modified ?? fallbackBlue;
-  const accentOrange = fallbackOrange;
-
-  const borderBase = mix(primaryBg, syntaxFg, isDark ? 0.15 : 0.12);
-
-  return {
-    isDark,
-
-    bg: {
-      primary: primaryBg,
-      chrome: chromeColor,
-      deepest: deepestColor,
-      elevated: elevate(0.08),
-      hover: elevate(0.06),
-    },
-
-    border: {
-      subtle: mix(primaryBg, syntaxFg, 0.08),
-      muted: borderBase,
-      emphasis: mix(primaryBg, syntaxFg, isDark ? 0.25 : 0.2),
-    },
-
-    text: {
-      primary: syntaxFg,
-      muted: syntaxComment,
-      faint: mix(primaryBg, syntaxComment, 0.5),
-      accent: accentBlue,
-    },
-
-    status: {
-      modified: accentOrange,
-      added: accentGreen,
-      deleted: accentRed,
-      renamed: accentBlue,
-      untracked: syntaxComment,
-    },
-
-    ui: {
-      accent: accentGreen,
-      accentHover: isDark
-        ? adjust(accentGreen, -0.15)
-        : adjust(accentGreen, 0.15),
-      danger: accentRed,
-      dangerBg: overlay(accentRed, isDark ? 0.1 : 0.08),
-      warning: accentOrange,
-      warningBg: overlay(accentOrange, isDark ? 0.1 : 0.08),
-      selection: overlay(syntaxFg, isDark ? 0.08 : 0.1),
-    },
-
-    scrollbar: {
-      thumb: borderBase,
-      thumbHover: mix(primaryBg, syntaxFg, 0.25),
-    },
-
-    shadow: {
-      overlay: isDark ? "rgba(0, 0, 0, 0.6)" : "rgba(0, 0, 0, 0.4)",
-      elevated: isDark
-        ? `0 8px 24px ${overlay("#000000", 0.4)}`
-        : `0 8px 24px ${overlay("#000000", 0.15)}`,
-    },
-  };
-}
-
-// =============================================================================
-// HSL Bridge for Tailwind/shadcn
-// =============================================================================
-
-/**
- * Convert a hex color to HSL component format: "H S% L%"
- * This is what Tailwind expects inside hsl() wrappers.
- */
-export function hexToHslComponents(hex: string): string {
+function hsl(hex: string): string {
   const { r, g, b } = hexToRgb(hex);
   const rn = r / 255;
   const gn = g / 255;
@@ -332,65 +167,106 @@ export function hexToHslComponents(hex: string): string {
   return `${(h * 360).toFixed(1)} ${(s * 100).toFixed(2)}% ${(l * 100).toFixed(1)}%`;
 }
 
-/**
- * Map a Theme to shadcn CSS variable names with HSL component values.
- * These get applied via document.documentElement.style.setProperty().
- */
-export function themeToShadcnVarMap(t: Theme): Record<string, string> {
-  const h = hexToHslComponents;
+// =============================================================================
+// Adaptive Theme Generator — emits shadcn CSS vars directly
+// =============================================================================
 
-  // For foreground-on-primary, use the bg as the contrast color
-  const primaryFg = h(t.bg.primary);
-  // For accent foreground, use primary text
-  const accentFg = h(t.text.primary);
+export interface ThemeGitColors {
+  added: string | null;
+  deleted: string | null;
+  modified: string | null;
+}
+
+export interface ThemeResult {
+  isDark: boolean;
+  vars: Record<string, string>;
+}
+
+/**
+ * Derive a full set of shadcn CSS variables from syntax theme colors.
+ *
+ * Takes bg, fg, comment hex colors (+ optional git decoration colors) and
+ * returns the var map ready to apply via style.setProperty().
+ */
+export function createThemeVars(
+  syntaxBg: string,
+  syntaxFg: string,
+  syntaxComment: string,
+  gitColors?: ThemeGitColors,
+): ThemeResult {
+  const isDark = luminance(syntaxBg) < 0.5;
+
+  const { chrome: chromeColor, primary: primaryBg } =
+    calculateChromeColors(syntaxBg);
+
+  const dir = isDark ? 1 : -1;
+  const elevate = (amount: number) => adjust(primaryBg, dir * amount);
+
+  // Git/accent colors with fallbacks
+  const fallbackGreen = isDark ? "#3fb950" : "#1a7f37";
+  const fallbackRed = isDark ? "#f85149" : "#cf222e";
+  const fallbackOrange = isDark ? "#d29922" : "#9a6700";
+
+  const accentGreen = gitColors?.added ?? fallbackGreen;
+  const accentRed = gitColors?.deleted ?? fallbackRed;
+  const accentOrange = fallbackOrange;
+
+  // Derived colors
+  const borderColor = mix(primaryBg, syntaxFg, isDark ? 0.15 : 0.12);
+  const hoverBg = elevate(0.06);
+  const primaryFg = hsl(primaryBg);
+  const textFg = hsl(syntaxFg);
 
   return {
-    // Backgrounds
-    "--background": h(t.bg.primary),
-    "--card": h(t.bg.primary),
-    "--popover": h(t.bg.elevated),
-    "--muted": h(t.bg.hover),
-    "--accent": h(t.bg.hover),
-    "--secondary": h(t.bg.hover),
+    isDark,
+    vars: {
+      // Backgrounds
+      "--background": hsl(primaryBg),
+      "--card": hsl(primaryBg),
+      "--popover": hsl(elevate(0.08)),
+      "--muted": hsl(hoverBg),
+      "--accent": hsl(hoverBg),
+      "--secondary": hsl(hoverBg),
 
-    // Foregrounds
-    "--foreground": h(t.text.primary),
-    "--card-foreground": h(t.text.primary),
-    "--popover-foreground": h(t.text.primary),
-    "--muted-foreground": h(t.text.muted),
-    "--accent-foreground": accentFg,
-    "--secondary-foreground": accentFg,
+      // Foregrounds
+      "--foreground": textFg,
+      "--card-foreground": textFg,
+      "--popover-foreground": textFg,
+      "--muted-foreground": hsl(syntaxComment),
+      "--accent-foreground": textFg,
+      "--secondary-foreground": textFg,
 
-    // Primary interactive
-    "--primary": h(t.ui.accent),
-    "--primary-foreground": primaryFg,
+      // Primary interactive
+      "--primary": hsl(accentGreen),
+      "--primary-foreground": primaryFg,
 
-    // Destructive
-    "--destructive": h(t.ui.danger),
-    "--destructive-foreground": primaryFg,
+      // Destructive
+      "--destructive": hsl(accentRed),
+      "--destructive-foreground": primaryFg,
 
-    // Borders
-    "--border": h(t.border.muted),
-    "--input": h(t.border.muted),
-    "--ring": h(t.text.primary),
+      // Borders
+      "--border": hsl(borderColor),
+      "--input": hsl(borderColor),
+      "--ring": textFg,
 
-    // Sidebar
-    "--sidebar-background": h(t.bg.chrome),
-    "--sidebar-foreground": h(t.text.primary),
-    "--sidebar-primary": h(t.ui.accent),
-    "--sidebar-primary-foreground": primaryFg,
-    "--sidebar-accent": h(t.bg.primary),
-    "--sidebar-accent-foreground": accentFg,
-    "--sidebar-border": h(t.border.muted),
-    "--sidebar-ring": h(t.border.muted),
+      // Sidebar
+      "--sidebar-background": hsl(chromeColor),
+      "--sidebar-foreground": textFg,
+      "--sidebar-primary": hsl(accentGreen),
+      "--sidebar-primary-foreground": primaryFg,
+      "--sidebar-accent": hsl(primaryBg),
+      "--sidebar-accent-foreground": textFg,
+      "--sidebar-border": hsl(borderColor),
+      "--sidebar-ring": hsl(borderColor),
 
-    // Status colors (hex, not HSL — used directly via var())
-    "--status-added": t.status.added,
-    "--status-deleted": t.status.deleted,
-    "--status-modified": t.status.modified,
+      // Status colors (hex — used directly via var())
+      "--status-added": accentGreen,
+      "--status-deleted": accentRed,
+      "--status-modified": accentOrange,
 
-    // Warning
-    "--ui-warning": t.ui.warning,
-    "--ui-warning-bg": t.ui.warningBg,
+      // Warning
+      "--ui-warning": accentOrange,
+      "--ui-warning-bg": overlay(accentOrange, isDark ? 0.1 : 0.08),
+    },
   };
 }
