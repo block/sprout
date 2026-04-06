@@ -1,7 +1,7 @@
 import { useEffect, useEffectEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { updateChannelLastMessageAt } from "@/features/channels/hooks";
+import { updateChannelLastMessageAt } from "@/features/channels/lib/channelCache";
 import {
   channelMessagesKey,
   dedupeMessagesById,

@@ -1,4 +1,3 @@
-import { Bot, Crown, Shield, User } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -8,8 +7,11 @@ import {
 } from "@/features/channels/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import { formatMemberName } from "@/features/channels/lib/memberUtils";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
+import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { usePresenceQuery } from "@/features/presence/hooks";
-import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
+import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import type { Channel, ChannelMember } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import {
@@ -28,17 +30,12 @@ type MembersSidebarProps = {
   onOpenChange: (open: boolean) => void;
 };
 
-function roleIcon(role: ChannelMember["role"]) {
-  switch (role) {
-    case "owner":
-      return Crown;
-    case "admin":
-      return Shield;
-    case "bot":
-      return Bot;
-    default:
-      return User;
+function formatRoleLabel(member: ChannelMember, memberIsBot: boolean) {
+  if (memberIsBot) {
+    return "Bot";
   }
+
+  return `${member.role[0]?.toUpperCase() ?? ""}${member.role.slice(1)}`;
 }
 
 export function MembersSidebar({
@@ -65,6 +62,9 @@ export function MembersSidebar({
   const memberPresenceQuery = usePresenceQuery(allMemberPubkeys, {
     enabled: open && rawMembers.length > 0,
   });
+  const memberProfilesQuery = useUsersBatchQuery(allMemberPubkeys, {
+    enabled: open && rawMembers.length > 0,
+  });
 
   const selfMember =
     rawMembers.find((member) => member.pubkey === currentPubkey) ?? null;
@@ -78,39 +78,52 @@ export function MembersSidebar({
   }
 
   function renderMemberCard(member: ChannelMember, memberIsBot: boolean) {
-    const Icon = memberIsBot ? Bot : roleIcon(member.role);
+    const canRemoveMember =
+      (selfMember?.role === "admin" && member.pubkey !== currentPubkey) ||
+      (selfMember?.role === "owner" && isBot(member)) ||
+      (currentPubkey && member.pubkey === currentPubkey);
+    const memberLabel = formatMemberName(member, currentPubkey);
+    const profile =
+      memberProfilesQuery.data?.profiles[member.pubkey.toLowerCase()] ?? null;
+    const presenceStatus =
+      memberPresenceQuery.data?.[member.pubkey.toLowerCase()] ?? null;
+    const roleLabel = formatRoleLabel(member, memberIsBot);
 
     return (
       <div
-        className="flex items-start justify-between gap-3 rounded-2xl border border-border/80 bg-background px-4 py-3"
+        className="flex items-center justify-between gap-3 rounded-xl border border-border/80 bg-background px-3 py-2.5"
         data-testid={`sidebar-member-${member.pubkey}`}
         key={member.pubkey}
       >
-        <div className="min-w-0 space-y-1">
-          <div className="flex items-center gap-2">
-            <Icon className="h-4 w-4 text-muted-foreground" />
-            <p className="truncate text-sm font-medium">
-              {formatMemberName(member, currentPubkey)}
+        <div className="flex min-w-0 items-center gap-3">
+          <ProfileAvatar
+            avatarUrl={profile?.avatarUrl ?? null}
+            className="h-9 w-9 rounded-full text-[11px] shadow-none"
+            iconClassName="h-4 w-4"
+            label={memberLabel}
+          />
+          <div className="min-w-0 space-y-0.5">
+            <p className="truncate text-sm font-medium leading-5">
+              {memberLabel}
             </p>
-            {memberPresenceQuery.data ? (
-              <PresenceBadge
-                className="border-border/70 bg-muted/50 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em]"
-                data-testid={`sidebar-member-presence-${member.pubkey}`}
-                status={
-                  memberPresenceQuery.data[member.pubkey.toLowerCase()] ??
-                  "offline"
-                }
-              />
-            ) : null}
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              {memberIsBot ? "bot" : member.role}
-            </span>
+            <div
+              className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
+              data-testid={`sidebar-member-presence-${member.pubkey}`}
+            >
+              {presenceStatus ? (
+                <>
+                  <PresenceDot className="h-2 w-2" status={presenceStatus} />
+                  <span>{getPresenceLabel(presenceStatus)}</span>
+                  <span aria-hidden="true">&middot;</span>
+                </>
+              ) : null}
+              <span>{roleLabel}</span>
+            </div>
           </div>
         </div>
-        {(selfMember?.role === "admin" && member.pubkey !== currentPubkey) ||
-        (selfMember?.role === "owner" && isBot(member)) ||
-        (currentPubkey && member.pubkey === currentPubkey) ? (
+        {canRemoveMember ? (
           <Button
+            className="h-8 shrink-0 rounded-full px-2.5 text-xs text-muted-foreground hover:text-foreground"
             data-testid={`sidebar-remove-member-${member.pubkey}`}
             disabled={removeMemberMutation.isPending || isArchived}
             onClick={() => {
@@ -161,10 +174,13 @@ export function MembersSidebar({
             />
           ) : null}
 
-          <section className="space-y-3">
-            <h2 className="text-sm font-semibold tracking-tight">
-              People ({people.length})
-            </h2>
+          <section className="space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold tracking-tight">People</h2>
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                {people.length}
+              </span>
+            </div>
             <div className="space-y-2" data-testid="members-sidebar-people">
               {people.length > 0 ? (
                 people.map((member) => renderMemberCard(member, false))
@@ -178,10 +194,13 @@ export function MembersSidebar({
             </div>
           </section>
 
-          <section className="space-y-3">
-            <h2 className="text-sm font-semibold tracking-tight">
-              Bots ({bots.length})
-            </h2>
+          <section className="space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold tracking-tight">Bots</h2>
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                {bots.length}
+              </span>
+            </div>
             <div className="space-y-2" data-testid="members-sidebar-bots">
               {bots.length > 0 ? (
                 bots.map((member) => renderMemberCard(member, true))

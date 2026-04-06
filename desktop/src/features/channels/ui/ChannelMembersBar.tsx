@@ -1,12 +1,13 @@
-import { Bot, Plus, Settings2, UserRound, Users, Zap } from "lucide-react";
+import { Plus, Settings2, Users, Zap } from "lucide-react";
 import * as React from "react";
 
 import {
   useAcpProvidersQuery,
   useBackendProvidersQuery,
+  useManagedAgentsQuery,
+  useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
-import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import { CreateWorkflowDialog } from "@/features/workflows/ui/CreateWorkflowDialog";
 import type { Channel } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -20,28 +21,6 @@ type ChannelMembersBarProps = {
   onToggleMembers: () => void;
 };
 
-function CountStat({
-  count,
-  icon: Icon,
-  label,
-  loading,
-}: {
-  count: number;
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  loading?: boolean;
-}) {
-  return (
-    <div className="inline-flex h-8 items-center justify-center gap-1.5 rounded-full bg-muted/55 px-2.5 text-muted-foreground">
-      <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
-      <span className="relative top-px min-w-[1ch] text-[13px] font-medium leading-none text-muted-foreground/80 tabular-nums">
-        {loading ? "..." : count}
-      </span>
-      <span className="sr-only">{loading ? `Loading ${label}` : label}</span>
-    </div>
-  );
-}
-
 export function ChannelMembersBar({
   channel,
   currentPubkey,
@@ -53,9 +32,10 @@ export function ChannelMembersBar({
   const membersQuery = useChannelMembersQuery(channel.id);
   const providersQuery = useAcpProvidersQuery();
   const backendProvidersQuery = useBackendProvidersQuery();
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const relayAgentsQuery = useRelayAgentsQuery();
   const members = membersQuery.data ?? [];
-  const { peopleCount, botCount, managedAgentsQuery, relayAgentsQuery } =
-    useClassifiedMembers(members, currentPubkey);
+  const memberCount = membersQuery.data?.length ?? channel.memberCount;
   const providers = React.useMemo(
     () =>
       [...(providersQuery.data ?? [])].sort((left, right) => {
@@ -106,28 +86,6 @@ export function ChannelMembersBar({
   return (
     <React.Fragment>
       <div className="flex items-center gap-2">
-        <button
-          aria-label="View channel members"
-          className="flex items-center gap-2 rounded-full transition-colors hover:opacity-80"
-          data-testid="channel-members-stats"
-          onClick={onToggleMembers}
-          type="button"
-        >
-          <CountStat
-            count={peopleCount}
-            icon={UserRound}
-            label="people"
-            loading={membersQuery.isLoading}
-          />
-
-          <CountStat
-            count={botCount}
-            icon={Bot}
-            label="bots"
-            loading={membersQuery.isLoading}
-          />
-        </button>
-
         <Button
           aria-label="Add agent"
           className="h-9 w-9 rounded-full"
@@ -159,15 +117,17 @@ export function ChannelMembersBar({
         </Button>
 
         <Button
-          aria-label="View members"
-          className="h-9 w-9 rounded-full"
+          aria-label={`View channel members (${memberCount})`}
+          className="h-9 gap-1.5 rounded-full px-3"
           data-testid="channel-members-trigger"
           onClick={onToggleMembers}
-          size="icon"
           type="button"
           variant="outline"
         >
           <Users className="h-4 w-4" />
+          <span className="min-w-[1ch] text-sm font-medium tabular-nums">
+            {memberCount}
+          </span>
         </Button>
 
         <Button

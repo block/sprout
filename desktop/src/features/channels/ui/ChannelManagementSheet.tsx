@@ -139,6 +139,11 @@ export function ChannelManagementSheet({
     detail?.channelType !== "dm" &&
     !isArchived &&
     selfMember !== null;
+  const showAccessSection =
+    canJoin ||
+    canLeave ||
+    joinChannelMutation.error instanceof Error ||
+    leaveChannelMutation.error instanceof Error;
 
   const [nameDraft, setNameDraft] = React.useState("");
   const [descriptionDraft, setDescriptionDraft] = React.useState("");
@@ -254,122 +259,75 @@ export function ChannelManagementSheet({
             </p>
           ) : null}
 
-          <Section
-            description="Open channels stay visible to everyone. Private channels require an invite."
-            title="Access"
-          >
-            <div className="flex flex-wrap gap-2">
-              {canJoin ? (
-                <Button
-                  data-testid="channel-management-join"
-                  disabled={joinChannelMutation.isPending}
-                  onClick={() => {
-                    void joinChannelMutation.mutateAsync();
-                  }}
-                  size="sm"
-                  type="button"
-                >
-                  <DoorOpen className="h-4 w-4" />
-                  {joinChannelMutation.isPending
-                    ? "Joining..."
-                    : "Join channel"}
-                </Button>
-              ) : null}
-
-              {canLeave ? (
-                <Button
-                  data-testid="channel-management-leave"
-                  disabled={leaveChannelMutation.isPending}
-                  onClick={() => {
-                    void leaveChannelMutation.mutateAsync().then(() => {
-                      onOpenChange(false);
-                    });
-                  }}
-                  size="sm"
-                  type="button"
-                  variant="outline"
-                >
-                  <DoorClosed className="h-4 w-4" />
-                  {leaveChannelMutation.isPending
-                    ? "Leaving..."
-                    : "Leave channel"}
-                </Button>
-              ) : null}
-            </div>
-            {joinChannelMutation.error instanceof Error ? (
-              <p className="text-sm text-destructive">
-                {joinChannelMutation.error.message}
-              </p>
-            ) : null}
-            {leaveChannelMutation.error instanceof Error ? (
-              <p className="text-sm text-destructive">
-                {leaveChannelMutation.error.message}
-              </p>
-            ) : null}
-          </Section>
-
-          <Separator />
-
-          <Section
-            description="Name and description are owner/admin actions."
-            title="Details"
-          >
-            <form
-              className="space-y-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void updateChannelMutation.mutateAsync({
-                  description: descriptionDraft.trim() || undefined,
-                  name: nameDraft.trim() || undefined,
-                });
-              }}
-            >
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium" htmlFor="channel-name">
-                  Name
-                </label>
-                <Input
-                  data-testid="channel-management-name"
-                  disabled={
-                    !canManageChannel || updateChannelMutation.isPending
-                  }
-                  id="channel-name"
-                  onChange={(event) => setNameDraft(event.target.value)}
-                  value={nameDraft}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label
-                  className="text-sm font-medium"
-                  htmlFor="channel-description"
-                >
-                  Description
-                </label>
-                <Textarea
-                  className="min-h-24"
-                  data-testid="channel-management-description"
-                  disabled={
-                    !canManageChannel || updateChannelMutation.isPending
-                  }
-                  id="channel-description"
-                  onChange={(event) => setDescriptionDraft(event.target.value)}
-                  value={descriptionDraft}
-                />
-              </div>
-              <Button
-                data-testid="channel-management-save-details"
-                disabled={!canManageChannel || updateChannelMutation.isPending}
-                size="sm"
-                type="submit"
+          {showAccessSection ? (
+            <>
+              <Section
+                description="Open channels stay visible to everyone. Private channels require an invite."
+                title="Access"
               >
-                {updateChannelMutation.isPending ? "Saving..." : "Save details"}
-              </Button>
-              {updateChannelMutation.error instanceof Error ? (
-                <p className="text-sm text-destructive">
-                  {updateChannelMutation.error.message}
-                </p>
-              ) : null}
-            </form>
+                <div className="flex flex-wrap gap-2">
+                  {canJoin ? (
+                    <Button
+                      data-testid="channel-management-join"
+                      disabled={joinChannelMutation.isPending}
+                      onClick={() => {
+                        void joinChannelMutation.mutateAsync();
+                      }}
+                      size="sm"
+                      type="button"
+                    >
+                      <DoorOpen className="h-4 w-4" />
+                      {joinChannelMutation.isPending
+                        ? "Joining..."
+                        : "Join channel"}
+                    </Button>
+                  ) : null}
+
+                  {canLeave ? (
+                    <Button
+                      data-testid="channel-management-leave"
+                      disabled={leaveChannelMutation.isPending}
+                      onClick={() => {
+                        void leaveChannelMutation.mutateAsync().then(() => {
+                          onOpenChange(false);
+                        });
+                      }}
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                    >
+                      <DoorClosed className="h-4 w-4" />
+                      {leaveChannelMutation.isPending
+                        ? "Leaving..."
+                        : "Leave channel"}
+                    </Button>
+                  ) : null}
+                </div>
+                {joinChannelMutation.error instanceof Error ? (
+                  <p className="text-sm text-destructive">
+                    {joinChannelMutation.error.message}
+                  </p>
+                ) : null}
+                {leaveChannelMutation.error instanceof Error ? (
+                  <p className="text-sm text-destructive">
+                    {leaveChannelMutation.error.message}
+                  </p>
+                ) : null}
+              </Section>
+
+              <Separator />
+            </>
+          ) : null}
+
+          <Section
+            description="A shared Markdown document for the channel."
+            title="Canvas"
+          >
+            <ChannelCanvas
+              canEdit={canEditNarrative}
+              channelId={channelId}
+              isArchived={isArchived}
+            />
           </Section>
 
           <Separator />
@@ -460,14 +418,65 @@ export function ChannelManagementSheet({
           <Separator />
 
           <Section
-            description="A shared Markdown document for the channel."
-            title="Canvas"
+            description="Name and description are owner/admin actions."
+            title="Details"
           >
-            <ChannelCanvas
-              canEdit={canEditNarrative}
-              channelId={channelId}
-              isArchived={isArchived}
-            />
+            <form
+              className="space-y-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void updateChannelMutation.mutateAsync({
+                  description: descriptionDraft.trim() || undefined,
+                  name: nameDraft.trim() || undefined,
+                });
+              }}
+            >
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" htmlFor="channel-name">
+                  Name
+                </label>
+                <Input
+                  data-testid="channel-management-name"
+                  disabled={
+                    !canManageChannel || updateChannelMutation.isPending
+                  }
+                  id="channel-name"
+                  onChange={(event) => setNameDraft(event.target.value)}
+                  value={nameDraft}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="channel-description"
+                >
+                  Description
+                </label>
+                <Textarea
+                  className="min-h-24"
+                  data-testid="channel-management-description"
+                  disabled={
+                    !canManageChannel || updateChannelMutation.isPending
+                  }
+                  id="channel-description"
+                  onChange={(event) => setDescriptionDraft(event.target.value)}
+                  value={descriptionDraft}
+                />
+              </div>
+              <Button
+                data-testid="channel-management-save-details"
+                disabled={!canManageChannel || updateChannelMutation.isPending}
+                size="sm"
+                type="submit"
+              >
+                {updateChannelMutation.isPending ? "Saving..." : "Save details"}
+              </Button>
+              {updateChannelMutation.error instanceof Error ? (
+                <p className="text-sm text-destructive">
+                  {updateChannelMutation.error.message}
+                </p>
+              ) : null}
+            </form>
           </Section>
 
           {resolvedChannel.channelType !== "dm" ? (
