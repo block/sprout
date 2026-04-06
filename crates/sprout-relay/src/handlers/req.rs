@@ -659,5 +659,12 @@ mod tests {
         let no_kinds_filter = Filter::new().custom_tag(d_tag, ["slug"]);
         let q4 = filter_to_query_params(&no_kinds_filter, None);
         assert_eq!(q4.d_tag, None);
+
+        // Multi-value #d → pushdown NOT active (can't push OR into single column match)
+        let multi_d_filter = Filter::new()
+            .kind(nostr::Kind::Custom(30023))
+            .custom_tag(d_tag, ["slug-a", "slug-b"]);
+        let q5 = filter_to_query_params(&multi_d_filter, None);
+        assert_eq!(q5.d_tag, None);
     }
 }
