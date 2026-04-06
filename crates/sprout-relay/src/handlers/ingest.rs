@@ -1242,6 +1242,13 @@ pub async fn ingest_event(
     } else if is_parameterized_replaceable(kind_u32) {
         // NIP-33 parameterized replaceable — keyed by (kind, pubkey, d_tag).
         let d_tag = sprout_db::event::extract_d_tag(&event).unwrap_or_default();
+        if d_tag.len() > sprout_db::event::D_TAG_MAX_LEN {
+            return Err(IngestError::Rejected(format!(
+                "invalid: d tag too long ({} bytes, max {})",
+                d_tag.len(),
+                sprout_db::event::D_TAG_MAX_LEN,
+            )));
+        }
         state
             .db
             .replace_parameterized_event(&event, &d_tag, channel_id)

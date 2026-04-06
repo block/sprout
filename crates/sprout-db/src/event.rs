@@ -40,16 +40,14 @@ pub struct EventQuery {
 }
 
 /// Maximum length for a `d_tag` value (bytes). NIP-33 d-tags are short identifiers;
-/// anything beyond this is either a bug or abuse. Truncated, not rejected — the event
-/// is still valid, we just cap the storage/index key.
-const D_TAG_MAX_LEN: usize = 1024;
+/// anything beyond this is either a bug or abuse.
+pub const D_TAG_MAX_LEN: usize = 1024;
 
 /// Extract the `d_tag` value for storage.
 ///
 /// For NIP-33 parameterized replaceable events (kind 30000–39999): returns the first
 /// `d` tag's value, or `""` if no `d` tag is present (per NIP-33 spec).
 /// For all other events: returns `None` (column stays NULL).
-/// Values longer than [`D_TAG_MAX_LEN`] are truncated to bound index/storage cost.
 pub fn extract_d_tag(event: &Event) -> Option<String> {
     let kind_u32 = event.kind.as_u16() as u32;
     if !is_parameterized_replaceable(kind_u32) {
@@ -67,16 +65,7 @@ pub fn extract_d_tag(event: &Event) -> Option<String> {
             }
         })
         .unwrap_or_default(); // Missing d tag → empty string per NIP-33
-    if val.len() > D_TAG_MAX_LEN {
-        // Truncate on a char boundary to avoid splitting a multi-byte sequence.
-        let mut end = D_TAG_MAX_LEN;
-        while end > 0 && !val.is_char_boundary(end) {
-            end -= 1;
-        }
-        Some(val[..end].to_string())
-    } else {
-        Some(val)
-    }
+    Some(val)
 }
 
 /// Insert a Nostr event. Rejects AUTH and ephemeral kinds.
@@ -740,12 +729,13 @@ mod tests {
     }
 
     #[test]
-    fn extract_d_tag_truncates_oversized_value() {
+    fn extract_d_tag_preserves_full_value() {
+        // extract_d_tag returns the full value — length enforcement is at the ingest layer.
         let long_val = "x".repeat(2048);
         let event =
             make_event_with_kind_and_tags(30023, vec![Tag::parse(&["d", &long_val]).unwrap()]);
         let result = extract_d_tag(&event).unwrap();
-        assert!(result.len() <= super::D_TAG_MAX_LEN);
-        assert_eq!(result.len(), super::D_TAG_MAX_LEN);
+        assert_eq!(result.len(), 2048);
+        assert_eq!(result, long_val);
     }
 }
