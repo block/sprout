@@ -472,6 +472,7 @@ export type {
   WorkflowApprovalStatus,
   WorkflowRun,
   WorkflowRunStatus,
+  WorkflowSaveResult,
   WorkflowStatus,
   TraceEntry,
   TriggerWorkflowResponse,

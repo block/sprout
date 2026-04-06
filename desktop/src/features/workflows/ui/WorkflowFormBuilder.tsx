@@ -2,6 +2,7 @@ import { Code, Plus } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/shared/ui/button";
+import { Checkbox } from "@/shared/ui/checkbox";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
 import { WorkflowStepCard } from "./WorkflowStepCard";
@@ -34,6 +35,7 @@ function TriggerConfigFields({
 }) {
   switch (trigger.on) {
     case "message_posted":
+    case "diff_posted":
       return (
         <div className="space-y-1.5">
           <FieldLabel htmlFor="wf-trigger-filter">
@@ -49,7 +51,7 @@ function TriggerConfigFields({
             value={trigger.filter ?? ""}
           />
           <p className="text-xs text-muted-foreground">
-            Evalexpr filter — leave empty to trigger on all messages.
+            Evalexpr filter — leave empty to trigger on all matching events.
           </p>
         </div>
       );
@@ -257,6 +259,42 @@ export function WorkflowFormBuilder({
             />
           </div>
 
+          <div className="space-y-1.5">
+            <FieldLabel htmlFor="wf-description">
+              Description (optional)
+            </FieldLabel>
+            <Textarea
+              className="min-h-[72px] resize-y text-sm"
+              disabled={disabled}
+              id="wf-description"
+              onChange={(event) =>
+                updateFormState({
+                  ...formState,
+                  description: event.target.value,
+                })
+              }
+              placeholder="What does this workflow do?"
+              value={formState.description}
+            />
+          </div>
+
+          <div className="flex items-center gap-2 rounded-md border border-border/70 px-3 py-2">
+            <Checkbox
+              checked={formState.enabled}
+              disabled={disabled}
+              id="wf-enabled"
+              onCheckedChange={(checked) =>
+                updateFormState({
+                  ...formState,
+                  enabled: checked === true,
+                })
+              }
+            />
+            <label className="text-sm" htmlFor="wf-enabled">
+              Workflow is enabled
+            </label>
+          </div>
+
           <div className="space-y-3">
             <div className="space-y-1.5">
               <FieldLabel htmlFor="wf-trigger-type">Trigger</FieldLabel>
@@ -308,11 +346,13 @@ export function WorkflowFormBuilder({
               <div className="space-y-2">
                 {formState.steps.map((step, index) => (
                   <WorkflowStepCard
+                    disabled={disabled}
                     index={index}
                     key={step.id}
                     onRemove={() => removeStep(index)}
                     onUpdate={(updated) => updateStep(index, updated)}
                     step={step}
+                    triggerType={formState.trigger.on}
                   />
                 ))}
               </div>

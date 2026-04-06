@@ -5,6 +5,7 @@ import type {
   Workflow,
   WorkflowApproval,
   WorkflowRun,
+  WorkflowSaveResult,
   TraceEntry,
 } from "@/shared/api/types";
 
@@ -19,6 +20,10 @@ type RawWorkflow = {
   status: Workflow["status"];
   created_at: number;
   updated_at: number;
+};
+
+type RawWorkflowSaveResponse = RawWorkflow & {
+  webhook_secret?: string | null;
 };
 
 type RawTraceEntry = {
@@ -81,6 +86,13 @@ function fromRawWorkflow(raw: RawWorkflow): Workflow {
     status: raw.status,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
+  };
+}
+
+function fromRawWorkflowSave(raw: RawWorkflowSaveResponse): WorkflowSaveResult {
+  return {
+    workflow: fromRawWorkflow(raw),
+    webhookSecret: raw.webhook_secret ?? null,
   };
 }
 
@@ -165,23 +177,23 @@ export async function getWorkflow(workflowId: string): Promise<Workflow> {
 export async function createWorkflow(
   channelId: string,
   yamlDefinition: string,
-): Promise<Workflow> {
-  const raw = await invokeTauri<RawWorkflow>("create_workflow", {
+): Promise<WorkflowSaveResult> {
+  const raw = await invokeTauri<RawWorkflowSaveResponse>("create_workflow", {
     channelId,
     yamlDefinition,
   });
-  return fromRawWorkflow(raw);
+  return fromRawWorkflowSave(raw);
 }
 
 export async function updateWorkflow(
   workflowId: string,
   yamlDefinition: string,
-): Promise<Workflow> {
-  const raw = await invokeTauri<RawWorkflow>("update_workflow", {
+): Promise<WorkflowSaveResult> {
+  const raw = await invokeTauri<RawWorkflowSaveResponse>("update_workflow", {
     workflowId,
     yamlDefinition,
   });
-  return fromRawWorkflow(raw);
+  return fromRawWorkflowSave(raw);
 }
 
 export async function deleteWorkflow(workflowId: string): Promise<void> {

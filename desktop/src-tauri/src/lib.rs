@@ -345,6 +345,7 @@ pub fn run() {
             get_presence,
             set_presence,
             get_relay_ws_url,
+            get_relay_http_url,
             discover_acp_providers,
             discover_managed_agent_prereqs,
             sign_event,

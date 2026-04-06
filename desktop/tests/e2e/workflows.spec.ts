@@ -15,24 +15,50 @@ async function navigateToWorkflows(page: import("@playwright/test").Page) {
 async function createWorkflow(
   page: import("@playwright/test").Page,
   name: string,
+  options?: {
+    description?: string;
+    enabled?: boolean;
+    trigger?: string;
+    stepCondition?: string;
+    stepName?: string;
+    stepTimeoutSecs?: string;
+  },
 ) {
   await page.getByRole("button", { name: "Create Workflow" }).click();
-  await expect(page.getByRole("dialog")).toBeVisible();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
 
-  // Fill the form — name field
-  await page.getByLabel("Workflow name").fill(name);
+  await dialog.getByLabel("Workflow name").fill(name);
+  if (options?.description) {
+    await dialog.getByLabel("Description (optional)").fill(options.description);
+  }
+  if (options?.enabled === false) {
+    await dialog.getByLabel("Workflow is enabled").click();
+  }
+  if (options?.trigger) {
+    await dialog.getByLabel("Trigger").selectOption(options.trigger);
+  }
 
-  // Add a step
-  await page.getByRole("button", { name: "Add step" }).click();
+  await dialog.getByRole("button", { name: "Add step" }).click();
+  if (options?.stepName) {
+    await dialog.getByLabel("Step name (optional)").fill(options.stepName);
+  }
+  if (options?.stepCondition) {
+    await dialog
+      .getByLabel("Run condition (optional)")
+      .fill(options.stepCondition);
+  }
+  if (options?.stepTimeoutSecs) {
+    await dialog
+      .getByLabel("Timeout seconds (optional)")
+      .fill(options.stepTimeoutSecs);
+  }
 
-  // Submit
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await dialog.getByRole("button", { name: "Create" }).click();
 
-  // Wait for dialog to close
-  await expect(page.getByRole("dialog")).not.toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Create Workflow" }),
+  ).not.toBeVisible();
 }
 
 test("navigates to workflows view and shows empty state", async ({ page }) => {
@@ -52,6 +78,48 @@ test("creates a workflow via the form builder", async ({ page }) => {
 
   // Verify workflow appears in the list
   await expect(page.getByTestId("workflows-view")).toContainText(workflowName);
+});
+
+test("captures disabled diff workflows in the list UI", async ({ page }) => {
+  const workflowName = `diff_workflow_${Date.now()}`;
+  const description = "Watches diff events for src/ changes";
+
+  await navigateToWorkflows(page);
+  await createWorkflow(page, workflowName, {
+    description,
+    enabled: false,
+    trigger: "diff_posted",
+    stepName: "Notify reviewers",
+    stepCondition: 'str_contains(trigger_text, "src/")',
+    stepTimeoutSecs: "45",
+  });
+
+  const card = page
+    .locator('[data-testid^="workflow-card-"]')
+    .filter({ hasText: workflowName })
+    .first();
+  await expect(card).toContainText(workflowName);
+  await expect(card).toContainText(description);
+  await expect(card).toContainText("Diff Posted");
+  await expect(card).toContainText("disabled");
+});
+
+test("shows the webhook secret dialog after saving a webhook workflow", async ({
+  page,
+}) => {
+  const workflowName = `webhook_workflow_${Date.now()}`;
+
+  await navigateToWorkflows(page);
+  await createWorkflow(page, workflowName, {
+    trigger: "webhook",
+  });
+
+  await expect(page.getByText("Webhook Ready")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy URL" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy Secret" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByText("Webhook Ready")).not.toBeVisible();
 });
 
 test("edits an existing workflow", async ({ page }) => {
