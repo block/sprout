@@ -184,30 +184,14 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
   await expect(page.getByTestId("settings-view")).toBeVisible();
   await page.getByTestId("settings-nav-appearance").click();
 
-  // Switch to a dark theme and verify CSS vars + dark class are applied
-  await page.getByTestId("theme-option-dracula").click();
-
+  // Default theme is catppuccin-macchiato (dark)
   await expect
     .poll(() =>
       page.evaluate(() => document.documentElement.classList.contains("dark")),
     )
     .toBe(true);
 
-  // The real theming mechanism: CSS variables are set on the root element
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        document.documentElement.style.getPropertyValue("--background").trim(),
-      ),
-    )
-    .toBeTruthy();
-
-  // Theme name persists in localStorage
-  await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("sprout-theme")))
-    .toBe("dracula");
-
-  // Switch to a light theme and verify light class replaces dark
+  // Switch to a light theme — verifies dark→light transition
   await page.getByTestId("theme-option-github-light").click();
 
   await expect
@@ -222,9 +206,32 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
     )
     .toBe(false);
 
+  // CSS variables are set on the root element (the real theming mechanism)
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        document.documentElement.style.getPropertyValue("--background").trim(),
+      ),
+    )
+    .toBeTruthy();
+
+  // Theme name persists in localStorage
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("sprout-theme")))
     .toBe("github-light");
+
+  // Switch back to a dark theme — verifies light→dark transition
+  await page.getByTestId("theme-option-dracula").click();
+
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.documentElement.classList.contains("dark")),
+    )
+    .toBe(true);
+
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("sprout-theme")))
+    .toBe("dracula");
 
   // Close settings with keyboard shortcut
   await page.keyboard.press(
