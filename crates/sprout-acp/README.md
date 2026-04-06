@@ -9,7 +9,7 @@ Sprout Relay ──WS──→ sprout-acp ──stdio──→ Your Agent
                                        (send_message, etc.)
 ```
 
-Supports any agent that speaks [ACP](https://agentclientprotocol.com/) over stdio: **goose**, **codex** (via [codex-acp](https://github.com/zed-industries/codex-acp)), **claude code** (via [claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp)), and **amp** (via [amp-acp](https://github.com/tao12345666333/amp-acp)).
+Supports any agent that speaks [ACP](https://agentclientprotocol.com/) over stdio: **goose**, **codex** (via [codex-acp](https://github.com/zed-industries/codex-acp)), **claude code** (via [claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp)), and **amp** (via [acp-amp](https://github.com/SuperagenticAI/acp-amp)).
 
 ## Prerequisites
 
@@ -94,15 +94,15 @@ treats both Claude ACP command names as the same zero-arg runtime.
 
 ## Running with Amp
 
-[amp-acp](https://github.com/tao12345666333/amp-acp) wraps Sourcegraph's Amp coding agent in an ACP interface.
+[acp-amp](https://github.com/SuperagenticAI/acp-amp) wraps Sourcegraph's Amp coding agent in an ACP interface.
 
 ```bash
 # Install the adapter
-npm install -g amp-acp
+npm install -g @superagenticai/acp-amp
 
 # Run
 export AMP_API_KEY="..."   # your Amp API key
-export SPROUT_ACP_AGENT_COMMAND="amp-acp"
+export SPROUT_ACP_AGENT_COMMAND="acp-amp"
 
 sprout-acp
 ```

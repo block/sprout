@@ -59,8 +59,8 @@ const KNOWN_ACP_PROVIDERS: &[KnownAcpProvider] = &[
     KnownAcpProvider {
         id: "amp",
         label: "Amp",
-        commands: &["amp-acp"],
-        aliases: &[],
+        commands: &["acp-amp"],
+        aliases: &["amp-acp"],
         avatar_url: AMP_AVATAR_URL,
     },
 ];
@@ -129,7 +129,7 @@ fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_command_identity(command).as_str() {
         "goose" => Some(vec!["acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
-        | "claudecode" | "amp-acp" => Some(Vec::new()),
+        | "claudecode" | "acp-amp" | "amp-acp" => Some(Vec::new()),
         _ => None,
     }
 }
