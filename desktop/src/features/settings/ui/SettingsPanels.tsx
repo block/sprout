@@ -1,8 +1,11 @@
+import { useState, useMemo } from "react";
 import {
   BellRing,
+  Check,
   KeyRound,
   MonitorCog,
   Moon,
+  Search,
   Stethoscope,
   Sun,
   UserRound,
@@ -15,6 +18,7 @@ import type {
 import { TokenSettingsCard } from "@/features/tokens/ui/TokenSettingsCard";
 import { cn } from "@/shared/lib/cn";
 import { useTheme } from "@/shared/theme/ThemeProvider";
+import { SYNTAX_THEMES, isLightTheme } from "@/shared/theme/theme-loader";
 import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
@@ -47,12 +51,6 @@ export type SettingsPanelProps = {
   onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
 };
 
-type ThemeOption = {
-  value: "light" | "dark" | "system";
-  label: string;
-  icon: LucideIcon;
-};
-
 export const settingsSections: SettingsSectionDescriptor[] = [
   {
     value: "profile",
@@ -81,66 +79,86 @@ export const settingsSections: SettingsSectionDescriptor[] = [
   },
 ];
 
-const themeOptions: ThemeOption[] = [
-  {
-    value: "light",
-    label: "Light",
-    icon: Sun,
-  },
-  {
-    value: "dark",
-    label: "Dark",
-    icon: Moon,
-  },
-  {
-    value: "system",
-    label: "System",
-    icon: MonitorCog,
-  },
-];
+function formatThemeLabel(name: string): string {
+  return name
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
 
 function ThemeSettingsCard() {
-  const { setTheme, theme } = useTheme();
+  const { setTheme, themeName } = useTheme();
+  const [search, setSearch] = useState("");
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    if (!q) return SYNTAX_THEMES;
+    return SYNTAX_THEMES.filter((name) => name.includes(q));
+  }, [search]);
 
   return (
     <section
       className="rounded-xl border border-border/80 bg-card/80 p-4 shadow-sm"
       data-testid="settings-theme"
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <h2 className="text-sm font-semibold tracking-tight">Appearance</h2>
-          <p className="text-sm text-muted-foreground">
-            Choose how Sprout looks on this device.
-          </p>
-        </div>
+      <div className="mb-3 min-w-0">
+        <h2 className="text-sm font-semibold tracking-tight">Appearance</h2>
+        <p className="text-sm text-muted-foreground">
+          Choose a theme for Sprout. Light and dark mode is auto-detected.
+        </p>
+      </div>
 
-        <div className="inline-flex w-full flex-col gap-1 rounded-xl border border-border/70 bg-background/70 p-1 sm:w-auto sm:flex-row">
-          {themeOptions.map(({ value, label, icon: Icon }) => {
-            const isActive = theme === value;
+      <div className="relative mb-3">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <input
+          className="w-full rounded-lg border border-border/70 bg-background/70 py-2 pl-9 pr-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search themes..."
+          type="text"
+          value={search}
+        />
+      </div>
+
+      <div className="max-h-72 overflow-y-auto rounded-lg border border-border/70 bg-background/70">
+        {filtered.length === 0 ? (
+          <p className="px-3 py-4 text-center text-sm text-muted-foreground">
+            No themes match your search.
+          </p>
+        ) : (
+          filtered.map((name) => {
+            const isActive = themeName === name;
+            const light = isLightTheme(name);
 
             return (
               <button
                 aria-pressed={isActive}
                 className={cn(
-                  "inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  "flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                   isActive
-                    ? "bg-primary text-primary-foreground shadow-sm"
+                    ? "bg-primary/10 text-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
                 )}
-                data-testid={`theme-option-${value}`}
-                key={value}
-                onClick={() => {
-                  setTheme(value);
-                }}
+                data-testid={`theme-option-${name}`}
+                key={name}
+                onClick={() => setTheme(name)}
                 type="button"
               >
-                <Icon className="h-4 w-4" />
-                <span>{label}</span>
+                {light ? (
+                  <Sun className="h-4 w-4 shrink-0" />
+                ) : (
+                  <Moon className="h-4 w-4 shrink-0" />
+                )}
+                <span className="flex-1 truncate">
+                  {formatThemeLabel(name)}
+                </span>
+                {isActive && (
+                  <Check className="h-4 w-4 shrink-0 text-primary" />
+                )}
               </button>
             );
-          })}
-        </div>
+          })
+        )}
       </div>
     </section>
   );
