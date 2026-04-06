@@ -1,5 +1,4 @@
 import * as React from "react";
-import { FocusScope } from "@radix-ui/react-focus-scope";
 import { X } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
@@ -115,93 +114,91 @@ export function SettingsView({
       />
 
       {/* Modal container */}
-      <FocusScope loop>
-        {/* biome-ignore lint/a11y/useKeyWithClickEvents: Click stops propagation to backdrop; keyboard dismiss handled by Escape key */}
-        <div
-          aria-labelledby="settings-title"
-          aria-modal="true"
-          className={cn(
-            "relative mx-auto flex h-[min(600px,calc(100vh-8rem))] w-[calc(100%-4rem)] max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-lg motion-safe:transition-all motion-safe:duration-500 motion-safe:ease-out",
-            isLoaded ? "opacity-100 scale-100" : "opacity-0 scale-95",
-          )}
-          data-testid="settings-view"
-          onClick={(e) => e.stopPropagation()}
-          role="dialog"
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: Click stops propagation to backdrop; keyboard dismiss handled by Escape key */}
+      <div
+        aria-labelledby="settings-title"
+        aria-modal="true"
+        className={cn(
+          "relative mx-auto flex h-[min(600px,calc(100vh-8rem))] w-[calc(100%-4rem)] max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-lg motion-safe:transition-all motion-safe:duration-500 motion-safe:ease-out",
+          isLoaded ? "opacity-100 scale-100" : "opacity-0 scale-95",
+        )}
+        data-testid="settings-view"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+      >
+        {/* Header with title and close button */}
+        <header
+          className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"
+          data-tauri-drag-region
         >
-          {/* Header with title and close button */}
-          <header
-            className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"
-            data-tauri-drag-region
+          <h2
+            className="text-base font-semibold"
+            data-testid="settings-title"
+            id="settings-title"
           >
-            <h2
-              className="text-base font-semibold"
-              data-testid="settings-title"
-              id="settings-title"
-            >
-              Settings
-            </h2>
-            <button
-              aria-label="Close settings"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              data-testid="settings-close"
-              onClick={onClose}
-              type="button"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </header>
+            Settings
+          </h2>
+          <button
+            aria-label="Close settings"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="settings-close"
+            onClick={onClose}
+            type="button"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
 
-          {/* Two-column layout */}
-          <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)] lg:grid-rows-1">
-            {/* Sidebar nav */}
-            <aside
-              className={cn(
-                "border-b border-border/70 bg-muted/20 motion-safe:transition-all motion-safe:duration-700 motion-safe:ease-out lg:border-b-0 lg:border-r",
-                isLoaded
-                  ? "opacity-100 translate-x-0"
-                  : "opacity-0 -translate-x-2",
-              )}
+        {/* Two-column layout */}
+        <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)] lg:grid-rows-1">
+          {/* Sidebar nav */}
+          <aside
+            className={cn(
+              "border-b border-border/70 bg-muted/20 motion-safe:transition-all motion-safe:duration-700 motion-safe:ease-out lg:border-b-0 lg:border-r",
+              isLoaded
+                ? "opacity-100 translate-x-0"
+                : "opacity-0 -translate-x-2",
+            )}
+          >
+            <nav
+              aria-label="Settings sections"
+              className="flex gap-1 overflow-x-auto px-3 py-3 lg:flex-col lg:overflow-y-auto lg:pt-1"
             >
-              <nav
-                aria-label="Settings sections"
-                className="flex gap-1 overflow-x-auto px-3 py-3 lg:flex-col lg:overflow-y-auto lg:pt-1"
-              >
-                {settingsSections.map((entry, index) => (
-                  <SettingsSectionButton
-                    active={entry.value === section}
-                    index={index}
-                    isLoaded={isLoaded}
-                    key={entry.value}
-                    onSelect={onSectionChange}
-                    section={entry}
-                  />
-                ))}
-              </nav>
-            </aside>
+              {settingsSections.map((entry, index) => (
+                <SettingsSectionButton
+                  active={entry.value === section}
+                  index={index}
+                  isLoaded={isLoaded}
+                  key={entry.value}
+                  onSelect={onSectionChange}
+                  section={entry}
+                />
+              ))}
+            </nav>
+          </aside>
 
-            {/* Content area */}
-            <section className="min-h-0 overflow-y-auto px-4 py-4 sm:px-6">
-              <div
-                className="mx-auto flex w-full max-w-4xl flex-col gap-4"
-                data-testid={`settings-panel-${section}`}
-              >
-                {renderSettingsSection(section, {
-                  currentPubkey,
-                  fallbackDisplayName,
-                  isUpdatingDesktopNotifications,
-                  notificationErrorMessage,
-                  notificationPermission,
-                  notificationSettings,
-                  onSetDesktopNotificationsEnabled,
-                  onSetHomeBadgeEnabled,
-                  onSetMentionNotificationsEnabled,
-                  onSetNeedsActionNotificationsEnabled,
-                })}
-              </div>
-            </section>
-          </div>
+          {/* Content area */}
+          <section className="min-h-0 overflow-y-auto px-4 py-4 sm:px-6">
+            <div
+              className="mx-auto flex w-full max-w-4xl flex-col gap-4"
+              data-testid={`settings-panel-${section}`}
+            >
+              {renderSettingsSection(section, {
+                currentPubkey,
+                fallbackDisplayName,
+                isUpdatingDesktopNotifications,
+                notificationErrorMessage,
+                notificationPermission,
+                notificationSettings,
+                onSetDesktopNotificationsEnabled,
+                onSetHomeBadgeEnabled,
+                onSetMentionNotificationsEnabled,
+                onSetNeedsActionNotificationsEnabled,
+              })}
+            </div>
+          </section>
         </div>
-      </FocusScope>
+      </div>
     </div>
   );
 }

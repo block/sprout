@@ -12,11 +12,13 @@ export function useDmSidebarMetadata({
   directMessages,
   fallbackDisplayName,
   profileDisplayName,
+  enabled = true,
 }: {
   currentPubkey?: string;
   directMessages: Channel[];
   fallbackDisplayName?: string;
   profileDisplayName?: string | null;
+  enabled?: boolean;
 }) {
   const selfDmLabels = React.useMemo(
     () =>
@@ -44,10 +46,10 @@ export function useDmSidebarMetadata({
     [currentPubkey, directMessages, selfDmLabels],
   );
   const dmPresenceQuery = usePresenceQuery(dmParticipantPubkeys, {
-    enabled: directMessages.length > 0,
+    enabled: enabled && directMessages.length > 0,
   });
   const dmProfilesQuery = useUsersBatchQuery(dmParticipantPubkeys, {
-    enabled: directMessages.length > 0,
+    enabled: enabled && directMessages.length > 0,
   });
   const dmProfiles = dmProfilesQuery.data?.profiles;
   const dmPresenceByChannelId = React.useMemo(

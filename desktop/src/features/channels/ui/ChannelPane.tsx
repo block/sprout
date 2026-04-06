@@ -71,7 +71,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   typingPubkeys,
 }: ChannelPaneProps) {
   return (
-    <React.Fragment>
+    <>
       <MessageTimeline
         channelId={activeChannel?.id}
         activeReplyTargetId={replyTargetId}
@@ -144,6 +144,6 @@ export const ChannelPane = React.memo(function ChannelPane({
             : null
         }
       />
-    </React.Fragment>
+    </>
   );
 });

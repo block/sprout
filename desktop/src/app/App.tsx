@@ -1,11 +1,11 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
 
 import { AppShell } from "@/app/AppShell";
 
 export function App() {
-  useEffect(() => {
-    getCurrentWindow().show();
+  useLayoutEffect(() => {
+    void getCurrentWindow().show();
   }, []);
 
   return <AppShell />;
