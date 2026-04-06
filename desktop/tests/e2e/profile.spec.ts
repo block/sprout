@@ -183,7 +183,7 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
 
   await expect(page.getByTestId("settings-view")).toBeVisible();
   await page.getByTestId("settings-nav-appearance").click();
-  await page.getByTestId("theme-option-dark").click();
+  await page.getByTestId("theme-option-dracula").click();
 
   await expect
     .poll(() =>
