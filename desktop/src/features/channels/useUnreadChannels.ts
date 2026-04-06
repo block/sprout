@@ -77,7 +77,10 @@ export function useUnreadChannels(
   const hasInitializedChannelsRef = React.useRef(false);
   const activeChannelId = activeChannel?.id ?? null;
   const activeChannelLastMessageAt = activeChannel?.lastMessageAt ?? null;
-  const effectiveActiveReadAt = activeReadAt ?? activeChannelLastMessageAt;
+  // Let callers pass `null` to intentionally suppress the optimistic
+  // channel-metadata fallback until a real timeline position is known.
+  const effectiveActiveReadAt =
+    activeReadAt === undefined ? activeChannelLastMessageAt : activeReadAt;
 
   const markChannelRead = React.useCallback(
     (channelId: string, readAt: string | null | undefined) => {

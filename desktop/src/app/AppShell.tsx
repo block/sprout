@@ -115,7 +115,9 @@ export function AppShell() {
   const { markChannelRead, unreadChannelIds } = useUnreadChannels(
     channels,
     activeChannel,
-    undefined,
+    // Wait for ChannelScreen to report the latest loaded message before
+    // advancing unread state for the active channel.
+    null,
     {
       currentPubkey: identityQuery.data?.pubkey,
       onLiveMention: refetchHomeFeedOnLiveMention,
@@ -126,6 +128,18 @@ export function AppShell() {
   const createForumMutation = useCreateChannelMutation();
   const openDmMutation = useOpenDmMutation();
   const hideDmMutation = useHideDmMutation();
+  const handleOpenBrowseChannels = React.useCallback(() => {
+    setBrowseDialogType("stream");
+    void refetchChannels();
+  }, [refetchChannels]);
+  const handleOpenBrowseForums = React.useCallback(() => {
+    setBrowseDialogType("forum");
+    void refetchChannels();
+  }, [refetchChannels]);
+  const handleOpenSearch = React.useCallback(() => {
+    setIsSearchOpen(true);
+    void refetchChannels();
+  }, [refetchChannels]);
 
   const handleBrowseDialogOpenChange = React.useCallback((open: boolean) => {
     if (!open) {
@@ -282,7 +296,7 @@ export function AppShell() {
     };
   }, []);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (selectedView === "settings") {
       return;
     }
@@ -291,6 +305,35 @@ export function AppShell() {
   }, [selectedView]);
 
   React.useEffect(() => {
+    if (selectedView === "settings") {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      if (key === "k" && !event.shiftKey) {
+        event.preventDefault();
+        handleOpenSearch();
+        return;
+      }
+
+      if (key === "o" && event.shiftKey) {
+        event.preventDefault();
+        handleOpenBrowseChannels();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [handleOpenBrowseChannels, handleOpenSearch, selectedView]);
+
+  React.useLayoutEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       const isSettingsShortcut =
         (event.key === "," || event.code === "Comma") &&
@@ -395,16 +438,13 @@ export function AppShell() {
                 openChannelView(createdForum.id);
               }}
               onOpenBrowseChannels={() => {
-                setBrowseDialogType("stream");
-                void refetchChannels();
+                handleOpenBrowseChannels();
               }}
               onOpenBrowseForums={() => {
-                setBrowseDialogType("forum");
-                void refetchChannels();
+                handleOpenBrowseForums();
               }}
               onOpenSearch={() => {
-                setIsSearchOpen(true);
-                void refetchChannels();
+                handleOpenSearch();
               }}
               onHideDm={handleHideDm}
               onOpenDm={async ({ pubkeys }) => {

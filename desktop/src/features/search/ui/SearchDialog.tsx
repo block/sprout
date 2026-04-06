@@ -183,27 +183,6 @@ export function SearchDialog({
   }, [query]);
 
   React.useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (
-        event.key.toLowerCase() !== "k" ||
-        !(event.metaKey || event.ctrlKey) ||
-        event.altKey ||
-        event.shiftKey
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-      onOpenChange(true);
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [onOpenChange]);
-
-  React.useEffect(() => {
     if (!open) {
       setQuery("");
       setDebouncedQuery("");
