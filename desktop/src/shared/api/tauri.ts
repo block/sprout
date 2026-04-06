@@ -522,6 +522,10 @@ export function getRelayWsUrl(): Promise<string> {
   return invokeTauri<string>("get_relay_ws_url");
 }
 
+export function getRelayHttpUrl(): Promise<string> {
+  return invokeTauri<string>("get_relay_http_url");
+}
+
 export async function getChannels(): Promise<Channel[]> {
   const channels = await invokeTauri<RawChannel[]>("get_channels");
   return channels.map(fromRawChannel);

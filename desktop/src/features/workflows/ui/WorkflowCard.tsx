@@ -16,6 +16,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
+import {
+  getWorkflowDescription,
+  getWorkflowDisplayStatus,
+  getWorkflowTriggerSummary,
+} from "./workflowDefinition";
 
 type WorkflowCardProps = {
   workflow: Workflow;
@@ -52,6 +57,10 @@ export function WorkflowCard({
   onDuplicate,
   onDelete,
 }: WorkflowCardProps) {
+  const displayStatus = getWorkflowDisplayStatus(workflow);
+  const description = getWorkflowDescription(workflow.definition);
+  const triggerSummary = getWorkflowTriggerSummary(workflow.definition);
+
   return (
     <div
       className="relative w-full rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/50"
@@ -72,15 +81,21 @@ export function WorkflowCard({
             <span className="truncate text-sm font-medium">
               {workflow.name}
             </span>
-            <StatusBadge status={workflow.status} />
+            <StatusBadge status={displayStatus} />
           </div>
           <div className="mt-1.5 flex items-center gap-3 pl-6 text-[11px] text-muted-foreground">
             {channelName ? <span>{channelName}</span> : null}
+            {triggerSummary ? <span>{triggerSummary}</span> : null}
             <span className="flex items-center gap-1">
               <Clock className="h-3 w-3" />
               {new Date(workflow.updatedAt * 1000).toLocaleDateString()}
             </span>
           </div>
+          {description ? (
+            <p className="mt-2 pl-6 text-xs text-muted-foreground">
+              {description}
+            </p>
+          ) : null}
         </div>
 
         <DropdownMenu>

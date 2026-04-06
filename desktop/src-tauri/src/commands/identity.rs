@@ -1,7 +1,11 @@
 use nostr::{EventBuilder, JsonUtil, Kind, Tag, ToBech32};
 use tauri::State;
 
-use crate::{app_state::AppState, models::IdentityInfo, relay::relay_ws_url};
+use crate::{
+    app_state::AppState,
+    models::IdentityInfo,
+    relay::{relay_api_base_url, relay_ws_url},
+};
 
 #[tauri::command]
 pub fn get_identity(state: State<'_, AppState>) -> Result<IdentityInfo, String> {
@@ -26,6 +30,11 @@ pub fn get_identity(state: State<'_, AppState>) -> Result<IdentityInfo, String> 
 #[tauri::command]
 pub fn get_relay_ws_url() -> String {
     relay_ws_url()
+}
+
+#[tauri::command]
+pub fn get_relay_http_url() -> String {
+    relay_api_base_url()
 }
 
 #[tauri::command]

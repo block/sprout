@@ -1,6 +1,7 @@
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { finalizeEvent } from "nostr-tools/pure";
+import { parse as yamlParse } from "yaml";
 
 import type { RelayEvent } from "@/shared/api/types";
 
@@ -1016,6 +1017,16 @@ type MockWorkflow = {
 const mockWorkflows: MockWorkflow[] = [];
 let mockWorkflowIdCounter = 0;
 
+function parseWorkflowDefinition(
+  yamlDefinition: string,
+): Record<string, unknown> {
+  const parsed = yamlParse(yamlDefinition);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Workflow definition must be a YAML object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
 function handleGetChannelWorkflows(args: { channelId: string }) {
   return mockWorkflows.filter((w) => w.channel_id === args.channelId);
 }
@@ -1032,23 +1043,31 @@ function handleCreateWorkflow(args: {
 }) {
   mockWorkflowIdCounter += 1;
   const now = Math.floor(Date.now() / 1000);
-  // Parse the name from the YAML definition (simple extraction)
-  const nameMatch = args.yamlDefinition.match(/^name:\s*(.+)$/m);
-  const name = nameMatch
-    ? nameMatch[1].trim()
-    : `workflow_${mockWorkflowIdCounter}`;
+  const definition = parseWorkflowDefinition(args.yamlDefinition);
+  const name =
+    typeof definition.name === "string"
+      ? definition.name
+      : `workflow_${mockWorkflowIdCounter}`;
   const workflow: MockWorkflow = {
     id: `mock-wf-${mockWorkflowIdCounter}`,
     name,
     owner_pubkey: MOCK_IDENTITY_PUBKEY,
     channel_id: args.channelId,
-    definition: { raw: args.yamlDefinition },
+    definition,
     status: "active",
     created_at: now,
     updated_at: now,
   };
   mockWorkflows.push(workflow);
-  return workflow;
+
+  const trigger = definition.trigger as Record<string, unknown> | undefined;
+  return {
+    ...workflow,
+    webhook_secret:
+      trigger?.on === "webhook"
+        ? `mock-webhook-secret-${mockWorkflowIdCounter}`
+        : undefined,
+  };
 }
 
 function handleUpdateWorkflow(args: {
@@ -1057,11 +1076,19 @@ function handleUpdateWorkflow(args: {
 }) {
   const workflow = mockWorkflows.find((w) => w.id === args.workflowId);
   if (!workflow) throw new Error(`Workflow ${args.workflowId} not found`);
-  const nameMatch = args.yamlDefinition.match(/^name:\s*(.+)$/m);
-  if (nameMatch) workflow.name = nameMatch[1].trim();
-  workflow.definition = { raw: args.yamlDefinition };
+  const definition = parseWorkflowDefinition(args.yamlDefinition);
+  if (typeof definition.name === "string") workflow.name = definition.name;
+  workflow.definition = definition;
   workflow.updated_at = Math.floor(Date.now() / 1000);
-  return workflow;
+
+  const trigger = definition.trigger as Record<string, unknown> | undefined;
+  return {
+    ...workflow,
+    webhook_secret:
+      trigger?.on === "webhook"
+        ? `mock-webhook-secret-${workflow.id}`
+        : undefined,
+  };
 }
 
 function handleDeleteWorkflow(args: { workflowId: string }) {
@@ -3421,6 +3448,8 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "get_relay_ws_url":
         return getRelayWsUrl(activeConfig);
+      case "get_relay_http_url":
+        return getRelayHttpUrl(activeConfig);
       case "discover_acp_providers":
         return handleDiscoverAcpProviders();
       case "discover_backend_providers":
