@@ -19,6 +19,16 @@ async function closeChannelManagement(page: import("@playwright/test").Page) {
   await expect(page.getByTestId("channel-management-sheet")).not.toBeVisible();
 }
 
+async function openMembersSidebar(
+  page: import("@playwright/test").Page,
+  channelName: string,
+) {
+  await page.getByTestId(`channel-${channelName}`).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await page.getByTestId("channel-members-trigger").click();
+  await expect(page.getByTestId("members-sidebar")).toBeVisible();
+}
+
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
@@ -342,9 +352,9 @@ test("manage channel updates details and context", async ({ page }) => {
   );
 });
 
-test("manage channel can invite and remove members", async ({ page }) => {
+test("members sidebar can invite and remove members", async ({ page }) => {
   await page.goto("/");
-  await openChannelManagement(page, "general");
+  await openMembersSidebar(page, "general");
 
   await page.getByTestId("channel-management-search-users").fill("char");
   await expect(
@@ -369,18 +379,18 @@ test("manage channel can invite and remove members", async ({ page }) => {
     "",
   );
   await expect(
-    page.getByTestId(`channel-member-${TEST_IDENTITIES.charlie.pubkey}`),
+    page.getByTestId(`sidebar-member-${TEST_IDENTITIES.charlie.pubkey}`),
   ).toContainText("charlie");
   await expect(
-    page.getByTestId(`channel-member-${TEST_IDENTITIES.charlie.pubkey}`),
+    page.getByTestId(`sidebar-member-${TEST_IDENTITIES.charlie.pubkey}`),
   ).toContainText("admin");
 
   await page
-    .getByTestId(`remove-member-${TEST_IDENTITIES.charlie.pubkey}`)
+    .getByTestId(`sidebar-remove-member-${TEST_IDENTITIES.charlie.pubkey}`)
     .click();
 
   await expect(
-    page.getByTestId(`channel-member-${TEST_IDENTITIES.charlie.pubkey}`),
+    page.getByTestId(`sidebar-member-${TEST_IDENTITIES.charlie.pubkey}`),
   ).toHaveCount(0);
 });
 
@@ -411,14 +421,19 @@ test("open channel management supports join and leave", async ({ page }) => {
     .click();
   await expect(page.getByTestId("chat-title")).toHaveText("design");
 
+  // Open members sidebar — should show current user after joining
+  await page.getByTestId("channel-members-trigger").click();
+  await expect(page.getByTestId("members-sidebar")).toBeVisible();
+  await expect(
+    page.getByTestId(`sidebar-member-${MOCK_IDENTITY_PUBKEY}`),
+  ).toContainText("You");
+  await page.keyboard.press("Escape");
+
   // Open channel management — should show Leave since we just joined
   await page.getByTestId("channel-management-trigger").click();
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
   await expect(page.getByTestId("channel-management-join")).toHaveCount(0);
   await expect(page.getByTestId("channel-management-leave")).toBeVisible();
-  await expect(
-    page.getByTestId(`channel-member-${MOCK_IDENTITY_PUBKEY}`),
-  ).toContainText("You");
 
   // Leave the channel
   await page.getByTestId("channel-management-leave").click();

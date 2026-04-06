@@ -10,10 +10,7 @@ import type {
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
-
-function formatPubkey(pubkey: string) {
-  return `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`;
-}
+import { formatPubkey } from "@/features/channels/lib/memberUtils";
 
 function formatSearchUserName(user: UserSearchResult) {
   return (

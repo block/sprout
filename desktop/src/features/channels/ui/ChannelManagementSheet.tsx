@@ -23,7 +23,8 @@ import {
   useUnarchiveChannelMutation,
   useUpdateChannelMutation,
 } from "@/features/channels/hooks";
-import type { Channel, ChannelMember } from "@/shared/api/types";
+import { compareMembersByRole } from "@/features/channels/lib/memberUtils";
+import type { Channel } from "@/shared/api/types";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -55,26 +56,6 @@ type ChannelManagementSheetProps = {
   onOpenChange: (open: boolean) => void;
   open: boolean;
 };
-
-const roleOrder: Record<ChannelMember["role"], number> = {
-  owner: 0,
-  admin: 1,
-  member: 2,
-  guest: 3,
-  bot: 4,
-};
-
-function formatPubkey(pubkey: string) {
-  return `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`;
-}
-
-function formatMemberName(member: ChannelMember, currentPubkey?: string) {
-  if (currentPubkey && member.pubkey === currentPubkey) {
-    return "You";
-  }
-
-  return member.displayName ?? formatPubkey(member.pubkey);
-}
 
 function Section({
   title,
@@ -134,22 +115,9 @@ export function ChannelManagementSheet({
   const detail = detailsQuery.data ?? channel;
   const members = React.useMemo(() => {
     const currentMembers = membersQuery.data ?? [];
-    return [...currentMembers].sort((left, right) => {
-      if (currentPubkey && left.pubkey === currentPubkey) {
-        return -1;
-      }
-
-      if (currentPubkey && right.pubkey === currentPubkey) {
-        return 1;
-      }
-
-      const roleDelta = roleOrder[left.role] - roleOrder[right.role];
-      if (roleDelta !== 0) {
-        return roleDelta;
-      }
-
-      return formatMemberName(left).localeCompare(formatMemberName(right));
-    });
+    return [...currentMembers].sort((left, right) =>
+      compareMembersByRole(left, right, currentPubkey),
+    );
   }, [currentPubkey, membersQuery.data]);
   const selfMember =
     members.find((member) => member.pubkey === currentPubkey) ?? null;

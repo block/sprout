@@ -2,18 +2,15 @@ import { Bot, Crown, Shield, User } from "lucide-react";
 import * as React from "react";
 
 import {
-  useManagedAgentsQuery,
-  useRelayAgentsQuery,
-} from "@/features/agents/hooks";
-import {
   useAddChannelMembersMutation,
   useChannelMembersQuery,
   useRemoveChannelMemberMutation,
 } from "@/features/channels/hooks";
+import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
+import { formatMemberName } from "@/features/channels/lib/memberUtils";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import type { Channel, ChannelMember } from "@/shared/api/types";
-import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import {
   Sheet,
@@ -30,26 +27,6 @@ type MembersSidebarProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 };
-
-const roleOrder: Record<ChannelMember["role"], number> = {
-  owner: 0,
-  admin: 1,
-  member: 2,
-  guest: 3,
-  bot: 4,
-};
-
-function formatPubkey(pubkey: string) {
-  return `${pubkey.slice(0, 8)}...${pubkey.slice(-4)}`;
-}
-
-function formatMemberName(member: ChannelMember, currentPubkey?: string) {
-  if (currentPubkey && member.pubkey === currentPubkey) {
-    return "You";
-  }
-
-  return member.displayName ?? formatPubkey(member.pubkey);
-}
 
 function roleIcon(role: ChannelMember["role"]) {
   switch (role) {
@@ -72,58 +49,11 @@ export function MembersSidebar({
 }: MembersSidebarProps) {
   const channelId = channel?.id ?? null;
   const membersQuery = useChannelMembersQuery(channelId, open);
-  const managedAgentsQuery = useManagedAgentsQuery();
-  const relayAgentsQuery = useRelayAgentsQuery();
   const addMembersMutation = useAddChannelMembersMutation(channelId);
   const removeMemberMutation = useRemoveChannelMemberMutation(channelId);
 
-  const managedAgents = managedAgentsQuery.data ?? [];
-  const relayAgents = relayAgentsQuery.data ?? [];
   const rawMembers = membersQuery.data ?? [];
-
-  const managedAgentPubkeys = React.useMemo(
-    () => new Set(managedAgents.map((agent) => normalizePubkey(agent.pubkey))),
-    [managedAgents],
-  );
-  const relayAgentPubkeys = React.useMemo(
-    () => new Set(relayAgents.map((agent) => normalizePubkey(agent.pubkey))),
-    [relayAgents],
-  );
-
-  const { people, bots } = React.useMemo(() => {
-    const peopleList: ChannelMember[] = [];
-    const botList: ChannelMember[] = [];
-
-    for (const member of rawMembers) {
-      const normalizedPubkey = normalizePubkey(member.pubkey);
-      if (
-        member.role === "bot" ||
-        managedAgentPubkeys.has(normalizedPubkey) ||
-        relayAgentPubkeys.has(normalizedPubkey)
-      ) {
-        botList.push(member);
-      } else {
-        peopleList.push(member);
-      }
-    }
-
-    const sortMembers = (list: ChannelMember[]) =>
-      [...list].sort((left, right) => {
-        if (currentPubkey && left.pubkey === currentPubkey) {
-          return -1;
-        }
-        if (currentPubkey && right.pubkey === currentPubkey) {
-          return 1;
-        }
-        const roleDelta = roleOrder[left.role] - roleOrder[right.role];
-        if (roleDelta !== 0) {
-          return roleDelta;
-        }
-        return formatMemberName(left).localeCompare(formatMemberName(right));
-      });
-
-    return { people: sortMembers(peopleList), bots: sortMembers(botList) };
-  }, [currentPubkey, managedAgentPubkeys, rawMembers, relayAgentPubkeys]);
+  const { people, bots } = useClassifiedMembers(rawMembers, currentPubkey);
 
   const allMemberPubkeys = React.useMemo(
     () => rawMembers.map((member) => member.pubkey),
@@ -174,12 +104,17 @@ export function MembersSidebar({
             </span>
           </div>
         </div>
-        {canManageMembers && member.pubkey !== currentPubkey ? (
+        {canManageMembers ||
+        (currentPubkey && member.pubkey === currentPubkey) ? (
           <Button
             data-testid={`sidebar-remove-member-${member.pubkey}`}
             disabled={removeMemberMutation.isPending || isArchived}
             onClick={() => {
-              void removeMemberMutation.mutateAsync(member.pubkey);
+              void removeMemberMutation.mutateAsync(member.pubkey).then(() => {
+                if (member.pubkey === currentPubkey) {
+                  onOpenChange(false);
+                }
+              });
             }}
             size="sm"
             type="button"

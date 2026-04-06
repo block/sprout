@@ -4,10 +4,9 @@ import * as React from "react";
 import {
   useAcpProvidersQuery,
   useBackendProvidersQuery,
-  useManagedAgentsQuery,
-  useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
+import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import { CreateWorkflowDialog } from "@/features/workflows/ui/CreateWorkflowDialog";
 import type { Channel } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -54,9 +53,9 @@ export function ChannelMembersBar({
   const membersQuery = useChannelMembersQuery(channel.id);
   const providersQuery = useAcpProvidersQuery();
   const backendProvidersQuery = useBackendProvidersQuery();
-  const managedAgentsQuery = useManagedAgentsQuery();
-  const relayAgentsQuery = useRelayAgentsQuery();
   const members = membersQuery.data ?? [];
+  const { peopleCount, botCount, managedAgentsQuery, relayAgentsQuery } =
+    useClassifiedMembers(members, currentPubkey);
   const providers = React.useMemo(
     () =>
       [...(providersQuery.data ?? [])].sort((left, right) => {
@@ -70,8 +69,6 @@ export function ChannelMembersBar({
       }),
     [providersQuery.data],
   );
-  const managedAgents = managedAgentsQuery.data ?? [];
-  const relayAgents = relayAgentsQuery.data ?? [];
   const normalizedCurrentPubkey = currentPubkey
     ? normalizePubkey(currentPubkey)
     : null;
@@ -85,27 +82,6 @@ export function ChannelMembersBar({
     channel.channelType !== "dm" &&
     channel.archivedAt === null &&
     (channel.visibility === "open" || canManageMembers);
-  const managedAgentPubkeys = React.useMemo(
-    () => new Set(managedAgents.map((agent) => normalizePubkey(agent.pubkey))),
-    [managedAgents],
-  );
-  const relayAgentPubkeys = React.useMemo(
-    () => new Set(relayAgents.map((agent) => normalizePubkey(agent.pubkey))),
-    [relayAgents],
-  );
-  const peopleCount = React.useMemo(
-    () =>
-      members.filter((member) => {
-        const normalizedPubkey = normalizePubkey(member.pubkey);
-        return (
-          member.role !== "bot" &&
-          !managedAgentPubkeys.has(normalizedPubkey) &&
-          !relayAgentPubkeys.has(normalizedPubkey)
-        );
-      }).length,
-    [managedAgentPubkeys, members, relayAgentPubkeys],
-  );
-  const botCount = members.length - peopleCount;
   const previousChannelIdRef = React.useRef(channel.id);
 
   React.useEffect(() => {
@@ -131,6 +107,7 @@ export function ChannelMembersBar({
     <React.Fragment>
       <div className="flex items-center gap-2">
         <button
+          aria-label="View channel members"
           className="flex items-center gap-2 rounded-full transition-colors hover:opacity-80"
           data-testid="channel-members-stats"
           onClick={onToggleMembers}
