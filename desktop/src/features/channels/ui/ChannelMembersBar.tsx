@@ -1,4 +1,4 @@
-import { Bot, Plus, UserRound, Users, Zap } from "lucide-react";
+import { Bot, Plus, Settings2, UserRound, Users, Zap } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -17,6 +17,7 @@ import { AddChannelBotDialog } from "./AddChannelBotDialog";
 type ChannelMembersBarProps = {
   channel: Channel;
   currentPubkey?: string;
+  onManageChannel: () => void;
   onToggleMembers: () => void;
 };
 
@@ -45,6 +46,7 @@ function CountStat({
 export function ChannelMembersBar({
   channel,
   currentPubkey,
+  onManageChannel,
   onToggleMembers,
 }: ChannelMembersBarProps) {
   const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
@@ -189,6 +191,18 @@ export function ChannelMembersBar({
           variant="outline"
         >
           <Users className="h-4 w-4" />
+        </Button>
+
+        <Button
+          aria-label="Manage channel"
+          className="h-9 w-9 rounded-full"
+          data-testid="channel-management-trigger"
+          onClick={onManageChannel}
+          size="icon"
+          type="button"
+          variant="outline"
+        >
+          <Settings2 className="h-4 w-4" />
         </Button>
       </div>
 

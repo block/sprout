@@ -68,7 +68,7 @@ export function ChannelScreen({
   activeChannel,
   currentIdentity,
   currentProfile,
-  onManageChannel: _onManageChannel,
+  onManageChannel,
   onMarkChannelRead,
   onTargetReached,
   searchAnchor,
@@ -349,6 +349,7 @@ export function ChannelScreen({
             <ChannelMembersBar
               channel={activeChannel}
               currentPubkey={currentPubkey}
+              onManageChannel={onManageChannel}
               onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
             />
           ) : null
