@@ -33,8 +33,7 @@ import {
   SidebarTrigger,
 } from "@/shared/ui/sidebar";
 
-type AppView = "home" | "channel" | "settings" | "agents" | "workflows";
-type MainView = Exclude<AppView, "settings">;
+type AppView = "home" | "channel" | "agents" | "workflows";
 const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
 
 const AgentsScreen = React.lazy(async () => {
@@ -58,6 +57,7 @@ export function AppShell() {
   useWebviewZoomShortcuts();
 
   const [selectedView, setSelectedView] = React.useState<AppView>("home");
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [settingsSection, setSettingsSection] = React.useState<SettingsSection>(
     DEFAULT_SETTINGS_SECTION,
   );
@@ -74,7 +74,6 @@ export function AppShell() {
   >(null);
   const [searchAnchorEvent, setSearchAnchorEvent] =
     React.useState<RelayEvent | null>(null);
-  const lastNonSettingsViewRef = React.useRef<MainView>("home");
   const queryClient = useQueryClient();
 
   const selectView = React.useCallback((view: AppView) => {
@@ -223,22 +222,14 @@ export function AppShell() {
       setIsSearchOpen(false);
       setIsChannelManagementOpen(false);
       setSettingsSection(section);
-
-      React.startTransition(() => {
-        setSelectedView("settings");
-      });
+      setSettingsOpen(true);
     },
     [],
   );
 
   const handleCloseSettings = React.useCallback(() => {
-    const nextView: MainView =
-      lastNonSettingsViewRef.current === "channel" && !selectedChannel
-        ? "home"
-        : lastNonSettingsViewRef.current;
-
-    selectView(nextView);
-  }, [selectView, selectedChannel]);
+    setSettingsOpen(false);
+  }, []);
 
   const handleTargetReached = React.useCallback((messageId: string) => {
     setSearchAnchor((current) =>
@@ -297,15 +288,7 @@ export function AppShell() {
   }, []);
 
   React.useLayoutEffect(() => {
-    if (selectedView === "settings") {
-      return;
-    }
-
-    lastNonSettingsViewRef.current = selectedView;
-  }, [selectedView]);
-
-  React.useEffect(() => {
-    if (selectedView === "settings") {
+    if (settingsOpen) {
       return;
     }
 
@@ -331,7 +314,7 @@ export function AppShell() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [handleOpenBrowseChannels, handleOpenSearch, selectedView]);
+  }, [handleOpenBrowseChannels, handleOpenSearch, settingsOpen]);
 
   React.useLayoutEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -346,7 +329,7 @@ export function AppShell() {
       }
 
       event.preventDefault();
-      if (selectedView === "settings") {
+      if (settingsOpen) {
         handleCloseSettings();
         return;
       }
@@ -358,7 +341,7 @@ export function AppShell() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [handleCloseSettings, handleOpenSettings, selectedView]);
+  }, [handleCloseSettings, handleOpenSettings, settingsOpen]);
 
   return (
     <ChannelNavigationProvider
@@ -366,149 +349,106 @@ export function AppShell() {
       onOpenChannel={handleOpenChannel}
     >
       <SidebarProvider className="h-dvh overflow-hidden overscroll-none">
-        {selectedView === "settings" ? (
-          <React.Suspense
-            fallback={<ViewLoadingFallback label="Loading settings..." />}
-          >
-            <SettingsScreen
+        <SidebarTrigger className="fixed left-[80px] top-[8px] z-50 h-6 w-6 text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" />
+        <AppSidebar
+          channels={memberChannels}
+          currentPubkey={identityQuery.data?.pubkey}
+          errorMessage={
+            channelsQuery.error instanceof Error
+              ? channelsQuery.error.message
+              : undefined
+          }
+          fallbackDisplayName={identityQuery.data?.displayName}
+          homeBadgeCount={homeBadgeCount}
+          isCreatingChannel={createChannelMutation.isPending}
+          isCreatingForum={createForumMutation.isPending}
+          isLoading={channelsQuery.isLoading}
+          isOpeningDm={openDmMutation.isPending}
+          isPresencePending={presenceSession.isPending}
+          selfPresenceStatus={presenceSession.currentStatus}
+          onCreateChannel={async ({ description, name, visibility }) => {
+            const createdChannel = await createChannelMutation.mutateAsync({
+              name,
+              description,
+              channelType: "stream",
+              visibility,
+            });
+
+            openChannelView(createdChannel.id);
+          }}
+          onCreateForum={async ({ description, name, visibility }) => {
+            const createdForum = await createForumMutation.mutateAsync({
+              name,
+              description,
+              channelType: "forum",
+              visibility,
+            });
+
+            openChannelView(createdForum.id);
+          }}
+          onHideDm={handleHideDm}
+          onOpenBrowseChannels={handleOpenBrowseChannels}
+          onOpenBrowseForums={handleOpenBrowseForums}
+          onOpenDm={async ({ pubkeys }) => {
+            const directMessage = await openDmMutation.mutateAsync({
+              pubkeys,
+            });
+            openChannelView(directMessage.id);
+          }}
+          onOpenSearch={handleOpenSearch}
+          onSelectAgents={() => selectView("agents")}
+          onSelectChannel={handleOpenChannel}
+          onSelectHome={() => {
+            selectView("home");
+          }}
+          onSelectSettings={handleOpenSettings}
+          onSelectWorkflows={() => selectView("workflows")}
+          onSetPresenceStatus={(status) => presenceSession.setStatus(status)}
+          profile={profileQuery.data}
+          selectedChannelId={selectedChannel?.id ?? null}
+          selectedView={selectedView}
+          unreadChannelIds={unreadChannelIds}
+        />
+
+        <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
+          {selectedView === "home" ? (
+            <HomeScreen
+              availableChannelIds={availableChannelIds}
               currentPubkey={identityQuery.data?.pubkey}
-              fallbackDisplayName={identityQuery.data?.displayName}
-              isPresenceLoading={presenceSession.isLoading}
-              isUpdatingDesktopNotifications={
-                notificationSettings.isUpdatingDesktopEnabled
-              }
-              isUpdatingPresence={presenceSession.isPending}
-              notificationErrorMessage={notificationSettings.errorMessage}
-              notificationPermission={notificationSettings.permission}
-              notificationSettings={notificationSettings.settings}
-              onClose={handleCloseSettings}
-              onSectionChange={setSettingsSection}
-              onSetDesktopNotificationsEnabled={
-                notificationSettings.setDesktopEnabled
-              }
-              onSetHomeBadgeEnabled={notificationSettings.setHomeBadgeEnabled}
-              onSetMentionNotificationsEnabled={
-                notificationSettings.setMentionsEnabled
-              }
-              onSetNeedsActionNotificationsEnabled={
-                notificationSettings.setNeedsActionEnabled
-              }
-              onSetPresence={presenceSession.setStatus}
-              presenceError={presenceSession.error}
-              presenceStatus={presenceSession.currentStatus}
-              section={settingsSection}
+              onOpenChannel={handleOpenChannel}
             />
-          </React.Suspense>
-        ) : (
-          <>
-            <SidebarTrigger className="fixed left-[80px] top-[8px] z-50 h-6 w-6 text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" />
-            <AppSidebar
-              channels={memberChannels}
-              currentPubkey={identityQuery.data?.pubkey}
-              errorMessage={
-                channelsQuery.error instanceof Error
-                  ? channelsQuery.error.message
-                  : undefined
-              }
-              fallbackDisplayName={identityQuery.data?.displayName}
-              homeBadgeCount={homeBadgeCount}
-              isCreatingChannel={createChannelMutation.isPending}
-              isCreatingForum={createForumMutation.isPending}
-              isLoading={channelsQuery.isLoading}
-              isOpeningDm={openDmMutation.isPending}
-              selfPresenceStatus={presenceSession.currentStatus}
-              onCreateChannel={async ({ description, name, visibility }) => {
-                const createdChannel = await createChannelMutation.mutateAsync({
-                  name,
-                  description,
-                  channelType: "stream",
-                  visibility,
-                });
-
-                openChannelView(createdChannel.id);
-              }}
-              onCreateForum={async ({ description, name, visibility }) => {
-                const createdForum = await createForumMutation.mutateAsync({
-                  name,
-                  description,
-                  channelType: "forum",
-                  visibility,
-                });
-
-                openChannelView(createdForum.id);
-              }}
-              onOpenBrowseChannels={() => {
-                handleOpenBrowseChannels();
-              }}
-              onOpenBrowseForums={() => {
-                handleOpenBrowseForums();
-              }}
-              onOpenSearch={() => {
-                handleOpenSearch();
-              }}
-              onHideDm={handleHideDm}
-              onOpenDm={async ({ pubkeys }) => {
-                const directMessage = await openDmMutation.mutateAsync({
-                  pubkeys,
-                });
-                openChannelView(directMessage.id);
-              }}
-              onSelectAgents={() => selectView("agents")}
-              onSelectWorkflows={() => selectView("workflows")}
-              onSelectHome={() => {
-                selectView("home");
-              }}
-              onSelectChannel={handleOpenChannel}
-              onSelectSettings={handleOpenSettings}
-              profile={profileQuery.data}
-              selectedChannelId={selectedChannel?.id ?? null}
-              selectedView={selectedView}
-              unreadChannelIds={unreadChannelIds}
-            />
-
-            <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
-              {selectedView === "home" ? (
-                <HomeScreen
-                  availableChannelIds={availableChannelIds}
-                  currentPubkey={identityQuery.data?.pubkey}
-                  onOpenChannel={handleOpenChannel}
-                />
-              ) : selectedView === "agents" ? (
-                <React.Suspense
-                  fallback={<ViewLoadingFallback label="Loading agents..." />}
-                >
-                  <AgentsScreen />
-                </React.Suspense>
-              ) : selectedView === "workflows" ? (
-                <React.Suspense
-                  fallback={
-                    <ViewLoadingFallback label="Loading workflows..." />
-                  }
-                >
-                  <WorkflowsScreen channels={memberChannels} />
-                </React.Suspense>
-              ) : (
-                <React.Suspense
-                  fallback={<ViewLoadingFallback label="Loading channel..." />}
-                >
-                  <ChannelScreen
-                    activeChannel={activeChannel}
-                    currentIdentity={identityQuery.data}
-                    currentProfile={profileQuery.data}
-                    onManageChannel={() => {
-                      setIsChannelManagementOpen(true);
-                    }}
-                    onMarkChannelRead={markChannelRead}
-                    onTargetReached={handleTargetReached}
-                    searchAnchor={searchAnchor}
-                    searchAnchorChannelId={searchAnchorChannelId}
-                    searchAnchorEvent={searchAnchorEvent}
-                  />
-                </React.Suspense>
-              )}
-            </SidebarInset>
-          </>
-        )}
+          ) : selectedView === "agents" ? (
+            <React.Suspense
+              fallback={<ViewLoadingFallback label="Loading agents..." />}
+            >
+              <AgentsScreen />
+            </React.Suspense>
+          ) : selectedView === "workflows" ? (
+            <React.Suspense
+              fallback={<ViewLoadingFallback label="Loading workflows..." />}
+            >
+              <WorkflowsScreen channels={memberChannels} />
+            </React.Suspense>
+          ) : (
+            <React.Suspense
+              fallback={<ViewLoadingFallback label="Loading channel..." />}
+            >
+              <ChannelScreen
+                activeChannel={activeChannel}
+                currentIdentity={identityQuery.data}
+                currentProfile={profileQuery.data}
+                onManageChannel={() => {
+                  setIsChannelManagementOpen(true);
+                }}
+                onMarkChannelRead={markChannelRead}
+                onTargetReached={handleTargetReached}
+                searchAnchor={searchAnchor}
+                searchAnchorChannelId={searchAnchorChannelId}
+                searchAnchorEvent={searchAnchorEvent}
+              />
+            </React.Suspense>
+          )}
+        </SidebarInset>
 
         <AppShellOverlays
           activeChannel={activeChannel}
@@ -528,6 +468,36 @@ export function AppShell() {
           onSearchOpenChange={setIsSearchOpen}
           onSelectChannel={handleOpenChannel}
         />
+
+        {settingsOpen ? (
+          <React.Suspense
+            fallback={<ViewLoadingFallback label="Loading settings..." />}
+          >
+            <SettingsScreen
+              currentPubkey={identityQuery.data?.pubkey}
+              fallbackDisplayName={identityQuery.data?.displayName}
+              isUpdatingDesktopNotifications={
+                notificationSettings.isUpdatingDesktopEnabled
+              }
+              notificationErrorMessage={notificationSettings.errorMessage}
+              notificationPermission={notificationSettings.permission}
+              notificationSettings={notificationSettings.settings}
+              onClose={handleCloseSettings}
+              onSectionChange={setSettingsSection}
+              onSetDesktopNotificationsEnabled={
+                notificationSettings.setDesktopEnabled
+              }
+              onSetHomeBadgeEnabled={notificationSettings.setHomeBadgeEnabled}
+              onSetMentionNotificationsEnabled={
+                notificationSettings.setMentionsEnabled
+              }
+              onSetNeedsActionNotificationsEnabled={
+                notificationSettings.setNeedsActionEnabled
+              }
+              section={settingsSection}
+            />
+          </React.Suspense>
+        ) : null}
       </SidebarProvider>
     </ChannelNavigationProvider>
   );
