@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::connection::MAX_FRAME_BYTES;
 
+/// NIPs supported by this relay, advertised in the NIP-11 document.
+/// Kept as a module-level constant so tests can verify it without constructing
+/// a full `Config` (which reads env vars and races with config.rs tests).
+pub(crate) const SUPPORTED_NIPS: &[u32] = &[1, 2, 10, 11, 16, 17, 23, 25, 29, 33, 42, 50];
+
 /// Relay information document served at `GET /` with `Accept: application/nostr+json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayInfo {
@@ -56,7 +61,7 @@ impl RelayInfo {
             description: "Sprout — private team communication relay".to_string(),
             pubkey: None,
             contact: None,
-            supported_nips: vec![1, 2, 10, 11, 16, 17, 25, 29, 33, 42, 50],
+            supported_nips: SUPPORTED_NIPS.to_vec(),
             software: "https://github.com/sprout-rs/sprout".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             limitation: Some(RelayLimitation {
@@ -79,4 +84,34 @@ pub async fn relay_info_handler(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
 ) -> axum::response::Json<RelayInfo> {
     axum::response::Json(RelayInfo::from_config(&state.config))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supported_nips_includes_nip23_and_nip33() {
+        // Tests the production SUPPORTED_NIPS constant directly — no Config::from_env()
+        // needed, avoiding the env-var race with config.rs tests.
+        assert!(
+            SUPPORTED_NIPS.contains(&23),
+            "NIP-23 (long-form content) must be advertised"
+        );
+        assert!(
+            SUPPORTED_NIPS.contains(&33),
+            "NIP-33 (parameterized replaceable) must be advertised"
+        );
+    }
+
+    #[test]
+    fn supported_nips_are_sorted() {
+        let mut sorted = SUPPORTED_NIPS.to_vec();
+        sorted.sort();
+        assert_eq!(
+            SUPPORTED_NIPS,
+            &sorted[..],
+            "supported_nips should be sorted"
+        );
+    }
 }
