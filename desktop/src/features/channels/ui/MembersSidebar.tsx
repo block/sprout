@@ -53,7 +53,10 @@ export function MembersSidebar({
   const removeMemberMutation = useRemoveChannelMemberMutation(channelId);
 
   const rawMembers = membersQuery.data ?? [];
-  const { people, bots } = useClassifiedMembers(rawMembers, currentPubkey);
+  const { people, bots, isBot } = useClassifiedMembers(
+    rawMembers,
+    currentPubkey,
+  );
 
   const allMemberPubkeys = React.useMemo(
     () => rawMembers.map((member) => member.pubkey),
@@ -74,8 +77,8 @@ export function MembersSidebar({
     return null;
   }
 
-  function renderMemberCard(member: ChannelMember, isBot: boolean) {
-    const Icon = isBot ? Bot : roleIcon(member.role);
+  function renderMemberCard(member: ChannelMember, memberIsBot: boolean) {
+    const Icon = memberIsBot ? Bot : roleIcon(member.role);
 
     return (
       <div
@@ -100,11 +103,12 @@ export function MembersSidebar({
               />
             ) : null}
             <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              {isBot ? "bot" : member.role}
+              {memberIsBot ? "bot" : member.role}
             </span>
           </div>
         </div>
-        {canManageMembers ||
+        {(selfMember?.role === "admin" && member.pubkey !== currentPubkey) ||
+        (selfMember?.role === "owner" && isBot(member)) ||
         (currentPubkey && member.pubkey === currentPubkey) ? (
           <Button
             data-testid={`sidebar-remove-member-${member.pubkey}`}
@@ -142,7 +146,8 @@ export function MembersSidebar({
         </SheetHeader>
 
         <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
-          {canManageMembers && channel.channelType !== "dm" ? (
+          {(canManageMembers || channel.visibility === "open") &&
+          channel.channelType !== "dm" ? (
             <ChannelMemberInviteCard
               existingMembers={rawMembers}
               isPending={addMembersMutation.isPending}
