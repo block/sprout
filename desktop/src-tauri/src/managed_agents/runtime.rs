@@ -110,21 +110,46 @@ pub(crate) fn process_belongs_to_us(_pid: u32) -> bool {
 }
 
 #[cfg(unix)]
-pub(crate) fn terminate_process(pid: u32) -> Result<(), String> {
-    // The child was spawned with process_group(0), so pid == pgid.
-    // Kill the entire process group to avoid orphaning MCP servers
-    // and agent subprocesses.
+fn signal_process_group_or_leader(pid: u32, signal: i32, action: &str) -> Result<(), String> {
     let pgid = -(pid as i32);
 
-    // Try graceful shutdown first (SIGTERM to the group).
-    if unsafe { libc::kill(pgid, libc::SIGTERM) } != 0 {
-        // ESRCH means the process is already gone — that's fine.
-        let err = std::io::Error::last_os_error();
-        if err.raw_os_error() != Some(libc::ESRCH) && process_is_running(pid) {
-            return Err(format!("failed to terminate process group {pid}: {err}"));
-        }
+    if unsafe { libc::kill(pgid, signal) } == 0 {
         return Ok(());
     }
+
+    let group_err = std::io::Error::last_os_error();
+    if !process_is_running(pid) {
+        return Ok(());
+    }
+
+    // Some local agent trees can no longer be signalled as a process group
+    // (for example if the leader changed groups, or macOS returns EPERM for one
+    // descendant). Fall back to the leader PID so stop/delete can still recover.
+    if matches!(
+        group_err.raw_os_error(),
+        Some(libc::EPERM) | Some(libc::ESRCH)
+    ) {
+        if unsafe { libc::kill(pid as i32, signal) } == 0 {
+            return Ok(());
+        }
+
+        let leader_err = std::io::Error::last_os_error();
+        if leader_err.raw_os_error() == Some(libc::ESRCH) || !process_is_running(pid) {
+            return Ok(());
+        }
+
+        return Err(format!("failed to {action} process {pid}: {leader_err}"));
+    }
+
+    Err(format!(
+        "failed to {action} process group {pid}: {group_err}"
+    ))
+}
+
+#[cfg(unix)]
+pub(crate) fn terminate_process(pid: u32) -> Result<(), String> {
+    // Try graceful shutdown first (SIGTERM to the group).
+    signal_process_group_or_leader(pid, libc::SIGTERM, "terminate")?;
 
     // Wait up to 1s for graceful exit.
     for _ in 0..10 {
@@ -135,12 +160,7 @@ pub(crate) fn terminate_process(pid: u32) -> Result<(), String> {
     }
 
     // Escalate to SIGKILL on the entire group.
-    if unsafe { libc::kill(pgid, libc::SIGKILL) } != 0 {
-        let err = std::io::Error::last_os_error();
-        if err.raw_os_error() != Some(libc::ESRCH) && process_is_running(pid) {
-            return Err(format!("failed to kill process group {pid}: {err}"));
-        }
-    }
+    signal_process_group_or_leader(pid, libc::SIGKILL, "kill")?;
 
     Ok(())
 }

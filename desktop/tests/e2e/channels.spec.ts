@@ -19,6 +19,16 @@ async function closeChannelManagement(page: import("@playwright/test").Page) {
   await expect(page.getByTestId("channel-management-sheet")).not.toBeVisible();
 }
 
+async function openMembersSidebar(
+  page: import("@playwright/test").Page,
+  channelName: string,
+) {
+  await page.getByTestId(`channel-${channelName}`).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await page.getByTestId("channel-members-trigger").click();
+  await expect(page.getByTestId("members-sidebar")).toBeVisible();
+}
+
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
@@ -63,14 +73,15 @@ test("shows presence in sidebar, DM header, and member list", async ({
   await expect(page.getByTestId("chat-title")).toHaveText("alice-tyler");
   await expect(page.getByTestId("chat-presence-badge")).toContainText("Online");
 
-  await openChannelManagement(page, "general");
+  await openMembersSidebar(page, "general");
   await expect(
-    page.getByTestId(`member-presence-${TEST_IDENTITIES.alice.pubkey}`),
+    page.getByTestId(`sidebar-member-presence-${TEST_IDENTITIES.alice.pubkey}`),
   ).toContainText("Online");
   await expect(
-    page.getByTestId(`member-presence-${TEST_IDENTITIES.bob.pubkey}`),
+    page.getByTestId(`sidebar-member-presence-${TEST_IDENTITIES.bob.pubkey}`),
   ).toContainText("Away");
-  await closeChannelManagement(page);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("members-sidebar")).not.toBeVisible();
 });
 
 test("start a new direct message from the sidebar", async ({ page }) => {
@@ -342,9 +353,34 @@ test("manage channel updates details and context", async ({ page }) => {
   );
 });
 
-test("manage channel can invite and remove members", async ({ page }) => {
+test("manage channel keeps canvas near the top of the sheet", async ({
+  page,
+}) => {
   await page.goto("/");
   await openChannelManagement(page, "general");
+
+  const sectionHeadings = await page
+    .getByTestId("channel-management-sheet")
+    .locator("section h2")
+    .allTextContents();
+
+  expect(sectionHeadings).toEqual([
+    "Access",
+    "Canvas",
+    "Context",
+    "Details",
+    "Channel state",
+    "Danger zone",
+  ]);
+});
+
+test("members sidebar can invite and remove members", async ({ page }) => {
+  await page.goto("/");
+  await openMembersSidebar(page, "general");
+  await expect(page.getByTestId("channel-members-trigger")).toContainText("3");
+  await expect(page.getByTestId("channel-management-add-pubkeys")).toHaveCount(
+    0,
+  );
 
   await page.getByTestId("channel-management-search-users").fill("char");
   await expect(
@@ -369,19 +405,44 @@ test("manage channel can invite and remove members", async ({ page }) => {
     "",
   );
   await expect(
-    page.getByTestId(`channel-member-${TEST_IDENTITIES.charlie.pubkey}`),
+    page.getByTestId(`sidebar-member-${TEST_IDENTITIES.charlie.pubkey}`),
   ).toContainText("charlie");
-  await expect(
-    page.getByTestId(`channel-member-${TEST_IDENTITIES.charlie.pubkey}`),
-  ).toContainText("admin");
+  await expect(page.getByTestId("channel-members-trigger")).toContainText("4");
 
   await page
-    .getByTestId(`remove-member-${TEST_IDENTITIES.charlie.pubkey}`)
+    .getByTestId(`sidebar-remove-member-${TEST_IDENTITIES.charlie.pubkey}`)
     .click();
 
   await expect(
-    page.getByTestId(`channel-member-${TEST_IDENTITIES.charlie.pubkey}`),
+    page.getByTestId(`sidebar-member-${TEST_IDENTITIES.charlie.pubkey}`),
   ).toHaveCount(0);
+  await expect(page.getByTestId("channel-members-trigger")).toContainText("3");
+});
+
+test("members sidebar keeps direct pubkey entry behind a toggle", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await openMembersSidebar(page, "general");
+
+  await expect(page.getByTestId("channel-management-add-pubkeys")).toHaveCount(
+    0,
+  );
+
+  await page.getByTestId("channel-management-toggle-direct-pubkeys").click();
+  await expect(
+    page.getByTestId("channel-management-add-pubkeys"),
+  ).toBeVisible();
+
+  await page
+    .getByTestId("channel-management-add-pubkeys")
+    .fill(TEST_IDENTITIES.outsider.pubkey);
+  await page.getByTestId("channel-management-add-members").click();
+
+  await expect(
+    page.getByTestId(`sidebar-member-${TEST_IDENTITIES.outsider.pubkey}`),
+  ).toContainText("outsider");
+  await expect(page.getByTestId("channel-members-trigger")).toContainText("4");
 });
 
 test("open-channel members can add agents from the header", async ({
@@ -399,6 +460,67 @@ test("open-channel members can add agents from the header", async ({
   await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
 });
 
+test("removing a channel-scoped agent also cleans up the managed agent record", async ({
+  page,
+}) => {
+  const agentName = `cleanup-agent-${Date.now()}`;
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  await page.getByTestId("channel-add-bot-trigger").click();
+  await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Generic" }).click();
+  await page.locator("#channel-generic-name").fill(agentName);
+  await page
+    .locator("#channel-generic-prompt")
+    .fill("Watch the channel and help when asked.");
+  await page.getByRole("button", { name: "Add agent" }).click();
+  await expect(page.getByRole("heading", { name: "Add agents" })).toHaveCount(
+    0,
+  );
+
+  await page.getByTestId("open-agents-view").click();
+  const managedAgentRow = page
+    .locator('[data-testid^="managed-agent-"]')
+    .filter({ hasText: agentName });
+  await expect(managedAgentRow).toHaveCount(1);
+
+  const managedAgentTestId = await managedAgentRow
+    .first()
+    .getAttribute("data-testid");
+  if (!managedAgentTestId) {
+    throw new Error("Managed agent row test id missing.");
+  }
+  const agentPubkey = managedAgentTestId.replace("managed-agent-", "");
+
+  await page.getByTestId("channel-general").click();
+  await openMembersSidebar(page, "general");
+
+  const removeButton = page.getByTestId(`sidebar-remove-member-${agentPubkey}`);
+  await expect(removeButton).toBeVisible();
+  await removeButton.click();
+  await expect(removeButton).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("members-sidebar")).not.toBeVisible();
+
+  await page.getByTestId("open-agents-view").click();
+  await expect(page.getByTestId(`managed-agent-${agentPubkey}`)).toHaveCount(0);
+
+  const commands = await page.evaluate(() => {
+    return (
+      (
+        window as Window & {
+          __SPROUT_E2E_COMMANDS__?: string[];
+        }
+      ).__SPROUT_E2E_COMMANDS__ ?? []
+    );
+  });
+  expect(commands).toContain("delete_managed_agent");
+});
+
 test("open channel management supports join and leave", async ({ page }) => {
   await page.goto("/");
 
@@ -411,14 +533,19 @@ test("open channel management supports join and leave", async ({ page }) => {
     .click();
   await expect(page.getByTestId("chat-title")).toHaveText("design");
 
+  // Open members sidebar — should show current user after joining
+  await page.getByTestId("channel-members-trigger").click();
+  await expect(page.getByTestId("members-sidebar")).toBeVisible();
+  await expect(
+    page.getByTestId(`sidebar-member-${MOCK_IDENTITY_PUBKEY}`),
+  ).toContainText("You");
+  await page.keyboard.press("Escape");
+
   // Open channel management — should show Leave since we just joined
   await page.getByTestId("channel-management-trigger").click();
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
   await expect(page.getByTestId("channel-management-join")).toHaveCount(0);
   await expect(page.getByTestId("channel-management-leave")).toBeVisible();
-  await expect(
-    page.getByTestId(`channel-member-${MOCK_IDENTITY_PUBKEY}`),
-  ).toContainText("You");
 
   // Leave the channel
   await page.getByTestId("channel-management-leave").click();

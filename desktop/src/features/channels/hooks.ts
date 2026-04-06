@@ -1,10 +1,5 @@
 import * as React from "react";
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-  type QueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   addChannelMembers,
@@ -26,7 +21,10 @@ import {
   unarchiveChannel,
   updateChannel,
 } from "@/shared/api/tauri";
-import { cleanupChannelAgents } from "@/features/channels/cleanupChannelAgents";
+import {
+  cleanupChannelAgents,
+  cleanupManagedAgentIfOrphaned,
+} from "@/features/channels/cleanupChannelAgents";
 import type {
   AddChannelMembersInput,
   Channel,
@@ -65,68 +63,6 @@ function sortChannels(channels: Channel[]) {
     }
 
     return left.name.localeCompare(right.name);
-  });
-}
-
-function parseTimestamp(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  const timestamp = Date.parse(value);
-  return Number.isNaN(timestamp) ? null : timestamp;
-}
-
-function isNewerTimestamp(
-  candidate: string | null | undefined,
-  current: string | null | undefined,
-) {
-  const candidateTimestamp = parseTimestamp(candidate);
-  if (candidateTimestamp === null) {
-    return false;
-  }
-
-  const currentTimestamp = parseTimestamp(current);
-  return currentTimestamp === null || candidateTimestamp > currentTimestamp;
-}
-
-export function updateChannelLastMessageAt(
-  queryClient: QueryClient,
-  channelId: string,
-  lastMessageAt: string | null | undefined,
-) {
-  const lastMessageTimestamp = parseTimestamp(lastMessageAt);
-  const normalizedLastMessageAt =
-    lastMessageTimestamp === null
-      ? null
-      : new Date(lastMessageTimestamp).toISOString();
-
-  if (!normalizedLastMessageAt) {
-    return;
-  }
-
-  queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) => {
-    if (!current) {
-      return current;
-    }
-
-    let didUpdate = false;
-    const nextChannels = current.map((channel) => {
-      if (
-        channel.id !== channelId ||
-        !isNewerTimestamp(normalizedLastMessageAt, channel.lastMessageAt)
-      ) {
-        return channel;
-      }
-
-      didUpdate = true;
-      return {
-        ...channel,
-        lastMessageAt: normalizedLastMessageAt,
-      };
-    });
-
-    return didUpdate ? nextChannels : current;
   });
 }
 
@@ -430,9 +366,19 @@ export function useRemoveChannelMemberMutation(channelId: string | null) {
       }
 
       await removeChannelMember(channelId, pubkey);
+
+      try {
+        await cleanupManagedAgentIfOrphaned(pubkey, channelId);
+      } catch (error) {
+        console.warn("Failed to clean up managed agent:", error);
+      }
     },
     onSettled: async () => {
-      await invalidateChannelState(queryClient, channelId);
+      await Promise.all([
+        invalidateChannelState(queryClient, channelId),
+        queryClient.invalidateQueries({ queryKey: ["managed-agents"] }),
+        queryClient.invalidateQueries({ queryKey: ["relay-agents"] }),
+      ]);
     },
   });
 }

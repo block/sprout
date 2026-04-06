@@ -1,36 +1,30 @@
 import {
   Archive,
   ArchiveRestore,
-  Crown,
   DoorClosed,
   DoorOpen,
   FileText,
   Hash,
   Lock,
   MessageSquare,
-  Shield,
-  User,
   Users,
 } from "lucide-react";
 import * as React from "react";
 
 import {
-  useAddChannelMembersMutation,
   useArchiveChannelMutation,
   useChannelDetailsQuery,
   useChannelMembersQuery,
   useDeleteChannelMutation,
   useJoinChannelMutation,
   useLeaveChannelMutation,
-  useRemoveChannelMemberMutation,
   useSetChannelPurposeMutation,
   useSetChannelTopicMutation,
   useUnarchiveChannelMutation,
   useUpdateChannelMutation,
 } from "@/features/channels/hooks";
-import { usePresenceQuery } from "@/features/presence/hooks";
-import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
-import type { Channel, ChannelMember } from "@/shared/api/types";
+import { compareMembersByRole } from "@/features/channels/lib/memberUtils";
+import type { Channel } from "@/shared/api/types";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -54,7 +48,6 @@ import {
 } from "@/shared/ui/sheet";
 import { Textarea } from "@/shared/ui/textarea";
 import { ChannelCanvas } from "./ChannelCanvas";
-import { ChannelMemberInviteCard } from "./ChannelMemberInviteCard";
 
 type ChannelManagementSheetProps = {
   channel: Channel | null;
@@ -63,26 +56,6 @@ type ChannelManagementSheetProps = {
   onOpenChange: (open: boolean) => void;
   open: boolean;
 };
-
-const roleOrder: Record<ChannelMember["role"], number> = {
-  owner: 0,
-  admin: 1,
-  member: 2,
-  guest: 3,
-  bot: 4,
-};
-
-function formatPubkey(pubkey: string) {
-  return `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`;
-}
-
-function formatMemberName(member: ChannelMember, currentPubkey?: string) {
-  if (currentPubkey && member.pubkey === currentPubkey) {
-    return "You";
-  }
-
-  return member.displayName ?? formatPubkey(member.pubkey);
-}
 
 function Section({
   title,
@@ -120,17 +93,6 @@ function MetadataPill({
   );
 }
 
-function roleIcon(role: ChannelMember["role"]) {
-  switch (role) {
-    case "owner":
-      return Crown;
-    case "admin":
-      return Shield;
-    default:
-      return User;
-  }
-}
-
 export function ChannelManagementSheet({
   channel,
   currentPubkey,
@@ -147,36 +109,16 @@ export function ChannelManagementSheet({
   const archiveChannelMutation = useArchiveChannelMutation(channelId);
   const unarchiveChannelMutation = useUnarchiveChannelMutation(channelId);
   const deleteChannelMutation = useDeleteChannelMutation(channelId);
-  const addMembersMutation = useAddChannelMembersMutation(channelId);
-  const removeMemberMutation = useRemoveChannelMemberMutation(channelId);
   const joinChannelMutation = useJoinChannelMutation(channelId);
   const leaveChannelMutation = useLeaveChannelMutation(channelId);
 
   const detail = detailsQuery.data ?? channel;
   const members = React.useMemo(() => {
     const currentMembers = membersQuery.data ?? [];
-    return [...currentMembers].sort((left, right) => {
-      if (currentPubkey && left.pubkey === currentPubkey) {
-        return -1;
-      }
-
-      if (currentPubkey && right.pubkey === currentPubkey) {
-        return 1;
-      }
-
-      const roleDelta = roleOrder[left.role] - roleOrder[right.role];
-      if (roleDelta !== 0) {
-        return roleDelta;
-      }
-
-      return formatMemberName(left).localeCompare(formatMemberName(right));
-    });
+    return [...currentMembers].sort((left, right) =>
+      compareMembersByRole(left, right, currentPubkey),
+    );
   }, [currentPubkey, membersQuery.data]);
-  const memberPresenceQuery = usePresenceQuery(
-    members.map((member) => member.pubkey),
-    { enabled: open && members.length > 0 },
-  );
-
   const selfMember =
     members.find((member) => member.pubkey === currentPubkey) ?? null;
   const hasResolvedMembership = membersQuery.data !== undefined;
@@ -197,6 +139,11 @@ export function ChannelManagementSheet({
     detail?.channelType !== "dm" &&
     !isArchived &&
     selfMember !== null;
+  const showAccessSection =
+    canJoin ||
+    canLeave ||
+    joinChannelMutation.error instanceof Error ||
+    leaveChannelMutation.error instanceof Error;
 
   const [nameDraft, setNameDraft] = React.useState("");
   const [descriptionDraft, setDescriptionDraft] = React.useState("");
@@ -312,122 +259,75 @@ export function ChannelManagementSheet({
             </p>
           ) : null}
 
-          <Section
-            description="Open channels stay visible to everyone. Private channels require an invite."
-            title="Access"
-          >
-            <div className="flex flex-wrap gap-2">
-              {canJoin ? (
-                <Button
-                  data-testid="channel-management-join"
-                  disabled={joinChannelMutation.isPending}
-                  onClick={() => {
-                    void joinChannelMutation.mutateAsync();
-                  }}
-                  size="sm"
-                  type="button"
-                >
-                  <DoorOpen className="h-4 w-4" />
-                  {joinChannelMutation.isPending
-                    ? "Joining..."
-                    : "Join channel"}
-                </Button>
-              ) : null}
-
-              {canLeave ? (
-                <Button
-                  data-testid="channel-management-leave"
-                  disabled={leaveChannelMutation.isPending}
-                  onClick={() => {
-                    void leaveChannelMutation.mutateAsync().then(() => {
-                      onOpenChange(false);
-                    });
-                  }}
-                  size="sm"
-                  type="button"
-                  variant="outline"
-                >
-                  <DoorClosed className="h-4 w-4" />
-                  {leaveChannelMutation.isPending
-                    ? "Leaving..."
-                    : "Leave channel"}
-                </Button>
-              ) : null}
-            </div>
-            {joinChannelMutation.error instanceof Error ? (
-              <p className="text-sm text-destructive">
-                {joinChannelMutation.error.message}
-              </p>
-            ) : null}
-            {leaveChannelMutation.error instanceof Error ? (
-              <p className="text-sm text-destructive">
-                {leaveChannelMutation.error.message}
-              </p>
-            ) : null}
-          </Section>
-
-          <Separator />
-
-          <Section
-            description="Name and description are owner/admin actions."
-            title="Details"
-          >
-            <form
-              className="space-y-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void updateChannelMutation.mutateAsync({
-                  description: descriptionDraft.trim() || undefined,
-                  name: nameDraft.trim() || undefined,
-                });
-              }}
-            >
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium" htmlFor="channel-name">
-                  Name
-                </label>
-                <Input
-                  data-testid="channel-management-name"
-                  disabled={
-                    !canManageChannel || updateChannelMutation.isPending
-                  }
-                  id="channel-name"
-                  onChange={(event) => setNameDraft(event.target.value)}
-                  value={nameDraft}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label
-                  className="text-sm font-medium"
-                  htmlFor="channel-description"
-                >
-                  Description
-                </label>
-                <Textarea
-                  className="min-h-24"
-                  data-testid="channel-management-description"
-                  disabled={
-                    !canManageChannel || updateChannelMutation.isPending
-                  }
-                  id="channel-description"
-                  onChange={(event) => setDescriptionDraft(event.target.value)}
-                  value={descriptionDraft}
-                />
-              </div>
-              <Button
-                data-testid="channel-management-save-details"
-                disabled={!canManageChannel || updateChannelMutation.isPending}
-                size="sm"
-                type="submit"
+          {showAccessSection ? (
+            <>
+              <Section
+                description="Open channels stay visible to everyone. Private channels require an invite."
+                title="Access"
               >
-                {updateChannelMutation.isPending ? "Saving..." : "Save details"}
-              </Button>
-              {updateChannelMutation.error instanceof Error ? (
-                <p className="text-sm text-destructive">
-                  {updateChannelMutation.error.message}
-                </p>
-              ) : null}
-            </form>
+                <div className="flex flex-wrap gap-2">
+                  {canJoin ? (
+                    <Button
+                      data-testid="channel-management-join"
+                      disabled={joinChannelMutation.isPending}
+                      onClick={() => {
+                        void joinChannelMutation.mutateAsync();
+                      }}
+                      size="sm"
+                      type="button"
+                    >
+                      <DoorOpen className="h-4 w-4" />
+                      {joinChannelMutation.isPending
+                        ? "Joining..."
+                        : "Join channel"}
+                    </Button>
+                  ) : null}
+
+                  {canLeave ? (
+                    <Button
+                      data-testid="channel-management-leave"
+                      disabled={leaveChannelMutation.isPending}
+                      onClick={() => {
+                        void leaveChannelMutation.mutateAsync().then(() => {
+                          onOpenChange(false);
+                        });
+                      }}
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                    >
+                      <DoorClosed className="h-4 w-4" />
+                      {leaveChannelMutation.isPending
+                        ? "Leaving..."
+                        : "Leave channel"}
+                    </Button>
+                  ) : null}
+                </div>
+                {joinChannelMutation.error instanceof Error ? (
+                  <p className="text-sm text-destructive">
+                    {joinChannelMutation.error.message}
+                  </p>
+                ) : null}
+                {leaveChannelMutation.error instanceof Error ? (
+                  <p className="text-sm text-destructive">
+                    {leaveChannelMutation.error.message}
+                  </p>
+                ) : null}
+              </Section>
+
+              <Separator />
+            </>
+          ) : null}
+
+          <Section
+            description="A shared Markdown document for the channel."
+            title="Canvas"
+          >
+            <ChannelCanvas
+              canEdit={canEditNarrative}
+              channelId={channelId}
+              isArchived={isArchived}
+            />
           </Section>
 
           <Separator />
@@ -518,112 +418,65 @@ export function ChannelManagementSheet({
           <Separator />
 
           <Section
-            description="A shared Markdown document for the channel."
-            title="Canvas"
+            description="Name and description are owner/admin actions."
+            title="Details"
           >
-            <ChannelCanvas
-              canEdit={canEditNarrative}
-              channelId={channelId}
-              isArchived={isArchived}
-            />
-          </Section>
-
-          <Separator />
-
-          <Section
-            description="Owners and admins can invite members or remove them."
-            title="Members"
-          >
-            {canManageChannel && resolvedChannel.channelType !== "dm" ? (
-              <ChannelMemberInviteCard
-                existingMembers={members}
-                isPending={addMembersMutation.isPending}
-                onSubmit={(input) => addMembersMutation.mutateAsync(input)}
-                open={open}
-                requestErrorMessage={
-                  addMembersMutation.error instanceof Error
-                    ? addMembersMutation.error.message
-                    : null
-                }
-              />
-            ) : null}
-
-            <div className="space-y-2" data-testid="channel-members-list">
-              {members.length > 0 ? (
-                members.map((member) => {
-                  const Icon = roleIcon(member.role);
-
-                  return (
-                    <div
-                      className="flex items-start justify-between gap-3 rounded-2xl border border-border/80 bg-background px-4 py-3"
-                      data-testid={`channel-member-${member.pubkey}`}
-                      key={member.pubkey}
-                    >
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex items-center gap-2">
-                          <Icon className="h-4 w-4 text-muted-foreground" />
-                          <p className="truncate text-sm font-medium">
-                            {formatMemberName(member, currentPubkey)}
-                          </p>
-                          {memberPresenceQuery.data ? (
-                            <PresenceBadge
-                              className="border-border/70 bg-muted/50 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em]"
-                              data-testid={`member-presence-${member.pubkey}`}
-                              status={
-                                memberPresenceQuery.data[
-                                  member.pubkey.toLowerCase()
-                                ] ?? "offline"
-                              }
-                            />
-                          ) : null}
-                          <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                            {member.role}
-                          </span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          {member.pubkey}
-                        </p>
-                      </div>
-                      {canManageChannel ||
-                      (currentPubkey && member.pubkey === currentPubkey) ? (
-                        <Button
-                          data-testid={`remove-member-${member.pubkey}`}
-                          disabled={
-                            removeMemberMutation.isPending || isArchived
-                          }
-                          onClick={() => {
-                            void removeMemberMutation
-                              .mutateAsync(member.pubkey)
-                              .then(() => {
-                                if (member.pubkey === currentPubkey) {
-                                  onOpenChange(false);
-                                }
-                              });
-                          }}
-                          size="sm"
-                          type="button"
-                          variant="ghost"
-                        >
-                          Remove
-                        </Button>
-                      ) : null}
-                    </div>
-                  );
-                })
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  {membersQuery.isLoading
-                    ? "Loading members..."
-                    : "No active members found."}
+            <form
+              className="space-y-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void updateChannelMutation.mutateAsync({
+                  description: descriptionDraft.trim() || undefined,
+                  name: nameDraft.trim() || undefined,
+                });
+              }}
+            >
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" htmlFor="channel-name">
+                  Name
+                </label>
+                <Input
+                  data-testid="channel-management-name"
+                  disabled={
+                    !canManageChannel || updateChannelMutation.isPending
+                  }
+                  id="channel-name"
+                  onChange={(event) => setNameDraft(event.target.value)}
+                  value={nameDraft}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="channel-description"
+                >
+                  Description
+                </label>
+                <Textarea
+                  className="min-h-24"
+                  data-testid="channel-management-description"
+                  disabled={
+                    !canManageChannel || updateChannelMutation.isPending
+                  }
+                  id="channel-description"
+                  onChange={(event) => setDescriptionDraft(event.target.value)}
+                  value={descriptionDraft}
+                />
+              </div>
+              <Button
+                data-testid="channel-management-save-details"
+                disabled={!canManageChannel || updateChannelMutation.isPending}
+                size="sm"
+                type="submit"
+              >
+                {updateChannelMutation.isPending ? "Saving..." : "Save details"}
+              </Button>
+              {updateChannelMutation.error instanceof Error ? (
+                <p className="text-sm text-destructive">
+                  {updateChannelMutation.error.message}
                 </p>
-              )}
-            </div>
-
-            {removeMemberMutation.error instanceof Error ? (
-              <p className="text-sm text-destructive">
-                {removeMemberMutation.error.message}
-              </p>
-            ) : null}
+              ) : null}
+            </form>
           </Section>
 
           {resolvedChannel.channelType !== "dm" ? (

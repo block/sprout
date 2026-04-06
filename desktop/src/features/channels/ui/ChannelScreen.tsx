@@ -5,6 +5,7 @@ import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
 import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandlers";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
+import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
 import {
   mergeMessages,
   useChannelMessagesQuery,
@@ -75,6 +76,7 @@ export function ChannelScreen({
   searchAnchorEvent,
 }: ChannelScreenProps) {
   const queryClient = useQueryClient();
+  const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
   const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
   const currentPubkey = currentIdentity?.pubkey;
@@ -348,6 +350,7 @@ export function ChannelScreen({
               channel={activeChannel}
               currentPubkey={currentPubkey}
               onManageChannel={onManageChannel}
+              onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
             />
           ) : null
         }
@@ -427,6 +430,13 @@ export function ChannelScreen({
           </div>
         )}
       </div>
+
+      <MembersSidebar
+        channel={activeChannel}
+        currentPubkey={currentPubkey}
+        open={isMembersSidebarOpen}
+        onOpenChange={setIsMembersSidebarOpen}
+      />
     </>
   );
 }
