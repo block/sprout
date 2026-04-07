@@ -43,7 +43,7 @@ function readStoredTheme(fallback: SyntaxThemeName): SyntaxThemeName {
 
   // Migrate legacy values
   if (stored === "light") return "catppuccin-latte";
-  if (stored === "dark" || stored === "system") return "catppuccin-macchiato";
+  if (stored === "dark" || stored === "system") return "houston";
 
   return isValidThemeName(stored) ? stored : fallback;
 }
@@ -99,7 +99,7 @@ async function applyTheme(name: SyntaxThemeName): Promise<{ isDark: boolean }> {
 
 export function ThemeProvider({
   children,
-  defaultTheme = "catppuccin-macchiato",
+  defaultTheme = "houston",
 }: ThemeProviderProps) {
   // Apply cached vars synchronously before first render
   const [themeName, setThemeName] = useState<string>(() => {
