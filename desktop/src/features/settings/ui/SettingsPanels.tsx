@@ -17,7 +17,7 @@ import type {
 } from "@/features/notifications/hooks";
 import { TokenSettingsCard } from "@/features/tokens/ui/TokenSettingsCard";
 import { cn } from "@/shared/lib/cn";
-import { useTheme } from "@/shared/theme/ThemeProvider";
+import { ACCENT_COLORS, useTheme } from "@/shared/theme/ThemeProvider";
 import { SYNTAX_THEMES, isLightTheme } from "@/shared/theme/theme-loader";
 import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
@@ -87,7 +87,7 @@ function formatThemeLabel(name: string): string {
 }
 
 function ThemeSettingsCard() {
-  const { setTheme, themeName } = useTheme();
+  const { setTheme, themeName, accentColor, setAccentColor } = useTheme();
   const [search, setSearch] = useState("");
   const didScrollRef = useRef(false);
   const activeRef = (node: HTMLButtonElement | null) => {
@@ -166,6 +166,31 @@ function ThemeSettingsCard() {
             );
           })
         )}
+      </div>
+
+      <div className="mt-4">
+        <h3 className="mb-2 text-sm font-medium">Accent Color</h3>
+        <div className="flex gap-2">
+          {ACCENT_COLORS.map((color) => (
+            <button
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded-full transition-transform hover:scale-110",
+                accentColor === color.value &&
+                  "ring-2 ring-ring ring-offset-2 ring-offset-background",
+              )}
+              data-testid={`accent-color-${color.name.toLowerCase()}`}
+              key={color.value}
+              onClick={() => setAccentColor(color.value)}
+              style={{ backgroundColor: color.value }}
+              title={color.name}
+              type="button"
+            >
+              {accentColor === color.value && (
+                <Check className="h-3.5 w-3.5 text-white" />
+              )}
+            </button>
+          ))}
+        </div>
       </div>
     </section>
   );

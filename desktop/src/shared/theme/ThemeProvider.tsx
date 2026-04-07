@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { createThemeVars } from "./adaptive-theme";
+import { createThemeVars, hexToHsl } from "./adaptive-theme";
 import {
   SYNTAX_THEMES,
   type SyntaxThemeName,
@@ -17,12 +17,28 @@ import {
 
 const STORAGE_KEY = "sprout-theme";
 const CACHE_KEY = "sprout-theme-cache";
+const ACCENT_KEY = "sprout-accent-color";
+
+export const ACCENT_COLORS = [
+  { name: "Blue", value: "#3b82f6" },
+  { name: "Cyan", value: "#06b6d4" },
+  { name: "Green", value: "#22c55e" },
+  { name: "Orange", value: "#f97316" },
+  { name: "Red", value: "#ef4444" },
+  { name: "Pink", value: "#ec4899" },
+  { name: "Purple", value: "#a855f7" },
+  { name: "Indigo", value: "#6366f1" },
+] as const;
+
+const DEFAULT_ACCENT = "#3b82f6";
 
 type ThemeContextValue = {
   themeName: string;
   isDark: boolean;
   isLoading: boolean;
+  accentColor: string;
   setTheme: (name: string) => void;
+  setAccentColor: (color: string) => void;
 };
 
 type ThemeProviderProps = {
@@ -48,6 +64,26 @@ function readStoredTheme(fallback: SyntaxThemeName): SyntaxThemeName {
   return isValidThemeName(stored) ? stored : fallback;
 }
 
+function getContrastColor(hex: string): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})/i.exec(hex);
+  if (!m) return "#ffffff";
+  const r = parseInt(m[1], 16);
+  const g = parseInt(m[2], 16);
+  const b = parseInt(m[3], 16);
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.5 ? "#000000" : "#ffffff";
+}
+
+function applyAccentColor(hex: string) {
+  const root = document.documentElement;
+  const accentHsl = hexToHsl(hex);
+  const fgHsl = hexToHsl(getContrastColor(hex));
+  root.style.setProperty("--primary", accentHsl);
+  root.style.setProperty("--primary-foreground", fgHsl);
+  root.style.setProperty("--sidebar-primary", accentHsl);
+  root.style.setProperty("--sidebar-primary-foreground", fgHsl);
+}
+
 /** Apply cached CSS vars synchronously to prevent FOUC. */
 function applyCachedVars(): string | null {
   try {
@@ -60,6 +96,11 @@ function applyCachedVars(): string | null {
     }
     root.classList.remove("light", "dark");
     root.classList.add(isDark ? "dark" : "light");
+
+    // Also apply cached accent
+    const accent = window.localStorage.getItem(ACCENT_KEY) ?? DEFAULT_ACCENT;
+    applyAccentColor(accent);
+
     return themeName;
   } catch {
     return null;
@@ -111,6 +152,9 @@ export function ThemeProvider({
   });
   const [isLoading, setIsLoading] = useState(true);
   const loadingRef = useRef<string | null>(null);
+  const [accentColor, setAccentColorState] = useState<string>(() => {
+    return window.localStorage.getItem(ACCENT_KEY) ?? DEFAULT_ACCENT;
+  });
 
   // Load and apply theme
   useEffect(() => {
@@ -126,9 +170,18 @@ export function ThemeProvider({
       if (loadingRef.current === thisTheme) {
         setIsDark(dark);
         setIsLoading(false);
+        // Re-apply accent after theme load (theme vars don't include primary)
+        applyAccentColor(
+          window.localStorage.getItem(ACCENT_KEY) ?? DEFAULT_ACCENT,
+        );
       }
     });
   }, [themeName]);
+
+  // Apply accent color changes
+  useEffect(() => {
+    applyAccentColor(accentColor);
+  }, [accentColor]);
 
   const setTheme = useCallback((name: string) => {
     if (!isValidThemeName(name)) return;
@@ -136,11 +189,18 @@ export function ThemeProvider({
     window.localStorage.setItem(STORAGE_KEY, name);
   }, []);
 
+  const setAccentColor = useCallback((color: string) => {
+    window.localStorage.setItem(ACCENT_KEY, color);
+    setAccentColorState(color);
+  }, []);
+
   const value: ThemeContextValue = {
     themeName,
     isDark,
     isLoading,
+    accentColor,
     setTheme,
+    setAccentColor,
   };
 
   return (

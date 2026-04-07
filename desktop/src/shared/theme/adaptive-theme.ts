@@ -135,10 +135,10 @@ function calculateChromeColors(syntaxBg: string): {
 }
 
 // =============================================================================
-// Hex → HSL component format ("H S% L%") for Tailwind's hsl() wrappers
+// Hex → HSL component format ("H S% L%") for Tailwind's hexToHsl() wrappers
 // =============================================================================
 
-function hsl(hex: string): string {
+export function hexToHsl(hex: string): string {
   const { r, g, b } = hexToRgb(hex);
   const rn = r / 255;
   const gn = g / 255;
@@ -214,50 +214,44 @@ export function createThemeVars(
   // Derived colors
   const borderColor = mix(primaryBg, syntaxFg, isDark ? 0.15 : 0.12);
   const hoverBg = elevate(0.06);
-  const primaryFg = hsl(primaryBg);
-  const textFg = hsl(syntaxFg);
+  const primaryFg = hexToHsl(primaryBg);
+  const textFg = hexToHsl(syntaxFg);
 
   return {
     isDark,
     vars: {
       // Backgrounds
-      "--background": hsl(primaryBg),
-      "--card": hsl(primaryBg),
-      "--popover": hsl(elevate(0.08)),
-      "--muted": hsl(hoverBg),
-      "--accent": hsl(hoverBg),
-      "--secondary": hsl(hoverBg),
+      "--background": hexToHsl(primaryBg),
+      "--card": hexToHsl(primaryBg),
+      "--popover": hexToHsl(elevate(0.08)),
+      "--muted": hexToHsl(hoverBg),
+      "--accent": hexToHsl(hoverBg),
+      "--secondary": hexToHsl(hoverBg),
 
       // Foregrounds
       "--foreground": textFg,
       "--card-foreground": textFg,
       "--popover-foreground": textFg,
-      "--muted-foreground": hsl(syntaxComment),
+      "--muted-foreground": hexToHsl(syntaxComment),
       "--accent-foreground": textFg,
       "--secondary-foreground": textFg,
 
-      // Primary interactive
-      "--primary": hsl(accentGreen),
-      "--primary-foreground": primaryFg,
-
       // Destructive
-      "--destructive": hsl(accentRed),
+      "--destructive": hexToHsl(accentRed),
       "--destructive-foreground": primaryFg,
 
       // Borders
-      "--border": hsl(borderColor),
-      "--input": hsl(borderColor),
+      "--border": hexToHsl(borderColor),
+      "--input": hexToHsl(borderColor),
       "--ring": textFg,
 
       // Sidebar
-      "--sidebar-background": hsl(chromeColor),
+      "--sidebar-background": hexToHsl(chromeColor),
       "--sidebar-foreground": textFg,
-      "--sidebar-primary": hsl(accentGreen),
-      "--sidebar-primary-foreground": primaryFg,
-      "--sidebar-accent": hsl(primaryBg),
+      "--sidebar-accent": hexToHsl(primaryBg),
       "--sidebar-accent-foreground": textFg,
-      "--sidebar-border": hsl(borderColor),
-      "--sidebar-ring": hsl(borderColor),
+      "--sidebar-border": hexToHsl(borderColor),
+      "--sidebar-ring": hexToHsl(borderColor),
 
       // Status colors (hex — used directly via var())
       "--status-added": accentGreen,
