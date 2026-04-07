@@ -71,7 +71,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   typingPubkeys,
 }: ChannelPaneProps) {
   return (
-    <>
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <MessageTimeline
         channelId={activeChannel?.id}
         activeReplyTargetId={replyTargetId}
@@ -101,49 +101,51 @@ export const ChannelPane = React.memo(function ChannelPane({
         onToggleReaction={onToggleReaction}
         targetMessageId={targetMessageId}
       />
-      <TypingIndicatorRow
-        channel={activeChannel}
-        currentPubkey={currentPubkey}
-        profiles={profiles}
-        typingPubkeys={typingPubkeys}
-      />
-      <MessageComposer
-        channelId={activeChannel?.id ?? null}
-        channelName={activeChannel?.name ?? "channel"}
-        disabled={
-          !activeChannel ||
-          !activeChannel.isMember ||
-          activeChannel.archivedAt !== null ||
-          activeChannel.channelType === "forum" ||
-          isSending
-        }
-        editTarget={editTarget}
-        isSending={isSending}
-        onCancelEdit={onCancelEdit}
-        onCancelReply={onCancelReply}
-        onEditSave={onEditSave}
-        onSend={onSend}
-        placeholder={
-          activeChannel?.archivedAt
-            ? "Archived channels are read-only."
-            : activeChannel && !activeChannel.isMember
-              ? "Join this channel to message."
-              : activeChannel?.channelType === "forum"
-                ? "Forum posting is not wired in this pass."
-                : activeChannel
-                  ? `Message #${activeChannel.name}`
-                  : "Select a channel"
-        }
-        replyTarget={
-          replyTargetMessage
-            ? {
-                author: replyTargetMessage.author,
-                body: replyTargetMessage.body,
-                id: replyTargetMessage.id,
-              }
-            : null
-        }
-      />
-    </>
+      <div className="relative z-10 -mt-10 shrink-0">
+        <TypingIndicatorRow
+          channel={activeChannel}
+          currentPubkey={currentPubkey}
+          profiles={profiles}
+          typingPubkeys={typingPubkeys}
+        />
+        <MessageComposer
+          channelId={activeChannel?.id ?? null}
+          channelName={activeChannel?.name ?? "channel"}
+          disabled={
+            !activeChannel ||
+            !activeChannel.isMember ||
+            activeChannel.archivedAt !== null ||
+            activeChannel.channelType === "forum" ||
+            isSending
+          }
+          editTarget={editTarget}
+          isSending={isSending}
+          onCancelEdit={onCancelEdit}
+          onCancelReply={onCancelReply}
+          onEditSave={onEditSave}
+          onSend={onSend}
+          placeholder={
+            activeChannel?.archivedAt
+              ? "Archived channels are read-only."
+              : activeChannel && !activeChannel.isMember
+                ? "Join this channel to message."
+                : activeChannel?.channelType === "forum"
+                  ? "Forum posting is not wired in this pass."
+                  : activeChannel
+                    ? `Message #${activeChannel.name}`
+                    : "Select a channel"
+          }
+          replyTarget={
+            replyTargetMessage
+              ? {
+                  author: replyTargetMessage.author,
+                  body: replyTargetMessage.body,
+                  id: replyTargetMessage.id,
+                }
+              : null
+          }
+        />
+      </div>
+    </div>
   );
 });

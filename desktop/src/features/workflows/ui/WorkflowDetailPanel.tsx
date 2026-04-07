@@ -54,7 +54,7 @@ export function WorkflowDetailPanel({
 
   return (
     <div
-      className="flex h-full flex-col border-l bg-background"
+      className="flex h-full flex-col bg-background"
       data-testid="workflow-detail-panel"
     >
       <div className="flex items-center justify-between border-b px-4 py-3">

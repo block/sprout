@@ -72,7 +72,7 @@ export function TypingIndicatorRow({
   return (
     <div
       aria-live="polite"
-      className="bg-background/95 px-4 py-2 sm:px-6"
+      className="shrink-0 bg-transparent px-4 py-2 sm:px-6"
       data-testid="message-typing-indicator"
     >
       <div className="mx-auto flex w-full max-w-4xl items-center">

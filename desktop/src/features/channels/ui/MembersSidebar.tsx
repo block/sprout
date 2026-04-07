@@ -147,7 +147,7 @@ export function MembersSidebar({
   return (
     <Sheet onOpenChange={onOpenChange} open={open}>
       <SheetContent
-        className="flex w-full flex-col gap-0 overflow-hidden border-l border-border/80 bg-background p-0 sm:max-w-md"
+        className="flex w-full flex-col gap-0 overflow-hidden bg-background p-0 sm:max-w-md"
         data-testid="members-sidebar"
         side="right"
       >
