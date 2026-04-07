@@ -21,6 +21,10 @@ pub const KIND_REACTION: u32 = 7;
 pub const KIND_GIFT_WRAP: u32 = 1059;
 /// NIP-94: File metadata attachment.
 pub const KIND_FILE_METADATA: u32 = 1063;
+/// NIP-23: Long-form content (articles, blog posts, RFCs).
+/// Parameterized replaceable (NIP-33, 30000–39999 range) — keyed by `(pubkey, kind, d_tag)`.
+/// Stored globally (channel_id = NULL); author-owned, not channel-scoped.
+pub const KIND_LONG_FORM: u32 = 30023;
 /// NIP-42 auth event — never stored (carries bearer tokens).
 pub const KIND_AUTH: u32 = 22242;
 
@@ -61,6 +65,11 @@ pub const KIND_NIP29_GROUP_ADMINS: u32 = 39001;
 pub const KIND_NIP29_GROUP_MEMBERS: u32 = 39002;
 /// NIP-29: Addressable group roles definition.
 pub const KIND_NIP29_GROUP_ROLES: u32 = 39003;
+
+/// Lower bound of the NIP-33 parameterized replaceable range (30000–39999).
+pub const PARAM_REPLACEABLE_KIND_MIN: u32 = 30000;
+/// Upper bound of the NIP-33 parameterized replaceable range (30000–39999).
+pub const PARAM_REPLACEABLE_KIND_MAX: u32 = 39999;
 
 /// Lower bound of the ephemeral event range (20000–29999). Never stored.
 pub const EPHEMERAL_KIND_MIN: u32 = 20000;
@@ -271,6 +280,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_SUBSCRIPTION_RESUMED,
     KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_LONG_FORM,
     KIND_FORUM_POST,
     KIND_FORUM_VOTE,
     KIND_FORUM_COMMENT,
@@ -308,9 +318,16 @@ pub const fn is_ephemeral(kind: u32) -> bool {
 
 /// Returns `true` if `kind` is replaceable (NIP-01: kinds 0, 3, 41, 10000–19999).
 /// NIP-33 parameterized-replaceable kinds (30000–39999) use a different replacement
-/// key (includes `d`-tag) and are handled separately via `replace_addressable_event`.
+/// key (includes `d`-tag) and are handled separately via `replace_parameterized_event`.
 pub const fn is_replaceable(kind: u32) -> bool {
     matches!(kind, 0 | 3 | KIND_CHANNEL_METADATA | 10000..=19999)
+}
+
+/// Returns `true` if `kind` is in the NIP-33 parameterized replaceable range (30000–39999).
+///
+/// These events are keyed by `(pubkey, kind, d_tag)` — the latest `created_at` wins.
+pub const fn is_parameterized_replaceable(kind: u32) -> bool {
+    kind >= PARAM_REPLACEABLE_KIND_MIN && kind <= PARAM_REPLACEABLE_KIND_MAX
 }
 
 /// Returns `true` if `kind` is a workflow execution event (46001–46012).
@@ -346,6 +363,26 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for &k in ALL_KINDS {
             assert!(seen.insert(k), "duplicate kind value: {k}");
+        }
+    }
+
+    #[test]
+    fn parameterized_replaceable_range() {
+        assert!(!is_parameterized_replaceable(29999));
+        assert!(is_parameterized_replaceable(30000));
+        assert!(is_parameterized_replaceable(30023)); // NIP-23 long-form
+        assert!(is_parameterized_replaceable(39000)); // NIP-29 group metadata
+        assert!(is_parameterized_replaceable(39999));
+        assert!(!is_parameterized_replaceable(40000));
+    }
+
+    #[test]
+    fn replaceable_and_parameterized_are_disjoint() {
+        for kind in 0..=65535u32 {
+            assert!(
+                !(is_replaceable(kind) && is_parameterized_replaceable(kind)),
+                "kind {kind} is both replaceable and parameterized replaceable"
+            );
         }
     }
 }

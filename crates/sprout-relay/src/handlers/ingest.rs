@@ -12,14 +12,15 @@ use uuid::Uuid;
 use nostr::Event;
 use sprout_auth::Scope;
 use sprout_core::kind::{
-    event_kind_u32, KIND_AUTH, KIND_CANVAS, KIND_CONTACT_LIST, KIND_DELETION, KIND_FORUM_COMMENT,
-    KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP, KIND_MEMBER_ADDED_NOTIFICATION,
-    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT,
-    KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST,
-    KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_PRESENCE_UPDATE,
-    KIND_PROFILE, KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
-    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
-    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE,
+    event_kind_u32, is_parameterized_replaceable, KIND_AUTH, KIND_CANVAS, KIND_CONTACT_LIST,
+    KIND_DELETION, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP,
+    KIND_LONG_FORM, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
+    KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
+    KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_PRESENCE_UPDATE, KIND_PROFILE, KIND_REACTION,
+    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
+    KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
+    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE,
 };
 use sprout_core::verification::verify_event;
 
@@ -141,7 +142,7 @@ pub enum IngestError {
 fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static str> {
     match kind {
         KIND_PROFILE => Ok(Scope::UsersWrite),
-        KIND_TEXT_NOTE => Ok(Scope::MessagesWrite),
+        KIND_TEXT_NOTE | KIND_LONG_FORM => Ok(Scope::MessagesWrite),
         KIND_CONTACT_LIST => Ok(Scope::UsersWrite),
         KIND_DELETION
         | KIND_REACTION
@@ -239,6 +240,24 @@ pub(crate) async fn derive_reaction_channel(
         Ok(None) => ReactionChannelResult::NotFound,
         Err(e) => ReactionChannelResult::DbError(e.to_string()),
     }
+}
+
+/// Kinds that are always global (`channel_id = NULL`).
+///
+/// If a client includes a stray `h` tag on these kinds, the ingest pipeline
+/// sets `channel_id = None` — these events are never channel-scoped.
+///
+/// Note: the raw `h` tag remains on the stored event (Nostr events are signed,
+/// so tags cannot be stripped without invalidating the signature). The read-path
+/// filter matching in `filter.rs` treats explicit `h` tags as authoritative,
+/// which means a stray `h` tag can still match `#h` queries. This is a known
+/// limitation affecting all global-only kinds and should be addressed in the
+/// filter layer as a follow-up.
+pub(crate) fn is_global_only_kind(kind: u32) -> bool {
+    matches!(
+        kind,
+        KIND_PROFILE | KIND_TEXT_NOTE | KIND_CONTACT_LIST | KIND_LONG_FORM
+    )
 }
 
 /// Kinds that require an `h` tag for channel scoping.
@@ -843,9 +862,7 @@ pub async fn ingest_event(
     };
 
     // ── 5b. Global-only kinds ignore h-tags ─────────────────────────────
-    // kind:0 (profile), kind:1 (text note), kind:3 (contact list) are always global.
-    // If a client includes a stray h-tag, ignore it — these kinds are never channel-scoped.
-    if matches!(kind_u32, KIND_PROFILE | KIND_TEXT_NOTE | KIND_CONTACT_LIST) {
+    if is_global_only_kind(kind_u32) {
         channel_id = None;
     }
 
@@ -1238,6 +1255,21 @@ pub async fn ingest_event(
             .replace_addressable_event(&event, channel_id)
             .await
             .map_err(|e| IngestError::Internal(format!("error: {e}")))?
+    } else if is_parameterized_replaceable(kind_u32) {
+        // NIP-33 parameterized replaceable — keyed by (kind, pubkey, d_tag).
+        let d_tag = sprout_db::event::extract_d_tag(&event).unwrap_or_default();
+        if d_tag.len() > sprout_db::event::D_TAG_MAX_LEN {
+            return Err(IngestError::Rejected(format!(
+                "invalid: d tag too long ({} bytes, max {})",
+                d_tag.len(),
+                sprout_db::event::D_TAG_MAX_LEN,
+            )));
+        }
+        state
+            .db
+            .replace_parameterized_event(&event, &d_tag, channel_id)
+            .await
+            .map_err(|e| IngestError::Internal(format!("error: {e}")))?
     } else {
         let thread_params = thread_meta.as_ref().map(|m| m.as_params());
         match state
@@ -1298,8 +1330,8 @@ pub async fn ingest_event(
 mod tests {
     use super::*;
     use sprout_core::kind::{
-        KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE,
-        KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF,
+        KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_LONG_FORM,
+        KIND_PRESENCE_UPDATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF,
     };
 
     #[test]
@@ -1356,12 +1388,53 @@ mod tests {
     }
 
     #[test]
+    fn long_form_is_in_scope_allowlist() {
+        let dummy = make_dummy_event();
+        assert!(
+            required_scope_for_kind(KIND_LONG_FORM, &dummy).is_ok(),
+            "KIND_LONG_FORM (30023) should be accepted"
+        );
+    }
+
+    #[test]
+    fn long_form_requires_messages_write_scope() {
+        let dummy = make_dummy_event();
+        assert_eq!(
+            required_scope_for_kind(KIND_LONG_FORM, &dummy).unwrap(),
+            Scope::MessagesWrite,
+        );
+    }
+
+    #[test]
+    fn long_form_does_not_require_h_tag() {
+        // kind:30023 is global (author-owned, not channel-scoped)
+        assert!(!requires_h_channel_scope(KIND_LONG_FORM));
+    }
+
+    #[test]
+    fn long_form_is_global_only() {
+        // kind:30023 is always global — ingest nulls channel_id even if an h-tag is present
+        assert!(is_global_only_kind(KIND_LONG_FORM));
+    }
+
+    #[test]
+    fn global_only_and_channel_scoped_are_disjoint() {
+        // A kind cannot be both global-only and channel-scoped
+        for kind in 0..=65535u32 {
+            assert!(
+                !(is_global_only_kind(kind) && requires_h_channel_scope(kind)),
+                "kind {kind} is both global-only and channel-scoped"
+            );
+        }
+    }
+
+    #[test]
     fn ephemeral_kinds_not_in_scope_allowlist() {
         assert!(required_scope_for_kind(KIND_PRESENCE_UPDATE, &make_dummy_event()).is_err());
     }
 
     #[test]
-    fn per_kind_scope_allowlist_covers_all_18_migrated_kinds() {
+    fn per_kind_scope_allowlist_covers_all_migrated_kinds() {
         let dummy = make_dummy_event();
         let migrated = [
             KIND_PROFILE,
@@ -1382,6 +1455,7 @@ mod tests {
             KIND_FORUM_POST,
             KIND_FORUM_VOTE,
             KIND_FORUM_COMMENT,
+            KIND_LONG_FORM,
         ];
         for kind in migrated {
             assert!(

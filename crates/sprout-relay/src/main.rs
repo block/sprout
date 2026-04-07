@@ -59,6 +59,14 @@ async fn main() -> anyhow::Result<()> {
         error!("Failed to ensure partitions: {e}");
     }
 
+    // NIP-33: backfill d_tag for any existing parameterized replaceable events
+    // that predate the column addition. Idempotent — no-ops when fully populated.
+    match db.backfill_d_tags().await {
+        Ok(0) => {}
+        Ok(n) => info!("Backfilled d_tag for {n} NIP-33 events"),
+        Err(e) => error!("Failed to backfill d_tags: {e}"),
+    }
+
     let audit_pool = sqlx::PgPool::connect(&config.database_url)
         .await
         .map_err(|e| anyhow::anyhow!("Audit DB connection failed: {e}"))?;

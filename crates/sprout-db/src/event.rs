@@ -9,7 +9,7 @@ use nostr::Event;
 use sqlx::{PgPool, QueryBuilder, Row};
 use uuid::Uuid;
 
-use sprout_core::kind::{event_kind_i32, is_ephemeral, KIND_AUTH};
+use sprout_core::kind::{event_kind_i32, is_ephemeral, is_parameterized_replaceable, KIND_AUTH};
 use sprout_core::StoredEvent;
 
 use crate::error::{DbError, Result};
@@ -34,6 +34,38 @@ pub struct EventQuery {
     /// Restrict to events with a `p` tag mentioning this hex pubkey.
     /// Joins against `event_mentions` table (indexed).
     pub p_tag_hex: Option<String>,
+    /// Restrict to events with this exact `d_tag` value (NIP-33).
+    /// Pushed into SQL via the `idx_events_parameterized` index.
+    pub d_tag: Option<String>,
+}
+
+/// Maximum length for a `d_tag` value (bytes). NIP-33 d-tags are short identifiers;
+/// anything beyond this is either a bug or abuse.
+pub const D_TAG_MAX_LEN: usize = 1024;
+
+/// Extract the `d_tag` value for storage.
+///
+/// For NIP-33 parameterized replaceable events (kind 30000–39999): returns the first
+/// `d` tag's value, or `""` if no `d` tag is present (per NIP-33 spec).
+/// For all other events: returns `None` (column stays NULL).
+pub fn extract_d_tag(event: &Event) -> Option<String> {
+    let kind_u32 = event.kind.as_u16() as u32;
+    if !is_parameterized_replaceable(kind_u32) {
+        return None;
+    }
+    let val = event
+        .tags
+        .iter()
+        .find_map(|tag| {
+            let parts = tag.as_slice();
+            if parts.len() >= 2 && parts[0] == "d" {
+                Some(parts[1].to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default(); // Missing d tag → empty string per NIP-33
+    Some(val)
 }
 
 /// Insert a Nostr event. Rejects AUTH and ephemeral kinds.
@@ -64,10 +96,11 @@ pub async fn insert_event(
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
     let received_at = Utc::now();
+    let d_tag = extract_d_tag(event);
     let result = sqlx::query(
         r#"
-        INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT DO NOTHING
         "#,
     )
@@ -80,6 +113,7 @@ pub async fn insert_event(
     .bind(sig_bytes.as_slice())
     .bind(received_at)
     .bind(channel_id)
+    .bind(d_tag.as_deref())
     .execute(pool)
     .await?;
 
@@ -150,6 +184,11 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
     if let Some(u) = q.until {
         qb.push(format!(" AND {col_prefix}created_at <= "))
             .push_bind(u);
+    }
+
+    if let Some(ref d) = q.d_tag {
+        qb.push(format!(" AND {col_prefix}d_tag = "))
+            .push_bind(d.clone());
     }
 
     qb.push(format!(" ORDER BY {col_prefix}created_at DESC LIMIT "))
@@ -457,13 +496,14 @@ pub async fn insert_event_with_thread_metadata(
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
     let received_at = Utc::now();
+    let d_tag = extract_d_tag(event);
     let mut tx = pool.begin().await?;
 
     // ── Insert event ──────────────────────────────────────────────────────────
     let result = sqlx::query(
         r#"
-        INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT DO NOTHING
         "#,
     )
@@ -476,6 +516,7 @@ pub async fn insert_event_with_thread_metadata(
     .bind(sig_bytes.as_slice())
     .bind(received_at)
     .bind(channel_id)
+    .bind(d_tag.as_deref())
     .execute(&mut *tx)
     .await?;
 
@@ -593,4 +634,108 @@ pub async fn insert_event_with_thread_metadata(
         StoredEvent::with_received_at(event.clone(), received_at, channel_id, true),
         was_inserted,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    fn make_event_with_kind_and_tags(kind: u16, tags: Vec<Tag>) -> nostr::Event {
+        let keys = Keys::generate();
+        EventBuilder::new(Kind::Custom(kind), "test", tags)
+            .sign_with_keys(&keys)
+            .expect("sign")
+    }
+
+    #[test]
+    fn extract_d_tag_from_nip33_event() {
+        let event = make_event_with_kind_and_tags(
+            30023,
+            vec![Tag::parse(&["d", "my-article-slug"]).unwrap()],
+        );
+        assert_eq!(extract_d_tag(&event), Some("my-article-slug".to_string()));
+    }
+
+    #[test]
+    fn extract_d_tag_first_d_wins() {
+        let event = make_event_with_kind_and_tags(
+            30023,
+            vec![
+                Tag::parse(&["d", "first"]).unwrap(),
+                Tag::parse(&["d", "second"]).unwrap(),
+            ],
+        );
+        assert_eq!(extract_d_tag(&event), Some("first".to_string()));
+    }
+
+    #[test]
+    fn extract_d_tag_missing_becomes_empty_string() {
+        // NIP-33: "if there is no d tag, the d tag is considered to be ''"
+        let event =
+            make_event_with_kind_and_tags(30023, vec![Tag::parse(&["p", "abc123"]).unwrap()]);
+        assert_eq!(extract_d_tag(&event), Some(String::new()));
+    }
+
+    #[test]
+    fn extract_d_tag_empty_value_preserved() {
+        let event = make_event_with_kind_and_tags(30023, vec![Tag::parse(&["d", ""]).unwrap()]);
+        assert_eq!(extract_d_tag(&event), Some(String::new()));
+    }
+
+    #[test]
+    fn extract_d_tag_non_nip33_returns_none() {
+        // kind:1 (text note) — not parameterized replaceable
+        let event = make_event_with_kind_and_tags(
+            1,
+            vec![Tag::parse(&["d", "should-be-ignored"]).unwrap()],
+        );
+        assert_eq!(extract_d_tag(&event), None);
+    }
+
+    #[test]
+    fn extract_d_tag_nip29_group_metadata() {
+        // kind:39000 is in the 30000–39999 range — d_tag should be extracted
+        let event =
+            make_event_with_kind_and_tags(39000, vec![Tag::parse(&["d", "group-id"]).unwrap()]);
+        assert_eq!(extract_d_tag(&event), Some("group-id".to_string()));
+    }
+
+    #[test]
+    fn extract_d_tag_boundary_kinds() {
+        // kind:29999 — just below range
+        let below = make_event_with_kind_and_tags(29999, vec![Tag::parse(&["d", "val"]).unwrap()]);
+        assert_eq!(extract_d_tag(&below), None);
+
+        // kind:30000 — lower bound
+        let lower = make_event_with_kind_and_tags(30000, vec![Tag::parse(&["d", "val"]).unwrap()]);
+        assert_eq!(extract_d_tag(&lower), Some("val".to_string()));
+
+        // kind:39999 — upper bound
+        let upper = make_event_with_kind_and_tags(39999, vec![Tag::parse(&["d", "val"]).unwrap()]);
+        assert_eq!(extract_d_tag(&upper), Some("val".to_string()));
+
+        // kind:40000 — just above range
+        let above = make_event_with_kind_and_tags(40000, vec![Tag::parse(&["d", "val"]).unwrap()]);
+        assert_eq!(extract_d_tag(&above), None);
+    }
+
+    #[test]
+    fn extract_d_tag_single_element_d_tag_ignored() {
+        // A d tag with only one element (no value) should not match — parts.len() < 2
+        let event = make_event_with_kind_and_tags(30023, vec![Tag::parse(&["d"]).unwrap()]);
+        // No d tag with a value → empty string per NIP-33
+        assert_eq!(extract_d_tag(&event), Some(String::new()));
+    }
+
+    #[test]
+    fn extract_d_tag_preserves_full_value() {
+        // extract_d_tag returns the full value — length enforcement is at the ingest layer.
+        let long_val = "x".repeat(2048);
+        let event =
+            make_event_with_kind_and_tags(30023, vec![Tag::parse(&["d", &long_val]).unwrap()]);
+        let result = extract_d_tag(&event).unwrap();
+        assert_eq!(result.len(), 2048);
+        assert_eq!(result, long_val);
+    }
 }

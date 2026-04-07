@@ -94,6 +94,7 @@ CREATE TABLE events (
     received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     channel_id  UUID,
     deleted_at  TIMESTAMPTZ,
+    d_tag       TEXT,
     PRIMARY KEY (created_at, id)
 ) PARTITION BY RANGE (created_at);
 
@@ -120,6 +121,7 @@ CREATE INDEX idx_events_kind_created ON events (kind, created_at);
 CREATE INDEX idx_events_id ON events (id);
 CREATE INDEX idx_events_deleted ON events (deleted_at);
 CREATE INDEX idx_events_addressable ON events (kind, pubkey, channel_id, deleted_at);
+CREATE INDEX idx_events_parameterized ON events (kind, pubkey, d_tag, deleted_at) WHERE d_tag IS NOT NULL;
 
 -- ── Event mentions ────────────────────────────────────────────────────────────
 
