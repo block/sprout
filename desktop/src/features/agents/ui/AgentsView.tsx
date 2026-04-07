@@ -40,7 +40,6 @@ import { AddAgentToChannelDialog } from "./AddAgentToChannelDialog";
 import { AddTeamToChannelDialog } from "./AddTeamToChannelDialog";
 import { BatchImportDialog } from "./BatchImportDialog";
 import { CreateAgentDialog } from "./CreateAgentDialog";
-import { ManagedAgentLogPanel } from "./ManagedAgentLogPanel";
 import { ManagedAgentsSection } from "./ManagedAgentsSection";
 import { PersonaDialog } from "./PersonaDialog";
 import { PersonaDeleteDialog } from "./PersonaDeleteDialog";
@@ -132,8 +131,6 @@ export function AgentsView() {
   const [logAgentPubkey, setLogAgentPubkey] = React.useState<string | null>(
     null,
   );
-  const logAgent =
-    managedAgents.find((agent) => agent.pubkey === logAgentPubkey) ?? null;
   const managedAgentLogQuery = useManagedAgentLogQuery(logAgentPubkey);
   const managedPubkeys = React.useMemo(
     () => new Set(managedAgents.map((agent) => agent.pubkey)),
@@ -574,6 +571,13 @@ export function AgentsView() {
               }
               isActionPending={isActionPending}
               isLoading={managedAgentsQuery.isLoading}
+              logContent={managedAgentLogQuery.data?.content ?? null}
+              logError={
+                managedAgentLogQuery.error instanceof Error
+                  ? managedAgentLogQuery.error
+                  : null
+              }
+              logLoading={managedAgentLogQuery.isLoading}
               personaLabelsById={personaLabelsById}
               presenceLookup={managedPresenceQuery.data ?? {}}
               onAddToChannel={(agent) => {
@@ -590,6 +594,7 @@ export function AgentsView() {
               onMintToken={(pubkey, name) => {
                 void handleMintToken(pubkey, name);
               }}
+              onSelectLogAgent={setLogAgentPubkey}
               onStart={(pubkey) => {
                 void handleStart(pubkey);
               }}
@@ -599,7 +604,7 @@ export function AgentsView() {
               onToggleStartOnAppLaunch={(pubkey, startOnAppLaunch) => {
                 void handleToggleStartOnAppLaunch(pubkey, startOnAppLaunch);
               }}
-              onViewLogs={setLogAgentPubkey}
+              selectedLogAgentPubkey={logAgentPubkey}
             />
 
             <RelayDirectorySection
@@ -613,17 +618,6 @@ export function AgentsView() {
               relayAgents={relayAgentsQuery.data ?? []}
             />
           </div>
-
-          <ManagedAgentLogPanel
-            error={
-              managedAgentLogQuery.error instanceof Error
-                ? managedAgentLogQuery.error
-                : null
-            }
-            isLoading={managedAgentLogQuery.isLoading}
-            logContent={managedAgentLogQuery.data?.content ?? null}
-            selectedAgent={logAgent}
-          />
         </div>
       </div>
 

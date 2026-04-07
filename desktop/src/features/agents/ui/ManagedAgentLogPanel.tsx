@@ -1,6 +1,7 @@
 import { CircleAlert } from "lucide-react";
 
 import type { ManagedAgent } from "@/shared/api/types";
+import { cn } from "@/shared/lib/cn";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { CopyButton } from "./CopyButton";
 import { describeLogFile } from "./agentUi";
@@ -10,14 +11,29 @@ export function ManagedAgentLogPanel({
   isLoading,
   logContent,
   selectedAgent,
+  variant = "section",
 }: {
   error: Error | null;
   isLoading: boolean;
   logContent: string | null;
   selectedAgent: ManagedAgent | null;
+  variant?: "inline" | "section";
 }) {
+  const isInline = variant === "inline";
+
+  if (!selectedAgent && isInline) {
+    return null;
+  }
+
   return (
-    <section className="rounded-[28px] border border-border/70 bg-card/90 p-5 shadow-sm">
+    <section
+      className={cn(
+        "border border-border/70 shadow-sm",
+        isInline
+          ? "rounded-2xl bg-background/80 p-4"
+          : "rounded-[28px] bg-card/90 p-5",
+      )}
+    >
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h3 className="text-sm font-semibold tracking-tight">Harness log</h3>
@@ -55,7 +71,10 @@ export function ManagedAgentLogPanel({
             <span>{selectedAgent.status}</span>
           </div>
           <pre
-            className="max-h-[22rem] overflow-auto whitespace-pre-wrap px-4 py-4"
+            className={cn(
+              "overflow-auto whitespace-pre-wrap px-4 py-4",
+              isInline ? "max-h-[18rem]" : "max-h-[22rem]",
+            )}
             data-testid="managed-agent-log-content"
           >
             {logContent?.trim() ? logContent : "No log output yet."}

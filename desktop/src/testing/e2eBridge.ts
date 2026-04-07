@@ -1014,8 +1014,42 @@ type MockWorkflow = {
   updated_at: number;
 };
 
+type RawWorkflowTraceEntry = {
+  step_id: string;
+  status: string;
+  output?: Record<string, unknown>;
+  started_at?: number | null;
+  completed_at?: number | null;
+  error?: string | null;
+};
+
+type RawWorkflowRun = {
+  id: string;
+  workflow_id: string;
+  status:
+    | "pending"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "waiting_approval";
+  current_step: number | null;
+  execution_trace: RawWorkflowTraceEntry[];
+  started_at: number | null;
+  completed_at: number | null;
+  error_message: string | null;
+  created_at: number;
+};
+
 const mockWorkflows: MockWorkflow[] = [];
+let mockWorkflowRuns: RawWorkflowRun[] = [];
 let mockWorkflowIdCounter = 0;
+
+function resetMockWorkflows() {
+  mockWorkflows.length = 0;
+  mockWorkflowRuns = [];
+  mockWorkflowIdCounter = 0;
+}
 
 function parseWorkflowDefinition(
   yamlDefinition: string,
@@ -1095,20 +1129,91 @@ function handleDeleteWorkflow(args: { workflowId: string }) {
   const index = mockWorkflows.findIndex((w) => w.id === args.workflowId);
   if (index === -1) throw new Error(`Workflow ${args.workflowId} not found`);
   mockWorkflows.splice(index, 1);
+  mockWorkflowRuns = mockWorkflowRuns.filter(
+    (run) => run.workflow_id !== args.workflowId,
+  );
+}
+
+function buildMockWorkflowRun(workflow: MockWorkflow): RawWorkflowRun {
+  const createdAt = Math.floor(Date.now() / 1000);
+  const rawSteps = Array.isArray(workflow.definition.steps)
+    ? workflow.definition.steps
+    : [];
+  const executionTrace = rawSteps.map((candidate, index) => {
+    const step =
+      candidate && typeof candidate === "object"
+        ? (candidate as Record<string, unknown>)
+        : {};
+    const startedAt = createdAt + index;
+    const completedAt = startedAt + 1;
+    const output: Record<string, unknown> = {};
+
+    if (typeof step.action === "string") {
+      output.action = step.action;
+    }
+    if (typeof step.name === "string" && step.name.trim().length > 0) {
+      output.name = step.name;
+    }
+    if (typeof step.text === "string" && step.text.trim().length > 0) {
+      output.preview = step.text;
+    }
+
+    return {
+      step_id:
+        typeof step.id === "string" && step.id.trim().length > 0
+          ? step.id
+          : `step_${index + 1}`,
+      status: "completed",
+      output,
+      started_at: startedAt,
+      completed_at: completedAt,
+      error: null,
+    };
+  });
+
+  const startedAt =
+    executionTrace.length > 0
+      ? (executionTrace[0].started_at ?? createdAt)
+      : createdAt;
+  const lastTraceEntry = executionTrace[executionTrace.length - 1];
+  const completedAt =
+    executionTrace.length > 0
+      ? (lastTraceEntry?.completed_at ?? createdAt)
+      : createdAt;
+
+  return {
+    id: `mock-run-${Date.now()}`,
+    workflow_id: workflow.id,
+    status: "completed",
+    current_step: null,
+    execution_trace: executionTrace,
+    started_at: startedAt,
+    completed_at: completedAt,
+    error_message: null,
+    created_at: createdAt,
+  };
 }
 
 function handleTriggerWorkflow(args: { workflowId: string }) {
   const workflow = mockWorkflows.find((w) => w.id === args.workflowId);
   if (!workflow) throw new Error(`Workflow ${args.workflowId} not found`);
+  const run = buildMockWorkflowRun(workflow);
+  mockWorkflowRuns = [run, ...mockWorkflowRuns];
   return {
-    run_id: `mock-run-${Date.now()}`,
+    run_id: run.id,
     workflow_id: workflow.id,
-    status: "pending",
+    status: run.status,
   };
 }
 
-function handleGetWorkflowRuns(_args: { workflowId: string }) {
-  return [];
+function handleGetWorkflowRuns(args: {
+  limit?: number | null;
+  workflowId: string;
+}) {
+  const runs = mockWorkflowRuns.filter(
+    (run) => run.workflow_id === args.workflowId,
+  );
+  return args.limit ? runs.slice(0, args.limit) : runs;
 }
 
 function handleGetRunApprovals(_args: { workflowId: string; runId: string }) {
@@ -3364,6 +3469,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockTokens(config);
   resetMockManagedAgents();
   resetMockPersonas();
+  resetMockWorkflows();
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
   window.__SPROUT_E2E_WEBVIEW_ZOOM__ = 1;

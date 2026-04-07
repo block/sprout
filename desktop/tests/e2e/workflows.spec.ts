@@ -80,6 +80,24 @@ test("creates a workflow via the form builder", async ({ page }) => {
   await expect(page.getByTestId("workflows-view")).toContainText(workflowName);
 });
 
+test("disables autocapitalization in the workflow form", async ({ page }) => {
+  await navigateToWorkflows(page);
+
+  await page.getByRole("button", { name: "Create Workflow" }).click();
+  const dialog = page.getByRole("dialog");
+
+  await expect(dialog.getByLabel("Workflow name")).toHaveAttribute(
+    "autocapitalize",
+    "off",
+  );
+
+  await dialog.getByRole("button", { name: "Add step" }).click();
+  await expect(dialog.getByLabel("Step name (optional)")).toHaveAttribute(
+    "autocapitalize",
+    "off",
+  );
+});
+
 test("captures disabled diff workflows in the list UI", async ({ page }) => {
   const workflowName = `diff_workflow_${Date.now()}`;
   const description = "Watches diff events for src/ changes";
@@ -222,4 +240,13 @@ test("triggers a workflow from the detail panel", async ({ page }) => {
       .getByTestId("workflow-detail-panel")
       .getByRole("button", { name: "Trigger" }),
   ).toBeVisible();
+
+  await expect(
+    page
+      .getByTestId("workflow-detail-panel")
+      .getByTestId("workflow-selected-run"),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("workflow-detail-panel").getByTestId("workflow-run-trace"),
+  ).toContainText("step_1");
 });

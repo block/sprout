@@ -76,6 +76,7 @@ function StepConfigFields({
           <div className="space-y-1.5">
             <FieldLabel htmlFor={`${prefix}-text`}>Message text</FieldLabel>
             <Textarea
+              autoCapitalize="off"
               className="min-h-[60px] resize-y text-xs"
               disabled={disabled}
               id={`${prefix}-text`}
@@ -133,6 +134,7 @@ function StepConfigFields({
           <div className="space-y-1.5">
             <FieldLabel htmlFor={`${prefix}-text`}>Message text</FieldLabel>
             <Textarea
+              autoCapitalize="off"
               className="min-h-[60px] resize-y text-xs"
               disabled={disabled}
               id={`${prefix}-text`}
@@ -192,6 +194,7 @@ function StepConfigFields({
           <div className="space-y-1.5">
             <FieldLabel htmlFor={`${prefix}-body`}>Body (optional)</FieldLabel>
             <Textarea
+              autoCapitalize="off"
               className="min-h-[60px] resize-y font-mono text-xs"
               disabled={disabled}
               id={`${prefix}-body`}
@@ -224,6 +227,7 @@ function StepConfigFields({
           <div className="space-y-1.5">
             <FieldLabel htmlFor={`${prefix}-message`}>Message</FieldLabel>
             <Input
+              autoCapitalize="off"
               disabled={disabled}
               id={`${prefix}-message`}
               onChange={(event) =>
@@ -238,6 +242,7 @@ function StepConfigFields({
               Timeout (optional)
             </FieldLabel>
             <Input
+              autoCapitalize="off"
               disabled={disabled}
               id={`${prefix}-timeout`}
               onChange={(event) =>
@@ -272,6 +277,7 @@ function StepConfigFields({
           <div className="space-y-1.5">
             <FieldLabel htmlFor={`${prefix}-topic`}>Topic</FieldLabel>
             <Input
+              autoCapitalize="off"
               disabled={disabled}
               id={`${prefix}-topic`}
               onChange={(event) =>
@@ -341,6 +347,7 @@ export function WorkflowStepCard({
             Step name (optional)
           </FieldLabel>
           <Input
+            autoCapitalize="off"
             disabled={disabled}
             id={`${prefix}-name`}
             onChange={(event) =>
@@ -379,6 +386,7 @@ export function WorkflowStepCard({
             Timeout seconds (optional)
           </FieldLabel>
           <Input
+            autoCapitalize="off"
             disabled={disabled}
             id={`${prefix}-timeout-secs`}
             inputMode="numeric"
