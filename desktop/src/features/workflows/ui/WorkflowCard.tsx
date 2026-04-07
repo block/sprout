@@ -25,6 +25,7 @@ import {
 type WorkflowCardProps = {
   workflow: Workflow;
   channelName?: string;
+  isActive?: boolean;
   onSelect: (workflowId: string) => void;
   onTrigger: (workflowId: string) => void;
   onEdit: (workflow: Workflow) => void;
@@ -51,6 +52,7 @@ function StatusBadge({ status }: { status: Workflow["status"] }) {
 export function WorkflowCard({
   workflow,
   channelName,
+  isActive = false,
   onSelect,
   onTrigger,
   onEdit,
@@ -63,7 +65,9 @@ export function WorkflowCard({
 
   return (
     <div
-      className="relative w-full rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/50"
+      className={`relative w-full rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/50 ${
+        isActive ? "border-primary/40 bg-primary/5 shadow-sm" : ""
+      }`}
       data-testid={`workflow-card-${workflow.id}`}
     >
       <button

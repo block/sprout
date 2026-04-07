@@ -102,6 +102,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         ) : null}
         <div
           className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 [overflow-anchor:none] sm:px-6"
+          data-scroll-restoration-id="message-timeline"
           data-testid="message-timeline"
           onScroll={syncScrollState}
           ref={scrollContainerRef}

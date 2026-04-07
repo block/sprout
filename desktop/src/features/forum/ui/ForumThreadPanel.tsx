@@ -267,7 +267,11 @@ export function ForumThreadPanel({
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto" ref={scrollRef}>
+      <div
+        className="flex-1 overflow-y-auto"
+        data-scroll-restoration-id={`forum-thread:${channelId}`}
+        ref={scrollRef}
+      >
         {/* Original post */}
         <div
           className={cn(

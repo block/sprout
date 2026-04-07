@@ -14,9 +14,13 @@ import {
   triggerWorkflow,
 } from "@/shared/api/tauriWorkflows";
 import { Button } from "@/shared/ui/button";
+import { Skeleton } from "@/shared/ui/skeleton";
 
 type WorkflowsViewProps = {
   channels: Channel[];
+  onCloseWorkflow: () => void;
+  onSelectWorkflow: (workflowId: string) => void;
+  selectedWorkflowId: string | null;
 };
 
 type WorkflowWithChannel = {
@@ -30,14 +34,48 @@ type DialogState =
   | { mode: "edit"; workflow: Workflow }
   | { mode: "duplicate"; workflow: Workflow };
 
-export function WorkflowsView({ channels }: WorkflowsViewProps) {
+function WorkflowsListSkeleton() {
+  return (
+    <div className="space-y-2">
+      {["first", "second", "third", "fourth"].map((card) => (
+        <div
+          className="rounded-xl border border-border/70 bg-card/80 p-4 shadow-sm"
+          key={card}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1 space-y-3">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-5 w-44" />
+                <Skeleton className="h-5 w-16 rounded-full" />
+              </div>
+              <Skeleton className="h-4 w-full max-w-2xl" />
+              <div className="flex flex-wrap gap-2">
+                <Skeleton className="h-5 w-20 rounded-full" />
+                <Skeleton className="h-5 w-24 rounded-full" />
+                <Skeleton className="h-5 w-16 rounded-full" />
+              </div>
+            </div>
+            <div className="hidden shrink-0 gap-2 sm:flex">
+              <Skeleton className="h-8 w-8 rounded-lg" />
+              <Skeleton className="h-8 w-8 rounded-lg" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function WorkflowsView({
+  channels,
+  onCloseWorkflow,
+  onSelectWorkflow,
+  selectedWorkflowId,
+}: WorkflowsViewProps) {
   const [dialogState, setDialogState] = React.useState<DialogState>({
     mode: "closed",
   });
   const [deleteTarget, setDeleteTarget] = React.useState<Workflow | null>(null);
-  const [selectedWorkflowId, setSelectedWorkflowId] = React.useState<
-    string | null
-  >(null);
   const queryClient = useQueryClient();
 
   const memberChannels = channels.filter((c) => c.isMember);
@@ -77,9 +115,9 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
   const deleteMutation = useMutation({
     mutationFn: (workflowId: string) => deleteWorkflow(workflowId),
     onSuccess: (_data, workflowId) => {
-      setSelectedWorkflowId((current) =>
-        current === workflowId ? null : current,
-      );
+      if (selectedWorkflowId === workflowId) {
+        onCloseWorkflow();
+      }
       void queryClient.invalidateQueries({
         predicate: (query) =>
           query.queryKey[0] === "workflows" ||
@@ -129,7 +167,10 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
       className="flex min-h-0 flex-1 overflow-hidden"
       data-testid="workflows-view"
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
+      <div
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4"
+        data-scroll-restoration-id="workflows-list"
+      >
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h2 className="text-lg font-semibold">Workflows</h2>
@@ -152,11 +193,7 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
         </div>
 
         {allWorkflowsQuery.isLoading ? (
-          <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              Loading workflows...
-            </p>
-          </div>
+          <WorkflowsListSkeleton />
         ) : allWorkflowsQuery.isError ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 text-muted-foreground">
             <p className="text-sm text-red-400">Failed to load workflows</p>
@@ -186,11 +223,12 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
             {allWorkflows.map(({ workflow, channelName }) => (
               <WorkflowCard
                 channelName={channelName}
+                isActive={selectedWorkflowId === workflow.id}
                 key={workflow.id}
                 onDelete={handleDelete}
                 onDuplicate={handleDuplicate}
                 onEdit={handleEdit}
-                onSelect={setSelectedWorkflowId}
+                onSelect={onSelectWorkflow}
                 onTrigger={handleTrigger}
                 workflow={workflow}
               />
@@ -203,7 +241,7 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
         <div className="w-[400px] shrink-0">
           <WorkflowDetailPanel
             key={selectedWorkflowId}
-            onClose={() => setSelectedWorkflowId(null)}
+            onClose={onCloseWorkflow}
             onEdit={handleEdit}
             workflowId={selectedWorkflowId}
           />

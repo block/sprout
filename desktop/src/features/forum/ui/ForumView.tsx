@@ -1,11 +1,9 @@
 import { MessageSquareText } from "lucide-react";
 import * as React from "react";
 
-import { getThreadReference } from "@/features/messages/lib/threading";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
 import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
-import type { Channel, RelayEvent } from "@/shared/api/types";
-import { KIND_FORUM_COMMENT, KIND_FORUM_POST } from "@/shared/constants/kinds";
+import type { Channel } from "@/shared/api/types";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 import {
@@ -23,10 +21,11 @@ import { ForumThreadPanel } from "./ForumThreadPanel";
 type ForumViewProps = {
   channel: Channel;
   currentPubkey?: string;
+  onClosePost: () => void;
+  onSelectPost: (postId: string) => void;
   onTargetReached?: (messageId: string) => void;
-  targetEvent: RelayEvent | null;
-  targetEventId: string | null;
-  targetEventKind: number | null;
+  selectedPostId: string | null;
+  targetReplyId: string | null;
 };
 
 function canDelete(postPubkey: string, currentPubkey?: string): boolean {
@@ -39,28 +38,26 @@ function canDelete(postPubkey: string, currentPubkey?: string): boolean {
 export function ForumView({
   channel,
   currentPubkey,
+  onClosePost,
+  onSelectPost,
   onTargetReached,
-  targetEvent,
-  targetEventId,
-  targetEventKind,
+  selectedPostId,
+  targetReplyId,
 }: ForumViewProps) {
-  const [expandedPostId, setExpandedPostId] = React.useState<string | null>(
-    null,
-  );
   const [isComposerOpen, setIsComposerOpen] = React.useState(false);
 
   const profileQuery = useProfileQuery();
   const postsQuery = useForumPostsQuery(channel);
   const threadQuery = useForumThreadQuery(
-    expandedPostId ? channel.id : null,
-    expandedPostId,
+    selectedPostId ? channel.id : null,
+    selectedPostId,
   );
   const createPostMutation = useCreateForumPostMutation(channel);
   const createReplyMutation = useCreateForumReplyMutation(channel);
   const deletePostMutation = useDeleteForumPostMutation(channel);
   const deleteReplyMutation = useDeleteForumReplyMutation(
     channel,
-    expandedPostId,
+    selectedPostId,
   );
 
   const posts = postsQuery.data?.posts ?? [];
@@ -97,40 +94,18 @@ export function ForumView({
       ),
     [profileQuery.data, profilesQuery.data?.profiles],
   );
-  const targetThreadId = React.useMemo(() => {
-    if (!targetEventId) {
-      return null;
-    }
 
-    if (targetEventKind === KIND_FORUM_POST) {
-      return targetEventId;
-    }
-
-    if (!targetEvent || targetEvent.kind !== KIND_FORUM_COMMENT) {
-      return null;
-    }
-
-    const thread = getThreadReference(targetEvent.tags);
-    return thread.rootId ?? thread.parentId ?? null;
-  }, [targetEvent, targetEventId, targetEventKind]);
-
-  // Reset expanded post when channel changes
   const previousChannelIdRef = React.useRef(channel.id);
-  if (previousChannelIdRef.current !== channel.id) {
-    previousChannelIdRef.current = channel.id;
-    setExpandedPostId(null);
-    setIsComposerOpen(false);
-  }
-
   React.useEffect(() => {
-    if (!targetThreadId || expandedPostId === targetThreadId) {
+    if (previousChannelIdRef.current === channel.id) {
       return;
     }
 
-    setExpandedPostId(targetThreadId);
-  }, [expandedPostId, targetThreadId]);
+    previousChannelIdRef.current = channel.id;
+    setIsComposerOpen(false);
+  }, [channel.id]);
 
-  if (expandedPostId) {
+  if (selectedPostId) {
     const threadPost = threadQuery.data?.post;
     const canDeleteExpandedPost = threadPost
       ? canDelete(threadPost.pubkey, effectiveCurrentPubkey)
@@ -143,12 +118,9 @@ export function ForumView({
         isDeletingPost={deletePostMutation.isPending}
         isLoading={threadQuery.isLoading}
         isSendingReply={createReplyMutation.isPending}
-        onBack={() => setExpandedPostId(null)}
+        onBack={onClosePost}
         onDeletePost={(eventId) => {
-          deletePostMutation.mutate(
-            { eventId },
-            { onSuccess: () => setExpandedPostId(null) },
-          );
+          deletePostMutation.mutate({ eventId }, { onSuccess: onClosePost });
         }}
         onDeleteReply={(eventId) => {
           deleteReplyMutation.mutate({ eventId });
@@ -157,13 +129,13 @@ export function ForumView({
         onReply={(content, mentionPubkeys) => {
           createReplyMutation.mutate({
             content,
-            parentEventId: expandedPostId,
+            parentEventId: selectedPostId,
             mentionPubkeys,
           });
         }}
         onTargetReached={onTargetReached}
         profiles={profiles}
-        targetEventId={targetEventId}
+        targetEventId={targetReplyId}
         thread={threadQuery.data}
       />
     );
@@ -208,7 +180,10 @@ export function ForumView({
       </div>
 
       {/* Post list */}
-      <div className="flex-1 overflow-y-auto">
+      <div
+        className="flex-1 overflow-y-auto"
+        data-scroll-restoration-id={`forum-list:${channel.id}`}
+      >
         {postsQuery.isLoading ? (
           <div className="space-y-3 p-4">
             <Skeleton className="h-24 w-full rounded-xl" />
@@ -233,13 +208,13 @@ export function ForumView({
               <ForumPostCard
                 canDelete={canDelete(post.pubkey, effectiveCurrentPubkey)}
                 currentPubkey={effectiveCurrentPubkey}
-                isActive={false}
+                isActive={selectedPostId === post.eventId}
                 isDeleting={
                   deletePostMutation.isPending &&
                   deletePostMutation.variables?.eventId === post.eventId
                 }
                 key={post.eventId}
-                onClick={() => setExpandedPostId(post.eventId)}
+                onClick={() => onSelectPost(post.eventId)}
                 onDelete={(eventId) => {
                   deletePostMutation.mutate({ eventId });
                 }}

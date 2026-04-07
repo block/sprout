@@ -10,6 +10,7 @@ import {
 import { WorkflowRunTrace } from "@/features/workflows/ui/WorkflowRunTrace";
 import type { Workflow } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
+import { Skeleton } from "@/shared/ui/skeleton";
 import {
   getWorkflowDescription,
   getWorkflowDisplayStatus,
@@ -60,20 +61,28 @@ export function WorkflowDetailPanel({
       <div className="flex items-center justify-between border-b px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h3 className="truncate text-sm font-semibold">
-              {workflow?.name ?? "Loading..."}
-            </h3>
+            {workflow ? (
+              <h3 className="truncate text-sm font-semibold">
+                {workflow.name}
+              </h3>
+            ) : (
+              <Skeleton className="h-4 w-36" />
+            )}
             {workflowStatus ? <RunStatusBadge status={workflowStatus} /> : null}
           </div>
           {workflowDescription ? (
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {workflowDescription}
             </p>
+          ) : workflowQuery.isLoading ? (
+            <Skeleton className="mt-1 h-3 w-full max-w-64" />
           ) : null}
           {triggerSummary ? (
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {triggerSummary}
             </p>
+          ) : workflowQuery.isLoading ? (
+            <Skeleton className="mt-1 h-3 w-40" />
           ) : null}
         </div>
         <div className="flex items-center gap-1">
@@ -88,7 +97,7 @@ export function WorkflowDetailPanel({
             </Button>
           ) : null}
           <Button
-            disabled={triggerMutation.isPending}
+            disabled={triggerMutation.isPending || workflowQuery.isLoading}
             onClick={() => void handleTrigger()}
             size="sm"
             variant="outline"
@@ -113,7 +122,10 @@ export function WorkflowDetailPanel({
         </div>
       ) : null}
 
-      <div className="flex-1 overflow-y-auto">
+      <div
+        className="flex-1 overflow-y-auto"
+        data-scroll-restoration-id={`workflow-detail:${workflowId}`}
+      >
         {workflow ? (
           <div className="space-y-4 p-4">
             <div>
@@ -234,8 +246,18 @@ export function WorkflowDetailPanel({
             <p className="text-sm text-red-400">Failed to load workflow</p>
           </div>
         ) : (
-          <div className="flex h-32 items-center justify-center">
-            <p className="text-sm text-muted-foreground">Loading...</p>
+          <div className="space-y-4 p-4">
+            <div>
+              <Skeleton className="mb-2 h-4 w-28" />
+              <Skeleton className="h-40 w-full rounded-xl" />
+            </div>
+            <div>
+              <Skeleton className="mb-2 h-4 w-24" />
+              <div className="space-y-2">
+                <Skeleton className="h-16 w-full rounded-xl" />
+                <Skeleton className="h-16 w-full rounded-xl" />
+              </div>
+            </div>
           </div>
         )}
       </div>
