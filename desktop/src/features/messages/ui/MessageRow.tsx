@@ -10,8 +10,14 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
+import { BotIdenticon } from "./BotIdenticon";
 import { MessageActionBar } from "./MessageActionBar";
 import { MessageTimestamp } from "./MessageTimestamp";
+
+/** Returns true if the author name looks like a numbered bot copy (e.g. "Scout::01") */
+function isNumberedBot(author: string, role?: string): boolean {
+  return Boolean(role) && author.includes("::");
+}
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
@@ -171,62 +177,71 @@ export const MessageRow = React.memo(
           data-message-id={message.id}
           data-testid="message-row"
         >
-          {message.pubkey ? (
-            <UserProfilePopover pubkey={message.pubkey}>
-              <button
-                className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                type="button"
-              >
-                {message.avatarUrl && !hasAvatarError ? (
-                  <img
-                    alt={`${message.author} avatar`}
-                    className="h-8 w-8 rounded-lg bg-secondary object-cover shadow-sm"
-                    data-testid="message-avatar-image"
-                    onError={() => {
-                      setHasAvatarError(true);
-                    }}
-                    referrerPolicy="no-referrer"
-                    src={rewriteRelayUrl(message.avatarUrl)}
-                  />
-                ) : (
-                  <div
-                    className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-lg text-[11px] font-semibold shadow-sm",
-                      message.accent
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-secondary text-secondary-foreground",
-                    )}
-                    data-testid="message-avatar-fallback"
-                  >
-                    {initials}
-                  </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {isNumberedBot(message.author, message.role) ? (
+              <BotIdenticon
+                value={message.author}
+                size={20}
+                className="rounded"
+              />
+            ) : null}
+            {message.pubkey ? (
+              <UserProfilePopover pubkey={message.pubkey}>
+                <button
+                  className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  type="button"
+                >
+                  {message.avatarUrl && !hasAvatarError ? (
+                    <img
+                      alt={`${message.author} avatar`}
+                      className="h-8 w-8 rounded-lg bg-secondary object-cover shadow-sm"
+                      data-testid="message-avatar-image"
+                      onError={() => {
+                        setHasAvatarError(true);
+                      }}
+                      referrerPolicy="no-referrer"
+                      src={rewriteRelayUrl(message.avatarUrl)}
+                    />
+                  ) : (
+                    <div
+                      className={cn(
+                        "flex h-8 w-8 items-center justify-center rounded-lg text-[11px] font-semibold shadow-sm",
+                        message.accent
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-secondary text-secondary-foreground",
+                      )}
+                      data-testid="message-avatar-fallback"
+                    >
+                      {initials}
+                    </div>
+                  )}
+                </button>
+              </UserProfilePopover>
+            ) : message.avatarUrl && !hasAvatarError ? (
+              <img
+                alt={`${message.author} avatar`}
+                className="h-8 w-8 shrink-0 rounded-lg bg-secondary object-cover shadow-sm"
+                data-testid="message-avatar-image"
+                onError={() => {
+                  setHasAvatarError(true);
+                }}
+                referrerPolicy="no-referrer"
+                src={rewriteRelayUrl(message.avatarUrl)}
+              />
+            ) : (
+              <div
+                className={cn(
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold shadow-sm",
+                  message.accent
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-secondary text-secondary-foreground",
                 )}
-              </button>
-            </UserProfilePopover>
-          ) : message.avatarUrl && !hasAvatarError ? (
-            <img
-              alt={`${message.author} avatar`}
-              className="h-8 w-8 shrink-0 rounded-lg bg-secondary object-cover shadow-sm"
-              data-testid="message-avatar-image"
-              onError={() => {
-                setHasAvatarError(true);
-              }}
-              referrerPolicy="no-referrer"
-              src={rewriteRelayUrl(message.avatarUrl)}
-            />
-          ) : (
-            <div
-              className={cn(
-                "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold shadow-sm",
-                message.accent
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-secondary text-secondary-foreground",
-              )}
-              data-testid="message-avatar-fallback"
-            >
-              {initials}
-            </div>
-          )}
+                data-testid="message-avatar-fallback"
+              >
+                {initials}
+              </div>
+            )}
+          </div>
 
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
