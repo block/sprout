@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
 import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandlers";
+import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
 import {
@@ -158,6 +159,8 @@ export function ChannelScreen({
       ),
     [currentProfile, messageProfilesQuery.data?.profiles],
   );
+  const channelMembersQuery = useChannelMembersQuery(activeChannel?.id ?? null);
+  const channelMembers = channelMembersQuery.data;
   const timelineMessages = React.useMemo(
     () =>
       formatTimelineMessages(
@@ -166,9 +169,11 @@ export function ChannelScreen({
         currentPubkey,
         currentProfile?.avatarUrl ?? null,
         messageProfiles,
+        channelMembers,
       ),
     [
       activeChannel,
+      channelMembers,
       currentProfile?.avatarUrl,
       currentPubkey,
       messageProfiles,
