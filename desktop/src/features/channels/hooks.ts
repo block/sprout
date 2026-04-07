@@ -86,6 +86,25 @@ async function invalidateChannelState(
   ]);
 }
 
+function setChannelArchivedState(
+  queryClient: ReturnType<typeof useQueryClient>,
+  channelId: string,
+  archivedAt: string | null,
+) {
+  queryClient.setQueryData<Channel[]>(channelsQueryKey, (current = []) =>
+    sortChannels(
+      current.map((channel) =>
+        channel.id === channelId ? { ...channel, archivedAt } : channel,
+      ),
+    ),
+  );
+
+  queryClient.setQueryData<ChannelDetail | undefined>(
+    channelDetailQueryKey(channelId),
+    (current) => (current ? { ...current, archivedAt } : current),
+  );
+}
+
 export function useChannelsQuery() {
   return useQuery({
     queryKey: channelsQueryKey,
@@ -273,6 +292,13 @@ export function useArchiveChannelMutation(channelId: string | null) {
 
       await archiveChannel(channelId);
     },
+    onSuccess: () => {
+      if (!channelId) {
+        return;
+      }
+
+      setChannelArchivedState(queryClient, channelId, new Date().toISOString());
+    },
     onSettled: async () => {
       await invalidateChannelState(queryClient, channelId);
     },
@@ -289,6 +315,13 @@ export function useUnarchiveChannelMutation(channelId: string | null) {
       }
 
       await unarchiveChannel(channelId);
+    },
+    onSuccess: () => {
+      if (!channelId) {
+        return;
+      }
+
+      setChannelArchivedState(queryClient, channelId, null);
     },
     onSettled: async () => {
       await invalidateChannelState(queryClient, channelId);
