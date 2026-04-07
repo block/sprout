@@ -115,6 +115,65 @@ pub fn infer_language(file_path: &str) -> Option<String> {
     Some(lang.to_string())
 }
 
+/// Extract @mention names from message content.
+/// Returns lowercased names found after `@` tokens.
+/// Only matches `@word` preceded by whitespace or start-of-string.
+/// Characters allowed in names: alphanumeric, `.`, `-`, `_`.
+pub fn extract_at_names(content: &str) -> Vec<String> {
+    if content.is_empty() || !content.contains('@') {
+        return vec![];
+    }
+    let mut names: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let chars: Vec<char> = content.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    while i < len {
+        if chars[i] == '@' {
+            // Must be at start-of-string or preceded by whitespace
+            let preceded_by_ws = i == 0 || chars[i - 1].is_ascii_whitespace();
+            if preceded_by_ws && i + 1 < len {
+                // Capture the name token: [a-zA-Z0-9._-]+
+                let start = i + 1;
+                let mut end = start;
+                while end < len {
+                    let c = chars[end];
+                    if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                        end += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if end > start {
+                    let name: String = chars[start..end].iter().collect();
+                    let lower = name.to_ascii_lowercase();
+                    if seen.insert(lower.clone()) {
+                        names.push(lower);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    names
+}
+
+/// Merge auto-resolved pubkeys into an explicit mention list, up to `cap`.
+/// Explicit mentions have priority; auto-resolved are added only if not already present.
+pub fn merge_mentions(explicit: &mut Vec<String>, auto_resolved: &[String], cap: usize) {
+    let budget = cap.saturating_sub(explicit.len());
+    let mut added = 0usize;
+    for pk in auto_resolved {
+        if added >= budget {
+            break;
+        }
+        if !explicit.contains(pk) {
+            explicit.push(pk.clone());
+            added += 1;
+        }
+    }
+}
+
 /// Normalize mention pubkeys: lowercase, deduplicate, remove sender's own pubkey.
 pub fn normalize_mention_pubkeys(pubkeys: &[String], sender_pubkey: &str) -> Vec<String> {
     let sender = sender_pubkey.to_ascii_lowercase();
@@ -335,6 +394,32 @@ mod tests {
         );
     }
 
+    // --- extract_at_names ---
+
+    #[test]
+    fn extract_at_names_matches() {
+        assert_eq!(extract_at_names("hello @alice"), vec!["alice"]);
+        assert_eq!(extract_at_names("@bob hello"), vec!["bob"]);
+        assert_eq!(
+            extract_at_names("@alice and @alice, meet @Bob"),
+            vec!["alice", "bob"]
+        );
+        assert_eq!(extract_at_names("line1\n@tyler line2"), vec!["tyler"]);
+        assert_eq!(
+            extract_at_names("@john.doe @mary_jane @bob-smith"),
+            vec!["john.doe", "mary_jane", "bob-smith"]
+        );
+    }
+
+    #[test]
+    fn extract_at_names_rejects() {
+        assert!(extract_at_names("").is_empty());
+        assert!(extract_at_names("no mentions").is_empty());
+        assert!(extract_at_names("user@example.com").is_empty());
+        assert!(extract_at_names("hello @ world").is_empty());
+        assert!(extract_at_names("hello @").is_empty());
+    }
+
     // --- normalize_mention_pubkeys ---
 
     #[test]
@@ -378,5 +463,31 @@ mod tests {
     fn normalize_mention_pubkeys_empty_input() {
         let result = normalize_mention_pubkeys(&[], "sender");
         assert!(result.is_empty());
+    }
+
+    // --- merge_mentions ---
+
+    #[test]
+    fn merge_mentions_dedup_and_cap() {
+        // basic merge
+        let mut m = vec!["a".into()];
+        merge_mentions(&mut m, &["b".into()], 50);
+        assert_eq!(m, ["a", "b"]);
+
+        // dedup: "a" already present
+        let mut m = vec!["a".into()];
+        merge_mentions(&mut m, &["a".into(), "b".into()], 50);
+        assert_eq!(m, ["a", "b"]);
+
+        // cap: 49 explicit + 2 auto → only 1 added
+        let mut m: Vec<String> = (0..49).map(|i| format!("{i:064}")).collect();
+        merge_mentions(&mut m, &["x".into(), "y".into()], 50);
+        assert_eq!(m.len(), 50);
+        assert_eq!(m.last().unwrap(), "x");
+
+        // at cap: 50 explicit → nothing added
+        let mut m: Vec<String> = (0..50).map(|i| format!("{i:064}")).collect();
+        merge_mentions(&mut m, &["extra".into()], 50);
+        assert_eq!(m.len(), 50);
     }
 }
