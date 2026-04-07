@@ -210,7 +210,7 @@ export function ChannelManagementSheet({
   return (
     <Sheet onOpenChange={handleSheetOpenChange} open={open}>
       <SheetContent
-        className="flex w-full flex-col gap-0 overflow-hidden border-l border-border/80 bg-background p-0 sm:max-w-xl"
+        className="flex w-full flex-col gap-0 overflow-hidden bg-background p-0 sm:max-w-xl"
         data-testid="channel-management-sheet"
         side="right"
       >

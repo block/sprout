@@ -60,7 +60,7 @@ export function ChatHeader({
 }: ChatHeaderProps) {
   return (
     <header
-      className="flex min-w-0 items-center gap-3 border-b border-border/80 bg-background px-4 pb-3 pt-8 sm:px-6"
+      className="relative z-20 flex shrink-0 min-w-0 items-center gap-3 bg-background/25 px-4 pb-2 pt-6 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:px-6"
       data-testid="chat-header"
       data-tauri-drag-region
     >

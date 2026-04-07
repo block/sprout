@@ -5,7 +5,7 @@
  * - `formatFullDateTime` — verbose string for tooltips
  *   ("Wednesday, April 2, 2026 at 2:34 PM").
  * - `formatDayHeading` — label for day dividers / sticky headers.
- *   Returns "Today", "Yesterday", or a date like "Monday, March 31, 2026".
+ *   Returns "Today", "Yesterday", or a compact date like "Sat, Mar 21, 2026".
  * - `isSameDay` — compare two unix-second timestamps.
  */
 
@@ -23,11 +23,12 @@ const FULL_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
 });
 
-const DAY_HEADING_FORMATTER = new Intl.DateTimeFormat("en-US", {
-  weekday: "long",
-  year: "numeric",
-  month: "long",
+/** Compact calendar line for dividers (not Today/Yesterday). */
+const DAY_HEADING_COMPACT = new Intl.DateTimeFormat("en-US", {
+  weekday: "short",
+  month: "short",
   day: "numeric",
+  year: "numeric",
 });
 
 /** Short clock time, e.g. "2:34 PM". */
@@ -42,7 +43,7 @@ export function formatFullDateTime(unixSeconds: number): string {
 
 /**
  * Human-friendly day label for dividers and sticky headers.
- * Returns "Today", "Yesterday", or a full date like "Monday, March 31, 2026".
+ * Returns "Today", "Yesterday", or a short date like "Sat, Mar 21, 2026".
  */
 export function formatDayHeading(unixSeconds: number): string {
   const date = new Date(unixSeconds * 1_000);
@@ -58,7 +59,7 @@ export function formatDayHeading(unixSeconds: number): string {
     return "Yesterday";
   }
 
-  return DAY_HEADING_FORMATTER.format(date);
+  return DAY_HEADING_COMPACT.format(date);
 }
 
 /** True when two unix-second timestamps fall on the same calendar day (local time). */

@@ -144,7 +144,7 @@ export function SettingsView({
         <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)] lg:grid-rows-1">
           <aside
             className={cn(
-              "border-b border-border/70 bg-muted/20 motion-safe:transition-all motion-safe:duration-200 motion-safe:ease-out lg:border-b-0 lg:border-r",
+              "border-b border-border/70 bg-muted/20 motion-safe:transition-all motion-safe:duration-200 motion-safe:ease-out lg:border-b-0",
               isLoaded
                 ? "opacity-100 translate-x-0"
                 : "opacity-0 -translate-x-2",

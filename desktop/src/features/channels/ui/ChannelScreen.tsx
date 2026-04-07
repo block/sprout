@@ -412,94 +412,97 @@ export function ChannelScreen({
 
   return (
     <>
-      <ChatHeader
-        actions={
-          activeChannel ? (
-            <ChannelMembersBar
-              channel={activeChannel}
-              currentPubkey={currentPubkey}
-              onManageChannel={onManageChannel}
-              onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
-            />
-          ) : null
-        }
-        channelType={activeChannel?.channelType}
-        visibility={activeChannel?.visibility}
-        description={channelDescription}
-        statusBadge={
-          activeChannel?.channelType === "dm" && activeDmPresenceStatus ? (
-            <PresenceBadge
-              data-testid="chat-presence-badge"
-              status={activeDmPresenceStatus}
-            />
-          ) : null
-        }
-        title={activeChannelTitle}
-      />
-
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {activeChannel ? (
-          activeChannel.channelType === "forum" ? (
-            <React.Suspense
-              fallback={<ViewLoadingFallback label="Loading forum..." />}
-            >
-              <ForumView
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <ChatHeader
+          actions={
+            activeChannel ? (
+              <ChannelMembersBar
                 channel={activeChannel}
                 currentPubkey={currentPubkey}
+                onManageChannel={onManageChannel}
+                onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
               />
-            </React.Suspense>
+            ) : null
+          }
+          channelType={activeChannel?.channelType}
+          visibility={activeChannel?.visibility}
+          description={channelDescription}
+          statusBadge={
+            activeChannel?.channelType === "dm" && activeDmPresenceStatus ? (
+              <PresenceBadge
+                data-testid="chat-presence-badge"
+                status={activeDmPresenceStatus}
+              />
+            ) : null
+          }
+          title={activeChannelTitle}
+        />
+
+        <div className="relative z-0 -mt-8 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {activeChannel ? (
+            activeChannel.channelType === "forum" ? (
+              <React.Suspense
+                fallback={<ViewLoadingFallback label="Loading forum..." />}
+              >
+                <ForumView
+                  channel={activeChannel}
+                  currentPubkey={currentPubkey}
+                />
+              </React.Suspense>
+            ) : (
+              <React.Suspense
+                fallback={<ViewLoadingFallback label="Loading channel..." />}
+              >
+                <ChannelPane
+                  activeChannel={activeChannel}
+                  currentPubkey={currentPubkey}
+                  fetchOlder={fetchOlder}
+                  hasOlderMessages={hasOlderMessages}
+                  isFetchingOlder={isFetchingOlder}
+                  editTarget={
+                    editTargetMessage
+                      ? {
+                          author: editTargetMessage.author,
+                          body: editTargetMessage.body,
+                          id: editTargetMessage.id,
+                        }
+                      : null
+                  }
+                  isSending={sendMessageMutation.isPending}
+                  isTimelineLoading={isTimelineLoading}
+                  messages={mainTimelineMessages}
+                  onCancelEdit={handleCancelEdit}
+                  onCancelReply={handleCancelReply}
+                  onCloseThread={handleCloseThread}
+                  onDelete={handleDelete}
+                  onEdit={handleEdit}
+                  onEditSave={handleEditSave}
+                  onReply={handleReplyOpenThread}
+                  onSend={handleSend}
+                  onTargetReached={onTargetReached}
+                  onToggleReaction={effectiveToggleReaction}
+                  profiles={messageProfiles}
+                  replyTargetId={replyTargetId}
+                  replyTargetMessage={replyTargetMessage}
+                  threadRootId={threadRootId}
+                  targetMessageId={
+                    activeChannel &&
+                    searchAnchor?.channelId === activeChannel.id
+                      ? searchAnchor.eventId
+                      : null
+                  }
+                  typingPubkeys={typingPubkeys}
+                />
+              </React.Suspense>
+            )
           ) : (
-            <React.Suspense
-              fallback={<ViewLoadingFallback label="Loading channel..." />}
-            >
-              <ChannelPane
-                activeChannel={activeChannel}
-                currentPubkey={currentPubkey}
-                fetchOlder={fetchOlder}
-                hasOlderMessages={hasOlderMessages}
-                isFetchingOlder={isFetchingOlder}
-                editTarget={
-                  editTargetMessage
-                    ? {
-                        author: editTargetMessage.author,
-                        body: editTargetMessage.body,
-                        id: editTargetMessage.id,
-                      }
-                    : null
-                }
-                isSending={sendMessageMutation.isPending}
-                isTimelineLoading={isTimelineLoading}
-                messages={mainTimelineMessages}
-                onCancelEdit={handleCancelEdit}
-                onCancelReply={handleCancelReply}
-                onCloseThread={handleCloseThread}
-                onDelete={handleDelete}
-                onEdit={handleEdit}
-                onEditSave={handleEditSave}
-                onReply={handleReplyOpenThread}
-                onSend={handleSend}
-                onTargetReached={onTargetReached}
-                onToggleReaction={effectiveToggleReaction}
-                profiles={messageProfiles}
-                replyTargetId={replyTargetId}
-                replyTargetMessage={replyTargetMessage}
-                threadRootId={threadRootId}
-                targetMessageId={
-                  activeChannel && searchAnchor?.channelId === activeChannel.id
-                    ? searchAnchor.eventId
-                    : null
-                }
-                typingPubkeys={typingPubkeys}
-              />
-            </React.Suspense>
-          )
-        ) : (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8">
-            <p className="text-sm text-muted-foreground">
-              Select a channel to view messages.
-            </p>
-          </div>
-        )}
+            <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8">
+              <p className="text-sm text-muted-foreground">
+                Select a channel to view messages.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       <MembersSidebar
