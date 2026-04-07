@@ -7,6 +7,7 @@ import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 export const TRIGGER_TYPES = [
   "message_posted",
   "reaction_added",
+  "diff_posted",
   "webhook",
   "schedule",
 ] as const;
@@ -31,15 +32,25 @@ export type TriggerConfig = {
   interval?: string;
 };
 
+export type HeaderFormState = {
+  id: string;
+  key: string;
+  value: string;
+};
+
 export type StepFormState = {
   id: string;
+  name?: string;
   action: ActionType;
+  condition?: string;
+  timeoutSecs?: string;
   duration?: string;
   text?: string;
   channel?: string;
   to?: string;
   url?: string;
   method?: string;
+  headers?: HeaderFormState[];
   body?: string;
   emoji?: string;
   topic?: string;
@@ -50,12 +61,16 @@ export type StepFormState = {
 
 export type WorkflowFormState = {
   name: string;
+  description: string;
+  enabled: boolean;
   trigger: TriggerConfig;
   steps: StepFormState[];
 };
 
 export const DEFAULT_FORM_STATE: WorkflowFormState = {
   name: "",
+  description: "",
+  enabled: true,
   trigger: { on: "message_posted" },
   steps: [],
 };
@@ -63,6 +78,7 @@ export const DEFAULT_FORM_STATE: WorkflowFormState = {
 export const TRIGGER_LABELS: Record<TriggerType, string> = {
   message_posted: "Message Posted",
   reaction_added: "Reaction Added",
+  diff_posted: "Diff Posted",
   webhook: "Webhook",
   schedule: "Schedule",
 };
@@ -77,12 +93,55 @@ export const ACTION_LABELS: Record<ActionType, string> = {
   set_channel_topic: "Set Channel Topic",
 };
 
+function toHeaderRows(
+  headers: unknown,
+  stepId: string,
+): HeaderFormState[] | undefined {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    return undefined;
+  }
+
+  const rows = Object.entries(headers).map(([key, value], index) => ({
+    id: `${stepId}_header_${index + 1}`,
+    key,
+    value: typeof value === "string" ? value : String(value),
+  }));
+
+  return rows.length > 0 ? rows : undefined;
+}
+
+function headersToRecord(
+  headers: HeaderFormState[] | undefined,
+): Record<string, string> | undefined {
+  if (!headers) return undefined;
+
+  const entries = headers
+    .map(({ key, value }) => [key.trim(), value] as const)
+    .filter(([key]) => key.length > 0);
+
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries);
+}
+
+function parseTimeoutSecs(timeoutSecs: string | undefined): number | undefined {
+  if (!timeoutSecs) return undefined;
+  const trimmed = timeoutSecs.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const parsed = Number(trimmed);
+  return parsed > 0 ? parsed : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Serialization helpers
 // ---------------------------------------------------------------------------
 
 function actionFieldsForStep(step: StepFormState): Record<string, unknown> {
   const fields: Record<string, unknown> = {};
+  if (step.name?.trim()) fields.name = step.name.trim();
+  if (step.condition?.trim()) fields.if = step.condition.trim();
+  const timeoutSecs = parseTimeoutSecs(step.timeoutSecs);
+  if (timeoutSecs !== undefined) fields.timeout_secs = timeoutSecs;
+
   switch (step.action) {
     case "delay":
       if (step.duration) fields.duration = step.duration;
@@ -98,6 +157,10 @@ function actionFieldsForStep(step: StepFormState): Record<string, unknown> {
     case "call_webhook":
       if (step.url) fields.url = step.url;
       fields.method = step.method || "POST";
+      {
+        const headers = headersToRecord(step.headers);
+        if (headers) fields.headers = headers;
+      }
       if (step.body) fields.body = step.body;
       break;
     case "request_approval":
@@ -117,7 +180,11 @@ function actionFieldsForStep(step: StepFormState): Record<string, unknown> {
 
 export function formStateToYaml(state: WorkflowFormState): string {
   const trigger: Record<string, unknown> = { on: state.trigger.on };
-  if (state.trigger.on === "message_posted" && state.trigger.filter) {
+  if (
+    (state.trigger.on === "message_posted" ||
+      state.trigger.on === "diff_posted") &&
+    state.trigger.filter
+  ) {
     trigger.filter = state.trigger.filter;
   }
   if (state.trigger.on === "reaction_added" && state.trigger.emoji) {
@@ -134,7 +201,20 @@ export function formStateToYaml(state: WorkflowFormState): string {
     ...actionFieldsForStep(step),
   }));
 
-  return yamlStringify({ name: state.name, trigger, steps });
+  const workflow: Record<string, unknown> = {
+    name: state.name,
+    trigger,
+    steps,
+  };
+
+  if (state.description.trim()) {
+    workflow.description = state.description.trim();
+  }
+  if (!state.enabled) {
+    workflow.enabled = false;
+  }
+
+  return yamlStringify(workflow);
 }
 
 const STEP_ID_PATTERN = /^step_(\d+)$/;
@@ -192,13 +272,23 @@ export function yamlToFormState(
     const steps: StepFormState[] = rawSteps.map(
       (step: Record<string, unknown>, index: number) => ({
         id: (step.id as string) ?? `step_${index + 1}`,
+        name: step.name as string | undefined,
         action: (step.action as ActionType) ?? ACTION_TYPES[0],
+        condition: step.if as string | undefined,
+        timeoutSecs:
+          step.timeout_secs !== undefined
+            ? String(step.timeout_secs)
+            : undefined,
         duration: step.duration as string | undefined,
         text: step.text as string | undefined,
         channel: step.channel as string | undefined,
         to: step.to as string | undefined,
         url: step.url as string | undefined,
         method: step.method as string | undefined,
+        headers: toHeaderRows(
+          step.headers,
+          (step.id as string) ?? `step_${index + 1}`,
+        ),
         body: step.body as string | undefined,
         emoji: step.emoji as string | undefined,
         topic: step.topic as string | undefined,
@@ -210,7 +300,13 @@ export function yamlToFormState(
 
     return {
       ok: true,
-      state: { name: (parsed.name as string) ?? "", trigger, steps },
+      state: {
+        name: (parsed.name as string) ?? "",
+        description: (parsed.description as string) ?? "",
+        enabled: parsed.enabled !== false,
+        trigger,
+        steps,
+      },
     };
   } catch (error) {
     return {

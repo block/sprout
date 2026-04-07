@@ -13,15 +13,31 @@ use managed_agents::{
     find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents, save_managed_agents,
     start_managed_agent_process, sync_managed_agent_processes, BackendKind, ManagedAgentProcess,
 };
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tauri::{http, Manager, RunEvent};
 use tauri_plugin_window_state::StateFlags;
 
-fn restore_managed_agents_on_launch(app: &tauri::AppHandle) -> Result<(), String> {
+fn restore_managed_agents_on_launch(
+    app: &tauri::AppHandle,
+    shutdown_started: &AtomicBool,
+) -> Result<(), String> {
+    if shutdown_started.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
     let state = app.state::<AppState>();
     let _store_guard = state
         .managed_agents_store_lock
         .lock()
         .map_err(|error| error.to_string())?;
+
+    if shutdown_started.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
     let mut records = load_managed_agents(app)?;
     let mut runtimes = state
         .managed_agent_processes
@@ -46,6 +62,10 @@ fn restore_managed_agents_on_launch(app: &tauri::AppHandle) -> Result<(), String
         .collect::<Vec<_>>();
 
     for pubkey in pubkeys_to_restore {
+        if shutdown_started.load(Ordering::SeqCst) {
+            break;
+        }
+
         let record = find_managed_agent_mut(&mut records, &pubkey)?;
         match start_managed_agent_process(app, record, &mut runtimes) {
             Ok(()) => {
@@ -275,6 +295,8 @@ pub fn run() {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
     };
 
+    let shutdown_started = Arc::new(AtomicBool::new(false));
+    let restore_shutdown_started = Arc::clone(&shutdown_started);
     let app = builder
         .register_asynchronous_uri_scheme_protocol("sprout-media", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
@@ -284,8 +306,9 @@ pub fn run() {
             });
         })
         .manage(build_app_state())
-        .setup(|app| {
+        .setup(move |app| {
             let app_handle = app.handle().clone();
+            let shutdown_started = Arc::clone(&restore_shutdown_started);
 
             // Migrate data from the legacy `com.wesb.sprout` directory before
             // resolving identity, so the persisted key is available at the new
@@ -300,9 +323,15 @@ pub fn run() {
             resolve_persisted_identity(&app_handle, &state)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-            if let Err(error) = restore_managed_agents_on_launch(&app_handle) {
-                eprintln!("sprout-desktop: failed to restore managed agents: {error}");
-            }
+            // Keep launch-time agent restoration off the synchronous setup path
+            // so the frontend can mount and reveal the window promptly.
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) =
+                    restore_managed_agents_on_launch(&app_handle, shutdown_started.as_ref())
+                {
+                    eprintln!("sprout-desktop: failed to restore managed agents: {error}");
+                }
+            });
 
             Ok(())
         })
@@ -316,6 +345,7 @@ pub fn run() {
             get_presence,
             set_presence,
             get_relay_ws_url,
+            get_relay_http_url,
             discover_acp_providers,
             discover_managed_agent_prereqs,
             sign_event,
@@ -394,10 +424,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    let shutdown_done = std::sync::atomic::AtomicBool::new(false);
+    let shutdown_done = AtomicBool::new(false);
     app.run(move |app_handle, event| match event {
         RunEvent::ExitRequested { .. } | RunEvent::Exit => {
-            if !shutdown_done.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            shutdown_started.store(true, Ordering::SeqCst);
+            if !shutdown_done.swap(true, Ordering::SeqCst) {
                 if let Err(error) = shutdown_managed_agents(app_handle) {
                     eprintln!("sprout-desktop: failed to stop managed agents: {error}");
                 }

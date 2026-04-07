@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { installMockBridge } from "../helpers/bridge";
+import { openSettings } from "../helpers/settings";
 
 const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 const DESIGN_CHANNEL_ID = "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e";
@@ -11,9 +12,7 @@ test("creates a channel-scoped token from settings and can revoke it", async ({
   await installMockBridge(page);
   await page.goto("/");
 
-  await page.getByTestId("open-settings").click();
-  await expect(page.getByTestId("settings-view")).toBeVisible();
-  await page.getByTestId("settings-nav-tokens").click();
+  await openSettings(page, "tokens");
 
   const tokenCard = page.getByTestId("settings-tokens");
   await tokenCard.getByRole("button", { name: "Create token" }).click();
@@ -62,9 +61,7 @@ test("surfaces token mint errors in the dialog", async ({ page }) => {
   });
   await page.goto("/");
 
-  await page.getByTestId("open-settings").click();
-  await expect(page.getByTestId("settings-view")).toBeVisible();
-  await page.getByTestId("settings-nav-tokens").click();
+  await openSettings(page, "tokens");
 
   await page
     .getByTestId("settings-tokens")

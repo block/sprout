@@ -1,9 +1,9 @@
 /**
- * Best-effort cleanup of managed agents when a channel is deleted.
+ * Best-effort cleanup of channel-scoped managed agents.
  *
- * Each agent added via the "Add agents" dialog is a unique process scoped to
- * the channel. When the channel is deleted these orphaned agents should be
- * removed — but only if they are not members of any other channel.
+ * Each agent added via the "Add agents" dialog is a dedicated managed-agent
+ * record. If that agent is no longer present in any channel, the managed-agent
+ * record should be removed as well.
  */
 import {
   deleteManagedAgent,
@@ -12,40 +12,66 @@ import {
   listRelayAgents,
 } from "@/shared/api/tauri";
 
-export async function cleanupChannelAgents(channelId: string): Promise<void> {
-  const [members, managedAgents, relayAgents] = await Promise.all([
-    getChannelMembers(channelId),
+async function cleanupManagedAgentsByPubkey(
+  pubkeys: readonly string[],
+  options?: { ignoreChannelId?: string },
+): Promise<void> {
+  const normalizedPubkeys = new Set(
+    pubkeys
+      .map((pubkey) => pubkey.trim().toLowerCase())
+      .filter((pubkey) => pubkey.length > 0),
+  );
+
+  if (normalizedPubkeys.size === 0) {
+    return;
+  }
+
+  const [managedAgents, relayAgents] = await Promise.all([
     listManagedAgents(),
     listRelayAgents(),
   ]);
 
-  const memberPubkeys = new Set(
-    members.map((member) => member.pubkey.toLowerCase()),
+  const agentsToDelete = managedAgents.filter((agent) =>
+    normalizedPubkeys.has(agent.pubkey.toLowerCase()),
   );
-
-  // Find managed agents that are members of this channel.
-  const agentsInChannel = managedAgents.filter((agent) =>
-    memberPubkeys.has(agent.pubkey.toLowerCase()),
-  );
-
-  // Only delete agents that are NOT members of any other channel.
-  const agentsToDelete = agentsInChannel.filter((agent) => {
-    const relayAgent = relayAgents.find(
-      (ra) => ra.pubkey.toLowerCase() === agent.pubkey.toLowerCase(),
-    );
-    if (!relayAgent) {
-      // Not found in relay — safe to delete.
-      return true;
-    }
-    // Only delete if this is the agent's only channel.
-    const otherChannels = relayAgent.channelIds.filter(
-      (id) => id !== channelId,
-    );
-    return otherChannels.length === 0;
-  });
 
   // Delete orphaned agents (best-effort — don't block channel deletion).
   await Promise.allSettled(
-    agentsToDelete.map((agent) => deleteManagedAgent(agent.pubkey)),
+    agentsToDelete
+      .filter((agent) => {
+        const relayAgent = relayAgents.find(
+          (candidate) =>
+            candidate.pubkey.toLowerCase() === agent.pubkey.toLowerCase(),
+        );
+        if (!relayAgent) {
+          // Not found in relay — safe to delete.
+          return true;
+        }
+
+        const activeChannelIds = relayAgent.channelIds.filter(
+          (channelId) => channelId !== options?.ignoreChannelId,
+        );
+        return activeChannelIds.length === 0;
+      })
+      .map((agent) => deleteManagedAgent(agent.pubkey)),
+  );
+}
+
+export async function cleanupManagedAgentIfOrphaned(
+  pubkey: string,
+  channelId?: string,
+): Promise<void> {
+  await cleanupManagedAgentsByPubkey([pubkey], {
+    ignoreChannelId: channelId,
+  });
+}
+
+export async function cleanupChannelAgents(channelId: string): Promise<void> {
+  const members = await getChannelMembers(channelId);
+  await cleanupManagedAgentsByPubkey(
+    members.map((member) => member.pubkey),
+    {
+      ignoreChannelId: channelId,
+    },
   );
 }

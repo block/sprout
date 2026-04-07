@@ -1,4 +1,4 @@
-import { Bot, Plus, Settings2, UserRound, Zap } from "lucide-react";
+import { Plus, Settings2, Users, Zap } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -18,34 +18,14 @@ type ChannelMembersBarProps = {
   channel: Channel;
   currentPubkey?: string;
   onManageChannel: () => void;
+  onToggleMembers: () => void;
 };
-
-function CountStat({
-  count,
-  icon: Icon,
-  label,
-  loading,
-}: {
-  count: number;
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  loading?: boolean;
-}) {
-  return (
-    <div className="inline-flex h-8 items-center justify-center gap-1.5 rounded-full bg-muted/55 px-2.5 text-muted-foreground">
-      <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
-      <span className="relative top-px min-w-[1ch] text-[13px] font-medium leading-none text-muted-foreground/80 tabular-nums">
-        {loading ? "..." : count}
-      </span>
-      <span className="sr-only">{loading ? `Loading ${label}` : label}</span>
-    </div>
-  );
-}
 
 export function ChannelMembersBar({
   channel,
   currentPubkey,
   onManageChannel,
+  onToggleMembers,
 }: ChannelMembersBarProps) {
   const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
   const [isCreateWorkflowOpen, setIsCreateWorkflowOpen] = React.useState(false);
@@ -55,6 +35,7 @@ export function ChannelMembersBar({
   const managedAgentsQuery = useManagedAgentsQuery();
   const relayAgentsQuery = useRelayAgentsQuery();
   const members = membersQuery.data ?? [];
+  const memberCount = membersQuery.data?.length ?? channel.memberCount;
   const providers = React.useMemo(
     () =>
       [...(providersQuery.data ?? [])].sort((left, right) => {
@@ -68,8 +49,6 @@ export function ChannelMembersBar({
       }),
     [providersQuery.data],
   );
-  const managedAgents = managedAgentsQuery.data ?? [];
-  const relayAgents = relayAgentsQuery.data ?? [];
   const normalizedCurrentPubkey = currentPubkey
     ? normalizePubkey(currentPubkey)
     : null;
@@ -83,27 +62,6 @@ export function ChannelMembersBar({
     channel.channelType !== "dm" &&
     channel.archivedAt === null &&
     (channel.visibility === "open" || canManageMembers);
-  const managedAgentPubkeys = React.useMemo(
-    () => new Set(managedAgents.map((agent) => normalizePubkey(agent.pubkey))),
-    [managedAgents],
-  );
-  const relayAgentPubkeys = React.useMemo(
-    () => new Set(relayAgents.map((agent) => normalizePubkey(agent.pubkey))),
-    [relayAgents],
-  );
-  const peopleCount = React.useMemo(
-    () =>
-      members.filter((member) => {
-        const normalizedPubkey = normalizePubkey(member.pubkey);
-        return (
-          member.role !== "bot" &&
-          !managedAgentPubkeys.has(normalizedPubkey) &&
-          !relayAgentPubkeys.has(normalizedPubkey)
-        );
-      }).length,
-    [managedAgentPubkeys, members, relayAgentPubkeys],
-  );
-  const botCount = members.length - peopleCount;
   const previousChannelIdRef = React.useRef(channel.id);
 
   React.useEffect(() => {
@@ -128,20 +86,6 @@ export function ChannelMembersBar({
   return (
     <React.Fragment>
       <div className="flex items-center gap-2">
-        <CountStat
-          count={peopleCount}
-          icon={UserRound}
-          label="people"
-          loading={membersQuery.isLoading}
-        />
-
-        <CountStat
-          count={botCount}
-          icon={Bot}
-          label="bots"
-          loading={membersQuery.isLoading}
-        />
-
         <Button
           aria-label="Add agent"
           className="h-9 w-9 rounded-full"
@@ -170,6 +114,20 @@ export function ChannelMembersBar({
           variant="outline"
         >
           <Zap className="h-4 w-4" />
+        </Button>
+
+        <Button
+          aria-label={`View channel members (${memberCount})`}
+          className="h-9 gap-1.5 rounded-full px-3"
+          data-testid="channel-members-trigger"
+          onClick={onToggleMembers}
+          type="button"
+          variant="outline"
+        >
+          <Users className="h-4 w-4" />
+          <span className="min-w-[1ch] text-sm font-medium tabular-nums">
+            {memberCount}
+          </span>
         </Button>
 
         <Button

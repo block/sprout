@@ -1,6 +1,7 @@
 import { expect, test, type Browser } from "@playwright/test";
 
 import { installRelayBridge, TEST_IDENTITIES } from "../helpers/bridge";
+import { openSettings } from "../helpers/settings";
 import { assertRelaySeeded } from "../helpers/seed";
 
 async function createStream(
@@ -35,9 +36,7 @@ async function closeChannelManagement(page: import("@playwright/test").Page) {
 async function enableDesktopNotifications(
   page: import("@playwright/test").Page,
 ) {
-  await page.getByTestId("open-settings").click();
-  await expect(page.getByTestId("settings-view")).toBeVisible();
-  await page.getByTestId("settings-nav-notifications").click();
+  await openSettings(page, "notifications");
   await expect(page.getByTestId("settings-notifications")).toBeVisible();
   await page.getByTestId("notifications-desktop-toggle").click();
   await expect(page.getByTestId("notifications-desktop-state")).toContainText(

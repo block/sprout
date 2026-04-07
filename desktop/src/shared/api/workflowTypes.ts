@@ -11,6 +11,11 @@ export type Workflow = {
   updatedAt: number;
 };
 
+export type WorkflowSaveResult = {
+  workflow: Workflow;
+  webhookSecret: string | null;
+};
+
 export type WorkflowRunStatus =
   | "pending"
   | "running"

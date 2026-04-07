@@ -9,7 +9,7 @@ import type {
 
 /**
  * Stable callback references for ChannelPane so that keystroke-driven
- * re-renders of AppShell don't cascade into the timeline and composer.
+ * re-renders of ChannelScreen don't cascade into the timeline and composer.
  *
  * Mutation objects from TanStack Query v5 are new references on every render
  * (especially when `isPending` flips), so we stash `.mutateAsync` in a ref

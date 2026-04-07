@@ -6,6 +6,7 @@ import {
   useUpdateWorkflowMutation,
 } from "@/features/workflows/hooks";
 import type { Channel, Workflow } from "@/shared/api/types";
+import { getRelayHttpUrl } from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -16,6 +17,7 @@ import {
 } from "@/shared/ui/dialog";
 import { ChannelCombobox } from "./ChannelCombobox";
 import { WorkflowFormBuilder } from "./WorkflowFormBuilder";
+import { WorkflowWebhookSecretDialog } from "./WorkflowWebhookSecretDialog";
 import { FieldLabel } from "./workflowFormPrimitives";
 
 type DialogMode = "create" | "edit" | "duplicate";
@@ -74,6 +76,11 @@ export function WorkflowDialog({
   const [yamlDefinition, setYamlDefinition] = React.useState(() =>
     getInitialYaml(mode, workflow),
   );
+  const [savedWebhookInfo, setSavedWebhookInfo] = React.useState<{
+    relayHttpUrl: string;
+    webhookSecret: string;
+    workflowId: string;
+  } | null>(null);
 
   const createMutation = useCreateWorkflowMutation(selectedChannelId);
   const updateMutation = useUpdateWorkflowMutation(workflow?.id ?? "");
@@ -96,6 +103,7 @@ export function WorkflowDialog({
           : defaultChannelId;
       setSelectedChannelId(newChannelId);
       setYamlDefinition(getInitialYaml(mode, workflow));
+      setSavedWebhookInfo(null);
       resetCreate();
       resetUpdate();
     }
@@ -124,8 +132,16 @@ export function WorkflowDialog({
     if (!selectedChannelId || !yamlDefinition.trim()) return;
 
     try {
-      await mutation.mutateAsync(yamlDefinition);
+      const saved = await mutation.mutateAsync(yamlDefinition);
       handleOpenChange(false);
+      if (saved.webhookSecret) {
+        const relayHttpUrl = await getRelayHttpUrl();
+        setSavedWebhookInfo({
+          relayHttpUrl,
+          webhookSecret: saved.webhookSecret,
+          workflowId: saved.workflow.id,
+        });
+      }
     } catch {
       // React Query stores the error; keep the dialog open.
     }
@@ -135,86 +151,104 @@ export function WorkflowDialog({
   const showChannelInfo = mode !== "edit" && channels.length === 1;
 
   return (
-    <Dialog onOpenChange={handleOpenChange} open={open}>
-      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-lg">
-        <DialogHeader className="flex-shrink-0">
-          <DialogTitle>{TITLES[mode]}</DialogTitle>
-          <DialogDescription>
-            {mode === "edit"
-              ? "Modify the workflow definition."
-              : channels.length === 1
-                ? "Create a workflow scoped to this channel."
-                : "Define a workflow and assign it to a channel."}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
-          {showChannelSelector ? (
-            <div className="space-y-1.5">
-              <FieldLabel htmlFor="wf-channel-select">Channel</FieldLabel>
-              <ChannelCombobox
-                channels={channels}
-                disabled={mutation.isPending}
-                id="wf-channel-select"
-                onChange={(value) => {
-                  mutation.reset();
-                  setSelectedChannelId(value);
-                }}
-                value={selectedChannelId}
-              />
-              <p className="text-xs text-muted-foreground">
-                {selectedChannel
-                  ? `New workflows will belong to ${selectedChannel.name}.`
-                  : "Join or create a channel before adding a workflow."}
-              </p>
-            </div>
-          ) : (showChannelInfo || mode === "edit") && selectedChannel ? (
-            <p className="text-sm text-muted-foreground">
+    <>
+      <Dialog onOpenChange={handleOpenChange} open={open}>
+        <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-lg">
+          <DialogHeader className="flex-shrink-0">
+            <DialogTitle>{TITLES[mode]}</DialogTitle>
+            <DialogDescription>
               {mode === "edit"
-                ? "Editing workflow in"
-                : "This workflow will be created in"}{" "}
-              <span className="font-medium text-foreground">
-                {selectedChannel.name}
-              </span>
-              .
-            </p>
-          ) : null}
+                ? "Modify the workflow definition."
+                : channels.length === 1
+                  ? "Create a workflow scoped to this channel."
+                  : "Define a workflow and assign it to a channel."}
+            </DialogDescription>
+          </DialogHeader>
 
-          <WorkflowFormBuilder
-            disabled={mutation.isPending}
-            onChange={(yaml) => {
-              mutation.reset();
-              setYamlDefinition(yaml);
-            }}
-            yaml={yamlDefinition}
-          />
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
+            {showChannelSelector ? (
+              <div className="space-y-1.5">
+                <FieldLabel htmlFor="wf-channel-select">Channel</FieldLabel>
+                <ChannelCombobox
+                  channels={channels}
+                  disabled={mutation.isPending}
+                  id="wf-channel-select"
+                  onChange={(value) => {
+                    mutation.reset();
+                    setSelectedChannelId(value);
+                  }}
+                  value={selectedChannelId}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {selectedChannel
+                    ? `New workflows will belong to ${selectedChannel.name}.`
+                    : "Join or create a channel before adding a workflow."}
+                </p>
+              </div>
+            ) : (showChannelInfo || mode === "edit") && selectedChannel ? (
+              <p className="text-sm text-muted-foreground">
+                {mode === "edit"
+                  ? "Editing workflow in"
+                  : "This workflow will be created in"}{" "}
+                <span className="font-medium text-foreground">
+                  {selectedChannel.name}
+                </span>
+                .
+              </p>
+            ) : null}
 
-          {mutation.error instanceof Error ? (
-            <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {mutation.error.message}
-            </p>
-          ) : null}
-        </div>
+            <WorkflowFormBuilder
+              disabled={mutation.isPending}
+              onChange={(yaml) => {
+                mutation.reset();
+                setYamlDefinition(yaml);
+              }}
+              yaml={yamlDefinition}
+            />
 
-        <div className="flex flex-shrink-0 justify-end gap-2 border-t border-border pt-4">
-          <Button
-            onClick={() => handleOpenChange(false)}
-            type="button"
-            variant="outline"
-          >
-            Cancel
-          </Button>
-          <Button
-            disabled={
-              !selectedChannelId || !yamlDefinition.trim() || mutation.isPending
+            {mutation.error instanceof Error ? (
+              <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {mutation.error.message}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex flex-shrink-0 justify-end gap-2 border-t border-border pt-4">
+            <Button
+              onClick={() => handleOpenChange(false)}
+              type="button"
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={
+                !selectedChannelId ||
+                !yamlDefinition.trim() ||
+                mutation.isPending
+              }
+              onClick={handleSubmit}
+              type="button"
+            >
+              {mutation.isPending ? PENDING_LABELS[mode] : SUBMIT_LABELS[mode]}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {savedWebhookInfo ? (
+        <WorkflowWebhookSecretDialog
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) {
+              setSavedWebhookInfo(null);
             }
-            onClick={handleSubmit}
-            type="button"
-          >
-            {mutation.isPending ? PENDING_LABELS[mode] : SUBMIT_LABELS[mode]}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+          }}
+          open
+          relayHttpUrl={savedWebhookInfo.relayHttpUrl}
+          webhookSecret={savedWebhookInfo.webhookSecret}
+          workflowId={savedWebhookInfo.workflowId}
+        />
+      ) : null}
+    </>
   );
 }

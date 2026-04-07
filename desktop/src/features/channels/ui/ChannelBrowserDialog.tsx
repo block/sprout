@@ -20,7 +20,6 @@ import {
 import { Input } from "@/shared/ui/input";
 import { Button } from "@/shared/ui/button";
 
-const BROWSE_CHANNELS_SHORTCUT_KEY = "o";
 const BROWSE_CHANNELS_SHORTCUT_HINT = "\u21E7\u2318O";
 
 function formatRelativeTime(isoString: string | null) {
@@ -140,31 +139,6 @@ export function ChannelBrowserDialog({
     () => [...notJoined, ...joined],
     [notJoined, joined],
   );
-
-  React.useEffect(() => {
-    if (isForumMode) {
-      return;
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (
-        event.key.toLowerCase() !== BROWSE_CHANNELS_SHORTCUT_KEY ||
-        !(event.metaKey || event.ctrlKey) ||
-        event.altKey ||
-        !event.shiftKey
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-      onOpenChange(true);
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isForumMode, onOpenChange]);
 
   React.useEffect(() => {
     if (!open) {

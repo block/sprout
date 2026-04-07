@@ -10,6 +10,11 @@ import {
 import { WorkflowRunTrace } from "@/features/workflows/ui/WorkflowRunTrace";
 import type { Workflow } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
+import {
+  getWorkflowDescription,
+  getWorkflowDisplayStatus,
+  getWorkflowTriggerSummary,
+} from "./workflowDefinition";
 
 type WorkflowDetailPanelProps = {
   workflowId: string;
@@ -33,6 +38,13 @@ export function WorkflowDetailPanel({
     ? (runs.find((r) => r.id === selectedRunId) ?? null)
     : null;
   const approvalsQuery = useRunApprovalsQuery(workflowId, selectedRunId);
+  const workflowDescription = workflow
+    ? getWorkflowDescription(workflow.definition)
+    : null;
+  const triggerSummary = workflow
+    ? getWorkflowTriggerSummary(workflow.definition)
+    : null;
+  const workflowStatus = workflow ? getWorkflowDisplayStatus(workflow) : null;
 
   async function handleTrigger() {
     try {
@@ -49,9 +61,24 @@ export function WorkflowDetailPanel({
       data-testid="workflow-detail-panel"
     >
       <div className="flex items-center justify-between border-b px-4 py-3">
-        <h3 className="truncate text-sm font-semibold">
-          {workflow?.name ?? "Loading..."}
-        </h3>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="truncate text-sm font-semibold">
+              {workflow?.name ?? "Loading..."}
+            </h3>
+            {workflowStatus ? <RunStatusBadge status={workflowStatus} /> : null}
+          </div>
+          {workflowDescription ? (
+            <p className="mt-1 truncate text-xs text-muted-foreground">
+              {workflowDescription}
+            </p>
+          ) : null}
+          {triggerSummary ? (
+            <p className="mt-1 truncate text-xs text-muted-foreground">
+              {triggerSummary}
+            </p>
+          ) : null}
+        </div>
         <div className="flex items-center gap-1">
           {workflow ? (
             <Button
@@ -165,6 +192,9 @@ export function WorkflowDetailPanel({
 
 function RunStatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
+    active: "bg-green-500/15 text-green-500",
+    disabled: "bg-muted text-muted-foreground",
+    archived: "bg-amber-500/15 text-amber-500",
     completed: "bg-green-500/15 text-green-500",
     failed: "bg-red-500/15 text-red-500",
     running: "bg-blue-500/15 text-blue-500",

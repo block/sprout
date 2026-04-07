@@ -1,10 +1,8 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import {
-  channelsQueryKey,
-  updateChannelLastMessageAt,
-} from "@/features/channels/hooks";
+import { updateChannelLastMessageAt } from "@/features/channels/lib/channelCache";
+import { channelsQueryKey } from "@/features/channels/hooks";
 import { mergeTimelineCacheMessages } from "@/features/messages/hooks";
 import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
 import { getChannelIdFromTags } from "@/features/messages/lib/threading";
