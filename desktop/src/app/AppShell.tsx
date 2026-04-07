@@ -246,11 +246,13 @@ export function AppShell() {
         pubkey: hit.pubkey,
         created_at: hit.createdAt,
         kind: hit.kind,
-        tags: [["h", hit.channelId]],
+        tags: hit.channelId ? [["h", hit.channelId]] : [],
         content: hit.content,
         sig: "",
       });
-      void handleOpenChannel(hit.channelId);
+      if (hit.channelId) {
+        void handleOpenChannel(hit.channelId);
+      }
 
       void getEventById(hit.eventId)
         .then((event) => {

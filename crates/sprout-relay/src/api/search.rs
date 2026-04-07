@@ -48,13 +48,15 @@ pub async fn search_handler(
         .await
         .unwrap_or_default();
 
-    // Build Typesense filter_by: channel_id:=[id1,id2,...]
+    // Build Typesense filter_by: channel_id:=[id1,id2,...] || global events
     let filter_by = if channel_ids.is_empty() {
-        // No accessible channels — return empty results immediately.
-        return Ok(Json(serde_json::json!({ "hits": [], "found": 0 })));
+        Some("channel_id:=__global__".to_string())
     } else {
         let ids: Vec<String> = channel_ids.iter().map(|id| id.to_string()).collect();
-        Some(format!("channel_id:=[{}]", ids.join(",")))
+        Some(format!(
+            "(channel_id:=[{}] || channel_id:=__global__)",
+            ids.join(",")
+        ))
     };
 
     let search_query = SearchQuery {
@@ -82,19 +84,15 @@ pub async fn search_handler(
         .map(|c| (c.id.to_string(), c.name))
         .collect();
 
-    // Filter out hits with no channel_id (spec requirement: "Exclude hits with channel_id: None").
-    // This also prevents a deserialization mismatch — the desktop expects channel_id: String.
+    // Global events have channel_id: null — include them in results.
     let hits: Vec<serde_json::Value> = search_result
         .hits
         .into_iter()
-        .filter(|hit| hit.channel_id.is_some())
         .map(|hit| {
-            let channel_name = hit
+            let channel_name: Option<&String> = hit
                 .channel_id
                 .as_deref()
-                .and_then(|id| channel_name_map.get(id))
-                .cloned()
-                .unwrap_or_default();
+                .and_then(|id| channel_name_map.get(id));
             serde_json::json!({
                 "event_id": hit.event_id,
                 "content": hit.content,

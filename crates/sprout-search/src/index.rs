@@ -29,7 +29,19 @@ pub fn event_to_document(event: &StoredEvent) -> Result<Value, SearchError> {
         })
         .collect();
 
-    let channel_id = event.channel_id.as_ref().map(|id| id.to_string());
+    // Global events use a sentinel value instead of NULL/absent. Typesense 27.1's
+    // `__missing__` filter does not reliably match absent optional fields, so we use
+    // an explicit `__global__` sentinel that can be matched with `channel_id:=__global__`.
+    // NOTE: Historical docs indexed before this change have channel_id absent/null and
+    // won't match the sentinel filter. A full reindex (`just reindex-search`) is needed
+    // after deploy to backfill. Pre-existing global events (kind:0 only) were already
+    // excluded from search results by the old `.filter(|h| h.channel_id.is_some())`, so
+    // this is not a regression — those docs were never returned.
+    let channel_id_val = event
+        .channel_id
+        .as_ref()
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "__global__".to_string());
 
     let doc = json!({
         "id":         nostr_event.id.to_string(),
@@ -37,7 +49,7 @@ pub fn event_to_document(event: &StoredEvent) -> Result<Value, SearchError> {
         // Cast to i32 for Typesense schema (int32 field). nostr Kind is u16; all Sprout kinds fit in i32.
         "kind":       event_kind_i32(nostr_event),
         "pubkey":     nostr_event.pubkey.to_string(),
-        "channel_id": channel_id,
+        "channel_id": channel_id_val,
         "created_at": nostr_event.created_at.as_u64() as i64,
         "tags_flat":  tags_flat,
     });
@@ -251,10 +263,10 @@ mod tests {
     }
 
     #[test]
-    fn document_no_channel_id_is_null() {
+    fn document_no_channel_id_uses_global_sentinel() {
         let stored = make_stored_event("no channel", Kind::TextNote, None);
         let doc = event_to_document(&stored).unwrap();
-        assert!(doc["channel_id"].is_null());
+        assert_eq!(doc["channel_id"].as_str().unwrap(), "__global__");
     }
 
     #[test]
