@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useRef } from "react";
 import {
   BellRing,
   Check,
@@ -89,9 +89,13 @@ function formatThemeLabel(name: string): string {
 function ThemeSettingsCard() {
   const { setTheme, themeName } = useTheme();
   const [search, setSearch] = useState("");
-  const activeRef = useCallback((node: HTMLButtonElement | null) => {
-    node?.scrollIntoView({ block: "center" });
-  }, []);
+  const didScrollRef = useRef(false);
+  const activeRef = (node: HTMLButtonElement | null) => {
+    if (node && !didScrollRef.current) {
+      didScrollRef.current = true;
+      node.scrollIntoView({ block: "center" });
+    }
+  };
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
