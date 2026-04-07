@@ -216,7 +216,7 @@ pub async fn post_tokens(
     {
         if let Some(encoded) = auth_header.strip_prefix("Nostr ") {
             // Reconstruct canonical URL for NIP-98 verification.
-            let canonical_url = reconstruct_canonical_url_for_tokens(&headers, &state);
+            let canonical_url = reconstruct_canonical_url_for_tokens(&state.config.relay_url);
 
             // The Authorization: Nostr header value is base64-encoded JSON.
             // Decode it before passing to verify_nip98_event which expects JSON.
@@ -801,27 +801,14 @@ pub async fn delete_all_tokens(
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-/// Reconstruct the canonical URL for NIP-98 verification on the token mint endpoint.
-fn reconstruct_canonical_url_for_tokens(headers: &HeaderMap, state: &AppState) -> String {
-    let proto = headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("https");
-    let host = headers
-        .get("x-forwarded-host")
-        .or_else(|| headers.get("host"))
-        .and_then(|v| v.to_str().ok());
-
-    if let Some(host) = host {
-        format!("{proto}://{host}/api/tokens")
-    } else {
-        let base = state
-            .config
-            .relay_url
-            .replace("wss://", "https://")
-            .replace("ws://", "http://");
-        format!("{base}/api/tokens")
-    }
+/// Derive the canonical token-mint URL from the configured relay identity.
+fn reconstruct_canonical_url_for_tokens(relay_url: &str) -> String {
+    let base = relay_url
+        .trim()
+        .trim_end_matches('/')
+        .replace("wss://", "https://")
+        .replace("ws://", "http://");
+    format!("{base}/api/tokens")
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -889,5 +876,11 @@ mod tests {
         }"#;
         let req: MintTokenRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.channel_ids.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn canonical_token_url_uses_configured_relay_identity() {
+        let url = reconstruct_canonical_url_for_tokens("wss://relay.example.test/");
+        assert_eq!(url, "https://relay.example.test/api/tokens");
     }
 }

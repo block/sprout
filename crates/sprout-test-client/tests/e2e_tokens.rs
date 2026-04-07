@@ -178,15 +178,11 @@ async fn test_mint_token_via_nip98() {
     });
     let body_bytes = serde_json::to_vec(&body_json).unwrap();
 
-    // The relay's reconstruct_canonical_url_for_tokens uses X-Forwarded-Proto
-    // to determine the scheme. We pass "http" so the canonical URL matches
-    // what we sign in the NIP-98 event.
     let auth_header = build_nip98_header(&keys, &endpoint_url, "POST", &body_bytes);
 
     let resp = client
         .post(&endpoint_url)
         .header("Authorization", auth_header)
-        .header("X-Forwarded-Proto", "http")
         .header("Content-Type", "application/json")
         .body(body_bytes)
         .send()
@@ -389,7 +385,6 @@ async fn test_nip98_rejected_for_list_tokens() {
     let resp = client
         .get(&endpoint_url)
         .header("Authorization", auth_header)
-        .header("X-Forwarded-Proto", "http")
         .send()
         .await
         .expect("GET /api/tokens failed");
@@ -438,7 +433,6 @@ async fn test_nip98_requires_payload_tag() {
     let resp = client
         .post(&endpoint_url)
         .header("Authorization", auth_header)
-        .header("X-Forwarded-Proto", "http")
         .header("Content-Type", "application/json")
         .body(body_bytes)
         .send()
@@ -477,7 +471,6 @@ async fn test_nip98_wrong_payload_rejected() {
     let resp = client
         .post(&endpoint_url)
         .header("Authorization", auth_header)
-        .header("X-Forwarded-Proto", "http")
         .header("Content-Type", "application/json")
         .body(body_bytes)
         .send()

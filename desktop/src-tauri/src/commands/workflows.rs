@@ -4,7 +4,7 @@ use tauri::State;
 
 use crate::{
     app_state::AppState,
-    relay::{build_authed_request, send_empty_request, send_json_request},
+    relay::{api_path, build_authed_request, send_empty_request, send_json_request},
 };
 
 // ── Reads ───────────────────────────────────────────────────────────────────
@@ -14,7 +14,7 @@ pub async fn get_channel_workflows(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let path = format!("/api/channels/{channel_id}/workflows");
+    let path = api_path(&["channels", &channel_id, "workflows"]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
@@ -24,7 +24,7 @@ pub async fn get_workflow(
     workflow_id: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let path = format!("/api/workflows/{workflow_id}");
+    let path = api_path(&["workflows", &workflow_id]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
@@ -35,11 +35,11 @@ pub async fn get_workflow_runs(
     limit: Option<u32>,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let mut path = format!("/api/workflows/{workflow_id}/runs");
+    let path = api_path(&["workflows", &workflow_id, "runs"]);
+    let mut request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     if let Some(limit) = limit {
-        path.push_str(&format!("?limit={limit}"));
+        request = request.query(&[("limit", limit.to_string())]);
     }
-    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
 
@@ -56,7 +56,7 @@ pub async fn create_workflow(
     yaml_definition: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let path = format!("/api/channels/{channel_id}/workflows");
+    let path = api_path(&["channels", &channel_id, "workflows"]);
     let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?
         .json(&CreateWorkflowBody { yaml_definition });
     send_json_request(request).await
@@ -73,7 +73,7 @@ pub async fn update_workflow(
     yaml_definition: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let path = format!("/api/workflows/{workflow_id}");
+    let path = api_path(&["workflows", &workflow_id]);
     let request = build_authed_request(&state.http_client, Method::PUT, &path, &state)?
         .json(&UpdateWorkflowBody { yaml_definition });
     send_json_request(request).await
@@ -84,7 +84,7 @@ pub async fn delete_workflow(
     workflow_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let path = format!("/api/workflows/{workflow_id}");
+    let path = api_path(&["workflows", &workflow_id]);
     let request = build_authed_request(&state.http_client, Method::DELETE, &path, &state)?;
     send_empty_request(request).await
 }
@@ -94,7 +94,7 @@ pub async fn trigger_workflow(
     workflow_id: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let path = format!("/api/workflows/{workflow_id}/trigger");
+    let path = api_path(&["workflows", &workflow_id, "trigger"]);
     let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?;
     send_json_request(request).await
 }
@@ -107,7 +107,7 @@ pub async fn get_run_approvals(
     run_id: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let path = format!("/api/workflows/{workflow_id}/runs/{run_id}/approvals");
+    let path = api_path(&["workflows", &workflow_id, "runs", &run_id, "approvals"]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
@@ -124,7 +124,7 @@ pub async fn grant_approval(
     note: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let path = format!("/api/approvals/by-hash/{token}/grant");
+    let path = api_path(&["approvals", "by-hash", &token, "grant"]);
     let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?
         .json(&ApprovalBody { note });
     send_json_request(request).await
@@ -136,7 +136,7 @@ pub async fn deny_approval(
     note: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let path = format!("/api/approvals/by-hash/{token}/deny");
+    let path = api_path(&["approvals", "by-hash", &token, "deny"]);
     let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?
         .json(&ApprovalBody { note });
     send_json_request(request).await
