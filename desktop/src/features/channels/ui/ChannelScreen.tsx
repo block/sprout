@@ -15,7 +15,11 @@ import {
   useSendMessageMutation,
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
-import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
+import type { TimelineMessage } from "@/features/messages/types";
+import {
+  channelMessagesKey,
+  channelThreadKey,
+} from "@/features/messages/lib/messageQueryKeys";
 import {
   collectMessageAuthorPubkeys,
   formatTimelineMessages,
@@ -37,6 +41,7 @@ import type {
   RelayEvent,
   SearchHit,
 } from "@/shared/api/types";
+import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 
 const ChannelPane = React.lazy(async () => {
@@ -79,6 +84,7 @@ export function ChannelScreen({
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
   const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
+  const [threadRootId, setThreadRootId] = React.useState<string | null>(null);
   const currentPubkey = currentIdentity?.pubkey;
   const activeChannelId = activeChannel?.id ?? null;
 
@@ -175,6 +181,19 @@ export function ChannelScreen({
       resolvedMessages,
     ],
   );
+
+  /** Main channel timeline: top-level messages only; thread replies live in the thread sidebar. */
+  const mainTimelineMessages = React.useMemo(
+    () =>
+      timelineMessages.filter((message) => {
+        if (message.kind === KIND_SYSTEM_MESSAGE) {
+          return true;
+        }
+
+        return message.depth === 0;
+      }),
+    [timelineMessages],
+  );
   const replyTargetMessage = React.useMemo(
     () =>
       timelineMessages.find((message) => message.id === replyTargetId) ?? null,
@@ -193,7 +212,6 @@ export function ChannelScreen({
     handleEdit,
     handleEditSave,
     handleReply,
-    handleSend,
     handleToggleReaction,
   } = useChannelPaneHandlers({
     deleteMessageMutation,
@@ -205,6 +223,56 @@ export function ChannelScreen({
     setReplyTargetId,
     toggleReactionMutation,
   });
+
+  const handleReplyOpenThread = React.useCallback(
+    (message: TimelineMessage) => {
+      setThreadRootId(message.rootId ?? message.id);
+      handleReply(message);
+    },
+    [handleReply],
+  );
+
+  const handleCloseThread = React.useCallback(() => {
+    setThreadRootId(null);
+    setReplyTargetId(null);
+  }, []);
+
+  const handleSend = React.useCallback(
+    async (
+      content: string,
+      mentionPubkeys: string[],
+      mediaTags?: string[][],
+    ) => {
+      const parentEventId = threadRootId
+        ? (replyTargetId ?? threadRootId)
+        : replyTargetId;
+
+      const result = await sendMessageMutation.mutateAsync({
+        content,
+        mentionPubkeys,
+        parentEventId,
+        mediaTags,
+      });
+
+      if (threadRootId) {
+        setReplyTargetId(result.id);
+        if (activeChannelId) {
+          void queryClient.invalidateQueries({
+            queryKey: channelThreadKey(activeChannelId, threadRootId),
+          });
+        }
+      } else {
+        setReplyTargetId(null);
+      }
+    },
+    [
+      activeChannelId,
+      queryClient,
+      replyTargetId,
+      sendMessageMutation,
+      threadRootId,
+    ],
+  );
 
   const canReact = activeChannel !== null && activeChannel.archivedAt === null;
   const effectiveToggleReaction = React.useMemo(
@@ -237,6 +305,7 @@ export function ChannelScreen({
     (_channelId: string | null) => {
       setReplyTargetId(null);
       setEditTargetId(null);
+      setThreadRootId(null);
     },
     [],
   );
@@ -400,19 +469,21 @@ export function ChannelScreen({
                 }
                 isSending={sendMessageMutation.isPending}
                 isTimelineLoading={isTimelineLoading}
-                messages={timelineMessages}
+                messages={mainTimelineMessages}
                 onCancelEdit={handleCancelEdit}
                 onCancelReply={handleCancelReply}
+                onCloseThread={handleCloseThread}
                 onDelete={handleDelete}
                 onEdit={handleEdit}
                 onEditSave={handleEditSave}
-                onReply={handleReply}
+                onReply={handleReplyOpenThread}
                 onSend={handleSend}
                 onTargetReached={onTargetReached}
                 onToggleReaction={effectiveToggleReaction}
                 profiles={messageProfiles}
                 replyTargetId={replyTargetId}
                 replyTargetMessage={replyTargetMessage}
+                threadRootId={threadRootId}
                 targetMessageId={
                   activeChannel && searchAnchor?.channelId === activeChannel.id
                     ? searchAnchor.eventId

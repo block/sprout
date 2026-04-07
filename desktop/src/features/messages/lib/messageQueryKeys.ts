@@ -6,6 +6,11 @@ export function channelMessagesKey(channelId: string) {
   return ["channel-messages", channelId] as const;
 }
 
+/** React-query key for GET /api/channels/:id/threads/:root_event_id (stream or forum). */
+export function channelThreadKey(channelId: string, rootEventId: string) {
+  return ["channel-thread", channelId, rootEventId] as const;
+}
+
 export function dedupeMessagesById(messages: RelayEvent[]) {
   const seenIds = new Set<string>();
   const deduped: RelayEvent[] = [];
