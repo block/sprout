@@ -15,7 +15,10 @@ import {
   useSendMessageMutation,
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
-import type { TimelineMessage } from "@/features/messages/types";
+import type {
+  ThreadConversationHint,
+  TimelineMessage,
+} from "@/features/messages/types";
 import {
   channelMessagesKey,
   channelThreadKey,
@@ -32,7 +35,10 @@ import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
-import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
+import {
+  mergeCurrentProfileIntoLookup,
+  resolveUserLabel,
+} from "@/features/profile/lib/identity";
 import { getEventById } from "@/shared/api/tauri";
 import type {
   Channel,
@@ -194,6 +200,56 @@ export function ChannelScreen({
       }),
     [timelineMessages],
   );
+
+  /** Reply counts + participant labels for roots that have sidebar thread activity. */
+  const threadHintsByRootId = React.useMemo(() => {
+    const aggregates = new Map<
+      string,
+      { replyCount: number; pubkeys: string[] }
+    >();
+
+    for (const m of timelineMessages) {
+      if (m.kind === KIND_SYSTEM_MESSAGE) {
+        continue;
+      }
+      if (m.depth === 0) {
+        continue;
+      }
+      const rootId = m.rootId;
+      if (!rootId) {
+        continue;
+      }
+
+      const agg = aggregates.get(rootId) ?? { replyCount: 0, pubkeys: [] };
+      agg.replyCount += 1;
+      if (m.pubkey) {
+        const pk = m.pubkey.toLowerCase();
+        if (!agg.pubkeys.some((p) => p.toLowerCase() === pk)) {
+          agg.pubkeys.push(m.pubkey);
+        }
+      }
+      aggregates.set(rootId, agg);
+    }
+
+    const out = new Map<string, ThreadConversationHint>();
+    for (const [rootId, agg] of aggregates) {
+      const participantPubkeys = agg.pubkeys.slice(0, 5);
+      const participantLabels = participantPubkeys.map((pk) =>
+        resolveUserLabel({
+          pubkey: pk,
+          currentPubkey,
+          profiles: messageProfiles,
+          preferResolvedSelfLabel: true,
+        }),
+      );
+      out.set(rootId, {
+        replyCount: agg.replyCount,
+        participantPubkeys,
+        participantLabels,
+      });
+    }
+    return out;
+  }, [currentPubkey, messageProfiles, timelineMessages]);
   const replyTargetMessage = React.useMemo(
     () =>
       timelineMessages.find((message) => message.id === replyTargetId) ?? null,
@@ -237,15 +293,41 @@ export function ChannelScreen({
     setReplyTargetId(null);
   }, []);
 
-  const handleSend = React.useCallback(
+  /** Main channel composer — always posts to the channel timeline (not the open thread). */
+  const handleSendChannel = React.useCallback(
     async (
       content: string,
       mentionPubkeys: string[],
       mediaTags?: string[][],
     ) => {
-      const parentEventId = threadRootId
-        ? (replyTargetId ?? threadRootId)
-        : replyTargetId;
+      const parentEventId = threadRootId ? null : replyTargetId;
+
+      await sendMessageMutation.mutateAsync({
+        content,
+        mentionPubkeys,
+        parentEventId,
+        mediaTags,
+      });
+
+      if (!threadRootId) {
+        setReplyTargetId(null);
+      }
+    },
+    [replyTargetId, sendMessageMutation, threadRootId],
+  );
+
+  /** Thread sidebar composer — replies inside the active thread. */
+  const handleSendThread = React.useCallback(
+    async (
+      content: string,
+      mentionPubkeys: string[],
+      mediaTags?: string[][],
+    ) => {
+      if (!threadRootId) {
+        return;
+      }
+
+      const parentEventId = replyTargetId ?? threadRootId;
 
       const result = await sendMessageMutation.mutateAsync({
         content,
@@ -254,15 +336,11 @@ export function ChannelScreen({
         mediaTags,
       });
 
-      if (threadRootId) {
-        setReplyTargetId(result.id);
-        if (activeChannelId) {
-          void queryClient.invalidateQueries({
-            queryKey: channelThreadKey(activeChannelId, threadRootId),
-          });
-        }
-      } else {
-        setReplyTargetId(null);
+      setReplyTargetId(result.id);
+      if (activeChannelId) {
+        void queryClient.invalidateQueries({
+          queryKey: channelThreadKey(activeChannelId, threadRootId),
+        });
       }
     },
     [
@@ -478,12 +556,14 @@ export function ChannelScreen({
                   onEdit={handleEdit}
                   onEditSave={handleEditSave}
                   onReply={handleReplyOpenThread}
-                  onSend={handleSend}
+                  onSendChannel={handleSendChannel}
+                  onSendThread={handleSendThread}
                   onTargetReached={onTargetReached}
                   onToggleReaction={effectiveToggleReaction}
                   profiles={messageProfiles}
                   replyTargetId={replyTargetId}
                   replyTargetMessage={replyTargetMessage}
+                  threadHintsByRootId={threadHintsByRootId}
                   threadRootId={threadRootId}
                   targetMessageId={
                     activeChannel &&

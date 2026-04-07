@@ -5,6 +5,15 @@ export type TimelineReaction = {
   users: Array<{ pubkey: string; displayName: string }>;
 };
 
+/** Sidebar thread summary for a root message (main timeline). */
+export type ThreadConversationHint = {
+  replyCount: number;
+  /** Unique reply authors (up to 5) for avatar stack. */
+  participantPubkeys: string[];
+  /** Parallel display names (tooltips / initials fallback). */
+  participantLabels: string[];
+};
+
 export type TimelineMessage = {
   id: string;
   createdAt: number;

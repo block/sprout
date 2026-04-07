@@ -1,12 +1,17 @@
 import * as React from "react";
+import { MessageSquare } from "lucide-react";
 
-import type { TimelineMessage } from "@/features/messages/types";
+import type {
+  ThreadConversationHint,
+  TimelineMessage,
+} from "@/features/messages/types";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
@@ -16,22 +21,84 @@ import { MessageTimestamp } from "./MessageTimestamp";
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
 
+function threadParticipantInitials(label: string) {
+  const parts = label.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) {
+    return "?";
+  }
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+  return `${parts[0][0] ?? ""}${parts[parts.length - 1]?.[0] ?? ""}`.toUpperCase();
+}
+
+function ThreadParticipantAvatar({
+  avatarUrl,
+  label,
+  pubkey,
+  stackIndex,
+}: {
+  avatarUrl?: string | null;
+  label: string;
+  pubkey: string;
+  stackIndex: number;
+}) {
+  const [failed, setFailed] = React.useState(false);
+
+  return (
+    <UserProfilePopover pubkey={pubkey}>
+      <button
+        className={cn(
+          "relative inline-flex h-5 w-5 shrink-0 overflow-hidden rounded-full border-2 border-background bg-muted text-[8px] font-semibold text-muted-foreground shadow-sm transition-transform hover:z-20 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        )}
+        onClick={(event) => {
+          event.stopPropagation();
+        }}
+        style={{ zIndex: 10 - stackIndex }}
+        title={label}
+        type="button"
+      >
+        {avatarUrl && !failed ? (
+          <img
+            alt=""
+            className="h-full w-full object-cover"
+            onError={() => {
+              setFailed(true);
+            }}
+            referrerPolicy="no-referrer"
+            src={rewriteRelayUrl(avatarUrl)}
+          />
+        ) : (
+          <span className="flex h-full w-full items-center justify-center">
+            {threadParticipantInitials(label)}
+          </span>
+        )}
+      </button>
+    </UserProfilePopover>
+  );
+}
+
 export const MessageRow = React.memo(
   function MessageRow({
     activeReplyTargetId = null,
+    activeThreadRootId = null,
     highlighted = false,
     message,
     onDelete,
     onEdit,
+    onOpenThread,
     onToggleReaction,
     onReply,
     profiles,
+    threadHint,
   }: {
     activeReplyTargetId?: string | null;
+    activeThreadRootId?: string | null;
     highlighted?: boolean;
     message: TimelineMessage;
     onDelete?: (message: TimelineMessage) => void;
     onEdit?: (message: TimelineMessage) => void;
+    onOpenThread?: (message: TimelineMessage) => void;
     onToggleReaction?: (
       message: TimelineMessage,
       emoji: string,
@@ -39,6 +106,7 @@ export const MessageRow = React.memo(
     ) => Promise<void>;
     onReply?: (message: TimelineMessage) => void;
     profiles?: UserProfileLookup;
+    threadHint?: ThreadConversationHint;
   }) {
     const [hasAvatarError, setHasAvatarError] = React.useState(false);
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
@@ -294,6 +362,61 @@ export const MessageRow = React.memo(
                 });
               }}
             />
+            {message.depth === 0 &&
+            threadHint &&
+            threadHint.replyCount > 0 &&
+            onOpenThread ? (
+              <div
+                className={cn(
+                  "mt-1.5 inline-flex max-w-full flex-wrap items-center gap-2 rounded-md py-0.5 text-left text-[11px] transition-colors",
+                  "text-muted-foreground/90 hover:bg-muted/50 hover:text-foreground",
+                  activeThreadRootId === message.id
+                    ? "bg-muted/40 text-foreground"
+                    : "",
+                )}
+                data-testid="message-thread-conversation-hint"
+              >
+                <button
+                  className="inline-flex items-center gap-x-1.5 rounded-md px-0 text-left font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenThread(message);
+                  }}
+                  type="button"
+                >
+                  <MessageSquare
+                    aria-hidden
+                    className="h-3 w-3 shrink-0 opacity-70"
+                  />
+                  <span>
+                    {threadHint.replyCount}{" "}
+                    {threadHint.replyCount === 1 ? "reply" : "replies"}
+                  </span>
+                </button>
+                {threadHint.participantPubkeys.length > 0 ? (
+                  <div
+                    aria-hidden
+                    className="flex items-center -space-x-1.5 pl-0.5"
+                  >
+                    {threadHint.participantPubkeys.map((pubkey, i) => {
+                      const label =
+                        threadHint.participantLabels[i] ?? pubkey.slice(0, 8);
+                      const resolved =
+                        profiles?.[normalizePubkey(pubkey)] ?? null;
+                      return (
+                        <ThreadParticipantAvatar
+                          avatarUrl={resolved?.avatarUrl ?? null}
+                          key={pubkey}
+                          label={label}
+                          pubkey={pubkey}
+                          stackIndex={i}
+                        />
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {reactionErrorMessage ? (
               <p className="mt-1.5 text-xs text-destructive">
                 {reactionErrorMessage}
@@ -340,7 +463,14 @@ export const MessageRow = React.memo(
     prev.message.role === next.message.role &&
     prev.highlighted === next.highlighted &&
     prev.activeReplyTargetId === next.activeReplyTargetId &&
-    prev.profiles === next.profiles,
+    prev.activeThreadRootId === next.activeThreadRootId &&
+    prev.profiles === next.profiles &&
+    (prev.threadHint === next.threadHint ||
+      (prev.threadHint?.replyCount === next.threadHint?.replyCount &&
+        prev.threadHint?.participantPubkeys.join("\0") ===
+          next.threadHint?.participantPubkeys.join("\0") &&
+        prev.threadHint?.participantLabels.join("\0") ===
+          next.threadHint?.participantLabels.join("\0"))),
 );
 
 MessageRow.displayName = "MessageRow";

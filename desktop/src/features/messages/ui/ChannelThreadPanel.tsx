@@ -1,7 +1,11 @@
-import { MessageSquare, X } from "lucide-react";
+import { X } from "lucide-react";
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import {
+  useManagedAgentsQuery,
+  useRelayAgentsQuery,
+} from "@/features/agents/hooks";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { channelThreadKey } from "@/features/messages/lib/messageQueryKeys";
 import { getForumThread } from "@/shared/api/forum";
@@ -25,11 +29,6 @@ type ChannelThreadPanelProps = {
   profiles?: UserProfileLookup;
   rootEventId: string;
   onClose: () => void;
-  replyTarget: {
-    author: string;
-    body: string;
-    id: string;
-  } | null;
   onCancelReply: () => void;
   onSend: (
     content: string,
@@ -74,7 +73,7 @@ function ThreadReplyRow({
   const mentionNames = resolveMentionNames(tags, profiles);
 
   return (
-    <div className="border-b border-border/40 px-3 py-2.5 last:border-b-0">
+    <div className="px-3 py-2.5">
       <div className="flex items-start gap-2">
         <ProfileAvatar
           avatarUrl={avatarUrl}
@@ -109,7 +108,6 @@ export function ChannelThreadPanel({
   profiles,
   rootEventId,
   onClose,
-  replyTarget,
   onCancelReply,
   onSend,
   isSending,
@@ -130,22 +128,42 @@ export function ChannelThreadPanel({
     enabled: Boolean(channel.id && rootEventId),
   });
 
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const relayAgentsQuery = useRelayAgentsQuery();
+
   const thread = threadQuery.data;
   const isLoading = threadQuery.isPending;
 
+  const implicitThreadAgentMention = React.useMemo(() => {
+    const rootPk = thread?.post.pubkey;
+    if (!rootPk) {
+      return null;
+    }
+
+    const lower = rootPk.toLowerCase();
+    const managed = (managedAgentsQuery.data ?? []).find(
+      (a) => a.pubkey.toLowerCase() === lower,
+    );
+    if (managed) {
+      return { displayName: managed.name, pubkey: managed.pubkey };
+    }
+
+    const relay = (relayAgentsQuery.data ?? []).find(
+      (a) => a.pubkey.toLowerCase() === lower,
+    );
+    if (relay) {
+      return { displayName: relay.name, pubkey: relay.pubkey };
+    }
+
+    return null;
+  }, [managedAgentsQuery.data, relayAgentsQuery.data, thread?.post.pubkey]);
+
   return (
     <aside
-      className="flex h-full min-h-0 w-[min(100%,420px)] shrink-0 flex-col border-l border-border/60 bg-muted/20"
+      className="relative z-10 flex h-full min-h-0 w-[min(100%,420px)] shrink-0 flex-col border-l border-border/60 bg-muted/20 pt-12"
       data-testid="channel-thread-panel"
     >
-      <header className="flex shrink-0 items-center gap-2 border-b border-border/60 px-3 py-2">
-        <MessageSquare className="h-4 w-4 text-muted-foreground" aria-hidden />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold">Thread</p>
-          <p className="truncate text-[11px] text-muted-foreground">
-            #{channel.name}
-          </p>
-        </div>
+      <header className="flex shrink-0 justify-end px-2 py-2">
         <Button
           aria-label="Close thread"
           className="h-8 w-8 shrink-0 p-0"
@@ -166,7 +184,7 @@ export function ChannelThreadPanel({
           </div>
         ) : thread ? (
           <>
-            <div className="border-b border-border/50 bg-background/40 px-3 py-3">
+            <div className="bg-background/40 px-3 py-3">
               <div className="flex items-start gap-2">
                 <ProfileAvatar
                   avatarUrl={
@@ -232,19 +250,21 @@ export function ChannelThreadPanel({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-border/60 bg-background/80 p-2 backdrop-blur-sm">
+      <div className="shrink-0 bg-background/80 p-2 backdrop-blur-sm">
         <MessageComposer
           channelId={channel.id}
           channelName={channel.name}
           disabled={disabledComposer}
+          draftStorageKey={`${channel.id}:thread:${rootEventId}`}
           editTarget={editTarget}
+          implicitThreadAgentMention={implicitThreadAgentMention}
           isSending={isSending}
           onCancelEdit={onCancelEdit}
           onCancelReply={onCancelReply}
           onEditSave={onEditSave}
           onSend={onSend}
-          placeholder={`Reply in thread…`}
-          replyTarget={replyTarget}
+          placeholder="Reply in thread…"
+          replyTarget={null}
         />
       </div>
     </aside>

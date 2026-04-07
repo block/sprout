@@ -4,7 +4,10 @@ import {
   formatDayHeading,
   isSameDay,
 } from "@/features/messages/lib/dateFormatters";
-import type { TimelineMessage } from "@/features/messages/types";
+import type {
+  ThreadConversationHint,
+  TimelineMessage,
+} from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { DayDivider } from "./DayDivider";
@@ -13,11 +16,14 @@ import { SystemMessageRow } from "./SystemMessageRow";
 
 type TimelineMessageListProps = {
   activeReplyTargetId?: string | null;
+  activeThreadRootId?: string | null;
   currentPubkey?: string;
   highlightedMessageId?: string | null;
   messages: TimelineMessage[];
+  threadHintsByRootId?: Map<string, ThreadConversationHint>;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
+  onOpenThread?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
   onToggleReaction?: (
     message: TimelineMessage,
@@ -29,11 +35,14 @@ type TimelineMessageListProps = {
 
 export const TimelineMessageList = React.memo(function TimelineMessageList({
   activeReplyTargetId = null,
+  activeThreadRootId = null,
   currentPubkey,
   highlightedMessageId = null,
   messages,
+  threadHintsByRootId,
   onDelete,
   onEdit,
+  onOpenThread,
   onReply,
   onToggleReaction,
   profiles,
@@ -65,10 +74,12 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
         />,
       );
     } else {
+      const threadHint = threadHintsByRootId?.get(message.id);
       elements.push(
         <MessageRow
           key={message.id}
           activeReplyTargetId={activeReplyTargetId}
+          activeThreadRootId={activeThreadRootId}
           highlighted={message.id === highlightedMessageId}
           message={message}
           onDelete={
@@ -81,9 +92,11 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               ? onEdit
               : undefined
           }
+          onOpenThread={onOpenThread}
           onToggleReaction={onToggleReaction}
           onReply={onReply}
           profiles={profiles}
+          threadHint={threadHint}
         />,
       );
     }

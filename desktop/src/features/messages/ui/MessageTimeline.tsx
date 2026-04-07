@@ -1,7 +1,10 @@
 import * as React from "react";
 import { ArrowDown, Loader2 } from "lucide-react";
 
-import type { TimelineMessage } from "@/features/messages/types";
+import type {
+  ThreadConversationHint,
+  TimelineMessage,
+} from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { Button } from "@/shared/ui/button";
 import { Separator } from "@/shared/ui/separator";
@@ -19,13 +22,16 @@ type MessageTimelineProps = {
   emptyTitle?: string;
   emptyDescription?: string;
   activeReplyTargetId?: string | null;
+  activeThreadRootId?: string | null;
   currentPubkey?: string;
   fetchOlder?: () => Promise<void>;
   hasOlderMessages?: boolean;
   isFetchingOlder?: boolean;
   profiles?: UserProfileLookup;
+  threadHintsByRootId?: Map<string, ThreadConversationHint>;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
+  onOpenThread?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
   onToggleReaction?: (
     message: TimelineMessage,
@@ -43,13 +49,16 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   emptyTitle = "No messages yet",
   emptyDescription = "Send the first message to start the thread.",
   activeReplyTargetId = null,
+  activeThreadRootId = null,
   currentPubkey,
   fetchOlder,
   hasOlderMessages = true,
   isFetchingOlder = false,
   profiles,
+  threadHintsByRootId,
   onDelete,
   onEdit,
+  onOpenThread,
   onReply,
   onToggleReaction,
   targetMessageId = null,
@@ -150,14 +159,17 @@ export const MessageTimeline = React.memo(function MessageTimeline({
             {!isLoading && messages.length > 0 ? (
               <TimelineMessageList
                 activeReplyTargetId={activeReplyTargetId}
+                activeThreadRootId={activeThreadRootId}
                 currentPubkey={currentPubkey}
                 highlightedMessageId={highlightedMessageId}
                 messages={messages}
                 onDelete={onDelete}
                 onEdit={onEdit}
+                onOpenThread={onOpenThread}
                 onReply={onReply}
                 onToggleReaction={onToggleReaction}
                 profiles={profiles}
+                threadHintsByRootId={threadHintsByRootId}
               />
             ) : null}
 

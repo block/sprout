@@ -4,7 +4,10 @@ import { ChannelThreadPanel } from "@/features/messages/ui/ChannelThreadPanel";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
 import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
-import type { TimelineMessage } from "@/features/messages/types";
+import type {
+  ThreadConversationHint,
+  TimelineMessage,
+} from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
 
@@ -29,7 +32,12 @@ type ChannelPaneProps = {
   onEdit?: (message: TimelineMessage) => void;
   onEditSave?: (content: string) => Promise<void>;
   onReply: (message: TimelineMessage) => void;
-  onSend: (
+  onSendChannel: (
+    content: string,
+    mentionPubkeys: string[],
+    mediaTags?: string[][],
+  ) => Promise<void>;
+  onSendThread: (
     content: string,
     mentionPubkeys: string[],
     mediaTags?: string[][],
@@ -44,6 +52,7 @@ type ChannelPaneProps = {
   replyTargetId: string | null;
   replyTargetMessage: TimelineMessage | null;
   targetMessageId: string | null;
+  threadHintsByRootId: Map<string, ThreadConversationHint>;
   threadRootId: string | null;
   typingPubkeys: string[];
 };
@@ -65,13 +74,15 @@ export const ChannelPane = React.memo(function ChannelPane({
   onEdit,
   onEditSave,
   onReply,
-  onSend,
+  onSendChannel,
+  onSendThread,
   onTargetReached,
   onToggleReaction,
   profiles,
   replyTargetId,
   replyTargetMessage,
   targetMessageId,
+  threadHintsByRootId,
   threadRootId,
   typingPubkeys,
 }: ChannelPaneProps) {
@@ -96,13 +107,16 @@ export const ChannelPane = React.memo(function ChannelPane({
     <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <MessageTimeline
+          activeThreadRootId={threadRootId}
           channelId={activeChannel?.id}
           activeReplyTargetId={replyTargetId}
           currentPubkey={currentPubkey}
           fetchOlder={fetchOlder}
           hasOlderMessages={hasOlderMessages}
           isFetchingOlder={isFetchingOlder}
+          onOpenThread={onReply}
           profiles={profiles}
+          threadHintsByRootId={threadHintsByRootId}
           emptyDescription={
             activeChannel?.channelType === "forum"
               ? "Select a stream or DM to load real message history in this first integration pass."
@@ -131,29 +145,27 @@ export const ChannelPane = React.memo(function ChannelPane({
             profiles={profiles}
             typingPubkeys={typingPubkeys}
           />
-          {!threadRootId ? (
-            <MessageComposer
-              channelId={activeChannel?.id ?? null}
-              channelName={activeChannel?.name ?? "channel"}
-              disabled={composerDisabled}
-              editTarget={editTarget}
-              isSending={isSending}
-              onCancelEdit={onCancelEdit}
-              onCancelReply={onCancelReply}
-              onEditSave={onEditSave}
-              onSend={onSend}
-              placeholder={mainPlaceholder}
-              replyTarget={
-                replyTargetMessage
-                  ? {
-                      author: replyTargetMessage.author,
-                      body: replyTargetMessage.body,
-                      id: replyTargetMessage.id,
-                    }
-                  : null
-              }
-            />
-          ) : null}
+          <MessageComposer
+            channelId={activeChannel?.id ?? null}
+            channelName={activeChannel?.name ?? "channel"}
+            disabled={composerDisabled}
+            editTarget={threadRootId ? null : editTarget}
+            isSending={isSending}
+            onCancelEdit={onCancelEdit}
+            onCancelReply={threadRootId ? undefined : onCancelReply}
+            onEditSave={onEditSave}
+            onSend={onSendChannel}
+            placeholder={mainPlaceholder}
+            replyTarget={
+              threadRootId || !replyTargetMessage
+                ? null
+                : {
+                    author: replyTargetMessage.author,
+                    body: replyTargetMessage.body,
+                    id: replyTargetMessage.id,
+                  }
+            }
+          />
         </div>
       </div>
 
@@ -168,17 +180,8 @@ export const ChannelPane = React.memo(function ChannelPane({
           onCancelReply={onCancelReply}
           onClose={onCloseThread}
           onEditSave={onEditSave}
-          onSend={onSend}
+          onSend={onSendThread}
           profiles={profiles}
-          replyTarget={
-            replyTargetMessage
-              ? {
-                  author: replyTargetMessage.author,
-                  body: replyTargetMessage.body,
-                  id: replyTargetMessage.id,
-                }
-              : null
-          }
           rootEventId={threadRootId}
         />
       ) : null}

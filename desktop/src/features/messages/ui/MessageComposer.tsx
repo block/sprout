@@ -6,6 +6,7 @@ import { useDrafts } from "@/features/messages/lib/useDrafts";
 import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
 import { useMentions } from "@/features/messages/lib/useMentions";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
+import { escapeRegExp } from "@/shared/lib/mentionPattern";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
@@ -18,6 +19,8 @@ import { MessageComposerToolbar } from "./MessageComposerToolbar";
 
 type MessageComposerProps = {
   channelId?: string | null;
+  /** When set, drafts are keyed by this (e.g. thread sidebar) instead of channelId alone. */
+  draftStorageKey?: string | null;
   channelName: string;
   disabled?: boolean;
   editTarget?: {
@@ -40,12 +43,27 @@ type MessageComposerProps = {
     body: string;
     id: string;
   } | null;
+  /**
+   * Thread sidebar: when the thread is with an agent, we seed `@Name ` and ensure
+   * sends include a mention + p-tag without the user typing @ every time.
+   */
+  implicitThreadAgentMention?: {
+    displayName: string;
+    pubkey: string;
+  } | null;
 };
 
 const MAX_TEXTAREA_ROWS = 4;
 
+function textAlreadyMentionsDisplayName(text: string, displayName: string) {
+  const escaped = escapeRegExp(displayName);
+  const pattern = new RegExp(`(?:^|\\s)@${escaped}(?=[\\s,;.!?:)\\]}]|$)`, "i");
+  return pattern.test(text);
+}
+
 export function MessageComposer({
   channelId = null,
+  draftStorageKey = null,
   channelName,
   disabled = false,
   editTarget = null,
@@ -56,6 +74,7 @@ export function MessageComposer({
   onSend,
   placeholder,
   replyTarget = null,
+  implicitThreadAgentMention = null,
 }: MessageComposerProps) {
   const [content, setContent] = React.useState("");
   const contentRef = React.useRef(content);
@@ -70,7 +89,7 @@ export function MessageComposer({
   contentRef.current = content;
 
   const drafts = useDrafts();
-  const previousChannelIdRef = React.useRef<string | null>(null);
+  const previousDraftKeyRef = React.useRef<string | null>(null);
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
@@ -86,34 +105,51 @@ export function MessageComposer({
   const onEditSaveRef = React.useRef(onEditSave);
   const editTargetRef = React.useRef(editTarget);
   const channelIdRef = React.useRef(channelId);
+  const effectiveDraftKeyRef = React.useRef<string | null>(null);
+  const implicitThreadAgentMentionRef = React.useRef(
+    implicitThreadAgentMention,
+  );
   disabledRef.current = disabled;
   isSendingRef.current = isSending;
   onSendRef.current = onSend;
   onEditSaveRef.current = onEditSave;
   editTargetRef.current = editTarget;
   channelIdRef.current = channelId;
+  effectiveDraftKeyRef.current = draftStorageKey ?? channelId ?? null;
+  implicitThreadAgentMentionRef.current = implicitThreadAgentMention;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger — save draft for previous channel, restore draft for new channel, reset transient state
+  const mentionNamesForOverlay = React.useMemo(() => {
+    const list = [...mentions.knownNames];
+    const extra = implicitThreadAgentMention?.displayName;
+    if (extra && !list.some((n) => n.toLowerCase() === extra.toLowerCase())) {
+      list.push(extra);
+    }
+    return list;
+  }, [mentions.knownNames, implicitThreadAgentMention?.displayName]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: draft key change saves/restores draft and resets transient state
   React.useEffect(() => {
-    // Save draft for the channel we're leaving
-    const prevId = previousChannelIdRef.current;
-    if (prevId) {
+    const nextKey = draftStorageKey ?? channelId ?? null;
+
+    // Save draft for the storage key we're leaving
+    const prevKey = previousDraftKeyRef.current;
+    if (prevKey) {
       const currentContent = contentRef.current;
       const sel = draftSelectionRef.current;
       if (currentContent.trim().length > 0) {
-        drafts.saveDraft(prevId, {
+        drafts.saveDraft(prevKey, {
           content: currentContent,
           selectionEnd: sel.end,
           selectionStart: sel.start,
         });
       } else {
-        drafts.clearDraft(prevId);
+        drafts.clearDraft(prevKey);
       }
     }
-    previousChannelIdRef.current = channelId;
+    previousDraftKeyRef.current = nextKey;
 
-    // Restore draft for the channel we're entering
-    const saved = channelId ? drafts.loadDraft(channelId) : undefined;
+    // Restore draft for the storage key we're entering
+    const saved = nextKey ? drafts.loadDraft(nextKey) : undefined;
     if (saved) {
       setContent(saved.content);
       contentRef.current = saved.content;
@@ -136,7 +172,7 @@ export function MessageComposer({
     mentions.clearMentions();
     channelLinks.clearChannels();
     lineHeightRef.current = null;
-  }, [channelId]);
+  }, [channelId, draftStorageKey]);
 
   const applyMentionInsert = React.useCallback(
     (suggestion: MentionSuggestion) => {
@@ -257,7 +293,7 @@ export function MessageComposer({
   );
 
   const submitMessage = React.useCallback(async () => {
-    const trimmed = contentRef.current.trim();
+    let trimmed = contentRef.current.trim();
 
     // Edit mode: save the edit and return.
     if (editTargetRef.current && onEditSaveRef.current) {
@@ -290,7 +326,22 @@ export function MessageComposer({
       return;
     }
 
-    const pubkeys = mentions.extractMentionPubkeys(trimmed);
+    const implicit = implicitThreadAgentMentionRef.current;
+    if (implicit && !editTargetRef.current) {
+      if (!textAlreadyMentionsDisplayName(trimmed, implicit.displayName)) {
+        trimmed =
+          trimmed.length > 0
+            ? `@${implicit.displayName} ${trimmed}`
+            : `@${implicit.displayName}`;
+      }
+    }
+
+    let pubkeys = mentions.extractMentionPubkeys(trimmed);
+    if (implicit && !editTargetRef.current) {
+      const set = new Set(pubkeys);
+      set.add(implicit.pubkey);
+      pubkeys = [...set];
+    }
 
     const mediaTags =
       currentPendingImeta.length > 0
@@ -316,11 +367,22 @@ export function MessageComposer({
     channelLinks.clearChannels();
     setIsEmojiPickerOpen(false);
 
-    const sendChannelId = channelIdRef.current;
+    const sendDraftKey = effectiveDraftKeyRef.current;
     try {
       await onSendRef.current(trimmed, pubkeys, mediaTags);
-      if (sendChannelId) {
-        drafts.clearDraft(sendChannelId);
+      if (sendDraftKey) {
+        drafts.clearDraft(sendDraftKey);
+      }
+      const implicitAfter = implicitThreadAgentMentionRef.current;
+      if (implicitAfter && !editTargetRef.current) {
+        const seed = `@${implicitAfter.displayName} `;
+        setContent(seed);
+        contentRef.current = seed;
+        draftSelectionRef.current = {
+          end: seed.length,
+          start: seed.length,
+        };
+        pendingSelectionRef.current = seed.length;
       }
     } catch {
       setContent(savedContent);
@@ -477,6 +539,29 @@ export function MessageComposer({
     textareaRef.current?.focus();
   }, [editTarget?.id]);
 
+  // Seed `@AgentName ` in agent threads so users need not type @ every time.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only re-seed when implicit agent or edit mode changes
+  React.useEffect(() => {
+    const implicit = implicitThreadAgentMention;
+    if (!implicit || editTarget) {
+      return;
+    }
+
+    if (contentRef.current.trim().length > 0) {
+      return;
+    }
+
+    const seed = `@${implicit.displayName} `;
+    setContent(seed);
+    contentRef.current = seed;
+    draftSelectionRef.current = { end: seed.length, start: seed.length };
+    pendingSelectionRef.current = seed.length;
+  }, [
+    implicitThreadAgentMention?.pubkey,
+    implicitThreadAgentMention?.displayName,
+    editTarget?.id,
+  ]);
+
   const sendDisabled = React.useMemo(
     () =>
       disabled ||
@@ -588,7 +673,7 @@ export function MessageComposer({
               <ComposerMentionOverlay
                 channelNames={channelLinks.knownChannelNames}
                 content={content}
-                mentionNames={mentions.knownNames}
+                mentionNames={mentionNamesForOverlay}
                 scrollTop={composerScrollTop}
               />
             </div>
