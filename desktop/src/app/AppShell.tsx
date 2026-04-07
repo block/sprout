@@ -20,6 +20,7 @@ import { useHomeFeedNotifications } from "@/features/notifications/hooks";
 import { usePresenceSession } from "@/features/presence/hooks";
 import { useProfileQuery } from "@/features/profile/hooks";
 import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
+import { SettingsScreen } from "@/features/settings/ui/SettingsScreen";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -43,10 +44,6 @@ const AgentsScreen = React.lazy(async () => {
 const ChannelScreen = React.lazy(async () => {
   const module = await import("@/features/channels/ui/ChannelScreen");
   return { default: module.ChannelScreen };
-});
-const SettingsScreen = React.lazy(async () => {
-  const module = await import("@/features/settings/ui/SettingsScreen");
-  return { default: module.SettingsScreen };
 });
 const WorkflowsScreen = React.lazy(async () => {
   const module = await import("@/features/workflows/ui/WorkflowsScreen");
@@ -472,33 +469,29 @@ export function AppShell() {
         />
 
         {settingsOpen ? (
-          <React.Suspense
-            fallback={<ViewLoadingFallback label="Loading settings..." />}
-          >
-            <SettingsScreen
-              currentPubkey={identityQuery.data?.pubkey}
-              fallbackDisplayName={identityQuery.data?.displayName}
-              isUpdatingDesktopNotifications={
-                notificationSettings.isUpdatingDesktopEnabled
-              }
-              notificationErrorMessage={notificationSettings.errorMessage}
-              notificationPermission={notificationSettings.permission}
-              notificationSettings={notificationSettings.settings}
-              onClose={handleCloseSettings}
-              onSectionChange={setSettingsSection}
-              onSetDesktopNotificationsEnabled={
-                notificationSettings.setDesktopEnabled
-              }
-              onSetHomeBadgeEnabled={notificationSettings.setHomeBadgeEnabled}
-              onSetMentionNotificationsEnabled={
-                notificationSettings.setMentionsEnabled
-              }
-              onSetNeedsActionNotificationsEnabled={
-                notificationSettings.setNeedsActionEnabled
-              }
-              section={settingsSection}
-            />
-          </React.Suspense>
+          <SettingsScreen
+            currentPubkey={identityQuery.data?.pubkey}
+            fallbackDisplayName={identityQuery.data?.displayName}
+            isUpdatingDesktopNotifications={
+              notificationSettings.isUpdatingDesktopEnabled
+            }
+            notificationErrorMessage={notificationSettings.errorMessage}
+            notificationPermission={notificationSettings.permission}
+            notificationSettings={notificationSettings.settings}
+            onClose={handleCloseSettings}
+            onSectionChange={setSettingsSection}
+            onSetDesktopNotificationsEnabled={
+              notificationSettings.setDesktopEnabled
+            }
+            onSetHomeBadgeEnabled={notificationSettings.setHomeBadgeEnabled}
+            onSetMentionNotificationsEnabled={
+              notificationSettings.setMentionsEnabled
+            }
+            onSetNeedsActionNotificationsEnabled={
+              notificationSettings.setNeedsActionEnabled
+            }
+            section={settingsSection}
+          />
         ) : null}
       </SidebarProvider>
     </ChannelNavigationProvider>

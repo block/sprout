@@ -133,8 +133,10 @@ export function ProfilePopover({
               className={MENU_ITEM_CLASS}
               data-testid="profile-popover-settings"
               onClick={() => {
-                onOpenSettings();
                 onOpenChange(false);
+                window.requestAnimationFrame(() => {
+                  onOpenSettings();
+                });
               }}
               role="menuitem"
               type="button"
