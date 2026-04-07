@@ -9,14 +9,6 @@ type E2eWindow = Window & {
   __SPROUT_E2E__?: unknown;
 };
 
-// Keep the large E2E bridge out of the normal startup path and production
-// bundle; only load it when tests explicitly inject an E2E config.
-if ((window as E2eWindow).__SPROUT_E2E__) {
-  void import("@/testing/e2eBridge").then(({ maybeInstallE2eTauriMocks }) => {
-    maybeInstallE2eTauriMocks();
-  });
-}
-
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -31,12 +23,32 @@ const queryClient = new QueryClient({
   },
 });
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider defaultTheme="houston">
-        <App />
-      </ThemeProvider>
-    </QueryClientProvider>
-  </React.StrictMode>,
-);
+function renderApp() {
+  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+    <React.StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider defaultTheme="houston">
+          <App />
+        </ThemeProvider>
+      </QueryClientProvider>
+    </React.StrictMode>,
+  );
+}
+
+async function installE2eBridgeIfConfigured() {
+  // Keep the large E2E bridge out of the normal startup path and production
+  // bundle; only load it when tests explicitly inject an E2E config.
+  if (!(window as E2eWindow).__SPROUT_E2E__) {
+    return;
+  }
+
+  const { maybeInstallE2eTauriMocks } = await import("@/testing/e2eBridge");
+  maybeInstallE2eTauriMocks();
+}
+
+async function bootstrap() {
+  await installE2eBridgeIfConfigured();
+  renderApp();
+}
+
+void bootstrap();
