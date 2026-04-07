@@ -24,6 +24,9 @@ use crate::state::AppState;
 /// Prevents transient read stalls from hard-disconnecting agents mid-inference.
 pub(crate) const SLOW_CLIENT_GRACE_LIMIT: u8 = 3;
 
+/// Shared mutable subscription map for a single WebSocket connection.
+pub(crate) type ConnectionSubscriptions = Arc<Mutex<HashMap<String, Vec<Filter>>>>;
+
 /// NIP-42 authentication state for a single connection.
 #[derive(Debug, Clone)]
 pub enum AuthState {
@@ -50,7 +53,7 @@ pub struct ConnectionState {
     /// Current NIP-42 authentication state.
     pub auth_state: RwLock<AuthState>,
     /// Active subscriptions keyed by subscription ID.
-    pub subscriptions: Arc<Mutex<HashMap<String, Vec<Filter>>>>,
+    pub subscriptions: ConnectionSubscriptions,
     /// Sender for outbound data messages (EVENT, NOTICE, OK, etc.).
     pub send_tx: mpsc::Sender<WsMessage>,
     /// Sender for outbound control frames (Pong, Close).

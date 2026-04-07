@@ -1,13 +1,11 @@
 //! Shared application state — Arc-wrapped, shared across all connections.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 use axum::extract::ws::Message as WsMessage;
 use dashmap::DashMap;
-use nostr::Filter;
 use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -24,7 +22,7 @@ use sprout_workflow::WorkflowEngine;
 
 use crate::api::tokens::MintRateLimiter;
 use crate::config::Config;
-use crate::connection::SLOW_CLIENT_GRACE_LIMIT;
+use crate::connection::{ConnectionSubscriptions, SLOW_CLIENT_GRACE_LIMIT};
 use crate::subscription::SubscriptionRegistry;
 
 /// Per-connection entry in the connection manager.
@@ -34,7 +32,7 @@ struct ConnEntry {
     /// Shared with `ConnectionState` — both direct sends and fan-out
     /// broadcasts track the same consecutive-full counter.
     backpressure_count: Arc<AtomicU8>,
-    subscriptions: Arc<tokio::sync::Mutex<HashMap<String, Vec<Filter>>>>,
+    subscriptions: ConnectionSubscriptions,
     authenticated_pubkey: Arc<std::sync::RwLock<Option<Vec<u8>>>>,
 }
 
@@ -59,7 +57,7 @@ impl ConnectionManager {
         tx: mpsc::Sender<WsMessage>,
         cancel: CancellationToken,
         backpressure_count: Arc<AtomicU8>,
-        subscriptions: Arc<tokio::sync::Mutex<HashMap<String, Vec<Filter>>>>,
+        subscriptions: ConnectionSubscriptions,
     ) {
         self.connections.insert(
             conn_id,
@@ -108,10 +106,7 @@ impl ConnectionManager {
     }
 
     /// Return the subscription map for a connection, if it is still live.
-    pub fn subscriptions_for(
-        &self,
-        conn_id: Uuid,
-    ) -> Option<Arc<tokio::sync::Mutex<HashMap<String, Vec<Filter>>>>> {
+    pub fn subscriptions_for(&self, conn_id: Uuid) -> Option<ConnectionSubscriptions> {
         self.connections
             .get(&conn_id)
             .map(|entry| Arc::clone(&entry.subscriptions))
