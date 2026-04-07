@@ -103,6 +103,8 @@ type RawChannel = {
   participants: string[];
   participant_pubkeys: string[];
   is_member?: boolean;
+  ttl_seconds: number | null;
+  ttl_deadline: string | null;
 };
 
 type RawChannelDetail = RawChannel & {
@@ -353,6 +355,8 @@ function fromRawChannel(channel: RawChannel): Channel {
     participants: channel.participants,
     participantPubkeys: channel.participant_pubkeys,
     isMember: channel.is_member ?? true,
+    ttlSeconds: channel.ttl_seconds,
+    ttlDeadline: channel.ttl_deadline,
   };
 }
 

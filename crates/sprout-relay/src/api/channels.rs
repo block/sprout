@@ -112,6 +112,8 @@ fn channel_record_to_json(
         "participants": participants,
         "participant_pubkeys": participant_pubkeys,
         "is_member": is_member,
+        "ttl_seconds": channel.ttl_seconds,
+        "ttl_deadline": channel.ttl_deadline.map(|t| t.to_rfc3339()),
     })
 }
 

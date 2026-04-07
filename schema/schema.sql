@@ -39,13 +39,17 @@ CREATE TABLE channels (
     purpose         TEXT,
     purpose_set_by  BYTEA,
     purpose_set_at  TIMESTAMPTZ,
-    participant_hash BYTEA
+    participant_hash BYTEA,
+    ttl_seconds     INT,
+    ttl_deadline    TIMESTAMPTZ
 );
 
 CREATE INDEX idx_channels_type ON channels (channel_type);
 CREATE INDEX idx_channels_visibility ON channels (visibility);
 CREATE INDEX idx_channels_created_by ON channels (created_by);
 CREATE UNIQUE INDEX idx_channels_dm_hash ON channels (participant_hash);
+CREATE INDEX idx_channels_ttl_expiry ON channels (ttl_deadline)
+    WHERE ttl_seconds IS NOT NULL AND archived_at IS NULL AND deleted_at IS NULL;
 
 -- ── Channel members ───────────────────────────────────────────────────────────
 

@@ -70,6 +70,8 @@ pub struct ChannelInfo {
     pub participant_pubkeys: Vec<String>,
     #[serde(default = "default_true")]
     pub is_member: bool,
+    pub ttl_seconds: Option<i32>,
+    pub ttl_deadline: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -94,6 +96,8 @@ pub struct ChannelDetailInfo {
     pub topic_required: bool,
     pub max_members: Option<i32>,
     pub nip29_group_id: Option<String>,
+    pub ttl_seconds: Option<i32>,
+    pub ttl_deadline: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

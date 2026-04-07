@@ -149,6 +149,67 @@ async fn main() -> anyhow::Result<()> {
     let wf_cron = Arc::clone(&workflow_engine);
     tokio::spawn(async move { wf_cron.run().await });
 
+    // Ephemeral channel reaper — archives channels whose TTL deadline has passed.
+    // Runs every 60s, matching the workflow cron loop pattern. The SQL UPDATE
+    // uses `archived_at IS NULL` as a guard, so concurrent runs from multiple
+    // pods are harmless (at worst, duplicate system messages — same trade-off
+    // as the workflow cron loop). Will be upgraded to use pg_advisory_lock
+    // together with the workflow engine in a future multi-pod coordination pass.
+    {
+        let reaper_state = Arc::clone(&state);
+        let reaper_interval_secs: u64 = std::env::var("SPROUT_REAPER_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60);
+        tokio::spawn(async move {
+            info!(
+                interval_secs = reaper_interval_secs,
+                "Ephemeral channel reaper started"
+            );
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(reaper_interval_secs)).await;
+
+                let expired = match reaper_state.db.reap_expired_ephemeral_channels().await {
+                    Ok(ids) => ids,
+                    Err(e) => {
+                        error!("Ephemeral reaper tick failed: {e}");
+                        continue;
+                    }
+                };
+
+                if expired.is_empty() {
+                    continue;
+                }
+
+                info!(count = expired.len(), "Ephemeral reaper archived channels");
+
+                for channel_id in &expired {
+                    // Emit a system message so members see why the channel was archived.
+                    if let Err(e) = sprout_relay::handlers::side_effects::emit_system_message(
+                        &reaper_state,
+                        *channel_id,
+                        serde_json::json!({ "type": "channel_auto_archived" }),
+                    )
+                    .await
+                    {
+                        error!(channel = %channel_id, "reaper system message failed: {e}");
+                    }
+
+                    // Update NIP-29 discovery events so clients see the archived state.
+                    if let Err(e) =
+                        sprout_relay::handlers::side_effects::emit_group_discovery_events(
+                            &reaper_state,
+                            *channel_id,
+                        )
+                        .await
+                    {
+                        error!(channel = %channel_id, "reaper discovery update failed: {e}");
+                    }
+                }
+            }
+        });
+    }
+
     // Multi-node fan-out consumer: receive events from Redis pub/sub
     // (published by other relay instances) and fan out to local WS subscribers.
     {

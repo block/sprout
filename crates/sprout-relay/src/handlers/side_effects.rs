@@ -948,6 +948,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
 
     let actor_bytes = event.pubkey.serialize().to_vec();
     let description = extract_tag_value(event, "about");
+    let ttl_seconds = super::resolve_ttl(event, state.config.ephemeral_ttl_override);
 
     // If the event has an h-tag UUID, ingest_event() already created the channel
     // via create_channel_with_id(). Fetch it rather than creating a duplicate.
@@ -966,6 +967,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
                         visibility,
                         description.as_deref(),
                         &actor_bytes,
+                        ttl_seconds,
                     )
                     .await?
             }
@@ -979,6 +981,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
                 visibility,
                 description.as_deref(),
                 &actor_bytes,
+                ttl_seconds,
             )
             .await?
     };

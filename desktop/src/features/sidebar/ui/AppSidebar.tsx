@@ -1,6 +1,9 @@
 import { Bot, Home, Lock, PenSquare, Plus, Search, Zap } from "lucide-react";
 import * as React from "react";
 
+/** Default TTL for ephemeral channels: 1 day of inactivity. */
+const EPHEMERAL_TTL_SECONDS = 86400;
+
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
@@ -68,11 +71,13 @@ type AppSidebarProps = {
     name: string;
     description?: string;
     visibility: ChannelVisibility;
+    ttlSeconds?: number;
   }) => Promise<void>;
   onCreateForum: (input: {
     name: string;
     description?: string;
     visibility: ChannelVisibility;
+    ttlSeconds?: number;
   }) => Promise<void>;
   onOpenBrowseChannels: () => void;
   onOpenBrowseForums: () => void;
@@ -97,6 +102,7 @@ function useCreateForm(
     name: string;
     description?: string;
     visibility: ChannelVisibility;
+    ttlSeconds?: number;
   }) => Promise<void>,
   entityLabel: string,
 ) {
@@ -105,6 +111,7 @@ function useCreateForm(
   const [draftDescription, setDraftDescription] = React.useState("");
   const [draftVisibility, setDraftVisibility] =
     React.useState<ChannelVisibility>("open");
+  const [draftEphemeral, setDraftEphemeral] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | undefined>();
   const inputRef = React.useRef<HTMLInputElement>(null);
 
@@ -124,6 +131,7 @@ function useCreateForm(
     setDraftName("");
     setDraftDescription("");
     setDraftVisibility("open");
+    setDraftEphemeral(false);
     setIsOpen(false);
   }
 
@@ -142,6 +150,11 @@ function useCreateForm(
     setDraftVisibility(value);
   }
 
+  function changeEphemeral(value: boolean) {
+    setErrorMessage(undefined);
+    setDraftEphemeral(value);
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -158,11 +171,13 @@ function useCreateForm(
         name,
         description: description || undefined,
         visibility: draftVisibility,
+        ttlSeconds: draftEphemeral ? EPHEMERAL_TTL_SECONDS : undefined,
       });
 
       setDraftName("");
       setDraftDescription("");
       setDraftVisibility("open");
+      setDraftEphemeral(false);
       setIsOpen(false);
     } catch (error) {
       setErrorMessage(
@@ -178,6 +193,7 @@ function useCreateForm(
     draftName,
     draftDescription,
     draftVisibility,
+    draftEphemeral,
     errorMessage,
     inputRef,
     toggle,
@@ -185,6 +201,7 @@ function useCreateForm(
     changeName,
     changeDescription,
     changeVisibility,
+    changeEphemeral,
     handleSubmit,
   };
 }
@@ -312,6 +329,40 @@ function PrivateCheckbox({
 }
 
 // ---------------------------------------------------------------------------
+// EphemeralCheckbox — checkbox toggle for auto-archiving channels
+// ---------------------------------------------------------------------------
+
+function EphemeralCheckbox({
+  disabled,
+  isEphemeral,
+  onChange,
+}: {
+  disabled: boolean;
+  isEphemeral: boolean;
+  onChange: (isEphemeral: boolean) => void;
+}) {
+  const id = React.useId();
+
+  return (
+    <div className="flex items-center gap-2">
+      <Checkbox
+        checked={isEphemeral}
+        disabled={disabled}
+        id={id}
+        onCheckedChange={(checked) => onChange(checked === true)}
+      />
+      <label
+        className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-sidebar-foreground/70 select-none peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
+        htmlFor={id}
+      >
+        <Zap className="h-3 w-3" />
+        Ephemeral — auto-archives after 1 day of inactivity
+      </label>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ChannelGroupSection — unified Channels / Forums section
 // ---------------------------------------------------------------------------
 
@@ -410,6 +461,11 @@ function ChannelGroupSection({
                 form.changeVisibility(isPrivate ? "private" : "open")
               }
               testId={createVisibilityTestId}
+            />
+            <EphemeralCheckbox
+              disabled={isCreating}
+              isEphemeral={form.draftEphemeral}
+              onChange={form.changeEphemeral}
             />
             <div className="flex items-center gap-2">
               <Button
