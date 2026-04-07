@@ -233,6 +233,7 @@ export function WorkflowFormBuilder({
       {mode === "yaml" ? (
         <div className="space-y-1.5">
           <Textarea
+            autoCapitalize="off"
             className="min-h-[240px] resize-y font-mono text-xs"
             disabled={disabled}
             onChange={(event) => onChange(event.target.value)}
@@ -264,6 +265,7 @@ export function WorkflowFormBuilder({
               Description (optional)
             </FieldLabel>
             <Textarea
+              autoCapitalize="off"
               className="min-h-[72px] resize-y text-sm"
               disabled={disabled}
               id="wf-description"

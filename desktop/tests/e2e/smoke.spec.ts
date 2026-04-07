@@ -96,12 +96,12 @@ test("create agent supports parallelism and system prompt overrides", async ({
   await expect(page.getByTestId("managed-agents-table")).toContainText(
     agentName,
   );
-  await expect(page.getByTestId("managed-agent-log-content")).toContainText(
-    "parallelism=3",
-  );
-  await expect(page.getByTestId("managed-agent-log-content")).toContainText(
-    "system prompt override configured",
-  );
+  const inlineLog = page
+    .getByTestId("managed-agents-table")
+    .getByTestId("managed-agent-log-content");
+
+  await expect(inlineLog).toContainText("parallelism=3");
+  await expect(inlineLog).toContainText("system prompt override configured");
 });
 
 test("opens a mocked channel from the home feed", async ({ page }) => {

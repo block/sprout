@@ -8,6 +8,10 @@ type WorkflowRunTraceProps = {
   approvals?: WorkflowApproval[];
 };
 
+function formatStatusLabel(status: string) {
+  return status.replace(/_/g, " ");
+}
+
 function StepStatusIcon({ status }: { status: string }) {
   switch (status) {
     case "completed":
@@ -37,14 +41,14 @@ export function WorkflowRunTrace({
 }: WorkflowRunTraceProps) {
   if (run.executionTrace.length === 0) {
     return (
-      <p className="py-4 text-center text-sm text-muted-foreground">
+      <p className="rounded-xl border border-dashed border-border/70 bg-background/60 px-4 py-6 text-center text-sm text-muted-foreground">
         No steps recorded yet.
       </p>
     );
   }
 
   return (
-    <div className="space-y-1" data-testid="workflow-run-trace">
+    <div className="space-y-3" data-testid="workflow-run-trace">
       {run.executionTrace.map((step) => {
         const duration = formatDuration(step.startedAt, step.completedAt);
         const pendingApproval = approvals.find(
@@ -52,14 +56,17 @@ export function WorkflowRunTrace({
         );
 
         return (
-          <div key={step.stepId}>
-            <div className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/50">
+          <div
+            className="rounded-xl border border-border/60 bg-background/80 p-3 shadow-sm"
+            key={step.stepId}
+          >
+            <div className="flex flex-wrap items-center gap-2 text-sm">
               <StepStatusIcon status={step.status} />
-              <span className="flex-1 truncate font-mono text-xs">
+              <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium">
                 {step.stepId}
               </span>
-              <span className="text-xs text-muted-foreground">
-                {step.status}
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                {formatStatusLabel(step.status)}
               </span>
               {duration ? (
                 <span className="text-xs text-muted-foreground">
@@ -68,17 +75,30 @@ export function WorkflowRunTrace({
               ) : null}
             </div>
             {Object.keys(step.output).length > 0 ? (
-              <pre className="ml-8 max-h-24 overflow-auto rounded bg-muted/30 px-2 py-1 font-mono text-xs text-muted-foreground">
-                {JSON.stringify(step.output, null, 2)}
-              </pre>
+              <div className="mt-3">
+                <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                  Output
+                </p>
+                <pre className="max-h-32 overflow-auto rounded-lg bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
+                  {JSON.stringify(step.output, null, 2)}
+                </pre>
+              </div>
             ) : null}
             {step.error ? (
-              <pre className="ml-8 max-h-24 overflow-auto rounded bg-red-500/10 px-2 py-1 font-mono text-xs text-red-400">
-                {step.error}
-              </pre>
+              <div className="mt-3">
+                <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.16em] text-red-400">
+                  Error
+                </p>
+                <pre className="max-h-32 overflow-auto rounded-lg bg-red-500/10 px-3 py-2 font-mono text-xs text-red-400">
+                  {step.error}
+                </pre>
+              </div>
             ) : null}
             {pendingApproval ? (
-              <div className="ml-8 mt-1">
+              <div className="mt-3">
+                <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-amber-600">
+                  Pending approval
+                </p>
                 <WorkflowApprovalCard approval={pendingApproval} />
               </div>
             ) : null}
