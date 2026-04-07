@@ -80,12 +80,7 @@ pub async fn get_forum_thread(
 #[tauri::command]
 pub async fn get_event(event_id: String, state: State<'_, AppState>) -> Result<String, String> {
     let path = api_path(&["events", &event_id]);
-    let request = build_authed_request(
-        &state.http_client,
-        Method::GET,
-        &path,
-        &state,
-    )?;
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     let response = request
         .send()
         .await

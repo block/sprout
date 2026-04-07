@@ -60,7 +60,10 @@ pub fn api_path(segments: &[&str]) -> String {
 }
 
 fn validate_api_path(path: &str) -> Result<(), String> {
-    let path_only = path.split_once('?').map(|(prefix, _)| prefix).unwrap_or(path);
+    let path_only = path
+        .split_once('?')
+        .map(|(prefix, _)| prefix)
+        .unwrap_or(path);
 
     if !path_only.starts_with('/') {
         return Err("API paths must start with '/'".to_string());
