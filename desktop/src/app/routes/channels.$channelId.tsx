@@ -1,6 +1,7 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 
+import { getCachedSearchHitEvent } from "@/app/navigation/searchHitEventCache";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { ChannelScreen } from "@/features/channels/ui/ChannelScreen";
@@ -49,7 +50,9 @@ export function ChannelRouteScreen({
   const activeChannel =
     channels.find((channel) => channel.id === channelId) ?? null;
   const [targetMessageEvent, setTargetMessageEvent] =
-    React.useState<RelayEvent | null>(null);
+    React.useState<RelayEvent | null>(() =>
+      getCachedSearchHitEvent(targetMessageId),
+    );
 
   React.useEffect(() => {
     let isCancelled = false;
@@ -61,7 +64,7 @@ export function ChannelRouteScreen({
       };
     }
 
-    setTargetMessageEvent(null);
+    setTargetMessageEvent(getCachedSearchHitEvent(targetMessageId));
     void getEventById(targetMessageId)
       .then((event) => {
         if (!isCancelled) {

@@ -6,6 +6,7 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 
+import { cacheSearchHitEvent } from "@/app/navigation/searchHitEventCache";
 import { resolveSearchHitDestination } from "@/app/navigation/resolveSearchHitDestination";
 import type { SearchHit } from "@/shared/api/types";
 
@@ -165,6 +166,8 @@ export function useAppNavigation() {
 
   const openSearchHit = React.useCallback(
     async (hit: SearchHit) => {
+      cacheSearchHitEvent(hit);
+
       const destination = await resolveSearchHitDestination(hit);
       if (!destination) {
         return false;
