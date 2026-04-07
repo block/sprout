@@ -108,8 +108,9 @@ export function ChannelBrowserDialog({
     const filtered = channels.filter(
       (channel) =>
         channel.channelType !== "dm" &&
-        channel.visibility === "open" &&
-        !channel.archivedAt &&
+        (channel.archivedAt
+          ? channel.isMember
+          : channel.visibility === "open") &&
         (channelTypeFilter ? channel.channelType === channelTypeFilter : true),
     );
 
@@ -132,6 +133,10 @@ export function ChannelBrowserDialog({
   const joined = React.useMemo(
     () => browsableChannels.filter((channel) => channel.isMember),
     [browsableChannels],
+  );
+  const hasArchivedJoinedChannels = React.useMemo(
+    () => joined.some((channel) => channel.archivedAt !== null),
+    [joined],
   );
 
   // Flat list for keyboard navigation: not-joined first, then joined
@@ -324,7 +329,9 @@ export function ChannelBrowserDialog({
         </div>
 
         <div className="border-t border-border/80 bg-card/50 px-6 py-3 text-xs text-muted-foreground">
-          Showing open {entityLabel}s. Private {entityLabel}s require an invite.
+          {hasArchivedJoinedChannels
+            ? `Showing open ${entityLabel}s and your archived ${entityLabel}s. Private ${entityLabel}s require an invite.`
+            : `Showing open ${entityLabel}s. Private ${entityLabel}s require an invite.`}
         </div>
       </DialogContent>
     </Dialog>
@@ -375,6 +382,11 @@ function ChannelCard({
             <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
               {channel.channelType}
             </p>
+            {channel.archivedAt ? (
+              <p className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-amber-700 dark:text-amber-300">
+                archived
+              </p>
+            ) : null}
             <div className="ml-auto flex items-center gap-3">
               <span className="flex items-center gap-1 text-xs text-muted-foreground">
                 <Users className="h-3 w-3" />

@@ -137,6 +137,10 @@ export function AppShell() {
     () => channels.filter((channel) => channel.isMember),
     [channels],
   );
+  const sidebarChannels = React.useMemo(
+    () => memberChannels.filter((channel) => channel.archivedAt === null),
+    [memberChannels],
+  );
   const activeChannel = React.useMemo(
     () =>
       selectedChannelId
@@ -379,7 +383,7 @@ export function AppShell() {
             </Button>
           </div>
           <AppSidebar
-            channels={memberChannels}
+            channels={sidebarChannels}
             currentPubkey={identityQuery.data?.pubkey}
             errorMessage={
               channelsQuery.error instanceof Error

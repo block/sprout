@@ -571,8 +571,18 @@ test("manage channel can archive and unarchive a stream", async ({ page }) => {
   await expect(page.getByTestId("channel-management-unarchive")).toBeVisible();
 
   await closeChannelManagement(page);
+  await expect(page.getByTestId("stream-list")).not.toContainText("general");
   await expect(page.getByTestId("message-input")).toBeDisabled();
   await expect(page.getByTestId("send-message")).toBeDisabled();
+
+  await page.getByTestId("browse-channels").click();
+  await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
+  await expect(page.getByTestId("browse-channel-general")).toContainText(
+    "archived",
+  );
+  await page.getByTestId("browse-channel-general").click();
+  await expect(page.getByTestId("channel-browser-dialog")).not.toBeVisible();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
 
   await page.getByTestId("channel-management-trigger").click();
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
@@ -580,6 +590,7 @@ test("manage channel can archive and unarchive a stream", async ({ page }) => {
   await expect(page.getByTestId("channel-management-archive")).toBeVisible();
 
   await closeChannelManagement(page);
+  await expect(page.getByTestId("stream-list")).toContainText("general");
   await expect(page.getByTestId("message-input")).toBeEnabled();
 });
 
