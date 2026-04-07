@@ -71,6 +71,82 @@ fn find_root_from_tags(tags: &serde_json::Value) -> Option<String> {
 /// Maximum allowed content size for a single message (64 KiB).
 const MAX_CONTENT_BYTES: usize = 65_536;
 
+/// Extract @mention names from message content.
+/// Returns lowercased names found after `@` tokens.
+/// Only matches `@word` preceded by whitespace or start-of-string.
+/// Characters allowed in names: alphanumeric, `.`, `-`, `_`.
+fn extract_at_names(content: &str) -> Vec<String> {
+    if content.is_empty() || !content.contains('@') {
+        return vec![];
+    }
+    let mut names: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let chars: Vec<char> = content.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    while i < len {
+        if chars[i] == '@' {
+            // Must be at start-of-string or preceded by whitespace
+            let preceded_by_ws = i == 0 || chars[i - 1].is_ascii_whitespace();
+            if preceded_by_ws && i + 1 < len {
+                // Capture the name token: [a-zA-Z0-9._-]+
+                let start = i + 1;
+                let mut end = start;
+                while end < len {
+                    let c = chars[end];
+                    if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                        end += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if end > start {
+                    let name: String = chars[start..end].iter().collect();
+                    let lower = name.to_ascii_lowercase();
+                    if seen.insert(lower.clone()) {
+                        names.push(lower);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    names
+}
+
+/// Resolve @names in content against channel members.
+/// Returns matching pubkeys. On any error, returns empty vec — never blocks a send.
+async fn resolve_content_mentions(
+    client: &RelayClient,
+    channel_id: &str,
+    content: &str,
+) -> Vec<String> {
+    let names = extract_at_names(content);
+    if names.is_empty() {
+        return vec![];
+    }
+    let body = client
+        .get(&format!("/api/channels/{channel_id}/members"))
+        .await
+        .unwrap_or_default();
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+    let Some(members) = parsed["members"].as_array() else {
+        return vec![];
+    };
+    let mut pubkeys = Vec::new();
+    for m in members {
+        let Some(dn) = m["display_name"].as_str() else {
+            continue;
+        };
+        if names.iter().any(|n| n.eq_ignore_ascii_case(dn)) {
+            if let Some(pk) = m["pubkey"].as_str() {
+                pubkeys.push(pk.to_ascii_lowercase());
+            }
+        }
+    }
+    pubkeys
+}
+
 /// Parameters for the `send_message` tool.
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SendMessageParams {
@@ -757,13 +833,32 @@ Default kind is 9 (stream message)."
         let kind_num = p
             .kind
             .unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE as u16);
-        let mention_refs: Vec<&str> = p
+        // Collect explicit pubkeys, dedup case-insensitively.
+        let mut seen = std::collections::HashSet::new();
+        let mut mentions: Vec<String> = p
             .mention_pubkeys
             .as_deref()
             .unwrap_or(&[])
             .iter()
-            .map(String::as_str)
+            .map(|s| s.to_ascii_lowercase())
+            .filter(|s| seen.insert(s.clone()))
             .collect();
+
+        // Auto-resolve @names in content and merge, up to SDK cap of 50.
+        let auto = resolve_content_mentions(&self.client, &p.channel_id, &p.content).await;
+        let budget = 50usize.saturating_sub(mentions.len());
+        let mut added = 0usize;
+        for pk in &auto {
+            if added >= budget {
+                break;
+            }
+            if !mentions.contains(pk) {
+                mentions.push(pk.clone());
+                added += 1;
+            }
+        }
+
+        let mention_refs: Vec<&str> = mentions.iter().map(String::as_str).collect();
         let broadcast = p.broadcast_to_channel.unwrap_or(false);
 
         // Build the event builder via SDK, routing by kind.
@@ -2430,6 +2525,34 @@ mod tests {
         assert_eq!(parsed.channel_id, params.channel_id);
         assert_eq!(parsed.event_id, params.event_id);
         assert!(matches!(parsed.direction, VoteDirection::Up));
+    }
+
+    // ── extract_at_names ──────────────────────────────────────────────────────
+
+    #[test]
+    fn extract_at_names_matches() {
+        // basic, start-of-string, dedup, newline, dots/hyphens/underscores
+        assert_eq!(extract_at_names("Hello @Tyler"), vec!["tyler"]);
+        assert_eq!(extract_at_names("@Tyler are you there?"), vec!["tyler"]);
+        assert_eq!(
+            extract_at_names("Hey @Alice and @alice, meet @Bob"),
+            vec!["alice", "bob"]
+        );
+        assert_eq!(extract_at_names("first line\n@Tyler second"), vec!["tyler"]);
+        assert_eq!(
+            extract_at_names("@john.doe @mary_jane @bob-smith"),
+            vec!["john.doe", "mary_jane", "bob-smith"]
+        );
+    }
+
+    #[test]
+    fn extract_at_names_rejects() {
+        // empty, no @, email, bare @, @ at EOF
+        assert!(extract_at_names("").is_empty());
+        assert!(extract_at_names("no mentions").is_empty());
+        assert!(extract_at_names("user@example.com").is_empty());
+        assert!(extract_at_names("hello @ world").is_empty());
+        assert!(extract_at_names("hello @").is_empty());
     }
 }
 

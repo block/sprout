@@ -5,8 +5,9 @@ use uuid::Uuid;
 use crate::client::SproutClient;
 use crate::error::CliError;
 use crate::validate::{
-    infer_language, normalize_mention_pubkeys, percent_encode, read_or_stdin, truncate_diff,
-    validate_content_size, validate_hex64, validate_uuid, MAX_DIFF_BYTES,
+    extract_at_names, infer_language, merge_mentions, normalize_mention_pubkeys, percent_encode,
+    read_or_stdin, truncate_diff, validate_content_size, validate_hex64, validate_uuid,
+    MAX_DIFF_BYTES,
 };
 
 // ---------------------------------------------------------------------------
@@ -58,6 +59,39 @@ async fn resolve_channel_id(client: &SproutClient, event_id: &str) -> Result<Uui
     Err(CliError::Other(format!(
         "event {event_id} has no h-tag — cannot determine channel"
     )))
+}
+
+/// Resolve @names in content against channel members.
+/// Returns matching pubkeys. On any error, returns empty vec — never blocks a send.
+async fn resolve_content_mentions(
+    client: &SproutClient,
+    channel_id: &str,
+    content: &str,
+) -> Vec<String> {
+    let names = extract_at_names(content);
+    if names.is_empty() {
+        return vec![];
+    }
+    let body = client
+        .get_raw(&format!("/api/channels/{channel_id}/members"))
+        .await
+        .unwrap_or_default();
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+    let Some(members) = parsed["members"].as_array() else {
+        return vec![];
+    };
+    let mut pubkeys = Vec::new();
+    for m in members {
+        let Some(dn) = m["display_name"].as_str() else {
+            continue;
+        };
+        if names.iter().any(|n| n.eq_ignore_ascii_case(dn)) {
+            if let Some(pk) = m["pubkey"].as_str() {
+                pubkeys.push(pk.to_ascii_lowercase());
+            }
+        }
+    }
+    pubkeys
 }
 
 // ---------------------------------------------------------------------------
@@ -157,9 +191,11 @@ pub async fn cmd_send_message(
         None
     };
 
-    // Normalize mentions
-    let normalized: Vec<String> = normalize_mention_pubkeys(mentions, "");
-    let mention_refs: Vec<&str> = normalized.iter().map(|s| s.as_str()).collect();
+    // Normalize explicit mentions, then merge auto-resolved up to SDK cap of 50.
+    let mut merged: Vec<String> = normalize_mention_pubkeys(mentions, "");
+    let auto_resolved = resolve_content_mentions(client, channel_id, content).await;
+    merge_mentions(&mut merged, &auto_resolved, 50);
+    let mention_refs: Vec<&str> = merged.iter().map(|s| s.as_str()).collect();
 
     let builder = sprout_sdk::build_message(
         channel_uuid,
