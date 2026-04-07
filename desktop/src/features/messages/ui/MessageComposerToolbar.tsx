@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AtSign, Paperclip, SendHorizontal } from "lucide-react";
+import { ArrowUp, AtSign, Paperclip } from "lucide-react";
 
 import { Button } from "@/shared/ui/button";
 import { ComposerEmojiPicker } from "./ComposerEmojiPicker";
@@ -67,14 +67,22 @@ export const MessageComposerToolbar = React.memo(
         </div>
 
         <Button
-          className="gap-2"
+          aria-label={isSending ? "Sending" : "Send message"}
+          className="rounded-full"
           data-testid="send-message"
           disabled={sendDisabled || isSending}
-          title="Send (Enter)"
+          title={isSending ? "Sending…" : "Send (Enter)"}
           type="submit"
+          size="icon"
         >
-          <SendHorizontal className="h-4 w-4" />
-          {isSending ? "Sending" : "Send"}
+          {isSending ? (
+            <span
+              aria-hidden
+              className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"
+            />
+          ) : (
+            <ArrowUp className="h-4 w-4" aria-hidden />
+          )}
         </Button>
       </div>
     );

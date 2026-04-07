@@ -262,7 +262,10 @@ test("supports multiline drafts with Ctrl+Enter and sends with Enter", async ({
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
-  await expect(page.getByTestId("send-message")).toContainText("Send");
+  await expect(page.getByTestId("send-message")).toHaveAttribute(
+    "title",
+    "Send (Enter)",
+  );
   const initialInputHeight = await input.evaluate(
     (element) => (element as HTMLTextAreaElement).clientHeight,
   );
