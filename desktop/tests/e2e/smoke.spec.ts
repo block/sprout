@@ -157,6 +157,9 @@ test("opens relay-backed search from the sidebar and loads the exact result", as
     .getByText("Engineering shipped the desktop build.")
     .click();
 
+  await expect(page).toHaveURL(
+    /#\/channels\/1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9\?messageId=mock-engineering-shipped$/,
+  );
   await expect(page.getByTestId("chat-title")).toHaveText("engineering");
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Engineering shipped the desktop build.",

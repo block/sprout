@@ -3260,6 +3260,16 @@ async function handleSearchMessages(
         created_at: now - 90 * 60,
         score: 5.8,
       },
+      {
+        event_id: "mock-forum-release-reply",
+        content: "Looks good to me. We should ship it.",
+        kind: 45003,
+        pubkey: ALICE_PUBKEY,
+        channel_id: "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11",
+        channel_name: "watercooler",
+        created_at: now - 80 * 60,
+        score: 5.2,
+      },
     ];
 
     const hits = mockHits
@@ -3462,6 +3472,21 @@ async function handleGetEvent(
         kind: 45001,
         tags: [["e", "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11"]],
         content: "Release checklist: async feedback thread.",
+        sig: "mocksig".repeat(20).slice(0, 128),
+      },
+      {
+        id: "mock-forum-release-reply",
+        pubkey: ALICE_PUBKEY,
+        created_at: Math.floor(Date.now() / 1000) - 80 * 60,
+        kind: 45003,
+        tags: buildReplyMessageTags(
+          "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11",
+          ALICE_PUBKEY,
+          "mock-forum-release-thread",
+          "mock-forum-release-thread",
+          undefined,
+        ),
+        content: "Looks good to me. We should ship it.",
         sig: "mocksig".repeat(20).slice(0, 128),
       },
     ];

@@ -17,6 +17,9 @@ import { Button } from "@/shared/ui/button";
 
 type WorkflowsViewProps = {
   channels: Channel[];
+  onCloseWorkflow: () => void;
+  onSelectWorkflow: (workflowId: string) => void;
+  selectedWorkflowId: string | null;
 };
 
 type WorkflowWithChannel = {
@@ -30,14 +33,16 @@ type DialogState =
   | { mode: "edit"; workflow: Workflow }
   | { mode: "duplicate"; workflow: Workflow };
 
-export function WorkflowsView({ channels }: WorkflowsViewProps) {
+export function WorkflowsView({
+  channels,
+  onCloseWorkflow,
+  onSelectWorkflow,
+  selectedWorkflowId,
+}: WorkflowsViewProps) {
   const [dialogState, setDialogState] = React.useState<DialogState>({
     mode: "closed",
   });
   const [deleteTarget, setDeleteTarget] = React.useState<Workflow | null>(null);
-  const [selectedWorkflowId, setSelectedWorkflowId] = React.useState<
-    string | null
-  >(null);
   const queryClient = useQueryClient();
 
   const memberChannels = channels.filter((c) => c.isMember);
@@ -77,9 +82,9 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
   const deleteMutation = useMutation({
     mutationFn: (workflowId: string) => deleteWorkflow(workflowId),
     onSuccess: (_data, workflowId) => {
-      setSelectedWorkflowId((current) =>
-        current === workflowId ? null : current,
-      );
+      if (selectedWorkflowId === workflowId) {
+        onCloseWorkflow();
+      }
       void queryClient.invalidateQueries({
         predicate: (query) =>
           query.queryKey[0] === "workflows" ||
@@ -129,7 +134,10 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
       className="flex min-h-0 flex-1 overflow-hidden"
       data-testid="workflows-view"
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
+      <div
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4"
+        data-scroll-restoration-id="workflows-list"
+      >
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h2 className="text-lg font-semibold">Workflows</h2>
@@ -186,11 +194,12 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
             {allWorkflows.map(({ workflow, channelName }) => (
               <WorkflowCard
                 channelName={channelName}
+                isActive={selectedWorkflowId === workflow.id}
                 key={workflow.id}
                 onDelete={handleDelete}
                 onDuplicate={handleDuplicate}
                 onEdit={handleEdit}
-                onSelect={setSelectedWorkflowId}
+                onSelect={onSelectWorkflow}
                 onTrigger={handleTrigger}
                 workflow={workflow}
               />
@@ -203,7 +212,7 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
         <div className="w-[400px] shrink-0">
           <WorkflowDetailPanel
             key={selectedWorkflowId}
-            onClose={() => setSelectedWorkflowId(null)}
+            onClose={onCloseWorkflow}
             onEdit={handleEdit}
             workflowId={selectedWorkflowId}
           />

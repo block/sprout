@@ -32,7 +32,7 @@ type ChannelPaneProps = {
     mentionPubkeys: string[],
     mediaTags?: string[][],
   ) => Promise<void>;
-  onTargetReached: (messageId: string) => void;
+  onTargetReached?: (messageId: string) => void;
   onToggleReaction?: (
     message: TimelineMessage,
     emoji: string,

@@ -113,7 +113,10 @@ export function WorkflowDetailPanel({
         </div>
       ) : null}
 
-      <div className="flex-1 overflow-y-auto">
+      <div
+        className="flex-1 overflow-y-auto"
+        data-scroll-restoration-id={`workflow-detail:${workflowId}`}
+      >
         {workflow ? (
           <div className="space-y-4 p-4">
             <div>

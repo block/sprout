@@ -11,9 +11,17 @@ const WorkflowsView = React.lazy(async () => {
 
 type WorkflowsScreenProps = {
   channels: Channel[];
+  onCloseWorkflow: () => void;
+  onSelectWorkflow: (workflowId: string) => void;
+  selectedWorkflowId: string | null;
 };
 
-export function WorkflowsScreen({ channels }: WorkflowsScreenProps) {
+export function WorkflowsScreen({
+  channels,
+  onCloseWorkflow,
+  onSelectWorkflow,
+  selectedWorkflowId,
+}: WorkflowsScreenProps) {
   return (
     <>
       <ChatHeader
@@ -26,7 +34,12 @@ export function WorkflowsScreen({ channels }: WorkflowsScreenProps) {
         fallback={<ViewLoadingFallback label="Loading workflows..." />}
       >
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <WorkflowsView channels={channels} />
+          <WorkflowsView
+            channels={channels}
+            onCloseWorkflow={onCloseWorkflow}
+            onSelectWorkflow={onSelectWorkflow}
+            selectedWorkflowId={selectedWorkflowId}
+          />
         </div>
       </React.Suspense>
     </>
