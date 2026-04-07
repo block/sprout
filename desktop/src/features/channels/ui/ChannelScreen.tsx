@@ -365,9 +365,7 @@ export function ChannelScreen({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {activeChannel ? (
           activeChannel.channelType === "forum" ? (
-            <React.Suspense
-              fallback={<ViewLoadingFallback label="Loading forum..." />}
-            >
+            <React.Suspense fallback={<ViewLoadingFallback kind="forum" />}>
               <ForumView
                 channel={activeChannel}
                 currentPubkey={currentPubkey}
@@ -378,9 +376,7 @@ export function ChannelScreen({
               />
             </React.Suspense>
           ) : (
-            <React.Suspense
-              fallback={<ViewLoadingFallback label="Loading channel..." />}
-            >
+            <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
               <ChannelPane
                 activeChannel={activeChannel}
                 currentPubkey={currentPubkey}

@@ -17,9 +17,7 @@ export function AgentsScreen() {
         title="Agents"
       />
 
-      <React.Suspense
-        fallback={<ViewLoadingFallback label="Loading agents..." />}
-      >
+      <React.Suspense fallback={<ViewLoadingFallback kind="agents" />}>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <AgentsView />
         </div>

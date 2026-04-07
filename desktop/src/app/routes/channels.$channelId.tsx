@@ -84,7 +84,7 @@ export function ChannelRouteScreen({
   }, [selectedPostId, targetMessageId]);
 
   if (channelsQuery.isPending && !activeChannel) {
-    return <ViewLoadingFallback label="Loading channel..." />;
+    return <ViewLoadingFallback includeHeader kind="channel" />;
   }
 
   return (

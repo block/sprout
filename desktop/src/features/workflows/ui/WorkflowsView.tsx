@@ -14,6 +14,7 @@ import {
   triggerWorkflow,
 } from "@/shared/api/tauriWorkflows";
 import { Button } from "@/shared/ui/button";
+import { Skeleton } from "@/shared/ui/skeleton";
 
 type WorkflowsViewProps = {
   channels: Channel[];
@@ -32,6 +33,38 @@ type DialogState =
   | { mode: "create" }
   | { mode: "edit"; workflow: Workflow }
   | { mode: "duplicate"; workflow: Workflow };
+
+function WorkflowsListSkeleton() {
+  return (
+    <div className="space-y-2">
+      {["first", "second", "third", "fourth"].map((card) => (
+        <div
+          className="rounded-xl border border-border/70 bg-card/80 p-4 shadow-sm"
+          key={card}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1 space-y-3">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-5 w-44" />
+                <Skeleton className="h-5 w-16 rounded-full" />
+              </div>
+              <Skeleton className="h-4 w-full max-w-2xl" />
+              <div className="flex flex-wrap gap-2">
+                <Skeleton className="h-5 w-20 rounded-full" />
+                <Skeleton className="h-5 w-24 rounded-full" />
+                <Skeleton className="h-5 w-16 rounded-full" />
+              </div>
+            </div>
+            <div className="hidden shrink-0 gap-2 sm:flex">
+              <Skeleton className="h-8 w-8 rounded-lg" />
+              <Skeleton className="h-8 w-8 rounded-lg" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function WorkflowsView({
   channels,
@@ -160,11 +193,7 @@ export function WorkflowsView({
         </div>
 
         {allWorkflowsQuery.isLoading ? (
-          <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              Loading workflows...
-            </p>
-          </div>
+          <WorkflowsListSkeleton />
         ) : allWorkflowsQuery.isError ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 text-muted-foreground">
             <p className="text-sm text-red-400">Failed to load workflows</p>
