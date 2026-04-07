@@ -17,6 +17,12 @@ import {
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
 import { HomeScreen } from "@/features/home/ui/HomeScreen";
 import { useHomeFeedNotifications } from "@/features/notifications/hooks";
+import {
+  listenForDesktopNotificationActions,
+  revealDesktopAppWindow,
+  setDesktopAppBadgeCount,
+  type DesktopNotificationTarget,
+} from "@/features/notifications/lib/desktop";
 import { usePresenceSession } from "@/features/presence/hooks";
 import { useProfileQuery } from "@/features/profile/hooks";
 import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
@@ -49,6 +55,23 @@ const WorkflowsScreen = React.lazy(async () => {
   const module = await import("@/features/workflows/ui/WorkflowsScreen");
   return { default: module.WorkflowsScreen };
 });
+
+function toSearchAnchor(target: DesktopNotificationTarget): SearchHit | null {
+  if (!target.eventId) {
+    return null;
+  }
+
+  return {
+    eventId: target.eventId,
+    content: target.content ?? "",
+    kind: target.kind ?? 9,
+    pubkey: target.pubkey ?? "",
+    channelId: target.channelId,
+    channelName: target.channelName ?? null,
+    createdAt: target.createdAt ?? Math.floor(Date.now() / 1_000),
+    score: 0,
+  };
+}
 
 export function AppShell() {
   useWebviewZoomShortcuts();
@@ -234,7 +257,7 @@ export function AppShell() {
     );
   }, []);
 
-  const handleOpenSearchResult = React.useCallback(
+  const openEventAnchor = React.useCallback(
     (hit: SearchHit) => {
       setSearchAnchor(hit);
       setSearchAnchorChannelId(hit.channelId);
@@ -272,6 +295,38 @@ export function AppShell() {
     [handleOpenChannel],
   );
 
+  const handleOpenSearchResult = React.useCallback(
+    (hit: SearchHit) => {
+      openEventAnchor(hit);
+    },
+    [openEventAnchor],
+  );
+
+  const handleDesktopNotificationAction = React.useEffectEvent(
+    async (target: DesktopNotificationTarget) => {
+      await revealDesktopAppWindow();
+
+      if (!target.channelId) {
+        setSearchAnchor(null);
+        setSearchAnchorChannelId(null);
+        setSearchAnchorEvent(null);
+        selectView("home");
+        return;
+      }
+
+      const anchor = toSearchAnchor(target);
+      if (!anchor) {
+        setSearchAnchor(null);
+        setSearchAnchorChannelId(null);
+        setSearchAnchorEvent(null);
+        await handleOpenChannel(target.channelId);
+        return;
+      }
+
+      openEventAnchor(anchor);
+    },
+  );
+
   React.useEffect(() => {
     let isCancelled = false;
 
@@ -283,6 +338,35 @@ export function AppShell() {
 
     return () => {
       isCancelled = true;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    void setDesktopAppBadgeCount(homeBadgeCount);
+  }, [homeBadgeCount]);
+
+  React.useEffect(() => {
+    let isCancelled = false;
+    let cleanup = () => {};
+
+    void listenForDesktopNotificationActions((target) => {
+      if (isCancelled) {
+        return;
+      }
+
+      void handleDesktopNotificationAction(target);
+    }).then((dispose) => {
+      if (isCancelled) {
+        dispose();
+        return;
+      }
+
+      cleanup = dispose;
+    });
+
+    return () => {
+      isCancelled = true;
+      cleanup();
     };
   }, []);
 

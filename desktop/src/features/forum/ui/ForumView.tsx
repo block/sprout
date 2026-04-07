@@ -1,9 +1,11 @@
 import { MessageSquareText } from "lucide-react";
 import * as React from "react";
 
+import { getThreadReference } from "@/features/messages/lib/threading";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
 import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
-import type { Channel } from "@/shared/api/types";
+import type { Channel, RelayEvent } from "@/shared/api/types";
+import { KIND_FORUM_COMMENT, KIND_FORUM_POST } from "@/shared/constants/kinds";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 import {
@@ -21,6 +23,10 @@ import { ForumThreadPanel } from "./ForumThreadPanel";
 type ForumViewProps = {
   channel: Channel;
   currentPubkey?: string;
+  onTargetReached?: (messageId: string) => void;
+  targetEvent: RelayEvent | null;
+  targetEventId: string | null;
+  targetEventKind: number | null;
 };
 
 function canDelete(postPubkey: string, currentPubkey?: string): boolean {
@@ -30,7 +36,14 @@ function canDelete(postPubkey: string, currentPubkey?: string): boolean {
   return postPubkey.toLowerCase() === currentPubkey.toLowerCase();
 }
 
-export function ForumView({ channel, currentPubkey }: ForumViewProps) {
+export function ForumView({
+  channel,
+  currentPubkey,
+  onTargetReached,
+  targetEvent,
+  targetEventId,
+  targetEventKind,
+}: ForumViewProps) {
   const [expandedPostId, setExpandedPostId] = React.useState<string | null>(
     null,
   );
@@ -84,6 +97,22 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
       ),
     [profileQuery.data, profilesQuery.data?.profiles],
   );
+  const targetThreadId = React.useMemo(() => {
+    if (!targetEventId) {
+      return null;
+    }
+
+    if (targetEventKind === KIND_FORUM_POST) {
+      return targetEventId;
+    }
+
+    if (!targetEvent || targetEvent.kind !== KIND_FORUM_COMMENT) {
+      return null;
+    }
+
+    const thread = getThreadReference(targetEvent.tags);
+    return thread.rootId ?? thread.parentId ?? null;
+  }, [targetEvent, targetEventId, targetEventKind]);
 
   // Reset expanded post when channel changes
   const previousChannelIdRef = React.useRef(channel.id);
@@ -92,6 +121,14 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
     setExpandedPostId(null);
     setIsComposerOpen(false);
   }
+
+  React.useEffect(() => {
+    if (!targetThreadId || expandedPostId === targetThreadId) {
+      return;
+    }
+
+    setExpandedPostId(targetThreadId);
+  }, [expandedPostId, targetThreadId]);
 
   if (expandedPostId) {
     const threadPost = threadQuery.data?.post;
@@ -124,7 +161,9 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
             mentionPubkeys,
           });
         }}
+        onTargetReached={onTargetReached}
         profiles={profiles}
+        targetEventId={targetEventId}
         thread={threadQuery.data}
       />
     );

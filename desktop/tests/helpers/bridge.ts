@@ -70,6 +70,7 @@ export async function installBridge(page: Page, options: BridgeOptions) {
         body: string | null;
         title: string;
       }> = [];
+      const notificationInstances: MockNotification[] = [];
 
       class MockNotification extends EventTarget {
         static permission: NotificationPermission = "granted";
@@ -79,12 +80,14 @@ export async function installBridge(page: Page, options: BridgeOptions) {
         }
 
         body: string | null;
+        onclick: ((event: Event) => void) | null = null;
         title: string;
 
         constructor(title: string, options?: NotificationOptions) {
           super();
           this.title = title;
           this.body = options?.body ?? null;
+          notificationInstances.push(this);
           notificationLog.push({
             body: this.body,
             title: this.title,
@@ -102,6 +105,8 @@ export async function installBridge(page: Page, options: BridgeOptions) {
 
       const testWindow = window as Window & {
         __SPROUT_E2E__?: Record<string, unknown>;
+        __SPROUT_E2E_APP_BADGE_COUNT__?: number;
+        __SPROUT_E2E_CLICK_NOTIFICATION__?: (index: number) => boolean;
         __SPROUT_E2E_NOTIFICATIONS__?: Array<{
           body: string | null;
           title: string;
@@ -116,6 +121,18 @@ export async function installBridge(page: Page, options: BridgeOptions) {
         mode,
         relayHttpUrl: relayHttpUrl ?? currentConfig.relayHttpUrl,
         relayWsUrl: relayWsUrl ?? currentConfig.relayWsUrl,
+      };
+      testWindow.__SPROUT_E2E_APP_BADGE_COUNT__ = 0;
+      testWindow.__SPROUT_E2E_CLICK_NOTIFICATION__ = (index: number) => {
+        const notification = notificationInstances[index];
+        if (!notification) {
+          return false;
+        }
+
+        const event = new Event("click");
+        notification.dispatchEvent(event);
+        notification.onclick?.(event);
+        return true;
       };
       testWindow.__SPROUT_E2E_NOTIFICATIONS__ = notificationLog;
     },

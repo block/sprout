@@ -185,6 +185,24 @@ export function ChannelScreen({
       timelineMessages.find((message) => message.id === editTargetId) ?? null,
     [editTargetId, timelineMessages],
   );
+  const forumTargetEventId =
+    activeChannel &&
+    activeChannel.channelType === "forum" &&
+    searchAnchorChannelId === activeChannel.id
+      ? (searchAnchor?.eventId ?? null)
+      : null;
+  const forumTargetEventKind =
+    activeChannel &&
+    activeChannel.channelType === "forum" &&
+    searchAnchorChannelId === activeChannel.id
+      ? (searchAnchor?.kind ?? null)
+      : null;
+  const forumTargetEvent =
+    activeChannel &&
+    activeChannel.channelType === "forum" &&
+    searchAnchorChannelId === activeChannel.id
+      ? searchAnchorEvent
+      : null;
 
   const {
     handleCancelEdit,
@@ -377,6 +395,10 @@ export function ChannelScreen({
               <ForumView
                 channel={activeChannel}
                 currentPubkey={currentPubkey}
+                onTargetReached={onTargetReached}
+                targetEvent={forumTargetEvent}
+                targetEventId={forumTargetEventId}
+                targetEventKind={forumTargetEventKind}
               />
             </React.Suspense>
           ) : (
