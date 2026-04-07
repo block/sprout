@@ -284,6 +284,14 @@ export function formatTimelineMessages(
       });
     const thread = getThreadReference(event.tags);
     const edit = editsByTargetId.get(event.id);
+    const depth = getDepth(event);
+    let displayDepth = depth;
+    if (thread.parentId) {
+      const parentEvent = eventsById.get(thread.parentId);
+      if (parentEvent && depth === 1 && getDepth(parentEvent) === 0) {
+        displayDepth = 0;
+      }
+    }
     return {
       id: event.id,
       createdAt: event.created_at,
@@ -299,7 +307,8 @@ export function formatTimelineMessages(
       body: edit ? edit.content : event.content,
       parentId: thread.parentId,
       rootId: thread.rootId,
-      depth: getDepth(event),
+      depth,
+      displayDepth,
       accent: currentPubkey === authorPubkey,
       pending: event.pending,
       edited: edit !== undefined,

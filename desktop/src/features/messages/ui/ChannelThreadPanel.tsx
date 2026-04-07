@@ -9,7 +9,12 @@ import {
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { channelThreadKey } from "@/features/messages/lib/messageQueryKeys";
 import { getForumThread } from "@/shared/api/forum";
-import type { Channel } from "@/shared/api/types";
+import type {
+  Channel,
+  ForumPost,
+  ForumThreadResponse,
+  ThreadReply,
+} from "@/shared/api/types";
 import {
   resolveUserLabel,
   type UserProfileLookup,
@@ -23,11 +28,88 @@ import { Skeleton } from "@/shared/ui/skeleton";
 
 import { formatRelativeTime } from "@/features/forum/lib/time";
 
+type ThreadHeaderSlice =
+  | { type: "post"; data: ForumPost }
+  | { type: "reply"; data: ThreadReply };
+
+type ThreadTailItem =
+  | { type: "post"; data: ForumPost }
+  | { type: "reply"; data: ThreadReply };
+
+/** Anchor header on the opened message; list messages strictly after it in time. */
+function sliceThreadForFocus(
+  thread: ForumThreadResponse,
+  focusEventId: string | null,
+): { header: ThreadHeaderSlice; tail: ThreadTailItem[] } {
+  const post = thread.post;
+  const entries = [
+    {
+      kind: "post" as const,
+      eventId: post.eventId,
+      createdAt: post.createdAt,
+      post,
+    },
+    ...thread.replies.map((reply) => ({
+      kind: "reply" as const,
+      eventId: reply.eventId,
+      createdAt: reply.createdAt,
+      reply,
+    })),
+  ].sort((a, b) => a.createdAt - b.createdAt);
+
+  const focusId =
+    focusEventId && focusEventId.length > 0 ? focusEventId : post.eventId;
+  const focusIdx = entries.findIndex((e) => e.eventId === focusId);
+
+  if (focusIdx < 0) {
+    return {
+      header: { type: "post", data: post },
+      tail: entries
+        .filter((e) => e.eventId !== post.eventId)
+        .map((e) =>
+          e.kind === "post"
+            ? { type: "post" as const, data: e.post }
+            : { type: "reply" as const, data: e.reply },
+        ),
+    };
+  }
+
+  const focusEntry = entries[focusIdx];
+  if (!focusEntry) {
+    return {
+      header: { type: "post", data: post },
+      tail: entries
+        .filter((e) => e.eventId !== post.eventId)
+        .map((e) =>
+          e.kind === "post"
+            ? { type: "post" as const, data: e.post }
+            : { type: "reply" as const, data: e.reply },
+        ),
+    };
+  }
+  const header: ThreadHeaderSlice =
+    focusEntry.kind === "post"
+      ? { type: "post", data: focusEntry.post }
+      : { type: "reply", data: focusEntry.reply };
+
+  const tail = entries
+    .slice(focusIdx + 1)
+    .map((e) =>
+      e.kind === "post"
+        ? { type: "post" as const, data: e.post }
+        : { type: "reply" as const, data: e.reply },
+    );
+
+  return { header, tail };
+}
+
 type ChannelThreadPanelProps = {
   channel: Channel;
   currentPubkey?: string;
   profiles?: UserProfileLookup;
   rootEventId: string;
+  /** Message id of the timeline row that opened this thread (header anchor). */
+  focusEventId: string | null;
   onClose: () => void;
   onCancelReply: () => void;
   onSend: (
@@ -107,6 +189,7 @@ export function ChannelThreadPanel({
   currentPubkey,
   profiles,
   rootEventId,
+  focusEventId,
   onClose,
   onCancelReply,
   onSend,
@@ -134,13 +217,21 @@ export function ChannelThreadPanel({
   const thread = threadQuery.data;
   const isLoading = threadQuery.isPending;
 
+  const { headerSlice, tailItems } = React.useMemo(() => {
+    if (!thread) {
+      return { headerSlice: null as ThreadHeaderSlice | null, tailItems: [] };
+    }
+    const { header, tail } = sliceThreadForFocus(thread, focusEventId);
+    return { headerSlice: header, tailItems: tail };
+  }, [focusEventId, thread]);
+
   const implicitThreadAgentMention = React.useMemo(() => {
-    const rootPk = thread?.post.pubkey;
-    if (!rootPk) {
+    const headerPk = headerSlice?.data.pubkey ?? thread?.post.pubkey;
+    if (!headerPk) {
       return null;
     }
 
-    const lower = rootPk.toLowerCase();
+    const lower = headerPk.toLowerCase();
     const managed = (managedAgentsQuery.data ?? []).find(
       (a) => a.pubkey.toLowerCase() === lower,
     );
@@ -156,7 +247,12 @@ export function ChannelThreadPanel({
     }
 
     return null;
-  }, [managedAgentsQuery.data, relayAgentsQuery.data, thread?.post.pubkey]);
+  }, [
+    headerSlice,
+    managedAgentsQuery.data,
+    relayAgentsQuery.data,
+    thread?.post.pubkey,
+  ]);
 
   return (
     <aside
@@ -182,18 +278,18 @@ export function ChannelThreadPanel({
             <Skeleton className="h-12 w-full rounded-lg" />
             <Skeleton className="h-12 w-full rounded-lg" />
           </div>
-        ) : thread ? (
+        ) : thread && headerSlice ? (
           <>
             <div className="bg-background/40 px-3 py-3">
               <div className="flex items-start gap-2">
                 <ProfileAvatar
                   avatarUrl={
-                    profiles?.[thread.post.pubkey.toLowerCase()]?.avatarUrl ??
-                    null
+                    profiles?.[headerSlice.data.pubkey.toLowerCase()]
+                      ?.avatarUrl ?? null
                   }
                   className="h-8 w-8 shrink-0 rounded-lg text-[11px]"
                   label={resolveUserLabel({
-                    pubkey: thread.post.pubkey,
+                    pubkey: headerSlice.data.pubkey,
                     currentPubkey,
                     profiles,
                     preferResolvedSelfLabel: true,
@@ -202,7 +298,7 @@ export function ChannelThreadPanel({
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold">
                     {resolveUserLabel({
-                      pubkey: thread.post.pubkey,
+                      pubkey: headerSlice.data.pubkey,
                       currentPubkey,
                       profiles,
                       preferResolvedSelfLabel: true,
@@ -212,9 +308,9 @@ export function ChannelThreadPanel({
                     <Markdown
                       channelNames={channelNames}
                       compact
-                      content={thread.post.content}
+                      content={headerSlice.data.content}
                       mentionNames={resolveMentionNames(
-                        thread.post.tags,
+                        headerSlice.data.tags,
                         profiles,
                       )}
                     />
@@ -224,19 +320,19 @@ export function ChannelThreadPanel({
             </div>
 
             <div className="pb-2">
-              {thread.replies.map((reply) => (
+              {tailItems.map((item) => (
                 <ThreadReplyRow
                   channelNames={channelNames}
-                  content={reply.content}
-                  createdAt={reply.createdAt}
+                  content={item.data.content}
+                  createdAt={item.data.createdAt}
                   currentPubkey={currentPubkey}
-                  key={reply.eventId}
+                  key={item.data.eventId}
                   profiles={profiles}
-                  pubkey={reply.pubkey}
-                  tags={reply.tags}
+                  pubkey={item.data.pubkey}
+                  tags={item.data.tags}
                 />
               ))}
-              {thread.replies.length === 0 ? (
+              {tailItems.length === 0 ? (
                 <p className="px-3 py-6 text-center text-sm text-muted-foreground">
                   No replies yet. Send a message below.
                 </p>

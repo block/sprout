@@ -127,8 +127,8 @@ export const MessageRow = React.memo(
       [channels],
     );
 
-    const visibleDepth = Math.min(message.depth, 6);
-    const indentPx = visibleDepth * 28;
+    const layoutDepth = Math.min(message.displayDepth ?? message.depth, 6);
+    const indentPx = layoutDepth * 28;
     const initials = message.author
       .split(" ")
       .map((part) => part[0])
@@ -220,7 +220,7 @@ export const MessageRow = React.memo(
         className="relative"
         style={indentPx > 0 ? { paddingLeft: `${indentPx}px` } : undefined}
       >
-        {message.depth > 0 ? (
+        {layoutDepth > 0 ? (
           <div
             aria-hidden
             className="absolute bottom-1.5 left-3 top-1.5 rounded-full border-l border-border/70"
@@ -366,10 +366,7 @@ export const MessageRow = React.memo(
                 });
               }}
             />
-            {message.depth === 0 &&
-            threadHint &&
-            threadHint.replyCount > 0 &&
-            onOpenThread ? (
+            {threadHint && threadHint.replyCount > 0 && onOpenThread ? (
               <div
                 className={cn(
                   "mt-1.5 inline-flex max-w-full flex-wrap items-center gap-2 rounded-md py-0.5 text-left text-[11px] transition-colors",
@@ -459,6 +456,7 @@ export const MessageRow = React.memo(
     prev.message.accent === next.message.accent &&
     prev.message.time === next.message.time &&
     prev.message.depth === next.message.depth &&
+    prev.message.displayDepth === next.message.displayDepth &&
     prev.message.kind === next.message.kind &&
     prev.message.pending === next.message.pending &&
     prev.message.edited === next.message.edited &&

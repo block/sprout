@@ -26,6 +26,8 @@ export type TimelineMessage = {
   parentId?: string | null;
   rootId?: string | null;
   depth: number;
+  /** Layout indent (0 = full-width row). First reply under a root is 0 so Q&A reads inline in main. */
+  displayDepth: number;
   accent?: boolean;
   pending?: boolean;
   edited?: boolean;

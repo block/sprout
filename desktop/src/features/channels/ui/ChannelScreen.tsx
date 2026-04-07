@@ -27,6 +27,7 @@ import {
   collectMessageAuthorPubkeys,
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
+import { threadHintAnchorIdForNestedMessage } from "@/features/messages/lib/threadHintAnchor";
 import {
   getChannelIdFromTags,
   getThreadReference,
@@ -91,6 +92,10 @@ export function ChannelScreen({
   const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
   const [threadRootId, setThreadRootId] = React.useState<string | null>(null);
+  /** Event id of the message row used to open the thread (Reply / thread hint). */
+  const [threadFocusEventId, setThreadFocusEventId] = React.useState<
+    string | null
+  >(null);
   const currentPubkey = currentIdentity?.pubkey;
   const activeChannelId = activeChannel?.id ?? null;
 
@@ -188,7 +193,11 @@ export function ChannelScreen({
     ],
   );
 
-  /** Main channel timeline: top-level messages only; thread replies live in the thread sidebar. */
+  /**
+   * Main channel: top-level posts plus **direct** replies to the thread root only
+   * (`parentId === rootId` in NIP-10 e-tags). Nested replies (`parentId !== rootId`)
+   * stay sidebar-only — they must not appear in the main stream even if depth is wrong.
+   */
   const mainTimelineMessages = React.useMemo(
     () =>
       timelineMessages.filter((message) => {
@@ -196,13 +205,30 @@ export function ChannelScreen({
           return true;
         }
 
-        return message.depth === 0;
+        const { parentId, rootId } = message;
+        if (!parentId) {
+          return true;
+        }
+
+        if (rootId && parentId === rootId) {
+          return true;
+        }
+
+        return false;
       }),
     [timelineMessages],
   );
 
-  /** Reply counts + participant labels for roots that have sidebar thread activity. */
-  const threadHintsByRootId = React.useMemo(() => {
+  /**
+   * Reply counts keyed by **main-timeline anchor** (prefer the direct reply to
+   * the thread root — e.g. agent message — over the user's root post).
+   */
+  const threadHintsByAnchorId = React.useMemo(() => {
+    const messageById = new Map<string, TimelineMessage>(
+      timelineMessages.map((m) => [m.id, m]),
+    );
+    const mainIds = new Set(mainTimelineMessages.map((m) => m.id));
+
     const aggregates = new Map<
       string,
       { replyCount: number; pubkeys: string[] }
@@ -212,15 +238,17 @@ export function ChannelScreen({
       if (m.kind === KIND_SYSTEM_MESSAGE) {
         continue;
       }
-      if (m.depth === 0) {
-        continue;
-      }
-      const rootId = m.rootId;
-      if (!rootId) {
+      const { parentId, rootId } = m;
+      if (!parentId || !rootId || parentId === rootId) {
         continue;
       }
 
-      const agg = aggregates.get(rootId) ?? { replyCount: 0, pubkeys: [] };
+      const anchorId = threadHintAnchorIdForNestedMessage(
+        m,
+        messageById,
+        mainIds,
+      );
+      const agg = aggregates.get(anchorId) ?? { replyCount: 0, pubkeys: [] };
       agg.replyCount += 1;
       if (m.pubkey) {
         const pk = m.pubkey.toLowerCase();
@@ -228,11 +256,11 @@ export function ChannelScreen({
           agg.pubkeys.push(m.pubkey);
         }
       }
-      aggregates.set(rootId, agg);
+      aggregates.set(anchorId, agg);
     }
 
     const out = new Map<string, ThreadConversationHint>();
-    for (const [rootId, agg] of aggregates) {
+    for (const [anchorId, agg] of aggregates) {
       const participantPubkeys = agg.pubkeys.slice(0, 5);
       const participantLabels = participantPubkeys.map((pk) =>
         resolveUserLabel({
@@ -242,14 +270,14 @@ export function ChannelScreen({
           preferResolvedSelfLabel: true,
         }),
       );
-      out.set(rootId, {
+      out.set(anchorId, {
         replyCount: agg.replyCount,
         participantPubkeys,
         participantLabels,
       });
     }
     return out;
-  }, [currentPubkey, messageProfiles, timelineMessages]);
+  }, [currentPubkey, mainTimelineMessages, messageProfiles, timelineMessages]);
   const replyTargetMessage = React.useMemo(
     () =>
       timelineMessages.find((message) => message.id === replyTargetId) ?? null,
@@ -283,6 +311,7 @@ export function ChannelScreen({
   const handleReplyOpenThread = React.useCallback(
     (message: TimelineMessage) => {
       setThreadRootId(message.rootId ?? message.id);
+      setThreadFocusEventId(message.id);
       handleReply(message);
     },
     [handleReply],
@@ -290,6 +319,7 @@ export function ChannelScreen({
 
   const handleCloseThread = React.useCallback(() => {
     setThreadRootId(null);
+    setThreadFocusEventId(null);
     setReplyTargetId(null);
   }, []);
 
@@ -327,7 +357,10 @@ export function ChannelScreen({
         return;
       }
 
-      const parentEventId = replyTargetId ?? threadRootId;
+      // Prefer explicit reply chain, then the message that opened the thread (e.g. agent).
+      // Never fall back to thread root alone when focus exists — that would create a depth-1
+      // reply to the root and duplicate the message in the main channel.
+      const parentEventId = replyTargetId ?? threadFocusEventId ?? threadRootId;
 
       const result = await sendMessageMutation.mutateAsync({
         content,
@@ -348,6 +381,7 @@ export function ChannelScreen({
       queryClient,
       replyTargetId,
       sendMessageMutation,
+      threadFocusEventId,
       threadRootId,
     ],
   );
@@ -358,20 +392,6 @@ export function ChannelScreen({
     [canReact, handleToggleReaction],
   );
 
-  const channelDescription = activeChannel
-    ? [
-        activeChannel.archivedAt ? "Archived." : null,
-        !activeChannel.isMember
-          ? "Read-only until you join this open channel."
-          : null,
-        activeChannel.topic,
-        activeChannel.description,
-        activeChannel.purpose,
-        null,
-      ]
-        .filter((value) => value && value.trim().length > 0)
-        .join(" ") || "Channel details and activity."
-    : "Connect to the relay to browse channels and read messages.";
   const shouldLoadTimeline =
     activeChannel !== null && activeChannel.channelType !== "forum";
   const isTimelineLoading =
@@ -384,6 +404,7 @@ export function ChannelScreen({
       setReplyTargetId(null);
       setEditTargetId(null);
       setThreadRootId(null);
+      setThreadFocusEventId(null);
     },
     [],
   );
@@ -399,13 +420,22 @@ export function ChannelScreen({
   }, [activeChannelId, resetComposerTargets]);
 
   React.useEffect(() => {
-    if (replyTargetId && !replyTargetMessage) {
+    // While the thread panel is open, keep replyTargetId even if the target is not in the
+    // current timeline slice momentarily — clearing it would make thread sends fall back to
+    // the thread root and surface replies in the main channel.
+    if (replyTargetId && !replyTargetMessage && !threadRootId) {
       setReplyTargetId(null);
     }
     if (editTargetId && !editTargetMessage) {
       setEditTargetId(null);
     }
-  }, [editTargetId, editTargetMessage, replyTargetId, replyTargetMessage]);
+  }, [
+    editTargetId,
+    editTargetMessage,
+    replyTargetId,
+    replyTargetMessage,
+    threadRootId,
+  ]);
 
   React.useEffect(() => {
     resetRequestedAncestors(activeChannelId);
@@ -504,7 +534,6 @@ export function ChannelScreen({
           }
           channelType={activeChannel?.channelType}
           visibility={activeChannel?.visibility}
-          description={channelDescription}
           statusBadge={
             activeChannel?.channelType === "dm" && activeDmPresenceStatus ? (
               <PresenceBadge
@@ -563,7 +592,8 @@ export function ChannelScreen({
                   profiles={messageProfiles}
                   replyTargetId={replyTargetId}
                   replyTargetMessage={replyTargetMessage}
-                  threadHintsByRootId={threadHintsByRootId}
+                  threadFocusEventId={threadFocusEventId}
+                  threadHintsByAnchorId={threadHintsByAnchorId}
                   threadRootId={threadRootId}
                   targetMessageId={
                     activeChannel &&

@@ -6,7 +6,8 @@ import type { ChannelType, ChannelVisibility } from "@/shared/api/types";
 type ChatHeaderProps = {
   actions?: React.ReactNode;
   title: string;
-  description: string;
+  /** Subtitle under the title; omitted when empty. */
+  description?: string;
   channelType?: ChannelType;
   visibility?: ChannelVisibility;
   mode?: "home" | "channel" | "agents" | "workflows";
@@ -79,12 +80,14 @@ export function ChatHeader({
           </h1>
           {statusBadge ? <div className="shrink-0">{statusBadge}</div> : null}
         </div>
-        <p
-          className="truncate text-sm text-muted-foreground"
-          data-testid="chat-description"
-        >
-          {description}
-        </p>
+        {description?.trim() ? (
+          <p
+            className="truncate text-sm text-muted-foreground"
+            data-testid="chat-description"
+          >
+            {description}
+          </p>
+        ) : null}
       </div>
 
       {actions ? <div className="shrink-0">{actions}</div> : null}

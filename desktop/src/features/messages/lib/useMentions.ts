@@ -1,6 +1,9 @@
 import * as React from "react";
 
-import { useManagedAgentsQuery } from "@/features/agents/hooks";
+import {
+  useManagedAgentsQuery,
+  useRelayAgentsQuery,
+} from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
@@ -17,6 +20,7 @@ export function useMentions(channelId: string | null) {
   const membersQuery = useChannelMembersQuery(channelId);
   const members = membersQuery.data;
   const managedAgentsQuery = useManagedAgentsQuery();
+  const relayAgentsQuery = useRelayAgentsQuery();
   const managedAgentNamesByPubkey = React.useMemo(
     () =>
       new Map(
@@ -27,6 +31,16 @@ export function useMentions(channelId: string | null) {
       ),
     [managedAgentsQuery.data],
   );
+  const relayAgentNamesByPubkey = React.useMemo(
+    () =>
+      new Map(
+        (relayAgentsQuery.data ?? []).map((agent) => [
+          agent.pubkey.toLowerCase(),
+          agent.name,
+        ]),
+      ),
+    [relayAgentsQuery.data],
+  );
 
   const knownNames = React.useMemo<string[]>(() => {
     if (!members) return [];
@@ -34,13 +48,30 @@ export function useMentions(channelId: string | null) {
     for (const member of members) {
       const name =
         member.displayName ??
-        managedAgentNamesByPubkey.get(member.pubkey.toLowerCase());
+        managedAgentNamesByPubkey.get(member.pubkey.toLowerCase()) ??
+        relayAgentNamesByPubkey.get(member.pubkey.toLowerCase());
       if (name) {
         names.push(name);
       }
     }
+    if (channelId) {
+      for (const agent of relayAgentsQuery.data ?? []) {
+        if (!agent.channelIds.includes(channelId)) {
+          continue;
+        }
+        if (!names.includes(agent.name)) {
+          names.push(agent.name);
+        }
+      }
+    }
     return names;
-  }, [members, managedAgentNamesByPubkey]);
+  }, [
+    channelId,
+    members,
+    managedAgentNamesByPubkey,
+    relayAgentNamesByPubkey,
+    relayAgentsQuery.data,
+  ]);
 
   /** Lower-cased version of knownNames, used for case-insensitive prefix matching. */
   const knownNamesLower = React.useMemo<string[]>(
@@ -80,6 +111,7 @@ export function useMentions(channelId: string | null) {
       .map((member) => {
         const fallbackName =
           managedAgentNamesByPubkey.get(member.pubkey.toLowerCase()) ??
+          relayAgentNamesByPubkey.get(member.pubkey.toLowerCase()) ??
           member.pubkey.slice(0, 8);
 
         return {
@@ -98,7 +130,12 @@ export function useMentions(channelId: string | null) {
         displayName: label,
         role: member.role === "admin" ? "admin" : null,
       }));
-  }, [managedAgentNamesByPubkey, members, mentionQuery]);
+  }, [
+    managedAgentNamesByPubkey,
+    members,
+    mentionQuery,
+    relayAgentNamesByPubkey,
+  ]);
 
   const isMentionOpen = mentionQuery !== null && suggestions.length > 0;
 
@@ -188,15 +225,32 @@ export function useMentions(channelId: string | null) {
         }
         const name =
           member.displayName ??
-          managedAgentNamesByPubkey.get(member.pubkey.toLowerCase());
+          managedAgentNamesByPubkey.get(member.pubkey.toLowerCase()) ??
+          relayAgentNamesByPubkey.get(member.pubkey.toLowerCase());
         if (name && hasMention(name)) {
           pubkeys.push(member.pubkey);
         }
       }
 
+      for (const agent of relayAgentsQuery.data ?? []) {
+        if (
+          pubkeys.some((pk) => pk.toLowerCase() === agent.pubkey.toLowerCase())
+        ) {
+          continue;
+        }
+        if (hasMention(agent.name)) {
+          pubkeys.push(agent.pubkey);
+        }
+      }
+
       return [...new Set(pubkeys)];
     },
-    [members, managedAgentNamesByPubkey],
+    [
+      members,
+      managedAgentNamesByPubkey,
+      relayAgentNamesByPubkey,
+      relayAgentsQuery.data,
+    ],
   );
 
   const clearMentions = React.useCallback(() => {

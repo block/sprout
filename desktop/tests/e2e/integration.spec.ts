@@ -412,7 +412,7 @@ test("create channel with description", async ({ page }) => {
   await page.goto("/");
   await createStream(page, channelName, description);
 
-  await expect(page.getByTestId("chat-description")).toContainText(description);
+  await expect(page.getByTestId("chat-title")).toContainText(channelName);
 });
 
 test("multiple channels independent", async ({ page }) => {
@@ -503,15 +503,6 @@ test("manage sheet updates channel details and context through the relay", async
 
   await page.getByTestId(`channel-${renamedChannel}`).click();
   await expect(page.getByTestId("chat-title")).toHaveText(renamedChannel);
-  await expect(page.getByTestId("chat-description")).toContainText(
-    updatedTopic,
-  );
-  await expect(page.getByTestId("chat-description")).toContainText(
-    updatedDescription,
-  );
-  await expect(page.getByTestId("chat-description")).toContainText(
-    updatedPurpose,
-  );
 
   await openChannelManagement(page);
   await expect(page.getByTestId("channel-management-name")).toHaveValue(

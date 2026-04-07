@@ -28,7 +28,7 @@ type MessageTimelineProps = {
   hasOlderMessages?: boolean;
   isFetchingOlder?: boolean;
   profiles?: UserProfileLookup;
-  threadHintsByRootId?: Map<string, ThreadConversationHint>;
+  threadHintsByAnchorId?: Map<string, ThreadConversationHint>;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onOpenThread?: (message: TimelineMessage) => void;
@@ -55,7 +55,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   hasOlderMessages = true,
   isFetchingOlder = false,
   profiles,
-  threadHintsByRootId,
+  threadHintsByAnchorId,
   onDelete,
   onEdit,
   onOpenThread,
@@ -169,7 +169,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                 onReply={onReply}
                 onToggleReaction={onToggleReaction}
                 profiles={profiles}
-                threadHintsByRootId={threadHintsByRootId}
+                threadHintsByAnchorId={threadHintsByAnchorId}
               />
             ) : null}
 

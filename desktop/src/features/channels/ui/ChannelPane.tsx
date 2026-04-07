@@ -52,7 +52,9 @@ type ChannelPaneProps = {
   replyTargetId: string | null;
   replyTargetMessage: TimelineMessage | null;
   targetMessageId: string | null;
-  threadHintsByRootId: Map<string, ThreadConversationHint>;
+  threadHintsByAnchorId: Map<string, ThreadConversationHint>;
+  /** Message id to anchor the thread panel header on (the row that opened the thread). */
+  threadFocusEventId: string | null;
   threadRootId: string | null;
   typingPubkeys: string[];
 };
@@ -82,7 +84,8 @@ export const ChannelPane = React.memo(function ChannelPane({
   replyTargetId,
   replyTargetMessage,
   targetMessageId,
-  threadHintsByRootId,
+  threadHintsByAnchorId,
+  threadFocusEventId,
   threadRootId,
   typingPubkeys,
 }: ChannelPaneProps) {
@@ -107,7 +110,7 @@ export const ChannelPane = React.memo(function ChannelPane({
     <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <MessageTimeline
-          activeThreadRootId={threadRootId}
+          activeThreadRootId={threadFocusEventId ?? threadRootId}
           channelId={activeChannel?.id}
           activeReplyTargetId={replyTargetId}
           currentPubkey={currentPubkey}
@@ -116,7 +119,7 @@ export const ChannelPane = React.memo(function ChannelPane({
           isFetchingOlder={isFetchingOlder}
           onOpenThread={onReply}
           profiles={profiles}
-          threadHintsByRootId={threadHintsByRootId}
+          threadHintsByAnchorId={threadHintsByAnchorId}
           emptyDescription={
             activeChannel?.channelType === "forum"
               ? "Select a stream or DM to load real message history in this first integration pass."
@@ -175,6 +178,7 @@ export const ChannelPane = React.memo(function ChannelPane({
           currentPubkey={currentPubkey}
           disabledComposer={composerDisabled}
           editTarget={editTarget}
+          focusEventId={threadFocusEventId}
           isSending={isSending}
           onCancelEdit={onCancelEdit}
           onCancelReply={onCancelReply}

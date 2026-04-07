@@ -20,7 +20,7 @@ type TimelineMessageListProps = {
   currentPubkey?: string;
   highlightedMessageId?: string | null;
   messages: TimelineMessage[];
-  threadHintsByRootId?: Map<string, ThreadConversationHint>;
+  threadHintsByAnchorId?: Map<string, ThreadConversationHint>;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onOpenThread?: (message: TimelineMessage) => void;
@@ -39,7 +39,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   currentPubkey,
   highlightedMessageId = null,
   messages,
-  threadHintsByRootId,
+  threadHintsByAnchorId,
   onDelete,
   onEdit,
   onOpenThread,
@@ -74,7 +74,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
         />,
       );
     } else {
-      const threadHint = threadHintsByRootId?.get(message.id);
+      const threadHint = threadHintsByAnchorId?.get(message.id);
       elements.push(
         <MessageRow
           key={message.id}
