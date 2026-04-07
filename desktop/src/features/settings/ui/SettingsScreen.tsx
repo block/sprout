@@ -1,14 +1,7 @@
-import * as React from "react";
-
 import type { DesktopNotificationPermissionState } from "@/features/notifications/hooks";
 import type { NotificationSettings } from "@/features/notifications/hooks";
 import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
-import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
-
-const SettingsView = React.lazy(async () => {
-  const module = await import("@/features/settings/ui/SettingsView");
-  return { default: module.SettingsView };
-});
+import { SettingsView } from "@/features/settings/ui/SettingsView";
 
 type SettingsScreenProps = {
   currentPubkey?: string;
@@ -42,26 +35,22 @@ export function SettingsScreen({
   section,
 }: SettingsScreenProps) {
   return (
-    <React.Suspense
-      fallback={<ViewLoadingFallback label="Loading settings..." />}
-    >
-      <SettingsView
-        currentPubkey={currentPubkey}
-        fallbackDisplayName={fallbackDisplayName}
-        isUpdatingDesktopNotifications={isUpdatingDesktopNotifications}
-        notificationErrorMessage={notificationErrorMessage}
-        notificationPermission={notificationPermission}
-        notificationSettings={notificationSettings}
-        onClose={onClose}
-        onSectionChange={onSectionChange}
-        onSetDesktopNotificationsEnabled={onSetDesktopNotificationsEnabled}
-        onSetHomeBadgeEnabled={onSetHomeBadgeEnabled}
-        onSetMentionNotificationsEnabled={onSetMentionNotificationsEnabled}
-        onSetNeedsActionNotificationsEnabled={
-          onSetNeedsActionNotificationsEnabled
-        }
-        section={section}
-      />
-    </React.Suspense>
+    <SettingsView
+      currentPubkey={currentPubkey}
+      fallbackDisplayName={fallbackDisplayName}
+      isUpdatingDesktopNotifications={isUpdatingDesktopNotifications}
+      notificationErrorMessage={notificationErrorMessage}
+      notificationPermission={notificationPermission}
+      notificationSettings={notificationSettings}
+      onClose={onClose}
+      onSectionChange={onSectionChange}
+      onSetDesktopNotificationsEnabled={onSetDesktopNotificationsEnabled}
+      onSetHomeBadgeEnabled={onSetHomeBadgeEnabled}
+      onSetMentionNotificationsEnabled={onSetMentionNotificationsEnabled}
+      onSetNeedsActionNotificationsEnabled={
+        onSetNeedsActionNotificationsEnabled
+      }
+      section={section}
+    />
   );
 }
