@@ -161,6 +161,52 @@ type RawHomeFeedResponse = {
   };
 };
 
+type RawThreadSummary = {
+  reply_count: number;
+  descendant_count: number;
+  last_reply_at: number | null;
+  participants: string[];
+};
+
+type RawForumPost = {
+  event_id: string;
+  pubkey: string;
+  content: string;
+  kind: number;
+  created_at: number;
+  channel_id: string;
+  tags: string[][];
+  thread_summary: RawThreadSummary | null;
+  reactions: unknown;
+};
+
+type RawForumPostsResponse = {
+  messages: RawForumPost[];
+  next_cursor: number | null;
+};
+
+type RawForumReply = {
+  event_id: string;
+  pubkey: string;
+  content: string;
+  kind: number;
+  created_at: number;
+  channel_id: string;
+  tags: string[][];
+  parent_event_id: string | null;
+  root_event_id: string | null;
+  depth: number;
+  broadcast: boolean;
+  reactions: unknown;
+};
+
+type RawForumThreadResponse = {
+  root: RawForumPost;
+  replies: RawForumReply[];
+  total_replies: number;
+  next_cursor: string | null;
+};
+
 type RawSearchHit = {
   event_id: string;
   content: string;
@@ -1470,7 +1516,35 @@ function getMockMessageStore(channelId: string): RelayEvent[] {
             sig: "mocksig".repeat(20).slice(0, 128),
           },
         ]
-      : [];
+      : channelId === "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11"
+        ? [
+            {
+              id: "mock-forum-release-thread",
+              pubkey:
+                "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+              created_at: Math.floor(Date.now() / 1000) - 90 * 60,
+              kind: 45001,
+              tags: [["h", channelId]],
+              content: "Release checklist: async feedback thread.",
+              sig: "mocksig".repeat(20).slice(0, 128),
+            },
+            {
+              id: "mock-forum-release-reply",
+              pubkey: ALICE_PUBKEY,
+              created_at: Math.floor(Date.now() / 1000) - 80 * 60,
+              kind: 45003,
+              tags: buildReplyMessageTags(
+                channelId,
+                ALICE_PUBKEY,
+                "mock-forum-release-thread",
+                "mock-forum-release-thread",
+                undefined,
+              ),
+              content: "Looks good to me. We should ship it.",
+              sig: "mocksig".repeat(20).slice(0, 128),
+            },
+          ]
+        : [];
 
   mockMessages.set(channelId, seeded);
   return seeded;
@@ -1534,6 +1608,115 @@ function emitMockTypingIndicator(channelId: string, pubkey: string) {
 
   emitMockLiveEvent(channelId, event);
   return event;
+}
+
+function toRawForumPost(
+  event: RelayEvent,
+  channelId: string,
+  threadSummary: RawThreadSummary | null,
+): RawForumPost {
+  return {
+    event_id: event.id,
+    pubkey: event.pubkey,
+    content: event.content,
+    kind: event.kind,
+    created_at: event.created_at,
+    channel_id: channelId,
+    tags: event.tags,
+    thread_summary: threadSummary,
+    reactions: null,
+  };
+}
+
+function toRawForumReply(event: RelayEvent, channelId: string): RawForumReply {
+  const thread = getThreadReferenceFromTags(event.tags);
+
+  return {
+    event_id: event.id,
+    pubkey: event.pubkey,
+    content: event.content,
+    kind: event.kind,
+    created_at: event.created_at,
+    channel_id: channelId,
+    tags: event.tags,
+    parent_event_id: thread.parentEventId,
+    root_event_id: thread.rootEventId,
+    depth:
+      thread.rootEventId && thread.parentEventId !== thread.rootEventId ? 2 : 1,
+    broadcast: false,
+    reactions: null,
+  };
+}
+
+async function handleGetForumPosts(args: {
+  channelId: string;
+  limit?: number | null;
+  before?: number | null;
+}): Promise<RawForumPostsResponse> {
+  const events = getMockMessageStore(args.channelId);
+  const posts = events
+    .filter((event) => event.kind === 45001)
+    .filter((event) => (args.before ? event.created_at < args.before : true))
+    .sort((left, right) => right.created_at - left.created_at)
+    .slice(0, args.limit ?? 50)
+    .map((event) => {
+      const replies = events.filter((candidate) => {
+        if (candidate.kind !== 45003) {
+          return false;
+        }
+
+        const thread = getThreadReferenceFromTags(candidate.tags);
+        return (thread.rootEventId ?? thread.parentEventId) === event.id;
+      });
+
+      return toRawForumPost(event, args.channelId, {
+        reply_count: replies.length,
+        descendant_count: replies.length,
+        last_reply_at:
+          replies.length > 0 ? replies[replies.length - 1].created_at : null,
+        participants: [...new Set(replies.map((reply) => reply.pubkey))],
+      });
+    });
+
+  return {
+    messages: posts,
+    next_cursor: null,
+  };
+}
+
+async function handleGetForumThread(args: {
+  channelId: string;
+  eventId: string;
+}): Promise<RawForumThreadResponse> {
+  const events = getMockMessageStore(args.channelId);
+  const root = events.find(
+    (event) => event.id === args.eventId && event.kind === 45001,
+  );
+  if (!root) {
+    throw new Error(`Mock forum thread not found: ${args.eventId}`);
+  }
+
+  const replies = events
+    .filter((event) => event.kind === 45003)
+    .filter((event) => {
+      const thread = getThreadReferenceFromTags(event.tags);
+      return (thread.rootEventId ?? thread.parentEventId) === root.id;
+    })
+    .sort((left, right) => left.created_at - right.created_at)
+    .map((event) => toRawForumReply(event, args.channelId));
+
+  return {
+    root: toRawForumPost(root, args.channelId, {
+      reply_count: replies.length,
+      descendant_count: replies.length,
+      last_reply_at:
+        replies.length > 0 ? replies[replies.length - 1].created_at : null,
+      participants: [...new Set(replies.map((reply) => reply.pubkey))],
+    }),
+    replies,
+    total_replies: replies.length,
+    next_cursor: null,
+  };
 }
 
 function createMockEvent(
@@ -3733,6 +3916,14 @@ export function maybeInstallE2eTauriMocks() {
         return handleSearchMessages(
           payload as Parameters<typeof handleSearchMessages>[0],
           activeConfig,
+        );
+      case "get_forum_posts":
+        return handleGetForumPosts(
+          payload as Parameters<typeof handleGetForumPosts>[0],
+        );
+      case "get_forum_thread":
+        return handleGetForumThread(
+          payload as Parameters<typeof handleGetForumThread>[0],
         );
       case "send_channel_message":
         return handleSendChannelMessage(
