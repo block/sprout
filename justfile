@@ -147,7 +147,7 @@ dev *ARGS:
 staging *ARGS:
     cd {{desktop_dir}} && pnpm install
     cargo build --release -p sprout-acp -p sprout-mcp
-    cd {{desktop_dir}} && SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co" pnpm tauri dev {{ARGS}}
+    cd {{desktop_dir}} && SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co" pnpm tauri dev --config src-tauri/tauri.dev.conf.json {{ARGS}}
 
 # Run the desktop frontend dev server
 desktop-dev:
