@@ -38,8 +38,8 @@ function FileChangeBadge({
       className={cn(
         "rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold",
         tone === "positive"
-          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-          : "bg-rose-500/10 text-rose-700 dark:text-rose-300",
+          ? "bg-emerald-500/10 text-status-added"
+          : "bg-rose-500/10 text-status-deleted",
       )}
     >
       {value}

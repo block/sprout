@@ -55,6 +55,15 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        status: {
+          added: "var(--status-added)",
+          deleted: "var(--status-deleted)",
+          modified: "var(--status-modified)",
+        },
+        warning: {
+          DEFAULT: "var(--ui-warning)",
+          bg: "var(--ui-warning-bg)",
+        },
       },
     },
   },
