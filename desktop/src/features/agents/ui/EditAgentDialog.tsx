@@ -34,6 +34,7 @@ export function EditAgentDialog({
   const [agentCommand, setAgentCommand] = React.useState(agent.agentCommand);
   const [agentArgs, setAgentArgs] = React.useState(agent.agentArgs.join(","));
   const [mcpCommand, setMcpCommand] = React.useState(agent.mcpCommand);
+  const [mcpToolsets, setMcpToolsets] = React.useState(agent.mcpToolsets ?? "");
   const [turnTimeoutSeconds, setTurnTimeoutSeconds] = React.useState(
     String(agent.turnTimeoutSeconds),
   );
@@ -44,7 +45,11 @@ export function EditAgentDialog({
     agent.systemPrompt ?? "",
   );
 
-  // Reset form state when the dialog opens with a (possibly different) agent.
+  // Reset form state only when the dialog opens or when switching to a different
+  // agent. Omitting the full agent object and its array fields from deps prevents
+  // the effect from firing on every 5s background poll (arrays are never
+  // reference-equal across renders), which would wipe in-progress user edits.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — including agent fields would re-fire on every 5s poll and wipe edits
   React.useEffect(() => {
     if (open) {
       setName(agent.name);
@@ -53,31 +58,36 @@ export function EditAgentDialog({
       setAgentCommand(agent.agentCommand);
       setAgentArgs(agent.agentArgs.join(","));
       setMcpCommand(agent.mcpCommand);
+      setMcpToolsets(agent.mcpToolsets ?? "");
       setTurnTimeoutSeconds(String(agent.turnTimeoutSeconds));
       setParallelism(String(agent.parallelism));
       setSystemPrompt(agent.systemPrompt ?? "");
       updateMutation.reset();
     }
-  }, [
-    open,
-    agent,
-    agent.name,
-    agent.relayUrl,
-    agent.acpCommand,
-    agent.agentCommand,
-    agent.agentArgs,
-    agent.mcpCommand,
-    agent.turnTimeoutSeconds,
-    agent.parallelism,
-    agent.systemPrompt,
-    updateMutation.reset,
-  ]);
+  }, [open, agent.pubkey]);
 
   function handleOpenChange(next: boolean) {
     onOpenChange(next);
   }
 
-  const canSubmit = name.trim().length > 0 && !updateMutation.isPending;
+  const parallelismValid =
+    parallelism.trim() === "" ||
+    !Number.isNaN(Number.parseInt(parallelism, 10));
+  const timeoutValid =
+    turnTimeoutSeconds.trim() === "" ||
+    !Number.isNaN(Number.parseInt(turnTimeoutSeconds, 10));
+  // Block clearing a previously-set command to empty — the backend has no
+  // "clear to None" path for Option<String> fields, so an empty string would
+  // cause a runtime failure.
+  const acpCommandValid = !(agent.acpCommand && acpCommand.trim() === "");
+  const mcpCommandValid = !(agent.mcpCommand && mcpCommand.trim() === "");
+  const canSubmit =
+    name.trim().length > 0 &&
+    parallelismValid &&
+    timeoutValid &&
+    acpCommandValid &&
+    mcpCommandValid &&
+    !updateMutation.isPending;
 
   async function handleSubmit() {
     try {
@@ -91,7 +101,8 @@ export function EditAgentDialog({
       const input: UpdateManagedAgentInput = {
         pubkey: agent.pubkey,
         name: name.trim() !== agent.name ? name.trim() : undefined,
-        relayUrl: relayUrl !== agent.relayUrl ? relayUrl : undefined,
+        relayUrl:
+          relayUrl.trim() !== agent.relayUrl ? relayUrl.trim() : undefined,
         acpCommand:
           acpCommand.trim() !== agent.acpCommand
             ? acpCommand.trim()
@@ -107,6 +118,10 @@ export function EditAgentDialog({
         mcpCommand:
           mcpCommand.trim() !== agent.mcpCommand
             ? mcpCommand.trim()
+            : undefined,
+        mcpToolsets:
+          (mcpToolsets.trim() || null) !== agent.mcpToolsets
+            ? mcpToolsets.trim() || null
             : undefined,
         turnTimeoutSeconds:
           parsedTimeout > 0 && parsedTimeout !== agent.turnTimeoutSeconds
@@ -152,10 +167,12 @@ export function EditAgentDialog({
               agentArgs={agentArgs}
               agentCommand={agentCommand}
               mcpCommand={mcpCommand}
+              mcpToolsets={mcpToolsets}
               onAcpCommandChange={setAcpCommand}
               onAgentArgsChange={setAgentArgs}
               onAgentCommandChange={setAgentCommand}
               onMcpCommandChange={setMcpCommand}
+              onMcpToolsetsChange={setMcpToolsets}
               onParallelismChange={setParallelism}
               onRelayUrlChange={setRelayUrl}
               onSystemPromptChange={setSystemPrompt}
