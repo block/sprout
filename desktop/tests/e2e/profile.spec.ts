@@ -69,19 +69,8 @@ test("updates presence from the profile menu", async ({ page }) => {
 test("notification settings drive the Home badge and desktop alerts", async ({
   page,
 }) => {
-  async function getAppBadgeCount() {
-    return page.evaluate(() => {
-      const win = window as Window & {
-        __SPROUT_E2E_APP_BADGE_COUNT__?: number;
-      };
-
-      return win.__SPROUT_E2E_APP_BADGE_COUNT__ ?? 0;
-    });
-  }
-
   await page.goto("/");
   await expect(page.getByTestId("sidebar-home-count")).toHaveCount(0);
-  await expect.poll(getAppBadgeCount).toBe(0);
 
   await openSettings(page, "notifications");
   await expect(page.getByTestId("settings-notifications")).toBeVisible();
@@ -133,7 +122,6 @@ test("notification settings drive the Home badge and desktop alerts", async ({
   });
 
   await expect(page.getByTestId("sidebar-home-count")).toHaveText("1");
-  await expect.poll(getAppBadgeCount).toBe(1);
 
   await expect
     .poll(() =>
@@ -187,18 +175,15 @@ test("notification settings drive the Home badge and desktop alerts", async ({
   await page.getByTestId("settings-close").click();
   await expect(page.getByTestId("chat-title")).toHaveText("engineering");
   await expect(page.getByTestId("sidebar-home-count")).toHaveCount(0);
-  await expect.poll(getAppBadgeCount).toBe(0);
 
   await openSettings(page, "notifications");
   await page.getByTestId("notifications-home-badge-toggle").click();
   await page.getByTestId("settings-close").click();
   await expect(page.getByTestId("sidebar-home-count")).toHaveText("1");
-  await expect.poll(getAppBadgeCount).toBe(1);
 
   await page.getByRole("button", { name: "Home" }).click();
   await expect(page.getByTestId("chat-title")).toHaveText("Home");
   await expect(page.getByTestId("sidebar-home-count")).toHaveCount(0);
-  await expect.poll(getAppBadgeCount).toBe(0);
 });
 
 test("desktop notification clicks open the matching forum thread", async ({
@@ -280,6 +265,7 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
   page,
 }) => {
   await page.goto("/");
+  await expect(page.getByTestId("open-settings")).toBeVisible();
 
   await page.keyboard.press(
     process.platform === "darwin" ? "Meta+," : "Control+,",
@@ -347,6 +333,7 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
 
 test("supports webview zoom keyboard shortcuts", async ({ page }) => {
   await page.goto("/");
+  await expect(page.getByTestId("open-settings")).toBeVisible();
 
   await page.keyboard.press(
     process.platform === "darwin" ? "Meta+Shift+Equal" : "Control+Shift+Equal",

@@ -194,8 +194,9 @@ export function NotificationSettingsCard({
       ) : null}
 
       <p className="mt-4 text-sm text-muted-foreground">
-        The Home badge is an in-app signal. Desktop alerts only fire for new
-        feed items after you enable them.
+        The Home badge is an in-app signal. The app icon badge follows unread
+        channels, and desktop alerts only fire for new feed items after you
+        enable them.
       </p>
     </section>
   );

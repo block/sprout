@@ -366,9 +366,13 @@ declare global {
     __SPROUT_E2E__?: E2eConfig;
     __SPROUT_E2E_COMMANDS__?: string[];
     __SPROUT_E2E_WEBVIEW_ZOOM__?: number;
+    __SPROUT_E2E_HAS_MOCK_SUBSCRIPTION__?: (input?: {
+      channelName?: string;
+    }) => boolean;
     __SPROUT_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
+      kind?: number;
       pubkey?: string;
     }) => RelayEvent;
     __SPROUT_E2E_EMIT_MOCK_TYPING__?: (input: {
@@ -1588,11 +1592,33 @@ function emitMockChannelMessage(
   channelId: string,
   content: string,
   pubkey?: string,
+  kind = 9,
 ) {
-  const event = createMockEvent(9, content, [["h", channelId]], pubkey);
+  const event = createMockEvent(kind, content, [["h", channelId]], pubkey);
   recordMockMessage(channelId, event);
   emitMockLiveEvent(channelId, event);
   return event;
+}
+
+function hasMockSubscription(channelName?: string) {
+  const subscribedChannelId =
+    typeof channelName === "string"
+      ? mockChannels.find((channel) => channel.name === channelName)?.id
+      : GLOBAL_MOCK_SUBSCRIPTION;
+
+  if (!subscribedChannelId) {
+    return false;
+  }
+
+  for (const socket of mockSockets.values()) {
+    for (const candidateChannelId of socket.subscriptions.values()) {
+      if (candidateChannelId === subscribedChannelId) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function emitMockTypingIndicator(channelId: string, pubkey: string) {
@@ -3681,9 +3707,12 @@ export function maybeInstallE2eTauriMocks() {
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
   window.__SPROUT_E2E_WEBVIEW_ZOOM__ = 1;
+  window.__SPROUT_E2E_HAS_MOCK_SUBSCRIPTION__ = ({ channelName } = {}) =>
+    hasMockSubscription(channelName);
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({
     channelName,
     content,
+    kind,
     pubkey,
   }) => {
     const channel = mockChannels.find(
@@ -3693,7 +3722,7 @@ export function maybeInstallE2eTauriMocks() {
       throw new Error(`Mock channel ${channelName} not found.`);
     }
 
-    return emitMockChannelMessage(channel.id, content, pubkey);
+    return emitMockChannelMessage(channel.id, content, pubkey, kind);
   };
   window.__SPROUT_E2E_EMIT_MOCK_TYPING__ = ({ channelName, pubkey }) => {
     const channel = mockChannels.find(

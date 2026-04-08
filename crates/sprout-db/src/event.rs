@@ -9,7 +9,11 @@ use nostr::Event;
 use sqlx::{PgPool, QueryBuilder, Row};
 use uuid::Uuid;
 
-use sprout_core::kind::{event_kind_i32, is_ephemeral, is_parameterized_replaceable, KIND_AUTH};
+use sprout_core::kind::{
+    event_kind_i32, is_ephemeral, is_parameterized_replaceable, KIND_AUTH, KIND_DELETION,
+    KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_REACTION, KIND_STREAM_MESSAGE,
+    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_SYSTEM_MESSAGE,
+};
 use sprout_core::StoredEvent;
 
 use crate::error::{DbError, Result};
@@ -42,6 +46,22 @@ pub struct EventQuery {
 /// Maximum length for a `d_tag` value (bytes). NIP-33 d-tags are short identifiers;
 /// anything beyond this is either a bug or abuse.
 pub const D_TAG_MAX_LEN: usize = 1024;
+
+const CHANNEL_ACTIVITY_KINDS: &[i32] = &[
+    KIND_DELETION as i32,
+    KIND_REACTION as i32,
+    KIND_STREAM_MESSAGE as i32,
+    40001, // legacy stream message kind still surfaced in desktop timelines
+    KIND_STREAM_MESSAGE_EDIT as i32,
+    KIND_STREAM_MESSAGE_DIFF as i32,
+    KIND_SYSTEM_MESSAGE as i32,
+    KIND_FORUM_POST as i32,
+    KIND_FORUM_COMMENT as i32,
+];
+
+fn is_channel_activity_kind(kind: i32) -> bool {
+    CHANNEL_ACTIVITY_KINDS.contains(&kind)
+}
 
 /// Extract the `d_tag` value for storage.
 ///
@@ -333,6 +353,34 @@ pub async fn get_last_message_at(
     }
 }
 
+/// Returns the latest unread-relevant activity timestamp for a channel.
+///
+/// This excludes discovery/admin-only events so channel unread markers match
+/// the activity users can actually read in the desktop app.
+pub async fn get_last_channel_activity_at(
+    pool: &PgPool,
+    channel_id: uuid::Uuid,
+) -> Result<Option<DateTime<Utc>>> {
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
+        "SELECT created_at FROM events \
+         WHERE channel_id = ",
+    );
+    qb.push_bind(channel_id);
+    qb.push(" AND deleted_at IS NULL AND kind IN (");
+    let mut kind_sep = qb.separated(", ");
+    for kind in CHANNEL_ACTIVITY_KINDS {
+        kind_sep.push_bind(*kind);
+    }
+    qb.push(") ORDER BY created_at DESC LIMIT 1");
+
+    let row = qb.build().fetch_optional(pool).await?;
+
+    match row {
+        Some(r) => Ok(Some(r.try_get("created_at")?)),
+        None => Ok(None),
+    }
+}
+
 /// Bulk-fetch the most recent `created_at` for a set of channel IDs.
 ///
 /// Returns a map of `channel_id → last_message_at`. Channels with no events are omitted.
@@ -352,6 +400,44 @@ pub async fn get_last_message_at_bulk(
     let mut sep = qb.separated(", ");
     for id in channel_ids {
         sep.push_bind(*id);
+    }
+    qb.push(") GROUP BY channel_id");
+
+    let rows = qb.build().fetch_all(pool).await?;
+
+    let mut map = std::collections::HashMap::with_capacity(rows.len());
+    for row in rows {
+        let id: Uuid = row.try_get("channel_id")?;
+        let last_at: DateTime<Utc> = row.try_get("last_at")?;
+        map.insert(id, last_at);
+    }
+    Ok(map)
+}
+
+/// Bulk-fetch the latest unread-relevant activity timestamp for a set of channels.
+///
+/// Returns a map of `channel_id → last_activity_at`. Channels with no
+/// unread-relevant activity are omitted.
+pub async fn get_last_channel_activity_at_bulk(
+    pool: &PgPool,
+    channel_ids: &[uuid::Uuid],
+) -> Result<std::collections::HashMap<uuid::Uuid, DateTime<Utc>>> {
+    if channel_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
+        "SELECT channel_id, MAX(created_at) as last_at FROM events \
+         WHERE deleted_at IS NULL AND kind IN (",
+    );
+    let mut kind_sep = qb.separated(", ");
+    for kind in CHANNEL_ACTIVITY_KINDS {
+        kind_sep.push_bind(*kind);
+    }
+    qb.push(") AND channel_id IN (");
+    let mut channel_sep = qb.separated(", ");
+    for id in channel_ids {
+        channel_sep.push_bind(*id);
     }
     qb.push(") GROUP BY channel_id");
 
@@ -737,5 +823,25 @@ mod tests {
         let result = extract_d_tag(&event).unwrap();
         assert_eq!(result.len(), 2048);
         assert_eq!(result, long_val);
+    }
+
+    #[test]
+    fn channel_activity_kinds_include_readable_timeline_events() {
+        for kind in [9, 40001, 40003, 40008, 40099, 45001, 45003] {
+            assert!(
+                is_channel_activity_kind(kind),
+                "expected kind {kind} to count toward channel unread state"
+            );
+        }
+    }
+
+    #[test]
+    fn channel_activity_kinds_exclude_discovery_and_admin_events() {
+        for kind in [39000, 39001, 39002, 9002, 44100, 46010] {
+            assert!(
+                !is_channel_activity_kind(kind),
+                "expected kind {kind} to be ignored for channel unread state"
+            );
+        }
     }
 }

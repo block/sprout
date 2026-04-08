@@ -8,6 +8,7 @@ import {
 import type { PresenceStatus, RelayEvent } from "@/shared/api/types";
 import {
   CHANNEL_EVENT_KINDS,
+  CHANNEL_UNREAD_EVENT_KINDS,
   HOME_MENTION_EVENT_KINDS,
   KIND_STREAM_MESSAGE,
   KIND_TYPING_INDICATOR,
@@ -171,8 +172,8 @@ export class RelayClient {
     );
   }
 
-  async subscribeToAllStreamMessages(onEvent: (event: RelayEvent) => void) {
-    return this.subscribe(this.buildGlobalStreamFilter(50), onEvent);
+  async subscribeToUnreadChannelActivity(onEvent: (event: RelayEvent) => void) {
+    return this.subscribe(this.buildUnreadChannelActivityFilter(50), onEvent);
   }
 
   async subscribeToChannelMentionEvents(
@@ -280,9 +281,11 @@ export class RelayClient {
     return filter;
   }
 
-  private buildGlobalStreamFilter(limit: number): RelaySubscriptionFilter {
+  private buildUnreadChannelActivityFilter(
+    limit: number,
+  ): RelaySubscriptionFilter {
     return {
-      kinds: [...CHANNEL_EVENT_KINDS],
+      kinds: [...CHANNEL_UNREAD_EVENT_KINDS],
       limit,
     };
   }

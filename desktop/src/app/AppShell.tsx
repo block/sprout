@@ -160,6 +160,14 @@ export function AppShell() {
       onLiveMention: refetchHomeFeedOnLiveMention,
     },
   );
+  const unreadSidebarChannelCount = React.useMemo(
+    () =>
+      sidebarChannels.reduce(
+        (count, channel) => count + (unreadChannelIds.has(channel.id) ? 1 : 0),
+        0,
+      ),
+    [sidebarChannels, unreadChannelIds],
+  );
 
   const createChannelMutation = useCreateChannelMutation();
   const createForumMutation = useCreateChannelMutation();
@@ -262,8 +270,8 @@ export function AppShell() {
   }, []);
 
   React.useEffect(() => {
-    void setDesktopAppBadgeCount(homeBadgeCount);
-  }, [homeBadgeCount]);
+    void setDesktopAppBadgeCount(unreadSidebarChannelCount);
+  }, [unreadSidebarChannelCount]);
 
   React.useEffect(() => {
     let isCancelled = false;

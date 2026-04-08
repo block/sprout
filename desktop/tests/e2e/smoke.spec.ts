@@ -171,6 +171,7 @@ test("search results use your resolved profile label instead of You", async ({
 }) => {
   await page.goto("/");
 
+  await expect(page.getByTestId("open-search")).toBeVisible();
   await page.keyboard.press(
     process.platform === "darwin" ? "Meta+K" : "Control+K",
   );
@@ -189,6 +190,7 @@ test("opens accessible unjoined channels from search in read-only mode", async (
 }) => {
   await page.goto("/");
 
+  await expect(page.getByTestId("open-search")).toBeVisible();
   await page.keyboard.press(
     process.platform === "darwin" ? "Meta+K" : "Control+K",
   );

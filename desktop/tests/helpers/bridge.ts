@@ -156,3 +156,22 @@ export async function installRelayBridge(
 ) {
   await installBridge(page, { mode: "relay", user });
 }
+
+export async function waitForMockSubscription(
+  page: Page,
+  channelName?: string,
+) {
+  await page.waitForFunction((targetChannelName) => {
+    const testWindow = window as Window & {
+      __SPROUT_E2E_HAS_MOCK_SUBSCRIPTION__?: (input?: {
+        channelName?: string;
+      }) => boolean;
+    };
+
+    return (
+      testWindow.__SPROUT_E2E_HAS_MOCK_SUBSCRIPTION__?.({
+        channelName: targetChannelName ?? undefined,
+      }) ?? false
+    );
+  }, channelName ?? null);
+}

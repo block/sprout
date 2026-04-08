@@ -26,3 +26,10 @@ export const CHANNEL_EVENT_KINDS = [
   KIND_STREAM_MESSAGE_DIFF, // 40008 — message diffs
   KIND_SYSTEM_MESSAGE, // 40099 — system messages (join, leave, etc.)
 ] as const;
+
+// Keep this in sync with the unread-activity query in sprout-db.
+export const CHANNEL_UNREAD_EVENT_KINDS = [
+  ...CHANNEL_EVENT_KINDS,
+  KIND_FORUM_POST,
+  KIND_FORUM_COMMENT,
+] as const;

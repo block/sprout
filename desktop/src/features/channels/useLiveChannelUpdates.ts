@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { updateChannelLastMessageAt } from "@/features/channels/lib/channelCache";
 import { channelsQueryKey } from "@/features/channels/hooks";
+import { forumPostsQueryKey } from "@/features/forum/hooks";
 import { mergeTimelineCacheMessages } from "@/features/messages/hooks";
 import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
 import { getChannelIdFromTags } from "@/features/messages/lib/threading";
@@ -15,6 +16,8 @@ export type UseLiveChannelUpdatesOptions = {
 };
 
 const LIVE_MENTION_SUBSCRIPTION_RETRY_MS = 1_000;
+const forumThreadQueryKeyPrefix = (channelId: string) =>
+  ["forum-thread", channelId] as const;
 
 function getMessageTimestamp(event: RelayEvent) {
   return new Date(event.created_at * 1_000).toISOString();
@@ -51,6 +54,18 @@ async function disposeLiveSubscriptions(
   await Promise.allSettled(subscriptions.map((dispose) => dispose()));
 }
 
+function invalidateForumChannelQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  channelId: string,
+) {
+  void queryClient.invalidateQueries({
+    queryKey: forumPostsQueryKey(channelId),
+  });
+  void queryClient.invalidateQueries({
+    queryKey: forumThreadQueryKeyPrefix(channelId),
+  });
+}
+
 export function useLiveChannelUpdates(
   channels: Channel[],
   activeChannelId: string | null,
@@ -60,13 +75,8 @@ export function useLiveChannelUpdates(
   const normalizedCurrentPubkey =
     options.currentPubkey?.trim().toLowerCase() ?? "";
   const seenMentionEventIdsRef = React.useRef(new Set<string>());
-  const liveChannelIds = React.useMemo(
-    () =>
-      new Set(
-        channels
-          .filter((channel) => channel.channelType !== "forum")
-          .map((channel) => channel.id),
-      ),
+  const channelsById = React.useMemo(
+    () => new Map(channels.map((channel) => [channel.id, channel])),
     [channels],
   );
   const mentionChannelIds = React.useMemo(
@@ -74,20 +84,31 @@ export function useLiveChannelUpdates(
     [channels],
   );
 
-  const handleIncomingMessage = React.useEffectEvent((event: RelayEvent) => {
+  const handleIncomingActivity = React.useEffectEvent((event: RelayEvent) => {
     const channelId = getChannelIdFromTags(event.tags);
-    if (!channelId || channelId === activeChannelId) {
+    if (!channelId) {
       return;
     }
 
-    if (!liveChannelIds.has(channelId)) {
+    const channel = channelsById.get(channelId);
+    if (!channel) {
       void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
       return;
     }
 
     const messageTimestamp = getMessageTimestamp(event);
+    const isActiveChannel = channelId === activeChannelId;
 
     updateChannelLastMessageAt(queryClient, channelId, messageTimestamp);
+    if (channel.channelType === "forum") {
+      invalidateForumChannelQueries(queryClient, channelId);
+      return;
+    }
+
+    if (isActiveChannel) {
+      return;
+    }
+
     queryClient.setQueryData<RelayEvent[]>(
       channelMessagesKey(channelId),
       (current) => {
@@ -119,17 +140,13 @@ export function useLiveChannelUpdates(
   }, [queryClient]);
 
   React.useEffect(() => {
-    if (liveChannelIds.size === 0) {
-      return;
-    }
-
     let isDisposed = false;
     let cleanup: (() => Promise<void>) | undefined;
 
     relayClient
-      .subscribeToAllStreamMessages((event) => {
+      .subscribeToUnreadChannelActivity((event) => {
         if (!isDisposed) {
-          handleIncomingMessage(event);
+          handleIncomingActivity(event);
         }
       })
       .then((dispose) => {
@@ -150,7 +167,7 @@ export function useLiveChannelUpdates(
         void cleanup();
       }
     };
-  }, [liveChannelIds]);
+  }, []);
 
   React.useEffect(() => {
     if (

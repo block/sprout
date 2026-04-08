@@ -57,7 +57,7 @@ pub async fn channels_handler(
         .unwrap_or_default();
     let last_messages = state
         .db
-        .get_last_message_at_bulk(&channel_ids)
+        .get_last_channel_activity_at_bulk(&channel_ids)
         .await
         .unwrap_or_default();
 

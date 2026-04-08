@@ -1,8 +1,13 @@
 import { expect, test } from "@playwright/test";
 
-import { TEST_IDENTITIES, installMockBridge } from "../helpers/bridge";
+import {
+  TEST_IDENTITIES,
+  installMockBridge,
+  waitForMockSubscription,
+} from "../helpers/bridge";
 
 const MOCK_IDENTITY_PUBKEY = "deadbeef".repeat(8);
+const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 
 async function openChannelManagement(
   page: import("@playwright/test").Page,
@@ -27,6 +32,16 @@ async function openMembersSidebar(
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
   await page.getByTestId("channel-members-trigger").click();
   await expect(page.getByTestId("members-sidebar")).toBeVisible();
+}
+
+async function getAppBadgeCount(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    const win = window as Window & {
+      __SPROUT_E2E_APP_BADGE_COUNT__?: number;
+    };
+
+    return win.__SPROUT_E2E_APP_BADGE_COUNT__ ?? 0;
+  });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -235,16 +250,23 @@ test("sidebar shows unread indicator for newly active channels", async ({
 }) => {
   await page.goto("/");
 
+  await expect(page.getByTestId("channel-random")).toBeVisible();
   await expect(page.getByTestId("channel-unread-random")).toHaveCount(0);
+  await waitForMockSubscription(page);
+  const initialAppBadgeCount = await getAppBadgeCount(page);
 
-  await page.evaluate(() => {
+  await page.evaluate((pubkey) => {
     window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "random",
       content: "Unread update for #random",
+      pubkey,
     });
-  });
+  }, TEST_IDENTITIES.alice.pubkey);
 
   await expect(page.getByTestId("channel-unread-random")).toBeVisible();
+  await expect
+    .poll(() => getAppBadgeCount(page))
+    .toBe(initialAppBadgeCount + 1);
 
   await page.getByTestId("channel-random").click();
   await expect(page.getByTestId("chat-title")).toHaveText("random");
@@ -252,12 +274,73 @@ test("sidebar shows unread indicator for newly active channels", async ({
     "Unread update for #random",
   );
   await expect(page.getByTestId("channel-unread-random")).toHaveCount(0);
+  await expect.poll(() => getAppBadgeCount(page)).toBe(initialAppBadgeCount);
+});
+
+test("sidebar restores stored unread state after reopening", async ({
+  page,
+}) => {
+  const seededReadAt = new Date(
+    Date.now() - 24 * 60 * 60 * 1_000,
+  ).toISOString();
+
+  await page.goto("/");
+  await page.evaluate(
+    ({ channelId, pubkey, readAt }) => {
+      window.localStorage.setItem(
+        `sprout.channel-read-state.v2:${pubkey}`,
+        JSON.stringify({ [channelId]: readAt }),
+      );
+    },
+    {
+      channelId: GENERAL_CHANNEL_ID,
+      pubkey: MOCK_IDENTITY_PUBKEY,
+      readAt: seededReadAt,
+    },
+  );
+  await page.reload();
+
+  await expect(page.getByTestId("channel-general")).toBeVisible();
+  await expect(page.getByTestId("channel-unread-general")).toBeVisible();
+  await expect.poll(() => getAppBadgeCount(page)).toBe(1);
+});
+
+test("sidebar shows unread indicator for newly active forums", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await expect(page.getByTestId("channel-watercooler")).toBeVisible();
+  await expect(page.getByTestId("channel-unread-watercooler")).toHaveCount(0);
+  await waitForMockSubscription(page);
+  const initialAppBadgeCount = await getAppBadgeCount(page);
+
+  await page.evaluate((pubkey) => {
+    window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "watercooler",
+      content: "Unread forum post",
+      kind: 45001,
+      pubkey,
+    });
+  }, TEST_IDENTITIES.alice.pubkey);
+
+  await expect(page.getByTestId("channel-unread-watercooler")).toBeVisible();
+  await expect
+    .poll(() => getAppBadgeCount(page))
+    .toBe(initialAppBadgeCount + 1);
+
+  await page.getByTestId("channel-watercooler").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("watercooler");
+  await expect(page.getByText("Unread forum post")).toBeVisible();
+  await expect(page.getByTestId("channel-unread-watercooler")).toHaveCount(0);
+  await expect.poll(() => getAppBadgeCount(page)).toBe(initialAppBadgeCount);
 });
 
 test("sidebar clears unread indicator after opening a DM", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByTestId("channel-unread-alice-tyler")).toHaveCount(0);
+  await waitForMockSubscription(page);
 
   await page.evaluate((pubkey) => {
     window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({

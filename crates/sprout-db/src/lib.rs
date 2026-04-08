@@ -265,6 +265,22 @@ impl Db {
         event::get_last_message_at_bulk(&self.pool, channel_ids).await
     }
 
+    /// Returns the latest unread-relevant activity timestamp for a channel.
+    pub async fn get_last_channel_activity_at(
+        &self,
+        channel_id: Uuid,
+    ) -> Result<Option<DateTime<Utc>>> {
+        event::get_last_channel_activity_at(&self.pool, channel_id).await
+    }
+
+    /// Bulk-fetch the latest unread-relevant activity timestamp for a set of channels.
+    pub async fn get_last_channel_activity_at_bulk(
+        &self,
+        channel_ids: &[Uuid],
+    ) -> Result<std::collections::HashMap<Uuid, DateTime<Utc>>> {
+        event::get_last_channel_activity_at_bulk(&self.pool, channel_ids).await
+    }
+
     /// Batch-fetch non-deleted events by their raw IDs.
     pub async fn get_events_by_ids(&self, ids: &[&[u8]]) -> Result<Vec<StoredEvent>> {
         event::get_events_by_ids(&self.pool, ids).await
