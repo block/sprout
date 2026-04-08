@@ -1,85 +1,206 @@
 import {
   type ReactNode,
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
+import { createThemeVars, hexToHsl } from "./adaptive-theme";
+import {
+  SYNTAX_THEMES,
+  type SyntaxThemeName,
+  extractThemeInfo,
+  loadThemeData,
+} from "./theme-loader";
 
-type Theme = "light" | "dark" | "system";
-type ResolvedTheme = "light" | "dark";
+const STORAGE_KEY = "sprout-theme";
+const CACHE_KEY = "sprout-theme-cache";
+const ACCENT_KEY = "sprout-accent-color";
+
+export const ACCENT_COLORS = [
+  { name: "Blue", value: "#3b82f6" },
+  { name: "Cyan", value: "#06b6d4" },
+  { name: "Green", value: "#22c55e" },
+  { name: "Orange", value: "#f97316" },
+  { name: "Red", value: "#ef4444" },
+  { name: "Pink", value: "#ec4899" },
+  { name: "Purple", value: "#a855f7" },
+  { name: "Indigo", value: "#6366f1" },
+] as const;
+
+const DEFAULT_ACCENT = "#3b82f6";
 
 type ThemeContextValue = {
-  theme: Theme;
-  resolvedTheme: ResolvedTheme;
-  setTheme: (theme: Theme) => void;
+  themeName: string;
+  isDark: boolean;
+  isLoading: boolean;
+  accentColor: string;
+  setTheme: (name: string) => void;
+  setAccentColor: (color: string) => void;
 };
 
 type ThemeProviderProps = {
   children: ReactNode;
-  defaultTheme?: Theme;
-  storageKey?: string;
+  defaultTheme?: SyntaxThemeName;
 };
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
-function readStoredTheme(storageKey: string, fallback: Theme): Theme {
-  if (typeof window === "undefined") {
-    return fallback;
-  }
-
-  const value = window.localStorage.getItem(storageKey);
-  return value === "light" || value === "dark" || value === "system"
-    ? value
-    : fallback;
+function isValidThemeName(name: string): name is SyntaxThemeName {
+  return (SYNTAX_THEMES as readonly string[]).includes(name);
 }
 
-function detectSystemTheme(): ResolvedTheme {
-  if (typeof window === "undefined") {
-    return "light";
-  }
+/** Read stored theme, migrating legacy "light"/"dark"/"system" values. */
+function readStoredTheme(fallback: SyntaxThemeName): SyntaxThemeName {
+  const stored = window.localStorage.getItem(STORAGE_KEY);
+  if (!stored) return fallback;
 
-  return window.matchMedia("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
+  // Migrate legacy values
+  if (stored === "light") return "catppuccin-latte";
+  if (stored === "dark" || stored === "system") return "houston";
+
+  return isValidThemeName(stored) ? stored : fallback;
 }
 
-function applyThemeToRoot(theme: ResolvedTheme) {
-  document.documentElement.classList.remove("light", "dark");
-  document.documentElement.classList.add(theme);
+function getContrastColor(hex: string): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})/i.exec(hex);
+  if (!m) return "#ffffff";
+  const r = parseInt(m[1], 16);
+  const g = parseInt(m[2], 16);
+  const b = parseInt(m[3], 16);
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.5 ? "#000000" : "#ffffff";
+}
+
+function applyAccentColor(hex: string) {
+  const root = document.documentElement;
+  const accentHsl = hexToHsl(hex);
+  const fgHsl = hexToHsl(getContrastColor(hex));
+  root.style.setProperty("--primary", accentHsl);
+  root.style.setProperty("--primary-foreground", fgHsl);
+  root.style.setProperty("--sidebar-primary", accentHsl);
+  root.style.setProperty("--sidebar-primary-foreground", fgHsl);
+}
+
+/** Apply cached CSS vars synchronously to prevent FOUC. */
+function applyCachedVars(): string | null {
+  try {
+    const cached = window.localStorage.getItem(CACHE_KEY);
+    if (!cached) return null;
+    const { themeName, vars, isDark } = JSON.parse(cached);
+    const root = document.documentElement;
+    for (const [key, value] of Object.entries(vars)) {
+      root.style.setProperty(key, value as string);
+    }
+    root.classList.remove("light", "dark");
+    root.classList.add(isDark ? "dark" : "light");
+
+    // Also apply cached accent
+    const accent = window.localStorage.getItem(ACCENT_KEY) ?? DEFAULT_ACCENT;
+    applyAccentColor(accent);
+
+    return themeName;
+  } catch {
+    return null;
+  }
+}
+
+/** Apply a theme: load data, derive CSS vars, set them on :root. */
+async function applyTheme(name: SyntaxThemeName): Promise<{ isDark: boolean }> {
+  const themeData = await loadThemeData(name);
+  const info = extractThemeInfo(name, themeData);
+  const { isDark, vars } = createThemeVars(info.bg, info.fg, info.comment, {
+    added: info.added,
+    deleted: info.deleted,
+    modified: info.modified,
+  });
+
+  const root = document.documentElement;
+  for (const [key, value] of Object.entries(vars)) {
+    root.style.setProperty(key, value);
+  }
+
+  root.classList.remove("light", "dark");
+  root.classList.add(isDark ? "dark" : "light");
+
+  // Cache for FOUC prevention
+  try {
+    window.localStorage.setItem(
+      CACHE_KEY,
+      JSON.stringify({ themeName: name, vars, isDark }),
+    );
+  } catch {
+    // Storage full — non-critical
+  }
+
+  return { isDark };
 }
 
 export function ThemeProvider({
   children,
-  defaultTheme = "system",
-  storageKey = "sprout-theme",
+  defaultTheme = "houston",
 }: ThemeProviderProps) {
-  const [theme, setThemeState] = useState<Theme>(() =>
-    readStoredTheme(storageKey, defaultTheme),
-  );
-  const [systemTheme, setSystemTheme] =
-    useState<ResolvedTheme>(detectSystemTheme);
+  // Apply cached vars synchronously before first render
+  const [themeName, setThemeName] = useState<string>(() => {
+    const cached = applyCachedVars();
+    return cached ?? readStoredTheme(defaultTheme);
+  });
+  const [isDark, setIsDark] = useState<boolean>(() => {
+    return document.documentElement.classList.contains("dark");
+  });
+  const [isLoading, setIsLoading] = useState(true);
+  const loadingRef = useRef<string | null>(null);
+  const [accentColor, setAccentColorState] = useState<string>(() => {
+    return window.localStorage.getItem(ACCENT_KEY) ?? DEFAULT_ACCENT;
+  });
 
+  // Load and apply theme
   useEffect(() => {
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (event: MediaQueryListEvent) =>
-      setSystemTheme(event.matches ? "dark" : "light");
+    if (!isValidThemeName(themeName)) return;
 
-    mediaQuery.addEventListener("change", onChange);
-    return () => mediaQuery.removeEventListener("change", onChange);
+    // Track which theme we're loading to avoid race conditions
+    const thisTheme = themeName;
+    loadingRef.current = thisTheme;
+    setIsLoading(true);
+
+    applyTheme(themeName).then(({ isDark: dark }) => {
+      // Only update if this is still the theme we want
+      if (loadingRef.current === thisTheme) {
+        setIsDark(dark);
+        setIsLoading(false);
+        // Re-apply accent after theme load (theme vars don't include primary)
+        applyAccentColor(
+          window.localStorage.getItem(ACCENT_KEY) ?? DEFAULT_ACCENT,
+        );
+      }
+    });
+  }, [themeName]);
+
+  // Apply accent color changes
+  useEffect(() => {
+    applyAccentColor(accentColor);
+  }, [accentColor]);
+
+  const setTheme = useCallback((name: string) => {
+    if (!isValidThemeName(name)) return;
+    setThemeName(name);
+    window.localStorage.setItem(STORAGE_KEY, name);
   }, []);
 
-  const resolvedTheme = theme === "system" ? systemTheme : theme;
-
-  useEffect(() => {
-    applyThemeToRoot(resolvedTheme);
-    window.localStorage.setItem(storageKey, theme);
-  }, [resolvedTheme, storageKey, theme]);
+  const setAccentColor = useCallback((color: string) => {
+    window.localStorage.setItem(ACCENT_KEY, color);
+    setAccentColorState(color);
+  }, []);
 
   const value: ThemeContextValue = {
-    theme,
-    resolvedTheme,
-    setTheme: setThemeState,
+    themeName,
+    isDark,
+    isLoading,
+    accentColor,
+    setTheme,
+    setAccentColor,
   };
 
   return (

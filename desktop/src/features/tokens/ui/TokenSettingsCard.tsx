@@ -52,11 +52,9 @@ function StatusBadge({ status }: { status: "active" | "revoked" | "expired" }) {
     <span
       className={cn(
         "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
-        status === "active" &&
-          "bg-green-500/10 text-green-700 dark:text-green-400",
+        status === "active" && "bg-green-500/10 text-status-added",
         status === "revoked" && "bg-muted text-muted-foreground",
-        status === "expired" &&
-          "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400",
+        status === "expired" && "bg-yellow-500/10 text-warning",
       )}
     >
       {status}
@@ -303,7 +301,7 @@ function CreateTokenDialog({
                     )}
                   </Button>
                 </div>
-                <div className="flex items-start gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-700 dark:text-yellow-400">
+                <div className="flex items-start gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-warning">
                   <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>
                     This is the only time this token will be shown. Store it
@@ -532,7 +530,7 @@ function CreateTokenDialog({
               </div>
 
               {activeTokenCount >= MAX_ACTIVE_TOKENS ? (
-                <p className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-700 dark:text-yellow-400">
+                <p className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-warning">
                   You already have {MAX_ACTIVE_TOKENS} active tokens. Revoke one
                   before creating another.
                 </p>
@@ -713,7 +711,7 @@ export function TokenSettingsCard({
       </div>
 
       {hasReachedTokenLimit ? (
-        <p className="mt-3 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-700 dark:text-yellow-400">
+        <p className="mt-3 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-warning">
           You've reached the active token limit. Revoke an existing token to
           mint another.
         </p>

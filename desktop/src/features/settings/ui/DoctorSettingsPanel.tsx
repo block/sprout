@@ -20,9 +20,9 @@ import { Input } from "@/shared/ui/input";
 
 function StatusIcon({ available }: { available: boolean }) {
   return available ? (
-    <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+    <CheckCircle2 className="h-4 w-4 text-status-added" />
   ) : (
-    <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+    <AlertTriangle className="h-4 w-4 text-warning" />
   );
 }
 
@@ -62,9 +62,7 @@ function CommandCheckRow({
         <p
           className={cn(
             "mt-2 text-xs",
-            isAvailable
-              ? "text-muted-foreground"
-              : "text-amber-700 dark:text-amber-300",
+            isAvailable ? "text-muted-foreground" : "text-warning",
           )}
         >
           {availability?.resolvedPath
@@ -260,7 +258,7 @@ export function DoctorSettingsPanel() {
               </div>
 
               {hasMissingSproutTools ? (
-                <p className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                <p className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-warning">
                   Build the workspace binaries with{" "}
                   <code className="font-mono">
                     cargo build --release --workspace
@@ -345,7 +343,7 @@ export function DoctorSettingsPanel() {
                     />
                   ))
                 ) : (
-                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-warning">
                     No known ACP runtime was detected on your PATH yet. You can
                     still use a custom command in Create agent.
                   </div>

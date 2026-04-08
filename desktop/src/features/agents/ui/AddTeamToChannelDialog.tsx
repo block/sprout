@@ -243,13 +243,11 @@ export function AddTeamToChannelDialog({
             {providerWarnings.length > 0
               ? providerWarnings.map((warning) => (
                   <div
-                    className="flex gap-3 rounded-2xl border border-amber-400/60 bg-amber-50/60 px-4 py-3 dark:border-amber-500/40 dark:bg-amber-950/30"
+                    className="flex gap-3 rounded-2xl border border-warning/30 bg-warning-bg px-4 py-3"
                     key={warning}
                   >
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                    <p className="text-sm text-amber-800 dark:text-amber-300">
-                      {warning}
-                    </p>
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                    <p className="text-sm text-warning">{warning}</p>
                   </div>
                 ))
               : null}
