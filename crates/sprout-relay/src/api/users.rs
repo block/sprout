@@ -117,7 +117,7 @@ pub struct BatchProfilesRequest {
 pub struct SearchUsersQuery {
     /// Case-insensitive search query.
     pub q: String,
-    /// Maximum number of results to return.
+    /// Maximum number of results to return (default 8, max 50).
     pub limit: Option<u32>,
 }
 
@@ -226,7 +226,7 @@ pub async fn search_users(
 
     let results = state
         .db
-        .search_users(q, query.limit.unwrap_or(8))
+        .search_users(q, query.limit.unwrap_or(8).min(50))
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
@@ -307,6 +307,10 @@ pub struct NotesQuery {
 }
 
 /// `GET /api/users/{pubkey}/notes` — list kind:1 text notes by a user.
+///
+/// Returns `{id, pubkey, created_at, content}` per note (tags and sig omitted
+/// for brevity). Use `GET /api/events/{id}` for the full event including tags
+/// and signature.
 pub async fn get_user_notes(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -332,7 +336,7 @@ pub async fn get_user_notes(
     let (until, before_id_bytes) = match (params.before, params.before_id.as_deref()) {
         (Some(ts), Some(id_hex)) => {
             // Composite cursor — validate and decode the event ID.
-            let id_bytes = hex::decode(id_hex)
+            let id_bytes = nostr_hex::decode(id_hex)
                 .ok()
                 .filter(|b| b.len() == 32)
                 .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid before_id hex"))?;
@@ -361,6 +365,11 @@ pub async fn get_user_notes(
         limit: Some(limit),
         until,
         before_id: before_id_bytes,
+        // Defensive: only return global events (channel_id IS NULL).
+        // kind:1 is always stored globally by is_global_only_kind(), but
+        // this explicit filter prevents information disclosure if that
+        // invariant ever changes.
+        global_only: true,
         ..Default::default()
     };
 

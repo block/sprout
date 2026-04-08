@@ -42,6 +42,12 @@ pub struct EventQuery {
     /// `created_at < until OR (created_at = until AND id > before_id)`.
     /// When set, `until` must also be set.
     pub before_id: Option<Vec<u8>>,
+    /// When true, restricts results to global events (`channel_id IS NULL`).
+    /// Use for endpoints that serve non-channel data (e.g. kind:1 notes) to
+    /// defensively prevent leaking channel-scoped events if the ingest
+    /// invariant (`is_global_only_kind`) ever changes.
+    /// Mutually exclusive with `channel_id`.
+    pub global_only: bool,
 }
 
 /// Maximum length for a `d_tag` value (bytes). NIP-33 d-tags are short identifiers;
@@ -142,6 +148,13 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
         ));
     }
 
+    // global_only and channel_id are mutually exclusive.
+    if q.global_only && q.channel_id.is_some() {
+        return Err(DbError::InvalidData(
+            "global_only and channel_id are mutually exclusive".to_string(),
+        ));
+    }
+
     // kinds:[] means "match no kinds" — return empty immediately.
     if q.kinds.as_deref().is_some_and(|k| k.is_empty()) {
         return Ok(vec![]);
@@ -174,6 +187,8 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
     if let Some(ch) = q.channel_id {
         qb.push(format!(" AND {col_prefix}channel_id = "))
             .push_bind(ch);
+    } else if q.global_only {
+        qb.push(format!(" AND {col_prefix}channel_id IS NULL"));
     }
 
     if let Some(ks) = q.kinds.as_deref().filter(|k| !k.is_empty()) {
@@ -216,8 +231,12 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
             .push_bind(d.clone());
     }
 
-    // Always use composite ordering for deterministic pagination.
-    // The id ASC tiebreaker ensures stable results when events share the same second.
+    // Composite ordering for deterministic pagination across ALL callers of
+    // query_events (WebSocket REQ, REST endpoints, canvas, notes, etc.).
+    // The `id ASC` tiebreaker ensures stable results when events share the
+    // same second.  No existing index covers this trailing column — Postgres
+    // sorts in memory, which is fine at current scale.  If query performance
+    // degrades, add a composite index like `(pubkey, kind, created_at DESC, id ASC)`.
     qb.push(format!(
         " ORDER BY {col_prefix}created_at DESC, {col_prefix}id ASC LIMIT "
     ));

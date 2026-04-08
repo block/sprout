@@ -190,6 +190,18 @@ pub async fn get_user_by_nip05(
     ))
 }
 
+/// Escape SQL LIKE metacharacters (`%`, `_`, `\`) so user input is treated
+/// as literal text.  Used with `ESCAPE '\'` in the query.
+///
+/// Without this, a search query of `"%"` would match every row (full table
+/// scan) and `"_"` would act as a single-character wildcard.
+fn escape_like(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 /// Search users by display name, NIP-05 handle, or pubkey prefix.
 ///
 /// Empty queries return an empty vec and do not hit the database.
@@ -203,12 +215,7 @@ pub async fn search_users(
         return Ok(Vec::new());
     }
 
-    // Escape LIKE metacharacters to prevent wildcard injection.
-    // Without this, a query of "%" would match every row (full table scan).
-    let escaped = normalized
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_");
+    let escaped = escape_like(&normalized);
     let contains_pattern = format!("%{escaped}%");
     let prefix_pattern = format!("{escaped}%");
     let limit = limit.clamp(1, 50) as i64;
@@ -532,13 +539,8 @@ mod tests {
 
     // ── LIKE escaping unit tests (no DB required) ──────────────────────
 
-    /// Helper that mirrors the escaping logic in `search_users`.
-    fn escape_like(input: &str) -> String {
-        input
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_")
-    }
+    // Use the production `escape_like` function directly — no local mirror.
+    use super::escape_like;
 
     #[test]
     fn like_escape_percent() {

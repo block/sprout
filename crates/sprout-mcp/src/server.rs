@@ -2558,7 +2558,7 @@ with kind:45003 comments)."
     /// List notes by a specific user.
     #[tool(
         name = "get_user_notes",
-        description = "List kind:1 text notes by a specific user (by hex pubkey). Supports composite cursor pagination via `before` (Unix timestamp) and `before_id` (hex event ID). Pass both values from the previous page's `next_cursor` for stable pagination that correctly handles same-second events."
+        description = "List kind:1 text notes by a specific user (by hex pubkey). Returns id, pubkey, created_at, and content per note (tags and sig omitted — use get_event for full events). Supports composite cursor pagination via `before` (Unix timestamp) and `before_id` (hex event ID)."
     )]
     pub async fn get_user_notes(&self, Parameters(p): Parameters<GetUserNotesParams>) -> String {
         if let Err(e) = validate_hex64(&p.pubkey, "pubkey") {
