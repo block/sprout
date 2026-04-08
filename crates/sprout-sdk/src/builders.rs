@@ -500,6 +500,9 @@ pub fn build_note(
 
 // ── Builder 25: build_contact_list ───────────────────────────────────────────
 
+/// Maximum number of contacts allowed in a single contact list event.
+const MAX_CONTACTS: usize = 10_000;
+
 /// Build a contact list replacement event (kind:3, NIP-02).
 ///
 /// Each contact is `(pubkey_hex, relay_url, petname)`.
@@ -508,10 +511,20 @@ pub fn build_note(
 /// with `SdkError::InvalidInput`.
 /// `relay_url` and `petname` may be `None` (stored as empty string per NIP-02).
 ///
+/// Duplicate pubkeys are silently deduplicated — the first occurrence is kept.
+///
 /// Replaces the entire contact list — callers must read-before-write for deltas.
 pub fn build_contact_list(
     contacts: &[(&str, Option<&str>, Option<&str>)],
 ) -> Result<EventBuilder, SdkError> {
+    if contacts.len() > MAX_CONTACTS {
+        return Err(SdkError::InvalidInput(format!(
+            "contact list exceeds maximum of {} contacts (got {})",
+            MAX_CONTACTS,
+            contacts.len()
+        )));
+    }
+    let mut seen = std::collections::HashSet::with_capacity(contacts.len());
     let mut tags = Vec::with_capacity(contacts.len());
     for &(pubkey_hex, relay_url, petname) in contacts {
         if pubkey_hex.len() != 64 || !pubkey_hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
@@ -536,9 +549,13 @@ pub fn build_contact_list(
                 )));
             }
         }
+        let lower = pubkey_hex.to_ascii_lowercase();
+        if !seen.insert(lower.clone()) {
+            continue;
+        }
         tags.push(tag(&[
             "p",
-            &pubkey_hex.to_ascii_lowercase(),
+            &lower,
             relay_url.unwrap_or(""),
             petname.unwrap_or(""),
         ])?);
@@ -1238,6 +1255,17 @@ mod tests {
         assert!(matches!(err, SdkError::ContentTooLarge { .. }));
     }
 
+    #[test]
+    fn build_note_empty_content() {
+        // Empty content is valid per NIP-01.
+        let builder = build_note("", None).unwrap();
+        let keys = nostr::Keys::generate();
+        let event = builder.sign_with_keys(&keys).unwrap();
+        assert_eq!(event.kind, Kind::Custom(1));
+        assert_eq!(event.content, "");
+        assert!(event.tags.is_empty());
+    }
+
     // ── Builder 25: build_contact_list ───────────────────────────────────────
 
     #[test]
@@ -1330,6 +1358,38 @@ mod tests {
         let pubkey = "a".repeat(64);
         let long_name = "x".repeat(257);
         let contacts = vec![(pubkey.as_str(), None, Some(long_name.as_str()))];
+        let err = build_contact_list(&contacts).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn build_contact_list_duplicate_pubkeys() {
+        let pubkey = "c".repeat(64);
+        // Same pubkey twice — only one p-tag should be emitted.
+        let contacts = vec![
+            (pubkey.as_str(), None, None),
+            (
+                pubkey.as_str(),
+                Some("wss://relay.example.com"),
+                Some("bob"),
+            ),
+        ];
+        let builder = build_contact_list(&contacts).unwrap();
+        let keys = nostr::Keys::generate();
+        let event = builder.sign_with_keys(&keys).unwrap();
+        assert_eq!(event.tags.len(), 1);
+        let tag = event.tags.iter().next().unwrap();
+        assert_eq!(tag.as_slice()[0], "p");
+        assert_eq!(tag.as_slice()[1], pubkey);
+    }
+
+    #[test]
+    fn build_contact_list_too_many() {
+        let pubkey = "d".repeat(64);
+        // MAX_CONTACTS + 1 entries (all same pubkey — uniqueness doesn't matter,
+        // the cap is checked before deduplication).
+        let entry = (pubkey.as_str(), None, None);
+        let contacts = vec![entry; MAX_CONTACTS + 1];
         let err = build_contact_list(&contacts).unwrap_err();
         assert!(matches!(err, SdkError::InvalidInput(_)));
     }

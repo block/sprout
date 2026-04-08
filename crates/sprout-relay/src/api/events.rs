@@ -24,6 +24,11 @@ use sprout_core::kind::{
     event_kind_u32, KIND_CONTACT_LIST, KIND_LONG_FORM, KIND_PROFILE, KIND_TEXT_NOTE,
 };
 
+/// Global event kinds that require `UsersRead` scope.
+pub(crate) const GLOBAL_USER_DATA_KINDS: [u32; 2] = [KIND_PROFILE, KIND_CONTACT_LIST];
+/// Global event kinds that require `MessagesRead` scope.
+pub(crate) const GLOBAL_MESSAGE_KINDS: [u32; 2] = [KIND_TEXT_NOTE, KIND_LONG_FORM];
+
 /// Fetch a single stored event by its 64-char hex ID.
 pub async fn get_event(
     State(state): State<Arc<AppState>>,
@@ -63,12 +68,9 @@ pub async fn get_event(
         // Global event — scope-aware allowlist.
         let event_kind = event_kind_u32(&stored_event.event);
 
-        const USER_DATA_KINDS: [u32; 2] = [KIND_PROFILE, KIND_CONTACT_LIST];
-        const MESSAGE_KINDS: [u32; 2] = [KIND_TEXT_NOTE, KIND_LONG_FORM];
-
-        let scope_ok = if USER_DATA_KINDS.contains(&event_kind) {
+        let scope_ok = if GLOBAL_USER_DATA_KINDS.contains(&event_kind) {
             sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersRead).is_ok()
-        } else if MESSAGE_KINDS.contains(&event_kind) {
+        } else if GLOBAL_MESSAGE_KINDS.contains(&event_kind) {
             sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead).is_ok()
         } else {
             false
@@ -149,18 +151,14 @@ pub async fn submit_event(
 mod tests {
     use sprout_core::kind::{KIND_CONTACT_LIST, KIND_LONG_FORM, KIND_PROFILE, KIND_TEXT_NOTE};
 
-    // Mirror the allowlist constants from `get_event` so tests break if
-    // the production lists are changed without updating the tests.
-    const USER_DATA_KINDS: [u32; 2] = [KIND_PROFILE, KIND_CONTACT_LIST];
-    const MESSAGE_KINDS: [u32; 2] = [KIND_TEXT_NOTE, KIND_LONG_FORM];
+    use super::{GLOBAL_MESSAGE_KINDS, GLOBAL_USER_DATA_KINDS};
 
     /// Reproduce the scope-check routing logic from `get_event` so we can
-    /// unit-test it without standing up a full HTTP server.  If the
-    /// production code changes, this helper must be updated in lockstep.
+    /// unit-test it without standing up a full HTTP server.
     fn scope_check_for_global_event(event_kind: u32, scopes: &[sprout_auth::Scope]) -> bool {
-        if USER_DATA_KINDS.contains(&event_kind) {
+        if GLOBAL_USER_DATA_KINDS.contains(&event_kind) {
             sprout_auth::require_scope(scopes, sprout_auth::Scope::UsersRead).is_ok()
-        } else if MESSAGE_KINDS.contains(&event_kind) {
+        } else if GLOBAL_MESSAGE_KINDS.contains(&event_kind) {
             sprout_auth::require_scope(scopes, sprout_auth::Scope::MessagesRead).is_ok()
         } else {
             false

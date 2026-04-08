@@ -2476,6 +2476,13 @@ with kind:45003 comments)."
             None => None,
         };
 
+        if p.content.len() > 64 * 1024 {
+            return format!(
+                "Error: content exceeds 64 KiB limit ({} bytes)",
+                p.content.len()
+            );
+        }
+
         let builder = match sprout_sdk::build_note(&p.content, reply_id) {
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
@@ -2542,7 +2549,7 @@ with kind:45003 comments)."
     /// Fetch a single event by event ID.
     #[tool(
         name = "get_event",
-        description = "Fetch a single event by its 64-char hex event ID. Returns global events (kind:1 notes, kind:0 profiles, kind:3 contacts, kind:30023 articles) and channel events the caller has access to."
+        description = "Fetch a single event by its 64-char hex event ID. For global events: kind:0 profiles and kind:3 contacts require UsersRead scope; kind:1 notes and kind:30023 articles require MessagesRead scope. For channel events: requires MessagesRead scope and channel membership. Unknown kinds return 404."
     )]
     pub async fn get_event(&self, Parameters(p): Parameters<GetEventParams>) -> String {
         if let Err(e) = validate_hex64(&p.event_id, "event_id") {
