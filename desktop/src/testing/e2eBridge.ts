@@ -207,6 +207,23 @@ type RawForumThreadResponse = {
   next_cursor: string | null;
 };
 
+type RawUserNote = {
+  id: string;
+  pubkey: string;
+  created_at: number;
+  content: string;
+};
+
+type RawUserNotesCursor = {
+  before: number;
+  before_id: string;
+};
+
+type RawUserNotesResponse = {
+  notes: RawUserNote[];
+  next_cursor: RawUserNotesCursor | null;
+};
+
 type RawSearchHit = {
   event_id: string;
   content: string;
@@ -1717,6 +1734,91 @@ async function handleGetForumThread(args: {
     total_replies: replies.length,
     next_cursor: null,
   };
+}
+
+function getMockUserNotes(pubkey: string): RawUserNote[] {
+  const now = Math.floor(Date.now() / 1000);
+
+  if (pubkey === DEFAULT_MOCK_IDENTITY.pubkey) {
+    return [
+      {
+        id: "mock-note-launch",
+        pubkey,
+        created_at: now - 20 * 60,
+        content: "Shipped the new desktop sidebar polish today.",
+      },
+      {
+        id: "mock-note-forum",
+        pubkey,
+        created_at: now - 3 * 60 * 60,
+        content: "Forum threads feel like the right home for slower decisions.",
+      },
+    ];
+  }
+
+  if (pubkey === ALICE_PUBKEY) {
+    return [
+      {
+        id: "mock-alice-note-release",
+        pubkey,
+        created_at: now - 45 * 60,
+        content: "Release checklist is ready for async feedback.",
+      },
+      {
+        id: "mock-alice-note-design",
+        pubkey,
+        created_at: now - 5 * 60 * 60,
+        content: "Trying a lighter forum layout for longer-form notes.",
+      },
+    ];
+  }
+
+  return [];
+}
+
+async function handleGetUserNotes(
+  args: {
+    pubkey: string;
+    limit?: number | null;
+    before?: number | null;
+    beforeId?: string | null;
+  },
+  config: E2eConfig | undefined,
+): Promise<RawUserNotesResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const notes = getMockUserNotes(args.pubkey)
+      .filter((note) => (args.before ? note.created_at < args.before : true))
+      .sort((left, right) => right.created_at - left.created_at)
+      .slice(0, args.limit ?? 50);
+
+    return {
+      notes,
+      next_cursor: null,
+    };
+  }
+
+  const url = new URL(
+    `/api/users/${args.pubkey}/notes`,
+    getRelayHttpUrl(config),
+  );
+  if (args.limit !== undefined && args.limit !== null) {
+    url.searchParams.set("limit", String(args.limit));
+  }
+  if (args.before !== undefined && args.before !== null) {
+    url.searchParams.set("before", String(args.before));
+  }
+  if (args.beforeId) {
+    url.searchParams.set("before_id", args.beforeId);
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      "X-Pubkey": identity.pubkey,
+    },
+  });
+  await assertOk(response);
+  return response.json();
 }
 
 function createMockEvent(
@@ -3741,6 +3843,11 @@ export function maybeInstallE2eTauriMocks() {
       case "get_users_batch":
         return handleGetUsersBatch(
           payload as Parameters<typeof handleGetUsersBatch>[0],
+          activeConfig,
+        );
+      case "get_user_notes":
+        return handleGetUserNotes(
+          payload as Parameters<typeof handleGetUserNotes>[0],
           activeConfig,
         );
       case "search_users":
