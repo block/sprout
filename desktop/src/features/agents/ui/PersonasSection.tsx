@@ -153,6 +153,7 @@ export function PersonasSection({
                       <DropdownMenuItem
                         disabled={isPending}
                         onClick={() => onEdit(persona)}
+                        title="Edit this persona's name, avatar, and system prompt"
                       >
                         <Pencil className="h-4 w-4" />
                         Edit
@@ -161,6 +162,7 @@ export function PersonasSection({
                     <DropdownMenuItem
                       disabled={isPending}
                       onClick={() => onDuplicate(persona)}
+                      title="Create a copy of this persona you can customize independently"
                     >
                       <CopyPlus className="h-4 w-4" />
                       Duplicate
@@ -168,6 +170,7 @@ export function PersonasSection({
                     <DropdownMenuItem
                       disabled={isPending}
                       onClick={() => onExport(persona)}
+                      title="Save this persona as a .persona.json file you can share or back up"
                     >
                       <Download className="h-4 w-4" />
                       Export
@@ -177,6 +180,7 @@ export function PersonasSection({
                         className="text-destructive focus:text-destructive"
                         disabled={isPending}
                         onClick={() => onDeactivate(persona)}
+                        title="Remove this built-in persona from your agent library"
                       >
                         <Trash2 className="h-4 w-4" />
                         Remove from My Agents
@@ -186,6 +190,7 @@ export function PersonasSection({
                         className="text-destructive focus:text-destructive"
                         disabled={isPending}
                         onClick={() => onDelete(persona)}
+                        title="Permanently delete this persona"
                       >
                         <Trash2 className="h-4 w-4" />
                         Delete

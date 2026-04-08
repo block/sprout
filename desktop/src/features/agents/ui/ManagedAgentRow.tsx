@@ -319,6 +319,11 @@ function AgentActionsMenu({
             <DropdownMenuItem
               disabled={isActionPending}
               onClick={() => onStart(agent.pubkey)}
+              title={
+                isActive
+                  ? "Push a new deployment to the provider"
+                  : "Deploy this agent to the provider"
+              }
             >
               <Play className="h-4 w-4" />
               {isActive ? "Redeploy" : "Deploy"}
@@ -326,6 +331,7 @@ function AgentActionsMenu({
             <DropdownMenuItem
               disabled={isActionPending}
               onClick={() => onStop(agent.pubkey)}
+              title="Stop the provider deployment and free its resources"
             >
               <Square className="h-4 w-4" />
               Shutdown
@@ -335,6 +341,7 @@ function AgentActionsMenu({
           <DropdownMenuItem
             disabled={isActionPending}
             onClick={() => onStop(agent.pubkey)}
+            title="Stop the running ACP harness process"
           >
             <Square className="h-4 w-4" />
             Stop
@@ -343,6 +350,7 @@ function AgentActionsMenu({
           <DropdownMenuItem
             disabled={isActionPending}
             onClick={() => onStart(agent.pubkey)}
+            title="Launch the local ACP harness process for this agent"
           >
             <Play className="h-4 w-4" />
             Spawn
@@ -352,6 +360,7 @@ function AgentActionsMenu({
         <DropdownMenuItem
           disabled={isActionPending}
           onClick={() => onAddToChannel(agent)}
+          title="Invite this agent to a channel so it can participate in conversations"
         >
           <UserPlus className="h-4 w-4" />
           Add to channel
@@ -360,6 +369,7 @@ function AgentActionsMenu({
         <DropdownMenuItem
           disabled={isActionPending}
           onClick={() => onMintToken(agent.pubkey, agent.name)}
+          title="Generate a bearer token this agent uses to authenticate with the relay"
         >
           <KeyRound className="h-4 w-4" />
           Mint token
@@ -367,13 +377,17 @@ function AgentActionsMenu({
 
         <DropdownMenuItem
           onClick={() => navigator.clipboard.writeText(agent.pubkey)}
+          title="Copy the agent's public key to the clipboard"
         >
           <Clipboard className="h-4 w-4" />
           Copy pubkey
         </DropdownMenuItem>
 
         {agent.backend.type === "local" ? (
-          <DropdownMenuItem onClick={() => onOpenLogs(agent.pubkey)}>
+          <DropdownMenuItem
+            onClick={() => onOpenLogs(agent.pubkey)}
+            title="Show the ACP harness stdout/stderr log inline"
+          >
             <FileText className="h-4 w-4" />
             View logs
           </DropdownMenuItem>
@@ -384,6 +398,11 @@ function AgentActionsMenu({
             disabled={isActionPending}
             onClick={() =>
               onToggleStartOnAppLaunch(agent.pubkey, !agent.startOnAppLaunch)
+            }
+            title={
+              agent.startOnAppLaunch
+                ? "Stop launching this agent automatically when the desktop app starts"
+                : "Launch this agent automatically every time the desktop app starts"
             }
           >
             <Power className="h-4 w-4" />
@@ -399,6 +418,7 @@ function AgentActionsMenu({
           className="text-destructive focus:text-destructive"
           disabled={isActionPending}
           onClick={() => onDelete(agent.pubkey)}
+          title="Permanently remove this agent profile from the desktop app"
         >
           <Trash2 className="h-4 w-4" />
           Delete

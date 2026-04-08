@@ -144,6 +144,10 @@ export function CreateAgentRuntimeFields({
             placeholder="Leave blank to use the desktop relay"
             value={relayUrl}
           />
+          <p className="text-xs text-muted-foreground">
+            WebSocket URL of the relay this agent connects to. Leave blank to
+            use the built-in desktop relay.
+          </p>
         </div>
 
         <div className="space-y-1.5">
@@ -155,6 +159,10 @@ export function CreateAgentRuntimeFields({
             onChange={(event) => onAcpCommandChange(event.target.value)}
             value={acpCommand}
           />
+          <p className="text-xs text-muted-foreground">
+            The `sprout-acp` binary path or alias used to launch the ACP harness
+            process.
+          </p>
         </div>
       </div>
 
@@ -171,6 +179,10 @@ export function CreateAgentRuntimeFields({
             onChange={(event) => onAgentCommandChange(event.target.value)}
             value={agentCommand}
           />
+          <p className="text-xs text-muted-foreground">
+            Full path or shell command for the agent binary when no known ACP
+            runtime was detected.
+          </p>
         </div>
       ) : null}
 
@@ -199,6 +211,10 @@ export function CreateAgentRuntimeFields({
             onChange={(event) => onMcpCommandChange(event.target.value)}
             value={mcpCommand}
           />
+          <p className="text-xs text-muted-foreground">
+            Command the ACP harness uses to start the MCP tool server for this
+            agent.
+          </p>
         </div>
 
         <div className="space-y-1.5">
@@ -211,6 +227,9 @@ export function CreateAgentRuntimeFields({
             placeholder="300"
             value={turnTimeoutSeconds}
           />
+          <p className="text-xs text-muted-foreground">
+            Seconds before an agent turn is cancelled. Defaults to 300.
+          </p>
         </div>
 
         <div className="space-y-1.5">

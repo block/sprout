@@ -200,6 +200,7 @@ export function TeamsSection({
                       <DropdownMenuItem
                         disabled={isPending || hasMissingPersonas}
                         onClick={() => onAddToChannel(team)}
+                        title="Add all personas in this team to a channel at once"
                       >
                         <Rocket className="h-4 w-4" />
                         Deploy to channel
@@ -208,6 +209,7 @@ export function TeamsSection({
                       <DropdownMenuItem
                         disabled={isPending}
                         onClick={() => onEdit(team)}
+                        title="Edit this team's name, description, and persona membership"
                       >
                         <Pencil className="h-4 w-4" />
                         Edit
@@ -215,6 +217,7 @@ export function TeamsSection({
                       <DropdownMenuItem
                         disabled={isPending || hasMissingPersonas}
                         onClick={() => onDuplicate(team)}
+                        title="Create a copy of this team you can customize independently"
                       >
                         <CopyPlus className="h-4 w-4" />
                         Duplicate
@@ -222,6 +225,7 @@ export function TeamsSection({
                       <DropdownMenuItem
                         disabled={isPending || hasMissingPersonas}
                         onClick={() => onExport(team)}
+                        title="Save this team as a .team.json file you can share or back up"
                       >
                         <Download className="h-4 w-4" />
                         Export
@@ -231,6 +235,7 @@ export function TeamsSection({
                         className="text-destructive focus:text-destructive"
                         disabled={isPending}
                         onClick={() => onDelete(team)}
+                        title="Permanently delete this team"
                       >
                         <Trash2 className="h-4 w-4" />
                         Delete
