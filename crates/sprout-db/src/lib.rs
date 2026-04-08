@@ -216,6 +216,19 @@ impl Db {
         event::query_events(&self.pool, q).await
     }
 
+    /// Fetch the latest replaceable event for a (kind, pubkey) pair.
+    ///
+    /// Uses canonical NIP-16 ordering: `created_at DESC, id ASC`.
+    /// This matches the write path in [`replace_addressable_event`] and handles
+    /// historical duplicate survivors correctly.
+    pub async fn get_latest_global_replaceable(
+        &self,
+        kind: i32,
+        pubkey_bytes: &[u8],
+    ) -> Result<Option<StoredEvent>> {
+        event::get_latest_global_replaceable(&self.pool, kind, pubkey_bytes).await
+    }
+
     /// Fetches a single non-deleted event by its raw ID bytes.
     ///
     /// Returns `None` if the event does not exist or has been soft-deleted.

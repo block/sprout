@@ -137,6 +137,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/users/search", get(api::search_users))
         .route("/api/users/{pubkey}/profile", get(api::get_user_profile))
+        .route("/api/users/{pubkey}/notes", get(api::get_user_notes))
+        .route(
+            "/api/users/{pubkey}/contact-list",
+            get(api::get_contact_list),
+        )
         .route("/api/users/batch", post(api::get_users_batch))
         // Feed route
         .route("/api/feed", get(api::feed_handler))

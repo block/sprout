@@ -99,4 +99,7 @@ pub enum SdkError {
     /// Diff metadata failed validation.
     #[error("invalid diff metadata: {0}")]
     InvalidDiffMeta(String),
+    /// Input failed validation (e.g. malformed pubkey).
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
 }

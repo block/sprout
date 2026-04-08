@@ -35,6 +35,18 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+/// Validate that a string is exactly 64 hex characters.
+fn validate_hex64(s: &str, label: &str) -> Result<(), String> {
+    if s.len() != 64 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        Err(format!(
+            "Error: {label} must be exactly 64 hex characters, got len={}",
+            s.len()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Validate that `s` is a well-formed UUID (any version/variant).
 /// Returns `Ok(())` on success, or an error string on failure.
 fn validate_uuid(s: &str) -> Result<(), String> {
@@ -640,6 +652,71 @@ pub struct VoteOnPostParams {
     pub event_id: String,
     /// Vote direction.
     pub direction: VoteDirection,
+}
+
+/// Parameters for [`SproutServer::publish_note`].
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PublishNoteParams {
+    /// Text content of the note (max 64 KiB).
+    pub content: String,
+    /// 64-char hex event ID to reply to. Adds a single e-tag with "reply" marker.
+    #[serde(default)]
+    pub reply_to_event_id: Option<String>,
+}
+
+/// A single contact entry for [`SetContactListParams`].
+///
+/// Kept local to MCP — not part of sprout-sdk. The SDK builder takes primitive slices.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ContactEntry {
+    /// 64-char hex pubkey (any case accepted, normalized to lowercase).
+    pub pubkey: String,
+    /// Optional relay URL hint (NIP-02). Empty string if omitted.
+    #[serde(default)]
+    pub relay_url: Option<String>,
+    /// Optional petname / display alias.
+    #[serde(default)]
+    pub petname: Option<String>,
+}
+
+/// Parameters for [`SproutServer::set_contact_list`].
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetContactListParams {
+    /// Replaces the **entire** contact list. Call `get_contact_list` first for delta updates.
+    pub contacts: Vec<ContactEntry>,
+}
+
+/// Parameters for [`SproutServer::get_event`].
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetEventParams {
+    /// 64-char hex event ID.
+    pub event_id: String,
+}
+
+/// Parameters for [`SproutServer::get_user_notes`].
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetUserNotesParams {
+    /// 64-char hex pubkey of the author.
+    pub pubkey: String,
+    /// Maximum number of notes to return (default 50, max 100).
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Unix timestamp cursor — return notes created before this time.
+    /// Use with `before_id` for stable composite cursor pagination.
+    #[serde(default)]
+    pub before: Option<i64>,
+    /// Hex event ID cursor for composite keyset pagination. Use together with
+    /// `before` to avoid skipping same-second events. Pass the `before_id` value
+    /// from the previous page's `next_cursor` response.
+    #[serde(default)]
+    pub before_id: Option<String>,
+}
+
+/// Parameters for [`SproutServer::get_contact_list`].
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetContactListParams {
+    /// 64-char hex pubkey of the user whose contact list to fetch.
+    pub pubkey: String,
 }
 
 // ── Diff utility functions ────────────────────────────────────────────────────
@@ -2379,6 +2456,165 @@ with kind:45003 comments)."
                 "message": ok.message,
             })
             .to_string(),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    // ── Social tools ─────────────────────────────────────────────────────────
+
+    /// Publish a kind:1 text note (global, no channel scope).
+    #[tool(
+        name = "publish_note",
+        description = "Publish a short text note (kind:1) to the global feed. Optionally reply to another note by event ID."
+    )]
+    pub async fn publish_note(&self, Parameters(p): Parameters<PublishNoteParams>) -> String {
+        let reply_id = match p.reply_to_event_id.as_deref() {
+            Some(hex) => match EventId::from_hex(hex) {
+                Ok(id) => Some(id),
+                Err(e) => return format!("Error: invalid reply_to_event_id: {e}"),
+            },
+            None => None,
+        };
+
+        if p.content.len() > 64 * 1024 {
+            return format!(
+                "Error: content exceeds 64 KiB limit ({} bytes)",
+                p.content.len()
+            );
+        }
+
+        let builder = match sprout_sdk::build_note(&p.content, reply_id) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign event: {e}"),
+        };
+
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Replace the authenticated user's contact list (kind:3).
+    #[tool(
+        name = "set_contact_list",
+        description = "Set the authenticated user's contact/follow list (kind:3). Replaces the entire list. Call get_contact_list first for delta updates."
+    )]
+    pub async fn set_contact_list(
+        &self,
+        Parameters(p): Parameters<SetContactListParams>,
+    ) -> String {
+        let contacts: Vec<(&str, Option<&str>, Option<&str>)> = p
+            .contacts
+            .iter()
+            .map(|c| {
+                (
+                    c.pubkey.as_str(),
+                    c.relay_url.as_deref(),
+                    c.petname.as_deref(),
+                )
+            })
+            .collect();
+
+        let builder = match sprout_sdk::build_contact_list(&contacts) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign event: {e}"),
+        };
+
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Fetch a single event by event ID.
+    #[tool(
+        name = "get_event",
+        description = "Fetch a single event by its 64-char hex event ID. For global events: kind:0 profiles and kind:3 contacts require UsersRead scope; kind:1 notes and kind:30023 articles require MessagesRead scope. For channel events: requires MessagesRead scope and channel membership. Unknown kinds return 404."
+    )]
+    pub async fn get_event(&self, Parameters(p): Parameters<GetEventParams>) -> String {
+        if let Err(e) = validate_hex64(&p.event_id, "event_id") {
+            return e;
+        }
+        let path = format!("/api/events/{}", p.event_id);
+        match self.client.get(&path).await {
+            Ok(body) => body,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// List notes by a specific user.
+    #[tool(
+        name = "get_user_notes",
+        description = "List kind:1 text notes by a specific user (by hex pubkey). Returns id, pubkey, created_at, and content per note (tags and sig omitted — use get_event for full events). Supports composite cursor pagination via `before` (Unix timestamp) and `before_id` (hex event ID)."
+    )]
+    pub async fn get_user_notes(&self, Parameters(p): Parameters<GetUserNotesParams>) -> String {
+        if let Err(e) = validate_hex64(&p.pubkey, "pubkey") {
+            return e;
+        }
+        if let Some(ref bid) = p.before_id {
+            if let Err(e) = validate_hex64(bid, "before_id") {
+                return e;
+            }
+        }
+        if p.before_id.is_some() && p.before.is_none() {
+            return "Error: before_id requires before".to_string();
+        }
+        let mut url = format!("/api/users/{}/notes", p.pubkey);
+        let mut query_parts = vec![];
+        if let Some(limit) = p.limit {
+            query_parts.push(format!("limit={limit}"));
+        }
+        if let Some(before) = p.before {
+            query_parts.push(format!("before={before}"));
+        }
+        if let Some(ref before_id) = p.before_id {
+            query_parts.push(format!("before_id={before_id}"));
+        }
+        if !query_parts.is_empty() {
+            url.push('?');
+            url.push_str(&query_parts.join("&"));
+        }
+        match self.client.get(&url).await {
+            Ok(body) => body,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Get a user's contact/follow list.
+    #[tool(
+        name = "get_contact_list",
+        description = "Get a user's contact/follow list (kind:3) by hex pubkey. Returns the latest replaceable event."
+    )]
+    pub async fn get_contact_list(
+        &self,
+        Parameters(p): Parameters<GetContactListParams>,
+    ) -> String {
+        if let Err(e) = validate_hex64(&p.pubkey, "pubkey") {
+            return e;
+        }
+        let path = format!("/api/users/{}/contact-list", p.pubkey);
+        match self.client.get(&path).await {
+            Ok(body) => body,
             Err(e) => format!("Error: {e}"),
         }
     }
