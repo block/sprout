@@ -22,10 +22,14 @@ export const personaCatalogCopy = {
   emptyCatalogTitle: "No personas in the catalog yet",
   detailsAction: "View details",
   selectAction: "Select",
+  deselectAction: "Selected",
   selectedState: "Selected",
   availableState: "Available",
-  detailSelectionTitle: "Selected for My Agents",
-  detailSelectionDescription:
+  detailSelectedTitle: "Selected for My Agents",
+  detailSelectedDescription:
+    "Turn this off to remove the persona from teams and agent creation in this app.",
+  detailAvailableTitle: "Available in Persona Catalog",
+  detailAvailableDescription:
     "Turn this on to make the persona available for teams and agent creation.",
   teamEmptyState:
     "No personas in My Agents yet. Create one or choose one from Persona Catalog first.",

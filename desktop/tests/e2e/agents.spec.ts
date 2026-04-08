@@ -120,7 +120,9 @@ test("built-in personas stay visible in the catalog and can be selected", async 
   );
   await expect(page.getByRole("tooltip")).toHaveCount(0);
 
-  await page.getByTestId("persona-catalog-toggle-builtin:reviewer").click();
+  await page
+    .getByTestId("persona-catalog-toggle-target-builtin:reviewer")
+    .click();
   await expect(
     page.getByTestId("persona-catalog-feedback-notice"),
   ).toContainText("Selected Reviewer for My Agents.");
@@ -132,7 +134,9 @@ test("built-in personas stay visible in the catalog and can be selected", async 
     page.getByTestId("persona-catalog-card-builtin:reviewer"),
   ).toContainText("Selected");
 
-  await page.getByTestId("persona-catalog-toggle-builtin:reviewer").click();
+  await page
+    .getByTestId("persona-catalog-toggle-target-builtin:reviewer")
+    .click();
   await expect(
     page.getByTestId("persona-catalog-feedback-notice"),
   ).toContainText("Deselected Reviewer from My Agents.");
@@ -155,13 +159,19 @@ test("catalog details sheet shows the full persona details", async ({
   await expect(page.getByTestId("persona-catalog-details-sheet")).toContainText(
     "You are Reviewer.",
   );
+  await expect(
+    page.getByTestId("persona-catalog-detail-selection-title"),
+  ).toHaveText("Available in Persona Catalog");
 
   await page
-    .getByTestId("persona-catalog-detail-toggle-builtin:reviewer")
+    .getByTestId("persona-catalog-detail-toggle-target-builtin:reviewer")
     .click();
   await expect(
     page.getByTestId("persona-catalog-detail-toggle-builtin:reviewer"),
   ).toHaveAttribute("data-state", "checked");
+  await expect(
+    page.getByTestId("persona-catalog-detail-selection-title"),
+  ).toHaveText("Selected for My Agents");
   await expect(page.getByTestId("agents-library-personas")).toContainText(
     "Reviewer",
   );
@@ -188,7 +198,9 @@ test("built-in deselection failures show up in Persona Catalog", async ({
   await gotoApp(page);
 
   await page.getByTestId("open-agents-view").click();
-  await page.getByTestId("persona-catalog-toggle-builtin:reviewer").click();
+  await page
+    .getByTestId("persona-catalog-toggle-target-builtin:reviewer")
+    .click();
 
   await invokeTauri(page, "create_team", {
     input: {
@@ -197,7 +209,9 @@ test("built-in deselection failures show up in Persona Catalog", async ({
     },
   });
 
-  await page.getByTestId("persona-catalog-toggle-builtin:reviewer").click();
+  await page
+    .getByTestId("persona-catalog-toggle-target-builtin:reviewer")
+    .click();
 
   await expect(
     page.getByTestId("persona-catalog-feedback-error"),
@@ -209,7 +223,9 @@ test("channel quick add falls back to added personas when defaults are absent", 
 }) => {
   await gotoApp(page);
   await page.getByTestId("open-agents-view").click();
-  await page.getByTestId("persona-catalog-toggle-builtin:reviewer").click();
+  await page
+    .getByTestId("persona-catalog-toggle-target-builtin:reviewer")
+    .click();
 
   await page.getByTestId("channel-random").click();
   await expect(page.getByTestId("chat-title")).toHaveText("random");

@@ -80,6 +80,7 @@ export function PersonaCatalogSection({
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
           {personas.map((persona) => {
             const preview = promptPreview(persona.systemPrompt);
+            const toggleId = `persona-catalog-toggle-control-${persona.id}`;
 
             return (
               <div
@@ -118,13 +119,15 @@ export function PersonaCatalogSection({
                     {personaCatalogCopy.detailsAction}
                   </Button>
 
-                  <div
+                  <label
                     className={cn(
-                      "flex items-center gap-2 text-xs font-medium text-foreground",
+                      "flex items-center gap-2 rounded-md px-2 py-1 text-xs font-medium text-foreground transition-colors",
                       isPending
                         ? "cursor-not-allowed opacity-70"
-                        : "cursor-pointer",
+                        : "cursor-pointer hover:bg-muted/60",
                     )}
+                    data-testid={`persona-catalog-toggle-target-${persona.id}`}
+                    htmlFor={toggleId}
                   >
                     <Checkbox
                       aria-label={getPersonaCatalogToggleAriaLabel(
@@ -133,16 +136,17 @@ export function PersonaCatalogSection({
                       checked={persona.isActive}
                       data-testid={`persona-catalog-toggle-${persona.id}`}
                       disabled={isPending}
+                      id={toggleId}
                       onCheckedChange={(checked) =>
                         handleCheckedChange(persona, checked)
                       }
                     />
                     <span>
                       {persona.isActive
-                        ? personaCatalogCopy.selectedState
+                        ? personaCatalogCopy.deselectAction
                         : personaCatalogCopy.selectAction}
                     </span>
-                  </div>
+                  </label>
                 </div>
               </div>
             );

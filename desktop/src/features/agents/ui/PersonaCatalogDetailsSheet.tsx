@@ -38,6 +38,15 @@ export function PersonaCatalogDetailsSheet({
   persona,
 }: PersonaCatalogDetailsSheetProps) {
   const preview = persona ? promptPreview(persona.systemPrompt) : "";
+  const selectionTitle = persona?.isActive
+    ? personaCatalogCopy.detailSelectedTitle
+    : personaCatalogCopy.detailAvailableTitle;
+  const selectionDescription = persona?.isActive
+    ? personaCatalogCopy.detailSelectedDescription
+    : personaCatalogCopy.detailAvailableDescription;
+  const toggleId = persona
+    ? `persona-catalog-detail-toggle-control-${persona.id}`
+    : undefined;
 
   function handleCheckedChange(checked: CheckedState) {
     if (!persona) return;
@@ -76,22 +85,40 @@ export function PersonaCatalogDetailsSheet({
             <div className="rounded-xl border border-border/70 bg-card/70 p-4">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-sm font-semibold tracking-tight">
-                    {personaCatalogCopy.detailSelectionTitle}
+                  <p
+                    className="text-sm font-semibold tracking-tight"
+                    data-testid="persona-catalog-detail-selection-title"
+                  >
+                    {selectionTitle}
                   </p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {personaCatalogCopy.detailSelectionDescription}
+                  <p
+                    className="mt-1 text-sm text-muted-foreground"
+                    data-testid="persona-catalog-detail-selection-description"
+                  >
+                    {selectionDescription}
                   </p>
                 </div>
-                <Checkbox
-                  aria-label={getPersonaCatalogToggleAriaLabel(
-                    persona.displayName,
-                  )}
-                  checked={persona.isActive}
-                  data-testid={`persona-catalog-detail-toggle-${persona.id}`}
-                  disabled={isPending}
-                  onCheckedChange={handleCheckedChange}
-                />
+                <label
+                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/60"
+                  data-testid={`persona-catalog-detail-toggle-target-${persona.id}`}
+                  htmlFor={toggleId}
+                >
+                  <Checkbox
+                    aria-label={getPersonaCatalogToggleAriaLabel(
+                      persona.displayName,
+                    )}
+                    checked={persona.isActive}
+                    data-testid={`persona-catalog-detail-toggle-${persona.id}`}
+                    disabled={isPending}
+                    id={toggleId}
+                    onCheckedChange={handleCheckedChange}
+                  />
+                  <span>
+                    {persona.isActive
+                      ? personaCatalogCopy.deselectAction
+                      : personaCatalogCopy.selectAction}
+                  </span>
+                </label>
               </div>
             </div>
 
