@@ -5,6 +5,7 @@ import { assertRelaySeeded } from "../helpers/seed";
 
 const isCi = Boolean(process.env.CI);
 const relayDeliveryTimeoutMs = isCi ? 15_000 : 5_000;
+const relaySeedHookTimeoutMs = isCi ? 90_000 : 30_000;
 
 async function expectTimelineToContain(page: Page, text: string) {
   await expect(page.getByTestId("message-timeline")).toContainText(text, {
@@ -94,6 +95,7 @@ async function scrollTimelineAwayFromBottom(page: Page, minDistance = 160) {
 }
 
 test.beforeAll(async () => {
+  test.setTimeout(relaySeedHookTimeoutMs);
   await assertRelaySeeded();
 });
 

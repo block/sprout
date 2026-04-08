@@ -280,12 +280,14 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
   page,
 }) => {
   await page.goto("/");
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
 
   await page.keyboard.press(
     process.platform === "darwin" ? "Meta+," : "Control+,",
   );
 
   await expect(page.getByTestId("settings-view")).toBeVisible();
+  await expect(page.getByTestId("settings-nav-appearance")).toBeVisible();
   await page.getByTestId("settings-nav-appearance").click();
 
   // Default theme is catppuccin-macchiato (dark)
@@ -347,6 +349,7 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
 
 test("supports webview zoom keyboard shortcuts", async ({ page }) => {
   await page.goto("/");
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
 
   await page.keyboard.press(
     process.platform === "darwin" ? "Meta+Shift+Equal" : "Control+Shift+Equal",
