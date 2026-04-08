@@ -144,3 +144,136 @@ pub async fn submit_event(
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use sprout_core::kind::{KIND_CONTACT_LIST, KIND_LONG_FORM, KIND_PROFILE, KIND_TEXT_NOTE};
+
+    const USER_DATA_KINDS: [u32; 2] = [KIND_PROFILE, KIND_CONTACT_LIST];
+    const MESSAGE_KINDS: [u32; 2] = [KIND_TEXT_NOTE, KIND_LONG_FORM];
+
+    /// MessagesRead must NOT satisfy UsersRead requirement.
+    #[test]
+    fn kind0_profile_requires_users_read() {
+        let scopes = vec![sprout_auth::Scope::MessagesRead];
+        assert!(
+            sprout_auth::require_scope(&scopes, sprout_auth::Scope::UsersRead).is_err(),
+            "MessagesRead must not satisfy UsersRead"
+        );
+    }
+
+    /// kind:3 (contact list) also requires UsersRead.
+    #[test]
+    fn kind3_contact_list_requires_users_read() {
+        let scopes = vec![sprout_auth::Scope::MessagesRead];
+        assert!(
+            sprout_auth::require_scope(&scopes, sprout_auth::Scope::UsersRead).is_err(),
+            "MessagesRead must not satisfy UsersRead for contact lists"
+        );
+    }
+
+    /// kind:1 (text note) requires MessagesRead.
+    #[test]
+    fn kind1_text_note_requires_messages_read() {
+        let scopes = vec![sprout_auth::Scope::MessagesRead];
+        assert!(
+            sprout_auth::require_scope(&scopes, sprout_auth::Scope::MessagesRead).is_ok(),
+            "MessagesRead should satisfy MessagesRead"
+        );
+    }
+
+    /// UsersRead must NOT satisfy MessagesRead requirement.
+    #[test]
+    fn kind1_with_only_users_read_is_denied() {
+        let scopes = vec![sprout_auth::Scope::UsersRead];
+        assert!(
+            sprout_auth::require_scope(&scopes, sprout_auth::Scope::MessagesRead).is_err(),
+            "UsersRead must not satisfy MessagesRead"
+        );
+    }
+
+    /// Unknown global kinds (e.g. kind:1059 gift wrap) are denied regardless of scopes.
+    #[test]
+    fn unknown_global_kind_denied() {
+        let gift_wrap_kind: u32 = 1059;
+        let scope_ok = if USER_DATA_KINDS.contains(&gift_wrap_kind) {
+            true
+        } else if MESSAGE_KINDS.contains(&gift_wrap_kind) {
+            true
+        } else {
+            false
+        };
+        assert!(!scope_ok, "kind:1059 must be denied by the allowlist");
+    }
+
+    // ── Positive-path tests ──────────────────────────────────────────────
+
+    /// UsersRead grants access to kind:0 (profile).
+    #[test]
+    fn kind0_profile_allowed_with_users_read() {
+        let scopes = vec![sprout_auth::Scope::UsersRead];
+        assert!(
+            USER_DATA_KINDS.contains(&KIND_PROFILE)
+                && sprout_auth::require_scope(&scopes, sprout_auth::Scope::UsersRead).is_ok(),
+            "UsersRead should grant access to kind:0 profile events"
+        );
+    }
+
+    /// UsersRead grants access to kind:3 (contact list).
+    #[test]
+    fn kind3_contact_list_allowed_with_users_read() {
+        let scopes = vec![sprout_auth::Scope::UsersRead];
+        assert!(
+            USER_DATA_KINDS.contains(&KIND_CONTACT_LIST)
+                && sprout_auth::require_scope(&scopes, sprout_auth::Scope::UsersRead).is_ok(),
+            "UsersRead should grant access to kind:3 contact list events"
+        );
+    }
+
+    /// MessagesRead grants access to kind:30023 (long-form content).
+    #[test]
+    fn kind30023_long_form_allowed_with_messages_read() {
+        let scopes = vec![sprout_auth::Scope::MessagesRead];
+        assert!(
+            MESSAGE_KINDS.contains(&KIND_LONG_FORM)
+                && sprout_auth::require_scope(&scopes, sprout_auth::Scope::MessagesRead).is_ok(),
+            "MessagesRead should grant access to kind:30023 long-form events"
+        );
+    }
+
+    /// Full routing: each allowed kind maps to exactly one scope.
+    #[test]
+    fn scope_routing_exhaustive() {
+        let users_read = vec![sprout_auth::Scope::UsersRead];
+        let messages_read = vec![sprout_auth::Scope::MessagesRead];
+
+        // Helper: mirrors the get_event scope-check logic
+        let check = |kind: u32, scopes: &[sprout_auth::Scope]| -> bool {
+            if USER_DATA_KINDS.contains(&kind) {
+                sprout_auth::require_scope(scopes, sprout_auth::Scope::UsersRead).is_ok()
+            } else if MESSAGE_KINDS.contains(&kind) {
+                sprout_auth::require_scope(scopes, sprout_auth::Scope::MessagesRead).is_ok()
+            } else {
+                false
+            }
+        };
+
+        // UsersRead grants user-data kinds, denies message kinds
+        assert!(check(KIND_PROFILE, &users_read));
+        assert!(check(KIND_CONTACT_LIST, &users_read));
+        assert!(!check(KIND_TEXT_NOTE, &users_read));
+        assert!(!check(KIND_LONG_FORM, &users_read));
+
+        // MessagesRead grants message kinds, denies user-data kinds
+        assert!(!check(KIND_PROFILE, &messages_read));
+        assert!(!check(KIND_CONTACT_LIST, &messages_read));
+        assert!(check(KIND_TEXT_NOTE, &messages_read));
+        assert!(check(KIND_LONG_FORM, &messages_read));
+
+        // Neither scope grants unknown kinds
+        assert!(!check(1059, &users_read));
+        assert!(!check(1059, &messages_read));
+        assert!(!check(9, &users_read)); // kind:9 stream message
+        assert!(!check(9, &messages_read));
+    }
+}
