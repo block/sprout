@@ -20,10 +20,10 @@ hex = { workspace = true }
 chrono = { workspace = true }
 axum = { workspace = true }
 s3 = { version = "0.37", package = "rust-s3", default-features = false, features = ["tokio-rustls-tls", "fail-on-err", "tags"] }
-infer = "0.16"
+infer = "0.19"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 blurhash = "0.2"
-imagesize = "0.13"
+imagesize = "0.14"
 bytes = "1"
 
 [dev-dependencies]
