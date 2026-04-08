@@ -15,6 +15,25 @@ let inputPath = CommandLine.arguments[1]
 let outputPath = CommandLine.arguments[2]
 let label = CommandLine.arguments[3]
 
+func sanitizedPathComponent(_ value: String) -> String {
+    let lowered = value.lowercased()
+    let sanitizedScalars = lowered.unicodeScalars.map { scalar -> Character in
+        switch scalar {
+        case "a"..."z", "0"..."9":
+            return Character(scalar)
+        default:
+            return "-"
+        }
+    }
+    let collapsed = String(sanitizedScalars).replacingOccurrences(
+        of: "-+",
+        with: "-",
+        options: .regularExpression
+    )
+    let trimmed = collapsed.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    return trimmed.isEmpty ? "dev" : trimmed
+}
+
 // Load the icns file
 guard let iconImage = NSImage(contentsOfFile: inputPath) else {
     fputs("Failed to load image: \(inputPath)\n", stderr)
@@ -138,10 +157,11 @@ guard let pngData = bitmapRep.representation(using: .png, properties: [:]) else 
 // If output is .icns, we need to create an iconset and use iconutil
 if outputPath.hasSuffix(".icns") {
     let tempDir = FileManager.default.temporaryDirectory
-    let iconsetPath = tempDir.appendingPathComponent("staged-dev.iconset")
-    
-    // Remove existing iconset if present
-    try? FileManager.default.removeItem(at: iconsetPath)
+    let iconsetParent = tempDir.appendingPathComponent(
+        "staged-dev-\(sanitizedPathComponent(label))-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let iconsetPath = iconsetParent.appendingPathComponent("icon.iconset", isDirectory: true)
     try! FileManager.default.createDirectory(at: iconsetPath, withIntermediateDirectories: true)
     
     // Generate all required sizes for iconset
@@ -183,7 +203,7 @@ if outputPath.hasSuffix(".icns") {
     process.waitUntilExit()
     
     // Cleanup
-    try? FileManager.default.removeItem(at: iconsetPath)
+    try? FileManager.default.removeItem(at: iconsetParent)
     
     if process.terminationStatus != 0 {
         fputs("iconutil failed\n", stderr)
