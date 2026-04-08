@@ -37,6 +37,11 @@ pub struct EventQuery {
     /// Restrict to events with this exact `d_tag` value (NIP-33).
     /// Pushed into SQL via the `idx_events_parameterized` index.
     pub d_tag: Option<String>,
+    /// Composite keyset cursor: exclude events at or "after" this (created_at, id) pair.
+    /// Used with `until` for stable pagination: events where
+    /// `created_at < until OR (created_at = until AND id > before_id)`.
+    /// When set, `until` must also be set.
+    pub before_id: Option<Vec<u8>>,
 }
 
 /// Maximum length for a `d_tag` value (bytes). NIP-33 d-tags are short identifiers;
@@ -130,6 +135,13 @@ pub async fn insert_event(
 /// Uses `QueryBuilder` for dynamic filter composition — avoids string concatenation
 /// while keeping all user values in bind parameters.
 pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEvent>> {
+    // Composite cursor requires both halves.
+    if q.before_id.is_some() && q.until.is_none() {
+        return Err(DbError::InvalidData(
+            "before_id requires until to be set".to_string(),
+        ));
+    }
+
     // kinds:[] means "match no kinds" — return empty immediately.
     if q.kinds.as_deref().is_some_and(|k| k.is_empty()) {
         return Ok(vec![]);
@@ -182,8 +194,21 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
             .push_bind(s);
     }
     if let Some(u) = q.until {
-        qb.push(format!(" AND {col_prefix}created_at <= "))
-            .push_bind(u);
+        if let Some(ref bid) = q.before_id {
+            // Composite keyset cursor for stable pagination.
+            // With ORDER BY created_at DESC, id ASC, "next page" means:
+            //   created_at < cursor_ts OR (created_at = cursor_ts AND id > cursor_id)
+            qb.push(format!(" AND ({col_prefix}created_at < "));
+            qb.push_bind(u);
+            qb.push(format!(" OR ({col_prefix}created_at = "));
+            qb.push_bind(u);
+            qb.push(format!(" AND {col_prefix}id > "));
+            qb.push_bind(bid.clone());
+            qb.push("))");
+        } else {
+            qb.push(format!(" AND {col_prefix}created_at <= "))
+                .push_bind(u);
+        }
     }
 
     if let Some(ref d) = q.d_tag {
@@ -191,8 +216,12 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
             .push_bind(d.clone());
     }
 
-    qb.push(format!(" ORDER BY {col_prefix}created_at DESC LIMIT "))
-        .push_bind(limit_val);
+    // Always use composite ordering for deterministic pagination.
+    // The id ASC tiebreaker ensures stable results when events share the same second.
+    qb.push(format!(
+        " ORDER BY {col_prefix}created_at DESC, {col_prefix}id ASC LIMIT "
+    ));
+    qb.push_bind(limit_val);
     qb.push(" OFFSET ").push_bind(offset_val);
 
     let rows = qb.build().fetch_all(pool).await?;
@@ -377,6 +406,35 @@ pub async fn get_event_by_id(pool: &PgPool, id_bytes: &[u8]) -> Result<Option<St
          FROM events WHERE id = $1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
     )
     .bind(id_bytes)
+    .fetch_optional(pool)
+    .await?;
+
+    match row {
+        Some(r) => row_to_stored_event(r),
+        None => Ok(None),
+    }
+}
+
+/// Fetches the latest global (non-channel, `channel_id IS NULL`) replaceable event
+/// for a (kind, pubkey) pair.
+///
+/// Uses canonical NIP-16 ordering: `created_at DESC, id ASC LIMIT 1`.
+/// This matches the write path's tie-breaking logic and handles historical
+/// duplicate survivors where multiple live rows share the same timestamp.
+pub async fn get_latest_global_replaceable(
+    pool: &PgPool,
+    kind: i32,
+    pubkey_bytes: &[u8],
+) -> Result<Option<StoredEvent>> {
+    let row = sqlx::query(
+        "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
+         FROM events \
+         WHERE kind = $1 AND pubkey = $2 AND channel_id IS NULL AND deleted_at IS NULL \
+         ORDER BY created_at DESC, id ASC \
+         LIMIT 1",
+    )
+    .bind(kind)
+    .bind(pubkey_bytes)
     .fetch_optional(pool)
     .await?;
 

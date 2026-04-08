@@ -21,6 +21,9 @@ use crate::state::AppState;
 
 use super::{api_error, extract_auth_context, internal_error, scope_error};
 
+use sprout_core::kind::{KIND_CONTACT_LIST, KIND_TEXT_NOTE};
+use sprout_db::event::EventQuery;
+
 /// `GET /api/users/me/profile` — get the authenticated user's profile.
 ///
 /// Returns: `{ "pubkey": "<hex>", "display_name": "...", "avatar_url": "...", "about": "...", "nip05_handle": "..." }`
@@ -276,4 +279,153 @@ pub async fn put_channel_add_policy(
         "channel_add_policy": current_policy,
         "agent_owner_pubkey": owner_pk.map(|b| nostr_hex::encode(&b)),
     })))
+}
+
+// ── Social endpoints ─────────────────────────────────────────────────────────
+
+/// Query params for [`get_user_notes`].
+#[derive(Debug, Deserialize)]
+pub struct NotesQuery {
+    /// Maximum number of notes to return (capped at 100, default 50).
+    pub limit: Option<u32>,
+    /// Unix timestamp cursor. When used alone (backward compat), events strictly
+    /// before this timestamp are returned (subtracts 1 second). When used together
+    /// with `before_id`, enables composite keyset pagination that correctly handles
+    /// same-second events.
+    pub before: Option<i64>,
+    /// Hex event ID cursor. When provided with `before`, enables composite keyset
+    /// pagination: returns events where `created_at < before` OR
+    /// `(created_at = before AND id > before_id)`. This prevents same-second events
+    /// from being skipped during pagination.
+    pub before_id: Option<String>,
+}
+
+/// `GET /api/users/{pubkey}/notes` — list kind:1 text notes by a user.
+pub async fn get_user_notes(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(pubkey): Path<String>,
+    Query(params): Query<NotesQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::MessagesRead)
+        .map_err(scope_error)?;
+
+    let pubkey_bytes = nostr_hex::decode(&pubkey)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid pubkey hex"))?;
+    if pubkey_bytes.len() != 32 {
+        return Err(api_error(StatusCode::BAD_REQUEST, "invalid pubkey hex"));
+    }
+
+    let limit = params.limit.unwrap_or(50).min(100) as i64;
+
+    // Composite cursor: when both `before` and `before_id` are provided, use exact
+    // keyset pagination (no ±1 adjustment needed — the DB clause is strictly exclusive).
+    // Simple cursor (backward compat): subtract 1 second so the last event on the
+    // previous page is not repeated (DB uses `<=` for the simple case).
+    let (until, before_id_bytes) = match (params.before, params.before_id.as_deref()) {
+        (Some(ts), Some(id_hex)) => {
+            // Composite cursor — validate and decode the event ID.
+            let id_bytes = hex::decode(id_hex)
+                .ok()
+                .filter(|b| b.len() == 32)
+                .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid before_id hex"))?;
+            let dt = chrono::DateTime::from_timestamp(ts, 0)
+                .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid before timestamp"))?;
+            (Some(dt), Some(id_bytes))
+        }
+        (Some(ts), None) => {
+            // Simple cursor: subtract 1 second for exclusivity (DB uses <=).
+            let dt = chrono::DateTime::from_timestamp(ts.saturating_sub(1), 0)
+                .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid before timestamp"))?;
+            (Some(dt), None)
+        }
+        (None, Some(_)) => {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "before_id requires before",
+            ));
+        }
+        (None, None) => (None, None),
+    };
+
+    let q = EventQuery {
+        pubkey: Some(pubkey_bytes),
+        kinds: Some(vec![KIND_TEXT_NOTE as i32]),
+        limit: Some(limit),
+        until,
+        before_id: before_id_bytes,
+        ..Default::default()
+    };
+
+    let events = state
+        .db
+        .query_events(&q)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    // Composite cursor: include both timestamp and event ID so the next page
+    // can use exact keyset pagination without same-second skipping.
+    let next_cursor = if events.len() == limit as usize {
+        events.last().map(|e| {
+            serde_json::json!({
+                "before": e.event.created_at.as_u64() as i64,
+                "before_id": e.event.id.to_hex(),
+            })
+        })
+    } else {
+        None
+    };
+    let notes: Vec<_> = events
+        .into_iter()
+        .map(|e| {
+            serde_json::json!({
+                "id":         e.event.id.to_hex(),
+                "pubkey":     e.event.pubkey.to_hex(),
+                "created_at": e.event.created_at.as_u64(),
+                "content":    e.event.content,
+            })
+        })
+        .collect();
+
+    Ok(Json(
+        serde_json::json!({ "notes": notes, "next_cursor": next_cursor }),
+    ))
+}
+
+/// `GET /api/users/{pubkey}/contact-list` — get a user's kind:3 contact list.
+pub async fn get_contact_list(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(pubkey): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context(&headers, &state).await?;
+    sprout_auth::require_scope(&ctx.scopes, sprout_auth::Scope::UsersRead).map_err(scope_error)?;
+
+    let pubkey_bytes = nostr_hex::decode(&pubkey)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid pubkey hex"))?;
+    if pubkey_bytes.len() != 32 {
+        return Err(api_error(StatusCode::BAD_REQUEST, "invalid pubkey hex"));
+    }
+
+    let event = state
+        .db
+        .get_latest_global_replaceable(KIND_CONTACT_LIST as i32, &pubkey_bytes)
+        .await
+        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+
+    match event {
+        Some(e) => {
+            let tags = serde_json::to_value(&e.event.tags)
+                .map_err(|err| internal_error(&format!("tag serialization error: {err}")))?;
+            Ok(Json(serde_json::json!({
+                "id":         e.event.id.to_hex(),
+                "pubkey":     e.event.pubkey.to_hex(),
+                "created_at": e.event.created_at.as_u64(),
+                "tags":       tags,
+                "content":    e.event.content,
+            })))
+        }
+        None => Err(api_error(StatusCode::NOT_FOUND, "contact list not found")),
+    }
 }

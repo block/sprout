@@ -26,6 +26,7 @@
 //! | `workflow_admin`| 5     |
 //! | `identity`      | 1     |
 //! | `forums`        | 1     |
+//! | `social`        | 5     |
 
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -40,7 +41,7 @@ use std::sync::LazyLock;
 /// classification. `is_read = true` means the tool is safe to include under
 /// a `:ro` (read-only) mode restriction.
 ///
-/// 43 tools total. See [`DEFERRED_TOOLS`] for tools planned but not yet implemented.
+/// See [`DEFERRED_TOOLS`] for tools planned but not yet implemented.
 pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     // ── default ─────────────────────────────────────────────────────────────
     ("send_message", "default", false),
@@ -92,6 +93,12 @@ pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     ("set_channel_add_policy", "identity", false),
     // ── forums ───────────────────────────────────────────────────────────────
     ("vote_on_post", "forums", false),
+    // Social
+    ("publish_note", "social", false),
+    ("set_contact_list", "social", false),
+    ("get_event", "social", true),
+    ("get_user_notes", "social", true),
+    ("get_contact_list", "social", true),
     // Deferred tools (not yet implemented): upload_file, subscribe, unsubscribe
 ];
 
@@ -157,6 +164,7 @@ const KNOWN_TOOLSETS: &[&str] = &[
     "realtime",
     "identity",
     "forums",
+    "social",
 ];
 
 // ---------------------------------------------------------------------------
@@ -319,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn all_includes_all_41_tools() {
+    fn all_includes_all_tools() {
         assert_eq!(enabled_tools("all").len(), ALL_TOOLS.len());
     }
 
@@ -371,8 +379,8 @@ mod tests {
     }
 
     #[test]
-    fn all_tools_count_is_43() {
-        assert_eq!(ALL_TOOLS.len(), 43);
+    fn all_tools_count_is_48() {
+        assert_eq!(ALL_TOOLS.len(), 48);
     }
 
     #[test]
@@ -396,14 +404,15 @@ mod tests {
 
     #[test]
     fn all_toolsets_returns_correct_count() {
-        // ALL_TOOLS covers: default, channel_admin, dms, canvas, workflow_admin, identity, forums
+        // ALL_TOOLS covers: default, channel_admin, dms, canvas, workflow_admin, identity, forums, social
         // (media and realtime have no implemented tools yet)
         let defs = all_toolsets();
-        assert_eq!(defs.len(), 7);
+        assert_eq!(defs.len(), 8);
         let names: Vec<_> = defs.iter().map(|d| d.name).collect();
         assert!(names.contains(&"default"));
         assert!(names.contains(&"canvas"));
         assert!(names.contains(&"forums"));
+        assert!(names.contains(&"social"));
     }
 
     // ── Cross-check: ALL_TOOLS integrity ────────────────────────────────────

@@ -397,6 +397,62 @@ enum Cmd {
     },
     /// Delete all your API tokens
     DeleteAllTokens,
+
+    // Social
+    /// Publish a short text note (kind:1) to the global feed.
+    #[command(name = "publish-note")]
+    PublishNote {
+        /// Text content of the note.
+        #[arg(long)]
+        content: String,
+        /// 64-char hex event ID to reply to.
+        #[arg(long)]
+        reply_to: Option<String>,
+    },
+
+    /// Set the authenticated user's contact/follow list (kind:3). Replaces the entire list.
+    #[command(name = "set-contact-list")]
+    SetContactList {
+        /// JSON array of contacts: [{"pubkey":"hex","relay_url":"...","petname":"..."}]
+        #[arg(long)]
+        contacts: String,
+    },
+
+    /// Get a single event by event ID (notes, profiles, contacts, articles, channel events).
+    #[command(name = "get-event")]
+    GetEvent {
+        /// 64-char hex event ID.
+        #[arg(long)]
+        event: String,
+    },
+
+    /// List kind:1 text notes by a specific user.
+    #[command(name = "get-user-notes")]
+    GetUserNotes {
+        /// 64-char hex pubkey of the author.
+        #[arg(long)]
+        pubkey: String,
+        /// Maximum number of notes to return (default 50, max 100).
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Unix timestamp cursor — return notes created before this time.
+        /// Use with --before-id for stable composite cursor pagination.
+        #[arg(long)]
+        before: Option<i64>,
+        /// Hex event ID cursor for composite keyset pagination. Use together with
+        /// --before to avoid skipping same-second events. Pass the before_id value
+        /// from the previous page's next_cursor response.
+        #[arg(long)]
+        before_id: Option<String>,
+    },
+
+    /// Get a user's contact/follow list (kind:3) by hex pubkey.
+    #[command(name = "get-contact-list")]
+    GetContactList {
+        /// 64-char hex pubkey.
+        #[arg(long)]
+        pubkey: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -728,6 +784,33 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             types,
         } => commands::feed::cmd_get_feed(&client, since, limit, types.as_deref()).await,
 
+        // ---- Social --------------------------------------------------------
+        Cmd::PublishNote { content, reply_to } => {
+            commands::social::cmd_publish_note(&client, &content, reply_to.as_deref()).await
+        }
+        Cmd::SetContactList { contacts } => {
+            commands::social::cmd_set_contact_list(&client, &contacts).await
+        }
+        Cmd::GetEvent { event } => commands::social::cmd_get_event(&client, &event).await,
+        Cmd::GetUserNotes {
+            pubkey,
+            limit,
+            before,
+            before_id,
+        } => {
+            commands::social::cmd_get_user_notes(
+                &client,
+                &pubkey,
+                limit,
+                before,
+                before_id.as_deref(),
+            )
+            .await
+        }
+        Cmd::GetContactList { pubkey } => {
+            commands::social::cmd_get_contact_list(&client, &pubkey).await
+        }
+
         // ---- Auth & Tokens -------------------------------------------------
         Cmd::Auth => unreachable!("handled above"),
         Cmd::ListTokens => commands::auth::cmd_list_tokens(&client).await,
@@ -779,10 +862,10 @@ mod tests {
         assert!(super::parse_bool_flag("--approved", "").is_err());
     }
 
-    /// Parity: the CLI exposes exactly the expected 48 commands.
+    /// Parity: the CLI exposes exactly the expected 53 commands.
     /// If a command is added or removed, this test forces a conscious update.
     #[test]
-    fn command_inventory_is_48() {
+    fn command_inventory_is_53() {
         let expected: Vec<&str> = vec![
             "add-channel-member",
             "add-dm-member",
@@ -800,11 +883,14 @@ mod tests {
             "edit-message",
             "get-canvas",
             "get-channel",
+            "get-contact-list",
+            "get-event",
             "get-feed",
             "get-messages",
             "get-presence",
             "get-reactions",
             "get-thread",
+            "get-user-notes",
             "get-users",
             "get-workflow",
             "get-workflow-runs",
@@ -816,6 +902,7 @@ mod tests {
             "list-tokens",
             "list-workflows",
             "open-dm",
+            "publish-note",
             "remove-channel-member",
             "remove-reaction",
             "search",
@@ -825,6 +912,7 @@ mod tests {
             "set-channel-add-policy",
             "set-channel-purpose",
             "set-channel-topic",
+            "set-contact-list",
             "set-presence",
             "set-profile",
             "trigger-workflow",
@@ -844,8 +932,8 @@ mod tests {
 
         assert_eq!(
             actual.len(),
-            48,
-            "Expected 48 commands, got {}. Actual: {:?}",
+            53,
+            "Expected 53 commands, got {}. Actual: {:?}",
             actual.len(),
             actual
         );
