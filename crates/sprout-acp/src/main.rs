@@ -2198,6 +2198,16 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                     value: token.clone(),
                 });
             }
+            // Forward SPROUT_TOOLSETS so the MCP server enables the
+            // same toolsets the operator configured for this harness.
+            if let Ok(ts) = std::env::var("SPROUT_TOOLSETS") {
+                if !ts.is_empty() {
+                    env.push(EnvVar {
+                        name: "SPROUT_TOOLSETS".into(),
+                        value: ts,
+                    });
+                }
+            }
             env
         },
     }]
