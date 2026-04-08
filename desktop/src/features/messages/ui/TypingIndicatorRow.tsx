@@ -4,6 +4,7 @@ import {
   resolveUserLabel,
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
+import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { Channel } from "@/shared/api/types";
 
 type TypingIndicatorRowProps = {
@@ -75,7 +76,26 @@ export function TypingIndicatorRow({
       className="bg-background/95 px-4 py-2 sm:px-6"
       data-testid="message-typing-indicator"
     >
-      <div className="mx-auto flex w-full max-w-4xl items-center">
+      <div className="mx-auto flex w-full max-w-4xl items-center gap-2">
+        <div className="flex flex-shrink-0 items-center">
+          {typingPubkeys.map((pubkey, index) => {
+            const profile = profiles?.[pubkey];
+            const label = labels[index] ?? pubkey.slice(0, 8);
+            return (
+              <div
+                key={pubkey}
+                className={`relative h-5 w-5 flex-shrink-0 rounded-full ring-1 ring-background${index > 0 ? " -ml-1.5" : ""}`}
+              >
+                <ProfileAvatar
+                  avatarUrl={profile?.avatarUrl ?? null}
+                  label={label}
+                  className="h-5 w-5 rounded-full text-[8px]"
+                  iconClassName="h-3 w-3"
+                />
+              </div>
+            );
+          })}
+        </div>
         <p
           className="truncate text-sm text-muted-foreground"
           data-testid="message-typing-indicator-label"
