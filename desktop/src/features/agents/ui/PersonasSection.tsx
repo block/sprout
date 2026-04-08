@@ -153,47 +153,70 @@ export function PersonasSection({
                       <DropdownMenuItem
                         disabled={isPending}
                         onClick={() => onEdit(persona)}
-                        title="Edit this persona's name, avatar, and system prompt"
                       >
                         <Pencil className="h-4 w-4" />
-                        Edit
+                        <div className="flex flex-col">
+                          <span>Edit</span>
+                          <span className="text-xs font-normal text-muted-foreground">
+                            Edit this persona&apos;s name, avatar, and system
+                            prompt
+                          </span>
+                        </div>
                       </DropdownMenuItem>
                     ) : null}
                     <DropdownMenuItem
                       disabled={isPending}
                       onClick={() => onDuplicate(persona)}
-                      title="Create a copy of this persona you can customize independently"
                     >
                       <CopyPlus className="h-4 w-4" />
-                      Duplicate
+                      <div className="flex flex-col">
+                        <span>Duplicate</span>
+                        <span className="text-xs font-normal text-muted-foreground">
+                          Create a copy of this persona you can customize
+                          independently
+                        </span>
+                      </div>
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       disabled={isPending}
                       onClick={() => onExport(persona)}
-                      title="Save this persona as a .persona.json file you can share or back up"
                     >
                       <Download className="h-4 w-4" />
-                      Export
+                      <div className="flex flex-col">
+                        <span>Export</span>
+                        <span className="text-xs font-normal text-muted-foreground">
+                          Save this persona as a .persona.json file you can
+                          share or back up
+                        </span>
+                      </div>
                     </DropdownMenuItem>
                     {persona.isBuiltIn ? (
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
                         disabled={isPending}
                         onClick={() => onDeactivate(persona)}
-                        title="Remove this built-in persona from your agent library"
                       >
                         <Trash2 className="h-4 w-4" />
-                        Remove from My Agents
+                        <div className="flex flex-col">
+                          <span>Remove from My Agents</span>
+                          <span className="text-xs font-normal text-muted-foreground">
+                            Remove this built-in persona from your agent library
+                          </span>
+                        </div>
                       </DropdownMenuItem>
                     ) : (
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
                         disabled={isPending}
                         onClick={() => onDelete(persona)}
-                        title="Permanently delete this persona"
                       >
                         <Trash2 className="h-4 w-4" />
-                        Delete
+                        <div className="flex flex-col">
+                          <span>Delete</span>
+                          <span className="text-xs font-normal text-muted-foreground">
+                            Permanently delete this persona
+                          </span>
+                        </div>
                       </DropdownMenuItem>
                     )}
                   </DropdownMenuContent>
