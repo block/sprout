@@ -295,7 +295,7 @@ export function CreateAgentRuntimeFields({
           value={mcpToolsets}
         />
         <p className="text-xs text-muted-foreground">
-          Comma-separated list of toolsets to expose via `SPROUT_TOOLSETS`.
+          Comma-separated list of toolsets to expose via SPROUT_TOOLSETS.
           Available: default, channel_admin, dms, canvas, workflow_admin,
           identity, forums, social. Leave blank for the default toolset only.
         </p>
