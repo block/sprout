@@ -118,13 +118,9 @@ export function useMentions(channelId: string | null) {
     return (members ?? [])
       .map((member) => {
         const pubkeyLower = member.pubkey.toLowerCase();
-        const fallbackName =
-          managedAgentNamesByPubkey.get(pubkeyLower) ??
-          member.pubkey.slice(0, 8);
 
         const actualName =
-          member.displayName ??
-          managedAgentNamesByPubkey.get(pubkeyLower);
+          member.displayName ?? managedAgentNamesByPubkey.get(pubkeyLower);
         const personaName = personaNameByPubkey.get(pubkeyLower) ?? null;
         const label = actualName ?? member.pubkey.slice(0, 8);
 
@@ -135,10 +131,9 @@ export function useMentions(channelId: string | null) {
             ? Math.min(nameScore, personaScore)
             : (nameScore ?? personaScore);
 
-        const lowerPubkey = member.pubkey.toLowerCase();
-        const pubkeyScore = lowerPubkey.startsWith(lowerQuery)
+        const pubkeyScore = pubkeyLower.startsWith(lowerQuery)
           ? 3
-          : lowerPubkey.includes(lowerQuery)
+          : pubkeyLower.includes(lowerQuery)
             ? 4
             : null;
         const score = labelScore !== null ? labelScore : pubkeyScore;
