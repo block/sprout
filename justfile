@@ -151,7 +151,6 @@ dev *ARGS:
 
 # Run the desktop app against the internal staging relay (installs deps + builds agent tools automatically)
 staging *ARGS:
-<<<<<<< HEAD
     cd {{desktop_dir}} && pnpm install
     cargo build --release -p sprout-acp -p sprout-mcp
     cd {{desktop_dir}} && SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co" pnpm exec tauri dev --config src-tauri/tauri.dev.conf.json {{ARGS}}
