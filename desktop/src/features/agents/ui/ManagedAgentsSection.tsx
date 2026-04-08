@@ -1,9 +1,6 @@
-import { Plus } from "lucide-react";
-
 import type { ManagedAgent, PresenceLookup } from "@/shared/api/types";
-import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { CreateNewButton } from "./CreateNewButton";
 import { ManagedAgentRow } from "./ManagedAgentRow";
 
 export function ManagedAgentsSection({
@@ -60,20 +57,11 @@ export function ManagedAgentsSection({
             Agent profiles and process state — local and remote.
           </p>
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label="Create agent"
-              onClick={onCreate}
-              size="icon"
-              type="button"
-              variant="ghost"
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Create agent</TooltipContent>
-        </Tooltip>
+        <CreateNewButton
+          ariaLabel="Create agent"
+          label="Agent"
+          onClick={onCreate}
+        />
       </div>
 
       {isLoading ? (

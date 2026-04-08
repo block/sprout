@@ -356,6 +356,16 @@ type RawPersona = {
   avatar_url: string | null;
   system_prompt: string;
   is_builtin: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type RawTeam = {
+  id: string;
+  name: string;
+  description: string | null;
+  persona_ids: string[];
   created_at: string;
   updated_at: string;
 };
@@ -392,6 +402,10 @@ declare global {
       channelName: string;
       pubkey?: string;
     }) => RelayEvent;
+    __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+      command: string,
+      payload?: Record<string, unknown>,
+    ) => Promise<unknown>;
     __SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?: (item: RawFeedItem) => RawFeedItem;
   }
 }
@@ -651,52 +665,32 @@ function resetMockPersonas() {
   const now = new Date().toISOString();
   mockPersonas = [
     {
-      id: "builtin:orchestrator",
-      display_name: "Orchestrator",
+      id: "builtin:solo",
+      display_name: "Solo",
       avatar_url: null,
-      system_prompt:
-        "You are an orchestration agent. Coordinate multi-step work across specialized agents, keep the overall plan moving, and synthesize results into a clear final outcome. When another agent should take a task, @mention them explicitly with the assignment, expected deliverable, and any relevant constraints or deadlines.",
+      system_prompt: "You are Solo.",
       is_builtin: true,
+      is_active: false,
       created_at: now,
       updated_at: now,
     },
     {
-      id: "builtin:researcher",
-      display_name: "Researcher",
+      id: "builtin:ralph",
+      display_name: "Ralph",
       avatar_url: null,
-      system_prompt:
-        "You are a research agent. Gather relevant information, compare sources, call out uncertainty, and return concise findings with evidence.",
+      system_prompt: "You are Ralph.",
       is_builtin: true,
+      is_active: false,
       created_at: now,
       updated_at: now,
     },
     {
-      id: "builtin:planner",
-      display_name: "Planner",
+      id: "builtin:scout",
+      display_name: "Scout",
       avatar_url: null,
-      system_prompt:
-        "You are a planning agent. Turn ambiguous requests into structured plans with milestones, dependencies, risks, and clear next actions. Do not implement the work yourself unless asked.",
+      system_prompt: "You are Scout.",
       is_builtin: true,
-      created_at: now,
-      updated_at: now,
-    },
-    {
-      id: "builtin:implementer",
-      display_name: "Builder",
-      avatar_url: null,
-      system_prompt:
-        "You are a builder agent. Execute tasks directly, make code and configuration changes carefully, validate the result, and explain important decisions and follow-up items.",
-      is_builtin: true,
-      created_at: now,
-      updated_at: now,
-    },
-    {
-      id: "builtin:refactor",
-      display_name: "Refactor",
-      avatar_url: null,
-      system_prompt:
-        "You are a refactoring agent. Improve structure, naming, duplication, and module boundaries without changing externally observable behavior. Keep changes incremental, preserve compatibility, and add or update validation when behavior could drift.",
-      is_builtin: true,
+      is_active: false,
       created_at: now,
       updated_at: now,
     },
@@ -704,13 +698,17 @@ function resetMockPersonas() {
       id: "builtin:reviewer",
       display_name: "Reviewer",
       avatar_url: null,
-      system_prompt:
-        "You are a review agent. Inspect plans, code, and outputs for bugs, regressions, edge cases, security issues, and missing tests. Prioritize findings by severity, cite concrete evidence, and keep summaries secondary to the actual review.",
+      system_prompt: "You are Reviewer.",
       is_builtin: true,
+      is_active: false,
       created_at: now,
       updated_at: now,
     },
   ];
+}
+
+function resetMockTeams() {
+  mockTeams = [];
 }
 
 function getMockProfileByPubkey(pubkey: string): RawProfile | null {
@@ -1045,6 +1043,7 @@ let mockTokens: MockToken[] = [];
 let mockMintTokenError: string | null = null;
 let mockManagedAgents: MockManagedAgent[] = [];
 let mockPersonas: RawPersona[] = [];
+let mockTeams: RawTeam[] = [];
 let mockRelayAgents: RawRelayAgent[] = [
   {
     pubkey: ALICE_PUBKEY,
@@ -3000,6 +2999,7 @@ async function handleCreatePersona(args: {
     avatar_url: args.input.avatarUrl?.trim() || null,
     system_prompt: args.input.systemPrompt.trim(),
     is_builtin: false,
+    is_active: true,
     created_at: now,
     updated_at: now,
   };
@@ -3041,6 +3041,11 @@ async function handleDeletePersona(args: { id: string }): Promise<void> {
   if (persona.is_builtin) {
     throw new Error("Built-in personas cannot be deleted.");
   }
+  if (mockTeams.some((team) => team.persona_ids.includes(args.id))) {
+    throw new Error(
+      `${persona.display_name} is still referenced by a team. Remove it from those teams first.`,
+    );
+  }
 
   mockPersonas = mockPersonas.filter((candidate) => candidate.id !== args.id);
   const now = new Date().toISOString();
@@ -3050,6 +3055,148 @@ async function handleDeletePersona(args: { id: string }): Promise<void> {
       agent.updated_at = now;
     }
   }
+}
+
+async function handleSetPersonaActive(args: {
+  id: string;
+  active: boolean;
+}): Promise<RawPersona> {
+  const persona = mockPersonas.find((candidate) => candidate.id === args.id);
+  if (!persona) {
+    throw new Error(`Persona ${args.id} not found.`);
+  }
+  if (!persona.is_builtin) {
+    throw new Error(
+      "Only built-in personas can be added to or removed from My Agents.",
+    );
+  }
+  if (
+    !args.active &&
+    mockManagedAgents.some((agent) => agent.persona_id === args.id)
+  ) {
+    throw new Error(
+      `${persona.display_name} is still assigned to a managed agent. Remove or reassign those agents first.`,
+    );
+  }
+  if (
+    !args.active &&
+    mockTeams.some((team) => team.persona_ids.includes(args.id))
+  ) {
+    throw new Error(
+      `${persona.display_name} is still referenced by a team. Remove it from those teams first.`,
+    );
+  }
+
+  persona.is_active = args.active;
+  persona.updated_at = new Date().toISOString();
+  return { ...persona };
+}
+
+function ensureMockPersonaIsActive(personaId: string) {
+  const persona = mockPersonas.find((candidate) => candidate.id === personaId);
+  if (!persona) {
+    throw new Error(`persona ${personaId} not found`);
+  }
+  if (!persona.is_active) {
+    throw new Error(
+      `${persona.display_name} is not in My Agents. Choose it from Persona Catalog first.`,
+    );
+  }
+}
+
+function ensureMockPersonaIdsAreActive(personaIds: string[]) {
+  for (const personaId of personaIds) {
+    ensureMockPersonaIsActive(personaId);
+  }
+}
+
+async function handleListTeams(): Promise<RawTeam[]> {
+  return mockTeams.map((team) => ({
+    ...team,
+    persona_ids: [...team.persona_ids],
+  }));
+}
+
+async function handleCreateTeam(args: {
+  input: {
+    name: string;
+    description?: string;
+    personaIds: string[];
+  };
+}): Promise<RawTeam> {
+  ensureMockPersonaIdsAreActive(args.input.personaIds);
+  const now = new Date().toISOString();
+  const team: RawTeam = {
+    id: crypto.randomUUID(),
+    name: args.input.name.trim(),
+    description: args.input.description?.trim() || null,
+    persona_ids: [...args.input.personaIds],
+    created_at: now,
+    updated_at: now,
+  };
+  mockTeams.push(team);
+  return { ...team, persona_ids: [...team.persona_ids] };
+}
+
+async function handleUpdateTeam(args: {
+  input: {
+    id: string;
+    name: string;
+    description?: string;
+    personaIds: string[];
+  };
+}): Promise<RawTeam> {
+  const team = mockTeams.find((candidate) => candidate.id === args.input.id);
+  if (!team) {
+    throw new Error(`Team ${args.input.id} not found.`);
+  }
+
+  ensureMockPersonaIdsAreActive(args.input.personaIds);
+  team.name = args.input.name.trim();
+  team.description = args.input.description?.trim() || null;
+  team.persona_ids = [...args.input.personaIds];
+  team.updated_at = new Date().toISOString();
+
+  return { ...team, persona_ids: [...team.persona_ids] };
+}
+
+async function handleDeleteTeam(args: { id: string }): Promise<void> {
+  mockTeams = mockTeams.filter((candidate) => candidate.id !== args.id);
+}
+
+async function handleExportTeamToJson(args: { id: string }): Promise<boolean> {
+  const team = mockTeams.find((candidate) => candidate.id === args.id);
+  if (!team) {
+    throw new Error(`Team ${args.id} not found.`);
+  }
+
+  const missingPersonaIds = team.persona_ids.filter(
+    (personaId) =>
+      !mockPersonas.some((candidate) => candidate.id === personaId),
+  );
+  if (missingPersonaIds.length > 0) {
+    throw new Error(
+      `Team ${team.name} references missing personas: ${missingPersonaIds.join(", ")}. Repair the team before exporting.`,
+    );
+  }
+
+  return true;
+}
+
+async function handleParseTeamFile(): Promise<{
+  name: string;
+  description: string | null;
+  personas: Array<{
+    display_name: string;
+    system_prompt: string;
+    avatar_url: string | null;
+  }>;
+}> {
+  return {
+    name: "Imported Team",
+    description: null,
+    personas: [],
+  };
 }
 
 async function handleParsePersonaFiles(args: {
@@ -3113,6 +3260,9 @@ async function handleCreateManagedAgent(args: {
       | { type: "provider"; id: string; config: Record<string, unknown> };
   };
 }): Promise<RawCreateManagedAgentResponse> {
+  if (args.input.personaId) {
+    ensureMockPersonaIsActive(args.input.personaId);
+  }
   const name = args.input.name.trim();
   const now = new Date().toISOString();
   const pubkey = crypto
@@ -3779,6 +3929,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockTokens(config);
   resetMockManagedAgents();
   resetMockPersonas();
+  resetMockTeams();
   resetMockWorkflows();
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
@@ -3813,7 +3964,7 @@ export function maybeInstallE2eTauriMocks() {
     window.dispatchEvent(new CustomEvent("sprout:e2e-home-feed-updated"));
     return item;
   };
-  mockIPC(async (command, payload) => {
+  const handleMockCommand = async (command: string, payload: unknown) => {
     const activeConfig = getConfig();
     const identity = getIdentity(activeConfig);
     window.__SPROUT_E2E_COMMANDS__?.push(command);
@@ -3918,6 +4069,28 @@ export function maybeInstallE2eTauriMocks() {
         return handleDeletePersona(
           payload as Parameters<typeof handleDeletePersona>[0],
         );
+      case "set_persona_active":
+        return handleSetPersonaActive(
+          payload as Parameters<typeof handleSetPersonaActive>[0],
+        );
+      case "list_teams":
+        return handleListTeams();
+      case "create_team":
+        return handleCreateTeam(
+          payload as Parameters<typeof handleCreateTeam>[0],
+        );
+      case "update_team":
+        return handleUpdateTeam(
+          payload as Parameters<typeof handleUpdateTeam>[0],
+        );
+      case "delete_team":
+        return handleDeleteTeam(
+          payload as Parameters<typeof handleDeleteTeam>[0],
+        );
+      case "export_team_to_json":
+        return handleExportTeamToJson(payload as { id: string });
+      case "parse_team_file":
+        return handleParseTeamFile();
       case "parse_persona_files":
         return handleParsePersonaFiles(
           payload as { fileBytes: number[]; fileName: string },
@@ -4173,7 +4346,10 @@ export function maybeInstallE2eTauriMocks() {
       default:
         throw new Error(`Unsupported mocked Tauri command: ${command}`);
     }
-  });
+  };
+  window.__SPROUT_E2E_INVOKE_MOCK_COMMAND__ = (command, payload) =>
+    handleMockCommand(command, payload ?? null);
+  mockIPC(handleMockCommand);
 
   installed = true;
 }

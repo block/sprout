@@ -7,6 +7,10 @@ import {
 } from "@/features/agents/hooks";
 import type { CreateChannelManagedAgentsResult } from "@/features/agents/channelAgents";
 import {
+  emptyResolvedTeamPersonas,
+  resolveTeamPersonas,
+} from "@/features/agents/lib/teamPersonas";
+import {
   collectProviderWarnings,
   resolvePersonaProvider,
 } from "@/features/agents/lib/resolvePersonaProvider";
@@ -38,15 +42,6 @@ type AddTeamToChannelDialogProps = {
   ) => void;
 };
 
-function resolvePersonas(
-  personaIds: string[],
-  personas: AgentPersona[],
-): AgentPersona[] {
-  return personaIds
-    .map((id) => personas.find((p) => p.id === id))
-    .filter((p): p is AgentPersona => p !== undefined);
-}
-
 export function AddTeamToChannelDialog({
   team,
   personas,
@@ -73,7 +68,13 @@ export function AddTeamToChannelDialog({
   const providers = providersQuery.data ?? [];
   const defaultProvider = providers[0] ?? null;
 
-  const resolved = team ? resolvePersonas(team.personaIds, personas) : [];
+  const teamPersonaResolution = React.useMemo(
+    () =>
+      team ? resolveTeamPersonas(team, personas) : emptyResolvedTeamPersonas(),
+    [team, personas],
+  );
+  const resolved = teamPersonaResolution.resolvedPersonas;
+  const missingPersonaCount = teamPersonaResolution.missingPersonaCount;
 
   // Surface warnings when a persona's preferred provider is unavailable.
   // This dialog has no provider selector, so the fallback is always
@@ -233,6 +234,15 @@ export function AddTeamToChannelDialog({
               </select>
             </div>
 
+            {missingPersonaCount > 0 ? (
+              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                This team references {missingPersonaCount} persona
+                {missingPersonaCount === 1 ? "" : "s"} that{" "}
+                {missingPersonaCount === 1 ? "is" : "are"} no longer in My
+                Agents. Add them back or edit the team before deploying.
+              </p>
+            ) : null}
+
             {!defaultProvider && !providersQuery.isLoading ? (
               <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                 No ACP providers found. Make sure an agent runtime (e.g. Goose)
@@ -280,6 +290,7 @@ export function AddTeamToChannelDialog({
                 !selectedChannel ||
                 !defaultProvider ||
                 resolved.length === 0 ||
+                missingPersonaCount > 0 ||
                 channelsQuery.isLoading ||
                 providersQuery.isLoading ||
                 deployMutation.isPending

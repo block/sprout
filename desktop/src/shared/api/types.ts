@@ -417,6 +417,7 @@ export type AgentPersona = {
   /** Preferred model ID (e.g. "gpt-4o", "claude-sonnet-4-20250514"). */
   model: string | null;
   isBuiltIn: boolean;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
 };

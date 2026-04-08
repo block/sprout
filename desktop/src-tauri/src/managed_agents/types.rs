@@ -29,6 +29,8 @@ pub struct PersonaRecord {
     pub model: Option<String>,
     #[serde(default)]
     pub is_builtin: bool,
+    #[serde(default = "default_record_active")]
+    pub is_active: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -330,5 +332,9 @@ fn default_agent_parallelism() -> u32 {
 }
 
 fn default_start_on_app_launch() -> bool {
+    true
+}
+
+fn default_record_active() -> bool {
     true
 }

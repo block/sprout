@@ -10,8 +10,9 @@ import {
 } from "@/features/agents/hooks";
 import {
   useBotRecents,
-  DEFAULT_PERSONA_NAMES,
+  pickQuickBotPersonas,
 } from "@/features/agents/lib/useBotRecents";
+import { getActivePersonas } from "@/features/agents/lib/catalog";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { QuickBotBar } from "@/features/channels/ui/QuickBotBar";
 import { useQuickBotDrop } from "@/features/channels/ui/useQuickBotDrop";
@@ -64,7 +65,10 @@ export function ChannelMembersBar({
       (member) => normalizePubkey(member.pubkey) === normalizedCurrentPubkey,
     ) ?? null;
   const personasQuery2 = usePersonasQuery();
-  const allPersonas = personasQuery2.data ?? [];
+  const allPersonas = React.useMemo(
+    () => getActivePersonas(personasQuery2.data ?? []),
+    [personasQuery2.data],
+  );
   const { recentIds, pushRecent } = useBotRecents();
   const quickDrop = useQuickBotDrop(channel.id);
 
@@ -73,31 +77,10 @@ export function ChannelMembersBar({
   const inflightCountRef = React.useRef<Record<string, number>>({});
 
   // Resolve the 3 personas to show in the quick bar.
-  // Use recents if available, otherwise fall back to default names.
   const quickPersonas = React.useMemo(() => {
     if (allPersonas.length === 0) return [];
 
-    const resolved: typeof allPersonas = [];
-
-    if (recentIds.length > 0) {
-      for (const id of recentIds) {
-        const found = allPersonas.find((p) => p.id === id);
-        if (found) resolved.push(found);
-        if (resolved.length >= 3) break;
-      }
-    }
-
-    if (resolved.length < 3) {
-      for (const name of DEFAULT_PERSONA_NAMES) {
-        if (resolved.length >= 3) break;
-        const found = allPersonas.find(
-          (p) =>
-            p.displayName.toLowerCase() === name.toLowerCase() &&
-            !resolved.some((r) => r.id === p.id),
-        );
-        if (found) resolved.push(found);
-      }
-    }
+    const resolved = pickQuickBotPersonas(allPersonas, recentIds);
 
     // Reset in-flight counts when members list updates (the new bot appeared).
     inflightCountRef.current = {};

@@ -5,8 +5,9 @@ use super::export_util::save_json_with_dialog;
 use crate::{
     app_state::AppState,
     managed_agents::{
-        encode_team_json, load_personas, load_teams, parse_team_json, save_teams,
-        CreateTeamRequest, ParsedTeamPreview, TeamRecord, UpdateTeamRequest,
+        encode_team_json, ensure_persona_ids_are_active, load_personas, load_teams,
+        parse_team_json, save_teams, CreateTeamRequest, ParsedTeamPreview, TeamRecord,
+        UpdateTeamRequest,
     },
     util::now_iso,
 };
@@ -49,6 +50,8 @@ pub fn create_team(
         .managed_agents_store_lock
         .lock()
         .map_err(|error| error.to_string())?;
+    let personas = load_personas(&app)?;
+    ensure_persona_ids_are_active(&personas, &input.persona_ids)?;
     let mut teams = load_teams(&app)?;
     let team = TeamRecord {
         id: Uuid::new_v4().to_string(),
@@ -76,6 +79,8 @@ pub fn update_team(
         .managed_agents_store_lock
         .lock()
         .map_err(|error| error.to_string())?;
+    let personas = load_personas(&app)?;
+    ensure_persona_ids_are_active(&personas, &input.persona_ids)?;
     let mut teams = load_teams(&app)?;
     let team = teams
         .iter_mut()

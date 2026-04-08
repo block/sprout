@@ -41,6 +41,8 @@ import {
   collectProviderWarnings,
   resolvePersonaProvider,
 } from "@/features/agents/lib/resolvePersonaProvider";
+import { getActivePersonas } from "@/features/agents/lib/catalog";
+import { getUsableTeams } from "@/features/agents/lib/teamPersonas";
 
 type AddChannelBotDialogProps = {
   backendProviders?: BackendProviderCandidate[];
@@ -108,8 +110,14 @@ export function AddChannelBotDialog({
     open && channelId !== null,
   );
   const createBotsMutation = useCreateChannelManagedAgentsMutation(channelId);
-  const personas = personasQuery.data ?? [];
-  const teams = teamsQuery.data ?? [];
+  const personas = React.useMemo(
+    () => getActivePersonas(personasQuery.data ?? []),
+    [personasQuery.data],
+  );
+  const teams = React.useMemo(
+    () => getUsableTeams(teamsQuery.data ?? [], personas),
+    [personas, teamsQuery.data],
+  );
   const [selectedProviderId, setSelectedProviderId] = React.useState("");
   const [selectedPersonaIds, setSelectedPersonaIds] = React.useState<string[]>(
     [],

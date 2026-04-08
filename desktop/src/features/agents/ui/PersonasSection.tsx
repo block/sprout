@@ -2,18 +2,13 @@ import {
   CopyPlus,
   Download,
   Ellipsis,
-  Info,
   Pencil,
-  Plus,
   Trash2,
   Upload,
 } from "lucide-react";
 
-import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { AgentPersona } from "@/shared/api/types";
 import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
-import { promptPreview } from "@/shared/lib/promptPreview";
-import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,17 +16,22 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import { Skeleton } from "@/shared/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { PersonaIdentity } from "./PersonaIdentity";
+import { PersonaLibraryEntryPoints } from "./PersonaLibraryEntryPoints";
+import { personaLibraryCopy } from "./personaLibraryCopy";
 
 type PersonasSectionProps = {
   personas: AgentPersona[];
   error: Error | null;
+  feedbackErrorMessage: string | null;
+  feedbackNoticeMessage: string | null;
   isLoading: boolean;
   isPending: boolean;
   onCreate: () => void;
   onDuplicate: (persona: AgentPersona) => void;
   onEdit: (persona: AgentPersona) => void;
   onExport: (persona: AgentPersona) => void;
+  onDeactivate: (persona: AgentPersona) => void;
   onDelete: (persona: AgentPersona) => void;
   onImportFile: (fileBytes: number[], fileName: string) => void;
 };
@@ -39,12 +39,15 @@ type PersonasSectionProps = {
 export function PersonasSection({
   personas,
   error,
+  feedbackErrorMessage,
+  feedbackNoticeMessage,
   isLoading,
   isPending,
   onCreate,
   onDuplicate,
   onEdit,
   onExport,
+  onDeactivate,
   onDelete,
   onImportFile,
 }: PersonasSectionProps) {
@@ -57,7 +60,11 @@ export function PersonasSection({
   } = useFileImportZone({ onImportFile });
 
   return (
-    <section className="relative space-y-4" {...dropHandlers}>
+    <section
+      className="relative space-y-4"
+      data-testid="agents-library-personas"
+      {...dropHandlers}
+    >
       {isDragOver ? (
         <div className="pointer-events-none absolute -inset-1 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/50 bg-background/80 backdrop-blur-sm">
           <p className="text-sm font-medium text-primary">
@@ -68,9 +75,11 @@ export function PersonasSection({
 
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold tracking-tight">Personas</h3>
+          <h3 className="text-sm font-semibold tracking-tight">
+            {personaLibraryCopy.title}
+          </h3>
           <p className="text-sm text-muted-foreground">
-            Reusable agent templates for common roles and prompts.
+            {personaLibraryCopy.description}
           </p>
         </div>
         <input
@@ -80,20 +89,13 @@ export function PersonasSection({
           ref={fileInputRef}
           type="file"
         />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label="Create persona"
-              onClick={onCreate}
-              type="button"
-              variant="ghost"
-              size="icon"
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Create persona</TooltipContent>
-        </Tooltip>
+        <div className="flex items-center gap-2">
+          <PersonaLibraryEntryPoints
+            isPending={isPending}
+            layout="header"
+            onCreate={onCreate}
+          />
+        </div>
       </div>
 
       {isLoading ? (
@@ -117,103 +119,77 @@ export function PersonasSection({
 
       {!isLoading && personas.length > 0 ? (
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
-          {personas.map((persona) => {
-            const preview = promptPreview(persona.systemPrompt);
+          {personas.map((persona) => (
+            <div
+              className="rounded-xl border border-border/70 bg-card/80 p-2 shadow-sm"
+              data-testid={`library-persona-${persona.id}`}
+              key={persona.id}
+            >
+              <div className="flex items-start justify-between gap-2.5">
+                <PersonaIdentity persona={persona} />
 
-            return (
-              <div
-                className="rounded-xl border border-border/70 bg-card/80 p-2 shadow-sm"
-                key={persona.id}
-              >
-                <div className="flex items-start justify-between gap-2.5">
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <ProfileAvatar
-                      avatarUrl={persona.avatarUrl}
-                      className="h-8 w-8 rounded-lg text-xs"
-                      label={persona.displayName}
-                    />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="truncate text-sm font-semibold tracking-tight">
-                          {persona.displayName}
-                        </p>
-                        {persona.isBuiltIn ? (
-                          <span className="whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                            Built-in
-                          </span>
-                        ) : null}
-                        {preview ? (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                aria-label="View system prompt"
-                                className="flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-                                type="button"
-                              >
-                                <Info className="h-3.5 w-3.5" />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom" className="max-w-xs">
-                              <p>{preview}</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-
-                  <DropdownMenu modal={false}>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                        type="button"
-                      >
-                        <Ellipsis className="h-4 w-4" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      align="end"
-                      onCloseAutoFocus={(event) => event.preventDefault()}
+                <DropdownMenu modal={false}>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      aria-label={`Open actions for ${persona.displayName}`}
+                      className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      data-testid={`library-persona-menu-${persona.id}`}
+                      type="button"
                     >
-                      {!persona.isBuiltIn ? (
-                        <DropdownMenuItem
-                          disabled={isPending}
-                          onClick={() => onEdit(persona)}
-                        >
-                          <Pencil className="h-4 w-4" />
-                          Edit
-                        </DropdownMenuItem>
-                      ) : null}
+                      <Ellipsis className="h-4 w-4" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    onCloseAutoFocus={(event) => event.preventDefault()}
+                  >
+                    {!persona.isBuiltIn ? (
                       <DropdownMenuItem
                         disabled={isPending}
-                        onClick={() => onDuplicate(persona)}
+                        onClick={() => onEdit(persona)}
                       >
-                        <CopyPlus className="h-4 w-4" />
-                        Duplicate
+                        <Pencil className="h-4 w-4" />
+                        Edit
                       </DropdownMenuItem>
+                    ) : null}
+                    <DropdownMenuItem
+                      disabled={isPending}
+                      onClick={() => onDuplicate(persona)}
+                    >
+                      <CopyPlus className="h-4 w-4" />
+                      Duplicate
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={isPending}
+                      onClick={() => onExport(persona)}
+                    >
+                      <Download className="h-4 w-4" />
+                      Export
+                    </DropdownMenuItem>
+                    {persona.isBuiltIn ? (
                       <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
                         disabled={isPending}
-                        onClick={() => onExport(persona)}
+                        onClick={() => onDeactivate(persona)}
                       >
-                        <Download className="h-4 w-4" />
-                        Export
+                        <Trash2 className="h-4 w-4" />
+                        Remove from My Agents
                       </DropdownMenuItem>
-                      {!persona.isBuiltIn ? (
-                        <DropdownMenuItem
-                          className="text-destructive focus:text-destructive"
-                          disabled={isPending}
-                          onClick={() => onDelete(persona)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          Delete
-                        </DropdownMenuItem>
-                      ) : null}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
+                    ) : (
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        disabled={isPending}
+                        onClick={() => onDelete(persona)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Delete
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
-            );
-          })}
+            </div>
+          ))}
           <button
             className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-primary p-2 text-primary transition-colors hover:bg-primary/5"
             onClick={openFilePicker}
@@ -226,26 +202,48 @@ export function PersonasSection({
       ) : null}
 
       {!isLoading && personas.length === 0 ? (
-        <button
-          className="w-full cursor-pointer rounded-xl border border-dashed border-primary/40 px-6 py-10 text-center transition-colors hover:border-primary hover:bg-primary/5"
-          onClick={openFilePicker}
-          type="button"
-        >
+        <div className="rounded-xl border border-dashed border-primary/40 px-6 py-10 text-center">
           <p className="text-sm font-semibold tracking-tight">
-            No personas yet
+            {personaLibraryCopy.emptyTitle}
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
-            Create one to save a role, prompt, and optional avatar for reuse.
+            {personaLibraryCopy.emptyDescription}
           </p>
           <p className="mt-1 text-xs text-muted-foreground/70">
-            Or drop a .persona.json, .persona.png, or .zip file here to import.
+            {personaLibraryCopy.emptyImportHint}
           </p>
-        </button>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            <PersonaLibraryEntryPoints
+              isPending={isPending}
+              layout="empty"
+              onCreate={onCreate}
+              onImport={openFilePicker}
+            />
+          </div>
+        </div>
       ) : null}
 
       {error ? (
         <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error.message}
+        </p>
+      ) : null}
+
+      {feedbackNoticeMessage ? (
+        <p
+          className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-primary"
+          data-testid="personas-library-feedback-notice"
+        >
+          {feedbackNoticeMessage}
+        </p>
+      ) : null}
+
+      {feedbackErrorMessage ? (
+        <p
+          className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          data-testid="personas-library-feedback-error"
+        >
+          {feedbackErrorMessage}
         </p>
       ) : null}
     </section>

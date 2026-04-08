@@ -12,7 +12,7 @@ export function AgentsScreen() {
   return (
     <>
       <ChatHeader
-        description="Create local ACP workers, mint agent tokens, and monitor the relay-visible agent directory."
+        description="Choose personas from Persona Catalog, create local ACP workers, and monitor the relay-visible agent directory."
         mode="agents"
         title="Agents"
       />

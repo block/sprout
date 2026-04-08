@@ -5,15 +5,15 @@ use crate::{
     app_state::AppState,
     managed_agents::{
         build_managed_agent_summary, default_token_scopes, discover_provider_candidates,
-        find_managed_agent_mut, invoke_provider, load_managed_agents, load_personas,
-        managed_agent_avatar_url, managed_agent_log_path, mint_token_via_api, normalize_agent_args,
-        provider_deploy, read_log_tail, resolve_provider_binary, save_managed_agents,
-        start_managed_agent_process, stop_managed_agent_process, sync_managed_agent_processes,
-        validate_provider_config, BackendKind, BackendProviderInfo, CreateManagedAgentRequest,
-        CreateManagedAgentResponse, ManagedAgentLogResponse, ManagedAgentRecord,
-        ManagedAgentSummary, MintManagedAgentTokenRequest, MintManagedAgentTokenResponse,
-        DEFAULT_ACP_COMMAND, DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM,
-        DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
+        ensure_persona_is_active, find_managed_agent_mut, invoke_provider, load_managed_agents,
+        load_personas, managed_agent_avatar_url, managed_agent_log_path, mint_token_via_api,
+        normalize_agent_args, provider_deploy, read_log_tail, resolve_provider_binary,
+        save_managed_agents, start_managed_agent_process, stop_managed_agent_process,
+        sync_managed_agent_processes, validate_provider_config, BackendKind, BackendProviderInfo,
+        CreateManagedAgentRequest, CreateManagedAgentResponse, ManagedAgentLogResponse,
+        ManagedAgentRecord, ManagedAgentSummary, MintManagedAgentTokenRequest,
+        MintManagedAgentTokenResponse, DEFAULT_ACP_COMMAND, DEFAULT_AGENT_COMMAND,
+        DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
     },
     relay::{relay_ws_url, sync_managed_agent_profile},
     util::now_iso,
@@ -178,9 +178,7 @@ pub async fn create_managed_agent(
         }
         if let Some(persona_id) = requested_persona_id.as_deref() {
             let personas = load_personas(&app)?;
-            if !personas.iter().any(|persona| persona.id == persona_id) {
-                return Err(format!("persona {persona_id} not found"));
-            }
+            ensure_persona_is_active(&personas, persona_id)?;
         }
         let keys = Keys::generate();
         let pubkey = keys.public_key().to_hex();
