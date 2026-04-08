@@ -29,7 +29,7 @@ if git rev-parse --is-inside-work-tree &>/dev/null; then
     if [[ "$GIT_DIR" == *".git/worktrees/"* ]]; then
         BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
         export SPROUT_WORKTREE_LABEL="${BRANCH_NAME##*/}"
-        export SPROUT_INSTANCE_SLUG=$(echo "$SPROUT_WORKTREE_LABEL" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
+        export SPROUT_INSTANCE_SLUG=$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
 
         ICON_DIR="$(pwd)/src-tauri/target/dev-icons"
         mkdir -p "$ICON_DIR"
