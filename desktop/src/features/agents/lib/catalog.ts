@@ -51,10 +51,6 @@ export function getCatalogSelectionState(
   };
 }
 
-export function getAddableCatalogPersonas(personas: readonly AgentPersona[]) {
-  return getCatalogSelectionState(personas).unselectedCatalogPersonas;
-}
-
 export function getPersonaLabelsById(personas: readonly AgentPersona[]) {
   return Object.fromEntries(
     personas.map((persona) => [persona.id, persona.displayName]),
