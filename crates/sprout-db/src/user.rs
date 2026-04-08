@@ -203,25 +203,31 @@ pub async fn search_users(
         return Ok(Vec::new());
     }
 
-    let contains_pattern = format!("%{normalized}%");
-    let prefix_pattern = format!("{normalized}%");
+    // Escape LIKE metacharacters to prevent wildcard injection.
+    // Without this, a query of "%" would match every row (full table scan).
+    let escaped = normalized
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let contains_pattern = format!("%{escaped}%");
+    let prefix_pattern = format!("{escaped}%");
     let limit = limit.clamp(1, 50) as i64;
 
     let rows = sqlx::query_as::<_, (Vec<u8>, Option<String>, Option<String>, Option<String>)>(
         r#"
         SELECT pubkey, display_name, avatar_url, nip05_handle
         FROM users
-        WHERE LOWER(COALESCE(display_name, '')) LIKE $1
-           OR LOWER(COALESCE(nip05_handle, '')) LIKE $1
-           OR LOWER(encode(pubkey, 'hex')) LIKE $1
+        WHERE LOWER(COALESCE(display_name, '')) LIKE $1 ESCAPE '\'
+           OR LOWER(COALESCE(nip05_handle, '')) LIKE $1 ESCAPE '\'
+           OR LOWER(encode(pubkey, 'hex')) LIKE $1 ESCAPE '\'
         ORDER BY
             CASE
                 WHEN LOWER(COALESCE(display_name, '')) = $2 THEN 0
                 WHEN LOWER(COALESCE(nip05_handle, '')) = $2 THEN 1
                 WHEN LOWER(encode(pubkey, 'hex')) = $2 THEN 2
-                WHEN LOWER(COALESCE(display_name, '')) LIKE $3 THEN 3
-                WHEN LOWER(COALESCE(nip05_handle, '')) LIKE $3 THEN 4
-                WHEN LOWER(encode(pubkey, 'hex')) LIKE $3 THEN 5
+                WHEN LOWER(COALESCE(display_name, '')) LIKE $3 ESCAPE '\' THEN 3
+                WHEN LOWER(COALESCE(nip05_handle, '')) LIKE $3 ESCAPE '\' THEN 4
+                WHEN LOWER(encode(pubkey, 'hex')) LIKE $3 ESCAPE '\' THEN 5
                 ELSE 6
             END,
             COALESCE(NULLIF(display_name, ''), NULLIF(nip05_handle, ''), LOWER(encode(pubkey, 'hex')))

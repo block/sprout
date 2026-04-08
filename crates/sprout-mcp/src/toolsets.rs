@@ -93,7 +93,7 @@ pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     ("set_channel_add_policy", "identity", false),
     // ── forums ───────────────────────────────────────────────────────────────
     ("vote_on_post", "forums", false),
-    // Social
+    // ── social ───────────────────────────────────────────────────────────────
     ("publish_note", "social", false),
     ("set_contact_list", "social", false),
     ("get_event", "social", true),

@@ -217,6 +217,12 @@ pub async fn search_users(
     if q.is_empty() {
         return Ok(Json(serde_json::json!({ "users": [] })));
     }
+    if q.len() > 200 {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "search query too long (max 200 characters)",
+        ));
+    }
 
     let results = state
         .db
@@ -317,7 +323,7 @@ pub async fn get_user_notes(
         return Err(api_error(StatusCode::BAD_REQUEST, "invalid pubkey hex"));
     }
 
-    let limit = params.limit.unwrap_or(50).min(100) as i64;
+    let limit = params.limit.unwrap_or(50).clamp(1, 100) as i64;
 
     // Composite cursor: when both `before` and `before_id` are provided, use exact
     // keyset pagination (no ±1 adjustment needed — the DB clause is strictly exclusive).

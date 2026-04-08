@@ -25,7 +25,9 @@ fn parse_event_id(hex: &str) -> Result<EventId, CliError> {
 #[derive(Debug, Deserialize)]
 pub struct ContactEntry {
     pub pubkey: String,
+    #[serde(default)]
     pub relay_url: Option<String>,
+    #[serde(default)]
     pub petname: Option<String>,
 }
 
