@@ -130,13 +130,13 @@ impl UpstreamClient {
         filters: Vec<Filter>,
     ) -> Result<(), crate::ProxyError> {
         let msg = ClientMessage::req(sub_id.clone(), filters).as_json();
-        self.inner
-            .active_subs
-            .insert(sub_id.to_string(), msg.clone());
         self.outbound_tx
-            .send(msg)
+            .send(msg.clone())
             .await
-            .map_err(|_| crate::ProxyError::Upstream("outbound channel closed".into()))
+            .map_err(|_| crate::ProxyError::Upstream("outbound channel closed".into()))?;
+        // Only record the subscription for reconnect replay after successful send.
+        self.inner.active_subs.insert(sub_id.to_string(), msg);
+        Ok(())
     }
 
     /// Send a CLOSE to the upstream relay.
@@ -177,6 +177,17 @@ impl UpstreamClient {
     #[allow(dead_code)] // Used in tests; kept for future server-layer integration
     pub(crate) fn active_subscription_count(&self) -> usize {
         self.inner.active_subs.len()
+    }
+
+    /// Returns the prefixed subscription IDs currently tracked by the upstream client.
+    /// Used by tests to discover the server-assigned prefix for injecting upstream messages.
+    #[allow(dead_code)] // Used in tests
+    pub(crate) fn active_sub_ids(&self) -> Vec<String> {
+        self.inner
+            .active_subs
+            .iter()
+            .map(|r| r.key().clone())
+            .collect()
     }
 
     // ── Run loop ──────────────────────────────────────────────────────────────

@@ -1,10 +1,11 @@
 //! sprout-proxy binary — NIP-28 guest relay proxy for standard Nostr clients.
 
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use nostr::prelude::*;
 use tokio::sync::{broadcast, mpsc};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use sprout_proxy::channel_map::ChannelMap;
 use sprout_proxy::guest_store::GuestStore;
@@ -97,6 +98,69 @@ async fn main() {
     );
     info!(channels = channel_map.len(), "channel map ready");
 
+    // ── Parse public channel list (optional) ──────────────────────────────────
+
+    let public_channels: Vec<uuid::Uuid> = std::env::var("SPROUT_PROXY_PUBLIC_CHANNELS")
+        .unwrap_or_default()
+        .split(',')
+        .filter(|s| !s.trim().is_empty())
+        .filter_map(|s| {
+            let trimmed = s.trim();
+            match trimmed.parse::<uuid::Uuid>() {
+                Ok(uuid) => {
+                    if channel_map.lookup_by_uuid(&uuid).is_some() {
+                        Some(uuid)
+                    } else {
+                        warn!(uuid = %trimmed, "SPROUT_PROXY_PUBLIC_CHANNELS: unknown channel UUID — skipping");
+                        None
+                    }
+                }
+                Err(_) => {
+                    warn!(value = %trimmed, "SPROUT_PROXY_PUBLIC_CHANNELS: invalid UUID — skipping");
+                    None
+                }
+            }
+        })
+        .collect();
+
+    if public_channels.is_empty() {
+        info!("no public channels configured — /public route disabled");
+    } else {
+        info!(
+            count = public_channels.len(),
+            "public channels configured for read-only access"
+        );
+    }
+
+    // ── Parse public connection lifetime cap ──────────────────────────────────
+
+    let public_lifetime_secs: u64 = match std::env::var("SPROUT_PROXY_PUBLIC_LIFETIME_SECS") {
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(0) => {
+                eprintln!(
+                    "error: SPROUT_PROXY_PUBLIC_LIFETIME_SECS cannot be 0 \
+                     (would disconnect every public client immediately)"
+                );
+                std::process::exit(1);
+            }
+            Ok(v) => v,
+            Err(_) => {
+                warn!(
+                    value = %raw.trim(),
+                    default = server::DEFAULT_PUBLIC_LIFETIME_SECS,
+                    "SPROUT_PROXY_PUBLIC_LIFETIME_SECS is not a valid integer — using default"
+                );
+                server::DEFAULT_PUBLIC_LIFETIME_SECS
+            }
+        },
+        Err(_) => server::DEFAULT_PUBLIC_LIFETIME_SECS,
+    };
+
+    info!(
+        seconds = public_lifetime_secs,
+        "public connection lifetime cap"
+    );
+
     // ── Init translator ───────────────────────────────────────────────────────
 
     let translator = Arc::new(Translator::new(
@@ -188,6 +252,9 @@ async fn main() {
         upstream_events: upstream_events_tx.clone(),
         admin_secret,
         relay_url,
+        public_channels: Arc::new(public_channels),
+        public_connection_count: Arc::new(AtomicUsize::new(0)),
+        public_lifetime_secs,
     };
 
     // ── Build router ──────────────────────────────────────────────────────────
