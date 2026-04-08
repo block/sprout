@@ -347,6 +347,7 @@ pub fn run() {
             update_profile,
             get_user_profile,
             get_users_batch,
+            get_user_notes,
             search_users,
             get_presence,
             set_presence,

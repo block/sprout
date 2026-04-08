@@ -389,8 +389,6 @@ export type ManagedAgentPrereqs = {
   mcp: CommandAvailability;
 };
 
-// ── Model discovery types ─────────────────────────────────────────────────────
-
 export type AgentModelsResponse = {
   agentName: string;
   agentVersion: string;
@@ -399,19 +397,16 @@ export type AgentModelsResponse = {
   selectedModel: string | null;
   supportsSwitching: boolean;
 };
-
 export type AgentModelInfo = {
   id: string;
   name: string | null;
   description: string | null;
 };
-
 export type UpdateManagedAgentInput = {
   pubkey: string;
   model?: string | null;
   systemPrompt?: string | null;
 };
-
 export type AgentPersona = {
   id: string;
   displayName: string;
@@ -442,9 +437,6 @@ export type UpdatePersonaInput = {
   provider?: string;
   model?: string;
 };
-
-// ── Team types ────────────────────────────────────────────────────────────────
-
 export type AgentTeam = {
   id: string;
   name: string;
@@ -466,8 +458,6 @@ export type UpdateTeamInput = {
   description?: string;
   personaIds: string[];
 };
-
-// ── Workflow types (re-exported from workflowTypes.ts) ────────────────────
 export type {
   ApprovalActionResponse,
   Workflow,
@@ -480,8 +470,11 @@ export type {
   TraceEntry,
   TriggerWorkflowResponse,
 } from "@/shared/api/workflowTypes";
-
-// ── Forum types ───────────────────────────────────────────────────────────────
+export type {
+  UserNote,
+  UserNotesCursor,
+  UserNotesResponse,
+} from "./socialTypes";
 
 export type ThreadSummary = {
   replyCount: number;
