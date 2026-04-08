@@ -1,6 +1,7 @@
+import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { ChannelRouteScreen } from "@/app/routes/channels.$channelId";
+import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 
 type ForumPostRouteSearch = {
   replyId?: string;
@@ -22,16 +23,25 @@ export const Route = createFileRoute("/channels/$channelId/posts/$postId")({
   component: ForumPostRouteComponent,
 });
 
+const ChannelRouteScreen = React.lazy(async () => {
+  const module = await import("./ChannelRouteScreen");
+  return { default: module.ChannelRouteScreen };
+});
+
 function ForumPostRouteComponent() {
   const { channelId, postId } = Route.useParams();
   const search = Route.useSearch();
 
   return (
-    <ChannelRouteScreen
-      channelId={channelId}
-      selectedPostId={postId}
-      targetMessageId={null}
-      targetReplyId={search.replyId ?? null}
-    />
+    <React.Suspense
+      fallback={<ViewLoadingFallback includeHeader kind="forum" />}
+    >
+      <ChannelRouteScreen
+        channelId={channelId}
+        selectedPostId={postId}
+        targetMessageId={null}
+        targetReplyId={search.replyId ?? null}
+      />
+    </React.Suspense>
   );
 }

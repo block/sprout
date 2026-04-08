@@ -1,35 +1,23 @@
+import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { useAppNavigation } from "@/app/navigation/useAppNavigation";
-import { useChannelsQuery } from "@/features/channels/hooks";
-import { WorkflowsScreen } from "@/features/workflows/ui/WorkflowsScreen";
+import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 
 export const Route = createFileRoute("/workflows")({
   component: WorkflowsRouteComponent,
 });
 
-export function WorkflowsRouteScreen({
-  selectedWorkflowId,
-}: {
-  selectedWorkflowId: string | null;
-}) {
-  const { closeWorkflowDetail, goWorkflow } = useAppNavigation();
-  const channelsQuery = useChannelsQuery();
-  const channels = channelsQuery.data ?? [];
-  const memberChannels = channels.filter((channel) => channel.isMember);
-
-  return (
-    <WorkflowsScreen
-      channels={memberChannels}
-      onCloseWorkflow={closeWorkflowDetail}
-      onSelectWorkflow={(workflowId) => {
-        void goWorkflow(workflowId);
-      }}
-      selectedWorkflowId={selectedWorkflowId}
-    />
-  );
-}
+const WorkflowsRouteScreen = React.lazy(async () => {
+  const module = await import("./WorkflowsRouteScreen");
+  return { default: module.WorkflowsRouteScreen };
+});
 
 function WorkflowsRouteComponent() {
-  return <WorkflowsRouteScreen selectedWorkflowId={null} />;
+  return (
+    <React.Suspense
+      fallback={<ViewLoadingFallback includeHeader kind="workflows" />}
+    >
+      <WorkflowsRouteScreen selectedWorkflowId={null} />
+    </React.Suspense>
+  );
 }
