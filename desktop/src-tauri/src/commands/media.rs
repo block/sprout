@@ -131,7 +131,7 @@ async fn do_upload(
     mime: &str,
     state: &State<'_, AppState>,
 ) -> Result<BlobDescriptor, String> {
-    let sha256 = format!("{:x}", Sha256::digest(&body));
+    let sha256 = hex::encode(Sha256::digest(&body));
 
     let auth_event = {
         let keys = state.keys.lock().map_err(|e| e.to_string())?;

@@ -175,7 +175,7 @@ pub fn build_nip98_auth_header_for_keys(
     url: &str,
     body: &[u8],
 ) -> Result<String, String> {
-    let payload_hash = format!("{:x}", Sha256::digest(body));
+    let payload_hash = hex::encode(Sha256::digest(body));
     let tags = vec![
         Tag::parse(vec!["u", url]).map_err(|error| format!("url tag failed: {error}"))?,
         Tag::parse(vec!["method", method.as_str()])

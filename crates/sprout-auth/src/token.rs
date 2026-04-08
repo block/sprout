@@ -10,8 +10,7 @@ const TOKEN_PREFIX: &str = "sprout_";
 
 /// Generate a new random API token (CSPRNG, 32 bytes, hex-encoded with prefix).
 pub fn generate_token() -> String {
-    use rand::Rng;
-    let bytes: [u8; 32] = rand::thread_rng().gen();
+    let bytes: [u8; 32] = rand::random();
     format!("{}{}", TOKEN_PREFIX, hex::encode(bytes))
 }
 

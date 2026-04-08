@@ -44,11 +44,11 @@ sqlx = { version = "0.8", features = [
 ] }
 
 # Redis
-redis        = { version = "0.32", features = ["tokio-comp", "connection-manager"] }
-deadpool-redis = { version = "0.23", features = ["rt_tokio_1"] }
+redis        = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+deadpool-redis = { version = "0.18", features = ["rt_tokio_1"] }
 
 # Nostr
-nostr = { version = "0.44" }
+nostr = { version = "0.36" }
 
 # Serialization
 serde       = { version = "1", features = ["derive"] }
@@ -71,7 +71,7 @@ uuid    = { version = "1", features = ["v4", "serde"] }
 chrono  = { version = "0.4", features = ["serde"] }
 
 # HTTP client (webhook delivery, Typesense indexing)
-reqwest = { version = "0.13", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
 
 # Cryptography
 sha2      = "0.11"
