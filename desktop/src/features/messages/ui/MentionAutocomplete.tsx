@@ -6,6 +6,7 @@ export type MentionSuggestion = {
   pubkey: string;
   displayName: string;
   role?: string | null;
+  personaName?: string | null;
 };
 
 type MentionAutocompleteProps = {
@@ -57,7 +58,11 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
             <span className="truncate font-medium">
               {suggestion.displayName}
             </span>
-            {suggestion.role ? (
+            {suggestion.personaName ? (
+              <span className="text-xs text-muted-foreground">
+                ({suggestion.personaName})
+              </span>
+            ) : suggestion.role ? (
               <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                 {suggestion.role}
               </span>

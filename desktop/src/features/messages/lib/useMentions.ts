@@ -1,6 +1,9 @@
 import * as React from "react";
 
-import { useManagedAgentsQuery } from "@/features/agents/hooks";
+import {
+  useManagedAgentsQuery,
+  usePersonasQuery,
+} from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
@@ -17,6 +20,7 @@ export function useMentions(channelId: string | null) {
   const membersQuery = useChannelMembersQuery(channelId);
   const members = membersQuery.data;
   const managedAgentsQuery = useManagedAgentsQuery();
+  const personasQuery = usePersonasQuery();
   const managedAgentNamesByPubkey = React.useMemo(
     () =>
       new Map(
@@ -27,20 +31,41 @@ export function useMentions(channelId: string | null) {
       ),
     [managedAgentsQuery.data],
   );
+  const personaNameByPubkey = React.useMemo(() => {
+    const agents = managedAgentsQuery.data ?? [];
+    const personas = personasQuery.data ?? [];
+    const personaById = new Map(personas.map((p) => [p.id, p.displayName]));
+    const lookup = new Map<string, string>();
+    for (const agent of agents) {
+      if (agent.personaId) {
+        const name = personaById.get(agent.personaId);
+        if (name) lookup.set(agent.pubkey.toLowerCase(), name);
+      }
+    }
+    return lookup;
+  }, [managedAgentsQuery.data, personasQuery.data]);
 
   const knownNames = React.useMemo<string[]>(() => {
     if (!members) return [];
     const names: string[] = [];
+    const seen = new Set<string>();
     for (const member of members) {
       const name =
         member.displayName ??
         managedAgentNamesByPubkey.get(member.pubkey.toLowerCase());
       if (name) {
         names.push(name);
+        seen.add(name.toLowerCase());
+      }
+      // Also include persona names so typing @Scout triggers the dropdown
+      const personaName = personaNameByPubkey.get(member.pubkey.toLowerCase());
+      if (personaName && !seen.has(personaName.toLowerCase())) {
+        names.push(personaName);
+        seen.add(personaName.toLowerCase());
       }
     }
     return names;
-  }, [members, managedAgentNamesByPubkey]);
+  }, [members, managedAgentNamesByPubkey, personaNameByPubkey]);
 
   /** Lower-cased version of knownNames, used for case-insensitive prefix matching. */
   const knownNamesLower = React.useMemo<string[]>(
@@ -78,27 +103,31 @@ export function useMentions(channelId: string | null) {
     const lowerQuery = mentionQuery.toLowerCase();
     return (members ?? [])
       .map((member) => {
+        const pubkeyLower = member.pubkey.toLowerCase();
         const fallbackName =
-          managedAgentNamesByPubkey.get(member.pubkey.toLowerCase()) ??
+          managedAgentNamesByPubkey.get(pubkeyLower) ??
           member.pubkey.slice(0, 8);
 
         return {
           member,
           label: member.displayName ?? fallbackName,
+          personaName: personaNameByPubkey.get(pubkeyLower) ?? null,
         };
       })
       .filter(
-        ({ label, member }) =>
+        ({ label, member, personaName }) =>
           label.toLowerCase().includes(lowerQuery) ||
-          member.pubkey.toLowerCase().includes(lowerQuery),
+          member.pubkey.toLowerCase().includes(lowerQuery) ||
+          personaName?.toLowerCase().includes(lowerQuery),
       )
       .slice(0, 8)
-      .map(({ member, label }) => ({
+      .map(({ member, label, personaName }) => ({
         pubkey: member.pubkey,
         displayName: label,
         role: member.role === "admin" ? "admin" : null,
+        personaName,
       }));
-  }, [managedAgentNamesByPubkey, members, mentionQuery]);
+  }, [managedAgentNamesByPubkey, members, mentionQuery, personaNameByPubkey]);
 
   const isMentionOpen = mentionQuery !== null && suggestions.length > 0;
 
