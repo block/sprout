@@ -95,9 +95,9 @@ pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     ("vote_on_post", "forums", false),
     // ── social ───────────────────────────────────────────────────────────────
     // Social tools for NIP-01/NIP-02 (text notes + contact lists).
-    // `get_event` is intentionally broad — it returns any event the caller
-    // has scope + access for, not just social kinds. This allows agents to
-    // inspect events referenced in notes (e.g., reply targets).
+    // `get_event` returns global events (kind:0/1/3/30023) with scope checks
+    // and channel events with membership verification. Unknown global kinds
+    // return 404 (closed-default allowlist in events.rs).
     ("publish_note", "social", false),
     ("set_contact_list", "social", false),
     ("get_event", "social", true),
