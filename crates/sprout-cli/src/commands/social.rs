@@ -103,6 +103,9 @@ pub async fn cmd_get_user_notes(
     if let Some(bid) = before_id {
         validate_hex64(bid)?;
     }
+    if before_id.is_some() && before.is_none() {
+        return Err(CliError::Usage("before_id requires before".to_string()));
+    }
     let mut path = format!("/api/users/{pubkey}/notes");
     let mut params = vec![];
     if let Some(l) = limit {
