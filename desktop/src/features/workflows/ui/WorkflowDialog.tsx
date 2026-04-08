@@ -17,7 +17,10 @@ import {
 } from "@/shared/ui/dialog";
 import { ChannelCombobox } from "./ChannelCombobox";
 import { WorkflowFormBuilder } from "./WorkflowFormBuilder";
+import { WorkflowPromptBuilder } from "./WorkflowPromptBuilder";
+import { getWorkflowYamlValidationError } from "./workflowFormTypes";
 import { WorkflowWebhookSecretDialog } from "./WorkflowWebhookSecretDialog";
+import { draftWorkflowYamlFromPrompt } from "./workflowPromptScaffold";
 import { FieldLabel } from "./workflowFormPrimitives";
 
 type DialogMode = "create" | "edit" | "duplicate";
@@ -67,6 +70,7 @@ export function WorkflowDialog({
   open,
   workflow,
 }: WorkflowDialogProps) {
+  const isCreateMode = mode === "create";
   const channelId =
     mode === "edit" && workflow?.channelId
       ? workflow.channelId
@@ -75,6 +79,10 @@ export function WorkflowDialog({
   const [selectedChannelId, setSelectedChannelId] = React.useState(channelId);
   const [yamlDefinition, setYamlDefinition] = React.useState(() =>
     getInitialYaml(mode, workflow),
+  );
+  const [workflowPrompt, setWorkflowPrompt] = React.useState("");
+  const [createStage, setCreateStage] = React.useState<"prompt" | "setup">(
+    isCreateMode ? "prompt" : "setup",
   );
   const [savedWebhookInfo, setSavedWebhookInfo] = React.useState<{
     relayHttpUrl: string;
@@ -88,6 +96,10 @@ export function WorkflowDialog({
 
   const selectedChannel =
     channels.find((c) => c.id === selectedChannelId) ?? null;
+  const isPromptStage = isCreateMode && createStage === "prompt";
+  const validationError = isPromptStage
+    ? null
+    : getWorkflowYamlValidationError(yamlDefinition);
 
   const defaultChannelId = channels[0]?.id ?? "";
   const workflowChannelId = workflow?.channelId ?? null;
@@ -103,6 +115,8 @@ export function WorkflowDialog({
           : defaultChannelId;
       setSelectedChannelId(newChannelId);
       setYamlDefinition(getInitialYaml(mode, workflow));
+      setWorkflowPrompt("");
+      setCreateStage(mode === "create" ? "prompt" : "setup");
       setSavedWebhookInfo(null);
       resetCreate();
       resetUpdate();
@@ -128,6 +142,19 @@ export function WorkflowDialog({
     [onOpenChange, resetCreate, resetUpdate],
   );
 
+  const handleDraftWorkflow = React.useCallback(() => {
+    const trimmedPrompt = workflowPrompt.trim();
+    if (!trimmedPrompt) return;
+
+    mutation.reset();
+    setYamlDefinition(
+      draftWorkflowYamlFromPrompt(trimmedPrompt, {
+        defaultChannelId: selectedChannelId || undefined,
+      }),
+    );
+    setCreateStage("setup");
+  }, [mutation, selectedChannelId, workflowPrompt]);
+
   async function handleSubmit() {
     if (!selectedChannelId || !yamlDefinition.trim()) return;
 
@@ -147,8 +174,10 @@ export function WorkflowDialog({
     }
   }
 
-  const showChannelSelector = mode !== "edit" && channels.length > 1;
-  const showChannelInfo = mode !== "edit" && channels.length === 1;
+  const showChannelSelector =
+    !isPromptStage && mode !== "edit" && channels.length > 1;
+  const showChannelInfo =
+    !isPromptStage && mode !== "edit" && channels.length === 1;
 
   return (
     <>
@@ -157,81 +186,132 @@ export function WorkflowDialog({
           <DialogHeader className="flex-shrink-0">
             <DialogTitle>{TITLES[mode]}</DialogTitle>
             <DialogDescription>
-              {mode === "edit"
-                ? "Modify the workflow definition."
-                : channels.length === 1
-                  ? "Create a workflow scoped to this channel."
-                  : "Define a workflow and assign it to a channel."}
+              {isPromptStage
+                ? "Describe the workflow you want and we'll draft the closest setup we can."
+                : mode === "edit"
+                  ? "Modify the workflow definition."
+                  : channels.length === 1
+                    ? "Review the draft and adjust the workflow before saving."
+                    : "Define a workflow and assign it to a channel."}
             </DialogDescription>
           </DialogHeader>
 
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
-            {showChannelSelector ? (
-              <div className="space-y-1.5">
-                <FieldLabel htmlFor="wf-channel-select">Channel</FieldLabel>
-                <ChannelCombobox
-                  channels={channels}
+            {isPromptStage ? (
+              <WorkflowPromptBuilder
+                disabled={mutation.isPending}
+                onChange={setWorkflowPrompt}
+                prompt={workflowPrompt}
+              />
+            ) : (
+              <>
+                {showChannelSelector ? (
+                  <div className="space-y-1.5">
+                    <FieldLabel htmlFor="wf-channel-select">Channel</FieldLabel>
+                    <ChannelCombobox
+                      channels={channels}
+                      disabled={mutation.isPending}
+                      id="wf-channel-select"
+                      onChange={(value) => {
+                        mutation.reset();
+                        setSelectedChannelId(value);
+                      }}
+                      value={selectedChannelId}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {selectedChannel
+                        ? `New workflows will belong to ${selectedChannel.name}.`
+                        : "Join or create a channel before adding a workflow."}
+                    </p>
+                  </div>
+                ) : (showChannelInfo || mode === "edit") && selectedChannel ? (
+                  <p className="text-sm text-muted-foreground">
+                    {mode === "edit"
+                      ? "Editing workflow in"
+                      : "This workflow will be created in"}{" "}
+                    <span className="font-medium text-foreground">
+                      {selectedChannel.name}
+                    </span>
+                    .
+                  </p>
+                ) : null}
+
+                {isCreateMode && workflowPrompt.trim() ? (
+                  <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+                    <p className="text-xs font-medium text-foreground">
+                      Drafted from your prompt
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {workflowPrompt.trim()}
+                    </p>
+                  </div>
+                ) : null}
+
+                <WorkflowFormBuilder
                   disabled={mutation.isPending}
-                  id="wf-channel-select"
-                  onChange={(value) => {
+                  onChange={(yaml) => {
                     mutation.reset();
-                    setSelectedChannelId(value);
+                    setYamlDefinition(yaml);
                   }}
-                  value={selectedChannelId}
+                  yaml={yamlDefinition}
                 />
-                <p className="text-xs text-muted-foreground">
-                  {selectedChannel
-                    ? `New workflows will belong to ${selectedChannel.name}.`
-                    : "Join or create a channel before adding a workflow."}
-                </p>
-              </div>
-            ) : (showChannelInfo || mode === "edit") && selectedChannel ? (
-              <p className="text-sm text-muted-foreground">
-                {mode === "edit"
-                  ? "Editing workflow in"
-                  : "This workflow will be created in"}{" "}
-                <span className="font-medium text-foreground">
-                  {selectedChannel.name}
-                </span>
-                .
-              </p>
-            ) : null}
 
-            <WorkflowFormBuilder
-              disabled={mutation.isPending}
-              onChange={(yaml) => {
-                mutation.reset();
-                setYamlDefinition(yaml);
-              }}
-              yaml={yamlDefinition}
-            />
-
-            {mutation.error instanceof Error ? (
-              <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {mutation.error.message}
-              </p>
-            ) : null}
+                {mutation.error instanceof Error ? (
+                  <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    {mutation.error.message}
+                  </p>
+                ) : null}
+              </>
+            )}
           </div>
 
-          <div className="flex flex-shrink-0 justify-end gap-2 border-t border-border pt-4">
-            <Button
-              onClick={() => handleOpenChange(false)}
-              type="button"
-              variant="outline"
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={
-                !selectedChannelId ||
-                !yamlDefinition.trim() ||
-                mutation.isPending
-              }
-              onClick={handleSubmit}
-              type="button"
-            >
-              {mutation.isPending ? PENDING_LABELS[mode] : SUBMIT_LABELS[mode]}
-            </Button>
+          <div className="flex flex-shrink-0 items-center justify-between gap-2 border-t border-border pt-4">
+            <div>
+              {isCreateMode && !isPromptStage ? (
+                <Button
+                  disabled={mutation.isPending}
+                  onClick={() => setCreateStage("prompt")}
+                  type="button"
+                  variant="ghost"
+                >
+                  Back to prompt
+                </Button>
+              ) : null}
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                onClick={() => handleOpenChange(false)}
+                type="button"
+                variant="outline"
+              >
+                Cancel
+              </Button>
+              {isPromptStage ? (
+                <Button
+                  disabled={!workflowPrompt.trim() || mutation.isPending}
+                  onClick={handleDraftWorkflow}
+                  type="button"
+                >
+                  Draft workflow
+                </Button>
+              ) : (
+                <Button
+                  disabled={
+                    !selectedChannelId ||
+                    !yamlDefinition.trim() ||
+                    validationError !== null ||
+                    mutation.isPending
+                  }
+                  onClick={handleSubmit}
+                  type="button"
+                >
+                  {mutation.isPending
+                    ? PENDING_LABELS[mode]
+                    : SUBMIT_LABELS[mode]}
+                </Button>
+              )}
+            </div>
           </div>
         </DialogContent>
       </Dialog>

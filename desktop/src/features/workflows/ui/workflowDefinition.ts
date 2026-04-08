@@ -2,6 +2,47 @@ import type { Workflow } from "@/shared/api/types";
 import { TRIGGER_LABELS } from "./workflowFormTypes";
 import type { TriggerType } from "./workflowFormTypes";
 
+const DISPLAY_TITLE_MAX = 100;
+
+/** Stable name from YAML / API (may be snake_case). */
+export function getWorkflowDefinitionName(workflow: Workflow): string {
+  const fromDef = workflow.definition?.name;
+  if (typeof fromDef === "string" && fromDef.trim().length > 0) {
+    return fromDef.trim();
+  }
+  return workflow.name.trim();
+}
+
+/**
+ * Turns stored workflow names into a readable header/card title.
+ * Pass-through for names that already look like sentences or titles; otherwise
+ * converts snake_case to Title Case words.
+ */
+export function humanizeWorkflowTitle(raw: string): string {
+  const name = raw.trim();
+  if (!name) {
+    return "Untitled workflow";
+  }
+  if (name.length > DISPLAY_TITLE_MAX) {
+    return `${name.slice(0, DISPLAY_TITLE_MAX - 1).trimEnd()}…`;
+  }
+
+  if (name.includes(" ") || !name.includes("_")) {
+    return name;
+  }
+
+  return name
+    .split("_")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+/** Title shown in headers, cards, and dialogs. */
+export function getWorkflowDisplayTitle(workflow: Workflow): string {
+  return humanizeWorkflowTitle(getWorkflowDefinitionName(workflow));
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;

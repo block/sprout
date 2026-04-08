@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 import type { Workflow } from "@/shared/api/types";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -19,12 +20,14 @@ import {
 import {
   getWorkflowDescription,
   getWorkflowDisplayStatus,
+  getWorkflowDisplayTitle,
   getWorkflowTriggerSummary,
 } from "./workflowDefinition";
 
 type WorkflowCardProps = {
   workflow: Workflow;
   channelName?: string;
+  selected?: boolean;
   onSelect: (workflowId: string) => void;
   onTrigger: (workflowId: string) => void;
   onEdit: (workflow: Workflow) => void;
@@ -51,6 +54,7 @@ function StatusBadge({ status }: { status: Workflow["status"] }) {
 export function WorkflowCard({
   workflow,
   channelName,
+  selected = false,
   onSelect,
   onTrigger,
   onEdit,
@@ -58,12 +62,16 @@ export function WorkflowCard({
   onDelete,
 }: WorkflowCardProps) {
   const displayStatus = getWorkflowDisplayStatus(workflow);
+  const displayTitle = getWorkflowDisplayTitle(workflow);
   const description = getWorkflowDescription(workflow.definition);
   const triggerSummary = getWorkflowTriggerSummary(workflow.definition);
 
   return (
     <div
-      className="relative w-full rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/50"
+      className={cn(
+        "relative w-full rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/50",
+        selected && "border-primary/45 ring-2 ring-primary/15",
+      )}
       data-testid={`workflow-card-${workflow.id}`}
     >
       <button
@@ -71,16 +79,14 @@ export function WorkflowCard({
         onClick={() => onSelect(workflow.id)}
         type="button"
       >
-        <span className="sr-only">View {workflow.name}</span>
+        <span className="sr-only">View {displayTitle}</span>
       </button>
 
       <div className="flex items-start justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <Zap className="h-4 w-4 shrink-0 text-amber-500" />
-            <span className="truncate text-sm font-medium">
-              {workflow.name}
-            </span>
+            <span className="truncate text-sm font-medium">{displayTitle}</span>
             <StatusBadge status={displayStatus} />
           </div>
           <div className="mt-1.5 flex items-center gap-3 pl-6 text-[11px] text-muted-foreground">

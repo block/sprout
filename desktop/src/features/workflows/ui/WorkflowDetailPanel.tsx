@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Pencil, Play, X } from "lucide-react";
+import { ArrowLeft, LayoutList, Pencil, Play } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -7,23 +7,36 @@ import {
   useWorkflowQuery,
   useWorkflowRunsQuery,
 } from "@/features/workflows/hooks";
-import { WorkflowRunTrace } from "@/features/workflows/ui/WorkflowRunTrace";
+import { WorkflowDefinitionGraph } from "@/features/workflows/ui/WorkflowDefinitionGraph";
+import { WorkflowPropertiesPanel } from "@/features/workflows/ui/WorkflowPropertiesPanel";
+import { WorkflowRunHistoryList } from "@/features/workflows/ui/WorkflowRunHistoryList";
 import type { Workflow } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import {
-  getWorkflowDescription,
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/shared/ui/sheet";
+import {
   getWorkflowDisplayStatus,
-  getWorkflowTriggerSummary,
+  getWorkflowDisplayTitle,
 } from "./workflowDefinition";
 
 type WorkflowDetailPanelProps = {
   workflowId: string;
+  channelName?: string | null;
   onClose: () => void;
   onEdit: (workflow: Workflow) => void;
 };
 
+/**
+ * Diagram uses the full content area; on large screens the properties panel is a
+ * floating rounded column over the map (no split layout / no vertical chrome).
+ */
 export function WorkflowDetailPanel({
   workflowId,
+  channelName,
   onClose,
   onEdit,
 }: WorkflowDetailPanelProps) {
@@ -31,17 +44,34 @@ export function WorkflowDetailPanel({
   const runsQuery = useWorkflowRunsQuery(workflowId);
   const triggerMutation = useTriggerWorkflowMutation(workflowId);
   const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
+  const [graphSelection, setGraphSelection] = React.useState<string | null>(
+    null,
+  );
+  const [propertiesOpen, setPropertiesOpen] = React.useState(false);
+
+  const handleGraphSelection = React.useCallback((id: string | null) => {
+    setGraphSelection(id);
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 1023px)").matches
+    ) {
+      setPropertiesOpen(true);
+    }
+  }, []);
 
   const workflow = workflowQuery.data;
   const runs = runsQuery.data ?? [];
   const approvalsQuery = useRunApprovalsQuery(workflowId, selectedRunId);
-  const workflowDescription = workflow
-    ? getWorkflowDescription(workflow.definition)
-    : null;
-  const triggerSummary = workflow
-    ? getWorkflowTriggerSummary(workflow.definition)
-    : null;
   const workflowStatus = workflow ? getWorkflowDisplayStatus(workflow) : null;
+
+  const approvalsSnapshot = React.useMemo(
+    () => ({
+      isFetching: approvalsQuery.isFetching,
+      error: approvalsQuery.error,
+      data: approvalsQuery.data,
+    }),
+    [approvalsQuery.isFetching, approvalsQuery.error, approvalsQuery.data],
+  );
 
   async function handleTrigger() {
     try {
@@ -52,31 +82,66 @@ export function WorkflowDetailPanel({
     }
   }
 
+  const propertiesTitle =
+    graphSelection === null
+      ? "Workflow"
+      : graphSelection === "trigger"
+        ? "Trigger"
+        : "Step";
+
+  const runHistoryProps = {
+    approvalsQuery: approvalsSnapshot,
+    onToggleRun: (id: string | null) => setSelectedRunId(id),
+    runs,
+    selectedRunId,
+    workflow,
+    workflowQueryError: workflowQuery.isError,
+    workflowQueryLoading: workflowQuery.isLoading,
+  };
+
   return (
     <div
-      className="flex h-full flex-col bg-background"
+      className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
       data-testid="workflow-detail-panel"
     >
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="truncate text-sm font-semibold">
-              {workflow?.name ?? "Loading..."}
-            </h3>
-            {workflowStatus ? <RunStatusBadge status={workflowStatus} /> : null}
+      <header
+        className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 sm:px-4"
+        data-tauri-drag-region
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
+          <Button
+            aria-label="Back to workflow list"
+            className="shrink-0 gap-1.5 px-2 sm:px-3"
+            onClick={onClose}
+            size="sm"
+            variant="ghost"
+          >
+            <ArrowLeft className="h-4 w-4 shrink-0" />
+            <span className="hidden sm:inline">Back</span>
+          </Button>
+          <div className="min-w-0 pl-0 sm:pl-1">
+            <div className="flex items-center gap-2">
+              <h3 className="truncate text-sm font-semibold">
+                {workflow ? getWorkflowDisplayTitle(workflow) : "Loading..."}
+              </h3>
+              {workflowStatus ? (
+                <RunStatusBadge status={workflowStatus} />
+              ) : null}
+            </div>
           </div>
-          {workflowDescription ? (
-            <p className="mt-1 truncate text-xs text-muted-foreground">
-              {workflowDescription}
-            </p>
-          ) : null}
-          {triggerSummary ? (
-            <p className="mt-1 truncate text-xs text-muted-foreground">
-              {triggerSummary}
-            </p>
-          ) : null}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
+          {workflow ? (
+            <Button
+              className="lg:hidden"
+              onClick={() => setPropertiesOpen(true)}
+              size="sm"
+              variant="outline"
+            >
+              <LayoutList className="mr-1 h-3 w-3" />
+              Properties
+            </Button>
+          ) : null}
           {workflow ? (
             <Button
               onClick={() => onEdit(workflow)}
@@ -96,161 +161,90 @@ export function WorkflowDetailPanel({
             <Play className="mr-1 h-3 w-3" />
             {triggerMutation.isPending ? "Triggering..." : "Trigger"}
           </Button>
-          <Button
-            aria-label="Close detail panel"
-            onClick={onClose}
-            size="icon"
-            variant="ghost"
-          >
-            <X className="h-4 w-4" />
-          </Button>
         </div>
-      </div>
+      </header>
 
       {triggerMutation.isError ? (
-        <div className="border-b px-4 py-2 text-xs text-red-400">
+        <div className="border-b border-border px-4 py-2 text-xs text-red-400">
           Failed to trigger workflow
         </div>
       ) : null}
 
-      <div className="flex-1 overflow-y-auto">
-        {workflow ? (
-          <div className="space-y-4 p-4">
-            <div>
-              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Definition
-              </h4>
-              <pre className="max-h-64 overflow-auto rounded-md bg-muted/50 p-3 font-mono text-xs leading-relaxed">
-                {JSON.stringify(workflow.definition, null, 2)}
-              </pre>
-            </div>
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        {/* Map: edge-to-edge on lg so the canvas reads as full-bleed behind the overlay */}
+        <div className="relative z-0 flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col p-2 sm:p-3 lg:absolute lg:inset-0 lg:p-0">
+            {workflow ? (
+              <WorkflowDefinitionGraph
+                className="min-h-0 flex-1 lg:rounded-none lg:border-0 lg:bg-muted/25"
+                controlsPosition="bottom-left"
+                definition={workflow.definition}
+                onSelectedNodeIdChange={handleGraphSelection}
+                selectedNodeId={graphSelection}
+              />
+            ) : workflowQuery.isError ? (
+              <div className="flex min-h-[12rem] flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-border/70">
+                <p className="text-sm text-red-400">Failed to load workflow</p>
+              </div>
+            ) : (
+              <div className="flex min-h-[12rem] flex-1 items-center justify-center rounded-xl border border-border/70">
+                <p className="text-sm text-muted-foreground">Loading...</p>
+              </div>
+            )}
+          </div>
 
-            <div>
-              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Run History
-              </h4>
-              {runs.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No runs yet.</p>
-              ) : (
-                <div className="space-y-2">
-                  {runs.map((run) => {
-                    const isSelected = selectedRunId === run.id;
-                    const duration = formatRunDuration(
-                      run.startedAt,
-                      run.completedAt,
-                    );
-
-                    return (
-                      <div
-                        className={`overflow-hidden rounded-xl border bg-card/70 transition-colors ${
-                          isSelected
-                            ? "border-primary/40 bg-primary/5 shadow-sm"
-                            : "border-border/70 hover:bg-muted/20"
-                        }`}
-                        key={run.id}
-                      >
-                        <button
-                          aria-expanded={isSelected}
-                          className="w-full px-4 py-3 text-left"
-                          data-testid={
-                            isSelected ? "workflow-selected-run" : undefined
-                          }
-                          onClick={() =>
-                            setSelectedRunId(isSelected ? null : run.id)
-                          }
-                          type="button"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                {isSelected ? (
-                                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                                ) : (
-                                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                                )}
-                                <span className="truncate font-mono text-xs font-medium">
-                                  {run.id.slice(0, 8)}
-                                </span>
-                                <RunStatusBadge status={run.status} />
-                              </div>
-                              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 pl-6 text-[11px] text-muted-foreground">
-                                <span>
-                                  {new Date(
-                                    run.createdAt * 1000,
-                                  ).toLocaleString()}
-                                </span>
-                                <span>
-                                  {run.executionTrace.length}{" "}
-                                  {run.executionTrace.length === 1
-                                    ? "step"
-                                    : "steps"}
-                                </span>
-                                {duration ? <span>{duration}</span> : null}
-                                {run.currentStep !== null ? (
-                                  <span>
-                                    Current step {run.currentStep + 1}
-                                  </span>
-                                ) : null}
-                              </div>
-                              {run.errorMessage ? (
-                                <p className="mt-2 break-words pl-6 text-xs text-destructive">
-                                  {run.errorMessage}
-                                </p>
-                              ) : null}
-                            </div>
-                          </div>
-                        </button>
-
-                        {isSelected ? (
-                          <div className="border-t border-border/60 bg-background/60 px-4 py-4">
-                            <div className="mb-3 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-                              <span>Execution Trace</span>
-                              {approvalsQuery.isFetching ? (
-                                <span className="text-[10px] tracking-[0.12em] text-muted-foreground/80">
-                                  Refreshing approvals...
-                                </span>
-                              ) : null}
-                            </div>
-                            {approvalsQuery.error instanceof Error ? (
-                              <p className="mb-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                                {approvalsQuery.error.message}
-                              </p>
-                            ) : null}
-                            <WorkflowRunTrace
-                              approvals={approvalsQuery.data}
-                              run={run}
-                            />
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+          {workflow ? (
+            <aside
+              aria-label="Flow diagram properties"
+              className="pointer-events-none absolute inset-y-2 right-2 z-10 hidden w-[min(20rem,calc(100vw-8rem))] max-w-sm flex-col lg:flex"
+            >
+              <div className="pointer-events-auto flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-background/45 shadow-2xl backdrop-blur-xl backdrop-saturate-150 dark:border-white/5 dark:bg-background/35 supports-[backdrop-filter]:bg-background/40">
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+                  <WorkflowPropertiesPanel
+                    channelName={channelName}
+                    className="gap-4 p-0"
+                    selectedNodeId={graphSelection}
+                    workflow={workflow}
+                  />
+                  <div className="mt-5 border-t border-border/40 pt-5">
+                    <WorkflowRunHistoryList {...runHistoryProps} />
+                  </div>
                 </div>
-              )}
-            </div>
+              </div>
+            </aside>
+          ) : null}
+        </div>
+
+        <div className="max-h-[min(40vh,20rem)] shrink-0 overflow-hidden border-t border-border/80 bg-background/95 lg:hidden">
+          <div className="max-h-[min(40vh,20rem)] overflow-y-auto p-3 sm:p-4">
+            <WorkflowRunHistoryList {...runHistoryProps} />
           </div>
-        ) : workflowQuery.isError ? (
-          <div className="flex h-32 flex-col items-center justify-center gap-2">
-            <p className="text-sm text-red-400">Failed to load workflow</p>
-          </div>
-        ) : (
-          <div className="flex h-32 items-center justify-center">
-            <p className="text-sm text-muted-foreground">Loading...</p>
-          </div>
-        )}
+        </div>
       </div>
+
+      {workflow ? (
+        <div className="lg:hidden">
+          <Sheet onOpenChange={setPropertiesOpen} open={propertiesOpen}>
+            <SheetContent
+              className="flex max-h-[90vh] flex-col overflow-hidden p-0"
+              side="bottom"
+            >
+              <SheetHeader className="border-b px-4 py-3 text-left">
+                <SheetTitle>{propertiesTitle}</SheetTitle>
+              </SheetHeader>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <WorkflowPropertiesPanel
+                  channelName={channelName}
+                  selectedNodeId={graphSelection}
+                  workflow={workflow}
+                />
+              </div>
+            </SheetContent>
+          </Sheet>
+        </div>
+      ) : null}
     </div>
   );
-}
-
-function formatRunDuration(
-  startedAt: number | null,
-  completedAt: number | null,
-) {
-  if (startedAt === null || completedAt === null) return null;
-  const seconds = completedAt - startedAt;
-  if (seconds < 1) return `${Math.round(seconds * 1000)}ms`;
-  return `${seconds.toFixed(1)}s`;
 }
 
 function formatStatusLabel(status: string) {

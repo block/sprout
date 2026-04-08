@@ -93,6 +93,10 @@ export const ACTION_LABELS: Record<ActionType, string> = {
   set_channel_topic: "Set Channel Topic",
 };
 
+function hasNonEmptyText(value: string | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function toHeaderRows(
   headers: unknown,
   stepId: string,
@@ -217,6 +221,25 @@ export function formStateToYaml(state: WorkflowFormState): string {
   return yamlStringify(workflow);
 }
 
+export function getWorkflowFormValidationError(
+  state: WorkflowFormState,
+): string | null {
+  if (state.trigger.on === "schedule") {
+    const hasCron = hasNonEmptyText(state.trigger.cron);
+    const hasInterval = hasNonEmptyText(state.trigger.interval);
+
+    if (!hasCron && !hasInterval) {
+      return "Schedule trigger requires either a cron expression or an interval.";
+    }
+
+    if (hasCron && hasInterval) {
+      return "Schedule trigger cannot include both a cron expression and an interval.";
+    }
+  }
+
+  return null;
+}
+
 const STEP_ID_PATTERN = /^step_(\d+)$/;
 
 export function nextStepId(existingSteps: StepFormState[]): string {
@@ -314,4 +337,10 @@ export function yamlToFormState(
       error: error instanceof Error ? error.message : "Invalid YAML",
     };
   }
+}
+
+export function getWorkflowYamlValidationError(yaml: string): string | null {
+  const result = yamlToFormState(yaml);
+  if (!result.ok) return null;
+  return getWorkflowFormValidationError(result.state);
 }

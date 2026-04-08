@@ -12,6 +12,8 @@ import {
   TRIGGER_LABELS,
   TRIGGER_TYPES,
   formStateToYaml,
+  getWorkflowFormValidationError,
+  getWorkflowYamlValidationError,
   nextStepId,
   yamlToFormState,
 } from "./workflowFormTypes";
@@ -208,6 +210,14 @@ export function WorkflowFormBuilder({
     [formState, updateFormState],
   );
 
+  const validationError = React.useMemo(
+    () =>
+      mode === "yaml"
+        ? getWorkflowYamlValidationError(yaml)
+        : getWorkflowFormValidationError(formState),
+    [formState, mode, yaml],
+  );
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-end">
@@ -230,6 +240,12 @@ export function WorkflowFormBuilder({
         </p>
       ) : null}
 
+      {validationError ? (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {validationError}
+        </p>
+      ) : null}
+
       {mode === "yaml" ? (
         <div className="space-y-1.5">
           <Textarea
@@ -246,7 +262,7 @@ export function WorkflowFormBuilder({
       ) : (
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <FieldLabel htmlFor="wf-name">Workflow name</FieldLabel>
+            <FieldLabel htmlFor="wf-name">Workflow title</FieldLabel>
             <Input
               autoCapitalize="off"
               autoCorrect="off"
@@ -255,7 +271,7 @@ export function WorkflowFormBuilder({
               onChange={(event) =>
                 updateFormState({ ...formState, name: event.target.value })
               }
-              placeholder="e.g. deploy_notifier"
+              placeholder="e.g. Deploy notifications"
               value={formState.name}
             />
           </div>

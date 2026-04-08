@@ -13,6 +13,7 @@ import {
   getChannelWorkflows,
   triggerWorkflow,
 } from "@/shared/api/tauriWorkflows";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 
 type WorkflowsViewProps = {
@@ -64,6 +65,11 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
   });
 
   const allWorkflows = allWorkflowsQuery.data ?? [];
+
+  const selectedChannelName = selectedWorkflowId
+    ? allWorkflows.find((w) => w.workflow.id === selectedWorkflowId)
+        ?.channelName
+    : undefined;
 
   const triggerMutation = useMutation({
     mutationFn: (workflowId: string) => triggerWorkflow(workflowId),
@@ -126,11 +132,22 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
 
   return (
     <div
-      className="flex min-h-0 flex-1 overflow-hidden"
+      className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row"
       data-testid="workflows-view"
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
-        <div className="mb-4 flex items-center justify-between">
+      {/* Workflow list only on overview — hidden while viewing a workflow (nav + full-width editor) */}
+      <div
+        className={cn(
+          "flex min-h-0 flex-col overflow-y-auto p-4",
+          selectedWorkflowId
+            ? "hidden"
+            : "min-h-0 w-full flex-1 lg:w-52 lg:max-w-xs lg:shrink-0 lg:border-border lg:border-r",
+        )}
+      >
+        <div
+          className="mb-4 flex items-center justify-between"
+          data-tauri-drag-region
+        >
           <div className="flex items-center gap-2">
             <h2 className="text-lg font-semibold">Workflows</h2>
             <Button
@@ -192,6 +209,7 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
                 onEdit={handleEdit}
                 onSelect={setSelectedWorkflowId}
                 onTrigger={handleTrigger}
+                selected={selectedWorkflowId === workflow.id}
                 workflow={workflow}
               />
             ))}
@@ -200,9 +218,10 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
       </div>
 
       {selectedWorkflowId ? (
-        <div className="w-[400px] shrink-0">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <WorkflowDetailPanel
             key={selectedWorkflowId}
+            channelName={selectedChannelName}
             onClose={() => setSelectedWorkflowId(null)}
             onEdit={handleEdit}
             workflowId={selectedWorkflowId}
