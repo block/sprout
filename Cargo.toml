@@ -44,18 +44,18 @@ sqlx = { version = "0.8", features = [
 ] }
 
 # Redis
-redis        = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
-deadpool-redis = { version = "0.18", features = ["rt_tokio_1"] }
+redis        = { version = "0.32", features = ["tokio-comp", "connection-manager"] }
+deadpool-redis = { version = "0.23", features = ["rt_tokio_1"] }
 
 # Nostr
-nostr = { version = "0.36" }
+nostr = { version = "0.44" }
 
 # Serialization
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
 serde_yaml  = "0.9"
 evalexpr    = "11"
-cron        = "0.12"
+cron        = "0.16"
 # Observability
 tracing             = "0.1"
 tracing-subscriber  = { version = "0.3", features = ["env-filter", "json"] }
@@ -71,15 +71,15 @@ uuid    = { version = "1", features = ["v4", "serde"] }
 chrono  = { version = "0.4", features = ["serde"] }
 
 # HTTP client (webhook delivery, Typesense indexing)
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.13", features = ["json", "rustls-tls"], default-features = false }
 
 # Cryptography
-sha2      = "0.10"
+sha2      = "0.11"
 hex       = "0.4"
-hmac      = "0.12"
+hmac      = "0.13"
 
 # Randomness
-rand = "0.8"
+rand = "0.10"
 
 # Concurrent data structures
 dashmap = "6"
@@ -93,7 +93,7 @@ jsonwebtoken = "9"
 futures-util = "0.3"
 
 # WebSocket client (test client)
-tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 url = "2"
 
 # MCP SDK
