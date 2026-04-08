@@ -53,6 +53,7 @@ export function CreateAgentDialog({
   const [agentCommand, setAgentCommand] = React.useState("goose");
   const [agentArgs, setAgentArgs] = React.useState("acp");
   const [mcpCommand, setMcpCommand] = React.useState("sprout-mcp-server");
+  const [mcpToolsets, setMcpToolsets] = React.useState("");
   const prereqsQuery = useManagedAgentPrereqsQuery(acpCommand, mcpCommand);
   const [name, setName] = React.useState("");
   const [relayUrl, setRelayUrl] = React.useState("");
@@ -213,6 +214,7 @@ export function CreateAgentDialog({
     setAgentCommand("goose");
     setAgentArgs("acp");
     setMcpCommand("sprout-mcp-server");
+    setMcpToolsets("");
     setTurnTimeoutSeconds("320");
     setParallelism("3");
     setSystemPrompt("");
@@ -355,6 +357,7 @@ export function CreateAgentDialog({
               .map((value) => value.trim())
               .filter((value) => value.length > 0),
             mcpCommand: mcpCommand.trim() || undefined,
+            mcpToolsets: mcpToolsets.trim() || undefined,
             turnTimeoutSeconds:
               Number.parseInt(turnTimeoutSeconds, 10) > 0
                 ? Number.parseInt(turnTimeoutSeconds, 10)
@@ -530,11 +533,13 @@ export function CreateAgentDialog({
                       agentArgs={agentArgs}
                       agentCommand={agentCommand}
                       mcpCommand={mcpCommand}
+                      mcpToolsets={mcpToolsets}
                       onParallelismChange={setParallelism}
                       onAcpCommandChange={setAcpCommand}
                       onAgentArgsChange={setAgentArgs}
                       onAgentCommandChange={setAgentCommand}
                       onMcpCommandChange={setMcpCommand}
+                      onMcpToolsetsChange={setMcpToolsets}
                       onRelayUrlChange={setRelayUrl}
                       onSystemPromptChange={setSystemPrompt}
                       onTurnTimeoutChange={setTurnTimeoutSeconds}

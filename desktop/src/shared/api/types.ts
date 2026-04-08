@@ -294,6 +294,7 @@ export type ManagedAgent = {
   parallelism: number;
   systemPrompt: string | null;
   model: string | null;
+  mcpToolsets: string | null;
   hasApiToken: boolean;
   status: "running" | "stopped" | "deployed" | "not_deployed";
   pid: number | null;
@@ -337,6 +338,7 @@ export type CreateManagedAgentInput = {
   systemPrompt?: string;
   avatarUrl?: string;
   model?: string;
+  mcpToolsets?: string;
   mintToken?: boolean;
   tokenScopes?: TokenScope[];
   tokenName?: string;
@@ -407,6 +409,7 @@ export type UpdateManagedAgentInput = {
   name?: string;
   model?: string | null;
   systemPrompt?: string | null;
+  mcpToolsets?: string | null;
 };
 export type AgentPersona = {
   id: string;

@@ -100,6 +100,7 @@ export function CreateAgentRuntimeFields({
   agentArgs,
   agentCommand,
   mcpCommand,
+  mcpToolsets,
   parallelism,
   relayUrl,
   selectedProviderId,
@@ -109,6 +110,7 @@ export function CreateAgentRuntimeFields({
   onAgentArgsChange,
   onAgentCommandChange,
   onMcpCommandChange,
+  onMcpToolsetsChange,
   onParallelismChange,
   onRelayUrlChange,
   onSystemPromptChange,
@@ -118,6 +120,7 @@ export function CreateAgentRuntimeFields({
   agentArgs: string;
   agentCommand: string;
   mcpCommand: string;
+  mcpToolsets: string;
   parallelism: string;
   relayUrl: string;
   selectedProviderId: string;
@@ -127,6 +130,7 @@ export function CreateAgentRuntimeFields({
   onAgentArgsChange: (value: string) => void;
   onAgentCommandChange: (value: string) => void;
   onMcpCommandChange: (value: string) => void;
+  onMcpToolsetsChange: (value: string) => void;
   onParallelismChange: (value: string) => void;
   onRelayUrlChange: (value: string) => void;
   onSystemPromptChange: (value: string) => void;
@@ -278,6 +282,23 @@ export function CreateAgentRuntimeFields({
             Number of ACP worker subprocesses. sprout-acp allows 1-32.
           </p>
         </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-sm font-medium" htmlFor="agent-mcp-toolsets">
+          MCP toolsets
+        </label>
+        <Input
+          id="agent-mcp-toolsets"
+          onChange={(event) => onMcpToolsetsChange(event.target.value)}
+          placeholder="default"
+          value={mcpToolsets}
+        />
+        <p className="text-xs text-muted-foreground">
+          Comma-separated list of toolsets to expose via `SPROUT_TOOLSETS`.
+          Available: default, channel_admin, dms, canvas, workflow_admin,
+          identity, forums, social. Leave blank for the default toolset only.
+        </p>
       </div>
 
       <div className="space-y-1.5">
