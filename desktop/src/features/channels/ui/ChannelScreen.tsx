@@ -144,17 +144,36 @@ export function ChannelScreen({
   const messageProfilesQuery = useUsersBatchQuery(messageProfilePubkeys, {
     enabled: messageProfilePubkeys.length > 0,
   });
-  const messageProfiles = React.useMemo(
-    () =>
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const messageProfiles = React.useMemo(() => {
+    const base =
       mergeCurrentProfileIntoLookup(
         messageProfilesQuery.data?.profiles,
         currentProfile,
-      ),
-    [currentProfile, messageProfilesQuery.data?.profiles],
-  );
+      ) ?? {};
+    // Merge managed agent names so system messages resolve instantly
+    // (without waiting for the relay profile batch query).
+    const agents = managedAgentsQuery.data ?? [];
+    const merged = { ...base };
+    for (const agent of agents) {
+      const key = agent.pubkey.toLowerCase();
+      if (!merged[key]?.displayName) {
+        merged[key] = {
+          ...merged[key],
+          displayName: agent.name,
+          avatarUrl: null,
+          nip05Handle: null,
+        };
+      }
+    }
+    return merged;
+  }, [
+    currentProfile,
+    managedAgentsQuery.data,
+    messageProfilesQuery.data?.profiles,
+  ]);
   const channelMembersQuery = useChannelMembersQuery(activeChannel?.id ?? null);
   const channelMembers = channelMembersQuery.data;
-  const managedAgentsQuery = useManagedAgentsQuery();
   const personasQuery = usePersonasQuery();
   const personaLookup = React.useMemo(() => {
     const agents = managedAgentsQuery.data ?? [];
