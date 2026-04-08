@@ -4,6 +4,9 @@ import { installRelayBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { openSettings } from "../helpers/settings";
 import { assertRelaySeeded } from "../helpers/seed";
 
+const isCi = Boolean(process.env.CI);
+const relaySeedHookTimeoutMs = isCi ? 90_000 : 30_000;
+
 async function createStream(
   page: import("@playwright/test").Page,
   channelName: string,
@@ -156,6 +159,7 @@ async function getLoggedNotificationCount(
 }
 
 test.beforeAll(async () => {
+  test.setTimeout(relaySeedHookTimeoutMs);
   await assertRelaySeeded();
 });
 

@@ -56,7 +56,7 @@ function getNextZoomFactor(action: ZoomAction, zoomFactor: number) {
 export function useWebviewZoomShortcuts() {
   const zoomFactorRef = React.useRef(DEFAULT_ZOOM_FACTOR);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     const webview = getCurrentWebview();
 
     function handleKeyDown(event: KeyboardEvent) {
