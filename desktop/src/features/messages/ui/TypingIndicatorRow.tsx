@@ -85,6 +85,7 @@ export function TypingIndicatorRow({
               <div
                 key={pubkey}
                 className={`relative h-5 w-5 flex-shrink-0 rounded-full ring-1 ring-background${index > 0 ? " -ml-1.5" : ""}`}
+                data-testid="message-typing-avatar"
               >
                 <ProfileAvatar
                   avatarUrl={profile?.avatarUrl ?? null}

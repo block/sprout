@@ -230,6 +230,72 @@ test("shows and clears typing indicators for active channel bots", async ({
   await expect(page.getByTestId("message-typing-indicator")).toHaveCount(0);
 });
 
+test("typing indicator shows avatars and maintains stable name order", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await page.waitForTimeout(300);
+
+  // Alice starts typing first
+  await page.evaluate((pubkey) => {
+    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+      channelName: "general",
+      pubkey,
+    });
+  }, TEST_IDENTITIES.alice.pubkey);
+
+  await expect(page.getByTestId("message-typing-indicator")).toBeVisible();
+  await expect(
+    page.getByTestId("message-typing-indicator-label"),
+  ).toContainText("alice is typing");
+
+  // Verify avatar is rendered for the typing user
+  const avatars = page
+    .getByTestId("message-typing-indicator")
+    .locator("[data-testid='message-typing-avatar']");
+  await expect(avatars).toHaveCount(1);
+
+  // Bob starts typing second
+  await page.evaluate((pubkey) => {
+    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+      channelName: "general",
+      pubkey,
+    });
+  }, TEST_IDENTITIES.bob.pubkey);
+
+  await expect(
+    page.getByTestId("message-typing-indicator-label"),
+  ).toContainText("alice and bob are typing");
+  await expect(avatars).toHaveCount(2);
+
+  // Alice re-broadcasts — order should stay "alice and bob", not flip
+  await page.evaluate((pubkey) => {
+    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+      channelName: "general",
+      pubkey,
+    });
+  }, TEST_IDENTITIES.alice.pubkey);
+
+  await expect(
+    page.getByTestId("message-typing-indicator-label"),
+  ).toContainText("alice and bob are typing");
+
+  // Bob re-broadcasts — order should still stay "alice and bob"
+  await page.evaluate((pubkey) => {
+    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+      channelName: "general",
+      pubkey,
+    });
+  }, TEST_IDENTITIES.bob.pubkey);
+
+  await expect(
+    page.getByTestId("message-typing-indicator-label"),
+  ).toContainText("alice and bob are typing");
+});
+
 test("sidebar shows unread indicator for newly active channels", async ({
   page,
 }) => {
