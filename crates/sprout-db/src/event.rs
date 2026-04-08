@@ -59,10 +59,6 @@ const CHANNEL_ACTIVITY_KINDS: &[i32] = &[
     KIND_FORUM_COMMENT as i32,
 ];
 
-fn is_channel_activity_kind(kind: i32) -> bool {
-    CHANNEL_ACTIVITY_KINDS.contains(&kind)
-}
-
 /// Extract the `d_tag` value for storage.
 ///
 /// For NIP-33 parameterized replaceable events (kind 30000–39999): returns the first
@@ -829,7 +825,7 @@ mod tests {
     fn channel_activity_kinds_include_readable_timeline_events() {
         for kind in [9, 40001, 40003, 40008, 40099, 45001, 45003] {
             assert!(
-                is_channel_activity_kind(kind),
+                CHANNEL_ACTIVITY_KINDS.contains(&kind),
                 "expected kind {kind} to count toward channel unread state"
             );
         }
@@ -839,7 +835,7 @@ mod tests {
     fn channel_activity_kinds_exclude_discovery_and_admin_events() {
         for kind in [39000, 39001, 39002, 9002, 44100, 46010] {
             assert!(
-                !is_channel_activity_kind(kind),
+                !CHANNEL_ACTIVITY_KINDS.contains(&kind),
                 "expected kind {kind} to be ignored for channel unread state"
             );
         }
