@@ -296,6 +296,20 @@ pub struct UpdateManagedAgentRequest {
     pub system_prompt: Option<Option<String>>,
     #[serde(default)]
     pub mcp_toolsets: Option<Option<String>>,
+    #[serde(default)]
+    pub parallelism: Option<u32>,
+    #[serde(default)]
+    pub turn_timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub relay_url: Option<String>,
+    #[serde(default)]
+    pub acp_command: Option<String>,
+    #[serde(default)]
+    pub agent_command: Option<String>,
+    #[serde(default)]
+    pub agent_args: Option<Vec<String>>,
+    #[serde(default)]
+    pub mcp_command: Option<String>,
 }
 
 /// Response from `get_agent_models` — normalized model info for the frontend.

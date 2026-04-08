@@ -410,6 +410,13 @@ export type UpdateManagedAgentInput = {
   model?: string | null;
   systemPrompt?: string | null;
   mcpToolsets?: string | null;
+  parallelism?: number;
+  turnTimeoutSeconds?: number;
+  relayUrl?: string;
+  acpCommand?: string;
+  agentCommand?: string;
+  agentArgs?: string[];
+  mcpCommand?: string;
 };
 export type AgentPersona = {
   id: string;

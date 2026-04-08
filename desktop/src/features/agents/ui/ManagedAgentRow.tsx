@@ -1,3 +1,5 @@
+import * as React from "react";
+
 import {
   ChevronDown,
   ChevronRight,
@@ -5,6 +7,7 @@ import {
   Ellipsis,
   FileText,
   KeyRound,
+  Pencil,
   Play,
   Power,
   Square,
@@ -26,6 +29,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
+import { EditAgentDialog } from "./EditAgentDialog";
 import { ManagedAgentLogPanel } from "./ManagedAgentLogPanel";
 import { ModelPicker } from "./ModelPicker";
 import { truncatePubkey } from "./agentUi";
@@ -313,6 +317,8 @@ function AgentActionsMenu({
   onStop: (pubkey: string) => void;
   onToggleStartOnAppLaunch: (pubkey: string, startOnAppLaunch: boolean) => void;
 }) {
+  const [editOpen, setEditOpen] = React.useState(false);
+
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
@@ -361,6 +367,13 @@ function AgentActionsMenu({
             Spawn
           </DropdownMenuItem>
         )}
+
+        {agent.backend.type !== "provider" ? (
+          <DropdownMenuItem onClick={() => setEditOpen(true)}>
+            <Pencil className="h-4 w-4" />
+            Edit
+          </DropdownMenuItem>
+        ) : null}
 
         <DropdownMenuItem
           disabled={isActionPending}
@@ -418,6 +431,12 @@ function AgentActionsMenu({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+
+      <EditAgentDialog
+        agent={agent}
+        onOpenChange={setEditOpen}
+        open={editOpen}
+      />
   );
 }
 

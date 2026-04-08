@@ -19,6 +19,7 @@ import {
   mintManagedAgentToken,
   startManagedAgent,
   stopManagedAgent,
+  updateManagedAgent,
 } from "@/shared/api/tauri";
 import {
   createPersona,
@@ -43,6 +44,7 @@ import type {
   CreateTeamInput,
   ManagedAgent,
   MintManagedAgentTokenInput,
+  UpdateManagedAgentInput,
   UpdatePersonaInput,
   UpdateTeamInput,
 } from "@/shared/api/types";
@@ -185,6 +187,29 @@ export function useCreateManagedAgentMutation() {
             created.agent,
             ...next.filter((agent) => agent.pubkey !== created.agent.pubkey),
           ];
+        },
+      );
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
+      await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });
+    },
+  });
+}
+
+export function useUpdateManagedAgentMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: UpdateManagedAgentInput) => updateManagedAgent(input),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<ManagedAgent[]>(
+        managedAgentsQueryKey,
+        (current) => {
+          if (!current) return current;
+          return current.map((agent) =>
+            agent.pubkey === updated.pubkey ? updated : agent,
+          );
         },
       );
     },

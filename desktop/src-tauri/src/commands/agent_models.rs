@@ -137,6 +137,27 @@ pub fn update_managed_agent(
             .filter(|v| !v.is_empty())
             .map(str::to_string);
     }
+    if let Some(parallelism) = input.parallelism {
+        record.parallelism = parallelism;
+    }
+    if let Some(turn_timeout_seconds) = input.turn_timeout_seconds {
+        record.turn_timeout_seconds = turn_timeout_seconds;
+    }
+    if let Some(relay_url) = input.relay_url {
+        record.relay_url = relay_url;
+    }
+    if let Some(acp_command) = input.acp_command {
+        record.acp_command = acp_command;
+    }
+    if let Some(agent_command) = input.agent_command {
+        record.agent_command = agent_command;
+    }
+    if let Some(agent_args) = input.agent_args {
+        record.agent_args = agent_args;
+    }
+    if let Some(mcp_command) = input.mcp_command {
+        record.mcp_command = mcp_command;
+    }
     record.updated_at = now_iso();
 
     save_managed_agents(&app, &records)?;
