@@ -1,15 +1,10 @@
-import type { CheckedState } from "@radix-ui/react-checkbox";
-
 import type { AgentPersona } from "@/shared/api/types";
 import { promptPreview } from "@/shared/lib/promptPreview";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
-import { Checkbox } from "@/shared/ui/checkbox";
 import { Skeleton } from "@/shared/ui/skeleton";
-import {
-  getPersonaCatalogToggleAriaLabel,
-  PersonaCatalogSelectionBadge,
-} from "./PersonaCatalogSelectionBadge";
+import { PersonaCatalogSelectionBadge } from "./PersonaCatalogSelectionBadge";
+import { PersonaCatalogSelectionControl } from "./PersonaCatalogSelectionControl";
 import { PersonaIdentity } from "./PersonaIdentity";
 import { personaCatalogCopy } from "./personaLibraryCopy";
 
@@ -40,10 +35,6 @@ export function PersonaCatalogSection({
   personas,
   showHeader = true,
 }: PersonaCatalogSectionProps) {
-  function handleCheckedChange(persona: AgentPersona, checked: CheckedState) {
-    onSelectPersona(persona, checked === true);
-  }
-
   return (
     <section className="space-y-4" data-testid="agents-persona-catalog">
       {showHeader ? (
@@ -80,7 +71,6 @@ export function PersonaCatalogSection({
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
           {personas.map((persona) => {
             const preview = promptPreview(persona.systemPrompt);
-            const toggleId = `persona-catalog-toggle-control-${persona.id}`;
 
             return (
               <div
@@ -119,34 +109,14 @@ export function PersonaCatalogSection({
                     {personaCatalogCopy.detailsAction}
                   </Button>
 
-                  <label
-                    className={cn(
-                      "flex items-center gap-2 rounded-md px-2 py-1 text-xs font-medium text-foreground transition-colors",
-                      isPending
-                        ? "cursor-not-allowed opacity-70"
-                        : "cursor-pointer hover:bg-muted/60",
-                    )}
-                    data-testid={`persona-catalog-toggle-target-${persona.id}`}
-                    htmlFor={toggleId}
-                  >
-                    <Checkbox
-                      aria-label={getPersonaCatalogToggleAriaLabel(
-                        persona.displayName,
-                      )}
-                      checked={persona.isActive}
-                      data-testid={`persona-catalog-toggle-${persona.id}`}
-                      disabled={isPending}
-                      id={toggleId}
-                      onCheckedChange={(checked) =>
-                        handleCheckedChange(persona, checked)
-                      }
-                    />
-                    <span>
-                      {persona.isActive
-                        ? personaCatalogCopy.deselectAction
-                        : personaCatalogCopy.selectAction}
-                    </span>
-                  </label>
+                  <PersonaCatalogSelectionControl
+                    isPending={isPending}
+                    onCheckedChange={(checked) => {
+                      onSelectPersona(persona, checked === true);
+                    }}
+                    persona={persona}
+                    variant="card"
+                  />
                 </div>
               </div>
             );

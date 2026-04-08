@@ -34,3 +34,15 @@ export const personaCatalogCopy = {
   teamEmptyState:
     "No personas in My Agents yet. Create one or choose one from Persona Catalog first.",
 } as const;
+
+export function getPersonaCatalogDetailSelectionCopy(isActive: boolean) {
+  return isActive
+    ? {
+        title: personaCatalogCopy.detailSelectedTitle,
+        description: personaCatalogCopy.detailSelectedDescription,
+      }
+    : {
+        title: personaCatalogCopy.detailAvailableTitle,
+        description: personaCatalogCopy.detailAvailableDescription,
+      };
+}
