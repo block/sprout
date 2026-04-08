@@ -46,6 +46,26 @@ pub struct SearchUsersResponse {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct UserNoteInfo {
+    pub id: String,
+    pub pubkey: String,
+    pub created_at: i64,
+    pub content: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UserNotesCursor {
+    pub before: i64,
+    pub before_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UserNotesResponse {
+    pub notes: Vec<UserNoteInfo>,
+    pub next_cursor: Option<UserNotesCursor>,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct SetPresenceResponse {
     pub status: PresenceStatus,
     pub ttl_seconds: u64,
@@ -257,6 +277,16 @@ pub struct SendChannelMessageResponse {
 #[derive(Serialize)]
 pub struct GetUsersBatchBody<'a> {
     pub pubkeys: &'a [String],
+}
+
+#[derive(Serialize)]
+pub struct GetUserNotesQuery<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_id: Option<&'a str>,
 }
 
 #[derive(Serialize, Deserialize)]

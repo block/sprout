@@ -4,5 +4,6 @@ pub mod dms;
 pub mod feed;
 pub mod messages;
 pub mod reactions;
+pub mod social;
 pub mod users;
 pub mod workflows;

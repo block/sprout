@@ -29,7 +29,6 @@ import {
 import { usePresenceSession } from "@/features/presence/hooks";
 import { useProfileQuery } from "@/features/profile/hooks";
 import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
-import { SettingsScreen } from "@/features/settings/ui/SettingsScreen";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -45,6 +44,11 @@ import {
 
 type AppView = "home" | "channel" | "agents" | "workflows";
 const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
+
+const LazySettingsScreen = React.lazy(async () => {
+  const module = await import("@/features/settings/ui/SettingsScreen");
+  return { default: module.SettingsScreen };
+});
 
 function toSearchHit(target: DesktopNotificationTarget): SearchHit | null {
   if (!target.eventId) {
@@ -250,14 +254,32 @@ export function AppShell() {
   React.useEffect(() => {
     let isCancelled = false;
 
-    void relayClient.preconnect().catch((error) => {
-      if (!isCancelled) {
-        console.error("Failed to preconnect to relay", error);
+    const startPreconnect = () => {
+      if (isCancelled) {
+        return;
       }
-    });
 
+      void relayClient.preconnect().catch((error) => {
+        if (!isCancelled) {
+          console.error("Failed to preconnect to relay", error);
+        }
+      });
+    };
+
+    if ("requestIdleCallback" in window) {
+      const idleId = window.requestIdleCallback(startPreconnect, {
+        timeout: 1_500,
+      });
+      return () => {
+        isCancelled = true;
+        window.cancelIdleCallback(idleId);
+      };
+    }
+
+    const timeoutId = globalThis.setTimeout(startPreconnect, 250);
     return () => {
       isCancelled = true;
+      globalThis.clearTimeout(timeoutId);
     };
   }, []);
 
@@ -486,29 +508,31 @@ export function AppShell() {
           />
 
           {settingsOpen ? (
-            <SettingsScreen
-              currentPubkey={identityQuery.data?.pubkey}
-              fallbackDisplayName={identityQuery.data?.displayName}
-              isUpdatingDesktopNotifications={
-                notificationSettings.isUpdatingDesktopEnabled
-              }
-              notificationErrorMessage={notificationSettings.errorMessage}
-              notificationPermission={notificationSettings.permission}
-              notificationSettings={notificationSettings.settings}
-              onClose={handleCloseSettings}
-              onSectionChange={setSettingsSection}
-              onSetDesktopNotificationsEnabled={
-                notificationSettings.setDesktopEnabled
-              }
-              onSetHomeBadgeEnabled={notificationSettings.setHomeBadgeEnabled}
-              onSetMentionNotificationsEnabled={
-                notificationSettings.setMentionsEnabled
-              }
-              onSetNeedsActionNotificationsEnabled={
-                notificationSettings.setNeedsActionEnabled
-              }
-              section={settingsSection}
-            />
+            <React.Suspense fallback={null}>
+              <LazySettingsScreen
+                currentPubkey={identityQuery.data?.pubkey}
+                fallbackDisplayName={identityQuery.data?.displayName}
+                isUpdatingDesktopNotifications={
+                  notificationSettings.isUpdatingDesktopEnabled
+                }
+                notificationErrorMessage={notificationSettings.errorMessage}
+                notificationPermission={notificationSettings.permission}
+                notificationSettings={notificationSettings.settings}
+                onClose={handleCloseSettings}
+                onSectionChange={setSettingsSection}
+                onSetDesktopNotificationsEnabled={
+                  notificationSettings.setDesktopEnabled
+                }
+                onSetHomeBadgeEnabled={notificationSettings.setHomeBadgeEnabled}
+                onSetMentionNotificationsEnabled={
+                  notificationSettings.setMentionsEnabled
+                }
+                onSetNeedsActionNotificationsEnabled={
+                  notificationSettings.setNeedsActionEnabled
+                }
+                section={settingsSection}
+              />
+            </React.Suspense>
           ) : null}
         </SidebarProvider>
       </AppShellProvider>

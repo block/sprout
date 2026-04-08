@@ -1,9 +1,14 @@
 import * as React from "react";
 
-import { useUserProfileQuery } from "@/features/profile/hooks";
-import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import {
+  useUserNotesQuery,
+  useUserProfileQuery,
+} from "@/features/profile/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
+import { formatRelativeTime } from "@/features/forum/lib/time";
+import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { Markdown } from "@/shared/ui/markdown";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 
 type UserProfilePopoverProps = {
@@ -25,17 +30,21 @@ export function UserProfilePopover({
 }: UserProfilePopoverProps) {
   const [open, setOpen] = React.useState(false);
   const profileQuery = useUserProfileQuery(open ? pubkey : undefined);
+  const notesQuery = useUserNotesQuery(open ? pubkey : undefined, {
+    limit: 3,
+  });
   const presenceQuery = usePresenceQuery(open ? [pubkey] : [], {
     enabled: open,
   });
 
   const profile = profileQuery.data;
+  const notes = notesQuery.data?.notes ?? [];
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
 
   return (
     <Popover onOpenChange={setOpen} open={open}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent align="start" className="w-72" side="top" sideOffset={8}>
+      <PopoverContent align="start" className="w-80" side="top" sideOffset={8}>
         <div className="flex flex-col gap-3">
           <div className="flex items-start gap-3">
             {profile?.avatarUrl ? (
@@ -76,6 +85,50 @@ export function UserProfilePopover({
           <p className="truncate font-mono text-[10px] text-muted-foreground/60">
             {truncatePubkey(pubkey)}
           </p>
+
+          {notesQuery.isLoading ? (
+            <div
+              className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
+              data-testid="user-profile-notes-loading"
+            >
+              Loading recent notes…
+            </div>
+          ) : null}
+
+          {!notesQuery.isLoading && notes.length > 0 ? (
+            <div
+              className="border-t border-border/60 pt-3"
+              data-testid="user-profile-notes"
+            >
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Recent Notes
+              </p>
+              <div className="space-y-2">
+                {notes.map((note) => (
+                  <article
+                    className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2"
+                    data-testid="user-profile-note"
+                    key={note.id}
+                  >
+                    <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground/80">
+                      {formatRelativeTime(note.createdAt)}
+                    </p>
+                    <Markdown
+                      className="max-w-none text-xs text-foreground"
+                      content={note.content}
+                      tight
+                    />
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {notesQuery.isError ? (
+            <p className="text-xs text-muted-foreground">
+              Recent notes are unavailable right now.
+            </p>
+          ) : null}
         </div>
       </PopoverContent>
     </Popover>

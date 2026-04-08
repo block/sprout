@@ -36,8 +36,7 @@ const TIMESTAMP_TOLERANCE_SECS: u64 = 60;
 
 /// Generate a random NIP-42 challenge (32 CSPRNG bytes, hex-encoded).
 pub fn generate_challenge() -> String {
-    use rand::Rng;
-    let bytes: [u8; 32] = rand::thread_rng().gen();
+    let bytes: [u8; 32] = rand::random();
     hex::encode(bytes)
 }
 

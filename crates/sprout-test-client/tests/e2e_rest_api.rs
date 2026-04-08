@@ -1520,3 +1520,340 @@ async fn test_set_channel_add_policy_rejects_invalid() {
 }
 
 // ── Thread reply mention p-tag tests ──────────────────────────────────────────
+
+// ── Notes (kind:1) tests ──────────────────────────────────────────────────────
+
+/// Phase 1: GET /api/events/{id} must return 200 for kind:1 text note.
+#[tokio::test]
+#[ignore]
+async fn test_get_event_returns_text_note() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    let content = format!("e2e-note-{}", uuid::Uuid::new_v4().simple());
+    let event = EventBuilder::new(Kind::Custom(1), &content, vec![])
+        .sign_with_keys(&keys)
+        .unwrap();
+    let event_id = event.id.to_hex();
+
+    let resp = client
+        .post(format!("{}/api/events", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).unwrap())
+        .send()
+        .await
+        .expect("submit kind:1 event");
+    assert!(
+        resp.status().is_success(),
+        "kind:1 submission failed: {}",
+        resp.status()
+    );
+
+    let url = format!("{}/api/events/{}", relay_http_url(), event_id);
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+    assert_eq!(resp.status(), 200, "expected 200 for known kind:1 event");
+
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(
+        body["id"].as_str(),
+        Some(event_id.as_str()),
+        "id must match"
+    );
+    assert_eq!(body["kind"].as_u64(), Some(1), "kind must be 1");
+    assert_eq!(
+        body["content"].as_str(),
+        Some(content.as_str()),
+        "content must match"
+    );
+}
+
+/// Phase 1: GET /api/events/{id} must return 404 for unknown / disallowed event IDs.
+#[tokio::test]
+#[ignore]
+async fn test_get_event_rejects_unknown_global_kind() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Use a well-formed but non-existent event ID (all-zeros hex).
+    let fake_id = "0".repeat(64);
+    let url = format!("{}/api/events/{}", relay_http_url(), fake_id);
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+    assert_eq!(resp.status(), 404, "unknown event ID should return 404");
+}
+
+/// Phase 2: GET /api/users/{pubkey}/notes returns paginated notes.
+#[tokio::test]
+#[ignore]
+async fn test_get_user_notes_returns_paginated_notes() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Publish 3 kind:1 events for this key. No sleep needed — the composite cursor
+    // (created_at, event_id) correctly handles same-second events without skipping.
+    for i in 0..3u8 {
+        let content = format!("e2e-paginated-note-{}-{}", i, uuid::Uuid::new_v4().simple());
+        let event = EventBuilder::new(Kind::Custom(1), &content, vec![])
+            .sign_with_keys(&keys)
+            .unwrap();
+        let resp = client
+            .post(format!("{}/api/events", relay_http_url()))
+            .header("X-Pubkey", &pubkey_hex)
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_string(&event).unwrap())
+            .send()
+            .await
+            .expect("submit kind:1 event");
+        assert!(
+            resp.status().is_success(),
+            "kind:1 submission {} failed: {}",
+            i,
+            resp.status()
+        );
+    }
+
+    // First page: limit=2 — expect exactly 2 results and a next_cursor.
+    let page1_url = format!(
+        "{}/api/users/{}/notes?limit=2",
+        relay_http_url(),
+        pubkey_hex
+    );
+    let resp = authed_get(&client, &page1_url, &pubkey_hex).await;
+    assert_eq!(resp.status(), 200, "expected 200 for first page of notes");
+
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let notes = body["notes"]
+        .as_array()
+        .expect("body must have a 'notes' array");
+    assert_eq!(notes.len(), 2, "first page should return exactly 2 notes");
+
+    // next_cursor is now a JSON object with `before` (i64 timestamp) and
+    // `before_id` (hex event ID) for stable composite cursor pagination.
+    let cursor = &body["next_cursor"];
+    assert!(
+        cursor.is_object(),
+        "next_cursor must be a JSON object when more results exist, got: {cursor}"
+    );
+    let cursor_before = cursor["before"]
+        .as_i64()
+        .expect("next_cursor.before must be a JSON number");
+    let cursor_before_id = cursor["before_id"]
+        .as_str()
+        .expect("next_cursor.before_id must be a string");
+
+    // Collect page 1 event IDs for duplicate checking.
+    let page1_ids: std::collections::HashSet<String> = notes
+        .iter()
+        .filter_map(|n| n["id"].as_str().map(|s| s.to_string()))
+        .collect();
+
+    // Second page: use composite cursor — expect at least 1 remaining note.
+    let page2_url = format!(
+        "{}/api/users/{}/notes?limit=2&before={}&before_id={}",
+        relay_http_url(),
+        pubkey_hex,
+        cursor_before,
+        cursor_before_id
+    );
+    let resp = authed_get(&client, &page2_url, &pubkey_hex).await;
+    assert_eq!(resp.status(), 200, "expected 200 for second page of notes");
+
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let notes = body["notes"]
+        .as_array()
+        .expect("body must have a 'notes' array");
+    assert!(
+        !notes.is_empty(),
+        "second page should return at least 1 remaining note"
+    );
+
+    // No event from page 1 should appear on page 2.
+    for note in notes {
+        let id = note["id"].as_str().unwrap_or("");
+        assert!(
+            !page1_ids.contains(id),
+            "event {id} appeared on both page 1 and page 2 (duplicate)"
+        );
+    }
+}
+
+/// Phase 2: GET /api/users/{pubkey}/contact-list returns latest kind:3.
+/// Also verifies replacement semantics: a newer kind:3 must supersede the older one.
+#[tokio::test]
+#[ignore]
+async fn test_get_contact_list_returns_latest() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // ── First contact list: 2 contacts ───────────────────────────────────────
+    let contact1 = Keys::generate().public_key().to_hex();
+    let contact2 = Keys::generate().public_key().to_hex();
+    let tags_v1 = vec![
+        Tag::parse(&["p", &contact1]).unwrap(),
+        Tag::parse(&["p", &contact2]).unwrap(),
+    ];
+    let event_v1 = EventBuilder::new(Kind::Custom(3), "", tags_v1)
+        .sign_with_keys(&keys)
+        .unwrap();
+
+    let resp = client
+        .post(format!("{}/api/events", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event_v1).unwrap())
+        .send()
+        .await
+        .expect("submit first kind:3 event");
+    assert!(
+        resp.status().is_success(),
+        "first kind:3 submission failed: {}",
+        resp.status()
+    );
+
+    // Wait 1 second so the replacement event gets a strictly greater created_at.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    // ── Second contact list: 1 different contact ──────────────────────────────
+    let contact3 = Keys::generate().public_key().to_hex();
+    let tags_v2 = vec![Tag::parse(&["p", &contact3]).unwrap()];
+    let event_v2 = EventBuilder::new(Kind::Custom(3), "", tags_v2)
+        .sign_with_keys(&keys)
+        .unwrap();
+
+    let resp = client
+        .post(format!("{}/api/events", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event_v2).unwrap())
+        .send()
+        .await
+        .expect("submit second kind:3 event");
+    assert!(
+        resp.status().is_success(),
+        "second kind:3 submission failed: {}",
+        resp.status()
+    );
+
+    // ── Fetch and assert replacement ──────────────────────────────────────────
+    let url = format!("{}/api/users/{}/contact-list", relay_http_url(), pubkey_hex);
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "expected 200 for contact-list after publishing kind:3"
+    );
+
+    let body: serde_json::Value = resp.json().await.expect("json");
+    let tags = body["tags"]
+        .as_array()
+        .expect("body must have 'tags' array");
+    let p_tags: Vec<_> = tags
+        .iter()
+        .filter(|t| {
+            t.as_array()
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str())
+                == Some("p")
+        })
+        .collect();
+    // The second event (1 contact) must have replaced the first (2 contacts).
+    assert_eq!(
+        p_tags.len(),
+        1,
+        "expected 1 'p' tag — the second (replacement) contact list should supersede the first"
+    );
+    // The single remaining contact must be contact3, not contact1 or contact2.
+    let remaining_pubkey = p_tags[0]
+        .as_array()
+        .and_then(|a| a.get(1))
+        .and_then(|v| v.as_str())
+        .expect("p-tag must have a pubkey value");
+    assert_eq!(
+        remaining_pubkey, contact3,
+        "the surviving contact must be contact3 from the replacement event"
+    );
+}
+
+/// Phase 2: GET /api/users/{pubkey}/contact-list returns 404 for unknown pubkey.
+#[tokio::test]
+#[ignore]
+async fn test_get_contact_list_returns_404_for_unknown() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Use a freshly generated key that has never published anything.
+    let unknown_pubkey = Keys::generate().public_key().to_hex();
+    let url = format!(
+        "{}/api/users/{}/contact-list",
+        relay_http_url(),
+        unknown_pubkey
+    );
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+    assert_eq!(
+        resp.status(),
+        404,
+        "unknown pubkey contact-list should return 404"
+    );
+}
+
+/// Overflow guard: any out-of-range `before` timestamp must return 400, whether
+/// used alone (simple cursor) or with `before_id` (composite cursor).
+#[tokio::test]
+#[ignore]
+async fn test_get_user_notes_invalid_before_returns_400() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pubkey_hex = keys.public_key().to_hex();
+
+    // Publish one note so the user has something to return.
+    let content = format!("e2e-overflow-note-{}", uuid::Uuid::new_v4().simple());
+    let event = EventBuilder::new(Kind::Custom(1), &content, vec![])
+        .sign_with_keys(&keys)
+        .unwrap();
+    let resp = client
+        .post(format!("{}/api/events", relay_http_url()))
+        .header("X-Pubkey", &pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).unwrap())
+        .send()
+        .await
+        .expect("submit kind:1 event");
+    assert!(
+        resp.status().is_success(),
+        "kind:1 submission failed: {}",
+        resp.status()
+    );
+
+    // Simple cursor (no before_id): overflow timestamp must return 400.
+    let url = format!(
+        "{}/api/users/{}/notes?before=99999999999999",
+        relay_http_url(),
+        pubkey_hex
+    );
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "simple overflow `before` must return 400"
+    );
+
+    // Composite cursor with overflow timestamp must also return 400.
+    let fake_id = "a".repeat(64);
+    let url = format!(
+        "{}/api/users/{}/notes?before=99999999999999&before_id={}",
+        relay_http_url(),
+        pubkey_hex,
+        fake_id
+    );
+    let resp = authed_get(&client, &url, &pubkey_hex).await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "composite cursor with overflow `before` must return 400"
+    );
+}

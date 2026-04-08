@@ -342,7 +342,7 @@ pub async fn mint_token_via_api(
         serde_json::to_vec(&body).map_err(|e| format!("serialize mint body failed: {e}"))?;
 
     // Build NIP-98 auth header signed by the AGENT's keys (not the desktop user's).
-    let payload_hash = format!("{:x}", Sha256::digest(&body_bytes));
+    let payload_hash = hex::encode(Sha256::digest(&body_bytes));
     let forwarded_proto = if url.starts_with("http://") {
         "http"
     } else {

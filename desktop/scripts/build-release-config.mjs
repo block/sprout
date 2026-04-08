@@ -32,6 +32,12 @@ if (publicKey && endpoint) {
   const missing = [];
   if (!publicKey) missing.push("SPROUT_UPDATER_PUBLIC_KEY");
   if (!endpoint) missing.push("SPROUT_UPDATER_ENDPOINT");
+  if (releaseConfig.plugins) {
+    delete releaseConfig.plugins.updater;
+    if (Object.keys(releaseConfig.plugins).length === 0) {
+      delete releaseConfig.plugins;
+    }
+  }
   console.log(`Updater config skipped (missing: ${missing.join(", ")})`);
 }
 
