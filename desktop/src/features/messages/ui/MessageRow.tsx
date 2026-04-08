@@ -14,9 +14,9 @@ import { BotIdenticon } from "./BotIdenticon";
 import { MessageActionBar } from "./MessageActionBar";
 import { MessageTimestamp } from "./MessageTimestamp";
 
-/** Returns true if the author name looks like a numbered bot copy (e.g. "Scout::01") */
-function isNumberedBot(author: string, role?: string): boolean {
-  return Boolean(role) && author.includes("::");
+/** Returns true if this message is from a bot instance. */
+function isBotInstance(role?: string): boolean {
+  return role === "bot";
 }
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
@@ -178,7 +178,7 @@ export const MessageRow = React.memo(
           data-testid="message-row"
         >
           <div className="flex shrink-0 items-center gap-1">
-            {isNumberedBot(message.author, message.role) ? (
+            {isBotInstance(message.role) ? (
               <BotIdenticon
                 value={message.author}
                 size={20}
@@ -259,7 +259,11 @@ export const MessageRow = React.memo(
                   {message.author}
                 </h3>
               )}
-              {message.role ? (
+              {message.personaDisplayName ? (
+                <span className="text-xs text-muted-foreground">
+                  {message.personaDisplayName}
+                </span>
+              ) : message.role ? (
                 <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                   {message.role}
                 </p>
@@ -353,6 +357,7 @@ export const MessageRow = React.memo(
     prev.message.reactions === next.message.reactions &&
     prev.message.tags === next.message.tags &&
     prev.message.role === next.message.role &&
+    prev.message.personaDisplayName === next.message.personaDisplayName &&
     prev.highlighted === next.highlighted &&
     prev.activeReplyTargetId === next.activeReplyTargetId &&
     prev.profiles === next.profiles,

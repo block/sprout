@@ -9,6 +9,10 @@ import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
 import {
+  useManagedAgentsQuery,
+  usePersonasQuery,
+} from "@/features/agents/hooks";
+import {
   mergeMessages,
   useChannelMessagesQuery,
   useChannelSubscription,
@@ -150,6 +154,23 @@ export function ChannelScreen({
   );
   const channelMembersQuery = useChannelMembersQuery(activeChannel?.id ?? null);
   const channelMembers = channelMembersQuery.data;
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const personasQuery = usePersonasQuery();
+  const personaLookup = React.useMemo(() => {
+    const agents = managedAgentsQuery.data ?? [];
+    const personas = personasQuery.data ?? [];
+    const personaById = new Map(personas.map((p) => [p.id, p.displayName]));
+    const lookup = new Map<string, string>();
+    for (const agent of agents) {
+      if (agent.personaId) {
+        const personaName = personaById.get(agent.personaId);
+        if (personaName) {
+          lookup.set(agent.pubkey.toLowerCase(), personaName);
+        }
+      }
+    }
+    return lookup;
+  }, [managedAgentsQuery.data, personasQuery.data]);
   const timelineMessages = React.useMemo(
     () =>
       formatTimelineMessages(
@@ -159,6 +180,7 @@ export function ChannelScreen({
         currentProfile?.avatarUrl ?? null,
         messageProfiles,
         channelMembers,
+        personaLookup,
       ),
     [
       activeChannel,
@@ -166,6 +188,7 @@ export function ChannelScreen({
       currentProfile?.avatarUrl,
       currentPubkey,
       messageProfiles,
+      personaLookup,
       resolvedMessages,
     ],
   );
@@ -403,6 +426,7 @@ export function ChannelScreen({
                 onReply={handleReply}
                 onSend={handleSend}
                 onToggleReaction={effectiveToggleReaction}
+                personaLookup={personaLookup}
                 profiles={messageProfiles}
                 replyTargetId={replyTargetId}
                 replyTargetMessage={replyTargetMessage}

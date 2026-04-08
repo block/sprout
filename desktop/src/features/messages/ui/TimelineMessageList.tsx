@@ -24,6 +24,8 @@ type TimelineMessageListProps = {
     emoji: string,
     remove: boolean,
   ) => Promise<void>;
+  /** Map from lowercase pubkey → persona display name for bot members. */
+  personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
 };
 
@@ -36,6 +38,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   onEdit,
   onReply,
   onToggleReaction,
+  personaLookup,
   profiles,
 }: TimelineMessageListProps) {
   const elements: React.ReactNode[] = [];
@@ -60,6 +63,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           body={message.body}
           createdAt={message.createdAt}
           currentPubkey={currentPubkey}
+          personaLookup={personaLookup}
           profiles={profiles}
           time={message.time}
         />,

@@ -114,6 +114,8 @@ export function formatTimelineMessages(
   currentUserAvatarUrl: string | null,
   profiles?: UserProfileLookup,
   members?: ChannelMember[],
+  /** Map from lowercase pubkey → persona display name for bot messages. */
+  personaLookup?: Map<string, string>,
 ): TimelineMessage[] {
   const currentPubkeyLower = currentPubkey?.toLowerCase();
   const roleByPubkey = new Map<string, string>();
@@ -291,6 +293,7 @@ export function formatTimelineMessages(
       });
     const thread = getThreadReference(event.tags);
     const edit = editsByTargetId.get(event.id);
+    const role = roleByPubkey.get(authorPubkey.toLowerCase());
     return {
       id: event.id,
       createdAt: event.created_at,
@@ -302,7 +305,11 @@ export function formatTimelineMessages(
         currentUserAvatarUrl,
         profiles,
       }),
-      role: roleByPubkey.get(authorPubkey.toLowerCase()),
+      role,
+      personaDisplayName:
+        role === "bot"
+          ? personaLookup?.get(authorPubkey.toLowerCase())
+          : undefined,
       time: formatTime(event.created_at),
       body: edit ? edit.content : event.content,
       parentId: thread.parentId,

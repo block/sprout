@@ -405,9 +405,9 @@ export type AgentModelInfo = {
   name: string | null;
   description: string | null;
 };
-
 export type UpdateManagedAgentInput = {
   pubkey: string;
+  name?: string;
   model?: string | null;
   systemPrompt?: string | null;
 };
@@ -421,6 +421,7 @@ export type AgentPersona = {
   provider: string | null;
   /** Preferred model ID (e.g. "gpt-4o", "claude-sonnet-4-20250514"). */
   model: string | null;
+  namePool: string[];
   isBuiltIn: boolean;
   createdAt: string;
   updatedAt: string;
@@ -432,6 +433,7 @@ export type CreatePersonaInput = {
   systemPrompt: string;
   provider?: string;
   model?: string;
+  namePool?: string[];
 };
 
 export type UpdatePersonaInput = {
@@ -441,10 +443,10 @@ export type UpdatePersonaInput = {
   systemPrompt: string;
   provider?: string;
   model?: string;
+  namePool?: string[];
 };
 
 // ── Team types ────────────────────────────────────────────────────────────────
-
 export type AgentTeam = {
   id: string;
   name: string;

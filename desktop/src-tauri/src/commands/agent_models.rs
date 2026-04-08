@@ -117,6 +117,12 @@ pub fn update_managed_agent(
 
     let record = find_managed_agent_mut(&mut records, &input.pubkey)?;
 
+    if let Some(name_update) = input.name {
+        let trimmed = name_update.trim().to_string();
+        if !trimmed.is_empty() {
+            record.name = trimmed;
+        }
+    }
     // Tri-state: None = don't touch, Some(None) = clear, Some(Some(v)) = set
     if let Some(model_update) = input.model {
         record.model = model_update;
