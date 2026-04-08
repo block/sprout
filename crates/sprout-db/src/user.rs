@@ -530,6 +530,47 @@ mod tests {
         assert!(result.is_err(), "should reject invalid policy value");
     }
 
+    // ── LIKE escaping unit tests (no DB required) ──────────────────────
+
+    /// Helper that mirrors the escaping logic in `search_users`.
+    fn escape_like(input: &str) -> String {
+        input
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    }
+
+    #[test]
+    fn like_escape_percent() {
+        assert_eq!(escape_like("%"), "\\%");
+        assert_eq!(escape_like("100%match"), "100\\%match");
+    }
+
+    #[test]
+    fn like_escape_underscore() {
+        assert_eq!(escape_like("_"), "\\_");
+        assert_eq!(escape_like("a_b"), "a\\_b");
+    }
+
+    #[test]
+    fn like_escape_backslash() {
+        assert_eq!(escape_like("\\"), "\\\\");
+        assert_eq!(escape_like("a\\b"), "a\\\\b");
+    }
+
+    #[test]
+    fn like_escape_combined() {
+        // All three metacharacters in one string
+        assert_eq!(escape_like("%_\\"), "\\%\\_\\\\");
+    }
+
+    #[test]
+    fn like_escape_normal_input_unchanged() {
+        assert_eq!(escape_like("alice"), "alice");
+        assert_eq!(escape_like("bob@example.com"), "bob@example.com");
+        assert_eq!(escape_like(""), "");
+    }
+
     /// A user with "owner_only" policy but no agent_owner_pubkey set should
     /// return Some(("owner_only", None)).
     #[tokio::test]
