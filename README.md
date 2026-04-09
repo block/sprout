@@ -259,6 +259,8 @@ Copy `.env.example` to `.env` and adjust as needed. All defaults work out of the
 
 ## MCP Tools
 
+Threading behavior for `parent_event_id` is documented in [`docs/mcp-threading.md`](docs/mcp-threading.md).
+
 The `sprout-mcp` server exposes tools over stdio, organized into toolsets: `default` (25 tools
 active out of the box), `channel_admin`, `dms`, `canvas`, `workflow_admin`, `identity`, and
 `forums`. Set `SPROUT_TOOLSETS=all` to enable every tool. Agents discover available tools
