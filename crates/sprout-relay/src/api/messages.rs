@@ -203,6 +203,7 @@ pub async fn verify_imeta_blobs(
         let mut size_value: u64 = 0;
         let mut thumb_value = String::new();
         let mut image_value = String::new();
+        let mut duration_value: f64 = 0.0;
 
         for part in tag.iter().skip(1) {
             let mut parts = part.splitn(2, ' ');
@@ -214,6 +215,7 @@ pub async fn verify_imeta_blobs(
                 "size" => size_value = value.parse().unwrap_or(0),
                 "thumb" => thumb_value = value.to_string(),
                 "image" => image_value = value.to_string(),
+                "duration" => duration_value = value.parse().unwrap_or(0.0),
                 _ => {}
             }
         }
@@ -251,6 +253,15 @@ pub async fn verify_imeta_blobs(
                 sidecar.size
             ));
         }
+        // Duration cross-check: if sidecar has duration and client claims one,
+        // they must agree within 0.1s tolerance (float rounding from mvhd).
+        if let Some(stored_dur) = sidecar.duration_secs {
+            if duration_value > 0.0 && (duration_value - stored_dur).abs() > 0.1 {
+                return Err(format!(
+                    "imeta duration ({duration_value}) does not match stored duration ({stored_dur})"
+                ));
+            }
+        }
 
         // 4. If thumb is claimed, HEAD the thumbnail object too.
         if !thumb_value.is_empty() {
@@ -284,6 +295,17 @@ pub async fn verify_imeta_blobs(
                         "imeta image poster MIME must be image type, got {}",
                         img_sidecar.mime_type
                     ));
+                }
+
+                // URL extension must match sidecar's canonical extension.
+                // Mismatch means the URL would 404 on serve (GET resolves via sidecar).
+                if let Some(url_ext) = extract_ext_from_media_url(&image_value) {
+                    if url_ext != img_sidecar.ext {
+                        return Err(format!(
+                            "imeta image extension ({url_ext}) does not match stored extension ({})",
+                            img_sidecar.ext
+                        ));
+                    }
                 }
 
                 let img_key = format!("{img_hash}.{}", img_sidecar.ext);
