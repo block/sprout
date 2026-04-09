@@ -48,6 +48,7 @@ pub async fn create_channel(
     channel_type: String,
     visibility: String,
     description: Option<String>,
+    ttl_seconds: Option<i32>,
     state: State<'_, AppState>,
 ) -> Result<ChannelInfo, String> {
     let channel_uuid = uuid::Uuid::new_v4();
@@ -61,8 +62,14 @@ pub async fn create_channel(
         other => return Err(format!("invalid channel_type: {other}")),
     };
 
-    let builder =
-        events::build_create_channel(channel_uuid, &name, vis, ct, description.as_deref())?;
+    let builder = events::build_create_channel(
+        channel_uuid,
+        &name,
+        vis,
+        ct,
+        description.as_deref(),
+        ttl_seconds,
+    )?;
     submit_event(builder, &state).await?;
 
     // Follow-up GET to return the full ChannelInfo the frontend expects.

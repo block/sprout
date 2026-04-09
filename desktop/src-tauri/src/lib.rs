@@ -288,12 +288,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init());
 
-    // The updater config is only generated for signed release builds.
+    // Only register the updater in release builds that were compiled with a
+    // real updater configuration. Local unsigned builds omit that config and
+    // should still launch for debugging.
+    #[cfg(sprout_updater_enabled)]
     let builder = if cfg!(debug_assertions) {
         builder
     } else {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
     };
+
+    #[cfg(not(sprout_updater_enabled))]
+    let builder = builder;
 
     let shutdown_started = Arc::new(AtomicBool::new(false));
     let restore_shutdown_started = Arc::clone(&shutdown_started);
@@ -341,6 +347,7 @@ pub fn run() {
             update_profile,
             get_user_profile,
             get_users_batch,
+            get_user_notes,
             search_users,
             get_presence,
             set_presence,
@@ -402,6 +409,7 @@ pub fn run() {
             create_persona,
             update_persona,
             delete_persona,
+            set_persona_active,
             list_teams,
             create_team,
             update_team,

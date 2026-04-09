@@ -25,6 +25,7 @@ import {
   deletePersona,
   exportPersonaToJson,
   listPersonas,
+  setPersonaActive,
   updatePersona,
 } from "@/shared/api/tauriPersonas";
 import { setManagedAgentStartOnAppLaunch } from "@/shared/api/tauriManagedAgents";
@@ -237,6 +238,21 @@ export function useDeletePersonaMutation() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: personasQueryKey }),
         queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
+      ]);
+    },
+  });
+}
+
+export function useSetPersonaActiveMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, active }: { id: string; active: boolean }) =>
+      setPersonaActive(id, active),
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: personasQueryKey }),
+        queryClient.invalidateQueries({ queryKey: teamsQueryKey }),
       ]);
     },
   });

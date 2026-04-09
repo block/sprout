@@ -35,6 +35,18 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+/// Validate that a string is exactly 64 hex characters.
+fn validate_hex64(s: &str, label: &str) -> Result<(), String> {
+    if s.len() != 64 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        Err(format!(
+            "Error: {label} must be exactly 64 hex characters, got len={}",
+            s.len()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Validate that `s` is a well-formed UUID (any version/variant).
 /// Returns `Ok(())` on success, or an error string on failure.
 fn validate_uuid(s: &str) -> Result<(), String> {
@@ -70,6 +82,82 @@ fn find_root_from_tags(tags: &serde_json::Value) -> Option<String> {
 
 /// Maximum allowed content size for a single message (64 KiB).
 const MAX_CONTENT_BYTES: usize = 65_536;
+
+/// Extract @mention names from message content.
+/// Returns lowercased names found after `@` tokens.
+/// Only matches `@word` preceded by whitespace or start-of-string.
+/// Characters allowed in names: alphanumeric, `.`, `-`, `_`.
+fn extract_at_names(content: &str) -> Vec<String> {
+    if content.is_empty() || !content.contains('@') {
+        return vec![];
+    }
+    let mut names: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let chars: Vec<char> = content.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    while i < len {
+        if chars[i] == '@' {
+            // Must be at start-of-string or preceded by whitespace
+            let preceded_by_ws = i == 0 || chars[i - 1].is_ascii_whitespace();
+            if preceded_by_ws && i + 1 < len {
+                // Capture the name token: [a-zA-Z0-9._-]+
+                let start = i + 1;
+                let mut end = start;
+                while end < len {
+                    let c = chars[end];
+                    if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                        end += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if end > start {
+                    let name: String = chars[start..end].iter().collect();
+                    let lower = name.to_ascii_lowercase();
+                    if seen.insert(lower.clone()) {
+                        names.push(lower);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    names
+}
+
+/// Resolve @names in content against channel members.
+/// Returns matching pubkeys. On any error, returns empty vec — never blocks a send.
+async fn resolve_content_mentions(
+    client: &RelayClient,
+    channel_id: &str,
+    content: &str,
+) -> Vec<String> {
+    let names = extract_at_names(content);
+    if names.is_empty() {
+        return vec![];
+    }
+    let body = client
+        .get(&format!("/api/channels/{channel_id}/members"))
+        .await
+        .unwrap_or_default();
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+    let Some(members) = parsed["members"].as_array() else {
+        return vec![];
+    };
+    let mut pubkeys = Vec::new();
+    for m in members {
+        let Some(dn) = m["display_name"].as_str() else {
+            continue;
+        };
+        if names.iter().any(|n| n.eq_ignore_ascii_case(dn)) {
+            if let Some(pk) = m["pubkey"].as_str() {
+                pubkeys.push(pk.to_ascii_lowercase());
+            }
+        }
+    }
+    pubkeys
+}
 
 /// Parameters for the `send_message` tool.
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -566,6 +654,71 @@ pub struct VoteOnPostParams {
     pub direction: VoteDirection,
 }
 
+/// Parameters for [`SproutServer::publish_note`].
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PublishNoteParams {
+    /// Text content of the note (max 64 KiB).
+    pub content: String,
+    /// 64-char hex event ID to reply to. Adds a single e-tag with "reply" marker.
+    #[serde(default)]
+    pub reply_to_event_id: Option<String>,
+}
+
+/// A single contact entry for [`SetContactListParams`].
+///
+/// Kept local to MCP — not part of sprout-sdk. The SDK builder takes primitive slices.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ContactEntry {
+    /// 64-char hex pubkey (any case accepted, normalized to lowercase).
+    pub pubkey: String,
+    /// Optional relay URL hint (NIP-02). Empty string if omitted.
+    #[serde(default)]
+    pub relay_url: Option<String>,
+    /// Optional petname / display alias.
+    #[serde(default)]
+    pub petname: Option<String>,
+}
+
+/// Parameters for [`SproutServer::set_contact_list`].
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetContactListParams {
+    /// Replaces the **entire** contact list. Call `get_contact_list` first for delta updates.
+    pub contacts: Vec<ContactEntry>,
+}
+
+/// Parameters for [`SproutServer::get_event`].
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetEventParams {
+    /// 64-char hex event ID.
+    pub event_id: String,
+}
+
+/// Parameters for [`SproutServer::get_user_notes`].
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetUserNotesParams {
+    /// 64-char hex pubkey of the author.
+    pub pubkey: String,
+    /// Maximum number of notes to return (default 50, max 100).
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Unix timestamp cursor — return notes created before this time.
+    /// Use with `before_id` for stable composite cursor pagination.
+    #[serde(default)]
+    pub before: Option<i64>,
+    /// Hex event ID cursor for composite keyset pagination. Use together with
+    /// `before` to avoid skipping same-second events. Pass the `before_id` value
+    /// from the previous page's `next_cursor` response.
+    #[serde(default)]
+    pub before_id: Option<String>,
+}
+
+/// Parameters for [`SproutServer::get_contact_list`].
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetContactListParams {
+    /// 64-char hex pubkey of the user whose contact list to fetch.
+    pub pubkey: String,
+}
+
 // ── Diff utility functions ────────────────────────────────────────────────────
 
 // Truncation notice appended when a diff is cut. This constant is used to
@@ -757,13 +910,32 @@ Default kind is 9 (stream message)."
         let kind_num = p
             .kind
             .unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE as u16);
-        let mention_refs: Vec<&str> = p
+        // Collect explicit pubkeys, dedup case-insensitively.
+        let mut seen = std::collections::HashSet::new();
+        let mut mentions: Vec<String> = p
             .mention_pubkeys
             .as_deref()
             .unwrap_or(&[])
             .iter()
-            .map(String::as_str)
+            .map(|s| s.to_ascii_lowercase())
+            .filter(|s| seen.insert(s.clone()))
             .collect();
+
+        // Auto-resolve @names in content and merge, up to SDK cap of 50.
+        let auto = resolve_content_mentions(&self.client, &p.channel_id, &p.content).await;
+        let budget = 50usize.saturating_sub(mentions.len());
+        let mut added = 0usize;
+        for pk in &auto {
+            if added >= budget {
+                break;
+            }
+            if !mentions.contains(pk) {
+                mentions.push(pk.clone());
+                added += 1;
+            }
+        }
+
+        let mention_refs: Vec<&str> = mentions.iter().map(String::as_str).collect();
         let broadcast = p.broadcast_to_channel.unwrap_or(false);
 
         // Build the event builder via SDK, routing by kind.
@@ -2287,6 +2459,165 @@ with kind:45003 comments)."
             Err(e) => format!("Error: {e}"),
         }
     }
+
+    // ── Social tools ─────────────────────────────────────────────────────────
+
+    /// Publish a kind:1 text note (global, no channel scope).
+    #[tool(
+        name = "publish_note",
+        description = "Publish a short text note (kind:1) to the global feed. Optionally reply to another note by event ID."
+    )]
+    pub async fn publish_note(&self, Parameters(p): Parameters<PublishNoteParams>) -> String {
+        let reply_id = match p.reply_to_event_id.as_deref() {
+            Some(hex) => match EventId::from_hex(hex) {
+                Ok(id) => Some(id),
+                Err(e) => return format!("Error: invalid reply_to_event_id: {e}"),
+            },
+            None => None,
+        };
+
+        if p.content.len() > 64 * 1024 {
+            return format!(
+                "Error: content exceeds 64 KiB limit ({} bytes)",
+                p.content.len()
+            );
+        }
+
+        let builder = match sprout_sdk::build_note(&p.content, reply_id) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign event: {e}"),
+        };
+
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Replace the authenticated user's contact list (kind:3).
+    #[tool(
+        name = "set_contact_list",
+        description = "Set the authenticated user's contact/follow list (kind:3). Replaces the entire list. Call get_contact_list first for delta updates."
+    )]
+    pub async fn set_contact_list(
+        &self,
+        Parameters(p): Parameters<SetContactListParams>,
+    ) -> String {
+        let contacts: Vec<(&str, Option<&str>, Option<&str>)> = p
+            .contacts
+            .iter()
+            .map(|c| {
+                (
+                    c.pubkey.as_str(),
+                    c.relay_url.as_deref(),
+                    c.petname.as_deref(),
+                )
+            })
+            .collect();
+
+        let builder = match sprout_sdk::build_contact_list(&contacts) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign event: {e}"),
+        };
+
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Fetch a single event by event ID.
+    #[tool(
+        name = "get_event",
+        description = "Fetch a single event by its 64-char hex event ID. For global events: kind:0 profiles and kind:3 contacts require UsersRead scope; kind:1 notes and kind:30023 articles require MessagesRead scope. For channel events: requires MessagesRead scope and channel membership. Unknown kinds return 404."
+    )]
+    pub async fn get_event(&self, Parameters(p): Parameters<GetEventParams>) -> String {
+        if let Err(e) = validate_hex64(&p.event_id, "event_id") {
+            return e;
+        }
+        let path = format!("/api/events/{}", p.event_id);
+        match self.client.get(&path).await {
+            Ok(body) => body,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// List notes by a specific user.
+    #[tool(
+        name = "get_user_notes",
+        description = "List kind:1 text notes by a specific user (by hex pubkey). Returns id, pubkey, created_at, and content per note (tags and sig omitted — use get_event for full events). Supports composite cursor pagination via `before` (Unix timestamp) and `before_id` (hex event ID)."
+    )]
+    pub async fn get_user_notes(&self, Parameters(p): Parameters<GetUserNotesParams>) -> String {
+        if let Err(e) = validate_hex64(&p.pubkey, "pubkey") {
+            return e;
+        }
+        if let Some(ref bid) = p.before_id {
+            if let Err(e) = validate_hex64(bid, "before_id") {
+                return e;
+            }
+        }
+        if p.before_id.is_some() && p.before.is_none() {
+            return "Error: before_id requires before".to_string();
+        }
+        let mut url = format!("/api/users/{}/notes", p.pubkey);
+        let mut query_parts = vec![];
+        if let Some(limit) = p.limit {
+            query_parts.push(format!("limit={limit}"));
+        }
+        if let Some(before) = p.before {
+            query_parts.push(format!("before={before}"));
+        }
+        if let Some(ref before_id) = p.before_id {
+            query_parts.push(format!("before_id={before_id}"));
+        }
+        if !query_parts.is_empty() {
+            url.push('?');
+            url.push_str(&query_parts.join("&"));
+        }
+        match self.client.get(&url).await {
+            Ok(body) => body,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Get a user's contact/follow list.
+    #[tool(
+        name = "get_contact_list",
+        description = "Get a user's contact/follow list (kind:3) by hex pubkey. Returns the latest replaceable event."
+    )]
+    pub async fn get_contact_list(
+        &self,
+        Parameters(p): Parameters<GetContactListParams>,
+    ) -> String {
+        if let Err(e) = validate_hex64(&p.pubkey, "pubkey") {
+            return e;
+        }
+        let path = format!("/api/users/{}/contact-list", p.pubkey);
+        match self.client.get(&path).await {
+            Ok(body) => body,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
 }
 
 #[tool_handler]
@@ -2430,6 +2761,34 @@ mod tests {
         assert_eq!(parsed.channel_id, params.channel_id);
         assert_eq!(parsed.event_id, params.event_id);
         assert!(matches!(parsed.direction, VoteDirection::Up));
+    }
+
+    // ── extract_at_names ──────────────────────────────────────────────────────
+
+    #[test]
+    fn extract_at_names_matches() {
+        // basic, start-of-string, dedup, newline, dots/hyphens/underscores
+        assert_eq!(extract_at_names("Hello @Tyler"), vec!["tyler"]);
+        assert_eq!(extract_at_names("@Tyler are you there?"), vec!["tyler"]);
+        assert_eq!(
+            extract_at_names("Hey @Alice and @alice, meet @Bob"),
+            vec!["alice", "bob"]
+        );
+        assert_eq!(extract_at_names("first line\n@Tyler second"), vec!["tyler"]);
+        assert_eq!(
+            extract_at_names("@john.doe @mary_jane @bob-smith"),
+            vec!["john.doe", "mary_jane", "bob-smith"]
+        );
+    }
+
+    #[test]
+    fn extract_at_names_rejects() {
+        // empty, no @, email, bare @, @ at EOF
+        assert!(extract_at_names("").is_empty());
+        assert!(extract_at_names("no mentions").is_empty());
+        assert!(extract_at_names("user@example.com").is_empty());
+        assert!(extract_at_names("hello @ world").is_empty());
+        assert!(extract_at_names("hello @").is_empty());
     }
 }
 

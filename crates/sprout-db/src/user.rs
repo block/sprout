@@ -190,6 +190,18 @@ pub async fn get_user_by_nip05(
     ))
 }
 
+/// Escape SQL LIKE metacharacters (`%`, `_`, `\`) so user input is treated
+/// as literal text.  Used with `ESCAPE '\'` in the query.
+///
+/// Without this, a search query of `"%"` would match every row (full table
+/// scan) and `"_"` would act as a single-character wildcard.
+fn escape_like(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 /// Search users by display name, NIP-05 handle, or pubkey prefix.
 ///
 /// Empty queries return an empty vec and do not hit the database.
@@ -203,25 +215,26 @@ pub async fn search_users(
         return Ok(Vec::new());
     }
 
-    let contains_pattern = format!("%{normalized}%");
-    let prefix_pattern = format!("{normalized}%");
+    let escaped = escape_like(&normalized);
+    let contains_pattern = format!("%{escaped}%");
+    let prefix_pattern = format!("{escaped}%");
     let limit = limit.clamp(1, 50) as i64;
 
     let rows = sqlx::query_as::<_, (Vec<u8>, Option<String>, Option<String>, Option<String>)>(
         r#"
         SELECT pubkey, display_name, avatar_url, nip05_handle
         FROM users
-        WHERE LOWER(COALESCE(display_name, '')) LIKE $1
-           OR LOWER(COALESCE(nip05_handle, '')) LIKE $1
-           OR LOWER(encode(pubkey, 'hex')) LIKE $1
+        WHERE LOWER(COALESCE(display_name, '')) LIKE $1 ESCAPE '\'
+           OR LOWER(COALESCE(nip05_handle, '')) LIKE $1 ESCAPE '\'
+           OR LOWER(encode(pubkey, 'hex')) LIKE $1 ESCAPE '\'
         ORDER BY
             CASE
                 WHEN LOWER(COALESCE(display_name, '')) = $2 THEN 0
                 WHEN LOWER(COALESCE(nip05_handle, '')) = $2 THEN 1
                 WHEN LOWER(encode(pubkey, 'hex')) = $2 THEN 2
-                WHEN LOWER(COALESCE(display_name, '')) LIKE $3 THEN 3
-                WHEN LOWER(COALESCE(nip05_handle, '')) LIKE $3 THEN 4
-                WHEN LOWER(encode(pubkey, 'hex')) LIKE $3 THEN 5
+                WHEN LOWER(COALESCE(display_name, '')) LIKE $3 ESCAPE '\' THEN 3
+                WHEN LOWER(COALESCE(nip05_handle, '')) LIKE $3 ESCAPE '\' THEN 4
+                WHEN LOWER(encode(pubkey, 'hex')) LIKE $3 ESCAPE '\' THEN 5
                 ELSE 6
             END,
             COALESCE(NULLIF(display_name, ''), NULLIF(nip05_handle, ''), LOWER(encode(pubkey, 'hex')))
@@ -522,6 +535,42 @@ mod tests {
         ensure_user(&db.pool, &pubkey).await.unwrap();
         let result = set_channel_add_policy(&db.pool, &pubkey, "invalid_policy").await;
         assert!(result.is_err(), "should reject invalid policy value");
+    }
+
+    // ── LIKE escaping unit tests (no DB required) ──────────────────────
+
+    // Use the production `escape_like` function directly — no local mirror.
+    use super::escape_like;
+
+    #[test]
+    fn like_escape_percent() {
+        assert_eq!(escape_like("%"), "\\%");
+        assert_eq!(escape_like("100%match"), "100\\%match");
+    }
+
+    #[test]
+    fn like_escape_underscore() {
+        assert_eq!(escape_like("_"), "\\_");
+        assert_eq!(escape_like("a_b"), "a\\_b");
+    }
+
+    #[test]
+    fn like_escape_backslash() {
+        assert_eq!(escape_like("\\"), "\\\\");
+        assert_eq!(escape_like("a\\b"), "a\\\\b");
+    }
+
+    #[test]
+    fn like_escape_combined() {
+        // All three metacharacters in one string
+        assert_eq!(escape_like("%_\\"), "\\%\\_\\\\");
+    }
+
+    #[test]
+    fn like_escape_normal_input_unchanged() {
+        assert_eq!(escape_like("alice"), "alice");
+        assert_eq!(escape_like("bob@example.com"), "bob@example.com");
+        assert_eq!(escape_like(""), "");
     }
 
     /// A user with "owner_only" policy but no agent_owner_pubkey set should

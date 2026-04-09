@@ -61,6 +61,13 @@ pub struct Config {
     pub pubkey_allowlist_enabled: bool,
     /// Media storage configuration (S3/MinIO).
     pub media: sprout_media::MediaConfig,
+
+    /// Optional override for ephemeral channel TTL (in seconds).
+    /// When set, any channel created with a TTL tag will use this value instead
+    /// of the client-provided one. Useful for testing ephemeral expiry quickly.
+    /// Example: `SPROUT_EPHEMERAL_TTL_OVERRIDE=60` → all ephemeral channels expire
+    /// 60 seconds after the last message.
+    pub ephemeral_ttl_override: Option<i32>,
 }
 
 impl Config {
@@ -194,6 +201,18 @@ impl Config {
                 }),
         };
 
+        let ephemeral_ttl_override = std::env::var("SPROUT_EPHEMERAL_TTL_OVERRIDE")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .filter(|&v| v > 0);
+
+        if let Some(ttl) = ephemeral_ttl_override {
+            warn!(
+                "SPROUT_EPHEMERAL_TTL_OVERRIDE={ttl}s — all ephemeral channels will use \
+                 this TTL instead of the client-provided value."
+            );
+        }
+
         Ok(Self {
             bind_addr,
             database_url,
@@ -213,6 +232,7 @@ impl Config {
             metrics_port,
             pubkey_allowlist_enabled,
             media,
+            ephemeral_ttl_override,
         })
     }
 }

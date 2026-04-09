@@ -4,6 +4,9 @@ import { installRelayBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { openSettings } from "../helpers/settings";
 import { assertRelaySeeded } from "../helpers/seed";
 
+const isCi = Boolean(process.env.CI);
+const relaySeedHookTimeoutMs = isCi ? 90_000 : 30_000;
+
 async function createStream(
   page: import("@playwright/test").Page,
   channelName: string,
@@ -156,6 +159,7 @@ async function getLoggedNotificationCount(
 }
 
 test.beforeAll(async () => {
+  test.setTimeout(relaySeedHookTimeoutMs);
   await assertRelaySeeded();
 });
 
@@ -542,12 +546,20 @@ test("manage sheet archive and unarchive survives a reload through the relay", a
   await expect(page.getByTestId("channel-management-unarchive")).toBeVisible();
   await closeChannelManagement(page);
 
+  await expect(page.getByTestId("stream-list")).not.toContainText(channelName);
   await expect(page.getByTestId("message-input")).toBeDisabled();
   await expect(page.getByTestId("send-message")).toBeDisabled();
 
   await page.reload();
 
-  await page.getByTestId(`channel-${channelName}`).click();
+  await expect(page.getByTestId("stream-list")).not.toContainText(channelName);
+  await page.getByTestId("browse-channels").click();
+  await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
+  await expect(page.getByTestId(`browse-channel-${channelName}`)).toContainText(
+    "archived",
+  );
+  await page.getByTestId(`browse-channel-${channelName}`).click();
+  await expect(page.getByTestId("channel-browser-dialog")).not.toBeVisible();
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
   await expect(page.getByTestId("message-input")).toBeDisabled();
 
@@ -556,5 +568,6 @@ test("manage sheet archive and unarchive survives a reload through the relay", a
   await expect(page.getByTestId("channel-management-archive")).toBeVisible();
   await closeChannelManagement(page);
 
+  await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("message-input")).toBeEnabled();
 });

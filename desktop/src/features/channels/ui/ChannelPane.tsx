@@ -34,12 +34,14 @@ type ChannelPaneProps = {
     mentionPubkeys: string[],
     mediaTags?: string[][],
   ) => Promise<void>;
-  onTargetReached: (messageId: string) => void;
+  onTargetReached?: (messageId: string) => void;
   onToggleReaction?: (
     message: TimelineMessage,
     emoji: string,
     remove: boolean,
   ) => Promise<void>;
+  /** Map from lowercase pubkey → persona display name for bot members. */
+  personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
   replyTargetId: string | null;
   replyTargetMessage: TimelineMessage | null;
@@ -68,6 +70,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onSend,
   onTargetReached,
   onToggleReaction,
+  personaLookup,
   profiles,
   replyTargetId,
   replyTargetMessage,
@@ -102,6 +105,7 @@ export const ChannelPane = React.memo(function ChannelPane({
           fetchOlder={fetchOlder}
           hasOlderMessages={hasOlderMessages}
           isFetchingOlder={isFetchingOlder}
+          personaLookup={personaLookup}
           profiles={profiles}
           emptyDescription={
             activeChannel?.channelType === "forum"

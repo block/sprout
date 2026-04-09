@@ -110,6 +110,7 @@ pub fn build_create_channel(
     visibility: &str,
     channel_type: &str,
     about: Option<&str>,
+    ttl_seconds: Option<i32>,
 ) -> Result<EventBuilder, String> {
     let mut tags = vec![
         tag(vec!["h", &channel_id.to_string()])?,
@@ -119,6 +120,9 @@ pub fn build_create_channel(
     ];
     if let Some(a) = about {
         tags.push(tag(vec!["about", a])?);
+    }
+    if let Some(ttl) = ttl_seconds {
+        tags.push(tag(vec!["ttl", &ttl.to_string()])?);
     }
     Ok(EventBuilder::new(Kind::Custom(9007), "").tags(tags))
 }

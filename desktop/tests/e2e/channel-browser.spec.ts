@@ -94,6 +94,7 @@ test("joining a channel from browser adds it to the sidebar", async ({
 
   // Dialog should close and navigate to the joined channel
   await expect(page.getByTestId("channel-browser-dialog")).not.toBeVisible();
+  await expect(page).toHaveURL(/#\/channels\//);
   await expect(page.getByTestId("chat-title")).toHaveText("design");
 
   // Channel should now appear in the sidebar
@@ -112,6 +113,7 @@ test("clicking a joined channel in browser navigates to it", async ({
   await page.getByTestId("browse-channel-general").click();
 
   await expect(page.getByTestId("channel-browser-dialog")).not.toBeVisible();
+  await expect(page).toHaveURL(/#\/channels\//);
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 });
 

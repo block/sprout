@@ -12,6 +12,7 @@ type RawParsedPersonaPreview = {
   avatar_data_url: string | null;
   provider: string | null;
   model: string | null;
+  name_pool?: string[];
   source_file: string;
 };
 
@@ -32,6 +33,7 @@ export type ParsedPersonaPreview = {
   avatarDataUrl: string | null;
   provider: string | null;
   model: string | null;
+  namePool: string[];
   sourceFile: string;
 };
 
@@ -52,7 +54,9 @@ type RawPersona = {
   system_prompt: string;
   provider?: string | null;
   model?: string | null;
+  name_pool?: string[];
   is_builtin: boolean;
+  is_active?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -65,7 +69,9 @@ function fromRawPersona(persona: RawPersona): AgentPersona {
     systemPrompt: persona.system_prompt,
     provider: persona.provider ?? null,
     model: persona.model ?? null,
+    namePool: persona.name_pool ?? [],
     isBuiltIn: persona.is_builtin,
+    isActive: persona.is_active ?? true,
     createdAt: persona.created_at,
     updatedAt: persona.updated_at,
   };
@@ -86,6 +92,7 @@ export async function createPersona(
         systemPrompt: input.systemPrompt,
         provider: input.provider,
         model: input.model,
+        namePool: input.namePool ?? [],
       },
     }),
   );
@@ -103,6 +110,7 @@ export async function updatePersona(
         systemPrompt: input.systemPrompt,
         provider: input.provider,
         model: input.model,
+        namePool: input.namePool ?? [],
       },
     }),
   );
@@ -110,6 +118,15 @@ export async function updatePersona(
 
 export async function deletePersona(id: string): Promise<void> {
   await invokeTauri("delete_persona", { id });
+}
+
+export async function setPersonaActive(
+  id: string,
+  active: boolean,
+): Promise<AgentPersona> {
+  return fromRawPersona(
+    await invokeTauri<RawPersona>("set_persona_active", { id, active }),
+  );
 }
 
 export async function parsePersonaFiles(
@@ -127,6 +144,7 @@ export async function parsePersonaFiles(
       avatarDataUrl: p.avatar_data_url,
       provider: p.provider,
       model: p.model,
+      namePool: p.name_pool ?? [],
       sourceFile: p.source_file,
     })),
     skipped: raw.skipped.map((s) => ({

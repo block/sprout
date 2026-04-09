@@ -23,20 +23,31 @@ function resolveLabel(
   return resolveUserLabel({ pubkey, currentPubkey, profiles });
 }
 
+function resolvePersonaSuffix(
+  pubkey: string | undefined,
+  personaLookup: Map<string, string> | undefined,
+): string {
+  if (!pubkey || !personaLookup) return "";
+  const personaName = personaLookup.get(pubkey.toLowerCase());
+  return personaName ? ` (${personaName})` : "";
+}
+
 function describeSystemEvent(
   payload: SystemMessagePayload,
   currentPubkey: string | undefined,
   profiles: UserProfileLookup | undefined,
+  personaLookup?: Map<string, string>,
 ): string | null {
   const actor = resolveLabel(payload.actor, currentPubkey, profiles);
 
   switch (payload.type) {
     case "member_joined": {
       const target = resolveLabel(payload.target, currentPubkey, profiles);
+      const personaSuffix = resolvePersonaSuffix(payload.target, personaLookup);
       if (payload.actor === payload.target) {
-        return `${actor} joined the channel`;
+        return `${actor}${personaSuffix} joined the channel`;
       }
-      return `${actor} added ${target} to the channel`;
+      return `${actor} added ${target}${personaSuffix} to the channel`;
     }
     case "member_left": {
       return `${actor} left the channel`;
@@ -62,12 +73,15 @@ export function SystemMessageRow({
   time,
   currentPubkey,
   profiles,
+  personaLookup,
 }: {
   body: string;
   createdAt: number;
   time: string;
   currentPubkey?: string;
   profiles?: UserProfileLookup;
+  /** Map from lowercase pubkey → persona display name for bot members. */
+  personaLookup?: Map<string, string>;
 }) {
   let payload: SystemMessagePayload;
   try {
@@ -76,7 +90,12 @@ export function SystemMessageRow({
     return null;
   }
 
-  const description = describeSystemEvent(payload, currentPubkey, profiles);
+  const description = describeSystemEvent(
+    payload,
+    currentPubkey,
+    profiles,
+    personaLookup,
+  );
   if (!description) {
     return null;
   }

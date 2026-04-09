@@ -21,7 +21,7 @@ tauri-build = { version = "2", features = [] }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [dependencies]
 atomic-write-file = "0.3"
@@ -33,17 +33,17 @@ tauri-plugin-websocket = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-infer = "0.16"
+infer = "0.19"
 hex = "0.4"
 tokio = { version = "1", features = ["fs", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 nostr = "0.37"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "query"] }
 url = "2"
 sprout-core = { path = "../../crates/sprout-core" }
 base64 = "0.22"
-sha2 = "0.10"
+sha2 = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
 tauri-plugin-notification = "2.3.3"
 uuid = { version = "1", features = ["v4"] }

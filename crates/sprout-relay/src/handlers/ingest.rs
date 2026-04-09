@@ -1029,6 +1029,8 @@ pub async fn ingest_event(
                 }
             });
 
+            let ttl_seconds = super::resolve_ttl(&event, state.config.ephemeral_ttl_override);
+
             let actor_bytes = event.pubkey.serialize().to_vec();
             let (_, was_created) = state
                 .db
@@ -1039,6 +1041,7 @@ pub async fn ingest_event(
                     visibility,
                     description.as_deref(),
                     &actor_bytes,
+                    ttl_seconds,
                 )
                 .await
                 .map_err(|e| IngestError::Internal(format!("error: {e}")))?;
@@ -1302,6 +1305,17 @@ pub async fn ingest_event(
             accepted: true,
             message: "duplicate:".into(),
         });
+    }
+
+    // ── 20b. Bump ephemeral channel TTL deadline ──────────────────────
+    // Any successfully stored channel-scoped event keeps the channel alive.
+    // Skip kind:9007 (create) — the deadline was just set during creation.
+    if let Some(ch_id) = channel_id {
+        if kind_u32 != KIND_NIP29_CREATE_GROUP {
+            if let Err(e) = state.db.bump_ttl_deadline(ch_id).await {
+                warn!(channel = %ch_id, "TTL deadline bump failed: {e}");
+            }
+        }
     }
 
     // ── 21. Side effects ─────────────────────────────────────────────────

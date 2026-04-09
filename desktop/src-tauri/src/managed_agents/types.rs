@@ -27,8 +27,14 @@ pub struct PersonaRecord {
     /// Passed to the agent at creation time when deploying from this persona.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Pool of short, thematic names for bot instances created from this persona.
+    /// When a new copy is added to a channel, a random unused name is picked from this pool.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub name_pool: Vec<String>,
     #[serde(default)]
     pub is_builtin: bool,
+    #[serde(default = "default_record_active")]
+    pub is_active: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -177,6 +183,8 @@ pub struct CreatePersonaRequest {
     pub provider: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub name_pool: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,6 +198,8 @@ pub struct UpdatePersonaRequest {
     pub provider: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub name_pool: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -253,6 +263,9 @@ pub struct ManagedAgentPrereqsInfo {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateManagedAgentRequest {
     pub pubkey: String,
+    /// Absent = don't touch. Present = rename the agent.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Absent = don't touch. null = clear to agent default. "id" = set.
     #[serde(default)]
     pub model: Option<Option<String>>,
@@ -331,4 +344,34 @@ fn default_agent_parallelism() -> u32 {
 
 fn default_start_on_app_launch() -> bool {
     true
+}
+
+fn default_record_active() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PersonaRecord;
+
+    #[test]
+    fn persona_record_defaults_active_when_field_is_missing() {
+        let record: PersonaRecord = serde_json::from_str(
+            r#"{
+                "id": "builtin:solo",
+                "display_name": "Solo",
+                "avatar_url": null,
+                "system_prompt": "Prompt",
+                "created_at": "2026-03-19T00:00:00Z",
+                "updated_at": "2026-03-19T00:00:00Z"
+            }"#,
+        )
+        .expect("legacy persona payload should deserialize");
+
+        assert!(record.is_active);
+        assert!(!record.is_builtin);
+        assert_eq!(record.provider, None);
+        assert_eq!(record.model, None);
+        assert!(record.name_pool.is_empty());
+    }
 }

@@ -8,8 +8,8 @@ use crate::{
     app_state::AppState,
     events,
     models::{
-        GetUsersBatchBody, ProfileInfo, SearchUsersResponse, SetPresenceBody, SetPresenceResponse,
-        UsersBatchResponse,
+        GetUserNotesQuery, GetUsersBatchBody, ProfileInfo, SearchUsersResponse, SetPresenceBody,
+        SetPresenceResponse, UserNotesResponse, UsersBatchResponse,
     },
     relay::{build_authed_request, send_json_request, submit_event},
 };
@@ -99,6 +99,26 @@ pub async fn get_users_batch(
                 pubkeys: pubkeys.as_slice(),
             },
         );
+    send_json_request(request).await
+}
+
+#[tauri::command]
+pub async fn get_user_notes(
+    pubkey: String,
+    limit: Option<u32>,
+    before: Option<i64>,
+    before_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<UserNotesResponse, String> {
+    let path = format!("/api/users/{pubkey}/notes");
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?.query(
+        &GetUserNotesQuery {
+            limit,
+            before,
+            before_id: before_id.as_deref(),
+        },
+    );
+
     send_json_request(request).await
 }
 

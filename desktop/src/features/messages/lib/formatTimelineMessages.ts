@@ -1,4 +1,4 @@
-import type { Channel, RelayEvent } from "@/shared/api/types";
+import type { Channel, ChannelMember, RelayEvent } from "@/shared/api/types";
 
 import type {
   TimelineMessage,
@@ -113,8 +113,17 @@ export function formatTimelineMessages(
   currentPubkey: string | undefined,
   currentUserAvatarUrl: string | null,
   profiles?: UserProfileLookup,
+  members?: ChannelMember[],
+  /** Map from lowercase pubkey → persona display name for bot messages. */
+  personaLookup?: Map<string, string>,
 ): TimelineMessage[] {
   const currentPubkeyLower = currentPubkey?.toLowerCase();
+  const roleByPubkey = new Map<string, string>();
+  if (members) {
+    for (const member of members) {
+      roleByPubkey.set(member.pubkey.toLowerCase(), member.role);
+    }
+  }
   const deletedEventIds = new Set<string>();
   for (const event of events) {
     if (event.kind !== KIND_DELETION) {
@@ -284,6 +293,7 @@ export function formatTimelineMessages(
       });
     const thread = getThreadReference(event.tags);
     const edit = editsByTargetId.get(event.id);
+    const role = roleByPubkey.get(authorPubkey.toLowerCase());
     return {
       id: event.id,
       createdAt: event.created_at,
@@ -295,6 +305,11 @@ export function formatTimelineMessages(
         currentUserAvatarUrl,
         profiles,
       }),
+      role,
+      personaDisplayName:
+        role === "bot"
+          ? personaLookup?.get(authorPubkey.toLowerCase())
+          : undefined,
       time: formatTime(event.created_at),
       body: edit ? edit.content : event.content,
       parentId: thread.parentId,

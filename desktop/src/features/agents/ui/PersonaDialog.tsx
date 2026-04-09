@@ -48,6 +48,7 @@ export function PersonaDialog({
   const [systemPrompt, setSystemPrompt] = React.useState("");
   const [provider, setProvider] = React.useState("");
   const [model, setModel] = React.useState("");
+  const [namePoolText, setNamePoolText] = React.useState("");
 
   React.useEffect(() => {
     if (!open || !initialValues) {
@@ -59,6 +60,12 @@ export function PersonaDialog({
     setSystemPrompt(initialValues.systemPrompt);
     setProvider(initialValues.provider ?? "");
     setModel(initialValues.model ?? "");
+    setNamePoolText(
+      ("namePool" in initialValues
+        ? (initialValues as { namePool?: string[] }).namePool
+        : undefined
+      )?.join(", ") ?? "",
+    );
   }, [initialValues, open]);
 
   function handleOpenChange(next: boolean) {
@@ -68,6 +75,7 @@ export function PersonaDialog({
       setSystemPrompt("");
       setProvider("");
       setModel("");
+      setNamePoolText("");
     }
 
     onOpenChange(next);
@@ -78,12 +86,17 @@ export function PersonaDialog({
       return;
     }
 
+    const namePool = namePoolText
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     const baseInput = {
       displayName,
       avatarUrl: avatarUrl.trim() || undefined,
       systemPrompt,
       provider: provider.trim() || undefined,
       model: model.trim() || undefined,
+      namePool: namePool.length > 0 ? namePool : undefined,
     };
 
     if ("id" in initialValues) {
@@ -209,6 +222,29 @@ export function PersonaDialog({
               <p className="text-xs text-muted-foreground">
                 Optional. Passed to the agent at creation time. Leave blank to
                 use the runtime default.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label
+                className="text-sm font-medium"
+                htmlFor="persona-name-pool"
+              >
+                Instance name pool
+              </label>
+              <Input
+                autoCapitalize="none"
+                autoCorrect="off"
+                disabled={isPending}
+                id="persona-name-pool"
+                onChange={(event) => setNamePoolText(event.target.value)}
+                placeholder="Birch, Compass, Ridge, Thistle, ..."
+                spellCheck={false}
+                value={namePoolText}
+              />
+              <p className="text-xs text-muted-foreground">
+                Comma-separated names for bot copies. Each instance gets a
+                random name from this pool. Leave empty to use generic defaults.
               </p>
             </div>
 

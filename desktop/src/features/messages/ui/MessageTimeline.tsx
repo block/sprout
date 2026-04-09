@@ -23,6 +23,8 @@ type MessageTimelineProps = {
   fetchOlder?: () => Promise<void>;
   hasOlderMessages?: boolean;
   isFetchingOlder?: boolean;
+  /** Map from lowercase pubkey → persona display name for bot members. */
+  personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
@@ -47,6 +49,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   fetchOlder,
   hasOlderMessages = true,
   isFetchingOlder = false,
+  personaLookup,
   profiles,
   onDelete,
   onEdit,
@@ -102,6 +105,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         ) : null}
         <div
           className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 [overflow-anchor:none] sm:px-6"
+          data-scroll-restoration-id="message-timeline"
           data-testid="message-timeline"
           onScroll={syncScrollState}
           ref={scrollContainerRef}
@@ -157,6 +161,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                 onEdit={onEdit}
                 onReply={onReply}
                 onToggleReaction={onToggleReaction}
+                personaLookup={personaLookup}
                 profiles={profiles}
               />
             ) : null}

@@ -21,6 +21,11 @@ import { ForumThreadPanel } from "./ForumThreadPanel";
 type ForumViewProps = {
   channel: Channel;
   currentPubkey?: string;
+  onClosePost: () => void;
+  onSelectPost: (postId: string) => void;
+  onTargetReached?: (messageId: string) => void;
+  selectedPostId: string | null;
+  targetReplyId: string | null;
 };
 
 function canDelete(postPubkey: string, currentPubkey?: string): boolean {
@@ -30,24 +35,29 @@ function canDelete(postPubkey: string, currentPubkey?: string): boolean {
   return postPubkey.toLowerCase() === currentPubkey.toLowerCase();
 }
 
-export function ForumView({ channel, currentPubkey }: ForumViewProps) {
-  const [expandedPostId, setExpandedPostId] = React.useState<string | null>(
-    null,
-  );
+export function ForumView({
+  channel,
+  currentPubkey,
+  onClosePost,
+  onSelectPost,
+  onTargetReached,
+  selectedPostId,
+  targetReplyId,
+}: ForumViewProps) {
   const [isComposerOpen, setIsComposerOpen] = React.useState(false);
 
   const profileQuery = useProfileQuery();
   const postsQuery = useForumPostsQuery(channel);
   const threadQuery = useForumThreadQuery(
-    expandedPostId ? channel.id : null,
-    expandedPostId,
+    selectedPostId ? channel.id : null,
+    selectedPostId,
   );
   const createPostMutation = useCreateForumPostMutation(channel);
   const createReplyMutation = useCreateForumReplyMutation(channel);
   const deletePostMutation = useDeleteForumPostMutation(channel);
   const deleteReplyMutation = useDeleteForumReplyMutation(
     channel,
-    expandedPostId,
+    selectedPostId,
   );
 
   const posts = postsQuery.data?.posts ?? [];
@@ -85,15 +95,17 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
     [profileQuery.data, profilesQuery.data?.profiles],
   );
 
-  // Reset expanded post when channel changes
   const previousChannelIdRef = React.useRef(channel.id);
-  if (previousChannelIdRef.current !== channel.id) {
-    previousChannelIdRef.current = channel.id;
-    setExpandedPostId(null);
-    setIsComposerOpen(false);
-  }
+  React.useEffect(() => {
+    if (previousChannelIdRef.current === channel.id) {
+      return;
+    }
 
-  if (expandedPostId) {
+    previousChannelIdRef.current = channel.id;
+    setIsComposerOpen(false);
+  }, [channel.id]);
+
+  if (selectedPostId) {
     const threadPost = threadQuery.data?.post;
     const canDeleteExpandedPost = threadPost
       ? canDelete(threadPost.pubkey, effectiveCurrentPubkey)
@@ -106,12 +118,9 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
         isDeletingPost={deletePostMutation.isPending}
         isLoading={threadQuery.isLoading}
         isSendingReply={createReplyMutation.isPending}
-        onBack={() => setExpandedPostId(null)}
+        onBack={onClosePost}
         onDeletePost={(eventId) => {
-          deletePostMutation.mutate(
-            { eventId },
-            { onSuccess: () => setExpandedPostId(null) },
-          );
+          deletePostMutation.mutate({ eventId }, { onSuccess: onClosePost });
         }}
         onDeleteReply={(eventId) => {
           deleteReplyMutation.mutate({ eventId });
@@ -120,11 +129,13 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
         onReply={(content, mentionPubkeys) => {
           createReplyMutation.mutate({
             content,
-            parentEventId: expandedPostId,
+            parentEventId: selectedPostId,
             mentionPubkeys,
           });
         }}
+        onTargetReached={onTargetReached}
         profiles={profiles}
+        targetEventId={targetReplyId}
         thread={threadQuery.data}
       />
     );
@@ -169,7 +180,10 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
       </div>
 
       {/* Post list */}
-      <div className="flex-1 overflow-y-auto">
+      <div
+        className="flex-1 overflow-y-auto"
+        data-scroll-restoration-id={`forum-list:${channel.id}`}
+      >
         {postsQuery.isLoading ? (
           <div className="space-y-3 p-4">
             <Skeleton className="h-24 w-full rounded-xl" />
@@ -194,13 +208,13 @@ export function ForumView({ channel, currentPubkey }: ForumViewProps) {
               <ForumPostCard
                 canDelete={canDelete(post.pubkey, effectiveCurrentPubkey)}
                 currentPubkey={effectiveCurrentPubkey}
-                isActive={false}
+                isActive={selectedPostId === post.eventId}
                 isDeleting={
                   deletePostMutation.isPending &&
                   deletePostMutation.variables?.eventId === post.eventId
                 }
                 key={post.eventId}
-                onClick={() => setExpandedPostId(post.eventId)}
+                onClick={() => onSelectPost(post.eventId)}
                 onDelete={(eventId) => {
                   deletePostMutation.mutate({ eventId });
                 }}

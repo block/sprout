@@ -3,6 +3,16 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
 import { installRelayBridge } from "../helpers/bridge";
 import { assertRelaySeeded } from "../helpers/seed";
 
+const isCi = Boolean(process.env.CI);
+const relayDeliveryTimeoutMs = isCi ? 15_000 : 5_000;
+const relaySeedHookTimeoutMs = isCi ? 90_000 : 30_000;
+
+async function expectTimelineToContain(page: Page, text: string) {
+  await expect(page.getByTestId("message-timeline")).toContainText(text, {
+    timeout: relayDeliveryTimeoutMs,
+  });
+}
+
 async function getTimelineMetrics(page: Page) {
   return page.getByTestId("message-timeline").evaluate((element) => {
     const timeline = element as HTMLDivElement;
@@ -36,9 +46,7 @@ async function ensureTimelineScrollable(
     await expect(input).toBeEnabled();
     await input.fill(message);
     await sendButton.click();
-    await expect(receiverPage.getByTestId("message-timeline")).toContainText(
-      message,
-    );
+    await expectTimelineToContain(receiverPage, message);
   }
 
   const metrics = await getTimelineMetrics(receiverPage);
@@ -87,6 +95,7 @@ async function scrollTimelineAwayFromBottom(page: Page, minDistance = 160) {
 }
 
 test.beforeAll(async () => {
+  test.setTimeout(relaySeedHookTimeoutMs);
   await assertRelaySeeded();
 });
 
@@ -143,7 +152,7 @@ test("sends a message through the real relay", async ({ page }) => {
   await page.getByTestId("message-input").fill(message);
   await page.getByTestId("send-message").click();
 
-  await expect(page.getByTestId("message-timeline")).toContainText(message);
+  await expectTimelineToContain(page, message);
 });
 
 test("delivers a message to a second browser context in real time", async ({
@@ -169,9 +178,7 @@ test("delivers a message to a second browser context in real time", async ({
     await pageOne.getByTestId("message-input").fill(message);
     await pageOne.getByTestId("send-message").click();
 
-    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
-      message,
-    );
+    await expectTimelineToContain(pageTwo, message);
   } finally {
     await contextOne.close();
     await contextTwo.close();
@@ -183,6 +190,8 @@ test("stays pinned to the latest message when new messages arrive at the bottom"
 }: {
   browser: Browser;
 }) => {
+  test.slow();
+
   const channelName = `pinned-bottom-${Date.now()}`;
   const contextOne = await browser.newContext();
   const contextTwo = await browser.newContext();
@@ -207,9 +216,7 @@ test("stays pinned to the latest message when new messages arrive at the bottom"
     await pageOne.getByTestId("message-input").fill(incomingMessage);
     await pageOne.getByTestId("send-message").click();
 
-    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
-      incomingMessage,
-    );
+    await expectTimelineToContain(pageTwo, incomingMessage);
     await expect
       .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
       .toBeLessThan(8);
@@ -227,6 +234,8 @@ test("stays pinned after you send a message and a remote reply arrives right aft
 }: {
   browser: Browser;
 }) => {
+  test.slow();
+
   const channelName = `reply-shared-${Date.now()}`;
   const contextOne = await browser.newContext();
   const contextTwo = await browser.newContext();
@@ -251,16 +260,12 @@ test("stays pinned after you send a message and a remote reply arrives right aft
 
     await pageTwo.getByTestId("message-input").fill(localMessage);
     await pageTwo.getByTestId("send-message").click();
-    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
-      localMessage,
-    );
+    await expectTimelineToContain(pageTwo, localMessage);
 
     await pageOne.getByTestId("message-input").fill(incomingMessage);
     await pageOne.getByTestId("send-message").click();
 
-    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
-      incomingMessage,
-    );
+    await expectTimelineToContain(pageTwo, incomingMessage);
     await expect
       .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
       .toBeLessThan(8);
@@ -278,6 +283,8 @@ test("keeps bottom-pinned scrolling after the composer grows", async ({
 }: {
   browser: Browser;
 }) => {
+  test.slow();
+
   const channelName = `composer-shared-${Date.now()}`;
   const contextOne = await browser.newContext();
   const contextTwo = await browser.newContext();
@@ -315,9 +322,7 @@ test("keeps bottom-pinned scrolling after the composer grows", async ({
     await pageOne.getByTestId("message-input").fill(incomingMessage);
     await pageOne.getByTestId("send-message").click();
 
-    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
-      incomingMessage,
-    );
+    await expectTimelineToContain(pageTwo, incomingMessage);
     await expect
       .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
       .toBeLessThan(8);
@@ -335,6 +340,8 @@ test("keeps scroll position when new messages arrive above the fold", async ({
 }: {
   browser: Browser;
 }) => {
+  test.slow();
+
   const channelName = `scroll-shared-${Date.now()}`;
   const contextOne = await browser.newContext();
   const contextTwo = await browser.newContext();
@@ -370,9 +377,7 @@ test("keeps scroll position when new messages arrive above the fold", async ({
 
     await pageTwo.getByTestId("message-scroll-to-latest").click();
 
-    await expect(pageTwo.getByTestId("message-timeline")).toContainText(
-      incomingMessage,
-    );
+    await expectTimelineToContain(pageTwo, incomingMessage);
     await expect
       .poll(async () => (await getTimelineMetrics(pageTwo)).distanceFromBottom)
       .toBeLessThan(8);

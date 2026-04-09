@@ -3,12 +3,13 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import type { Channel } from "@/shared/api/types";
+import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
 import remarkMentions from "@/shared/lib/remarkMentions";
-import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
-import type { Channel } from "@/shared/api/types";
 
 type MarkdownProps = {
   channelNames?: string[];
@@ -205,11 +206,15 @@ function MarkdownInner({
     : compact
       ? "compact"
       : "default";
-  const { channels, onOpenChannel } = useChannelNavigation();
+  const { channels } = useChannelNavigation();
+  const { goChannel } = useAppNavigation();
 
   const components = React.useMemo(
-    () => createMarkdownComponents(variant, channels, onOpenChannel),
-    [variant, channels, onOpenChannel],
+    () =>
+      createMarkdownComponents(variant, channels, (channelId) => {
+        void goChannel(channelId);
+      }),
+    [goChannel, variant, channels],
   );
 
   // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable

@@ -10,8 +10,14 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
+import { BotIdenticon } from "./BotIdenticon";
 import { MessageActionBar } from "./MessageActionBar";
 import { MessageTimestamp } from "./MessageTimestamp";
+
+/** Returns true if this message is from a bot instance. */
+function isBotInstance(role?: string): boolean {
+  return role === "bot";
+}
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
@@ -171,62 +177,71 @@ export const MessageRow = React.memo(
           data-message-id={message.id}
           data-testid="message-row"
         >
-          {message.pubkey ? (
-            <UserProfilePopover pubkey={message.pubkey}>
-              <button
-                className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                type="button"
-              >
-                {message.avatarUrl && !hasAvatarError ? (
-                  <img
-                    alt={`${message.author} avatar`}
-                    className="h-8 w-8 rounded-lg bg-secondary object-cover shadow-sm"
-                    data-testid="message-avatar-image"
-                    onError={() => {
-                      setHasAvatarError(true);
-                    }}
-                    referrerPolicy="no-referrer"
-                    src={rewriteRelayUrl(message.avatarUrl)}
-                  />
-                ) : (
-                  <div
-                    className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-lg text-[11px] font-semibold shadow-sm",
-                      message.accent
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-secondary text-secondary-foreground",
-                    )}
-                    data-testid="message-avatar-fallback"
-                  >
-                    {initials}
-                  </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {isBotInstance(message.role) ? (
+              <BotIdenticon
+                value={message.author}
+                size={20}
+                className="rounded"
+              />
+            ) : null}
+            {message.pubkey ? (
+              <UserProfilePopover pubkey={message.pubkey}>
+                <button
+                  className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  type="button"
+                >
+                  {message.avatarUrl && !hasAvatarError ? (
+                    <img
+                      alt={`${message.author} avatar`}
+                      className="h-8 w-8 rounded-lg bg-secondary object-cover shadow-sm"
+                      data-testid="message-avatar-image"
+                      onError={() => {
+                        setHasAvatarError(true);
+                      }}
+                      referrerPolicy="no-referrer"
+                      src={rewriteRelayUrl(message.avatarUrl)}
+                    />
+                  ) : (
+                    <div
+                      className={cn(
+                        "flex h-8 w-8 items-center justify-center rounded-lg text-[11px] font-semibold shadow-sm",
+                        message.accent
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-secondary text-secondary-foreground",
+                      )}
+                      data-testid="message-avatar-fallback"
+                    >
+                      {initials}
+                    </div>
+                  )}
+                </button>
+              </UserProfilePopover>
+            ) : message.avatarUrl && !hasAvatarError ? (
+              <img
+                alt={`${message.author} avatar`}
+                className="h-8 w-8 shrink-0 rounded-lg bg-secondary object-cover shadow-sm"
+                data-testid="message-avatar-image"
+                onError={() => {
+                  setHasAvatarError(true);
+                }}
+                referrerPolicy="no-referrer"
+                src={rewriteRelayUrl(message.avatarUrl)}
+              />
+            ) : (
+              <div
+                className={cn(
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold shadow-sm",
+                  message.accent
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-secondary text-secondary-foreground",
                 )}
-              </button>
-            </UserProfilePopover>
-          ) : message.avatarUrl && !hasAvatarError ? (
-            <img
-              alt={`${message.author} avatar`}
-              className="h-8 w-8 shrink-0 rounded-lg bg-secondary object-cover shadow-sm"
-              data-testid="message-avatar-image"
-              onError={() => {
-                setHasAvatarError(true);
-              }}
-              referrerPolicy="no-referrer"
-              src={rewriteRelayUrl(message.avatarUrl)}
-            />
-          ) : (
-            <div
-              className={cn(
-                "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold shadow-sm",
-                message.accent
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-secondary text-secondary-foreground",
-              )}
-              data-testid="message-avatar-fallback"
-            >
-              {initials}
-            </div>
-          )}
+                data-testid="message-avatar-fallback"
+              >
+                {initials}
+              </div>
+            )}
+          </div>
 
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -244,7 +259,11 @@ export const MessageRow = React.memo(
                   {message.author}
                 </h3>
               )}
-              {message.role ? (
+              {message.personaDisplayName ? (
+                <span className="text-xs text-muted-foreground">
+                  {message.personaDisplayName}
+                </span>
+              ) : message.role ? (
                 <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                   {message.role}
                 </p>
@@ -338,6 +357,7 @@ export const MessageRow = React.memo(
     prev.message.reactions === next.message.reactions &&
     prev.message.tags === next.message.tags &&
     prev.message.role === next.message.role &&
+    prev.message.personaDisplayName === next.message.personaDisplayName &&
     prev.highlighted === next.highlighted &&
     prev.activeReplyTargetId === next.activeReplyTargetId &&
     prev.profiles === next.profiles,

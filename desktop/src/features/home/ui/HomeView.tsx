@@ -6,7 +6,11 @@ import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type { HomeFeedResponse } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
-import { FeedSection } from "./FeedSection";
+
+const FeedSection = React.lazy(async () => {
+  const module = await import("./FeedSection");
+  return { default: module.FeedSection };
+});
 
 type FeedFilter = "all" | "mention" | "needs_action";
 
@@ -117,42 +121,44 @@ export function HomeView({
           ))}
         </div>
 
-        <div className={`grid gap-5 ${singleColumn ? "" : "xl:grid-cols-2"}`}>
-          {showMentions ? (
-            <FeedSection
-              availableChannelIds={availableChannelIds}
-              currentPubkey={currentPubkey}
-              profiles={feedProfiles}
-              doneSet={doneSet}
-              emptyDescription="When someone mentions you, it will land here."
-              emptyTitle="No mentions right now"
-              icon={AtSign}
-              items={feed.feed.mentions}
-              onMarkDone={markDone}
-              onOpenChannel={onOpenChannel}
-              onUndoDone={undoDone}
-              showDoneAction={false}
-              title="Mentions"
-            />
-          ) : null}
-          {showNeedsAction ? (
-            <FeedSection
-              availableChannelIds={availableChannelIds}
-              currentPubkey={currentPubkey}
-              profiles={feedProfiles}
-              doneSet={doneSet}
-              emptyDescription="Approval requests and reminders will appear here."
-              emptyTitle="Nothing needs action"
-              icon={CircleAlert}
-              items={feed.feed.needsAction}
-              onMarkDone={markDone}
-              onOpenChannel={onOpenChannel}
-              onUndoDone={undoDone}
-              showDoneAction={true}
-              title="Needs Action"
-            />
-          ) : null}
-        </div>
+        <React.Suspense fallback={null}>
+          <div className={`grid gap-5 ${singleColumn ? "" : "xl:grid-cols-2"}`}>
+            {showMentions ? (
+              <FeedSection
+                availableChannelIds={availableChannelIds}
+                currentPubkey={currentPubkey}
+                profiles={feedProfiles}
+                doneSet={doneSet}
+                emptyDescription="When someone mentions you, it will land here."
+                emptyTitle="No mentions right now"
+                icon={AtSign}
+                items={feed.feed.mentions}
+                onMarkDone={markDone}
+                onOpenChannel={onOpenChannel}
+                onUndoDone={undoDone}
+                showDoneAction={false}
+                title="Mentions"
+              />
+            ) : null}
+            {showNeedsAction ? (
+              <FeedSection
+                availableChannelIds={availableChannelIds}
+                currentPubkey={currentPubkey}
+                profiles={feedProfiles}
+                doneSet={doneSet}
+                emptyDescription="Approval requests and reminders will appear here."
+                emptyTitle="Nothing needs action"
+                icon={CircleAlert}
+                items={feed.feed.needsAction}
+                onMarkDone={markDone}
+                onOpenChannel={onOpenChannel}
+                onUndoDone={undoDone}
+                showDoneAction={true}
+                title="Needs Action"
+              />
+            ) : null}
+          </div>
+        </React.Suspense>
       </div>
     </div>
   );

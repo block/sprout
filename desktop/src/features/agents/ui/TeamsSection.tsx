@@ -4,17 +4,16 @@ import {
   Ellipsis,
   Info,
   Pencil,
-  Plus,
   Rocket,
   Trash2,
   Upload,
   Users,
 } from "lucide-react";
 
+import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { AgentPersona, AgentTeam } from "@/shared/api/types";
 import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
-import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +23,7 @@ import {
 } from "@/shared/ui/dropdown-menu";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { CreateNewButton } from "./CreateNewButton";
 
 const MAX_VISIBLE_AVATARS = 4;
 
@@ -41,15 +41,6 @@ type TeamsSectionProps = {
   onAddToChannel: (team: AgentTeam) => void;
   onImportFile: (fileBytes: number[], fileName: string) => void;
 };
-
-function resolvePersonas(
-  personaIds: string[],
-  personas: AgentPersona[],
-): AgentPersona[] {
-  return personaIds
-    .map((id) => personas.find((p) => p.id === id))
-    .filter((p): p is AgentPersona => p !== undefined);
-}
 
 export function TeamsSection({
   teams,
@@ -74,7 +65,11 @@ export function TeamsSection({
   } = useFileImportZone({ onImportFile });
 
   return (
-    <section className="relative space-y-4" {...dropHandlers}>
+    <section
+      className="relative space-y-4"
+      data-testid="agents-library-teams"
+      {...dropHandlers}
+    >
       {isDragOver ? (
         <div className="pointer-events-none absolute -inset-1 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/50 bg-background/80 backdrop-blur-sm">
           <p className="text-sm font-medium text-primary">
@@ -85,9 +80,9 @@ export function TeamsSection({
 
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold tracking-tight">Teams</h3>
+          <h3 className="text-sm font-semibold tracking-tight">My teams</h3>
           <p className="text-sm text-muted-foreground">
-            Named groups of personas you can deploy to a channel together.
+            Saved groups from My Agents that you can add to a channel together.
           </p>
         </div>
         <input
@@ -97,20 +92,11 @@ export function TeamsSection({
           ref={fileInputRef}
           type="file"
         />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label="Create team"
-              onClick={onCreate}
-              type="button"
-              variant="ghost"
-              size="icon"
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Create team</TooltipContent>
-        </Tooltip>
+        <CreateNewButton
+          ariaLabel="Create team"
+          label="Team"
+          onClick={onCreate}
+        />
       </div>
 
       {isLoading ? (
@@ -135,9 +121,15 @@ export function TeamsSection({
       {!isLoading && teams.length > 0 ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {teams.map((team) => {
-            const resolved = resolvePersonas(team.personaIds, personas);
-            const visible = resolved.slice(0, MAX_VISIBLE_AVATARS);
-            const overflow = resolved.length - visible.length;
+            const resolution = resolveTeamPersonas(team, personas);
+            const visible = resolution.resolvedPersonas.slice(
+              0,
+              MAX_VISIBLE_AVATARS,
+            );
+            const overflow =
+              resolution.resolvedPersonas.length - visible.length;
+            const missingPersonaCount = resolution.missingPersonaCount;
+            const hasMissingPersonas = resolution.hasMissingPersonas;
 
             return (
               <div
@@ -206,7 +198,7 @@ export function TeamsSection({
                       onCloseAutoFocus={(event) => event.preventDefault()}
                     >
                       <DropdownMenuItem
-                        disabled={isPending}
+                        disabled={isPending || hasMissingPersonas}
                         onClick={() => onAddToChannel(team)}
                       >
                         <Rocket className="h-4 w-4" />
@@ -221,14 +213,14 @@ export function TeamsSection({
                         Edit
                       </DropdownMenuItem>
                       <DropdownMenuItem
-                        disabled={isPending}
+                        disabled={isPending || hasMissingPersonas}
                         onClick={() => onDuplicate(team)}
                       >
                         <CopyPlus className="h-4 w-4" />
                         Duplicate
                       </DropdownMenuItem>
                       <DropdownMenuItem
-                        disabled={isPending}
+                        disabled={isPending || hasMissingPersonas}
                         onClick={() => onExport(team)}
                       >
                         <Download className="h-4 w-4" />
@@ -246,6 +238,16 @@ export function TeamsSection({
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
+
+                {hasMissingPersonas ? (
+                  <p className="mt-3 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    {missingPersonaCount} persona
+                    {missingPersonaCount === 1 ? "" : "s"} in this team{" "}
+                    {missingPersonaCount === 1 ? "is" : "are"} no longer in your
+                    My Agents. Edit the team to repair it before deploying or
+                    exporting.
+                  </p>
+                ) : null}
               </div>
             );
           })}
@@ -268,7 +270,8 @@ export function TeamsSection({
         >
           <p className="text-sm font-semibold tracking-tight">No teams yet</p>
           <p className="mt-2 text-sm text-muted-foreground">
-            Create a team to group personas for quick deployment to channels.
+            Create a team from the personas in My Agents for quick deployment to
+            channels.
           </p>
           <p className="mt-1 text-xs text-muted-foreground/70">
             Or drop a .team.json file here to import.

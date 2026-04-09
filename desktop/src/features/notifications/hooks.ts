@@ -3,6 +3,12 @@ import * as React from "react";
 import { useHomeFeedQuery } from "@/features/home/hooks";
 import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
 import {
+  collectHomeAlertItems,
+  eligibleFeedNotificationItems,
+  notificationBody,
+  notificationTitle,
+} from "./lib/feed";
+import {
   getDesktopNotificationPermissionState,
   requestDesktopNotificationAccess,
   sendDesktopNotification,
@@ -13,7 +19,6 @@ export type { DesktopNotificationPermissionState } from "./lib/desktop";
 
 const NOTIFICATION_SETTINGS_STORAGE_KEY = "sprout-notification-settings.v1";
 const HOME_FEED_SEEN_STORAGE_KEY = "sprout-home-feed-seen.v1";
-const FEED_NOTIFICATION_BODY_MAX_LENGTH = 140;
 const HOME_FEED_SEEN_MAX_ITEMS = 500;
 
 export type NotificationSettings = {
@@ -155,58 +160,6 @@ function mergeSeenFeedIds(current: string[], nextIds: readonly string[]) {
     : values.slice(values.length - HOME_FEED_SEEN_MAX_ITEMS);
 }
 
-function notificationTitle(item: FeedItem) {
-  const channelLabel = item.channelName.trim()
-    ? ` in #${item.channelName.trim()}`
-    : "";
-
-  if (item.category === "mention") {
-    return `@Mention${channelLabel}`;
-  }
-
-  if (item.kind === 46010) {
-    return `Approval Requested${channelLabel}`;
-  }
-
-  return `Needs Action${channelLabel}`;
-}
-
-function notificationBody(item: FeedItem) {
-  const content = item.content.trim();
-  const fallback =
-    item.kind === 46010
-      ? "A workflow is waiting for your approval."
-      : "Something in Sprout needs your attention.";
-  const body = content.length > 0 ? content : fallback;
-
-  if (body.length <= FEED_NOTIFICATION_BODY_MAX_LENGTH) {
-    return body;
-  }
-
-  return `${body.slice(0, FEED_NOTIFICATION_BODY_MAX_LENGTH - 3).trimEnd()}...`;
-}
-
-function collectHomeAlertItems(feed: HomeFeedResponse) {
-  return [...feed.feed.mentions, ...feed.feed.needsAction];
-}
-
-function eligibleFeedNotificationItems(
-  feed: HomeFeedResponse,
-  options: Pick<NotificationSettings, "mentions" | "needsAction">,
-) {
-  const items: FeedItem[] = [];
-
-  if (options.mentions) {
-    items.push(...feed.feed.mentions);
-  }
-
-  if (options.needsAction) {
-    items.push(...feed.feed.needsAction);
-  }
-
-  return items.sort((left, right) => left.createdAt - right.createdAt);
-}
-
 export function useNotificationSettings(pubkey?: string) {
   const normalizedPubkey = pubkey?.trim().toLowerCase() ?? "";
   const [settings, setSettings] = React.useState<NotificationSettings>(() =>
@@ -345,6 +298,15 @@ export function useFeedDesktopNotifications(
     async (item: FeedItem) => {
       await sendDesktopNotification({
         body: notificationBody(item),
+        target: {
+          channelId: item.channelId,
+          channelName: item.channelName,
+          content: item.content,
+          createdAt: item.createdAt,
+          eventId: item.id,
+          kind: item.kind,
+          pubkey: item.pubkey,
+        },
         title: notificationTitle(item),
       });
     },

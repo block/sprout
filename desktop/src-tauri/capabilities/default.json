@@ -6,8 +6,11 @@
   "permissions": [
     "core:default",
     "core:webview:allow-set-webview-zoom",
+    "core:window:allow-set-badge-count",
+    "core:window:allow-set-focus",
     "core:window:allow-start-dragging",
     "core:window:allow-toggle-maximize",
+    "core:window:allow-unminimize",
     "core:window:allow-show",
     "core:window:allow-close",
     "notification:default",

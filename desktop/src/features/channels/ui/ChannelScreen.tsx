@@ -1,11 +1,17 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { useAppShell } from "@/app/AppShellContext";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
 import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandlers";
+import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
+import {
+  useManagedAgentsQuery,
+  usePersonasQuery,
+} from "@/features/agents/hooks";
 import {
   mergeMessages,
   useChannelMessagesQuery,
@@ -39,7 +45,6 @@ import type {
   Identity,
   Profile,
   RelayEvent,
-  SearchHit,
 } from "@/shared/api/types";
 import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
@@ -58,29 +63,27 @@ type ChannelScreenProps = {
   activeChannel: Channel | null;
   currentIdentity?: Identity;
   currentProfile?: Profile;
-  onManageChannel: () => void;
-  onMarkChannelRead: (
-    channelId: string,
-    readAt: string | null | undefined,
-  ) => void;
-  onTargetReached: (messageId: string) => void;
-  searchAnchor: SearchHit | null;
-  searchAnchorChannelId: string | null;
-  searchAnchorEvent: RelayEvent | null;
+  onCloseForumPost: () => void;
+  onSelectForumPost: (postId: string) => void;
+  selectedForumPostId: string | null;
+  targetForumReplyId: string | null;
+  targetMessageEvent: RelayEvent | null;
+  targetMessageId: string | null;
 };
 
 export function ChannelScreen({
   activeChannel,
   currentIdentity,
   currentProfile,
-  onManageChannel,
-  onMarkChannelRead,
-  onTargetReached,
-  searchAnchor,
-  searchAnchorChannelId,
-  searchAnchorEvent,
+  onCloseForumPost,
+  onSelectForumPost,
+  selectedForumPostId,
+  targetForumReplyId,
+  targetMessageEvent,
+  targetMessageId,
 }: ChannelScreenProps) {
   const queryClient = useQueryClient();
+  const { markChannelRead, openChannelManagement } = useAppShell();
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
   const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
@@ -103,8 +106,8 @@ export function ChannelScreen({
       return;
     }
 
-    onMarkChannelRead(activeChannelId, activeReadAt);
-  }, [activeChannelId, activeReadAt, onMarkChannelRead]);
+    markChannelRead(activeChannelId, activeReadAt);
+  }, [activeChannelId, activeReadAt, markChannelRead]);
 
   const { activeChannelTitle, activeDmPresenceStatus } = useActiveChannelHeader(
     activeChannel,
@@ -121,21 +124,12 @@ export function ChannelScreen({
   const resolvedMessages = React.useMemo(() => {
     const currentMessages = messagesQuery.data ?? [];
 
-    if (
-      !activeChannel ||
-      !searchAnchorEvent ||
-      searchAnchorChannelId !== activeChannel.id
-    ) {
+    if (!activeChannel || !targetMessageEvent) {
       return currentMessages;
     }
 
-    return mergeMessages(currentMessages, searchAnchorEvent);
-  }, [
-    activeChannel,
-    messagesQuery.data,
-    searchAnchorChannelId,
-    searchAnchorEvent,
-  ]);
+    return mergeMessages(currentMessages, targetMessageEvent);
+  }, [activeChannel, messagesQuery.data, targetMessageEvent]);
   const messageAuthorPubkeys = React.useMemo(
     () => collectMessageAuthorPubkeys(resolvedMessages),
     [resolvedMessages],
@@ -156,14 +150,52 @@ export function ChannelScreen({
   const messageProfilesQuery = useUsersBatchQuery(messageProfilePubkeys, {
     enabled: messageProfilePubkeys.length > 0,
   });
-  const messageProfiles = React.useMemo(
-    () =>
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const messageProfiles = React.useMemo(() => {
+    const base =
       mergeCurrentProfileIntoLookup(
         messageProfilesQuery.data?.profiles,
         currentProfile,
-      ),
-    [currentProfile, messageProfilesQuery.data?.profiles],
-  );
+      ) ?? {};
+    // Merge managed agent names so system messages resolve instantly
+    // (without waiting for the relay profile batch query).
+    const agents = managedAgentsQuery.data ?? [];
+    const merged = { ...base };
+    for (const agent of agents) {
+      const key = agent.pubkey.toLowerCase();
+      if (!merged[key]?.displayName) {
+        merged[key] = {
+          ...merged[key],
+          displayName: agent.name,
+          avatarUrl: null,
+          nip05Handle: null,
+        };
+      }
+    }
+    return merged;
+  }, [
+    currentProfile,
+    managedAgentsQuery.data,
+    messageProfilesQuery.data?.profiles,
+  ]);
+  const channelMembersQuery = useChannelMembersQuery(activeChannel?.id ?? null);
+  const channelMembers = channelMembersQuery.data;
+  const personasQuery = usePersonasQuery();
+  const personaLookup = React.useMemo(() => {
+    const agents = managedAgentsQuery.data ?? [];
+    const personas = personasQuery.data ?? [];
+    const personaById = new Map(personas.map((p) => [p.id, p.displayName]));
+    const lookup = new Map<string, string>();
+    for (const agent of agents) {
+      if (agent.personaId) {
+        const personaName = personaById.get(agent.personaId);
+        if (personaName) {
+          lookup.set(agent.pubkey.toLowerCase(), personaName);
+        }
+      }
+    }
+    return lookup;
+  }, [managedAgentsQuery.data, personasQuery.data]);
   const timelineMessages = React.useMemo(
     () =>
       formatTimelineMessages(
@@ -172,12 +204,16 @@ export function ChannelScreen({
         currentPubkey,
         currentProfile?.avatarUrl ?? null,
         messageProfiles,
+        channelMembers,
+        personaLookup,
       ),
     [
       activeChannel,
+      channelMembers,
       currentProfile?.avatarUrl,
       currentPubkey,
       messageProfiles,
+      personaLookup,
       resolvedMessages,
     ],
   );
@@ -418,7 +454,7 @@ export function ChannelScreen({
             <ChannelMembersBar
               channel={activeChannel}
               currentPubkey={currentPubkey}
-              onManageChannel={onManageChannel}
+              onManageChannel={openChannelManagement}
               onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
             />
           ) : null
@@ -440,18 +476,18 @@ export function ChannelScreen({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {activeChannel ? (
           activeChannel.channelType === "forum" ? (
-            <React.Suspense
-              fallback={<ViewLoadingFallback label="Loading forum..." />}
-            >
+            <React.Suspense fallback={<ViewLoadingFallback kind="forum" />}>
               <ForumView
                 channel={activeChannel}
                 currentPubkey={currentPubkey}
+                onClosePost={onCloseForumPost}
+                onSelectPost={onSelectForumPost}
+                selectedPostId={selectedForumPostId}
+                targetReplyId={targetForumReplyId}
               />
             </React.Suspense>
           ) : (
-            <React.Suspense
-              fallback={<ViewLoadingFallback label="Loading channel..." />}
-            >
+            <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
               <ChannelPane
                 activeChannel={activeChannel}
                 currentPubkey={currentPubkey}
@@ -478,17 +514,13 @@ export function ChannelScreen({
                 onEditSave={handleEditSave}
                 onReply={handleReplyOpenThread}
                 onSend={handleSend}
-                onTargetReached={onTargetReached}
                 onToggleReaction={effectiveToggleReaction}
+                personaLookup={personaLookup}
                 profiles={messageProfiles}
                 replyTargetId={replyTargetId}
                 replyTargetMessage={replyTargetMessage}
                 threadRootId={threadRootId}
-                targetMessageId={
-                  activeChannel && searchAnchor?.channelId === activeChannel.id
-                    ? searchAnchor.eventId
-                    : null
-                }
+                targetMessageId={targetMessageId}
                 typingPubkeys={typingPubkeys}
               />
             </React.Suspense>

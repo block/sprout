@@ -15,10 +15,12 @@ import {
   usePersonasQuery,
   useRelayAgentsQuery,
   useSetManagedAgentStartOnAppLaunchMutation,
+  useSetPersonaActiveMutation,
   useStartManagedAgentMutation,
   useStopManagedAgentMutation,
   useUpdatePersonaMutation,
 } from "@/features/agents/hooks";
+import { getPersonaLibraryState } from "@/features/agents/lib/catalog";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { sendChannelMessage } from "@/shared/api/tauri";
@@ -41,6 +43,7 @@ import { AddTeamToChannelDialog } from "./AddTeamToChannelDialog";
 import { BatchImportDialog } from "./BatchImportDialog";
 import { CreateAgentDialog } from "./CreateAgentDialog";
 import { ManagedAgentsSection } from "./ManagedAgentsSection";
+import { PersonaCatalogDialog } from "./PersonaCatalogDialog";
 import { PersonaDialog } from "./PersonaDialog";
 import { PersonaDeleteDialog } from "./PersonaDeleteDialog";
 import { PersonasSection } from "./PersonasSection";
@@ -51,14 +54,16 @@ import { TeamDialog } from "./TeamDialog";
 import { TeamImportDialog } from "./TeamImportDialog";
 import { TeamsSection } from "./TeamsSection";
 import { TokenRevealDialog } from "./TokenRevealDialog";
+import {
+  createPersonaDialogState,
+  duplicatePersonaDialogState,
+  editPersonaDialogState,
+  importPersonaDialogState,
+  type PersonaDialogState,
+} from "./personaDialogState";
 import { useTeamActions } from "./useTeamActions";
 
-type PersonaDialogState = {
-  description: string;
-  initialValues: CreatePersonaInput | UpdatePersonaInput;
-  submitLabel: string;
-  title: string;
-} | null;
+type PersonaFeedbackSurface = "catalog" | "library";
 
 export function AgentsView() {
   const queryClient = useQueryClient();
@@ -75,10 +80,11 @@ export function AgentsView() {
   const createPersonaMutation = useCreatePersonaMutation();
   const updatePersonaMutation = useUpdatePersonaMutation();
   const deletePersonaMutation = useDeletePersonaMutation();
+  const setPersonaActiveMutation = useSetPersonaActiveMutation();
   const exportPersonaJsonMutation = useExportPersonaJsonMutation();
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
   const [personaDialogState, setPersonaDialogState] =
-    React.useState<PersonaDialogState>(null);
+    React.useState<PersonaDialogState | null>(null);
   const [personaToDelete, setPersonaToDelete] =
     React.useState<AgentPersona | null>(null);
   const [agentToAddToChannel, setAgentToAddToChannel] =
@@ -95,6 +101,14 @@ export function AgentsView() {
   const [actionErrorMessage, setActionErrorMessage] = React.useState<
     string | null
   >(null);
+  const [personaNoticeMessage, setPersonaNoticeMessage] = React.useState<
+    string | null
+  >(null);
+  const [personaErrorMessage, setPersonaErrorMessage] = React.useState<
+    string | null
+  >(null);
+  const [personaFeedbackSurface, setPersonaFeedbackSurface] =
+    React.useState<PersonaFeedbackSurface>("library");
 
   const teamActions = useTeamActions(
     { setActionNoticeMessage, setActionErrorMessage },
@@ -106,6 +120,7 @@ export function AgentsView() {
   const [batchImportResult, setBatchImportResult] =
     React.useState<ParsePersonaFilesResult | null>(null);
   const [batchImportFileName, setBatchImportFileName] = React.useState("");
+  const [isCatalogDialogOpen, setIsCatalogDialogOpen] = React.useState(false);
   const managedAgents = React.useMemo(
     () =>
       [...(managedAgentsQuery.data ?? [])].sort((left, right) => {
@@ -121,11 +136,8 @@ export function AgentsView() {
     [managedAgentsQuery.data],
   );
   const personas = personasQuery.data ?? [];
-  const personaLabelsById = React.useMemo(
-    () =>
-      Object.fromEntries(
-        personas.map((persona) => [persona.id, persona.displayName]),
-      ),
+  const { catalogPersonas, libraryPersonas, personaLabelsById } = React.useMemo(
+    () => getPersonaLibraryState(personas),
     [personas],
   );
   const [logAgentPubkey, setLogAgentPubkey] = React.useState<string | null>(
@@ -173,9 +185,21 @@ export function AgentsView() {
     }
   }, [managedAgents, logAgentPubkey]);
 
-  async function handleStart(pubkey: string) {
+  function clearActionFeedback() {
     setActionNoticeMessage(null);
     setActionErrorMessage(null);
+  }
+
+  function clearPersonaFeedback(
+    surface: PersonaFeedbackSurface = personaFeedbackSurface,
+  ) {
+    setPersonaFeedbackSurface(surface);
+    setPersonaNoticeMessage(null);
+    setPersonaErrorMessage(null);
+  }
+
+  async function handleStart(pubkey: string) {
+    clearActionFeedback();
 
     try {
       await startMutation.mutateAsync(pubkey);
@@ -187,8 +211,7 @@ export function AgentsView() {
   }
 
   async function handleStop(pubkey: string) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearActionFeedback();
 
     try {
       const agent = managedAgents.find((a) => a.pubkey === pubkey);
@@ -219,8 +242,7 @@ export function AgentsView() {
   }
 
   async function handleDelete(pubkey: string) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearActionFeedback();
 
     try {
       // For remote agents, send !shutdown before deleting to avoid orphaning.
@@ -290,8 +312,7 @@ export function AgentsView() {
     pubkey: string,
     startOnAppLaunch: boolean,
   ) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearActionFeedback();
 
     try {
       const updated = await startOnLaunchMutation.mutateAsync({
@@ -313,8 +334,7 @@ export function AgentsView() {
   }
 
   async function handleMintToken(pubkey: string, name: string) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearActionFeedback();
 
     try {
       const result = await mintTokenMutation.mutateAsync({
@@ -335,36 +355,62 @@ export function AgentsView() {
   async function handlePersonaSubmit(
     input: CreatePersonaInput | UpdatePersonaInput,
   ) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearPersonaFeedback("library");
 
     try {
       if ("id" in input) {
         await updatePersonaMutation.mutateAsync(input);
-        setActionNoticeMessage(`Updated ${input.displayName}.`);
+        setPersonaNoticeMessage(`Updated ${input.displayName}.`);
       } else {
         await createPersonaMutation.mutateAsync(input);
-        setActionNoticeMessage(`Created ${input.displayName}.`);
+        setPersonaNoticeMessage(`Created ${input.displayName}.`);
       }
       setPersonaDialogState(null);
     } catch (error) {
-      setActionErrorMessage(
+      setPersonaErrorMessage(
         error instanceof Error ? error.message : "Failed to save persona.",
       );
     }
   }
 
   async function handleDeletePersona(persona: AgentPersona) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearPersonaFeedback("library");
 
     try {
       await deletePersonaMutation.mutateAsync(persona.id);
-      setActionNoticeMessage(`Deleted ${persona.displayName}.`);
+      setPersonaNoticeMessage(`Deleted ${persona.displayName}.`);
       setPersonaToDelete(null);
     } catch (error) {
-      setActionErrorMessage(
+      setPersonaErrorMessage(
         error instanceof Error ? error.message : "Failed to delete persona.",
+      );
+    }
+  }
+
+  async function handleSetPersonaActive(
+    persona: AgentPersona,
+    active: boolean,
+    surface: PersonaFeedbackSurface,
+  ) {
+    clearPersonaFeedback(surface);
+
+    try {
+      await setPersonaActiveMutation.mutateAsync({
+        id: persona.id,
+        active,
+      });
+      setPersonaNoticeMessage(
+        active
+          ? `Selected ${persona.displayName} for My Agents.`
+          : `Deselected ${persona.displayName} from My Agents.`,
+      );
+    } catch (error) {
+      setPersonaErrorMessage(
+        error instanceof Error
+          ? error.message
+          : active
+            ? "Failed to select persona for My Agents."
+            : "Failed to deselect persona from My Agents.",
       );
     }
   }
@@ -397,32 +443,19 @@ export function AgentsView() {
     fileBytes: number[],
     fileName: string,
   ) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearPersonaFeedback("library");
     try {
       const result = await parsePersonaFiles(fileBytes, fileName);
       if (isSingleItemFile(fileBytes) && result.personas.length === 1) {
-        const p = result.personas[0];
-        setPersonaDialogState({
-          title: `Import ${p.displayName}`,
-          description: "Review and save this imported persona.",
-          submitLabel: "Create persona",
-          initialValues: {
-            displayName: p.displayName,
-            avatarUrl: p.avatarDataUrl ?? "",
-            systemPrompt: p.systemPrompt,
-            provider: p.provider ?? undefined,
-            model: p.model ?? undefined,
-          },
-        });
+        setPersonaDialogState(importPersonaDialogState(result.personas[0]));
       } else if (result.personas.length > 0) {
         setBatchImportResult(result);
         setBatchImportFileName(fileName);
       } else {
-        setActionErrorMessage("No valid personas found in file.");
+        setPersonaErrorMessage("No valid personas found in file.");
       }
     } catch (err) {
-      setActionErrorMessage(
+      setPersonaErrorMessage(
         err instanceof Error ? err.message : "Failed to parse persona file.",
       );
     }
@@ -437,6 +470,7 @@ export function AgentsView() {
     createPersonaMutation.isPending ||
     updatePersonaMutation.isPending ||
     deletePersonaMutation.isPending ||
+    setPersonaActiveMutation.isPending ||
     exportPersonaJsonMutation.isPending ||
     teamActions.exportTeamJsonMutation.isPending ||
     teamActions.createTeamMutation.isPending ||
@@ -449,84 +483,68 @@ export function AgentsView() {
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
           <div className="flex flex-col gap-6">
             <PersonasSection
+              canChooseCatalog={catalogPersonas.length > 0}
               error={
                 personasQuery.error instanceof Error
                   ? personasQuery.error
+                  : null
+              }
+              feedbackErrorMessage={
+                personaFeedbackSurface === "library"
+                  ? personaErrorMessage
+                  : null
+              }
+              feedbackNoticeMessage={
+                personaFeedbackSurface === "library"
+                  ? personaNoticeMessage
                   : null
               }
               isLoading={personasQuery.isLoading}
               isPending={
                 createPersonaMutation.isPending ||
                 updatePersonaMutation.isPending ||
-                deletePersonaMutation.isPending
+                deletePersonaMutation.isPending ||
+                setPersonaActiveMutation.isPending ||
+                exportPersonaJsonMutation.isPending
               }
-              onCreate={() => {
-                setActionNoticeMessage(null);
-                setActionErrorMessage(null);
-                setPersonaDialogState({
-                  title: "Create persona",
-                  description:
-                    "Save a reusable role, prompt, and optional avatar for future agent deployments.",
-                  submitLabel: "Create persona",
-                  initialValues: {
-                    displayName: "",
-                    avatarUrl: "",
-                    systemPrompt: "",
-                    provider: undefined,
-                    model: undefined,
-                  },
-                });
+              onChooseCatalog={() => {
+                clearPersonaFeedback("catalog");
+                setIsCatalogDialogOpen(true);
               }}
-              onDelete={setPersonaToDelete}
+              onCreate={() => {
+                clearPersonaFeedback("library");
+                setPersonaDialogState(createPersonaDialogState());
+              }}
+              onDelete={(persona) => {
+                clearPersonaFeedback("library");
+                setPersonaToDelete(persona);
+              }}
+              onDeactivate={(persona) => {
+                void handleSetPersonaActive(persona, false, "library");
+              }}
               onDuplicate={(persona) => {
-                setActionNoticeMessage(null);
-                setActionErrorMessage(null);
-                setPersonaDialogState({
-                  title: `Duplicate ${persona.displayName}`,
-                  description:
-                    "Create a new persona by copying this template and adjusting it as needed.",
-                  submitLabel: "Create persona",
-                  initialValues: {
-                    displayName: `${persona.displayName} copy`,
-                    avatarUrl: persona.avatarUrl ?? "",
-                    systemPrompt: persona.systemPrompt,
-                    provider: persona.provider ?? undefined,
-                    model: persona.model ?? undefined,
-                  },
-                });
+                clearPersonaFeedback("library");
+                setPersonaDialogState(duplicatePersonaDialogState(persona));
               }}
               onEdit={(persona) => {
-                setActionNoticeMessage(null);
-                setActionErrorMessage(null);
-                setPersonaDialogState({
-                  title: `Edit ${persona.displayName}`,
-                  description:
-                    "Update this saved persona. New deployments will use the updated values.",
-                  submitLabel: "Save changes",
-                  initialValues: {
-                    id: persona.id,
-                    displayName: persona.displayName,
-                    avatarUrl: persona.avatarUrl ?? "",
-                    systemPrompt: persona.systemPrompt,
-                    provider: persona.provider ?? undefined,
-                    model: persona.model ?? undefined,
-                  },
-                });
+                clearPersonaFeedback("library");
+                setPersonaDialogState(editPersonaDialogState(persona));
               }}
               onImportFile={(fileBytes, fileName) => {
                 void handlePersonaImportFile(fileBytes, fileName);
               }}
               onExport={(persona) => {
+                clearPersonaFeedback("library");
                 exportPersonaJsonMutation.mutate(persona.id, {
                   onSuccess: (saved) => {
                     if (saved) {
-                      setActionNoticeMessage(
+                      setPersonaNoticeMessage(
                         `Exported ${persona.displayName}.`,
                       );
                     }
                   },
                   onError: (error) => {
-                    setActionErrorMessage(
+                    setPersonaErrorMessage(
                       error instanceof Error
                         ? error.message
                         : "Failed to export persona.",
@@ -534,7 +552,7 @@ export function AgentsView() {
                   },
                 });
               }}
-              personas={personas}
+              personas={libraryPersonas}
             />
 
             <TeamsSection
@@ -556,7 +574,7 @@ export function AgentsView() {
               onExport={teamActions.handleExportTeam}
               onImportFile={teamActions.handleImportFile}
               onAddToChannel={teamActions.setTeamToAddToChannel}
-              personas={personas}
+              personas={libraryPersonas}
               teams={teamActions.teams}
             />
 
@@ -693,6 +711,28 @@ export function AgentsView() {
         open={personaToDelete !== null}
         persona={personaToDelete}
       />
+      <PersonaCatalogDialog
+        error={
+          personasQuery.error instanceof Error ? personasQuery.error : null
+        }
+        feedbackErrorMessage={
+          personaFeedbackSurface === "catalog" ? personaErrorMessage : null
+        }
+        feedbackNoticeMessage={
+          personaFeedbackSurface === "catalog" ? personaNoticeMessage : null
+        }
+        isLoading={personasQuery.isLoading}
+        isPending={setPersonaActiveMutation.isPending}
+        onClearFeedback={() => {
+          clearPersonaFeedback("catalog");
+        }}
+        onOpenChange={setIsCatalogDialogOpen}
+        onSelectPersona={(persona, active) => {
+          void handleSetPersonaActive(persona, active, "catalog");
+        }}
+        open={isCatalogDialogOpen}
+        personas={catalogPersonas}
+      />
       <TeamDialog
         description={teamActions.teamDialogState?.description ?? ""}
         error={
@@ -714,7 +754,7 @@ export function AgentsView() {
         }}
         onSubmit={teamActions.handleTeamSubmit}
         open={teamActions.teamDialogState !== null}
-        personas={personas}
+        personas={libraryPersonas}
         submitLabel={teamActions.teamDialogState?.submitLabel ?? "Save"}
         title={teamActions.teamDialogState?.title ?? "Team"}
       />
@@ -738,14 +778,15 @@ export function AgentsView() {
           }
         }}
         open={teamActions.teamToAddToChannel !== null}
-        personas={personas}
+        personas={libraryPersonas}
         team={teamActions.teamToAddToChannel}
       />
       <BatchImportDialog
         fileName={batchImportFileName}
         onComplete={(count) => {
+          clearPersonaFeedback("library");
           setBatchImportResult(null);
-          setActionNoticeMessage(
+          setPersonaNoticeMessage(
             `Imported ${count} persona${count !== 1 ? "s" : ""}.`,
           );
           void queryClient.invalidateQueries({ queryKey: personasQueryKey });

@@ -41,4 +41,4 @@ sprout-sdk = { workspace = true }
 base64 = "0.22"
 
 # SHA-256 — NIP-98 payload hash tag
-sha2 = "0.10"
+sha2 = "0.11"
