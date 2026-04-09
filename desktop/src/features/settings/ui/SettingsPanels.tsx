@@ -104,10 +104,7 @@ function ThemeSettingsCard() {
   }, [search]);
 
   return (
-    <section
-      className="rounded-xl border border-border/80 bg-card/80 p-4 shadow-sm"
-      data-testid="settings-theme"
-    >
+    <section className="min-w-0" data-testid="settings-theme">
       <div className="mb-3 min-w-0">
         <h2 className="text-sm font-semibold tracking-tight">Appearance</h2>
         <p className="text-sm text-muted-foreground">

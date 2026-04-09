@@ -34,11 +34,11 @@ function SelectionChipButton({
     <button
       aria-pressed={selected}
       className={cn(
-        "inline-flex min-h-9 items-center gap-2 rounded-full border py-1.5 text-sm font-medium transition-colors",
+        "inline-flex min-h-9 items-center gap-2 rounded-full border py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         showAvatar ? "pl-1.5 pr-3" : "px-3",
         selected
-          ? "border-foreground bg-foreground text-background shadow-sm"
-          : "border-border/70 bg-muted/25 text-foreground hover:bg-muted/55",
+          ? "border-primary bg-primary/10 text-foreground"
+          : "border-border/80 bg-background/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground",
         disabled && "cursor-not-allowed opacity-50",
       )}
       disabled={disabled}
@@ -51,8 +51,8 @@ function SelectionChipButton({
           className={cn(
             "h-6 w-6 rounded-full text-[10px]",
             selected
-              ? "bg-background/20 text-background"
-              : "bg-primary/20 text-primary",
+              ? "bg-primary/20 text-primary ring-1 ring-primary/20"
+              : "bg-background/80 text-muted-foreground ring-1 ring-border/70",
           )}
           iconClassName="h-3.5 w-3.5"
           label={label}
@@ -109,9 +109,7 @@ export function AddChannelBotPersonasSection({
                     <Bot
                       className={cn(
                         "h-4 w-4",
-                        includeGeneric
-                          ? "text-background/70"
-                          : "text-muted-foreground",
+                        includeGeneric ? "text-primary" : "text-current",
                       )}
                     />
                     Generic
@@ -142,7 +140,7 @@ export function AddChannelBotPersonasSection({
                             className={cn(
                               "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none",
                               isSelected
-                                ? "bg-background/20 text-background/80"
+                                ? "bg-primary/15 text-primary"
                                 : "bg-muted/60 text-muted-foreground",
                             )}
                           >

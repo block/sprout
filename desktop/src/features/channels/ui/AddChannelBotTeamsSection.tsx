@@ -31,10 +31,10 @@ function SelectionChipButton({
     <button
       aria-pressed={selected}
       className={cn(
-        "inline-flex min-h-9 items-center gap-2 rounded-full border py-1.5 px-3 text-sm font-medium transition-colors",
+        "inline-flex min-h-9 items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         selected
-          ? "border-foreground bg-foreground text-background shadow-sm"
-          : "border-border/70 bg-muted/25 text-foreground hover:bg-muted/55",
+          ? "border-primary bg-primary/10 text-foreground"
+          : "border-border/80 bg-background/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground",
         disabled && "cursor-not-allowed opacity-50",
       )}
       disabled={disabled}
@@ -109,18 +109,14 @@ export function AddChannelBotTeamsSection({
                       <Users
                         className={cn(
                           "h-4 w-4",
-                          allSelected
-                            ? "text-background/70"
-                            : "text-muted-foreground",
+                          allSelected ? "text-primary" : "text-current",
                         )}
                       />
                       {team.name}
                       <span
                         className={cn(
                           "text-xs",
-                          allSelected
-                            ? "text-background/60"
-                            : "text-muted-foreground",
+                          allSelected ? "text-primary/70" : "text-current/70",
                         )}
                       >
                         ({validIds.length})
@@ -130,7 +126,7 @@ export function AddChannelBotTeamsSection({
                           className={cn(
                             "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none",
                             allSelected
-                              ? "bg-background/20 text-background/80"
+                              ? "bg-primary/15 text-primary"
                               : "bg-muted/60 text-muted-foreground",
                           )}
                         >

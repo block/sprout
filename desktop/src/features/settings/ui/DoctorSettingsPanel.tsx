@@ -198,169 +198,165 @@ export function DoctorSettingsPanel() {
       !prereqs.mcp.available);
 
   return (
-    <div className="space-y-4" data-testid="settings-doctor">
-      <section className="rounded-xl border border-border/80 bg-card/80 p-5 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
+    <section className="space-y-5" data-testid="settings-doctor">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Stethoscope className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold tracking-tight">Doctor</h2>
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Verify the local Sprout tools and ACP runtime commands used by the
+            desktop app.
+          </p>
+        </div>
+
+        <Button
+          className="shrink-0"
+          disabled={isRefreshing}
+          onClick={() => {
+            void providersQuery.refetch();
+            void prereqsQuery.refetch();
+          }}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          <RefreshCw
+            className={cn("h-4 w-4", isRefreshing && "animate-spin")}
+          />
+          Re-run
+        </Button>
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+        <div className="space-y-4">
+          <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
             <div className="flex items-center gap-2">
-              <Stethoscope className="h-4 w-4 text-primary" />
-              <h2 className="text-sm font-semibold tracking-tight">Doctor</h2>
+              <TerminalSquare className="h-4 w-4 text-primary" />
+              <h3 className="text-sm font-semibold tracking-tight">
+                Local Sprout binaries
+              </h3>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
-              Verify the local Sprout tools and ACP runtime commands used by the
-              desktop app.
+              These checks replace the old binary status card from Create agent.
+            </p>
+
+            <div className="mt-4 space-y-2">
+              {toolChecks.map((check) => (
+                <CommandCheckRow
+                  availability={check.availability}
+                  id={check.id}
+                  isLoading={prereqsQuery.isLoading}
+                  key={check.id}
+                  label={check.label}
+                  purpose={check.purpose}
+                />
+              ))}
+            </div>
+
+            {hasMissingSproutTools ? (
+              <p className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-warning">
+                Build the workspace binaries with{" "}
+                <code className="font-mono">
+                  cargo build --release --workspace
+                </code>{" "}
+                or point agent creation at custom ACP and MCP commands.
+              </p>
+            ) : null}
+
+            {prereqsQuery.error instanceof Error ? (
+              <p className="mt-4 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                {prereqsQuery.error.message}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
+            <h3 className="text-sm font-semibold tracking-tight">
+              Custom harness commands
+            </h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Verify non-default ACP or MCP binaries before using them in agent
+              creation.
+            </p>
+
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" htmlFor="doctor-acp">
+                  ACP command
+                </label>
+                <Input
+                  data-testid="doctor-acp-command"
+                  id="doctor-acp"
+                  onChange={(event) => setAcpCommand(event.target.value)}
+                  value={acpCommand}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" htmlFor="doctor-mcp">
+                  MCP command
+                </label>
+                <Input
+                  data-testid="doctor-mcp-command"
+                  id="doctor-mcp"
+                  onChange={(event) => setMcpCommand(event.target.value)}
+                  value={mcpCommand}
+                />
+              </div>
+            </div>
+
+            <p className="mt-3 text-xs text-muted-foreground">
+              Token minting always checks the default{" "}
+              <code className="font-mono">sprout-admin</code> command.
             </p>
           </div>
-
-          <Button
-            className="shrink-0"
-            disabled={isRefreshing}
-            onClick={() => {
-              void providersQuery.refetch();
-              void prereqsQuery.refetch();
-            }}
-            size="sm"
-            type="button"
-            variant="outline"
-          >
-            <RefreshCw
-              className={cn("h-4 w-4", isRefreshing && "animate-spin")}
-            />
-            Re-run
-          </Button>
         </div>
 
-        <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-          <div className="space-y-4">
-            <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
-              <div className="flex items-center gap-2">
-                <TerminalSquare className="h-4 w-4 text-primary" />
-                <h3 className="text-sm font-semibold tracking-tight">
-                  Local Sprout binaries
-                </h3>
-              </div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                These checks replace the old binary status card from Create
-                agent.
-              </p>
+        <div className="space-y-4">
+          <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
+            <h3 className="text-sm font-semibold tracking-tight">
+              ACP runtimes
+            </h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Installed runtimes that the desktop app can offer in Create agent.
+            </p>
 
-              <div className="mt-4 space-y-2">
-                {toolChecks.map((check) => (
-                  <CommandCheckRow
-                    availability={check.availability}
-                    id={check.id}
-                    isLoading={prereqsQuery.isLoading}
-                    key={check.id}
-                    label={check.label}
-                    purpose={check.purpose}
+            <div className="mt-4 space-y-2">
+              {providersQuery.isLoading ? (
+                <p className="text-sm text-muted-foreground">
+                  Looking for installed ACP runtimes...
+                </p>
+              ) : providers.length > 0 ? (
+                providers.map((provider) => (
+                  <ProviderRow
+                    command={provider.command}
+                    defaultArgs={provider.defaultArgs}
+                    key={provider.id}
+                    label={provider.label}
+                    providerId={provider.id}
+                    resolvedPath={provider.binaryPath}
                   />
-                ))}
-              </div>
-
-              {hasMissingSproutTools ? (
-                <p className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-warning">
-                  Build the workspace binaries with{" "}
-                  <code className="font-mono">
-                    cargo build --release --workspace
-                  </code>{" "}
-                  or point agent creation at custom ACP and MCP commands.
-                </p>
-              ) : null}
-
-              {prereqsQuery.error instanceof Error ? (
-                <p className="mt-4 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                  {prereqsQuery.error.message}
-                </p>
-              ) : null}
+                ))
+              ) : (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-warning">
+                  No known ACP runtime was detected on your PATH yet. You can
+                  still use a custom command in Create agent.
+                </div>
+              )}
             </div>
 
-            <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
-              <h3 className="text-sm font-semibold tracking-tight">
-                Custom harness commands
-              </h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Verify non-default ACP or MCP binaries before using them in
-                agent creation.
+            {providersQuery.error instanceof Error ? (
+              <p className="mt-4 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                {providersQuery.error.message}
               </p>
-
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="doctor-acp">
-                    ACP command
-                  </label>
-                  <Input
-                    data-testid="doctor-acp-command"
-                    id="doctor-acp"
-                    onChange={(event) => setAcpCommand(event.target.value)}
-                    value={acpCommand}
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="doctor-mcp">
-                    MCP command
-                  </label>
-                  <Input
-                    data-testid="doctor-mcp-command"
-                    id="doctor-mcp"
-                    onChange={(event) => setMcpCommand(event.target.value)}
-                    value={mcpCommand}
-                  />
-                </div>
-              </div>
-
-              <p className="mt-3 text-xs text-muted-foreground">
-                Token minting always checks the default{" "}
-                <code className="font-mono">sprout-admin</code> command.
-              </p>
-            </div>
+            ) : null}
           </div>
 
-          <div className="space-y-4">
-            <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
-              <h3 className="text-sm font-semibold tracking-tight">
-                ACP runtimes
-              </h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Installed runtimes that the desktop app can offer in Create
-                agent.
-              </p>
-
-              <div className="mt-4 space-y-2">
-                {providersQuery.isLoading ? (
-                  <p className="text-sm text-muted-foreground">
-                    Looking for installed ACP runtimes...
-                  </p>
-                ) : providers.length > 0 ? (
-                  providers.map((provider) => (
-                    <ProviderRow
-                      command={provider.command}
-                      defaultArgs={provider.defaultArgs}
-                      key={provider.id}
-                      label={provider.label}
-                      providerId={provider.id}
-                      resolvedPath={provider.binaryPath}
-                    />
-                  ))
-                ) : (
-                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-warning">
-                    No known ACP runtime was detected on your PATH yet. You can
-                    still use a custom command in Create agent.
-                  </div>
-                )}
-              </div>
-
-              {providersQuery.error instanceof Error ? (
-                <p className="mt-4 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                  {providersQuery.error.message}
-                </p>
-              ) : null}
-            </div>
-
-            <SetupHelpCard />
-          </div>
+          <SetupHelpCard />
         </div>
-      </section>
-    </div>
+      </div>
+    </section>
   );
 }
