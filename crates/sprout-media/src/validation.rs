@@ -6,13 +6,17 @@ use std::path::Path;
 use crate::config::MediaConfig;
 use crate::error::MediaError;
 
-/// Accepted MIME types. Video is validated further via `validate_video_file`.
+/// Accepted MIME types for the image upload path.
+///
+/// `video/mp4` is intentionally excluded — video uploads use a separate pipeline
+/// (`process_video_upload`) with its own magic-byte check. If an MP4 is uploaded
+/// through the image path (Content-Type spoofing), `infer::get()` detects
+/// `video/mp4` and `validate_content()` rejects it here.
 const ALLOWED_MIME_TYPES: &[&str] = &[
     "image/jpeg",
     "image/png",
     "image/gif",
     "image/webp",
-    "video/mp4",
 ];
 
 /// Metadata extracted from a validated MP4 file.
@@ -28,11 +32,11 @@ pub struct VideoMeta {
     pub has_audio: bool,
 }
 
-/// Validate uploaded bytes: magic bytes, allowlist, size, pixel dimensions (images only).
+/// Validate uploaded bytes for the **image** upload path.
 ///
-/// For `video/mp4`, this function only checks magic bytes, allowlist, and size.
-/// Full video validation (codec, duration, resolution, moov placement) is done
-/// separately via [`validate_video_file`] once the body has been streamed to disk.
+/// Checks magic bytes, MIME allowlist (images only), size, and pixel dimensions.
+/// Rejects `video/mp4` — video uploads must use [`process_video_upload`] which
+/// has its own magic-byte check and full MP4 validation pipeline.
 pub fn validate_content(bytes: &[u8], config: &MediaConfig) -> Result<String, MediaError> {
     // 1. Magic bytes — never trust Content-Type header
     let mime = infer::get(bytes)
@@ -44,11 +48,9 @@ pub fn validate_content(bytes: &[u8], config: &MediaConfig) -> Result<String, Me
         return Err(MediaError::DisallowedContentType(mime));
     }
 
-    // 3. Size cap
+    // 3. Size cap (images only — video uses its own size enforcement in the streaming pipeline)
     let max = if mime == "image/gif" {
         config.max_gif_bytes
-    } else if mime == "video/mp4" {
-        config.max_video_bytes
     } else {
         config.max_image_bytes
     };
@@ -60,17 +62,13 @@ pub fn validate_content(bytes: &[u8], config: &MediaConfig) -> Result<String, Me
     }
 
     // 4. Image bomb — check pixel dimensions before full decode.
-    //    Skipped for video/mp4: imagesize does not understand MP4 and detailed
-    //    validation is deferred to validate_video_file() on the temp file.
-    //    Fail closed for all accepted image types: imagesize supports JPEG, PNG, GIF, WebP.
-    //    If dimensions can't be parsed, reject — don't let unknown-geometry images
-    //    reach the full decoder in thumbnail generation.
-    if mime != "video/mp4" {
-        const MAX_PIXELS: u64 = 25_000_000; // 25 megapixels — 100MB max RGBA decode
-        let size = imagesize::blob_size(bytes).map_err(|_| MediaError::InvalidImage)?;
-        if (size.width as u64) * (size.height as u64) > MAX_PIXELS {
-            return Err(MediaError::ImageTooLarge);
-        }
+    //    Fail closed: imagesize supports JPEG, PNG, GIF, WebP. If dimensions
+    //    can't be parsed, reject — don't let unknown-geometry images reach the
+    //    full decoder in thumbnail generation.
+    const MAX_PIXELS: u64 = 25_000_000; // 25 megapixels — 100MB max RGBA decode
+    let size = imagesize::blob_size(bytes).map_err(|_| MediaError::InvalidImage)?;
+    if (size.width as u64) * (size.height as u64) > MAX_PIXELS {
+        return Err(MediaError::ImageTooLarge);
     }
 
     Ok(mime)
@@ -392,35 +390,20 @@ mod tests {
     ];
 
     #[test]
-    fn test_validate_mp4_magic_bytes_accepted() {
+    fn test_validate_mp4_magic_bytes_rejected() {
+        // MP4 uploaded through the image path must be rejected — video/mp4 is
+        // not in ALLOWED_MIME_TYPES. This prevents Content-Type spoofing attacks
+        // where an MP4 is uploaded as image/jpeg to bypass video validation.
         let config = test_config();
-        // infer should detect video/mp4 from ftyp magic
         let result = validate_content(MP4_FTYP_MAGIC, &config);
-        // Either accepted as video/mp4 or unknown — depends on infer's detection.
-        // The key assertion: it must NOT be rejected as DisallowedContentType("video/mp4").
         match result {
-            Ok(mime) => assert_eq!(mime, "video/mp4"),
-            Err(MediaError::UnknownContentType) => {
-                // infer needs more bytes — acceptable, the streaming path handles this
+            Err(MediaError::DisallowedContentType(mime)) => {
+                assert_eq!(mime, "video/mp4");
             }
-            Err(e) => panic!("unexpected error for MP4 magic: {e:?}"),
-        }
-    }
-
-    #[test]
-    fn test_validate_mp4_size_cap() {
-        let config = test_config();
-        // Build a fake "video/mp4" byte slice that exceeds max_video_bytes.
-        // We can't easily make infer detect it without a real ftyp, so test
-        // the size logic directly with a config that has a tiny cap.
-        let mut cfg = config;
-        cfg.max_video_bytes = 4; // 4 bytes max
-                                 // Use the ftyp magic — if infer detects video/mp4, size check fires.
-        let result = validate_content(MP4_FTYP_MAGIC, &cfg);
-        match result {
-            Err(MediaError::FileTooLarge { .. }) => {} // expected
-            Err(MediaError::UnknownContentType) => {}  // infer needs more bytes — ok
-            Ok(_) => panic!("should have been rejected"),
+            Err(MediaError::UnknownContentType) => {
+                // infer needs more bytes — acceptable, still rejected
+            }
+            Ok(mime) => panic!("MP4 should be rejected by image path, got Ok({mime})"),
             Err(e) => panic!("unexpected error: {e:?}"),
         }
     }
