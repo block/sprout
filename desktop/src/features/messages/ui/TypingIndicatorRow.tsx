@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import {
+  useManagedAgentLogQuery,
   useManagedAgentsQuery,
   useStopManagedAgentMutation,
 } from "@/features/agents/hooks";
@@ -71,6 +72,35 @@ function formatElapsed(startIso: string): string {
   return `${totalSeconds}s`;
 }
 
+/** Compact ACP log preview — dark terminal block, last N lines. */
+function AgentLogPreview({ pubkey }: { pubkey: string }) {
+  const { data: logData, isLoading } = useManagedAgentLogQuery(pubkey, 10);
+
+  if (isLoading) {
+    return (
+      <div className="mt-2 rounded-lg bg-[#17171d] px-3 py-2 text-[11px] text-zinc-500">
+        Loading log…
+      </div>
+    );
+  }
+
+  const trimmed = logData?.content?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  return (
+    <div className="mt-2 overflow-hidden rounded-lg border border-white/5 bg-[#17171d]">
+      <pre
+        className="max-h-[8rem] overflow-auto whitespace-pre-wrap px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-300"
+        data-testid="typing-popover-log"
+      >
+        {trimmed}
+      </pre>
+    </div>
+  );
+}
+
 type BotTypingPopoverContentProps = {
   botAgents: ManagedAgent[];
 };
@@ -95,14 +125,17 @@ function BotTypingPopoverContent({ botAgents }: BotTypingPopoverContentProps) {
   return (
     <div>
       {botAgents.map((agent) => (
-        <div key={agent.pubkey} className="mb-2 last:mb-0">
-          <div className="font-bold text-sm">{agent.name}</div>
+        <div key={agent.pubkey} className="mb-3 last:mb-0">
+          <div className="flex items-baseline justify-between gap-2">
+            <div className="font-bold text-sm truncate">{agent.name}</div>
+            <div className="flex-shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+              {agent.lastStartedAt ? formatElapsed(agent.lastStartedAt) : "—"}
+            </div>
+          </div>
           {agent.model && (
             <div className="text-xs text-muted-foreground">{agent.model}</div>
           )}
-          <div className="text-xs text-muted-foreground">
-            {agent.lastStartedAt ? formatElapsed(agent.lastStartedAt) : "—"}
-          </div>
+          <AgentLogPreview pubkey={agent.pubkey} />
         </div>
       ))}
       <button
@@ -204,7 +237,7 @@ export function TypingIndicatorRow({
                 {typingText}
               </button>
             </PopoverTrigger>
-            <PopoverContent side="top" align="start" className="w-64 p-3">
+            <PopoverContent side="top" align="start" className="w-96 p-3">
               <BotTypingPopoverContent botAgents={botAgents} />
             </PopoverContent>
           </Popover>
