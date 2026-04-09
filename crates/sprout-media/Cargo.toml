@@ -25,6 +25,11 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 blurhash = "0.2"
 imagesize = "0.14"
 bytes = "1"
+mp4 = "0.14"
+tempfile = "3"
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
+futures-core = "0.3"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

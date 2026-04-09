@@ -54,6 +54,27 @@ pub enum MediaError {
     TokenRevoked,
     #[error("pubkey mismatch")]
     PubkeyMismatch,
+    /// Video codec is not H.264 (avc1).
+    #[error("unsupported video codec: only H.264 (avc1) is accepted")]
+    WrongCodec,
+    /// Video duration exceeds the 600-second limit.
+    #[error("video too long: duration exceeds 600 seconds")]
+    DurationTooLong,
+    /// Video resolution exceeds 3840×2160.
+    #[error("video resolution too high: maximum is 3840x2160")]
+    ResolutionTooHigh,
+    /// MP4 moov atom appears after mdat — not fast-start.
+    #[error("moov atom not at front of file (not fast-start)")]
+    MoovNotAtFront,
+    /// Container is not MP4 (e.g. MOV, MKV).
+    #[error("unsupported container: only MP4 is accepted")]
+    UnsupportedContainer,
+    /// MP4 metadata could not be parsed.
+    #[error("invalid video data")]
+    InvalidVideo,
+    /// I/O error during streaming upload.
+    #[error("io error: {0}")]
+    Io(String),
 }
 
 impl From<image::ImageError> for MediaError {
@@ -109,10 +130,16 @@ impl IntoResponse for MediaError {
                 )
             }
             Self::InsufficientScope => (StatusCode::FORBIDDEN, self.to_string()),
+            Self::UnsupportedContainer => (StatusCode::UNSUPPORTED_MEDIA_TYPE, self.to_string()),
+            Self::WrongCodec
+            | Self::DurationTooLong
+            | Self::ResolutionTooHigh
+            | Self::MoovNotAtFront
+            | Self::InvalidVideo => (StatusCode::BAD_REQUEST, self.to_string()),
             Self::UnknownContentType | Self::InvalidImage => {
                 (StatusCode::BAD_REQUEST, self.to_string())
             }
-            Self::StorageError(_) | Self::Internal => {
+            Self::Io(_) | Self::StorageError(_) | Self::Internal => {
                 tracing::error!(error = %self, "media storage error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
             }

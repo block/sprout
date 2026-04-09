@@ -84,7 +84,7 @@ pub fn verify_blossom_auth_event(
     if created > now + 5 {
         return Err(MediaError::TimestampOutOfWindow);
     }
-    const MAX_AGE_SECS: u64 = 600; // 10 minutes
+    const MAX_AGE_SECS: u64 = 3600; // 1 hour — supports large video uploads on slow connections
     if now > created + MAX_AGE_SECS {
         return Err(MediaError::TimestampOutOfWindow);
     }

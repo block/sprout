@@ -12,12 +12,7 @@ use crate::error::MediaError;
 /// (`process_video_upload`) with its own magic-byte check. If an MP4 is uploaded
 /// through the image path (Content-Type spoofing), `infer::get()` detects
 /// `video/mp4` and `validate_content()` rejects it here.
-const ALLOWED_MIME_TYPES: &[&str] = &[
-    "image/jpeg",
-    "image/png",
-    "image/gif",
-    "image/webp",
-];
+const ALLOWED_MIME_TYPES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
 
 /// Metadata extracted from a validated MP4 file.
 #[derive(Debug, Clone)]
