@@ -148,10 +148,10 @@ pub async fn process_video_upload(
         let mut hasher = Sha256::new();
         let mut total: u64 = 0;
         // Accumulate enough leading bytes for magic-byte detection.
-        // MP4 ftyp header is 12 bytes (size + "ftyp" + brand). infer::get()
-        // needs at least this much. We buffer up to 64 bytes to be safe —
-        // covers all formats infer supports.
-        const MIN_SNIFF_BYTES: usize = 64;
+        // 4 KiB is the standard sniff buffer — infer checks signatures at
+        // various offsets, and some formats need more than just the first few
+        // bytes. This is tiny relative to any real upload.
+        const MIN_SNIFF_BYTES: usize = 4096;
         let mut sniff_buf: Vec<u8> = Vec::with_capacity(MIN_SNIFF_BYTES);
         let mut buf = vec![0u8; 64 * 1024]; // 64 KiB read buffer
 
@@ -196,7 +196,7 @@ pub async fn process_video_upload(
     };
 
     // --- 2. Magic-byte check (video/mp4 only) ---
-    // sniff_buf has up to MIN_SNIFF_BYTES (64) of leading bytes — enough for
+    // sniff_buf has up to MIN_SNIFF_BYTES (4 KiB) of leading bytes — enough for
     // infer::get() to detect MP4 ftyp even if the first network chunk was tiny.
     let mime = infer::get(&first_bytes)
         .map(|t| t.mime_type().to_string())
