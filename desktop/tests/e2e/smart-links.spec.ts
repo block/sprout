@@ -46,6 +46,32 @@ test("GitHub PR chip links open in new tab", async ({ page }) => {
   await expect(prChip).toHaveAttribute("rel", "noreferrer");
 });
 
+test("selecting a PR chip copies the full URL, not the chip label", async ({
+  page,
+}) => {
+  const prUrl = "https://github.com/block/goose2/pull/125";
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill(prUrl);
+  await page.getByTestId("send-message").click();
+
+  const lastRow = page.getByTestId("message-row").last();
+  const prChip = lastRow.locator("a", { hasText: "block/goose2#125" });
+  await expect(prChip).toBeVisible();
+
+  // The hidden span should contain the full URL for selection/copy
+  const hiddenUrl = prChip.locator("span.overflow-hidden");
+  await expect(hiddenUrl).toHaveText(prUrl);
+
+  // The visible label should not be selectable
+  const visibleLabel = prChip.locator("span.select-none");
+  await expect(visibleLabel).toBeVisible();
+});
+
 test("non-PR GitHub links render as regular links", async ({ page }) => {
   const repoUrl = "https://github.com/block/sprout";
   const message = `Check out ${repoUrl}`;

@@ -52,13 +52,16 @@ function createMarkdownComponents(
         return (
           <a
             {...props}
-            className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-sm font-medium text-primary no-underline transition-colors hover:bg-primary/20"
+            className="relative inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-sm font-medium text-primary no-underline transition-colors hover:bg-primary/20"
             href={href}
             rel="noreferrer"
             target="_blank"
           >
-            <GitPullRequest className="size-3.5" />
-            {owner}/{repo}#{number}
+            <span className="pointer-events-none select-none inline-flex items-center gap-1" aria-hidden="true">
+              <GitPullRequest className="size-3.5" />
+              {owner}/{repo}#{number}
+            </span>
+            <span className="absolute w-0 overflow-hidden whitespace-nowrap">{href}</span>
           </a>
         );
       }
