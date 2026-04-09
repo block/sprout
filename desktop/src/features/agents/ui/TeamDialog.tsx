@@ -17,6 +17,12 @@ import {
 } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
+import { personaCatalogCopy } from "./personaLibraryCopy";
+import {
+  copySelectedPersonaIds,
+  countMissingPersonaIds,
+  filterAvailablePersonaIds,
+} from "./teamDialogSelection";
 
 type TeamDialogProps = {
   open: boolean;
@@ -48,6 +54,13 @@ export function TeamDialog({
   const [selectedPersonaIds, setSelectedPersonaIds] = React.useState<string[]>(
     [],
   );
+  const missingInitialPersonaCount = React.useMemo(() => {
+    if (!initialValues) {
+      return 0;
+    }
+
+    return countMissingPersonaIds(initialValues.personaIds, personas);
+  }, [initialValues, personas]);
 
   React.useEffect(() => {
     if (!open || !initialValues) {
@@ -56,7 +69,7 @@ export function TeamDialog({
 
     setName(initialValues.name);
     setTeamDescription(initialValues.description ?? "");
-    setSelectedPersonaIds(initialValues.personaIds);
+    setSelectedPersonaIds(copySelectedPersonaIds(initialValues.personaIds));
   }, [initialValues, open]);
 
   function handleOpenChange(next: boolean) {
@@ -85,7 +98,7 @@ export function TeamDialog({
     const baseInput = {
       name,
       description: teamDescription.trim() || undefined,
-      personaIds: selectedPersonaIds,
+      personaIds: filterAvailablePersonaIds(selectedPersonaIds, personas),
     };
 
     if ("id" in initialValues) {
@@ -139,9 +152,18 @@ export function TeamDialog({
               <p className="text-xs text-muted-foreground">
                 Select the personas to include in this team.
               </p>
+              {missingInitialPersonaCount > 0 ? (
+                <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                  This team references {missingInitialPersonaCount} persona
+                  {missingInitialPersonaCount === 1 ? "" : "s"} that{" "}
+                  {missingInitialPersonaCount === 1 ? "is" : "are"} no longer in
+                  My Agents. Save to remove them, or add them back to My Agents
+                  first.
+                </p>
+              ) : null}
               {personas.length === 0 ? (
                 <p className="py-4 text-center text-sm text-muted-foreground">
-                  No personas available. Create one first.
+                  {personaCatalogCopy.teamEmptyState}
                 </p>
               ) : (
                 <div

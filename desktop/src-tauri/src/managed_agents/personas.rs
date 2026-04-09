@@ -403,6 +403,7 @@ fn built_in_persona_records(now: &str) -> Vec<PersonaRecord> {
             model: None,
             name_pool: persona.name_pool.iter().map(|s| s.to_string()).collect(),
             is_builtin: true,
+            is_active: false,
             created_at: now.to_string(),
             updated_at: now.to_string(),
         })
@@ -444,6 +445,7 @@ fn merge_personas(mut stored: Vec<PersonaRecord>, now: &str) -> (Vec<PersonaReco
         if let Some(existing) = stored.iter_mut().find(|record| record.id == built_in.id) {
             let created_at = existing.created_at.clone();
             let updated_at = existing.updated_at.clone();
+            let is_active = existing.is_active;
             if existing.display_name != built_in.display_name
                 || existing.avatar_url != built_in.avatar_url
                 || existing.system_prompt != built_in.system_prompt
@@ -455,6 +457,7 @@ fn merge_personas(mut stored: Vec<PersonaRecord>, now: &str) -> (Vec<PersonaReco
                 *existing = PersonaRecord {
                     created_at,
                     updated_at,
+                    is_active,
                     ..built_in
                 };
                 changed = true;
@@ -467,6 +470,83 @@ fn merge_personas(mut stored: Vec<PersonaRecord>, now: &str) -> (Vec<PersonaReco
 
     sort_personas(&mut stored);
     (stored, changed)
+}
+
+pub fn ensure_persona_is_active(
+    personas: &[PersonaRecord],
+    persona_id: &str,
+) -> Result<(), String> {
+    let persona = personas
+        .iter()
+        .find(|candidate| candidate.id == persona_id)
+        .ok_or_else(|| format!("persona {persona_id} not found"))?;
+
+    if !persona.is_active {
+        return Err(format!(
+            "{} is not in My Agents. Choose it from Persona Catalog first.",
+            persona.display_name
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn ensure_persona_ids_are_active(
+    personas: &[PersonaRecord],
+    persona_ids: &[String],
+) -> Result<(), String> {
+    for persona_id in persona_ids {
+        ensure_persona_is_active(personas, persona_id)?;
+    }
+
+    Ok(())
+}
+
+pub fn validate_persona_deletion(
+    persona: &PersonaRecord,
+    referenced_by_team: bool,
+) -> Result<(), String> {
+    if persona.is_builtin {
+        return Err("Built-in personas cannot be deleted.".to_string());
+    }
+
+    if referenced_by_team {
+        return Err(format!(
+            "{} is still referenced by a team. Remove it from those teams first.",
+            persona.display_name
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn validate_persona_activation_change(
+    persona: &PersonaRecord,
+    active: bool,
+    referenced_by_managed_agent: bool,
+    referenced_by_team: bool,
+) -> Result<(), String> {
+    if !persona.is_builtin {
+        return Err(
+            "Only built-in personas can be added to or removed from My Agents.".to_string(),
+        );
+    }
+
+    if !active && referenced_by_managed_agent {
+        return Err(format!(
+            "{} is still assigned to a managed agent. Remove or reassign those agents first.",
+            persona.display_name
+        ));
+    }
+
+    if !active && referenced_by_team {
+        return Err(format!(
+            "{} is still referenced by a team. Remove it from those teams first.",
+            persona.display_name
+        ));
+    }
+
+    Ok(())
 }
 
 pub fn load_personas(app: &AppHandle) -> Result<Vec<PersonaRecord>, String> {
@@ -501,82 +581,4 @@ pub fn save_personas(app: &AppHandle, records: &[PersonaRecord]) -> Result<(), S
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{merge_personas, BUILT_IN_PERSONAS};
-    use crate::managed_agents::PersonaRecord;
-
-    fn custom_persona(id: &str, display_name: &str) -> PersonaRecord {
-        PersonaRecord {
-            id: id.to_string(),
-            display_name: display_name.to_string(),
-            avatar_url: Some("https://example.com/avatar.png".to_string()),
-            system_prompt: "Custom prompt".to_string(),
-            provider: None,
-            model: None,
-            name_pool: Vec::new(),
-            is_builtin: false,
-            created_at: "2026-03-19T00:00:00Z".to_string(),
-            updated_at: "2026-03-19T00:00:00Z".to_string(),
-        }
-    }
-
-    #[test]
-    fn merge_personas_adds_missing_built_ins() {
-        let (records, changed) = merge_personas(Vec::new(), "2026-03-19T00:00:00Z");
-
-        assert!(changed);
-        assert_eq!(records.len(), BUILT_IN_PERSONAS.len());
-        assert!(records.iter().all(|record| record.is_builtin));
-        let display_names: Vec<&str> = records
-            .iter()
-            .map(|record| record.display_name.as_str())
-            .collect();
-        assert_eq!(display_names, vec!["Solo", "Ralph", "Scout", "Reviewer"]);
-    }
-
-    #[test]
-    fn merge_personas_preserves_custom_records() {
-        let custom = custom_persona("custom:test", "Custom");
-        let (records, changed) = merge_personas(vec![custom.clone()], "2026-03-19T00:00:00Z");
-
-        assert!(changed);
-        assert!(records.iter().any(|record| record.id == custom.id));
-    }
-
-    #[test]
-    fn merge_personas_restores_builtin_defaults() {
-        let mut edited_builtin = custom_persona("builtin:reviewer", "My Reviewer");
-        edited_builtin.is_builtin = true;
-        let original_created_at = edited_builtin.created_at.clone();
-        let original_updated_at = edited_builtin.updated_at.clone();
-
-        let (records, changed) = merge_personas(vec![edited_builtin], "2026-03-19T00:00:00Z");
-
-        assert!(changed);
-        let reviewer = records
-            .iter()
-            .find(|record| record.id == "builtin:reviewer")
-            .expect("reviewer built-in should exist");
-        assert_eq!(reviewer.display_name, "Reviewer");
-        assert_eq!(reviewer.avatar_url, None);
-        assert_eq!(reviewer.created_at, original_created_at);
-        assert_eq!(reviewer.updated_at, original_updated_at);
-    }
-
-    #[test]
-    fn merge_personas_backfills_new_builtins_for_existing_store() {
-        let mut legacy_builtins = vec![custom_persona("builtin:reviewer", "Reviewer")];
-        for persona in &mut legacy_builtins {
-            persona.is_builtin = true;
-            persona.avatar_url = None;
-        }
-
-        let (records, changed) = merge_personas(legacy_builtins, "2026-03-19T00:00:00Z");
-
-        assert!(changed);
-        assert!(records.iter().any(|record| record.id == "builtin:reviewer"));
-        assert!(records.iter().any(|record| record.id == "builtin:ralph"));
-        assert!(records.iter().any(|record| record.id == "builtin:scout"));
-        assert!(records.iter().any(|record| record.id == "builtin:solo"));
-    }
-}
+mod tests;

@@ -33,6 +33,8 @@ pub struct PersonaRecord {
     pub name_pool: Vec<String>,
     #[serde(default)]
     pub is_builtin: bool,
+    #[serde(default = "default_record_active")]
+    pub is_active: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -342,4 +344,34 @@ fn default_agent_parallelism() -> u32 {
 
 fn default_start_on_app_launch() -> bool {
     true
+}
+
+fn default_record_active() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PersonaRecord;
+
+    #[test]
+    fn persona_record_defaults_active_when_field_is_missing() {
+        let record: PersonaRecord = serde_json::from_str(
+            r#"{
+                "id": "builtin:solo",
+                "display_name": "Solo",
+                "avatar_url": null,
+                "system_prompt": "Prompt",
+                "created_at": "2026-03-19T00:00:00Z",
+                "updated_at": "2026-03-19T00:00:00Z"
+            }"#,
+        )
+        .expect("legacy persona payload should deserialize");
+
+        assert!(record.is_active);
+        assert!(!record.is_builtin);
+        assert_eq!(record.provider, None);
+        assert_eq!(record.model, None);
+        assert!(record.name_pool.is_empty());
+    }
 }

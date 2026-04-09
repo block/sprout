@@ -419,6 +419,7 @@ export type AgentPersona = {
   model: string | null;
   namePool: string[];
   isBuiltIn: boolean;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
 };

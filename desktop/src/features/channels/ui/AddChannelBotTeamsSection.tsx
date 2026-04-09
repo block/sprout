@@ -4,6 +4,7 @@ import type * as React from "react";
 import type { AgentPersona, AgentTeam } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
 import {
   Tooltip,
   TooltipContent,
@@ -45,15 +46,6 @@ function SelectionChipButton({
   );
 }
 
-function resolveTeamPersonas(
-  team: AgentTeam,
-  personas: AgentPersona[],
-): AgentPersona[] {
-  return team.personaIds
-    .map((id) => personas.find((p) => p.id === id))
-    .filter((p): p is AgentPersona => p !== undefined);
-}
-
 type AddChannelBotTeamsSectionProps = {
   canToggleSelections: boolean;
   inChannelPersonaIds?: ReadonlySet<string>;
@@ -89,8 +81,8 @@ export function AddChannelBotTeamsSection({
       <TooltipProvider delayDuration={150}>
         <div className="flex flex-wrap gap-2">
           {teams.map((team) => {
-            const resolved = resolveTeamPersonas(team, personas);
-            const validIds = resolved.map((p) => p.id);
+            const resolution = resolveTeamPersonas(team, personas);
+            const validIds = resolution.resolvedPersonaIds;
             const allSelected =
               validIds.length > 0 &&
               validIds.every((id) => selectedPersonaIds.includes(id));
@@ -107,7 +99,7 @@ export function AddChannelBotTeamsSection({
                     <SelectionChipButton
                       disabled={
                         !canToggleSelections ||
-                        validIds.length === 0 ||
+                        !resolution.isUsable ||
                         allInChannel
                       }
                       label={team.name}
@@ -160,7 +152,7 @@ export function AddChannelBotTeamsSection({
                       </p>
                     ) : null}
                     <div className="flex flex-wrap gap-1">
-                      {resolved.map((persona) => {
+                      {resolution.resolvedPersonas.map((persona) => {
                         const personaInChannel =
                           inChannelPersonaIds?.has(persona.id) ?? false;
                         return (

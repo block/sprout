@@ -5,9 +5,10 @@ use super::export_util::save_json_with_dialog;
 use crate::{
     app_state::AppState,
     managed_agents::{
-        encode_persona_json, load_managed_agents, load_personas, parse_json_persona,
+        encode_persona_json, load_managed_agents, load_personas, load_teams, parse_json_persona,
         parse_png_persona, parse_zip_personas, save_managed_agents, save_personas,
-        CreatePersonaRequest, ParsePersonaFilesResult, PersonaRecord, UpdatePersonaRequest,
+        validate_persona_activation_change, validate_persona_deletion, CreatePersonaRequest,
+        ParsePersonaFilesResult, PersonaRecord, UpdatePersonaRequest,
     },
     util::now_iso,
 };
@@ -72,6 +73,7 @@ pub fn create_persona(
         model,
         name_pool,
         is_builtin: false,
+        is_active: true,
         created_at: now.clone(),
         updated_at: now,
     };
@@ -141,9 +143,12 @@ pub fn delete_persona(
         .iter()
         .find(|record| record.id == id)
         .ok_or_else(|| format!("persona {id} not found"))?;
-    if persona.is_builtin {
-        return Err("Built-in personas cannot be deleted.".to_string());
-    }
+    let referenced_by_team = load_teams(&app)?.iter().any(|team| {
+        team.persona_ids
+            .iter()
+            .any(|persona_id| persona_id == id.as_str())
+    });
+    validate_persona_deletion(persona, referenced_by_team)?;
 
     let original_len = personas.len();
     personas.retain(|record| record.id != id);
@@ -167,6 +172,53 @@ pub fn delete_persona(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub fn set_persona_active(
+    id: String,
+    active: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<PersonaRecord, String> {
+    let _store_guard = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let mut personas = load_personas(&app)?;
+    let persona = personas
+        .iter_mut()
+        .find(|record| record.id == id)
+        .ok_or_else(|| format!("persona {id} not found"))?;
+
+    let referenced_by_managed_agent = !active
+        && load_managed_agents(&app)?
+            .iter()
+            .any(|agent| agent.persona_id.as_deref() == Some(id.as_str()));
+    let referenced_by_team = !active
+        && load_teams(&app)?.iter().any(|team| {
+            team.persona_ids
+                .iter()
+                .any(|persona_id| persona_id == id.as_str())
+        });
+
+    validate_persona_activation_change(
+        persona,
+        active,
+        referenced_by_managed_agent,
+        referenced_by_team,
+    )?;
+
+    if persona.is_active == active {
+        return Ok(persona.clone());
+    }
+
+    persona.is_active = active;
+    persona.updated_at = now_iso();
+
+    let updated = persona.clone();
+    save_personas(&app, &personas)?;
+    Ok(updated)
 }
 
 // ---------------------------------------------------------------------------

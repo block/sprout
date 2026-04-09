@@ -56,6 +56,7 @@ type RawPersona = {
   model?: string | null;
   name_pool?: string[];
   is_builtin: boolean;
+  is_active?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -70,6 +71,7 @@ function fromRawPersona(persona: RawPersona): AgentPersona {
     model: persona.model ?? null,
     namePool: persona.name_pool ?? [],
     isBuiltIn: persona.is_builtin,
+    isActive: persona.is_active ?? true,
     createdAt: persona.created_at,
     updatedAt: persona.updated_at,
   };
@@ -116,6 +118,15 @@ export async function updatePersona(
 
 export async function deletePersona(id: string): Promise<void> {
   await invokeTauri("delete_persona", { id });
+}
+
+export async function setPersonaActive(
+  id: string,
+  active: boolean,
+): Promise<AgentPersona> {
+  return fromRawPersona(
+    await invokeTauri<RawPersona>("set_persona_active", { id, active }),
+  );
 }
 
 export async function parsePersonaFiles(

@@ -67,19 +67,32 @@ pub fn save_teams(app: &AppHandle, records: &[TeamRecord]) -> Result<(), String>
 /// name, description, and the full persona data for each member (so the
 /// import side can recreate personas that don't exist locally).
 pub fn encode_team_json(team: &TeamRecord, personas: &[PersonaRecord]) -> Result<Vec<u8>, String> {
-    let resolved_personas: Vec<serde_json::Value> = team
-        .persona_ids
-        .iter()
-        .filter_map(|id| {
-            personas.iter().find(|p| p.id == *id).map(|p| {
-                serde_json::json!({
-                    "displayName": p.display_name,
-                    "systemPrompt": p.system_prompt,
-                    "avatarUrl": p.avatar_url,
-                })
-            })
-        })
-        .collect();
+    let mut missing_persona_ids = Vec::new();
+    let mut resolved_personas = Vec::with_capacity(team.persona_ids.len());
+
+    for persona_id in &team.persona_ids {
+        let Some(persona) = personas
+            .iter()
+            .find(|candidate| candidate.id == *persona_id)
+        else {
+            missing_persona_ids.push(persona_id.clone());
+            continue;
+        };
+
+        resolved_personas.push(serde_json::json!({
+            "displayName": persona.display_name,
+            "systemPrompt": persona.system_prompt,
+            "avatarUrl": persona.avatar_url,
+        }));
+    }
+
+    if !missing_persona_ids.is_empty() {
+        return Err(format!(
+            "Team {} references missing personas: {}. Repair the team before exporting.",
+            team.name,
+            missing_persona_ids.join(", ")
+        ));
+    }
 
     let map = serde_json::json!({
         "version": 1,
@@ -219,6 +232,7 @@ mod tests {
             model: None,
             name_pool: Vec::new(),
             is_builtin: false,
+            is_active: true,
             created_at: "2026-03-20T00:00:00Z".to_string(),
             updated_at: "2026-03-20T00:00:00Z".to_string(),
         }
@@ -250,18 +264,19 @@ mod tests {
     }
 
     #[test]
-    fn encode_skips_missing_personas() {
+    fn encode_errors_for_missing_personas() {
         let t = TeamRecord {
             persona_ids: vec!["p1".to_string(), "missing".to_string()],
             ..team("t1", "Team")
         };
         let personas = vec![persona("p1", "Alice", "prompt")];
 
-        let bytes = encode_team_json(&t, &personas).unwrap();
-        let parsed = parse_team_json(&bytes).unwrap();
+        let err = encode_team_json(&t, &personas).unwrap_err();
 
-        assert_eq!(parsed.personas.len(), 1);
-        assert_eq!(parsed.personas[0].display_name, "Alice");
+        assert_eq!(
+            err,
+            "Team Team references missing personas: missing. Repair the team before exporting."
+        );
     }
 
     #[test]

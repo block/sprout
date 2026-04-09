@@ -409,6 +409,7 @@ pub fn run() {
             create_persona,
             update_persona,
             delete_persona,
+            set_persona_active,
             list_teams,
             create_team,
             update_team,

@@ -30,7 +30,7 @@ const rules = [
 
 // Exceptions should stay rare and temporary. Prefer splitting files instead.
 const overrides = new Map([
-  ["src-tauri/src/managed_agents/personas.rs", 600], // built-in persona system prompts (Solo, Ralph, Strategist) are long string literals
+  ["src-tauri/src/managed_agents/personas.rs", 600], // built-in persona system prompts (Solo, Ralph, Scout, Reviewer) keep this file slightly above the default cap even with tests extracted
   ["src-tauri/src/managed_agents/persona_card.rs", 800], // PNG/ZIP persona card codec + provider/model/namePool fields + 27 unit tests (~350 lines of tests); rustfmt adds line breaks around long literals/builders
   ["src/app/AppShell.tsx", 860], // message edit state + handlers + ChannelPane edit prop threading + scrollback pagination + workflows view + memory-leak safeguards
   ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
@@ -45,7 +45,8 @@ const overrides = new Map([
   ["src-tauri/src/commands/agents.rs", 849], // remote agent lifecycle routing (local + provider branches) + scope enforcement; rustfmt adds line breaks around long tuple/closure blocks
   ["src-tauri/src/managed_agents/runtime.rs", 650], // KNOWN_AGENT_BINARIES const + process_belongs_to_us FFI (macOS proc_name + Linux /proc/comm) + terminate_process + start/stop/sync lifecycle
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests
-  ["src/features/agents/ui/AgentsView.tsx", 790], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard + persona/team import + provider/model fields
+  ["src/features/agents/hooks.ts", 520], // agent query/mutation surface now includes built-in persona library activation
+  ["src/features/agents/ui/AgentsView.tsx", 850], // remote agent lifecycle controls + persona/team management + built-in catalog/library state orchestration
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
   ["src/shared/api/types.ts", 530], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields
