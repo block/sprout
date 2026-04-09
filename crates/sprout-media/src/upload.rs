@@ -147,7 +147,12 @@ pub async fn process_video_upload(
             .map_err(|e| MediaError::Io(e.to_string()))?;
         let mut hasher = Sha256::new();
         let mut total: u64 = 0;
-        let mut first_chunk: Option<Vec<u8>> = None;
+        // Accumulate enough leading bytes for magic-byte detection.
+        // MP4 ftyp header is 12 bytes (size + "ftyp" + brand). infer::get()
+        // needs at least this much. We buffer up to 64 bytes to be safe —
+        // covers all formats infer supports.
+        const MIN_SNIFF_BYTES: usize = 64;
+        let mut sniff_buf: Vec<u8> = Vec::with_capacity(MIN_SNIFF_BYTES);
         let mut buf = vec![0u8; 64 * 1024]; // 64 KiB read buffer
 
         loop {
@@ -177,8 +182,9 @@ pub async fn process_video_upload(
             file.write_all(&buf[..n])
                 .await
                 .map_err(|e| MediaError::Io(e.to_string()))?;
-            if first_chunk.is_none() {
-                first_chunk = Some(buf[..n].to_vec());
+            if sniff_buf.len() < MIN_SNIFF_BYTES {
+                let need = MIN_SNIFF_BYTES - sniff_buf.len();
+                sniff_buf.extend_from_slice(&buf[..n.min(need)]);
             }
         }
         file.flush()
@@ -186,11 +192,12 @@ pub async fn process_video_upload(
             .map_err(|e| MediaError::Io(e.to_string()))?;
 
         let sha256_hex = hex::encode(hasher.finalize());
-        let first = first_chunk.unwrap_or_default();
-        (sha256_hex, total, first)
+        (sha256_hex, total, sniff_buf)
     };
 
     // --- 2. Magic-byte check (video/mp4 only) ---
+    // sniff_buf has up to MIN_SNIFF_BYTES (64) of leading bytes — enough for
+    // infer::get() to detect MP4 ftyp even if the first network chunk was tiny.
     let mime = infer::get(&first_bytes)
         .map(|t| t.mime_type().to_string())
         .ok_or(MediaError::UnknownContentType)?;
