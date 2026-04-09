@@ -331,11 +331,11 @@ pub async fn get_blob(
             match parsed {
                 Some((start, end)) => {
                     if start >= total {
-                        return Ok(axum::response::Response::builder()
+                        return axum::response::Response::builder()
                             .status(StatusCode::RANGE_NOT_SATISFIABLE)
                             .header(header::CONTENT_RANGE, format!("bytes */{total}"))
                             .body(axum::body::Body::empty())
-                            .map_err(|_| MediaError::Internal)?);
+                            .map_err(|_| MediaError::Internal);
                     }
 
                     // Clamp end to total-1, then cap chunk size.
