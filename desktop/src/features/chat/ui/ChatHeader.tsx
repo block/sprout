@@ -65,19 +65,23 @@ export function ChatHeader({
       data-tauri-drag-region
     >
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <ChannelIcon
             channelType={channelType}
             mode={mode}
             visibility={visibility}
           />
           <h1
-            className="truncate text-lg font-semibold tracking-tight"
+            className="min-w-0 truncate text-lg font-semibold tracking-tight"
             data-testid="chat-title"
           >
             {title}
           </h1>
-          {statusBadge ? <div className="shrink-0">{statusBadge}</div> : null}
+          {statusBadge ? (
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {statusBadge}
+            </div>
+          ) : null}
         </div>
         <p
           className="truncate text-sm text-muted-foreground"

@@ -122,6 +122,36 @@ test("create stream with name and description", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 });
 
+test("create ephemeral stream shows sidebar and header affordances", async ({
+  page,
+}) => {
+  const channelName = `ephemeral-stream-${Date.now()}`;
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Create a stream" }).click();
+  await page.getByTestId("create-stream-name").fill(channelName);
+  await page
+    .getByTestId("create-stream-description")
+    .fill("Auto-cleaned test stream");
+  await page
+    .getByTestId("create-stream-form")
+    .getByLabel("Ephemeral — auto-archives after 1 day of inactivity")
+    .click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
+
+  await expect(page.getByTestId("stream-list")).toContainText(channelName);
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await expect(
+    page.getByTestId(`channel-ephemeral-${channelName}`),
+  ).toContainText("Ephemeral");
+  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveText(
+    /Ephemeral.+left/,
+  );
+});
+
 test("create stream with special characters", async ({ page }) => {
   const channelName = `dev ops-${Date.now()}`;
 

@@ -1,6 +1,8 @@
 import type * as React from "react";
 import { CircleDot, FileText, Hash, Lock, X } from "lucide-react";
 
+import { getEphemeralChannelDisplay } from "@/features/channels/lib/ephemeralChannel";
+import { EphemeralChannelBadge } from "@/features/channels/ui/EphemeralChannelBadge";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { Channel, PresenceStatus } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
@@ -139,6 +141,7 @@ export function ChannelMenuButton({
   onSelectChannel: (channelId: string) => void;
 }) {
   const resolvedLabel = label ?? channel.name;
+  const ephemeralDisplay = getEphemeralChannelDisplay(channel);
 
   return (
     <SidebarMenuButton
@@ -159,6 +162,13 @@ export function ChannelMenuButton({
         presenceStatus={presenceStatus}
       />
       <span className="min-w-0 flex-1 truncate">{resolvedLabel}</span>
+      {ephemeralDisplay ? (
+        <EphemeralChannelBadge
+          display={ephemeralDisplay}
+          testId={`channel-ephemeral-${channel.name}`}
+          variant="sidebar"
+        />
+      ) : null}
       {hasUnread && !isActive && channel.channelType !== "dm" ? (
         <span
           aria-hidden="true"

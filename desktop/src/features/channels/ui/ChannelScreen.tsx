@@ -7,6 +7,7 @@ import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHead
 import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandlers";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
+import { EphemeralChannelBadge } from "@/features/channels/ui/EphemeralChannelBadge";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
 import {
   useManagedAgentsQuery,
@@ -103,10 +104,11 @@ export function ChannelScreen({
     markChannelRead(activeChannelId, activeReadAt);
   }, [activeChannelId, activeReadAt, markChannelRead]);
 
-  const { activeChannelTitle, activeDmPresenceStatus } = useActiveChannelHeader(
-    activeChannel,
-    currentPubkey,
-  );
+  const {
+    activeChannelTitle,
+    activeDmPresenceStatus,
+    activeChannelEphemeralDisplay,
+  } = useActiveChannelHeader(activeChannel, currentPubkey);
   const sendMessageMutation = useSendMessageMutation(
     activeChannel,
     currentIdentity,
@@ -377,6 +379,27 @@ export function ChannelScreen({
     };
   }, [activeChannel, queryClient, resolvedMessages]);
 
+  const activeChannelEphemeralBadge = activeChannelEphemeralDisplay ? (
+    <EphemeralChannelBadge
+      display={activeChannelEphemeralDisplay}
+      testId="chat-ephemeral-badge"
+      variant="header"
+    />
+  ) : null;
+
+  const headerStatusBadge =
+    activeChannel?.channelType === "dm" && activeDmPresenceStatus ? (
+      <>
+        <PresenceBadge
+          data-testid="chat-presence-badge"
+          status={activeDmPresenceStatus}
+        />
+        {activeChannelEphemeralBadge}
+      </>
+    ) : (
+      activeChannelEphemeralBadge
+    );
+
   return (
     <>
       <ChatHeader
@@ -393,14 +416,7 @@ export function ChannelScreen({
         channelType={activeChannel?.channelType}
         visibility={activeChannel?.visibility}
         description={channelDescription}
-        statusBadge={
-          activeChannel?.channelType === "dm" && activeDmPresenceStatus ? (
-            <PresenceBadge
-              data-testid="chat-presence-badge"
-              status={activeDmPresenceStatus}
-            />
-          ) : null
-        }
+        statusBadge={headerStatusBadge}
         title={activeChannelTitle}
       />
 
