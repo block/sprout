@@ -1,11 +1,12 @@
 //! S3/MinIO storage client.
 
-use s3::creds::Credentials;
-use s3::{Bucket, Region};
-use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use crate::config::MediaConfig;
 use crate::error::MediaError;
+use s3::creds::Credentials;
+use s3::{Bucket, Region};
+use serde::{Deserialize, Serialize};
 
 /// S3-compatible object storage client.
 pub struct MediaStorage {
@@ -33,7 +34,10 @@ impl MediaStorage {
         Ok(Self { bucket })
     }
 
-    /// Store an object.
+    /// Store an object from a byte slice.
+    ///
+    /// Used for images, sidecars, and thumbnails. For large video files use
+    /// [`put_file`] to avoid loading the entire blob into RAM.
     pub async fn put(&self, key: &str, bytes: &[u8], content_type: &str) -> Result<(), MediaError> {
         self.bucket
             .put_object_with_content_type(key, bytes, content_type)
@@ -41,9 +45,46 @@ impl MediaStorage {
         Ok(())
     }
 
+    /// Stream a file from disk into S3 without loading it into RAM.
+    ///
+    /// Uses rust-s3's `put_object_stream_with_content_type` which reads from
+    /// the file incrementally via an 8 MiB `BufReader`. The full file is never
+    /// held in memory simultaneously. Intended for video blobs (up to 500 MB).
+    pub async fn put_file(
+        &self,
+        key: &str,
+        path: &Path,
+        content_type: &str,
+    ) -> Result<(), MediaError> {
+        const BUF: usize = 8 * 1024 * 1024; // 8 MiB read buffer
+
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|e| MediaError::Io(e.to_string()))?;
+        let mut reader = tokio::io::BufReader::with_capacity(BUF, file);
+
+        self.bucket
+            .put_object_stream_with_content_type(&mut reader, key, content_type)
+            .await?;
+        Ok(())
+    }
+
     /// Retrieve an object's bytes.
     pub async fn get(&self, key: &str) -> Result<Vec<u8>, MediaError> {
         match self.bucket.get_object(key).await {
+            Ok(response) => Ok(response.to_vec()),
+            Err(s3::error::S3Error::HttpFailWithBody(404, _)) => Err(MediaError::NotFound),
+            Err(e) => Err(MediaError::StorageError(e.to_string())),
+        }
+    }
+
+    /// Retrieve a byte range from an object via S3-native `Range` GET.
+    ///
+    /// `start` and `end` are inclusive byte offsets. Only the requested slice
+    /// is transferred from S3 — the full object is never loaded into RAM.
+    /// Intended for HTTP 206 range responses on large video blobs.
+    pub async fn get_range(&self, key: &str, start: u64, end: u64) -> Result<Vec<u8>, MediaError> {
+        match self.bucket.get_object_range(key, start, Some(end)).await {
             Ok(response) => Ok(response.to_vec()),
             Err(s3::error::S3Error::HttpFailWithBody(404, _)) => Err(MediaError::NotFound),
             Err(e) => Err(MediaError::StorageError(e.to_string())),
@@ -117,4 +158,7 @@ pub struct BlobMeta {
     /// Unix timestamp when the blob was first uploaded.
     #[serde(default)]
     pub uploaded_at: i64,
+    /// Video duration in seconds. `None` for non-video blobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<f64>,
 }
