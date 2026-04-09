@@ -1,4 +1,4 @@
-import { Bot, Check } from "lucide-react";
+import { Bot, Minus, Plus } from "lucide-react";
 
 import type { AgentPersona } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
@@ -11,31 +11,120 @@ import {
   TooltipTrigger,
 } from "@/shared/ui/tooltip";
 
-type SelectionChipButtonProps = {
-  avatarUrl?: string | null;
-  disabled: boolean;
-  label: string;
-  onClick: () => void;
-  selected: boolean;
-  children: React.ReactNode;
-};
+// ---------------------------------------------------------------------------
+// PersonaChip — pill with e-commerce stepper for multi-instance selection
+// ---------------------------------------------------------------------------
 
-function SelectionChipButton({
+function PersonaChip({
   avatarUrl,
+  count,
   disabled,
   label,
+  onSetCount,
+  children,
+}: {
+  avatarUrl?: string | null;
+  count: number;
+  disabled: boolean;
+  label: string;
+  onSetCount: (count: number) => void;
+  children: React.ReactNode;
+}) {
+  const showAvatar = avatarUrl !== undefined;
+  const isSelected = count > 0;
+
+  if (!isSelected) {
+    // Unselected state — single click to add.
+    return (
+      <button
+        aria-label={`Add ${label}`}
+        className={cn(
+          "inline-flex min-h-9 items-center gap-2 rounded-full border py-1.5 text-sm font-medium transition-colors",
+          showAvatar ? "pl-1.5 pr-3" : "px-3",
+          "border-border/70 bg-muted/25 text-foreground hover:bg-muted/55",
+          disabled && "cursor-not-allowed opacity-50",
+        )}
+        disabled={disabled}
+        onClick={() => onSetCount(1)}
+        type="button"
+      >
+        {showAvatar ? (
+          <ProfileAvatar
+            avatarUrl={avatarUrl}
+            className="h-6 w-6 rounded-full text-[10px] bg-primary/20 text-primary"
+            iconClassName="h-3.5 w-3.5"
+            label={label}
+          />
+        ) : null}
+        {children}
+      </button>
+    );
+  }
+
+  // Selected state — stepper mode.
+  return (
+    <div
+      className={cn(
+        "inline-flex min-h-9 items-center gap-1.5 rounded-full border py-1 text-sm font-medium transition-colors",
+        showAvatar ? "pl-1.5 pr-1" : "pl-3 pr-1",
+        "border-foreground bg-foreground text-background shadow-sm",
+        disabled && "cursor-not-allowed opacity-50",
+      )}
+    >
+      {showAvatar ? (
+        <ProfileAvatar
+          avatarUrl={avatarUrl}
+          className="h-6 w-6 rounded-full text-[10px] bg-background/20 text-background"
+          iconClassName="h-3.5 w-3.5"
+          label={label}
+        />
+      ) : null}
+      <span className="pr-0.5">{children}</span>
+      <span className="inline-flex items-center gap-0.5 rounded-full bg-background/20 px-0.5">
+        <button
+          aria-label={count === 1 ? `Remove ${label}` : `Decrease ${label}`}
+          className="flex h-6 w-6 items-center justify-center rounded-full transition-colors hover:bg-background/20 disabled:opacity-50"
+          disabled={disabled}
+          onClick={() => onSetCount(count - 1)}
+          type="button"
+        >
+          <Minus className="h-3 w-3" />
+        </button>
+        <span className="min-w-[1.25rem] text-center text-xs font-bold tabular-nums">
+          {count}
+        </span>
+        <button
+          aria-label={`Increase ${label}`}
+          className="flex h-6 w-6 items-center justify-center rounded-full transition-colors hover:bg-background/20 disabled:opacity-50"
+          disabled={disabled}
+          onClick={() => onSetCount(count + 1)}
+          type="button"
+        >
+          <Plus className="h-3 w-3" />
+        </button>
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// GenericChip — simple toggle (no stepper, always 0 or 1)
+// ---------------------------------------------------------------------------
+
+function GenericChip({
+  disabled,
   onClick,
   selected,
-  children,
-}: SelectionChipButtonProps) {
-  const showAvatar = avatarUrl !== undefined;
-
+}: {
+  disabled: boolean;
+  onClick: () => void;
+  selected: boolean;
+}) {
   return (
     <button
       aria-pressed={selected}
       className={cn(
-        "inline-flex min-h-9 items-center gap-2 rounded-full border py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        showAvatar ? "pl-1.5 pr-3" : "px-3",
+        "inline-flex min-h-9 items-center gap-2 rounded-full border py-1.5 px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         selected
           ? "border-primary bg-primary/10 text-foreground"
           : "border-border/80 bg-background/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground",
@@ -45,44 +134,41 @@ function SelectionChipButton({
       onClick={onClick}
       type="button"
     >
-      {showAvatar ? (
-        <ProfileAvatar
-          avatarUrl={avatarUrl}
-          className={cn(
-            "h-6 w-6 rounded-full text-[10px]",
-            selected
-              ? "bg-primary/20 text-primary ring-1 ring-primary/20"
-              : "bg-background/80 text-muted-foreground ring-1 ring-border/70",
-          )}
-          iconClassName="h-3.5 w-3.5"
-          label={label}
-        />
-      ) : null}
-      {children}
+      <Bot
+        className={cn(
+          "h-4 w-4",
+          selected ? "text-background/70" : "text-muted-foreground",
+        )}
+      />
+      Generic
     </button>
   );
 }
 
+// ---------------------------------------------------------------------------
+// AddChannelBotPersonasSection
+// ---------------------------------------------------------------------------
+
 type AddChannelBotPersonasSectionProps = {
   canToggleSelections: boolean;
-  inChannelPersonaIds?: ReadonlySet<string>;
+  inChannelPersonaCounts?: ReadonlyMap<string, number>;
   includeGeneric: boolean;
   isLoading: boolean;
   onToggleGeneric: () => void;
-  onTogglePersona: (personaId: string) => void;
+  onSetPersonaCount: (personaId: string, count: number) => void;
   personas: AgentPersona[];
-  selectedPersonaIds: readonly string[];
+  selectedPersonaCounts: ReadonlyMap<string, number>;
 };
 
 export function AddChannelBotPersonasSection({
   canToggleSelections,
-  inChannelPersonaIds,
+  inChannelPersonaCounts,
   includeGeneric,
   isLoading,
   onToggleGeneric,
-  onTogglePersona,
+  onSetPersonaCount,
   personas,
-  selectedPersonaIds,
+  selectedPersonaCounts,
 }: AddChannelBotPersonasSectionProps) {
   return (
     <div className="space-y-3">
@@ -90,8 +176,8 @@ export function AddChannelBotPersonasSection({
         <div>
           <div className="text-sm font-medium">Personas</div>
           <p className="text-xs text-muted-foreground">
-            Toggle as many as you want. Each selected persona is added as its
-            own agent. Hover a persona to preview its role.
+            Click to add. Use the stepper to add multiple instances of the same
+            persona. Hover to preview its role.
           </p>
         </div>
 
@@ -100,20 +186,11 @@ export function AddChannelBotPersonasSection({
             <Tooltip>
               <TooltipTrigger asChild>
                 <div>
-                  <SelectionChipButton
+                  <GenericChip
                     disabled={!canToggleSelections}
-                    label="Generic"
                     onClick={onToggleGeneric}
                     selected={includeGeneric}
-                  >
-                    <Bot
-                      className={cn(
-                        "h-4 w-4",
-                        includeGeneric ? "text-primary" : "text-current",
-                      )}
-                    />
-                    Generic
-                  </SelectionChipButton>
+                  />
                 </div>
               </TooltipTrigger>
               <TooltipContent className="max-w-xs text-left">
@@ -121,34 +198,29 @@ export function AddChannelBotPersonasSection({
               </TooltipContent>
             </Tooltip>
             {personas.map((persona) => {
-              const isSelected = selectedPersonaIds.includes(persona.id);
-              const isInChannel = inChannelPersonaIds?.has(persona.id) ?? false;
+              const count = selectedPersonaCounts.get(persona.id) ?? 0;
+              const inChannelCount =
+                inChannelPersonaCounts?.get(persona.id) ?? 0;
               return (
                 <Tooltip key={persona.id}>
                   <TooltipTrigger asChild>
                     <div>
-                      <SelectionChipButton
+                      <PersonaChip
                         avatarUrl={persona.avatarUrl}
-                        disabled={!canToggleSelections || isInChannel}
+                        count={count}
+                        disabled={!canToggleSelections}
                         label={persona.displayName}
-                        onClick={() => onTogglePersona(persona.id)}
-                        selected={isSelected}
+                        onSetCount={(newCount) =>
+                          onSetPersonaCount(persona.id, Math.max(0, newCount))
+                        }
                       >
                         {persona.displayName}
-                        {isInChannel ? (
-                          <span
-                            className={cn(
-                              "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none",
-                              isSelected
-                                ? "bg-primary/15 text-primary"
-                                : "bg-muted/60 text-muted-foreground",
-                            )}
-                          >
-                            <Check className="h-2.5 w-2.5" />
-                            In channel
+                        {inChannelCount > 0 && count === 0 ? (
+                          <span className="inline-flex items-center gap-0.5 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
+                            {inChannelCount} in channel
                           </span>
                         ) : null}
-                      </SelectionChipButton>
+                      </PersonaChip>
                     </div>
                   </TooltipTrigger>
                   <TooltipContent className="max-w-xs text-left">
@@ -162,9 +234,11 @@ export function AddChannelBotPersonasSection({
                         />
                         <p className="font-medium">{persona.displayName}</p>
                       </div>
-                      {isInChannel ? (
+                      {inChannelCount > 0 ? (
                         <p className="text-[11px] font-medium text-emerald-300">
-                          ✓ Already in this channel
+                          {inChannelCount}{" "}
+                          {inChannelCount === 1 ? "instance" : "instances"} in
+                          this channel
                         </p>
                       ) : null}
                       <p className="text-[11px] text-primary-foreground">

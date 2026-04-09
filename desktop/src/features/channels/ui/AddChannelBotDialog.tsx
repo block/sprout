@@ -7,7 +7,7 @@ import {
   useTeamsQuery,
   type CreateChannelManagedAgentResult,
 } from "@/features/agents/hooks";
-import { useInChannelPersonaIds } from "@/features/channels/ui/useInChannelPersonaIds";
+import { useInChannelPersonaCounts } from "@/features/channels/ui/useInChannelPersonaIds";
 import { AddChannelBotGenericSection } from "@/features/channels/ui/AddChannelBotGenericSection";
 import { AddChannelBotPersonasSection } from "@/features/channels/ui/AddChannelBotPersonasSection";
 import { AddChannelBotTeamsSection } from "@/features/channels/ui/AddChannelBotTeamsSection";
@@ -52,26 +52,9 @@ type AddChannelBotDialogProps = {
 };
 
 function defaultBotName(provider: AcpProvider | null) {
-  if (!provider) {
-    return "";
-  }
-
-  const normalizedId = provider.id.trim().toLowerCase();
-  if (normalizedId.length > 0) {
-    return normalizedId;
-  }
-
-  return provider.label.trim().toLowerCase() || "agent";
-}
-
-function toggleValue(values: readonly string[], value: string) {
-  return values.includes(value)
-    ? values.filter((candidate) => candidate !== value)
-    : [...values, value];
-}
-
-function formatAgentCountLabel(count: number) {
-  return count === 1 ? "agent" : "agents";
+  if (!provider) return "";
+  const id = provider.id.trim().toLowerCase();
+  return id || provider.label.trim().toLowerCase() || "agent";
 }
 
 function formatBatchFailureSummary(
@@ -100,7 +83,7 @@ export function AddChannelBotDialog({
 }: AddChannelBotDialogProps) {
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
-  const inChannelPersonaIds = useInChannelPersonaIds(
+  const inChannelPersonaCounts = useInChannelPersonaCounts(
     channelId,
     open && channelId !== null,
   );
@@ -114,9 +97,9 @@ export function AddChannelBotDialog({
     [personas, teamsQuery.data],
   );
   const [selectedProviderId, setSelectedProviderId] = React.useState("");
-  const [selectedPersonaIds, setSelectedPersonaIds] = React.useState<string[]>(
-    [],
-  );
+  const [selectedPersonaCounts, setSelectedPersonaCounts] = React.useState<
+    Map<string, number>
+  >(() => new Map());
   const [includeGeneric, setIncludeGeneric] = React.useState(false);
   const [customName, setCustomName] = React.useState("");
   const [customPrompt, setCustomPrompt] = React.useState("");
@@ -147,10 +130,20 @@ export function AddChannelBotDialog({
     [providers, selectedProviderId],
   );
   const selectedPersonas = React.useMemo(
-    () => personas.filter((persona) => selectedPersonaIds.includes(persona.id)),
-    [personas, selectedPersonaIds],
+    () =>
+      personas.filter(
+        (persona) => (selectedPersonaCounts.get(persona.id) ?? 0) > 0,
+      ),
+    [personas, selectedPersonaCounts],
   );
-  const selectedCount = selectedPersonas.length + (includeGeneric ? 1 : 0);
+  const totalPersonaInstances = React.useMemo(() => {
+    let total = 0;
+    for (const count of selectedPersonaCounts.values()) {
+      total += count;
+    }
+    return total;
+  }, [selectedPersonaCounts]);
+  const selectedCount = totalPersonaInstances + (includeGeneric ? 1 : 0);
 
   // Surface warnings when a persona's preferred provider differs from the
   // user-selected provider. In this dialog the user explicitly picks a
@@ -197,9 +190,16 @@ export function AddChannelBotDialog({
   }, [hasEditedCustomName, selectedProvider]);
 
   React.useEffect(() => {
-    setSelectedPersonaIds((current) =>
-      current.filter((id) => personas.some((persona) => persona.id === id)),
-    );
+    const validIds = new Set(personas.map((p) => p.id));
+    setSelectedPersonaCounts((current) => {
+      const next = new Map<string, number>();
+      for (const [id, count] of current) {
+        if (validIds.has(id)) {
+          next.set(id, count);
+        }
+      }
+      return next.size === current.size ? current : next;
+    });
   }, [personas]);
 
   React.useEffect(() => {
@@ -248,7 +248,7 @@ export function AddChannelBotDialog({
 
   function reset() {
     setSelectedProviderId(providers[0]?.id ?? "");
-    setSelectedPersonaIds([]);
+    setSelectedPersonaCounts(new Map());
     setIncludeGeneric(false);
     setCustomName(providers[0] ? defaultBotName(providers[0]) : "");
     setCustomPrompt("");
@@ -271,13 +271,21 @@ export function AddChannelBotDialog({
   }
 
   function handleToggleTeam(personaIds: string[]) {
-    setSelectedPersonaIds((current) => {
-      const allSelected = personaIds.every((id) => current.includes(id));
+    setSelectedPersonaCounts((current) => {
+      const allSelected = personaIds.every((id) => (current.get(id) ?? 0) > 0);
+      const next = new Map(current);
       if (allSelected) {
-        return current.filter((id) => !personaIds.includes(id));
+        for (const id of personaIds) {
+          next.delete(id);
+        }
+      } else {
+        for (const id of personaIds) {
+          if (!next.has(id) || next.get(id) === 0) {
+            next.set(id, 1);
+          }
+        }
       }
-      const merged = new Set([...current, ...personaIds]);
-      return [...merged];
+      return next;
     });
     setSubmissionNotice(null);
     setSubmissionError(null);
@@ -320,22 +328,26 @@ export function AddChannelBotDialog({
             },
           ]
         : []),
-      ...selectedPersonas.map((persona) => {
+      ...selectedPersonas.flatMap((persona) => {
+        const count = selectedPersonaCounts.get(persona.id) ?? 1;
         const resolved = resolvePersonaProvider(
           persona.provider,
           providers,
           selectedProvider,
         );
-        return {
+        return Array.from({ length: count }, (_, i) => ({
           provider: resolved.provider ?? selectedProvider,
-          name: persona.displayName,
+          name:
+            count > 1
+              ? `${persona.displayName}::${String(i + 1).padStart(2, "0")}`
+              : persona.displayName,
           personaId: persona.id,
           systemPrompt: persona.systemPrompt,
           avatarUrl: persona.avatarUrl ?? undefined,
           model: persona.model ?? undefined,
           role: "bot" as const,
           backend,
-        };
+        }));
       }),
     ];
 
@@ -358,19 +370,22 @@ export function AddChannelBotDialog({
           .map((failure) => failure.personaId)
           .filter((personaId): personaId is string => Boolean(personaId)),
       );
-      setSelectedPersonaIds((current) =>
-        current.filter((personaId) => failedPersonaIds.has(personaId)),
-      );
+      setSelectedPersonaCounts((current) => {
+        const next = new Map<string, number>();
+        for (const [id, count] of current) {
+          if (failedPersonaIds.has(id)) {
+            next.set(id, count);
+          }
+        }
+        return next;
+      });
       setIncludeGeneric(
         result.failures.some((failure) => failure.kind === "generic"),
       );
 
       if (result.successes.length > 0) {
-        setSubmissionNotice(
-          `Added ${result.successes.length} ${formatAgentCountLabel(
-            result.successes.length,
-          )}.`,
-        );
+        const n = result.successes.length;
+        setSubmissionNotice(`Added ${n} ${n === 1 ? "agent" : "agents"}.`);
       }
 
       setSubmissionError(formatBatchFailureSummary(result.failures));
@@ -519,18 +534,18 @@ export function AddChannelBotDialog({
         {teams.length > 0 ? (
           <AddChannelBotTeamsSection
             canToggleSelections={canToggleSelections}
-            inChannelPersonaIds={inChannelPersonaIds}
+            inChannelPersonaCounts={inChannelPersonaCounts}
             isLoading={teamsQuery.isLoading}
             onToggleTeam={handleToggleTeam}
             personas={personas}
-            selectedPersonaIds={selectedPersonaIds}
+            selectedPersonaCounts={selectedPersonaCounts}
             teams={teams}
           />
         ) : null}
 
         <AddChannelBotPersonasSection
           canToggleSelections={canToggleSelections}
-          inChannelPersonaIds={inChannelPersonaIds}
+          inChannelPersonaCounts={inChannelPersonaCounts}
           includeGeneric={includeGeneric}
           isLoading={personasQuery.isLoading}
           onToggleGeneric={() => {
@@ -538,13 +553,21 @@ export function AddChannelBotDialog({
             setSubmissionNotice(null);
             setSubmissionError(null);
           }}
-          onTogglePersona={(personaId) => {
-            setSelectedPersonaIds((current) => toggleValue(current, personaId));
+          onSetPersonaCount={(personaId, count) => {
+            setSelectedPersonaCounts((current) => {
+              const next = new Map(current);
+              if (count <= 0) {
+                next.delete(personaId);
+              } else {
+                next.set(personaId, count);
+              }
+              return next;
+            });
             setSubmissionNotice(null);
             setSubmissionError(null);
           }}
           personas={personas}
-          selectedPersonaIds={selectedPersonaIds}
+          selectedPersonaCounts={selectedPersonaCounts}
         />
 
         {includeGeneric ? (

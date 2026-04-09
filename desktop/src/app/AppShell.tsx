@@ -7,10 +7,14 @@ import { AppShellProvider } from "@/app/AppShellContext";
 import {
   AppShellOverlays,
   type BrowseDialogType,
+  type CreateChannelDialogType,
 } from "@/app/AppShellOverlays";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
+import { useAcpProvidersQuery } from "@/features/agents/hooks";
+import { createChannelManagedAgents } from "@/features/agents/channelAgents";
+import { resolvePersonaProvider } from "@/features/agents/lib/resolvePersonaProvider";
 import {
   channelsQueryKey,
   useChannelsQuery,
@@ -32,7 +36,7 @@ import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import { joinChannel } from "@/shared/api/tauri";
+import { addChannelMembers, joinChannel } from "@/shared/api/tauri";
 import type { SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
 import { Button } from "@/shared/ui/button";
@@ -111,6 +115,8 @@ export function AppShell() {
   const [isSearchOpen, setIsSearchOpen] = React.useState(false);
   const [browseDialogType, setBrowseDialogType] =
     React.useState<BrowseDialogType>(null);
+  const [createChannelDialogType, setCreateChannelDialogType] =
+    React.useState<CreateChannelDialogType>(null);
   const location = useLocation();
   const queryClient = useQueryClient();
   const { goAgents, goChannel, goHome, goWorkflows, openSearchHit } =
@@ -167,6 +173,7 @@ export function AppShell() {
 
   const createChannelMutation = useCreateChannelMutation();
   const createForumMutation = useCreateChannelMutation();
+  const acpProvidersQuery = useAcpProvidersQuery();
   const openDmMutation = useOpenDmMutation();
   const hideDmMutation = useHideDmMutation();
   const handleOpenBrowseChannels = React.useCallback(() => {
@@ -414,44 +421,12 @@ export function AppShell() {
             }
             fallbackDisplayName={identityQuery.data?.displayName}
             homeBadgeCount={homeBadgeCount}
-            isCreatingChannel={createChannelMutation.isPending}
-            isCreatingForum={createForumMutation.isPending}
             isLoading={channelsQuery.isLoading}
             isOpeningDm={openDmMutation.isPending}
             isPresencePending={presenceSession.isPending}
             selfPresenceStatus={presenceSession.currentStatus}
-            onCreateChannel={async ({
-              description,
-              name,
-              visibility,
-              ttlSeconds,
-            }) => {
-              const createdChannel = await createChannelMutation.mutateAsync({
-                name,
-                description,
-                channelType: "stream",
-                visibility,
-                ttlSeconds,
-              });
-
-              await goChannel(createdChannel.id);
-            }}
-            onCreateForum={async ({
-              description,
-              name,
-              visibility,
-              ttlSeconds,
-            }) => {
-              const createdForum = await createForumMutation.mutateAsync({
-                name,
-                description,
-                channelType: "forum",
-                visibility,
-                ttlSeconds,
-              });
-
-              await goChannel(createdForum.id);
-            }}
+            onOpenCreateChannel={() => setCreateChannelDialogType("stream")}
+            onOpenCreateForum={() => setCreateChannelDialogType("forum")}
             onHideDm={handleHideDm}
             onOpenBrowseChannels={handleOpenBrowseChannels}
             onOpenBrowseForums={handleOpenBrowseForums}
@@ -490,12 +465,99 @@ export function AppShell() {
             activeChannel={activeChannel}
             browseDialogType={browseDialogType}
             channels={channels}
+            createChannelDialogType={createChannelDialogType}
+            createChannelIsPending={
+              createChannelMutation.isPending || createForumMutation.isPending
+            }
             currentPubkey={identityQuery.data?.pubkey}
             isChannelManagementOpen={isChannelManagementOpen}
             isSearchOpen={isSearchOpen}
             onBrowseChannelJoin={handleBrowseChannelJoin}
             onBrowseDialogOpenChange={handleBrowseDialogOpenChange}
             onChannelManagementOpenChange={setIsChannelManagementOpen}
+            onCreateChannel={async ({
+              channelType,
+              description,
+              invitees,
+              name,
+              ttlSeconds,
+              visibility,
+            }) => {
+              const mutation =
+                channelType === "stream"
+                  ? createChannelMutation
+                  : createForumMutation;
+
+              const created = await mutation.mutateAsync({
+                name,
+                description,
+                channelType,
+                visibility,
+                ttlSeconds,
+              });
+
+              // Split invitees into people (add as members) and personas (spawn as bots).
+              const personPubkeys = invitees
+                .filter((inv) => inv.kind === "person")
+                .map((inv) => inv.user.pubkey);
+              const personaInvitees = invitees.filter(
+                (inv) => inv.kind === "persona",
+              );
+
+              // Add people as channel members.
+              if (personPubkeys.length > 0) {
+                await addChannelMembers({
+                  channelId: created.id,
+                  pubkeys: personPubkeys,
+                }).catch((error) => {
+                  console.error("Failed to add initial members:", error);
+                });
+              }
+
+              // Spawn persona bots.
+              if (personaInvitees.length > 0) {
+                const providers = acpProvidersQuery.data ?? [];
+                const defaultProvider = providers[0] ?? null;
+
+                if (defaultProvider) {
+                  const inputs = personaInvitees.flatMap((inv) => {
+                    const count = inv.count;
+                    const { provider } = resolvePersonaProvider(
+                      inv.persona.provider,
+                      providers,
+                      defaultProvider,
+                    );
+                    return Array.from({ length: count }, (_, i) => ({
+                      provider: provider ?? defaultProvider,
+                      name:
+                        count > 1
+                          ? `${inv.persona.displayName}::${String(i + 1).padStart(2, "0")}`
+                          : inv.persona.displayName,
+                      personaId: inv.persona.id,
+                      systemPrompt: inv.persona.systemPrompt,
+                      avatarUrl: inv.persona.avatarUrl ?? undefined,
+                      model: inv.persona.model ?? undefined,
+                      role: "bot" as const,
+                      backend: { type: "local" as const },
+                    }));
+                  });
+
+                  await createChannelManagedAgents(created.id, inputs).catch(
+                    (error) => {
+                      console.error("Failed to add initial bots:", error);
+                    },
+                  );
+                }
+              }
+
+              setCreateChannelDialogType(null);
+              await goChannel(created.id);
+            }}
+            onCreateChannelDialogOpenChange={(open) => {
+              if (!open) {
+                setCreateChannelDialogType(null);
+              }
+            }}
             onDeleteActiveChannel={() => {
               setIsChannelManagementOpen(false);
               void goHome({ replace: true });

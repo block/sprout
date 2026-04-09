@@ -4,6 +4,8 @@ import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
+const EMPTY_MAP = new Map<string, number>() as ReadonlyMap<string, number>;
+
 /**
  * Returns a `Set<string>` of persona IDs whose managed agents are already
  * members of the given channel. The query is only enabled when `enabled` is
@@ -13,6 +15,18 @@ export function useInChannelPersonaIds(
   channelId: string | null,
   enabled: boolean,
 ): ReadonlySet<string> {
+  return new Set(useInChannelPersonaCounts(channelId, enabled).keys());
+}
+
+/**
+ * Returns a `Map<personaId, instanceCount>` for personas whose managed agents
+ * are members of the given channel. Useful for showing how many instances of
+ * each persona are already present.
+ */
+export function useInChannelPersonaCounts(
+  channelId: string | null,
+  enabled: boolean,
+): ReadonlyMap<string, number> {
   const membersQuery = useChannelMembersQuery(channelId, enabled);
   const managedAgentsQuery = useManagedAgentsQuery();
 
@@ -20,19 +34,19 @@ export function useInChannelPersonaIds(
     const members = membersQuery.data;
     const managedAgents = managedAgentsQuery.data;
     if (!members || !managedAgents) {
-      return new Set<string>();
+      return EMPTY_MAP;
     }
 
     const memberPubkeys = new Set(
       members.map((m) => normalizePubkey(m.pubkey)),
     );
 
-    const ids = new Set<string>();
+    const counts = new Map<string, number>();
     for (const agent of managedAgents) {
       if (agent.personaId && memberPubkeys.has(normalizePubkey(agent.pubkey))) {
-        ids.add(agent.personaId);
+        counts.set(agent.personaId, (counts.get(agent.personaId) ?? 0) + 1);
       }
     }
-    return ids;
+    return counts;
   }, [membersQuery.data, managedAgentsQuery.data]);
 }

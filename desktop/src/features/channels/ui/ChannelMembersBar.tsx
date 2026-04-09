@@ -16,6 +16,7 @@ import {
 import { getActivePersonas } from "@/features/agents/lib/catalog";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { QuickBotBar } from "@/features/channels/ui/QuickBotBar";
+import { useInChannelPersonaCounts } from "@/features/channels/ui/useInChannelPersonaIds";
 import { useQuickBotDrop } from "@/features/channels/ui/useQuickBotDrop";
 import { CreateWorkflowDialog } from "@/features/workflows/ui/CreateWorkflowDialog";
 import type { AgentPersona, Channel } from "@/shared/api/types";
@@ -71,6 +72,7 @@ export function ChannelMembersBar({
     [personasQuery2.data],
   );
   const { recentIds, pushRecent } = useBotRecents();
+  const personaInstanceCounts = useInChannelPersonaCounts(channel.id, true);
   const quickDrop = useQuickBotDrop(channel.id);
 
   // Track in-flight instance names so rapid clicks don't produce duplicates.
@@ -99,9 +101,10 @@ export function ChannelMembersBar({
       for (const n of inflight) combinedUsed.add(n);
 
       const instanceName = pickBotName(persona.namePool ?? [], combinedUsed);
-      return { persona, instanceName };
+      const instanceCount = personaInstanceCounts.get(persona.id) ?? 0;
+      return { persona, instanceName, instanceCount };
     });
-  }, [allPersonas, recentIds, members]);
+  }, [allPersonas, recentIds, members, personaInstanceCounts]);
 
   const addBot = quickDrop.addBot;
   const handleQuickAdd = React.useCallback(

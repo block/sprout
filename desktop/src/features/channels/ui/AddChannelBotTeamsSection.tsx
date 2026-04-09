@@ -48,21 +48,21 @@ function SelectionChipButton({
 
 type AddChannelBotTeamsSectionProps = {
   canToggleSelections: boolean;
-  inChannelPersonaIds?: ReadonlySet<string>;
+  inChannelPersonaCounts?: ReadonlyMap<string, number>;
   isLoading: boolean;
   onToggleTeam: (personaIds: string[]) => void;
   personas: AgentPersona[];
-  selectedPersonaIds: readonly string[];
+  selectedPersonaCounts: ReadonlyMap<string, number>;
   teams: AgentTeam[];
 };
 
 export function AddChannelBotTeamsSection({
   canToggleSelections,
-  inChannelPersonaIds,
+  inChannelPersonaCounts,
   isLoading,
   onToggleTeam,
   personas,
-  selectedPersonaIds,
+  selectedPersonaCounts,
   teams,
 }: AddChannelBotTeamsSectionProps) {
   if (isLoading || teams.length === 0) {
@@ -85,9 +85,9 @@ export function AddChannelBotTeamsSection({
             const validIds = resolution.resolvedPersonaIds;
             const allSelected =
               validIds.length > 0 &&
-              validIds.every((id) => selectedPersonaIds.includes(id));
-            const inChannelCount = inChannelPersonaIds
-              ? validIds.filter((id) => inChannelPersonaIds.has(id)).length
+              validIds.every((id) => (selectedPersonaCounts.get(id) ?? 0) > 0);
+            const inChannelCount = inChannelPersonaCounts
+              ? validIds.filter((id) => inChannelPersonaCounts.has(id)).length
               : 0;
             const allInChannel =
               inChannelCount > 0 && inChannelCount === validIds.length;
@@ -150,7 +150,7 @@ export function AddChannelBotTeamsSection({
                     <div className="flex flex-wrap gap-1">
                       {resolution.resolvedPersonas.map((persona) => {
                         const personaInChannel =
-                          inChannelPersonaIds?.has(persona.id) ?? false;
+                          inChannelPersonaCounts?.has(persona.id) ?? false;
                         return (
                           <div
                             className="flex items-center gap-1 rounded-full bg-primary-foreground/10 px-1.5 py-0.5"
