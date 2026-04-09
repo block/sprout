@@ -37,6 +37,7 @@ type RawMockTokenSeed = {
 type RawProfile = {
   pubkey: string;
   display_name: string | null;
+  verified_name: string | null;
   avatar_url: string | null;
   about: string | null;
   nip05_handle: string | null;
@@ -44,6 +45,7 @@ type RawProfile = {
 
 type RawUserProfileSummary = {
   display_name: string | null;
+  verified_name: string | null;
   avatar_url: string | null;
   nip05_handle: string | null;
 };
@@ -741,6 +743,7 @@ function getMockProfileByPubkey(pubkey: string): RawProfile | null {
   return {
     pubkey: normalizedPubkey,
     display_name: mockDisplayNames.get(normalizedPubkey) ?? null,
+    verified_name: null,
     avatar_url: null,
     about: null,
     nip05_handle: null,
@@ -1309,6 +1312,7 @@ const mockProfiles = new Map<string, RawProfile>([
     {
       pubkey: MOCK_IDENTITY_PUBKEY,
       display_name: DEFAULT_MOCK_IDENTITY.display_name,
+      verified_name: null,
       avatar_url: null,
       about: null,
       nip05_handle: null,
@@ -1405,6 +1409,7 @@ function ensureMockProfile(config: E2eConfig | undefined): RawProfile {
   const profile = {
     pubkey,
     display_name: getMockMemberDisplayName(config),
+    verified_name: null,
     avatar_url: null,
     about: null,
     nip05_handle: null,
@@ -2136,6 +2141,7 @@ async function handleGetUsersBatch(
 
       profiles[normalizedPubkey] = {
         display_name: profile.display_name,
+        verified_name: profile.verified_name,
         avatar_url: profile.avatar_url,
         nip05_handle: profile.nip05_handle,
       };

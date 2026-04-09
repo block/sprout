@@ -549,6 +549,8 @@ pub fn run() {
             discover_managed_agent_prereqs,
             sign_event,
             create_auth_event,
+            set_identity_from_secret_key,
+            initialize_identity,
             get_channels,
             create_channel,
             open_dm,

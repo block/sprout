@@ -2,6 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { RouterProvider } from "@tanstack/react-router";
 import { useLayoutEffect } from "react";
 
+import { IdentityGate } from "@/app/IdentityGate";
 import { router } from "@/app/router";
 
 export function App() {
@@ -9,5 +10,9 @@ export function App() {
     void getCurrentWindow().show();
   }, []);
 
-  return <RouterProvider router={router} />;
+  return (
+    <IdentityGate>
+      <RouterProvider router={router} />
+    </IdentityGate>
+  );
 }

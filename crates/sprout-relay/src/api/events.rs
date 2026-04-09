@@ -122,6 +122,7 @@ pub async fn submit_event(
             RestAuthMethod::ApiToken => HttpAuthMethod::ApiToken,
             RestAuthMethod::OktaJwt => HttpAuthMethod::OktaJwt,
             RestAuthMethod::DevPubkey => HttpAuthMethod::DevPubkey,
+            RestAuthMethod::ProxyIdentity => HttpAuthMethod::ProxyIdentity,
             RestAuthMethod::Nip98 => {
                 return Err(api_error(
                     StatusCode::BAD_REQUEST,

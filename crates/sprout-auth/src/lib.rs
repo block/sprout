@@ -19,6 +19,8 @@
 pub mod access;
 /// Authentication error types.
 pub mod error;
+/// Corporate identity mode (proxy-injected JWTs, deterministic keypair derivation).
+pub mod identity;
 /// NIP-42 challenge–response authentication.
 pub mod nip42;
 /// NIP-98 HTTP Auth verification (kind:27235).
@@ -34,6 +36,7 @@ pub mod token;
 
 pub use access::{check_read_access, check_write_access, require_scope, ChannelAccessChecker};
 pub use error::AuthError;
+pub use identity::{derive_keypair_from_uid, IdentityConfig, IdentityMode};
 pub use nip42::{generate_challenge, verify_nip42_event};
 pub use nip98::verify_nip98_event;
 pub use okta::{CachedJwks, Jwks, JwksCache, OktaConfig};
@@ -59,6 +62,8 @@ pub enum AuthMethod {
     Nip42Okta,
     /// NIP-42 with a `sprout_` API token in the `auth_token` tag.
     Nip42ApiToken,
+    /// Proxy identity — pubkey derived from a proxy-injected identity JWT.
+    ProxyIdentity,
 }
 
 /// The result of a successful authentication, bound to a WebSocket connection.
@@ -92,6 +97,9 @@ pub struct AuthConfig {
     /// Per-user and per-IP rate limit thresholds.
     #[serde(default)]
     pub rate_limits: RateLimitConfig,
+    /// Corporate identity mode (proxy JWT, deterministic keypair derivation).
+    #[serde(default)]
+    pub identity: IdentityConfig,
 }
 
 /// Primary authentication service.
@@ -320,6 +328,78 @@ impl AuthService {
 
         let scopes = parse_scopes(scopes_raw);
         Ok((*owner_pubkey, scopes))
+    }
+
+    /// Returns a reference to the identity configuration.
+    pub fn identity_config(&self) -> &IdentityConfig {
+        &self.config.identity
+    }
+
+    /// Validate a proxy-injected identity JWT and derive the Nostr pubkey.
+    ///
+    /// Used in proxy identity mode where cf-doorman injects `x-forwarded-identity-token`.
+    /// Validates the JWT via JWKS (same infrastructure as Okta), extracts the `uid` claim,
+    /// and derives a deterministic Nostr keypair via HMAC-SHA256.
+    ///
+    /// Returns `(pubkey, all_known_scopes, username)` on success. The username is
+    /// extracted from the `user` claim for display purposes; it is not used for
+    /// key derivation (UIDs are immutable, usernames are not).
+    pub async fn validate_identity_jwt(
+        &self,
+        jwt: &str,
+    ) -> Result<(nostr::PublicKey, Vec<Scope>, String), AuthError> {
+        let (keys, scopes, username) = self.validate_identity_jwt_keys(jwt).await?;
+        Ok((keys.public_key(), scopes, username))
+    }
+
+    /// Like [`validate_identity_jwt`] but returns the full [`nostr::Keys`] (including
+    /// the secret key) instead of just the public key.
+    ///
+    /// Used by the identity bootstrap endpoint to return the derived secret key to
+    /// the desktop client. The secret key travels over TLS behind cf-doorman.
+    pub async fn validate_identity_jwt_keys(
+        &self,
+        jwt: &str,
+    ) -> Result<(nostr::Keys, Vec<Scope>, String), AuthError> {
+        let cached = self
+            .jwks_cache
+            .get_or_refresh(
+                &self.config.okta.jwks_uri,
+                self.config.okta.jwks_refresh_secs,
+                &self.http_client,
+            )
+            .await?;
+
+        let claims = cached.validate(jwt, &self.config.okta.issuer, &self.config.okta.audience)?;
+
+        let uid = claims
+            .get(&self.config.identity.uid_claim)
+            .and_then(|v| {
+                v.as_str()
+                    .map(String::from)
+                    .or_else(|| v.as_u64().map(|n| n.to_string()))
+            })
+            .ok_or_else(|| {
+                AuthError::InvalidJwt(format!(
+                    "missing '{}' claim in identity JWT",
+                    self.config.identity.uid_claim
+                ))
+            })?;
+
+        let username = claims
+            .get(&self.config.identity.user_claim)
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let keys = derive_keypair_from_uid(
+            &self.config.identity.secret,
+            &self.config.identity.context,
+            &uid,
+        )?;
+        let scopes = Scope::all_known();
+
+        Ok((keys, scopes, username))
     }
 }
 

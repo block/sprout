@@ -500,6 +500,15 @@ impl Db {
         user::ensure_user(&self.pool, pubkey).await
     }
 
+    /// Ensure a user record exists and sync the verified corporate name.
+    pub async fn ensure_user_with_verified_name(
+        &self,
+        pubkey: &[u8],
+        verified_name: &str,
+    ) -> Result<()> {
+        user::ensure_user_with_verified_name(&self.pool, pubkey, verified_name).await
+    }
+
     /// Get a single user record by pubkey.
     pub async fn get_user(&self, pubkey: &[u8]) -> Result<Option<user::UserProfile>> {
         user::get_user(&self.pool, pubkey).await

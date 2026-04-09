@@ -41,6 +41,8 @@ pub enum HttpAuthMethod {
     OktaJwt,
     /// `X-Pubkey: <hex>` dev-mode header.
     DevPubkey,
+    /// `x-forwarded-identity-token` proxy identity mode.
+    ProxyIdentity,
 }
 
 /// Authentication context for event ingestion — transport-neutral.

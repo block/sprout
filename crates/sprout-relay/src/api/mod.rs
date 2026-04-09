@@ -26,6 +26,8 @@ pub mod dms;
 pub mod events;
 /// Personalized home feed endpoint.
 pub mod feed;
+/// Identity bootstrap endpoint (proxy mode).
+pub mod identity;
 /// Blossom-compatible media upload, retrieval, and existence check endpoints.
 pub mod media;
 /// Channel membership endpoints.
@@ -102,6 +104,8 @@ pub enum RestAuthMethod {
     Nip98,
     /// `X-Pubkey: <hex>` — dev mode only (`require_auth_token=false`).
     DevPubkey,
+    /// `x-forwarded-identity-token` — proxy identity mode (cf-doorman).
+    ProxyIdentity,
 }
 
 /// Full authentication context returned to REST handlers.
@@ -149,6 +153,61 @@ pub(crate) async fn extract_auth_context(
     state: &AppState,
 ) -> Result<RestAuthContext, (StatusCode, Json<serde_json::Value>)> {
     let require_auth = state.config.require_auth_token;
+
+    // ── 0. Proxy / hybrid identity mode ──────────────────────────────────
+    // When identity_mode is proxy or hybrid, cf-doorman injects
+    // x-forwarded-identity-token for human users.
+    //   - Proxy:  header is mandatory — reject if missing.
+    //   - Hybrid: header is preferred — fall through to standard auth if missing.
+    // In both modes, a present-but-invalid header is a hard 401.
+    let identity_mode = &state.auth.identity_config().mode;
+    if identity_mode.is_proxy() {
+        if let Some(identity_jwt) = headers
+            .get("x-forwarded-identity-token")
+            .and_then(|v| v.to_str().ok())
+        {
+            match state.auth.validate_identity_jwt(identity_jwt).await {
+                Ok((pubkey, scopes, username)) => {
+                    let pubkey_bytes = pubkey.serialize().to_vec();
+                    if let Err(e) = state
+                        .db
+                        .ensure_user_with_verified_name(&pubkey_bytes, &username)
+                        .await
+                    {
+                        tracing::warn!("ensure_user_with_verified_name failed: {e}");
+                    }
+                    return Ok(RestAuthContext {
+                        pubkey,
+                        pubkey_bytes,
+                        scopes,
+                        auth_method: RestAuthMethod::ProxyIdentity,
+                        token_id: None,
+                        channel_ids: None,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("auth: identity JWT validation failed: {e}");
+                    return Err((
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({ "error": "identity_token_invalid" })),
+                    ));
+                }
+            }
+        } else if *identity_mode == sprout_auth::IdentityMode::Proxy {
+            tracing::warn!(
+                "auth: proxy mode enabled but x-forwarded-identity-token header missing"
+            );
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "identity_token_required",
+                    "message": "x-forwarded-identity-token header is required in proxy identity mode"
+                })),
+            ));
+        }
+        // Hybrid mode: no identity token — fall through to standard auth
+        // so agents can authenticate via API tokens, Okta JWTs, etc.
+    }
 
     if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         // ── 1. Reject NIP-98 on non-token endpoints ───────────────────────────

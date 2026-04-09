@@ -28,6 +28,8 @@ pub struct RelayInfo {
     pub version: String,
     /// Protocol and resource limits advertised to clients.
     pub limitation: Option<RelayLimitation>,
+    /// Corporate identity mode: `"proxy"` or `"disabled"`.
+    pub identity_mode: String,
 }
 
 /// Protocol and resource limits advertised in the NIP-11 document.
@@ -75,6 +77,7 @@ impl RelayInfo {
                 payment_required: false,
                 restricted_writes: true,
             }),
+            identity_mode: config.auth.identity.mode.to_string(),
         }
     }
 }

@@ -72,6 +72,7 @@ CREATE TABLE users (
     pubkey              BYTEA PRIMARY KEY,
     nip05_handle        VARCHAR(255) UNIQUE,
     display_name        VARCHAR(255),
+    verified_name       VARCHAR(255),
     avatar_url          TEXT,
     about               TEXT,
     agent_type          VARCHAR(255),

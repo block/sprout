@@ -104,7 +104,16 @@ impl ConnectionState {
 ///
 /// Acquires a connection semaphore permit, sends the NIP-42 AUTH challenge,
 /// then drives the send, heartbeat, and receive loops until the connection closes.
-pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: SocketAddr) {
+///
+/// If `pre_auth` is `Some`, the connection is immediately authenticated (skipping
+/// the NIP-42 challenge–response). Used in proxy identity mode where the upstream
+/// reverse proxy has already validated the user's identity.
+pub async fn handle_connection(
+    socket: WebSocket,
+    state: Arc<AppState>,
+    addr: SocketAddr,
+    pre_auth: Option<AuthContext>,
+) {
     let permit = match state.conn_semaphore.clone().try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
@@ -114,7 +123,6 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
     };
 
     let conn_id = Uuid::new_v4();
-    let challenge = generate_challenge();
     let cancel = CancellationToken::new();
 
     let (tx, rx) = mpsc::channel::<WsMessage>(state.config.send_buffer_size);
@@ -125,12 +133,27 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
     let backpressure_count = Arc::new(AtomicU8::new(0));
     let subscriptions = Arc::new(Mutex::new(HashMap::new()));
 
+    // Pre-authenticated connections (proxy identity mode) skip NIP-42 entirely.
+    let initial_auth_state = match pre_auth {
+        Some(ctx) => {
+            info!(conn_id = %conn_id, addr = %addr, pubkey = %ctx.pubkey.to_hex(),
+                  "WebSocket pre-authenticated via proxy identity");
+            AuthState::Authenticated(ctx)
+        }
+        None => AuthState::Pending {
+            challenge: generate_challenge(),
+        },
+    };
+
+    let challenge = match &initial_auth_state {
+        AuthState::Pending { challenge } => Some(challenge.clone()),
+        _ => None,
+    };
+
     let conn = Arc::new(ConnectionState {
         conn_id,
         remote_addr: addr,
-        auth_state: RwLock::new(AuthState::Pending {
-            challenge: challenge.clone(),
-        }),
+        auth_state: RwLock::new(initial_auth_state),
         subscriptions: Arc::clone(&subscriptions),
         send_tx: tx.clone(),
         ctrl_tx: ctrl_tx.clone(),
@@ -141,14 +164,17 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
     info!(conn_id = %conn_id, addr = %addr, "WebSocket connection established");
     metrics::counter!("sprout_ws_connections_total").increment(1);
 
-    let challenge_msg = RelayMessage::auth_challenge(&challenge);
-    if tx
-        .send(WsMessage::Text(challenge_msg.into()))
-        .await
-        .is_err()
-    {
-        warn!(conn_id = %conn_id, "Failed to send AUTH challenge — client disconnected immediately");
-        return;
+    // Only send NIP-42 challenge if not pre-authenticated.
+    if let Some(ref challenge_str) = challenge {
+        let challenge_msg = RelayMessage::auth_challenge(challenge_str);
+        if tx
+            .send(WsMessage::Text(challenge_msg.into()))
+            .await
+            .is_err()
+        {
+            warn!(conn_id = %conn_id, "Failed to send AUTH challenge — client disconnected immediately");
+            return;
+        }
     }
 
     // Gauge incremented AFTER challenge send succeeds — early disconnects

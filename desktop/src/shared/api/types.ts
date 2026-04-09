@@ -103,9 +103,17 @@ export type Identity = {
   displayName: string;
 };
 
+export type InitializedIdentity = {
+  pubkey: string;
+  displayName: string;
+  identityMode: string | null;
+  wsAuthMode: "nip42" | "preauthenticated";
+};
+
 export type Profile = {
   pubkey: string;
   displayName: string | null;
+  verifiedName: string | null;
   avatarUrl: string | null;
   about: string | null;
   nip05Handle: string | null;
@@ -113,6 +121,7 @@ export type Profile = {
 
 export type UserProfileSummary = {
   displayName: string | null;
+  verifiedName: string | null;
   avatarUrl: string | null;
   nip05Handle: string | null;
 };
@@ -125,6 +134,7 @@ export type UsersBatchResponse = {
 export type UserSearchResult = {
   pubkey: string;
   displayName: string | null;
+  verifiedName: string | null;
   avatarUrl: string | null;
   nip05Handle: string | null;
 };

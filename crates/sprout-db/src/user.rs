@@ -11,6 +11,8 @@ pub struct UserProfile {
     pub pubkey: Vec<u8>,
     /// Human-readable display name chosen by the user.
     pub display_name: Option<String>,
+    /// Verified corporate name derived from the identity JWT.
+    pub verified_name: Option<String>,
     /// URL of the user's avatar image.
     pub avatar_url: Option<String>,
     /// Short bio or description provided by the user.
@@ -26,10 +28,39 @@ pub struct UserSearchProfile {
     pub pubkey: Vec<u8>,
     /// Human-readable display name chosen by the user.
     pub display_name: Option<String>,
+    /// Verified corporate name derived from the identity JWT.
+    pub verified_name: Option<String>,
     /// URL of the user's avatar image.
     pub avatar_url: Option<String>,
     /// NIP-05 identifier (user@domain).
     pub nip05_handle: Option<String>,
+}
+
+/// Ensure a user record exists for the given pubkey and sync the verified
+/// corporate name derived from the identity JWT. On initial insert the
+/// `display_name` is also seeded from the verified name so the user has a
+/// visible name immediately. On conflict (user already exists), only the
+/// `verified_name` column is updated — `display_name` is left alone so
+/// user-chosen names are preserved.
+pub async fn ensure_user_with_verified_name(
+    pool: &PgPool,
+    pubkey: &[u8],
+    verified_name: &str,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO users (pubkey, verified_name, display_name)
+        VALUES ($1, NULLIF($2, ''), NULLIF($2, ''))
+        ON CONFLICT (pubkey) DO UPDATE
+        SET verified_name = EXCLUDED.verified_name
+        WHERE users.verified_name IS DISTINCT FROM EXCLUDED.verified_name
+        "#,
+    )
+    .bind(pubkey)
+    .bind(verified_name)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Ensure a user record exists for the given pubkey (upsert).
@@ -58,10 +89,11 @@ pub async fn get_user(pool: &PgPool, pubkey: &[u8]) -> Result<Option<UserProfile
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         ),
     >(
         r#"
-        SELECT pubkey, display_name, avatar_url, about, nip05_handle
+        SELECT pubkey, display_name, verified_name, avatar_url, about, nip05_handle
         FROM users
         WHERE pubkey = $1
         "#,
@@ -71,9 +103,10 @@ pub async fn get_user(pool: &PgPool, pubkey: &[u8]) -> Result<Option<UserProfile
     .await?;
 
     Ok(row.map(
-        |(pubkey, display_name, avatar_url, about, nip05_handle)| UserProfile {
+        |(pubkey, display_name, verified_name, avatar_url, about, nip05_handle)| UserProfile {
             pubkey,
             display_name,
+            verified_name,
             avatar_url,
             about,
             nip05_handle,
@@ -166,10 +199,11 @@ pub async fn get_user_by_nip05(
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         ),
     >(
         r#"
-        SELECT pubkey, display_name, avatar_url, about, nip05_handle
+        SELECT pubkey, display_name, verified_name, avatar_url, about, nip05_handle
         FROM users
         WHERE LOWER(nip05_handle) = LOWER($1)
         LIMIT 1
@@ -180,9 +214,10 @@ pub async fn get_user_by_nip05(
     .await?;
 
     Ok(row.map(
-        |(pubkey, display_name, avatar_url, about, nip05_handle)| UserProfile {
+        |(pubkey, display_name, verified_name, avatar_url, about, nip05_handle)| UserProfile {
             pubkey,
             display_name,
+            verified_name,
             avatar_url,
             about,
             nip05_handle,
@@ -220,9 +255,18 @@ pub async fn search_users(
     let prefix_pattern = format!("{escaped}%");
     let limit = limit.clamp(1, 50) as i64;
 
-    let rows = sqlx::query_as::<_, (Vec<u8>, Option<String>, Option<String>, Option<String>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Vec<u8>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
         r#"
-        SELECT pubkey, display_name, avatar_url, nip05_handle
+        SELECT pubkey, display_name, verified_name, avatar_url, nip05_handle
         FROM users
         WHERE LOWER(COALESCE(display_name, '')) LIKE $1 ESCAPE '\'
            OR LOWER(COALESCE(nip05_handle, '')) LIKE $1 ESCAPE '\'
@@ -251,9 +295,10 @@ pub async fn search_users(
     Ok(rows
         .into_iter()
         .map(
-            |(pubkey, display_name, avatar_url, nip05_handle)| UserSearchProfile {
+            |(pubkey, display_name, verified_name, avatar_url, nip05_handle)| UserSearchProfile {
                 pubkey,
                 display_name,
+                verified_name,
                 avatar_url,
                 nip05_handle,
             },

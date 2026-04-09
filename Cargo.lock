@@ -3683,6 +3683,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "hex",
+ "hmac",
  "jsonwebtoken",
  "nostr",
  "rand 0.10.0",
