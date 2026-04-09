@@ -294,7 +294,12 @@ pub async fn get_blob(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned());
 
-    match range_header {
+    // Extract single-range value, if present. Multi-range (comma-separated) is
+    // unsupported — we ignore it and serve the full body per RFC 9110 §14.2:
+    // "A server MAY ignore the Range header field."
+    let single_range = range_header.filter(|r| !r.contains(','));
+
+    match single_range {
         None => {
             // Full response — 200 OK. Stream from S3 — never loads full blob into RAM.
             let total = state
@@ -318,7 +323,7 @@ pub async fn get_blob(
             Ok(resp)
         }
         Some(range_str) => {
-            // Range request — HEAD first to get total size without loading the blob.
+            // Single-range request — HEAD first to get total size without loading the blob.
             let total = state
                 .media_storage
                 .head_with_metadata(&key)

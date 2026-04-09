@@ -357,7 +357,7 @@ async fn test_video_range_request_206() {
     assert!(range_resp
         .headers()
         .get("accept-ranges")
-        .map_or(false, |v| v == "bytes"));
+        .is_some_and(|v| v == "bytes"));
     let body = range_resp.bytes().await.unwrap();
     assert_eq!(body.len(), 100);
     assert_eq!(&body[..], &mp4[..100]);

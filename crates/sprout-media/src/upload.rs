@@ -126,10 +126,11 @@ pub async fn process_video_upload(
 
         // Convert axum::Error stream to std::io::Error stream for StreamReader.
         // Box::pin is required because StreamReader needs a pinned stream.
-        // Map stream errors, detecting body-limit errors so we can return 413
-        // instead of 500. axum wraps LengthLimitError in its error chain —
-        // we detect it via the Display string since axum::Error doesn't expose
-        // the inner type for downcasting.
+        // FRAGILE: Map stream errors, detecting body-limit errors so we can
+        // return 413 instead of 500. axum wraps LengthLimitError in its error
+        // chain — we detect it via the Display string since axum::Error doesn't
+        // expose the inner type for downcasting. If axum changes the error
+        // message, test_body_limit_error_detection will catch the regression.
         let mapped = futures_util::StreamExt::map(body_stream, |r| {
             r.map_err(|e| {
                 let msg = e.to_string();
@@ -247,6 +248,7 @@ pub async fn process_video_upload(
 
     // --- 6. Stream blob from temp file to S3 ---
     storage.put_file(&key, &tmp_path, &mime).await?;
+    drop(tmp); // Free temp file disk space immediately after S3 upload.
 
     // --- 7. Write sidecar (no thumbnail for video — desktop handles that) ---
     let meta = BlobMeta {
@@ -464,7 +466,7 @@ mod tests {
             if msg.contains("length limit") || msg.contains("body limit") {
                 std::io::Error::new(std::io::ErrorKind::WriteZero, msg)
             } else {
-                std::io::Error::new(std::io::ErrorKind::Other, limit_err)
+                std::io::Error::other(limit_err)
             }
         };
         assert_eq!(io_err.kind(), std::io::ErrorKind::WriteZero);
@@ -476,7 +478,7 @@ mod tests {
             if msg.contains("length limit") || msg.contains("body limit") {
                 std::io::Error::new(std::io::ErrorKind::WriteZero, msg)
             } else {
-                std::io::Error::new(std::io::ErrorKind::Other, other_err)
+                std::io::Error::other(other_err)
             }
         };
         assert_eq!(io_err.kind(), std::io::ErrorKind::Other);

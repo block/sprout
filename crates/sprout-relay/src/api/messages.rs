@@ -165,6 +165,18 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
             return Err("imeta tag must include url, m, x, and size".into());
         }
 
+        // Video-only NIP-71 fields must not appear on image blobs.
+        let is_video = m_value == "video/mp4";
+        if !is_video {
+            for key in &["duration", "bitrate", "image"] {
+                if seen_keys.contains(*key) {
+                    return Err(format!(
+                        "imeta {key} is only valid for video/mp4, not {m_value}"
+                    ));
+                }
+            }
+        }
+
         // Cross-check internal consistency: url hash must match x, url ext must match m.
         if let Some(hash_in_url) = extract_hash_from_media_url(&url_value) {
             if hash_in_url != x_value {
@@ -289,42 +301,43 @@ pub async fn verify_imeta_blobs(
         //    URL itself, not from x_value. Sidecar must exist (serving is gated
         //    on it) and MIME must be an image type.
         if !image_value.is_empty() {
-            if let Some(img_hash) = extract_hash_from_media_url(&image_value) {
-                let img_sidecar = storage.get_sidecar(img_hash).await.map_err(|_| {
-                    format!("imeta image references nonexistent poster: {img_hash}")
-                })?;
+            let img_hash = extract_hash_from_media_url(&image_value)
+                .ok_or_else(|| format!("imeta image URL has no extractable hash: {image_value}"))?;
 
-                // Poster frame must be an image, not video or other type.
-                const IMAGE_MIMES: &[&str] =
-                    &["image/jpeg", "image/png", "image/gif", "image/webp"];
-                if !IMAGE_MIMES.contains(&img_sidecar.mime_type.as_str()) {
+            let img_sidecar = storage
+                .get_sidecar(img_hash)
+                .await
+                .map_err(|_| format!("imeta image references nonexistent poster: {img_hash}"))?;
+
+            // Poster frame must be an image, not video or other type.
+            const IMAGE_MIMES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+            if !IMAGE_MIMES.contains(&img_sidecar.mime_type.as_str()) {
+                return Err(format!(
+                    "imeta image poster MIME must be image type, got {}",
+                    img_sidecar.mime_type
+                ));
+            }
+
+            // URL extension must match sidecar's canonical extension.
+            // Mismatch means the URL would 404 on serve (GET resolves via sidecar).
+            if let Some(url_ext) = extract_ext_from_media_url(&image_value) {
+                if url_ext != img_sidecar.ext {
                     return Err(format!(
-                        "imeta image poster MIME must be image type, got {}",
-                        img_sidecar.mime_type
+                        "imeta image extension ({url_ext}) does not match stored extension ({})",
+                        img_sidecar.ext
                     ));
                 }
+            }
 
-                // URL extension must match sidecar's canonical extension.
-                // Mismatch means the URL would 404 on serve (GET resolves via sidecar).
-                if let Some(url_ext) = extract_ext_from_media_url(&image_value) {
-                    if url_ext != img_sidecar.ext {
-                        return Err(format!(
-                            "imeta image extension ({url_ext}) does not match stored extension ({})",
-                            img_sidecar.ext
-                        ));
-                    }
-                }
-
-                let img_key = format!("{img_hash}.{}", img_sidecar.ext);
-                let img_exists = storage
-                    .head(&img_key)
-                    .await
-                    .map_err(|e| format!("storage error checking poster image: {e}"))?;
-                if !img_exists {
-                    return Err(format!(
-                        "imeta image references missing poster frame: {img_hash}"
-                    ));
-                }
+            let img_key = format!("{img_hash}.{}", img_sidecar.ext);
+            let img_exists = storage
+                .head(&img_key)
+                .await
+                .map_err(|e| format!("storage error checking poster image: {e}"))?;
+            if !img_exists {
+                return Err(format!(
+                    "imeta image references missing poster frame: {img_hash}"
+                ));
             }
         }
     }
@@ -1180,6 +1193,36 @@ mod tests {
             err.contains("image file") && err.contains("not video"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn test_imeta_image_thumbnail_url_rejected() {
+        // Poster frame must be a standalone blob, not a thumbnail variant.
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/mp4".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+            format!("image /media/{HASH}.thumb.jpg"),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("standalone poster frame"), "{err}");
+    }
+
+    #[test]
+    fn test_imeta_duration_on_image_rejected() {
+        // Video-only NIP-71 fields must not appear on image blobs.
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.jpg"),
+            "m image/jpeg".into(),
+            format!("x {HASH}"),
+            "size 100000".into(),
+            "duration 5.0".into(),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("only valid for video/mp4"), "{err}");
     }
 
     #[test]
