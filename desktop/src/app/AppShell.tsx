@@ -496,7 +496,12 @@ export function AppShell() {
                 ttlSeconds,
               });
 
-              // Split invitees into people (add as members) and personas (spawn as bots).
+              // Close dialog and navigate immediately — don't block on
+              // member/bot adding which can take a while.
+              setCreateChannelDialogType(null);
+              await goChannel(created.id);
+
+              // Add people and bots in the background after navigation.
               const personPubkeys = invitees
                 .filter((inv) => inv.kind === "person")
                 .map((inv) => inv.user.pubkey);
@@ -504,9 +509,8 @@ export function AppShell() {
                 (inv) => inv.kind === "persona",
               );
 
-              // Add people as channel members.
               if (personPubkeys.length > 0) {
-                await addChannelMembers({
+                addChannelMembers({
                   channelId: created.id,
                   pubkeys: personPubkeys,
                 }).catch((error) => {
@@ -514,7 +518,6 @@ export function AppShell() {
                 });
               }
 
-              // Spawn persona bots.
               if (personaInvitees.length > 0) {
                 const providers = acpProvidersQuery.data ?? [];
                 const defaultProvider = providers[0] ?? null;
@@ -542,16 +545,13 @@ export function AppShell() {
                     }));
                   });
 
-                  await createChannelManagedAgents(created.id, inputs).catch(
+                  createChannelManagedAgents(created.id, inputs).catch(
                     (error) => {
                       console.error("Failed to add initial bots:", error);
                     },
                   );
                 }
               }
-
-              setCreateChannelDialogType(null);
-              await goChannel(created.id);
             }}
             onCreateChannelDialogOpenChange={(open) => {
               if (!open) {
