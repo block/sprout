@@ -136,8 +136,13 @@ pub fn validate_video_file(path: &Path, config: &MediaConfig) -> Result<VideoMet
                 }
 
                 // Duration from mvhd timescale (track duration / timescale).
+                // Reject zero/negative (malformed) and >600s (too long).
+                // Must match imeta validation which requires duration > 0.0.
                 let duration_ms = track.duration().as_millis();
                 let duration_secs = duration_ms as f64 / 1000.0;
+                if duration_secs <= 0.0 {
+                    return Err(MediaError::InvalidVideo);
+                }
                 if duration_secs > 600.0 {
                     return Err(MediaError::DurationTooLong);
                 }
@@ -1107,6 +1112,20 @@ mod tests {
         assert!(
             matches!(result, Err(MediaError::DurationTooLong)),
             "expected DurationTooLong, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_video_zero_duration_rejected() {
+        let config = test_config();
+        // duration_ms=0 → duration_secs=0.0 → rejected as InvalidVideo
+        let mp4_bytes = build_mp4_bytes(true, b"avc1", 0, 320, 240, false);
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), &mp4_bytes).unwrap();
+        let result = validate_video_file(tmp.path(), &config);
+        assert!(
+            matches!(result, Err(MediaError::InvalidVideo)),
+            "expected InvalidVideo for zero-duration, got {result:?}"
         );
     }
 
