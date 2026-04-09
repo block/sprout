@@ -31,10 +31,10 @@ use crate::state::AppState;
 /// CORS once over the combined router.
 pub fn build_router(state: Arc<AppState>) -> Router {
     // ── Media routes: body limit covers both images and video ────────────────
-    // Transport cap is the larger of image and video limits. Per-MIME app-level
-    // limits (GIF: 10 MB) are enforced in sprout-media validation after MIME
-    // detection, so oversized uploads are buffered then rejected — acceptable
-    // for V1; streaming validation deferred to V2.
+    // Transport cap is the larger of image and video limits. Video uploads stream
+    // to disk (never fully buffered); images collect to bytes within this limit.
+    // Per-MIME app-level limits (GIF: 10 MB) are enforced in sprout-media
+    // validation after MIME detection.
     let media_body_limit = state
         .config
         .media

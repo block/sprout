@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use axum::http::header;
 use axum::{
-    body::Bytes,
     extract::{FromRequestParts, Path, State},
     http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -106,13 +105,11 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
 // TODO(v2): Add per-pubkey upload rate limiting and storage quotas to prevent
 // bandwidth/storage exhaustion from authenticated callers. Currently mitigated by
 // auth requirement (API token + Blossom signature) and body size limit.
-// TODO(v2): Replace Bytes extractor with axum::body::Body for true streaming (never
-// fully buffer video in RAM). Requires reworking the handler signature; deferred.
 pub async fn upload_blob(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedUpload,
     headers: HeaderMap,
-    body: Bytes,
+    body: axum::body::Body,
 ) -> Result<Json<BlobDescriptor>, MediaError> {
     let content_type = headers
         .get("content-type")
@@ -120,29 +117,30 @@ pub async fn upload_blob(
         .unwrap_or("");
 
     let descriptor = if content_type.starts_with("video/") {
-        // Video path: MP4 validation + streaming-to-disk pipeline.
-        // NOTE: body is already buffered by Axum's Bytes extractor here; true
-        // zero-copy streaming requires switching to axum::body::Body (see TODO above).
+        // Video path: stream body directly to disk — never fully buffered in RAM.
         let content_length = headers
             .get("content-length")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok());
-        let body_stream = futures_util::stream::once(async move { Ok::<_, axum::Error>(body) });
         sprout_media::process_video_upload(
             &state.media_storage,
             &state.config.media,
             &auth.auth_event,
-            body_stream,
+            body.into_data_stream(),
             content_length,
         )
         .await?
     } else {
-        // Image path: existing behavior unchanged.
+        // Image path: collect body to bytes (bounded by transport-layer limit).
+        let max = state.config.media.max_image_bytes;
+        let bytes = axum::body::to_bytes(body, max as usize)
+            .await
+            .map_err(|_| MediaError::FileTooLarge { size: 0, max })?;
         sprout_media::process_upload(
             &state.media_storage,
             &state.config.media,
             &auth.auth_event,
-            body,
+            bytes,
         )
         .await?
     };
@@ -298,18 +296,24 @@ pub async fn get_blob(
 
     match range_header {
         None => {
-            // Full response — 200 OK. Load entire blob.
-            let bytes = state.media_storage.get(&key).await?;
+            // Full response — 200 OK. Stream from S3 — never loads full blob into RAM.
+            let total = state
+                .media_storage
+                .head_with_metadata(&key)
+                .await?
+                .ok_or(MediaError::NotFound)?
+                .size;
+            let stream = state.media_storage.get_stream(&key).await?;
             let resp = axum::response::Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, &content_type)
-                .header(header::CONTENT_LENGTH, bytes.len().to_string())
+                .header(header::CONTENT_LENGTH, total.to_string())
                 .header(header::CONTENT_DISPOSITION, "inline")
                 .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
                 .header(header::CONTENT_SECURITY_POLICY, "default-src 'none'")
                 .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
                 .header(header::ACCEPT_RANGES, "bytes")
-                .body(axum::body::Body::from(bytes))
+                .body(axum::body::Body::from_stream(stream))
                 .map_err(|_| MediaError::Internal)?;
             Ok(resp)
         }
