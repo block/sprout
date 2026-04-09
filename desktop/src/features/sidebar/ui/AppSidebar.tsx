@@ -550,14 +550,17 @@ export function AppSidebar({
 
   const streamForm = useCreateForm(onCreateChannel, "stream");
   const forumForm = useCreateForm(onCreateForum, "forum");
+  const visibleChannels = channels.filter(
+    (channel) => channel.archivedAt === null,
+  );
 
-  const streamChannels = channels.filter(
+  const streamChannels = visibleChannels.filter(
     (channel) => channel.channelType === "stream",
   );
-  const forumChannels = channels.filter(
+  const forumChannels = visibleChannels.filter(
     (channel) => channel.channelType === "forum",
   );
-  const directMessages = channels.filter(
+  const directMessages = visibleChannels.filter(
     (channel) => channel.channelType === "dm",
   );
   const isSelectedDirectMessage =

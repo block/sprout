@@ -1,32 +1,28 @@
 import * as React from "react";
 
-import {
-  getEphemeralChannelDisplay,
-  isEphemeralChannel,
-} from "@/features/channels/lib/ephemeralChannel";
+import { getEphemeralChannelDisplay } from "@/features/channels/lib/ephemeralChannel";
 import type { Channel } from "@/shared/api/types";
 
 export function useEphemeralChannelDisplay(channel: Channel | null) {
-  const [ephemeralClock, setEphemeralClock] = React.useState(() => Date.now());
-  const hasEphemeralDeadline =
-    channel !== null &&
-    isEphemeralChannel(channel) &&
-    channel.ttlDeadline !== null;
+  const [, setClockTick] = React.useState(0);
+  const deadlineKey =
+    channel?.ttlDeadline === null || channel === null
+      ? null
+      : `${channel.id}:${channel.ttlDeadline}`;
 
   React.useEffect(() => {
-    if (!hasEphemeralDeadline) {
+    if (deadlineKey === null) {
       return;
     }
 
-    setEphemeralClock(Date.now());
     const intervalId = window.setInterval(() => {
-      setEphemeralClock(Date.now());
+      setClockTick((current) => current + 1);
     }, 60_000);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [hasEphemeralDeadline]);
+  }, [deadlineKey]);
 
-  return channel ? getEphemeralChannelDisplay(channel, ephemeralClock) : null;
+  return channel ? getEphemeralChannelDisplay(channel, Date.now()) : null;
 }
