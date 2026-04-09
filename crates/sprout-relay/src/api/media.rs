@@ -244,7 +244,7 @@ const MAX_RANGE_CHUNK: u64 = 16 * 1024 * 1024;
 ///   - No `Range` header → 200 with full body
 ///   - `Range: bytes=START-END` → 206 with slice; `Content-Range: bytes START-END/TOTAL`
 ///   - Unsatisfiable range (start ≥ total) → 416 with `Content-Range: bytes */TOTAL`
-///   - Suffix ranges (`bytes=-N`) → 416 (known deviation, documented)
+///   - Suffix ranges (`bytes=-N`) → 206 with last N bytes (RFC 9110 §14.1.2)
 ///   - Chunk capped at 16 MiB; clients request additional ranges for the rest
 ///
 /// All responses include `Accept-Ranges: bytes` so video players know seeking is supported.
@@ -326,7 +326,7 @@ pub async fn get_blob(
                 .ok_or(MediaError::NotFound)?
                 .size;
 
-            // Parse "bytes=START-END". Suffix ranges ("bytes=-N") are not supported.
+            // Parse range: "bytes=START-END", "bytes=START-", or "bytes=-N" (suffix).
             let parsed = parse_byte_range(&range_str, total);
             match parsed {
                 Some((start, end)) => {
@@ -373,15 +373,24 @@ pub async fn get_blob(
 
 /// Parse a `Range: bytes=START-END` header value.
 ///
-/// Returns `Some((start, end))` for a valid absolute range.
-/// Returns `None` for suffix ranges (`bytes=-N`), malformed values, or
-/// non-bytes units — callers should respond with 416.
-fn parse_byte_range(range: &str, _total: u64) -> Option<(u64, u64)> {
+/// Returns `Some((start, end))` for a valid absolute or suffix range.
+/// Supported forms:
+///   - `bytes=START-END` → absolute range
+///   - `bytes=START-`    → from START to end of file
+///   - `bytes=-N`        → last N bytes (suffix range, per RFC 9110 §14.1.2)
+///
+/// Returns `None` for malformed values or non-bytes units — callers respond with 416.
+fn parse_byte_range(range: &str, total: u64) -> Option<(u64, u64)> {
     let range = range.strip_prefix("bytes=")?;
 
-    // Reject suffix ranges (bytes=-N) — not supported.
-    if range.starts_with('-') {
-        return None;
+    // Suffix range: "bytes=-N" → last N bytes of the file.
+    if let Some(suffix) = range.strip_prefix('-') {
+        let n: u64 = suffix.parse().ok()?;
+        if n == 0 || total == 0 {
+            return None;
+        }
+        let start = total.saturating_sub(n);
+        return Some((start, total - 1));
     }
 
     let (start_str, end_str) = range.split_once('-')?;
@@ -665,9 +674,27 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_byte_range_rejects_suffix() {
-        // Suffix ranges not supported — returns None → 416
-        assert_eq!(parse_byte_range("bytes=-500", 1000), None);
+    fn test_parse_byte_range_suffix() {
+        // "bytes=-500" on a 1000-byte file → last 500 bytes
+        assert_eq!(parse_byte_range("bytes=-500", 1000), Some((500, 999)));
+    }
+
+    #[test]
+    fn test_parse_byte_range_suffix_larger_than_file() {
+        // Suffix larger than file → clamp to start of file
+        assert_eq!(parse_byte_range("bytes=-5000", 1000), Some((0, 999)));
+    }
+
+    #[test]
+    fn test_parse_byte_range_suffix_zero() {
+        // "bytes=-0" is nonsensical → None
+        assert_eq!(parse_byte_range("bytes=-0", 1000), None);
+    }
+
+    #[test]
+    fn test_parse_byte_range_suffix_empty_file() {
+        // Suffix on empty file → None
+        assert_eq!(parse_byte_range("bytes=-500", 0), None);
     }
 
     #[test]
