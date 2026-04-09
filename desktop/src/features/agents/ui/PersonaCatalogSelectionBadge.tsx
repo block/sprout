@@ -6,10 +6,6 @@ type PersonaCatalogSelectionBadgeProps = {
   isActive: boolean;
 };
 
-export function getPersonaCatalogToggleAriaLabel(displayName: string) {
-  return `Toggle ${displayName} in My Agents`;
-}
-
 export function PersonaCatalogSelectionBadge({
   isActive,
 }: PersonaCatalogSelectionBadgeProps) {

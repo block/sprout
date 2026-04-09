@@ -2,26 +2,29 @@ export const personaLibraryCopy = {
   title: "My agents",
   description:
     "The personas you have chosen for this app. Use them to create teams and launch agents.",
+  chooseFromCatalog: "Choose...",
   createNew: "Persona",
   import: "Import",
   emptyTitle: "No agents yet",
   emptyDescription:
-    "Select one from Persona Catalog below, add your own persona, or import one to get started.",
+    "Choose one from Persona Catalog, add your own persona, or import one to get started.",
   emptyImportHint:
     "Or drop a .persona.json, .persona.png, or .zip file here to import.",
 } as const;
 
 export const personaCatalogCopy = {
   title: "Persona Catalog",
-  description:
-    "Every built-in persona available in the app. Select the ones you want in My Agents.",
+  description: "Choose which built-in personas belong in My Agents.",
+  dialogTitle: "Choose from Persona Catalog",
+  dialogDescription:
+    "Select the built-in personas you want available in My Agents.",
   emptyTitle: "You're all set",
   emptyDescription: "Everything in Persona Catalog is already in My Agents.",
   emptyCatalogDescription:
     "New personas will show up here when the app ships more options.",
   emptyCatalogTitle: "No personas in the catalog yet",
   detailsAction: "View details",
-  selectAction: "Select",
+  selectAction: "Choose",
   deselectAction: "Selected",
   selectedState: "Selected",
   availableState: "Available",
@@ -34,6 +37,19 @@ export const personaCatalogCopy = {
   teamEmptyState:
     "No personas in My Agents yet. Create one or choose one from Persona Catalog first.",
 } as const;
+
+export function getPersonaCatalogSelectionActionCopy(isActive: boolean) {
+  return isActive
+    ? personaCatalogCopy.deselectAction
+    : personaCatalogCopy.selectAction;
+}
+
+export function getPersonaCatalogSelectionAriaLabel(
+  displayName: string,
+  isActive: boolean,
+) {
+  return `${isActive ? "Deselect" : "Select"} ${displayName} in My Agents`;
+}
 
 export function getPersonaCatalogDetailSelectionCopy(isActive: boolean) {
   return isActive

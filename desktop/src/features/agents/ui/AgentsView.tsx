@@ -43,8 +43,7 @@ import { AddTeamToChannelDialog } from "./AddTeamToChannelDialog";
 import { BatchImportDialog } from "./BatchImportDialog";
 import { CreateAgentDialog } from "./CreateAgentDialog";
 import { ManagedAgentsSection } from "./ManagedAgentsSection";
-import { PersonaCatalogDetailsSheet } from "./PersonaCatalogDetailsSheet";
-import { PersonaCatalogSection } from "./PersonaCatalogSection";
+import { PersonaCatalogDialog } from "./PersonaCatalogDialog";
 import { PersonaDialog } from "./PersonaDialog";
 import { PersonaDeleteDialog } from "./PersonaDeleteDialog";
 import { PersonasSection } from "./PersonasSection";
@@ -121,9 +120,7 @@ export function AgentsView() {
   const [batchImportResult, setBatchImportResult] =
     React.useState<ParsePersonaFilesResult | null>(null);
   const [batchImportFileName, setBatchImportFileName] = React.useState("");
-  const [catalogPersonaDetailsId, setCatalogPersonaDetailsId] = React.useState<
-    string | null
-  >(null);
+  const [isCatalogDialogOpen, setIsCatalogDialogOpen] = React.useState(false);
   const managedAgents = React.useMemo(
     () =>
       [...(managedAgentsQuery.data ?? [])].sort((left, right) => {
@@ -142,14 +139,6 @@ export function AgentsView() {
   const { catalogPersonas, libraryPersonas, personaLabelsById } = React.useMemo(
     () => getPersonaLibraryState(personas),
     [personas],
-  );
-  const catalogPersonaForDetails = React.useMemo(
-    () =>
-      catalogPersonaDetailsId
-        ? (personas.find((persona) => persona.id === catalogPersonaDetailsId) ??
-          null)
-        : null,
-    [catalogPersonaDetailsId, personas],
   );
   const [logAgentPubkey, setLogAgentPubkey] = React.useState<string | null>(
     null,
@@ -494,6 +483,7 @@ export function AgentsView() {
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
           <div className="flex flex-col gap-6">
             <PersonasSection
+              canChooseCatalog={catalogPersonas.length > 0}
               error={
                 personasQuery.error instanceof Error
                   ? personasQuery.error
@@ -517,6 +507,10 @@ export function AgentsView() {
                 setPersonaActiveMutation.isPending ||
                 exportPersonaJsonMutation.isPending
               }
+              onChooseCatalog={() => {
+                clearPersonaFeedback("catalog");
+                setIsCatalogDialogOpen(true);
+              }}
               onCreate={() => {
                 clearPersonaFeedback("library");
                 setPersonaDialogState(createPersonaDialogState());
@@ -559,34 +553,6 @@ export function AgentsView() {
                 });
               }}
               personas={libraryPersonas}
-            />
-
-            <PersonaCatalogSection
-              error={
-                personasQuery.error instanceof Error
-                  ? personasQuery.error
-                  : null
-              }
-              feedbackErrorMessage={
-                personaFeedbackSurface === "catalog"
-                  ? personaErrorMessage
-                  : null
-              }
-              feedbackNoticeMessage={
-                personaFeedbackSurface === "catalog"
-                  ? personaNoticeMessage
-                  : null
-              }
-              isLoading={personasQuery.isLoading}
-              isPending={setPersonaActiveMutation.isPending}
-              onSelectPersona={(persona, active) => {
-                void handleSetPersonaActive(persona, active, "catalog");
-              }}
-              onViewDetails={(persona) => {
-                clearPersonaFeedback("catalog");
-                setCatalogPersonaDetailsId(persona.id);
-              }}
-              personas={catalogPersonas}
             />
 
             <TeamsSection
@@ -745,24 +711,27 @@ export function AgentsView() {
         open={personaToDelete !== null}
         persona={personaToDelete}
       />
-      <PersonaCatalogDetailsSheet
+      <PersonaCatalogDialog
+        error={
+          personasQuery.error instanceof Error ? personasQuery.error : null
+        }
         feedbackErrorMessage={
           personaFeedbackSurface === "catalog" ? personaErrorMessage : null
         }
         feedbackNoticeMessage={
           personaFeedbackSurface === "catalog" ? personaNoticeMessage : null
         }
+        isLoading={personasQuery.isLoading}
         isPending={setPersonaActiveMutation.isPending}
-        onOpenChange={(open) => {
-          if (!open) {
-            setCatalogPersonaDetailsId(null);
-          }
+        onClearFeedback={() => {
+          clearPersonaFeedback("catalog");
         }}
+        onOpenChange={setIsCatalogDialogOpen}
         onSelectPersona={(persona, active) => {
           void handleSetPersonaActive(persona, active, "catalog");
         }}
-        open={catalogPersonaDetailsId !== null}
-        persona={catalogPersonaForDetails}
+        open={isCatalogDialogOpen}
+        personas={catalogPersonas}
       />
       <TeamDialog
         description={teamActions.teamDialogState?.description ?? ""}

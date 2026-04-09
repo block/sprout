@@ -448,6 +448,7 @@ test("members sidebar keeps direct pubkey entry behind a toggle", async ({
 test("open-channel members can add agents from the header", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 1280, height: 420 });
   await page.goto("/");
 
   await page.getByTestId("channel-random").click();
@@ -458,6 +459,23 @@ test("open-channel members can add agents from the header", async ({
 
   await addAgentTrigger.click();
   await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
+  await expect(page.getByTestId("add-channel-bot-dialog-header")).toBeVisible();
+  await expect(
+    page.getByTestId("add-channel-bot-dialog-scroll-area"),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("add-channel-bot-dialog-scroll-area"),
+  ).toHaveCSS("overflow-y", "auto");
+  expect(
+    await page
+      .getByTestId("add-channel-bot-dialog-scroll-area")
+      .evaluate(
+        (element) =>
+          element.scrollHeight > element.clientHeight &&
+          element.clientHeight > 0,
+      ),
+  ).toBe(true);
+  await expect(page.getByTestId("add-channel-bot-dialog-footer")).toBeVisible();
 });
 
 test("removing a channel-scoped agent also cleans up the managed agent record", async ({

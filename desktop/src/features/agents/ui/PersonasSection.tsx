@@ -21,6 +21,7 @@ import { PersonaLibraryEntryPoints } from "./PersonaLibraryEntryPoints";
 import { personaLibraryCopy } from "./personaLibraryCopy";
 
 type PersonasSectionProps = {
+  canChooseCatalog: boolean;
   personas: AgentPersona[];
   error: Error | null;
   feedbackErrorMessage: string | null;
@@ -28,6 +29,7 @@ type PersonasSectionProps = {
   isLoading: boolean;
   isPending: boolean;
   onCreate: () => void;
+  onChooseCatalog: () => void;
   onDuplicate: (persona: AgentPersona) => void;
   onEdit: (persona: AgentPersona) => void;
   onExport: (persona: AgentPersona) => void;
@@ -37,6 +39,7 @@ type PersonasSectionProps = {
 };
 
 export function PersonasSection({
+  canChooseCatalog,
   personas,
   error,
   feedbackErrorMessage,
@@ -44,6 +47,7 @@ export function PersonasSection({
   isLoading,
   isPending,
   onCreate,
+  onChooseCatalog,
   onDuplicate,
   onEdit,
   onExport,
@@ -91,9 +95,11 @@ export function PersonasSection({
         />
         <div className="flex items-center gap-2">
           <PersonaLibraryEntryPoints
+            canChooseCatalog={canChooseCatalog && personas.length > 0}
             isPending={isPending}
             layout="header"
             onCreate={onCreate}
+            onChooseCatalog={onChooseCatalog}
           />
         </div>
       </div>
@@ -214,9 +220,11 @@ export function PersonasSection({
           </p>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             <PersonaLibraryEntryPoints
+              canChooseCatalog={canChooseCatalog}
               isPending={isPending}
               layout="empty"
               onCreate={onCreate}
+              onChooseCatalog={onChooseCatalog}
               onImport={openFilePicker}
             />
           </div>

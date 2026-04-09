@@ -66,6 +66,36 @@ test("getCatalogSelectionState keeps built-in selection rules in one place", () 
   );
 });
 
+test("getCatalogPersonas keeps chooser order stable when selection changes", () => {
+  const inactiveFirst = [
+    createPersona("builtin:solo", "Solo", { isBuiltIn: true, isActive: false }),
+    createPersona("builtin:ralph", "Ralph", {
+      isBuiltIn: true,
+      isActive: true,
+    }),
+    createPersona("builtin:reviewer", "Reviewer", {
+      isBuiltIn: true,
+      isActive: false,
+    }),
+  ];
+  const activeFirst = [
+    createPersona("builtin:solo", "Solo", { isBuiltIn: true, isActive: true }),
+    createPersona("builtin:ralph", "Ralph", {
+      isBuiltIn: true,
+      isActive: false,
+    }),
+    createPersona("builtin:reviewer", "Reviewer", {
+      isBuiltIn: true,
+      isActive: true,
+    }),
+  ];
+
+  assert.deepEqual(
+    getCatalogPersonas(inactiveFirst).map((persona) => persona.id),
+    getCatalogPersonas(activeFirst).map((persona) => persona.id),
+  );
+});
+
 test("isCatalogPersonaSelected only treats active built-ins as selected", () => {
   assert.equal(
     isCatalogPersonaSelected(

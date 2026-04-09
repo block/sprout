@@ -1,12 +1,16 @@
+import { isCatalogPersonaSelected } from "@/features/agents/lib/catalog";
 import type { AgentPersona } from "@/shared/api/types";
 import { promptPreview } from "@/shared/lib/promptPreview";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { PersonaCatalogSelectionBadge } from "./PersonaCatalogSelectionBadge";
-import { PersonaCatalogSelectionControl } from "./PersonaCatalogSelectionControl";
 import { PersonaIdentity } from "./PersonaIdentity";
-import { personaCatalogCopy } from "./personaLibraryCopy";
+import {
+  getPersonaCatalogSelectionActionCopy,
+  getPersonaCatalogSelectionAriaLabel,
+  personaCatalogCopy,
+} from "./personaLibraryCopy";
 
 type PersonaCatalogSectionProps = {
   emptyDescription?: string;
@@ -16,7 +20,7 @@ type PersonaCatalogSectionProps = {
   feedbackNoticeMessage?: string | null;
   isLoading: boolean;
   isPending: boolean;
-  onSelectPersona: (persona: AgentPersona, active: boolean) => void;
+  onTogglePersona: (persona: AgentPersona) => void;
   onViewDetails: (persona: AgentPersona) => void;
   personas: AgentPersona[];
   showHeader?: boolean;
@@ -30,7 +34,7 @@ export function PersonaCatalogSection({
   feedbackNoticeMessage = null,
   isLoading,
   isPending,
-  onSelectPersona,
+  onTogglePersona,
   onViewDetails,
   personas,
   showHeader = true,
@@ -71,52 +75,72 @@ export function PersonaCatalogSection({
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
           {personas.map((persona) => {
             const preview = promptPreview(persona.systemPrompt);
+            const isSelected = isCatalogPersonaSelected(persona);
 
             return (
               <div
                 className={cn(
-                  "flex flex-col gap-4 rounded-xl border bg-card/80 p-3 shadow-sm transition-colors",
-                  persona.isActive
+                  "group relative flex flex-col gap-4 rounded-xl border bg-card/80 p-3 shadow-sm transition-colors",
+                  isPending
+                    ? "cursor-not-allowed opacity-70"
+                    : "cursor-pointer hover:border-primary/40 hover:bg-primary/[0.03]",
+                  isSelected
                     ? "border-primary/40 bg-primary/[0.04]"
                     : "border-border/70",
                 )}
                 data-testid={`persona-catalog-card-${persona.id}`}
+                data-state={isSelected ? "selected" : "available"}
                 key={persona.id}
               >
-                <div className="flex items-start justify-between gap-3">
-                  <PersonaIdentity
-                    className="min-w-0 flex-1"
-                    persona={persona}
-                    showBuiltInBadge={false}
-                    showPromptTooltip={false}
-                  />
+                <button
+                  aria-label={getPersonaCatalogSelectionAriaLabel(
+                    persona.displayName,
+                    isSelected,
+                  )}
+                  aria-pressed={isSelected}
+                  className="absolute inset-0 z-0 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  data-testid={`persona-catalog-card-target-${persona.id}`}
+                  disabled={isPending}
+                  onClick={() => {
+                    onTogglePersona(persona);
+                  }}
+                  type="button"
+                />
 
-                  <PersonaCatalogSelectionBadge isActive={persona.isActive} />
-                </div>
+                <div className="pointer-events-none relative z-10 flex h-full flex-col gap-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <PersonaIdentity
+                      className="min-w-0 flex-1"
+                      persona={persona}
+                      showBuiltInBadge={false}
+                      showPromptTooltip={false}
+                    />
 
-                <p className="min-h-12 text-xs leading-5 text-muted-foreground">
-                  {preview}
-                </p>
+                    <PersonaCatalogSelectionBadge isActive={isSelected} />
+                  </div>
 
-                <div className="mt-auto flex items-center justify-between gap-3 border-t border-border/60 pt-3">
-                  <Button
-                    data-testid={`persona-catalog-details-${persona.id}`}
-                    onClick={() => onViewDetails(persona)}
-                    size="sm"
-                    type="button"
-                    variant="ghost"
-                  >
-                    {personaCatalogCopy.detailsAction}
-                  </Button>
+                  <p className="min-h-12 text-xs leading-5 text-muted-foreground">
+                    {preview}
+                  </p>
 
-                  <PersonaCatalogSelectionControl
-                    isPending={isPending}
-                    onCheckedChange={(checked) => {
-                      onSelectPersona(persona, checked === true);
-                    }}
-                    persona={persona}
-                    variant="card"
-                  />
+                  <div className="mt-auto flex items-center justify-between gap-3 border-t border-border/60 pt-3">
+                    <Button
+                      className="pointer-events-auto"
+                      data-testid={`persona-catalog-details-${persona.id}`}
+                      onClick={() => {
+                        onViewDetails(persona);
+                      }}
+                      size="sm"
+                      type="button"
+                      variant="ghost"
+                    >
+                      {personaCatalogCopy.detailsAction}
+                    </Button>
+
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {getPersonaCatalogSelectionActionCopy(isSelected)}
+                    </span>
+                  </div>
                 </div>
               </div>
             );

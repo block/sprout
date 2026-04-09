@@ -23,14 +23,7 @@ export function getActivePersonas(personas: readonly AgentPersona[]) {
 export function getCatalogPersonas(personas: readonly AgentPersona[]) {
   return personas
     .filter((persona) => persona.isBuiltIn)
-    .sort((left, right) => {
-      const activeDiff = Number(right.isActive) - Number(left.isActive);
-      if (activeDiff !== 0) {
-        return activeDiff;
-      }
-
-      return left.displayName.localeCompare(right.displayName);
-    });
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
 }
 
 export function isCatalogPersonaSelected(persona: AgentPersona) {

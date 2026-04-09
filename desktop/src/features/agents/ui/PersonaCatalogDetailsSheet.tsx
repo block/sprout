@@ -1,3 +1,4 @@
+import { isCatalogPersonaSelected } from "@/features/agents/lib/catalog";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { AgentPersona } from "@/shared/api/types";
 import { promptPreview } from "@/shared/lib/promptPreview";
@@ -10,15 +11,17 @@ import {
 } from "@/shared/ui/sheet";
 
 import { PersonaCatalogSelectionBadge } from "./PersonaCatalogSelectionBadge";
-import { PersonaCatalogSelectionControl } from "./PersonaCatalogSelectionControl";
-import { getPersonaCatalogDetailSelectionCopy } from "./personaLibraryCopy";
+import {
+  getPersonaCatalogDetailSelectionCopy,
+  getPersonaCatalogSelectionAriaLabel,
+} from "./personaLibraryCopy";
 
 type PersonaCatalogDetailsSheetProps = {
   feedbackErrorMessage: string | null;
   feedbackNoticeMessage: string | null;
   isPending: boolean;
   onOpenChange: (open: boolean) => void;
-  onSelectPersona: (persona: AgentPersona, active: boolean) => void;
+  onTogglePersona: (persona: AgentPersona) => void;
   open: boolean;
   persona: AgentPersona | null;
 };
@@ -28,14 +31,13 @@ export function PersonaCatalogDetailsSheet({
   feedbackNoticeMessage,
   isPending,
   onOpenChange,
-  onSelectPersona,
+  onTogglePersona,
   open,
   persona,
 }: PersonaCatalogDetailsSheetProps) {
   const preview = persona ? promptPreview(persona.systemPrompt) : "";
-  const selectionCopy = getPersonaCatalogDetailSelectionCopy(
-    persona?.isActive ?? false,
-  );
+  const isSelected = persona ? isCatalogPersonaSelected(persona) : false;
+  const selectionCopy = getPersonaCatalogDetailSelectionCopy(isSelected);
 
   return (
     <Sheet onOpenChange={onOpenChange} open={open}>
@@ -57,7 +59,7 @@ export function PersonaCatalogDetailsSheet({
                     <SheetTitle className="truncate text-xl">
                       {persona.displayName}
                     </SheetTitle>
-                    <PersonaCatalogSelectionBadge isActive={persona.isActive} />
+                    <PersonaCatalogSelectionBadge isActive={isSelected} />
                   </div>
                   <SheetDescription className="mt-2">
                     {preview || "No summary available."}
@@ -66,7 +68,21 @@ export function PersonaCatalogDetailsSheet({
               </div>
             </SheetHeader>
 
-            <div className="rounded-xl border border-border/70 bg-card/70 p-4">
+            <button
+              aria-label={getPersonaCatalogSelectionAriaLabel(
+                persona.displayName,
+                isSelected,
+              )}
+              aria-pressed={isSelected}
+              className="w-full rounded-xl border border-border/70 bg-card/70 p-4 text-left transition-colors hover:border-primary/40 hover:bg-primary/[0.03]"
+              data-state={isSelected ? "selected" : "available"}
+              data-testid={`persona-catalog-detail-selection-target-${persona.id}`}
+              disabled={isPending}
+              onClick={() => {
+                onTogglePersona(persona);
+              }}
+              type="button"
+            >
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p
@@ -82,16 +98,9 @@ export function PersonaCatalogDetailsSheet({
                     {selectionCopy.description}
                   </p>
                 </div>
-                <PersonaCatalogSelectionControl
-                  isPending={isPending}
-                  onCheckedChange={(checked) => {
-                    onSelectPersona(persona, checked === true);
-                  }}
-                  persona={persona}
-                  variant="detail"
-                />
+                <PersonaCatalogSelectionBadge isActive={isSelected} />
               </div>
-            </div>
+            </button>
 
             {feedbackNoticeMessage ? (
               <p className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-primary">
