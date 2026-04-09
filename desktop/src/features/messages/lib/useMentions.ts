@@ -101,25 +101,48 @@ export function useMentions(channelId: string | null) {
     }
 
     const lowerQuery = mentionQuery.toLowerCase();
+
+    // Score a label against the query using word-boundary prefix matching.
+    // Returns 0 if the full label starts with the query (best), 1 if any
+    // word within the label starts with the query, or null if there's no
+    // match. No arbitrary substring matching — standard for mention UX.
+    const scoreLabel = (label: string): number | null => {
+      const lower = label.toLowerCase();
+      if (lower.startsWith(lowerQuery)) return 0;
+      const words = lower.split(/[\s\-_]+/).filter(Boolean);
+      if (words.some((word) => word.startsWith(lowerQuery))) return 1;
+      return null;
+    };
+
     return (members ?? [])
       .map((member) => {
         const pubkeyLower = member.pubkey.toLowerCase();
-        const fallbackName =
-          managedAgentNamesByPubkey.get(pubkeyLower) ??
-          member.pubkey.slice(0, 8);
 
-        return {
-          member,
-          label: member.displayName ?? fallbackName,
-          personaName: personaNameByPubkey.get(pubkeyLower) ?? null,
-        };
+        const actualName =
+          member.displayName ?? managedAgentNamesByPubkey.get(pubkeyLower);
+        const personaName = personaNameByPubkey.get(pubkeyLower) ?? null;
+        const label = actualName ?? member.pubkey.slice(0, 8);
+
+        const nameScore = actualName ? scoreLabel(actualName) : null;
+        const personaScore = personaName ? scoreLabel(personaName) : null;
+        const labelScore =
+          nameScore !== null && personaScore !== null
+            ? Math.min(nameScore, personaScore)
+            : (nameScore ?? personaScore);
+
+        const pubkeyScore = pubkeyLower.startsWith(lowerQuery)
+          ? 3
+          : pubkeyLower.includes(lowerQuery)
+            ? 4
+            : null;
+        const score = labelScore !== null ? labelScore : pubkeyScore;
+
+        return { member, label, personaName, score };
       })
       .filter(
-        ({ label, member, personaName }) =>
-          label.toLowerCase().includes(lowerQuery) ||
-          member.pubkey.toLowerCase().includes(lowerQuery) ||
-          personaName?.toLowerCase().includes(lowerQuery),
+        (item): item is typeof item & { score: number } => item.score !== null,
       )
+      .sort((a, b) => a.score - b.score)
       .slice(0, 8)
       .map(({ member, label, personaName }) => ({
         pubkey: member.pubkey,
