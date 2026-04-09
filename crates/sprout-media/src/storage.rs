@@ -1,12 +1,17 @@
 //! S3/MinIO storage client.
 
 use std::path::Path;
+use std::pin::Pin;
 
 use crate::config::MediaConfig;
 use crate::error::MediaError;
+use bytes::Bytes;
 use s3::creds::Credentials;
 use s3::{Bucket, Region};
 use serde::{Deserialize, Serialize};
+
+/// A stream of byte chunks from S3, usable with `axum::body::Body::from_stream()`.
+pub type ByteStream = Pin<Box<dyn futures_core::Stream<Item = Result<Bytes, MediaError>> + Send>>;
 
 /// S3-compatible object storage client.
 pub struct MediaStorage {
@@ -89,6 +94,28 @@ impl MediaStorage {
             Err(s3::error::S3Error::HttpFailWithBody(404, _)) => Err(MediaError::NotFound),
             Err(e) => Err(MediaError::StorageError(e.to_string())),
         }
+    }
+
+    /// Stream an object's bytes from S3 without loading into RAM.
+    ///
+    /// Returns a pinned stream of `Result<Bytes, MediaError>` chunks.
+    /// The full object is never buffered — intended for streaming large
+    /// blobs (video) directly into HTTP responses via `Body::from_stream()`.
+    pub async fn get_stream(&self, key: &str) -> Result<ByteStream, MediaError> {
+        let response = self
+            .bucket
+            .get_object_stream(key)
+            .await
+            .map_err(|e| MediaError::StorageError(e.to_string()))?;
+
+        if response.status_code == 404 {
+            return Err(MediaError::NotFound);
+        }
+
+        let stream = futures_util::StreamExt::map(response.bytes, |chunk| {
+            chunk.map_err(|e| MediaError::StorageError(e.to_string()))
+        });
+        Ok(Box::pin(stream))
     }
 
     /// Check if an object exists. Returns false on 404.
