@@ -72,6 +72,50 @@ test("selecting a PR chip copies the full URL, not the chip label", async ({
   await expect(visibleLabel).toBeVisible();
 });
 
+test("GitHub issue URL renders as an inline smart chip", async ({ page }) => {
+  const issueUrl = "https://github.com/block/sprout/issues/99";
+  const message = `See ${issueUrl} for context`;
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill(message);
+  await page.getByTestId("send-message").click();
+
+  const lastRow = page.getByTestId("message-row").last();
+
+  const issueChip = lastRow.locator("a", { hasText: "block/sprout#99" });
+  await expect(issueChip).toBeVisible();
+  await expect(issueChip).toHaveAttribute("href", issueUrl);
+  await expect(issueChip.locator("svg")).toBeVisible();
+});
+
+test("GitHub commit URL renders as an inline smart chip", async ({ page }) => {
+  const commitUrl =
+    "https://github.com/block/sprout/commit/abc1234def5678901234567890abcdef12345678";
+  const message = `Reverted in ${commitUrl}`;
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill(message);
+  await page.getByTestId("send-message").click();
+
+  const lastRow = page.getByTestId("message-row").last();
+
+  // Should show short SHA
+  const commitChip = lastRow.locator("a", {
+    hasText: "block/sprout@abc1234",
+  });
+  await expect(commitChip).toBeVisible();
+  await expect(commitChip).toHaveAttribute("href", commitUrl);
+  await expect(commitChip.locator("svg")).toBeVisible();
+});
+
 test("non-PR GitHub links render as regular links", async ({ page }) => {
   const repoUrl = "https://github.com/block/sprout";
   const message = `Check out ${repoUrl}`;

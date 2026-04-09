@@ -1,4 +1,4 @@
-import { GitPullRequest } from "lucide-react";
+import { CircleDot, GitCommitHorizontal, GitPullRequest } from "lucide-react";
 import * as React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
@@ -14,6 +14,12 @@ import remarkMentions from "@/shared/lib/remarkMentions";
 
 const GITHUB_PR_RE =
   /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/;
+
+const GITHUB_ISSUE_RE =
+  /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/;
+
+const GITHUB_COMMIT_RE =
+  /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/commit\/([0-9a-f]{7,40})\/?$/;
 
 type MarkdownProps = {
   channelNames?: string[];
@@ -46,25 +52,50 @@ function createMarkdownComponents(
 
   return {
     a: ({ children, href, ...props }) => {
-      const prMatch = href ? GITHUB_PR_RE.exec(href) : null;
-      if (prMatch) {
-        const [, owner, repo, number] = prMatch;
-        return (
-          <a
-            {...props}
-            className="relative inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-sm font-medium text-primary no-underline transition-colors hover:bg-primary/20"
-            href={href}
-            rel="noreferrer"
-            target="_blank"
-          >
-            <span className="pointer-events-none select-none inline-flex items-center gap-1" aria-hidden="true">
-              <GitPullRequest className="size-3.5" />
-              {owner}/{repo}#{number}
-            </span>
-            <span className="absolute w-0 overflow-hidden whitespace-nowrap">{href}</span>
-          </a>
-        );
+      if (href) {
+        let Icon: React.ComponentType<{ className?: string }> | null = null;
+        let label: string | null = null;
+
+        const prMatch = GITHUB_PR_RE.exec(href);
+        if (prMatch) {
+          const [, owner, repo, number] = prMatch;
+          Icon = GitPullRequest;
+          label = `${owner}/${repo}#${number}`;
+        }
+
+        const issueMatch = !Icon ? GITHUB_ISSUE_RE.exec(href) : null;
+        if (issueMatch) {
+          const [, owner, repo, number] = issueMatch;
+          Icon = CircleDot;
+          label = `${owner}/${repo}#${number}`;
+        }
+
+        const commitMatch = !Icon ? GITHUB_COMMIT_RE.exec(href) : null;
+        if (commitMatch) {
+          const [, owner, repo, sha] = commitMatch;
+          Icon = GitCommitHorizontal;
+          label = `${owner}/${repo}@${sha.slice(0, 7)}`;
+        }
+
+        if (Icon && label) {
+          return (
+            <a
+              {...props}
+              className="relative inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-sm font-medium text-primary no-underline transition-colors hover:bg-primary/20"
+              href={href}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <span className="pointer-events-none select-none inline-flex items-center gap-1" aria-hidden="true">
+                <Icon className="size-3.5" />
+                {label}
+              </span>
+              <span className="absolute w-0 overflow-hidden whitespace-nowrap">{href}</span>
+            </a>
+          );
+        }
       }
+
       return (
         <a
           {...props}
