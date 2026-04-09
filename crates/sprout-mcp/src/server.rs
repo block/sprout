@@ -80,6 +80,28 @@ fn find_root_from_tags(tags: &serde_json::Value) -> Option<String> {
     root.or(reply)
 }
 
+/// Return true if the given tags contain NIP-10 "e" tags with a marker of
+/// "root" or "reply".
+///
+/// This is intentionally strict:
+/// - an "e" tag without an explicit marker does NOT count as thread context.
+/// - the "mention" marker does NOT count as thread context.
+fn parent_event_has_nip10_markers(tags: &serde_json::Value) -> bool {
+    let Some(arr) = tags.as_array() else {
+        return false;
+    };
+
+    arr.iter().any(|tag| {
+        let Some(parts) = tag.as_array() else {
+            return false;
+        };
+        if parts.len() < 4 || parts[0].as_str() != Some("e") {
+            return false;
+        }
+        matches!(parts[3].as_str(), Some("root" | "reply"))
+    })
+}
+
 /// Maximum allowed content size for a single message (64 KiB).
 const MAX_CONTENT_BYTES: usize = 65_536;
 
@@ -169,7 +191,14 @@ pub struct SendMessageParams {
     /// Nostr event kind. Defaults to KIND_STREAM_MESSAGE (NIP-29 group chat message).
     #[serde(default = "default_kind")]
     pub kind: Option<u16>,
-    /// Optional parent event ID for threading. If provided, NIP-10 reply tags are added.
+    /// Optional parent event ID for threading.
+    ///
+    /// Stream messages: `parent_event_id` is only honored if the parent event is already in a
+    /// NIP-10 thread context (has an `e` tag with marker `root` or `reply`). Otherwise,
+    /// `parent_event_id` is ignored and the message is posted top-level.
+    ///
+    /// Forum comments (kind 45003): behavior unchanged — always posts as a comment under the
+    /// parent event.
     #[serde(default)]
     pub parent_event_id: Option<String>,
     /// If true and parent_event_id is set, surface the reply in the main channel timeline.
@@ -628,7 +657,11 @@ pub struct SendDiffMessageParams {
     /// Optional human-readable description of the change.
     #[serde(default)]
     pub description: Option<String>,
-    /// Optional parent event ID. If provided, sends the diff as a threaded reply.
+    /// Optional parent event ID for threading.
+    ///
+    /// `parent_event_id` is only honored if the parent event is already in a NIP-10 thread
+    /// context (has an `e` tag with marker `root` or `reply`). Otherwise it is ignored and the
+    /// diff is posted top-level.
     #[serde(default)]
     pub parent_event_id: Option<String>,
 }
@@ -833,30 +866,27 @@ impl SproutMcpServer {
             tool_router,
         }
     }
-
     /// Resolve a `ThreadRef` for SDK builders by fetching the parent event.
     ///
     /// Determines root vs. parent for NIP-10 markers:
     /// - Direct reply: root == parent
     /// - Nested reply: root is the thread root, parent is the immediate reply target
-    async fn resolve_thread_ref(
-        &self,
-        parent_event_id: &str,
+    fn thread_ref_from_parent_tags(
+        parent_tags: &serde_json::Value,
         parent_eid: EventId,
     ) -> Result<sprout_sdk::ThreadRef, String> {
-        let resp = self
-            .client
-            .get(&format!("/api/events/{}", parent_event_id))
-            .await
-            .map_err(|e| format!("failed to fetch parent event: {e}"))?;
-
-        let event_json: serde_json::Value = serde_json::from_str(&resp)
-            .map_err(|e| format!("failed to parse parent event: {e}"))?;
-
-        let root_eid = match find_root_from_tags(&event_json["tags"]) {
-            Some(root_hex) if root_hex != parent_event_id => EventId::from_hex(&root_hex)
-                .map_err(|e| format!("failed to parse root event id: {e}"))?,
-            _ => parent_eid,
+        // Normalize root comparison by parsing EventIds (avoids hex casing differences).
+        let root_eid = match find_root_from_tags(parent_tags) {
+            Some(root_hex) => {
+                let parsed = EventId::from_hex(&root_hex)
+                    .map_err(|e| format!("failed to parse root event id: {e}"))?;
+                if parsed != parent_eid {
+                    parsed
+                } else {
+                    parent_eid
+                }
+            }
+            None => parent_eid,
         };
 
         Ok(sprout_sdk::ThreadRef {
@@ -865,13 +895,78 @@ impl SproutMcpServer {
         })
     }
 
+    /// Resolve a `ThreadRef` for stream messages *only if* the parent event contains
+    /// NIP-10 thread context (explicit `root` or `reply` markers).
+    ///
+    /// If the parent has no root/reply markers, returns `Ok(None)` to prevent
+    /// accidental thread creation from implicit `e` tags (e.g. root @mention replies).
+    async fn resolve_thread_ref_if_thread_context(
+        &self,
+        parent_event_id: &str,
+        parent_eid: EventId,
+    ) -> Result<Option<sprout_sdk::ThreadRef>, String> {
+        let resp = self
+            .client
+            .get(&format!("/api/events/{parent_event_id}"))
+            .await
+            .map_err(|e| format!("failed to fetch parent event: {e}"))?;
+
+        let event_json: serde_json::Value = serde_json::from_str(&resp)
+            .map_err(|e| format!("failed to parse parent event: {e}"))?;
+
+        let parent_tags = &event_json["tags"];
+        if !parent_event_has_nip10_markers(parent_tags) {
+            tracing::info!(
+                parent_event_id = parent_event_id,
+                "resolve_thread_ref_if_thread_context: parent event has no NIP-10 root/reply markers; ignoring thread context"
+            );
+            return Ok(None);
+        }
+
+        Ok(Some(Self::thread_ref_from_parent_tags(
+            parent_tags,
+            parent_eid,
+        )?))
+    }
+
+    /// Resolve a `ThreadRef` unconditionally.
+    ///
+    /// This is used for forum comments, which must always thread/comment correctly
+    /// even if the parent event does not include explicit NIP-10 root/reply markers.
+    async fn resolve_thread_ref_unchecked(
+        &self,
+        parent_event_id: &str,
+        parent_eid: EventId,
+    ) -> Result<sprout_sdk::ThreadRef, String> {
+        let resp = self
+            .client
+            .get(&format!("/api/events/{parent_event_id}"))
+            .await
+            .map_err(|e| format!("failed to fetch parent event: {e}"))?;
+
+        let event_json: serde_json::Value = serde_json::from_str(&resp)
+            .map_err(|e| format!("failed to parse parent event: {e}"))?;
+
+        let parent_tags = &event_json["tags"];
+        Self::thread_ref_from_parent_tags(parent_tags, parent_eid)
+    }
+
     /// Send a message to a Sprout channel.
     #[tool(
         name = "send_message",
-        description = "Send a message to a Sprout channel. Include `parent_event_id` to reply in a thread. \
-Set `broadcast_to_channel` to also surface the reply in the main channel timeline. \
-For forum channels, set `kind` to 45001 (post) or 45003 (comment with `parent_event_id`). \
-Default kind is 9 (stream message)."
+        description = "Send a message to a Sprout channel.
+
+Stream messages (default kind 9): if `parent_event_id` is provided, it only results in a
+threaded reply if the parent event is already in a NIP-10 thread context (has an `e` tag
+marker `root` or `reply`). Otherwise `parent_event_id` is ignored and the message is posted
+top-level.
+
+Forum channels: set `kind` to 45001 (post) or 45003 (comment with `parent_event_id`). Forum
+comments (kind 45003) are unaffected by the stream threading guard and will still post as a
+comment.
+
+Set `broadcast_to_channel` to also surface the reply in the main channel timeline (when the
+message is actually threaded)."
     )]
     pub async fn send_message(&self, Parameters(p): Parameters<SendMessageParams>) -> String {
         if let Err(e) = validate_uuid(&p.channel_id) {
@@ -957,11 +1052,15 @@ Default kind is 9 (stream message)."
                     Ok(id) => id,
                     Err(e) => return format!("Error: invalid parent_event_id: {e}"),
                 };
-                // Fetch parent to resolve thread root for NIP-10 markers.
-                let thread_ref = match self.resolve_thread_ref(parent_id, parent_eid).await {
+
+                let thread_ref = match self
+                    .resolve_thread_ref_unchecked(parent_id, parent_eid)
+                    .await
+                {
                     Ok(tr) => tr,
                     Err(e) => return format!("Error: {e}"),
                 };
+
                 match sprout_sdk::build_forum_comment(
                     channel_uuid,
                     &p.content,
@@ -980,8 +1079,11 @@ Default kind is 9 (stream message)."
                         Ok(id) => id,
                         Err(e) => return format!("Error: invalid parent_event_id: {e}"),
                     };
-                    match self.resolve_thread_ref(parent_id, parent_eid).await {
-                        Ok(tr) => Some(tr),
+                    match self
+                        .resolve_thread_ref_if_thread_context(parent_id, parent_eid)
+                        .await
+                    {
+                        Ok(tr) => tr,
                         Err(e) => return format!("Error: {e}"),
                     }
                 } else {
@@ -992,7 +1094,7 @@ Default kind is 9 (stream message)."
                     &p.content,
                     thread_ref.as_ref(),
                     &mention_refs,
-                    broadcast && p.parent_event_id.is_some(),
+                    broadcast && thread_ref.is_some(),
                     &[],
                 ) {
                     Ok(b) => b,
@@ -1020,7 +1122,12 @@ Default kind is 9 (stream message)."
     /// Send a code diff to a Sprout channel as kind:40008.
     #[tool(
         name = "send_diff_message",
-        description = "Send a code diff to a Sprout channel with syntax highlighting and structured metadata. The diff is rendered with GitHub-quality visualization in the desktop client."
+        description = "Send a code diff to a Sprout channel with syntax highlighting and structured metadata. The
+diff is rendered with GitHub-quality visualization in the desktop client.
+
+If `parent_event_id` is provided, it only results in a threaded reply if the parent event is
+already in a NIP-10 thread context (has an `e` tag marker `root` or `reply`). Otherwise
+`parent_event_id` is ignored and the diff is posted top-level."
     )]
     pub async fn send_diff_message(
         &self,
@@ -1068,7 +1175,9 @@ Default kind is 9 (stream message)."
         // 4. Warn on partial branch metadata (both or neither required)
         match (&source_branch, &target_branch) {
             (Some(_), None) | (None, Some(_)) => {
-                tracing::warn!("send_diff_message: only one of source_branch/target_branch provided — both required, branch metadata omitted");
+                tracing::warn!(
+                    "send_diff_message: only one of source_branch/target_branch provided — both required, branch metadata omitted"
+                );
             }
             _ => {}
         }
@@ -1076,15 +1185,18 @@ Default kind is 9 (stream message)."
             (Some(src), Some(tgt)) => Some((src, tgt)),
             _ => None,
         };
-
         // 5. Resolve optional thread ref
         let thread_ref = if let Some(ref parent_id) = parent_event_id {
             let parent_eid = match EventId::from_hex(parent_id) {
                 Ok(id) => id,
                 Err(e) => return format!("Error: invalid parent_event_id: {e}"),
             };
-            match self.resolve_thread_ref(parent_id, parent_eid).await {
-                Ok(tr) => Some(tr),
+
+            match self
+                .resolve_thread_ref_if_thread_context(parent_id, parent_eid)
+                .await
+            {
+                Ok(tr) => tr,
                 Err(e) => return format!("Error: {e}"),
             }
         } else {
@@ -1092,6 +1204,7 @@ Default kind is 9 (stream message)."
         };
 
         // 6. Build signed event via SDK
+
         let diff_meta = sprout_sdk::DiffMeta {
             repo_url,
             commit_sha,
@@ -1325,7 +1438,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             other => {
                 return format!(
                     "Error: invalid visibility: {other:?} (must be 'open' or 'private')"
-                )
+                );
             }
         };
         let channel_type = match p.channel_type.as_str() {
@@ -1334,7 +1447,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             other => {
                 return format!(
                     "Error: invalid channel_type: {other:?} (must be 'stream' or 'forum')"
-                )
+                );
             }
         };
         let builder = match sprout_sdk::build_create_channel(
@@ -1634,7 +1747,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Some(other) => {
                 return format!(
                     "Error: invalid role: {other:?} (must be owner/admin/member/guest/bot)"
-                )
+                );
             }
         };
         let builder = match sprout_sdk::build_add_member(channel_uuid, &p.pubkey, role) {
@@ -2712,6 +2825,55 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // ── parent_event_has_nip10_markers ───────────────────────────────────────
+
+    #[test]
+    fn parent_event_has_nip10_markers_no_tags_false() {
+        assert!(!parent_event_has_nip10_markers(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn parent_event_has_nip10_markers_empty_tags_false() {
+        assert!(!parent_event_has_nip10_markers(&serde_json::json!([])));
+    }
+
+    #[test]
+    fn parent_event_has_nip10_markers_mention_marker_false() {
+        assert!(!parent_event_has_nip10_markers(&serde_json::json!([[
+            "e",
+            "a".repeat(64),
+            "",
+            "mention"
+        ]])));
+    }
+
+    #[test]
+    fn parent_event_has_nip10_markers_root_marker_true() {
+        assert!(parent_event_has_nip10_markers(&serde_json::json!([[
+            "e",
+            "a".repeat(64),
+            "",
+            "root"
+        ]])));
+    }
+
+    #[test]
+    fn parent_event_has_nip10_markers_reply_marker_true() {
+        assert!(parent_event_has_nip10_markers(&serde_json::json!([[
+            "e",
+            "a".repeat(64),
+            "",
+            "reply"
+        ]])));
+    }
+
+    #[test]
+    fn parent_event_has_nip10_markers_e_tag_without_marker_false() {
+        assert!(!parent_event_has_nip10_markers(&serde_json::json!([
+            ["e", "a".repeat(64)],
+            ["e", "a".repeat(64), "wss://relay.example.com"]
+        ])));
+    }
     // ── MAX_CONTENT_BYTES ─────────────────────────────────────────────────────
 
     #[test]
