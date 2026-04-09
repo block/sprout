@@ -27,6 +27,24 @@ pub(crate) const SLOW_CLIENT_GRACE_LIMIT: u8 = 3;
 /// Shared mutable subscription map for a single WebSocket connection.
 pub(crate) type ConnectionSubscriptions = Arc<Mutex<HashMap<String, Vec<Filter>>>>;
 
+/// Proxy identity claims stashed on the connection at upgrade time.
+///
+/// In proxy/hybrid mode the JWT and device_cn headers are validated during
+/// the HTTP → WS upgrade, but the client's pubkey is not yet known.  The
+/// claims are held here until the NIP-42 AUTH event arrives, at which point
+/// the relay can bind (uid, device_cn) → pubkey.
+#[derive(Debug, Clone)]
+pub struct PendingProxyIdentity {
+    /// Corporate user identifier extracted from the identity JWT.
+    pub uid: String,
+    /// Human-readable username from the identity JWT.
+    pub username: String,
+    /// Device common name from the `x-block-client-cert-subject-cn` header.
+    pub device_cn: String,
+    /// Permission scopes granted by the identity JWT.
+    pub scopes: Vec<sprout_auth::Scope>,
+}
+
 /// NIP-42 authentication state for a single connection.
 #[derive(Debug, Clone)]
 pub enum AuthState {
@@ -34,6 +52,10 @@ pub enum AuthState {
     Pending {
         /// The random challenge string sent to the client.
         challenge: String,
+        /// If set, proxy identity was validated at upgrade time and the
+        /// AUTH handler should resolve the pubkey binding instead of
+        /// performing standard JWT/token auth.
+        proxy_identity: Option<PendingProxyIdentity>,
     },
     /// Client has successfully authenticated.
     Authenticated(AuthContext),
@@ -105,14 +127,14 @@ impl ConnectionState {
 /// Acquires a connection semaphore permit, sends the NIP-42 AUTH challenge,
 /// then drives the send, heartbeat, and receive loops until the connection closes.
 ///
-/// If `pre_auth` is `Some`, the connection is immediately authenticated (skipping
-/// the NIP-42 challenge–response). Used in proxy identity mode where the upstream
-/// reverse proxy has already validated the user's identity.
+/// If `proxy_identity` is `Some`, the connection has a validated corporate
+/// identity from the proxy but still requires NIP-42 to prove the client's
+/// Nostr pubkey. The AUTH handler will bind (uid, device_cn) → pubkey.
 pub async fn handle_connection(
     socket: WebSocket,
     state: Arc<AppState>,
     addr: SocketAddr,
-    pre_auth: Option<AuthContext>,
+    proxy_identity: Option<PendingProxyIdentity>,
 ) {
     let permit = match state.conn_semaphore.clone().try_acquire_owned() {
         Ok(p) => p,
@@ -133,21 +155,16 @@ pub async fn handle_connection(
     let backpressure_count = Arc::new(AtomicU8::new(0));
     let subscriptions = Arc::new(Mutex::new(HashMap::new()));
 
-    // Pre-authenticated connections (proxy identity mode) skip NIP-42 entirely.
-    let initial_auth_state = match pre_auth {
-        Some(ctx) => {
-            info!(conn_id = %conn_id, addr = %addr, pubkey = %ctx.pubkey.to_hex(),
-                  "WebSocket pre-authenticated via proxy identity");
-            AuthState::Authenticated(ctx)
-        }
-        None => AuthState::Pending {
-            challenge: generate_challenge(),
-        },
-    };
-
-    let challenge = match &initial_auth_state {
-        AuthState::Pending { challenge } => Some(challenge.clone()),
-        _ => None,
+    // All connections start in Pending state with a NIP-42 challenge.
+    // In proxy mode the validated identity claims are stashed so the AUTH
+    // handler can resolve the pubkey binding after the client proves its key.
+    let challenge = generate_challenge();
+    if proxy_identity.is_some() {
+        info!(conn_id = %conn_id, addr = %addr, "WebSocket connection with proxy identity — awaiting NIP-42 AUTH");
+    }
+    let initial_auth_state = AuthState::Pending {
+        challenge: challenge.clone(),
+        proxy_identity,
     };
 
     let conn = Arc::new(ConnectionState {
@@ -164,17 +181,15 @@ pub async fn handle_connection(
     info!(conn_id = %conn_id, addr = %addr, "WebSocket connection established");
     metrics::counter!("sprout_ws_connections_total").increment(1);
 
-    // Only send NIP-42 challenge if not pre-authenticated.
-    if let Some(ref challenge_str) = challenge {
-        let challenge_msg = RelayMessage::auth_challenge(challenge_str);
-        if tx
-            .send(WsMessage::Text(challenge_msg.into()))
-            .await
-            .is_err()
-        {
-            warn!(conn_id = %conn_id, "Failed to send AUTH challenge — client disconnected immediately");
-            return;
-        }
+    // Send NIP-42 challenge — all connections require it now (including proxy mode).
+    let challenge_msg = RelayMessage::auth_challenge(&challenge);
+    if tx
+        .send(WsMessage::Text(challenge_msg.into()))
+        .await
+        .is_err()
+    {
+        warn!(conn_id = %conn_id, "Failed to send AUTH challenge — client disconnected immediately");
+        return;
     }
 
     // Gauge incremented AFTER challenge send succeeds — early disconnects

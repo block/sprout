@@ -22,7 +22,6 @@ tracing      = { workspace = true }
 thiserror    = { workspace = true }
 jsonwebtoken = { workspace = true }
 sha2         = { workspace = true }
-hmac         = { workspace = true }
 hex          = { workspace = true }
 reqwest      = { workspace = true }
 rand         = { workspace = true }

@@ -1,18 +1,17 @@
-//! Identity bootstrap endpoint for proxy/hybrid identity mode.
+//! Identity registration endpoint for proxy/hybrid identity mode.
 //!
-//! In proxy mode, the desktop client cannot derive its own Nostr keypair because
-//! the derivation secret is held only by the relay. This endpoint validates the
-//! client's identity JWT (injected by cf-doorman) and returns the derived secret
-//! key so the client can sign events locally.
+//! In proxy mode, the desktop client generates its own Nostr keypair locally.
+//! This endpoint binds the client's public key to its corporate identity
+//! (UID + device) so the relay can resolve identity on subsequent requests.
 //!
 //! The endpoint is only available when `SPROUT_IDENTITY_MODE=proxy` or `hybrid`.
 //!
 //! # Trusted-proxy assumption
 //!
-//! The relay trusts the `x-forwarded-identity-token` header unconditionally.
+//! The relay trusts the `x-forwarded-identity-token` and
+//! `x-block-client-cert-subject-cn` headers unconditionally.
 //! It MUST be deployed behind a trusted reverse proxy (cf-doorman) that is the
-//! sole source of this header. If the relay port is directly reachable, an
-//! attacker could inject arbitrary identity headers.
+//! sole source of these headers.
 
 use std::sync::Arc;
 
@@ -21,51 +20,53 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
 use crate::state::AppState;
 
-/// `POST /api/identity/bootstrap`
+/// `POST /api/identity/register`
 ///
-/// Validates the caller's `x-forwarded-identity-token` JWT and returns the
-/// derived Nostr secret key (hex-encoded) for that user.
+/// Binds the caller's Nostr public key to their corporate identity (UID + device).
+/// The caller proves key ownership via a NIP-98 signed event in the `Authorization`
+/// header.
 ///
-/// Uses POST (not GET) because the response contains a secret key that must
-/// never be cached by intermediaries.
+/// # Headers
 ///
-/// # Security
+/// - `x-forwarded-identity-token`: Corporate identity JWT (injected by cf-doorman)
+/// - `x-block-client-cert-subject-cn`: Device identifier from client certificate
+/// - `Authorization: Nostr <base64>`: NIP-98 signed event proving pubkey ownership
 ///
-/// - Only available when `SPROUT_IDENTITY_MODE=proxy` or `hybrid`.
-/// - The identity JWT is validated via JWKS (signature, issuer, audience, expiry).
-/// - Each caller only receives **their own** derived key — never another user's.
-/// - The derivation secret (`SPROUT_IDENTITY_SECRET`) never leaves the relay.
-/// - Transport is TLS behind cf-doorman; the secret key travels only over the
-///   authenticated, encrypted channel.
-/// - Response includes `Cache-Control: no-store` to prevent intermediary caching.
+/// # Binding semantics
+///
+/// - First request from a (UID, device) pair: creates a new binding.
+/// - Subsequent requests with the same pubkey: succeeds (idempotent).
+/// - Request with a different pubkey for an already-bound (UID, device): returns
+///   409 Conflict with `identity_binding_mismatch`.
 ///
 /// # Response
 ///
 /// ```json
 /// {
 ///   "pubkey": "abcd1234…",
-///   "secret_key": "ef012345…",
-///   "username": "alice"
+///   "username": "alice",
+///   "binding_status": "created"
 /// }
 /// ```
-pub async fn identity_bootstrap(
+pub async fn identity_register(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Result<(StatusCode, HeaderMap, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)>
-{
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     if !state.auth.identity_config().mode.is_proxy() {
         return Err((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
                 "error": "not_available",
-                "message": "identity bootstrap is only available in proxy identity mode"
+                "message": "identity registration is only available in proxy identity mode"
             })),
         ));
     }
 
+    // 1. Validate proxy identity JWT → extract uid + username
     let identity_jwt = headers
         .get("x-forwarded-identity-token")
         .and_then(|v| v.to_str().ok())
@@ -79,43 +80,177 @@ pub async fn identity_bootstrap(
             )
         })?;
 
-    let (keys, _scopes, username) = state
+    let (identity_claims, _scopes) = state
         .auth
-        .validate_identity_jwt_keys(identity_jwt)
+        .validate_identity_jwt(identity_jwt)
         .await
         .map_err(|e| {
-            tracing::warn!("identity bootstrap: JWT validation failed: {e}");
+            tracing::warn!("identity register: JWT validation failed: {e}");
             (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({ "error": "identity_token_invalid" })),
             )
         })?;
 
-    let pubkey_bytes = keys.public_key().serialize().to_vec();
-    if let Err(e) = state
+    // 2. Extract device identifier from client certificate CN
+    let device_cn = headers
+        .get("x-block-client-cert-subject-cn")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "device_cn_required",
+                    "message": "x-block-client-cert-subject-cn header is required"
+                })),
+            )
+        })?;
+
+    // 3. Verify NIP-98 auth to prove pubkey ownership
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "authorization_required",
+                    "message": "Authorization: Nostr <base64> header is required for identity registration"
+                })),
+            )
+        })?;
+
+    let nostr_b64 = auth_header.strip_prefix("Nostr ").ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "nip98_required",
+                "message": "identity registration requires NIP-98 auth (Authorization: Nostr <base64>)"
+            })),
+        )
+    })?;
+
+    let decoded_bytes = BASE64.decode(nostr_b64).map_err(|_| {
+        tracing::warn!("identity register: NIP-98 base64 decode failed");
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "nip98_invalid" })),
+        )
+    })?;
+
+    let event_json = String::from_utf8(decoded_bytes).map_err(|_| {
+        tracing::warn!("identity register: NIP-98 decoded bytes are not valid UTF-8");
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "nip98_invalid" })),
+        )
+    })?;
+
+    let canonical_url = reconstruct_canonical_url(&headers, &state);
+
+    let pubkey =
+        sprout_auth::verify_nip98_event(&event_json, &canonical_url, "POST", None).map_err(
+            |e| {
+                tracing::warn!("identity register: NIP-98 verification failed: {e}");
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({ "error": "nip98_invalid" })),
+                )
+            },
+        )?;
+
+    let pubkey_bytes = pubkey.serialize().to_vec();
+
+    // 4. Bind or validate the identity
+    let result = state
         .db
-        .ensure_user_with_verified_name(&pubkey_bytes, &username)
+        .bind_or_validate_identity(
+            &identity_claims.uid,
+            device_cn,
+            &pubkey_bytes,
+            &identity_claims.username,
+        )
         .await
-    {
-        tracing::warn!("identity bootstrap: ensure_user_with_verified_name failed: {e}");
+        .map_err(|e| {
+            tracing::error!("identity register: DB error: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "internal_error" })),
+            )
+        })?;
+
+    match result {
+        sprout_db::BindingResult::Mismatch { existing_pubkey } => {
+            let existing_hex = nostr::PublicKey::from_slice(&existing_pubkey)
+                .map(|pk| pk.to_hex())
+                .unwrap_or_else(|_| hex::encode(&existing_pubkey));
+            tracing::warn!(
+                uid = %identity_claims.uid,
+                device_cn = %device_cn,
+                presented = %pubkey.to_hex(),
+                existing = %existing_hex,
+                "identity binding mismatch"
+            );
+            return Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "identity_binding_mismatch",
+                    "message": "this device is already bound to a different pubkey"
+                })),
+            ));
+        }
+        ref status => {
+            tracing::info!(
+                uid = %identity_claims.uid,
+                device_cn = %device_cn,
+                pubkey = %pubkey.to_hex(),
+                status = ?status,
+                "identity binding resolved"
+            );
+        }
     }
 
-    // ⚠️ SECURITY: secret_key is logged at no level — it is sensitive material.
-    // The response travels over TLS behind cf-doorman.
-    let mut resp_headers = HeaderMap::new();
-    resp_headers.insert(
-        axum::http::header::CACHE_CONTROL,
-        "no-store, private, max-age=0".parse().unwrap(),
-    );
-    resp_headers.insert(axum::http::header::PRAGMA, "no-cache".parse().unwrap());
+    // 5. Ensure user record exists with verified name
+    if let Err(e) = state
+        .db
+        .ensure_user_with_verified_name(&pubkey_bytes, &identity_claims.username)
+        .await
+    {
+        tracing::warn!("identity register: ensure_user_with_verified_name failed: {e}");
+    }
 
-    Ok((
-        StatusCode::OK,
-        resp_headers,
-        Json(serde_json::json!({
-            "pubkey": keys.public_key().to_hex(),
-            "secret_key": keys.secret_key().to_secret_hex(),
-            "username": username,
-        })),
-    ))
+    let binding_status = match result {
+        sprout_db::BindingResult::Created => "created",
+        sprout_db::BindingResult::Matched => "existing",
+        sprout_db::BindingResult::Mismatch { .. } => unreachable!(),
+    };
+
+    Ok(Json(serde_json::json!({
+        "pubkey": pubkey.to_hex(),
+        "username": identity_claims.username,
+        "binding_status": binding_status,
+    })))
+}
+
+/// Reconstruct the canonical URL for NIP-98 verification from proxy headers.
+fn reconstruct_canonical_url(headers: &HeaderMap, state: &AppState) -> String {
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("https");
+    let host = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get("host"))
+        .and_then(|v| v.to_str().ok());
+
+    if let Some(host) = host {
+        format!("{proto}://{host}/api/identity/register")
+    } else {
+        let base = state
+            .config
+            .relay_url
+            .replace("wss://", "https://")
+            .replace("ws://", "http://");
+        format!("{base}/api/identity/register")
+    }
 }

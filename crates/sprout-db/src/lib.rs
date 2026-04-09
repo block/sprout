@@ -21,6 +21,8 @@ pub mod error;
 pub mod event;
 /// Home feed queries.
 pub mod feed;
+/// Identity binding persistence (corporate UID + device → pubkey).
+pub mod identity_binding;
 /// Monthly table partition management.
 pub mod partition;
 /// Reaction persistence.
@@ -34,6 +36,7 @@ pub mod workflow;
 
 pub use error::{DbError, Result};
 pub use event::EventQuery;
+pub use identity_binding::{BindingResult, IdentityBinding};
 
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgPoolOptions;
@@ -507,6 +510,35 @@ impl Db {
         verified_name: &str,
     ) -> Result<()> {
         user::ensure_user_with_verified_name(&self.pool, pubkey, verified_name).await
+    }
+
+    /// Look up an identity binding by (uid, device_cn).
+    pub async fn get_identity_binding(
+        &self,
+        uid: &str,
+        device_cn: &str,
+    ) -> Result<Option<identity_binding::IdentityBinding>> {
+        identity_binding::get_identity_binding(&self.pool, uid, device_cn).await
+    }
+
+    /// Bind a pubkey to (uid, device_cn) or validate an existing binding.
+    pub async fn bind_or_validate_identity(
+        &self,
+        uid: &str,
+        device_cn: &str,
+        pubkey: &[u8],
+        username: &str,
+    ) -> Result<identity_binding::BindingResult> {
+        identity_binding::bind_or_validate_identity(&self.pool, uid, device_cn, pubkey, username)
+            .await
+    }
+
+    /// Get all identity bindings for a given uid.
+    pub async fn get_bindings_for_uid(
+        &self,
+        uid: &str,
+    ) -> Result<Vec<identity_binding::IdentityBinding>> {
+        identity_binding::get_bindings_for_uid(&self.pool, uid).await
     }
 
     /// Get a single user record by pubkey.

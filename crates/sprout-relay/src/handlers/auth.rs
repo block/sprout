@@ -20,10 +20,13 @@ fn verify_api_token_nip42_binding(
 /// Handle a NIP-42 AUTH message: verify the challenge response and transition the connection to authenticated state.
 pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state: Arc<AppState>) {
     let event_id_hex_early = event.id.to_hex();
-    let (challenge, conn_id) = {
+    let (challenge, proxy_identity, conn_id) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
-            AuthState::Pending { challenge } => (challenge.clone(), conn.conn_id),
+            AuthState::Pending {
+                challenge,
+                proxy_identity,
+            } => (challenge.clone(), proxy_identity.clone(), conn.conn_id),
             AuthState::Authenticated(_) => {
                 debug!(conn_id = %conn.conn_id, "AUTH received but already authenticated");
                 conn.send(RelayMessage::ok(
@@ -60,7 +63,102 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         }
     });
 
-    metrics::counter!("sprout_auth_attempts_total", "method" => if auth_token.as_ref().is_some_and(|t| t.starts_with("sprout_")) { "api_token" } else { "nip42" }).increment(1);
+    metrics::counter!("sprout_auth_attempts_total", "method" => if proxy_identity.is_some() { "proxy_identity" } else if auth_token.as_ref().is_some_and(|t| t.starts_with("sprout_")) { "api_token" } else { "nip42" }).increment(1);
+
+    // ── Proxy identity path ─────────────────────────────────────────────
+    // When proxy identity claims were validated at upgrade time, the AUTH
+    // event only needs to prove the client owns its pubkey.  No JWT or API
+    // token tag is required — the identity was already established from the
+    // proxy headers.  After signature verification, the relay creates or
+    // validates the (uid, device_cn) → pubkey binding.
+    if let Some(proxy) = proxy_identity {
+        // Verify event structure + signature + challenge + relay URL (no token check).
+        let event_clone = event.clone();
+        let challenge_owned = challenge.clone();
+        let relay_owned = relay_url.clone();
+        let nip42_ok = tokio::task::spawn_blocking(move || {
+            sprout_auth::verify_nip42_event(&event_clone, &challenge_owned, &relay_owned)
+        })
+        .await
+        .ok()
+        .and_then(|r| r.ok());
+
+        if nip42_ok.is_none() {
+            warn!(conn_id = %conn_id, "proxy identity NIP-42 verification failed");
+            metrics::counter!("sprout_auth_failures_total", "reason" => "proxy_nip42_invalid")
+                .increment(1);
+            *conn.auth_state.write().await = AuthState::Failed;
+            conn.send(RelayMessage::ok(
+                &event_id_hex,
+                false,
+                "auth-required: verification failed",
+            ));
+            return;
+        }
+
+        // Resolve the (uid, device_cn) → pubkey binding.
+        let pubkey_bytes = event.pubkey.serialize().to_vec();
+        match state
+            .db
+            .bind_or_validate_identity(
+                &proxy.uid,
+                &proxy.device_cn,
+                &pubkey_bytes,
+                &proxy.username,
+            )
+            .await
+        {
+            Ok(sprout_db::BindingResult::Created) => {
+                info!(conn_id = %conn_id, uid = %proxy.uid, device_cn = %proxy.device_cn,
+                      pubkey = %event.pubkey.to_hex(), "identity binding created");
+            }
+            Ok(sprout_db::BindingResult::Matched) => {
+                info!(conn_id = %conn_id, uid = %proxy.uid, pubkey = %event.pubkey.to_hex(),
+                      "identity binding matched");
+            }
+            Ok(sprout_db::BindingResult::Mismatch { .. }) => {
+                warn!(conn_id = %conn_id, uid = %proxy.uid, device_cn = %proxy.device_cn,
+                      pubkey = %event.pubkey.to_hex(), "identity binding mismatch");
+                metrics::counter!("sprout_auth_failures_total", "reason" => "binding_mismatch")
+                    .increment(1);
+                *conn.auth_state.write().await = AuthState::Failed;
+                conn.send(RelayMessage::ok(
+                    &event_id_hex,
+                    false,
+                    "auth-required: identity binding mismatch — this device is bound to a different key",
+                ));
+                return;
+            }
+            Err(e) => {
+                warn!(conn_id = %conn_id, error = %e, "identity binding DB error");
+                *conn.auth_state.write().await = AuthState::Failed;
+                conn.send(RelayMessage::ok(
+                    &event_id_hex,
+                    false,
+                    "auth-required: verification failed",
+                ));
+                return;
+            }
+        }
+
+        // Ensure user record exists with verified name.
+        if let Err(e) = state
+            .db
+            .ensure_user_with_verified_name(&pubkey_bytes, &proxy.username)
+            .await
+        {
+            warn!(conn_id = %conn_id, error = %e, "ensure_user_with_verified_name failed");
+        }
+
+        let auth_ctx = sprout_auth::AuthContext {
+            pubkey: event.pubkey,
+            scopes: proxy.scopes,
+            auth_method: sprout_auth::AuthMethod::ProxyIdentity,
+        };
+        *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
+        conn.send(RelayMessage::ok(&event_id_hex, true, ""));
+        return;
+    }
 
     if let Some(ref token) = auth_token {
         if token.starts_with("sprout_") {

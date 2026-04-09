@@ -156,11 +156,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/users/batch", post(api::get_users_batch))
         // Feed route
         .route("/api/feed", get(api::feed_handler))
-        // Identity bootstrap (proxy mode — returns derived signing key).
-        // POST prevents intermediary caching of the secret key response.
+        // Identity registration (proxy mode — binds client pubkey to corporate identity).
         .route(
-            "/api/identity/bootstrap",
-            post(api::identity::identity_bootstrap),
+            "/api/identity/register",
+            post(api::identity::identity_register),
         )
         // Reject request bodies larger than 1 MB to prevent resource exhaustion.
         .layer(RequestBodyLimitLayer::new(1024 * 1024))
@@ -221,29 +220,28 @@ async fn nip11_or_ws_handler(
         return Json(info).into_response();
     }
 
-    // ── Proxy / hybrid identity: validate at upgrade time ──────────────
+    // ── Proxy / hybrid identity: validate JWT + device_cn at upgrade time ──
     //   - Proxy:  identity token mandatory — reject if missing.
     //   - Hybrid: identity token preferred — fall through to NIP-42 if missing.
+    //   NIP-42 challenge is always sent; the AUTH handler resolves the pubkey binding.
     let identity_mode = &state.auth.identity_config().mode;
-    let pre_auth = if identity_mode.is_proxy() {
+    let proxy_identity = if identity_mode.is_proxy() {
         match headers
             .get("x-forwarded-identity-token")
             .and_then(|v| v.to_str().ok())
         {
             Some(jwt) => match state.auth.validate_identity_jwt(jwt).await {
-                Ok((pubkey, scopes, username)) => {
-                    let pubkey_bytes = pubkey.serialize().to_vec();
-                    if let Err(e) = state
-                        .db
-                        .ensure_user_with_verified_name(&pubkey_bytes, &username)
-                        .await
-                    {
-                        tracing::warn!("ws: ensure_user_with_verified_name failed: {e}");
-                    }
-                    Some(sprout_auth::AuthContext {
-                        pubkey,
+                Ok((identity_claims, scopes)) => {
+                    let device_cn = headers
+                        .get("x-block-client-cert-subject-cn")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    Some(crate::connection::PendingProxyIdentity {
+                        uid: identity_claims.uid,
+                        username: identity_claims.username,
+                        device_cn,
                         scopes,
-                        auth_method: sprout_auth::AuthMethod::ProxyIdentity,
                     })
                 }
                 Err(e) => {
@@ -255,7 +253,7 @@ async fn nip11_or_ws_handler(
                 tracing::warn!("ws: proxy mode enabled but x-forwarded-identity-token missing");
                 return (StatusCode::UNAUTHORIZED, "identity token required").into_response();
             }
-            // Hybrid: no identity token — proceed to NIP-42 auth.
+            // Hybrid: no identity token — proceed to standard NIP-42 auth.
             None => None,
         }
     } else {
@@ -264,7 +262,7 @@ async fn nip11_or_ws_handler(
 
     match WebSocketUpgrade::from_request(req, &state).await {
         Ok(ws) => ws
-            .on_upgrade(move |socket| handle_connection(socket, state, addr, pre_auth))
+            .on_upgrade(move |socket| handle_connection(socket, state, addr, proxy_identity))
             .into_response(),
         Err(_) => {
             // Not a WS request and not asking for nostr+json — serve NIP-11 as fallback.

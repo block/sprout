@@ -14,9 +14,6 @@ pub enum ConfigError {
     /// The `SPROUT_IDENTITY_MODE` environment variable contains an unrecognised value.
     #[error("invalid SPROUT_IDENTITY_MODE: {0}")]
     InvalidIdentityMode(String),
-    /// `SPROUT_IDENTITY_SECRET` is required when identity mode is `proxy`.
-    #[error("SPROUT_IDENTITY_SECRET is required when SPROUT_IDENTITY_MODE=proxy or hybrid")]
-    MissingIdentitySecret,
 }
 
 /// Relay runtime configuration, loaded from environment variables.
@@ -143,12 +140,6 @@ impl Config {
 
         auth.identity.mode = identity_mode.clone();
 
-        if let Ok(secret) = std::env::var("SPROUT_IDENTITY_SECRET") {
-            auth.identity.secret = secret;
-        }
-        if let Ok(ctx) = std::env::var("SPROUT_IDENTITY_CONTEXT") {
-            auth.identity.context = ctx;
-        }
         if let Ok(uid_claim) = std::env::var("SPROUT_IDENTITY_UID_CLAIM") {
             auth.identity.uid_claim = uid_claim;
         }
@@ -160,9 +151,6 @@ impl Config {
         // (cf-doorman) — force require_auth_token so the NIP-42 fallback path
         // cannot be used with bare keypair-only auth.
         let require_auth_token = if identity_mode.is_proxy() {
-            if auth.identity.secret.is_empty() {
-                return Err(ConfigError::MissingIdentitySecret);
-            }
             if !require_auth_token {
                 tracing::info!(
                     "Identity mode: {identity_mode} — overriding SPROUT_REQUIRE_AUTH_TOKEN to true"

@@ -156,7 +156,8 @@ pub(crate) async fn extract_auth_context(
 
     // ── 0. Proxy / hybrid identity mode ──────────────────────────────────
     // When identity_mode is proxy or hybrid, cf-doorman injects
-    // x-forwarded-identity-token for human users.
+    // x-forwarded-identity-token for human users. The relay validates the JWT,
+    // extracts uid + device_cn, and looks up the pubkey binding from the DB.
     //   - Proxy:  header is mandatory — reject if missing.
     //   - Hybrid: header is preferred — fall through to standard auth if missing.
     // In both modes, a present-but-invalid header is a hard 401.
@@ -166,33 +167,71 @@ pub(crate) async fn extract_auth_context(
             .get("x-forwarded-identity-token")
             .and_then(|v| v.to_str().ok())
         {
-            match state.auth.validate_identity_jwt(identity_jwt).await {
-                Ok((pubkey, scopes, username)) => {
-                    let pubkey_bytes = pubkey.serialize().to_vec();
-                    if let Err(e) = state
-                        .db
-                        .ensure_user_with_verified_name(&pubkey_bytes, &username)
-                        .await
-                    {
-                        tracing::warn!("ensure_user_with_verified_name failed: {e}");
-                    }
-                    return Ok(RestAuthContext {
-                        pubkey,
-                        pubkey_bytes,
-                        scopes,
-                        auth_method: RestAuthMethod::ProxyIdentity,
-                        token_id: None,
-                        channel_ids: None,
-                    });
-                }
-                Err(e) => {
+            let (identity_claims, scopes) =
+                state.auth.validate_identity_jwt(identity_jwt).await.map_err(|e| {
                     tracing::warn!("auth: identity JWT validation failed: {e}");
-                    return Err((
+                    (
                         StatusCode::UNAUTHORIZED,
                         Json(serde_json::json!({ "error": "identity_token_invalid" })),
-                    ));
-                }
+                    )
+                })?;
+
+            let device_cn = headers
+                .get("x-block-client-cert-subject-cn")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown");
+
+            // Look up the pubkey binding for this (uid, device_cn).
+            let binding = state
+                .db
+                .get_identity_binding(&identity_claims.uid, device_cn)
+                .await
+                .map_err(|e| {
+                    tracing::error!("auth: identity binding lookup failed: {e}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": "internal_error" })),
+                    )
+                })?
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        uid = %identity_claims.uid,
+                        device_cn = %device_cn,
+                        "no identity binding — call POST /api/identity/register first"
+                    );
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({
+                            "error": "identity_binding_required",
+                            "message": "no identity binding for this device — call POST /api/identity/register first"
+                        })),
+                    )
+                })?;
+
+            let pubkey = nostr::PublicKey::from_slice(&binding.pubkey).map_err(|e| {
+                tracing::error!("auth: stored binding pubkey invalid: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "internal_error" })),
+                )
+            })?;
+            let pubkey_bytes = binding.pubkey;
+
+            if let Err(e) = state
+                .db
+                .ensure_user_with_verified_name(&pubkey_bytes, &identity_claims.username)
+                .await
+            {
+                tracing::warn!("ensure_user_with_verified_name failed: {e}");
             }
+            return Ok(RestAuthContext {
+                pubkey,
+                pubkey_bytes,
+                scopes,
+                auth_method: RestAuthMethod::ProxyIdentity,
+                token_id: None,
+                channel_ids: None,
+            });
         } else if *identity_mode == sprout_auth::IdentityMode::Proxy {
             tracing::warn!(
                 "auth: proxy mode enabled but x-forwarded-identity-token header missing"

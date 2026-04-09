@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use nostr::{EventBuilder, JsonUtil, Kind, PublicKey, Tag, ToBech32};
 use tauri::State;
 
@@ -68,25 +69,6 @@ pub fn sign_event(
     Ok(event.as_json())
 }
 
-/// Set the signing identity from a hex-encoded secret key.
-///
-/// Used in proxy identity mode: the desktop calls the relay's
-/// `POST /api/identity/bootstrap` endpoint (which validates the identity JWT
-/// and derives the keypair server-side), then passes the returned secret key
-/// here to install it as the active signing identity.
-#[tauri::command]
-pub fn set_identity_from_secret_key(
-    secret_key_hex: String,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    let secret_key = nostr::SecretKey::from_hex(&secret_key_hex)
-        .map_err(|e| format!("invalid secret key: {e}"))?;
-    let keys = nostr::Keys::new(secret_key);
-    let pubkey_hex = keys.public_key().to_hex();
-    *state.keys.lock().map_err(|e| e.to_string())? = keys;
-    Ok(pubkey_hex)
-}
-
 #[derive(serde::Serialize)]
 pub struct InitializedIdentity {
     pubkey: String,
@@ -103,43 +85,64 @@ pub async fn initialize_identity(
 
     match identity_mode.as_str() {
         "proxy" | "hybrid" => {
+            // Client-generated key — the key is already persisted locally by
+            // resolve_persisted_identity(). We just need to register it with
+            // the relay so the relay binds (uid, device_cn) → pubkey.
             let base_url = crate::relay::relay_api_base_url();
-            let url = format!("{base_url}/api/identity/bootstrap");
+            let register_url = format!("{base_url}/api/identity/register");
+
+            // Sign a NIP-98 event proving ownership of our pubkey.
+            let nip98_b64 = {
+                let keys = state.keys.lock().map_err(|e| e.to_string())?;
+                let tags = vec![
+                    Tag::parse(vec!["u", &register_url])
+                        .map_err(|e| format!("u tag: {e}"))?,
+                    Tag::parse(vec!["method", "POST"])
+                        .map_err(|e| format!("method tag: {e}"))?,
+                ];
+                let event = EventBuilder::new(Kind::HttpAuth, "")
+                    .tags(tags)
+                    .sign_with_keys(&keys)
+                    .map_err(|e| format!("NIP-98 sign failed: {e}"))?;
+                BASE64.encode(event.as_json().as_bytes())
+            };
 
             let response = state
                 .http_client
-                .post(&url)
+                .post(&register_url)
+                .header("Authorization", format!("Nostr {nip98_b64}"))
                 .timeout(std::time::Duration::from_secs(10))
                 .send()
                 .await
-                .map_err(|e| format!("identity bootstrap request failed: {e}"))?;
+                .map_err(|e| format!("identity register request failed: {e}"))?;
 
             if !response.status().is_success() {
                 let msg = crate::relay::relay_error_message(response).await;
-                return Err(format!("identity bootstrap failed: {msg}"));
+                return Err(format!("identity registration failed: {msg}"));
             }
 
             #[derive(serde::Deserialize)]
-            struct BootstrapResponse {
+            struct RegisterResponse {
                 #[allow(dead_code)]
                 pubkey: String,
-                secret_key: String,
                 username: String,
+                #[allow(dead_code)]
+                binding_status: String,
             }
 
-            let body: BootstrapResponse = response
+            let body: RegisterResponse = response
                 .json()
                 .await
-                .map_err(|e| format!("failed to parse bootstrap response: {e}"))?;
+                .map_err(|e| format!("failed to parse register response: {e}"))?;
 
-            // Install the derived secret key as the active signing identity.
-            let secret_key = nostr::SecretKey::from_hex(&body.secret_key)
-                .map_err(|e| format!("invalid secret key from bootstrap: {e}"))?;
-            let keys = nostr::Keys::new(secret_key);
-            let pubkey_hex = keys.public_key().to_hex();
-            *state.keys.lock().map_err(|e| e.to_string())? = keys;
+            let pubkey_hex = state
+                .keys
+                .lock()
+                .map_err(|e| e.to_string())?
+                .public_key()
+                .to_hex();
 
-            // Persist the bootstrap display name so get_identity returns it
+            // Persist the display name so get_identity returns it
             // instead of a truncated npub.
             *state.display_name.lock().map_err(|e| e.to_string())? = Some(body.username.clone());
 
@@ -147,7 +150,7 @@ pub async fn initialize_identity(
                 pubkey: pubkey_hex,
                 display_name: body.username,
                 identity_mode: Some(identity_mode),
-                ws_auth_mode: "preauthenticated".to_string(),
+                ws_auth_mode: "nip42".to_string(),
             })
         }
         _ => {

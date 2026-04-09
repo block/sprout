@@ -327,3 +327,20 @@ CREATE TABLE pubkey_allowlist (
     added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     note        TEXT
 );
+
+-- ── Identity bindings (proxy mode: corporate UID + device → pubkey) ───────────
+
+CREATE TABLE identity_bindings (
+    uid         TEXT NOT NULL,
+    device_cn   TEXT NOT NULL,
+    pubkey      BYTEA NOT NULL,
+    username    VARCHAR(255),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    PRIMARY KEY (uid, device_cn),
+    CONSTRAINT chk_identity_bindings_pubkey_len CHECK (LENGTH(pubkey) = 32)
+);
+
+CREATE INDEX idx_identity_bindings_pubkey ON identity_bindings(pubkey);
+CREATE INDEX idx_identity_bindings_uid ON identity_bindings(uid);
