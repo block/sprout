@@ -1,3 +1,4 @@
+import { GitPullRequest } from "lucide-react";
 import * as React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
@@ -10,6 +11,9 @@ import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
 import remarkMentions from "@/shared/lib/remarkMentions";
+
+const GITHUB_PR_RE =
+  /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/;
 
 type MarkdownProps = {
   channelNames?: string[];
@@ -41,17 +45,35 @@ function createMarkdownComponents(
       : "space-y-1 pl-6 marker:text-muted-foreground";
 
   return {
-    a: ({ children, href, ...props }) => (
-      <a
-        {...props}
-        className="font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80"
-        href={href}
-        rel="noreferrer"
-        target="_blank"
-      >
-        {children}
-      </a>
-    ),
+    a: ({ children, href, ...props }) => {
+      const prMatch = href ? GITHUB_PR_RE.exec(href) : null;
+      if (prMatch) {
+        const [, owner, repo, number] = prMatch;
+        return (
+          <a
+            {...props}
+            className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-sm font-medium text-primary no-underline transition-colors hover:bg-primary/20"
+            href={href}
+            rel="noreferrer"
+            target="_blank"
+          >
+            <GitPullRequest className="size-3.5" />
+            {owner}/{repo}#{number}
+          </a>
+        );
+      }
+      return (
+        <a
+          {...props}
+          className="font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80"
+          href={href}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {children}
+        </a>
+      );
+    },
     blockquote: ({ children }) => (
       <blockquote className="border-l-2 border-border pl-4 italic text-muted-foreground">
         {children}
