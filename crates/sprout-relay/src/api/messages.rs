@@ -28,15 +28,18 @@ use super::{
 /// Returns Ok(()) if all tags are valid, or a human-readable error string.
 pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result<(), String> {
     const ALLOWED_IMETA_KEYS: &[&str] = &[
-        "url", "m", "x", "size", "dim", "blurhash", "alt", "thumb", "fallback",
-        "duration", "bitrate", "image",
+        "url", "m", "x", "size", "dim", "blurhash", "alt", "thumb", "fallback", "duration",
+        "bitrate", "image",
     ];
     const SINGLETON_KEYS: &[&str] = &[
-        "url", "m", "x", "size", "dim", "blurhash", "thumb", "alt", "duration", "bitrate",
-        "image",
+        "url", "m", "x", "size", "dim", "blurhash", "thumb", "alt", "duration", "bitrate", "image",
     ];
     const ALLOWED_MIME: &[&str] = &[
-        "image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4",
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "video/mp4",
     ];
 
     for tag in tags {
@@ -53,7 +56,6 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
         let mut x_value = String::new();
         let mut m_value = String::new();
         let mut thumb_value = String::new();
-        let mut image_value = String::new();
 
         for part in tag.iter().skip(1) {
             let mut parts = part.splitn(2, ' ');
@@ -121,9 +123,7 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
                     // validate_video_file() also catches this via mvhd timescale.
                     if let Ok(d) = value.parse::<f64>() {
                         if d <= 0.0 || d.is_nan() || d.is_infinite() {
-                            return Err(
-                                "imeta duration must be a positive finite number".into()
-                            );
+                            return Err("imeta duration must be a positive finite number".into());
                         }
                     } else {
                         return Err("imeta duration must be a valid float".into());
@@ -149,7 +149,6 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
                                 .into(),
                         );
                     }
-                    image_value = value.to_string();
                 }
                 _ => {}
             }
@@ -171,7 +170,9 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
                 return Err("imeta url extension does not match m".into());
             }
         }
-        // Thumb hash must match x (same blob, different variant).
+        // Thumb URL hash segment must match x — thumbnails are keyed by their
+        // parent blob's hash (e.g. {video_hash}.thumb.jpg), not by their own
+        // content hash. This checks URL consistency, not content identity.
         if !thumb_value.is_empty() {
             if let Some(thumb_hash) = extract_hash_from_media_url(&thumb_value) {
                 if thumb_hash != x_value {
@@ -179,14 +180,9 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
                 }
             }
         }
-        // Image (NIP-71 poster frame) hash must match x (same content-addressed blob).
-        if !image_value.is_empty() {
-            if let Some(image_hash) = extract_hash_from_media_url(&image_value) {
-                if image_hash != x_value {
-                    return Err("imeta image hash does not match x".into());
-                }
-            }
-        }
+        // NIP-71 poster frame (`image`) is an independent blob with its own
+        // content hash — it cannot match the video's `x` hash. Validated as a
+        // local media URL with an image extension only (no hash cross-check).
     }
     Ok(())
 }
@@ -1090,14 +1086,16 @@ mod tests {
 
     #[test]
     fn test_imeta_image_poster_frame_accepted() {
-        // image field must be an image URL (jpg), not video
+        // Poster frame is an independent blob with its own hash — different from
+        // the video's x hash. This must be accepted (no hash cross-check).
+        let poster_hash = "b".repeat(64);
         let tag = vec![
             "imeta".into(),
             format!("url /media/{HASH}.mp4"),
             "m video/mp4".into(),
             format!("x {HASH}"),
             "size 5000000".into(),
-            format!("image /media/{HASH}.jpg"),
+            format!("image /media/{poster_hash}.jpg"),
         ];
         assert!(validate_imeta_tags(&[tag], BASE).is_ok());
     }
@@ -1118,36 +1116,6 @@ mod tests {
             err.contains("image file") && err.contains("not video"),
             "{err}"
         );
-    }
-
-    #[test]
-    fn test_imeta_image_hash_must_match_x() {
-        // image poster frame hash must match the x field (same content-addressed blob)
-        let other = "d".repeat(64);
-        let tag = vec![
-            "imeta".into(),
-            format!("url /media/{HASH}.mp4"),
-            "m video/mp4".into(),
-            format!("x {HASH}"),
-            "size 5000000".into(),
-            format!("image /media/{other}.jpg"),
-        ];
-        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
-        assert!(err.contains("image hash does not match x"), "{err}");
-    }
-
-    #[test]
-    fn test_imeta_image_matching_hash_accepted() {
-        // image with matching hash should pass
-        let tag = vec![
-            "imeta".into(),
-            format!("url /media/{HASH}.mp4"),
-            "m video/mp4".into(),
-            format!("x {HASH}"),
-            "size 5000000".into(),
-            format!("image /media/{HASH}.jpg"),
-        ];
-        assert!(validate_imeta_tags(&[tag], BASE).is_ok());
     }
 
     #[test]
