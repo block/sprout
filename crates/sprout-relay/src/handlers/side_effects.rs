@@ -205,6 +205,17 @@ pub async fn validate_admin_event(
                 let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
                 match actor_member {
                     Some(m) if m.role == "owner" || m.role == "admin" => Ok(()),
+                    Some(_) => {
+                        // Check if actor is agent owner of target
+                        if let Some((_policy, Some(owner))) =
+                            state.db.get_agent_channel_policy(&target_pubkey).await?
+                        {
+                            if owner == actor_bytes {
+                                return Ok(());
+                            }
+                        }
+                        Err(anyhow::anyhow!("actor not authorized"))
+                    }
                     _ => Err(anyhow::anyhow!("actor not authorized")),
                 }
             }
