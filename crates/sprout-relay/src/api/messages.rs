@@ -116,11 +116,13 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
                     thumb_value = value.to_string();
                 }
                 "duration" => {
-                    // NIP-71 standard field: seconds as float, non-negative
+                    // NIP-71 standard field: seconds as float, strictly positive.
+                    // Zero-duration videos are semantically invalid; server-side
+                    // validate_video_file() also catches this via mvhd timescale.
                     if let Ok(d) = value.parse::<f64>() {
-                        if d < 0.0 || d.is_nan() || d.is_infinite() {
+                        if d <= 0.0 || d.is_nan() || d.is_infinite() {
                             return Err(
-                                "imeta duration must be a non-negative finite number".into()
+                                "imeta duration must be a positive finite number".into()
                             );
                         }
                     } else {
@@ -1028,7 +1030,21 @@ mod tests {
             "duration -5".into(),
         ];
         let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
-        assert!(err.contains("non-negative finite number"), "{err}");
+        assert!(err.contains("positive finite number"), "{err}");
+    }
+
+    #[test]
+    fn test_imeta_duration_zero_rejected() {
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/mp4".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+            "duration 0".into(),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("positive finite number"), "{err}");
     }
 
     #[test]
