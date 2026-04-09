@@ -104,14 +104,13 @@ export function useMentions(channelId: string | null) {
 
     // Score a label against the query using word-boundary prefix matching.
     // Returns 0 if the full label starts with the query (best), 1 if any
-    // word within the label starts with the query, 2 if it's a substring
-    // match anywhere (fallback), or null if there's no match at all.
+    // word within the label starts with the query, or null if there's no
+    // match. No arbitrary substring matching — standard for mention UX.
     const scoreLabel = (label: string): number | null => {
       const lower = label.toLowerCase();
       if (lower.startsWith(lowerQuery)) return 0;
       const words = lower.split(/[\s\-_]+/).filter(Boolean);
       if (words.some((word) => word.startsWith(lowerQuery))) return 1;
-      if (lower.includes(lowerQuery)) return 2;
       return null;
     };
 
