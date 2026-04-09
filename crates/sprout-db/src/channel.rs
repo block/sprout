@@ -409,8 +409,10 @@ pub async fn add_member(
 /// removing themselves.
 ///
 /// Returns `Err(DbError::MemberNotFound)` if the target is not an active member.
-/// The authorization check and the UPDATE run inside a transaction to prevent a
+/// The actor's role check and the UPDATE run inside a transaction to prevent a
 /// TOCTOU race where the actor's role changes between the check and the update.
+/// The `is_agent_owner` check runs outside the transaction against the main pool
+/// because `agent_owner_pubkey` is immutable (set once at token mint).
 pub async fn remove_member(
     pool: &PgPool,
     channel_id: Uuid,

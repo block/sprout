@@ -216,6 +216,9 @@ pub async fn validate_admin_event(
                             Err(anyhow::anyhow!("actor not authorized"))
                         }
                     }
+                    // Non-members fall here. We intentionally do NOT check
+                    // is_agent_owner for non-members — you must be in the channel
+                    // to remove anyone, even your own bot.
                     _ => Err(anyhow::anyhow!("actor not authorized")),
                 }
             }

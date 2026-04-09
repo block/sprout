@@ -78,6 +78,7 @@ export function MembersSidebar({
   }
 
   function renderMemberCard(member: ChannelMember, memberIsBot: boolean) {
+    // Any channel member can remove bots they own, regardless of role.
     const canRemoveMember =
       (selfMember?.role === "admin" && member.pubkey !== currentPubkey) ||
       (selfMember?.role === "owner" && isBot(member)) ||

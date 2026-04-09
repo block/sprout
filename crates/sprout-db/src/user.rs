@@ -325,14 +325,21 @@ pub async fn get_agent_channel_policy(
 }
 
 /// Check whether `actor_pubkey` is the `agent_owner_pubkey` of `target_pubkey`.
+/// Queries `agent_owner_pubkey` directly rather than going through
+/// `get_agent_channel_policy`, which would fetch unrelated fields.
 pub async fn is_agent_owner(
     pool: &PgPool,
     target_pubkey: &[u8],
     actor_pubkey: &[u8],
 ) -> Result<bool> {
-    Ok(
-        matches!(get_agent_channel_policy(pool, target_pubkey).await?, Some((_policy, Some(owner))) if owner == actor_pubkey),
+    let row = sqlx::query_scalar::<_, bool>(
+        "SELECT agent_owner_pubkey = $2 FROM users WHERE pubkey = $1 AND agent_owner_pubkey IS NOT NULL",
     )
+    .bind(target_pubkey)
+    .bind(actor_pubkey)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.unwrap_or(false))
 }
 
 /// Set the channel_add_policy for a user.
