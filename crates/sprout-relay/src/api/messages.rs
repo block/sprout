@@ -266,15 +266,27 @@ pub async fn verify_imeta_blobs(
             }
         }
 
-        // 5. If image (poster frame) is claimed, HEAD the poster blob.
+        // 5. If image (poster frame) is claimed, verify sidecar + blob.
         //    Poster frames are independent blobs — extract hash from the image
-        //    URL itself, not from x_value.
+        //    URL itself, not from x_value. Sidecar must exist (serving is gated
+        //    on it) and MIME must be an image type.
         if !image_value.is_empty() {
-            if let (Some(img_hash), Some(img_ext)) = (
-                extract_hash_from_media_url(&image_value),
-                extract_ext_from_media_url(&image_value),
-            ) {
-                let img_key = format!("{img_hash}.{img_ext}");
+            if let Some(img_hash) = extract_hash_from_media_url(&image_value) {
+                let img_sidecar = storage
+                    .get_sidecar(img_hash)
+                    .await
+                    .map_err(|_| format!("imeta image references nonexistent poster: {img_hash}"))?;
+
+                // Poster frame must be an image, not video or other type.
+                const IMAGE_MIMES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+                if !IMAGE_MIMES.contains(&img_sidecar.mime_type.as_str()) {
+                    return Err(format!(
+                        "imeta image poster MIME must be image type, got {}",
+                        img_sidecar.mime_type
+                    ));
+                }
+
+                let img_key = format!("{img_hash}.{}", img_sidecar.ext);
                 let img_exists = storage
                     .head(&img_key)
                     .await
