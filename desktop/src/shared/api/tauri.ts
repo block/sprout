@@ -929,6 +929,7 @@ export async function createManagedAgent(input: CreateManagedAgentInput) {
         agentCommand: input.agentCommand,
         agentArgs: input.agentArgs,
         mcpCommand: input.mcpCommand,
+        mcpToolsets: input.mcpToolsets,
         turnTimeoutSeconds: input.turnTimeoutSeconds,
         idleTimeoutSeconds: input.idleTimeoutSeconds,
         maxTurnDurationSeconds: input.maxTurnDurationSeconds,
