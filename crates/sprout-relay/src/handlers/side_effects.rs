@@ -205,6 +205,20 @@ pub async fn validate_admin_event(
                 let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
                 match actor_member {
                     Some(m) if m.role == "owner" || m.role == "admin" => Ok(()),
+                    Some(_) => {
+                        if state
+                            .db
+                            .is_agent_owner(&target_pubkey, &actor_bytes)
+                            .await?
+                        {
+                            Ok(())
+                        } else {
+                            Err(anyhow::anyhow!("actor not authorized"))
+                        }
+                    }
+                    // Non-members fall here. We intentionally do NOT check
+                    // is_agent_owner for non-members — you must be in the channel
+                    // to remove anyone, even your own bot.
                     _ => Err(anyhow::anyhow!("actor not authorized")),
                 }
             }

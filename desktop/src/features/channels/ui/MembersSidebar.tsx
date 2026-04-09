@@ -50,7 +50,7 @@ export function MembersSidebar({
   const removeMemberMutation = useRemoveChannelMemberMutation(channelId);
 
   const rawMembers = membersQuery.data ?? [];
-  const { people, bots, isBot } = useClassifiedMembers(
+  const { people, bots, isBot, isMyBot } = useClassifiedMembers(
     rawMembers,
     currentPubkey,
   );
@@ -78,9 +78,11 @@ export function MembersSidebar({
   }
 
   function renderMemberCard(member: ChannelMember, memberIsBot: boolean) {
+    // Any channel member can remove bots they own, regardless of role.
     const canRemoveMember =
       (selfMember?.role === "admin" && member.pubkey !== currentPubkey) ||
       (selfMember?.role === "owner" && isBot(member)) ||
+      (selfMember && isMyBot(member)) ||
       (currentPubkey && member.pubkey === currentPubkey);
     const memberLabel = formatMemberName(member, currentPubkey);
     const profile =
