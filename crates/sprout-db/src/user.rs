@@ -324,6 +324,17 @@ pub async fn get_agent_channel_policy(
     .transpose()
 }
 
+/// Check whether `actor_pubkey` is the `agent_owner_pubkey` of `target_pubkey`.
+pub async fn is_agent_owner(
+    pool: &PgPool,
+    target_pubkey: &[u8],
+    actor_pubkey: &[u8],
+) -> Result<bool> {
+    Ok(
+        matches!(get_agent_channel_policy(pool, target_pubkey).await?, Some((_policy, Some(owner))) if owner == actor_pubkey),
+    )
+}
+
 /// Set the channel_add_policy for a user.
 /// Returns an error if the pubkey is not found (rows_affected == 0).
 /// Returns an error if `policy` is not one of the valid ENUM values.

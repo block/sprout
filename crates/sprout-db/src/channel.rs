@@ -405,7 +405,8 @@ pub async fn add_member(
 
 /// Remove a member from a channel (soft delete).
 ///
-/// `actor_pubkey` must be an active owner/admin, or the member removing themselves.
+/// `actor_pubkey` must be an active owner/admin, the agent's owner, or the member
+/// removing themselves.
 ///
 /// Returns `Err(DbError::MemberNotFound)` if the target is not an active member.
 /// The authorization check and the UPDATE run inside a transaction to prevent a
@@ -426,20 +427,12 @@ pub async fn remove_member(
         let actor_role: MemberRole = actor_role_str.parse().map_err(|_| {
             DbError::InvalidData(format!("invalid role in database: {actor_role_str}"))
         })?;
-        if !actor_role.is_elevated() {
-            // Check if actor is the agent owner of the target
-            let is_agent_owner = if let Some((_policy, Some(owner))) =
-                crate::user::get_agent_channel_policy(pool, pubkey).await?
-            {
-                owner == actor_pubkey
-            } else {
-                false
-            };
-            if !is_agent_owner {
-                return Err(DbError::AccessDenied(
-                    "only owners/admins or the agent's owner may remove other members".to_string(),
-                ));
-            }
+        if !actor_role.is_elevated()
+            && !crate::user::is_agent_owner(pool, pubkey, actor_pubkey).await?
+        {
+            return Err(DbError::AccessDenied(
+                "only owners/admins or the agent's owner may remove other members".to_string(),
+            ));
         }
     }
 
