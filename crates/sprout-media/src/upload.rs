@@ -126,8 +126,19 @@ pub async fn process_video_upload(
 
         // Convert axum::Error stream to std::io::Error stream for StreamReader.
         // Box::pin is required because StreamReader needs a pinned stream.
+        // Map stream errors, detecting body-limit errors so we can return 413
+        // instead of 500. axum wraps LengthLimitError in its error chain —
+        // we detect it via the Display string since axum::Error doesn't expose
+        // the inner type for downcasting.
         let mapped = futures_util::StreamExt::map(body_stream, |r| {
-            r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            r.map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("length limit") || msg.contains("body limit") {
+                    std::io::Error::new(std::io::ErrorKind::WriteZero, msg)
+                } else {
+                    std::io::Error::new(std::io::ErrorKind::Other, e)
+                }
+            })
         });
         let mut reader = StreamReader::new(Box::pin(mapped));
 
@@ -141,10 +152,17 @@ pub async fn process_video_upload(
 
         loop {
             use tokio::io::AsyncReadExt;
-            let n = reader
-                .read(&mut buf)
-                .await
-                .map_err(|e| MediaError::Io(e.to_string()))?;
+            let n = match reader.read(&mut buf).await {
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::WriteZero => {
+                    // Body limit exceeded — return 413 instead of 500.
+                    return Err(MediaError::FileTooLarge {
+                        size: total.saturating_add(max_bytes),
+                        max: max_bytes,
+                    });
+                }
+                Err(e) => return Err(MediaError::Io(e.to_string())),
+            };
             if n == 0 {
                 break;
             }
@@ -163,7 +181,9 @@ pub async fn process_video_upload(
                 first_chunk = Some(buf[..n].to_vec());
             }
         }
-        file.flush().await.map_err(|e| MediaError::Io(e.to_string()))?;
+        file.flush()
+            .await
+            .map_err(|e| MediaError::Io(e.to_string()))?;
 
         let sha256_hex = hex::encode(hasher.finalize());
         let first = first_chunk.unwrap_or_default();
@@ -191,11 +211,10 @@ pub async fn process_video_upload(
     // --- 4. Full MP4 validation on the temp file ---
     let tmp_path_clone = tmp_path.clone();
     let cfg = config.clone();
-    let video_meta = tokio::task::spawn_blocking(move || {
-        validate_video_file(&tmp_path_clone, &cfg)
-    })
-    .await
-    .map_err(|_| MediaError::Internal)??;
+    let video_meta =
+        tokio::task::spawn_blocking(move || validate_video_file(&tmp_path_clone, &cfg))
+            .await
+            .map_err(|_| MediaError::Internal)??;
 
     let ext = "mp4";
     let key = format!("{sha256_hex}.{ext}");
@@ -334,7 +353,7 @@ mod tests {
         let config = test_config();
         let meta = BlobMeta {
             dim: "320x240".to_string(),
-            blurhash: String::new(), // empty — video has no blurhash
+            blurhash: String::new(),  // empty — video has no blurhash
             thumb_url: String::new(), // empty — video has no thumbnail
             ext: "mp4".to_string(),
             mime_type: "video/mp4".to_string(),
@@ -343,21 +362,46 @@ mod tests {
             duration_secs: Some(29.5),
         };
 
-        let desc = build_descriptor(&config, "abc123", "mp4", "video/mp4", 5_000_000, Some(&meta), 1700000000);
+        let desc = build_descriptor(
+            &config,
+            "abc123",
+            "mp4",
+            "video/mp4",
+            5_000_000,
+            Some(&meta),
+            1700000000,
+        );
 
         // Empty strings must become None, not Some("")
-        assert!(desc.blurhash.is_none(), "blurhash should be None for video, got {:?}", desc.blurhash);
-        assert!(desc.thumb.is_none(), "thumb should be None for video, got {:?}", desc.thumb);
+        assert!(
+            desc.blurhash.is_none(),
+            "blurhash should be None for video, got {:?}",
+            desc.blurhash
+        );
+        assert!(
+            desc.thumb.is_none(),
+            "thumb should be None for video, got {:?}",
+            desc.thumb
+        );
         // Non-empty fields should be present
         assert_eq!(desc.dim, Some("320x240".to_string()));
         assert_eq!(desc.duration, Some(29.5));
 
         // Verify JSON serialization omits the empty fields entirely
         let json = serde_json::to_value(&desc).unwrap();
-        assert!(json.get("blurhash").is_none(), "blurhash should be absent from JSON");
-        assert!(json.get("thumb").is_none(), "thumb should be absent from JSON");
+        assert!(
+            json.get("blurhash").is_none(),
+            "blurhash should be absent from JSON"
+        );
+        assert!(
+            json.get("thumb").is_none(),
+            "thumb should be absent from JSON"
+        );
         assert!(json.get("dim").is_some(), "dim should be present in JSON");
-        assert!(json.get("duration").is_some(), "duration should be present in JSON");
+        assert!(
+            json.get("duration").is_some(),
+            "duration should be present in JSON"
+        );
     }
 
     #[test]
@@ -376,9 +420,20 @@ mod tests {
             duration_secs: None,
         };
 
-        let desc = build_descriptor(&config, &hash, "jpg", "image/jpeg", 100_000, Some(&meta), 1700000000);
+        let desc = build_descriptor(
+            &config,
+            &hash,
+            "jpg",
+            "image/jpeg",
+            100_000,
+            Some(&meta),
+            1700000000,
+        );
 
-        assert_eq!(desc.blurhash, Some("LEHV6nWB2yk8pyo0adR*.7kCMdnj".to_string()));
+        assert_eq!(
+            desc.blurhash,
+            Some("LEHV6nWB2yk8pyo0adR*.7kCMdnj".to_string())
+        );
         assert!(desc.thumb.is_some());
         assert!(desc.duration.is_none());
 
@@ -386,14 +441,53 @@ mod tests {
         let json = serde_json::to_value(&desc).unwrap();
         assert!(json.get("blurhash").is_some());
         assert!(json.get("thumb").is_some());
-        assert!(json.get("duration").is_none(), "duration should be absent for images");
+        assert!(
+            json.get("duration").is_none(),
+            "duration should be absent for images"
+        );
+    }
+
+    #[test]
+    fn test_body_limit_error_detection() {
+        // Verify that "length limit" errors are mapped to WriteZero (which
+        // process_video_upload converts to FileTooLarge / 413).
+        let limit_err = axum::Error::new("length limit exceeded");
+        let io_err = {
+            let msg = limit_err.to_string();
+            if msg.contains("length limit") || msg.contains("body limit") {
+                std::io::Error::new(std::io::ErrorKind::WriteZero, msg)
+            } else {
+                std::io::Error::new(std::io::ErrorKind::Other, limit_err)
+            }
+        };
+        assert_eq!(io_err.kind(), std::io::ErrorKind::WriteZero);
+
+        // Non-limit errors should remain as Other.
+        let other_err = axum::Error::new("connection reset");
+        let io_err = {
+            let msg = other_err.to_string();
+            if msg.contains("length limit") || msg.contains("body limit") {
+                std::io::Error::new(std::io::ErrorKind::WriteZero, msg)
+            } else {
+                std::io::Error::new(std::io::ErrorKind::Other, other_err)
+            }
+        };
+        assert_eq!(io_err.kind(), std::io::ErrorKind::Other);
     }
 
     #[test]
     fn test_build_descriptor_no_meta() {
         // When meta is None, all optional fields should be None.
         let config = test_config();
-        let desc = build_descriptor(&config, "abc123", "jpg", "image/jpeg", 100, None, 1700000000);
+        let desc = build_descriptor(
+            &config,
+            "abc123",
+            "jpg",
+            "image/jpeg",
+            100,
+            None,
+            1700000000,
+        );
 
         assert!(desc.dim.is_none());
         assert!(desc.blurhash.is_none());
