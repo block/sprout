@@ -92,8 +92,7 @@ pub fn validate_video_file(path: &Path, config: &MediaConfig) -> Result<VideoMet
     // because the mp4 crate parses the whole file regardless of atom order.
     check_moov_before_mdat(path)?;
 
-    let file =
-        std::fs::File::open(path).map_err(|e| MediaError::Io(e.to_string()))?;
+    let file = std::fs::File::open(path).map_err(|e| MediaError::Io(e.to_string()))?;
     let size = file
         .metadata()
         .map_err(|e| MediaError::Io(e.to_string()))?
@@ -108,8 +107,7 @@ pub fn validate_video_file(path: &Path, config: &MediaConfig) -> Result<VideoMet
     }
 
     let reader = BufReader::new(file);
-    let mp4 = mp4::Mp4Reader::read_header(reader, size)
-        .map_err(|_| MediaError::InvalidVideo)?;
+    let mp4 = mp4::Mp4Reader::read_header(reader, size).map_err(|_| MediaError::InvalidVideo)?;
 
     // --- Container check ---
     // QuickTime (MOV) uses brand "qt  ". We reject it — only ISO-base MP4.
@@ -184,8 +182,7 @@ fn check_moov_before_mdat(path: &Path) -> Result<(), MediaError> {
     /// A normal MP4 has < 20 top-level atoms. 1024 is generous but bounded.
     const MAX_ATOMS: u32 = 1024;
 
-    let mut file =
-        std::fs::File::open(path).map_err(|e| MediaError::Io(e.to_string()))?;
+    let mut file = std::fs::File::open(path).map_err(|e| MediaError::Io(e.to_string()))?;
     let file_size = file
         .metadata()
         .map_err(|e| MediaError::Io(e.to_string()))?
@@ -198,7 +195,9 @@ fn check_moov_before_mdat(path: &Path) -> Result<(), MediaError> {
     while offset < file_size {
         atoms_scanned += 1;
         if atoms_scanned > MAX_ATOMS {
-            break; // too many atoms — likely malformed; mp4 parser will catch it
+            // Fail closed: too many top-level atoms is abnormal. A crafted file
+            // could hide mdat after 1025 junk atoms to bypass the moov check.
+            return Err(MediaError::MoovNotAtFront);
         }
 
         file.seek(SeekFrom::Start(offset))
@@ -210,8 +209,7 @@ fn check_moov_before_mdat(path: &Path) -> Result<(), MediaError> {
             Err(_) => break, // truncated file — mp4 parser will catch it
         }
 
-        let compact_size =
-            u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as u64;
+        let compact_size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as u64;
         let fourcc = &header[4..8];
 
         // Resolve actual atom size.
@@ -417,7 +415,7 @@ mod tests {
         // the size logic directly with a config that has a tiny cap.
         let mut cfg = config;
         cfg.max_video_bytes = 4; // 4 bytes max
-        // Use the ftyp magic — if infer detects video/mp4, size check fires.
+                                 // Use the ftyp magic — if infer detects video/mp4, size check fires.
         let result = validate_content(MP4_FTYP_MAGIC, &cfg);
         match result {
             Err(MediaError::FileTooLarge { .. }) => {} // expected
@@ -544,7 +542,7 @@ mod tests {
             b.extend_from_slice(&0x00010000u32.to_be_bytes()); // rate = 1.0
             b.extend_from_slice(&0x0100u16.to_be_bytes()); // volume = 1.0
             b.extend_from_slice(&[0u8; 10]); // reserved
-            // identity matrix
+                                             // identity matrix
             b.extend_from_slice(&0x00010000u32.to_be_bytes());
             b.extend_from_slice(&0u32.to_be_bytes());
             b.extend_from_slice(&0u32.to_be_bytes());
@@ -595,7 +593,7 @@ mod tests {
             b.extend_from_slice(&0i16.to_be_bytes()); // alternate_group
             b.extend_from_slice(&0u16.to_be_bytes()); // volume
             b.extend_from_slice(&0u16.to_be_bytes()); // reserved
-            // identity matrix
+                                                      // identity matrix
             b.extend_from_slice(&0x00010000u32.to_be_bytes());
             b.extend_from_slice(&0u32.to_be_bytes());
             b.extend_from_slice(&0u32.to_be_bytes());
@@ -894,7 +892,7 @@ mod tests {
             b.extend_from_slice(&0u16.to_be_bytes()); // pre_defined
             b.extend_from_slice(&0u16.to_be_bytes()); // reserved
             b.extend_from_slice(&(44100u32 << 16).to_be_bytes()); // samplerate 44100.0
-            // No esds box — mp4a.esds is Option<EsdsBox>, None is valid.
+                                                                  // No esds box — mp4a.esds is Option<EsdsBox>, None is valid.
             b
         };
         let mp4a = box_wrap(b"mp4a", &mp4a_payload);
@@ -969,8 +967,8 @@ mod tests {
     #[test]
     fn test_moov_scanner_iteration_limit() {
         // Craft a file with 2000 minimal 8-byte "free" atoms followed by moov + mdat.
-        // Without the iteration cap, this would scan all 2000. With the cap (1024),
-        // it stops early and lets the mp4 parser handle it (returns Ok).
+        // The scanner hits MAX_ATOMS (1024) and fails closed — it can't verify
+        // moov-before-mdat, so it rejects the file rather than silently passing.
         let mut bytes = Vec::new();
         for _ in 0..2000 {
             bytes.extend_from_slice(&8u32.to_be_bytes()); // size = 8
@@ -980,8 +978,12 @@ mod tests {
         bytes.extend_from_slice(b"moov");
         bytes.extend_from_slice(&8u32.to_be_bytes());
         bytes.extend_from_slice(b"mdat");
-        // Should not hang or panic — returns Ok because scanner stops at cap
-        assert!(check_moov_bytes(&bytes).is_ok());
+        // Fail closed: too many atoms → reject
+        let err = check_moov_bytes(&bytes);
+        assert!(
+            matches!(err, Err(MediaError::MoovNotAtFront)),
+            "expected MoovNotAtFront, got {err:?}"
+        );
     }
 
     #[test]
@@ -1001,7 +1003,7 @@ mod tests {
         bytes.extend_from_slice(b"moov");
         bytes.extend_from_slice(&24u64.to_be_bytes()); // extended size = 24
         bytes.extend_from_slice(&[0u8; 8]); // 8 bytes of moov payload
-        // mdat
+                                            // mdat
         bytes.extend_from_slice(&8u32.to_be_bytes());
         bytes.extend_from_slice(b"mdat");
         // moov is before mdat — should pass
@@ -1023,7 +1025,7 @@ mod tests {
         bytes.extend_from_slice(b"mdat");
         bytes.extend_from_slice(&24u64.to_be_bytes()); // extended size = 24
         bytes.extend_from_slice(&[0u8; 8]); // payload
-        // moov after mdat
+                                            // moov after mdat
         bytes.extend_from_slice(&8u32.to_be_bytes());
         bytes.extend_from_slice(b"moov");
         let err = check_moov_bytes(&bytes);
