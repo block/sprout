@@ -137,10 +137,17 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
                 }
                 "image" => {
                     // NIP-71 poster frame — must be a local media URL with an image extension.
-                    // Video URLs (e.g. .mp4) are not valid poster frames.
+                    // Poster frames are independent blobs, NOT thumbnails.
+                    // Video URLs (e.g. .mp4) and thumbnail URLs (.thumb.jpg) are rejected.
                     const IMAGE_EXTS: &[&str] = &["jpg", "png", "gif", "webp"];
                     if !is_local_media_url(value, media_base_url) {
                         return Err("imeta image must be a local /media/ path".into());
+                    }
+                    if value.contains(".thumb.") {
+                        return Err(
+                            "imeta image must reference a standalone poster frame, not a thumbnail"
+                                .into(),
+                        );
                     }
                     let ext = value.rsplit('.').next().unwrap_or("");
                     if !IMAGE_EXTS.contains(&ext) {
