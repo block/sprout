@@ -18,6 +18,11 @@ import {
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
 import { personaCatalogCopy } from "./personaLibraryCopy";
+import {
+  copySelectedPersonaIds,
+  countMissingPersonaIds,
+  filterAvailablePersonaIds,
+} from "./teamDialogSelection";
 
 type TeamDialogProps = {
   open: boolean;
@@ -49,18 +54,12 @@ export function TeamDialog({
   const [selectedPersonaIds, setSelectedPersonaIds] = React.useState<string[]>(
     [],
   );
-  const getAvailablePersonaIds = React.useEffectEvent(
-    () => new Set(personas.map((persona) => persona.id)),
-  );
   const missingInitialPersonaCount = React.useMemo(() => {
     if (!initialValues) {
       return 0;
     }
 
-    const availablePersonaIds = new Set(personas.map((persona) => persona.id));
-    return initialValues.personaIds.filter(
-      (personaId) => !availablePersonaIds.has(personaId),
-    ).length;
+    return countMissingPersonaIds(initialValues.personaIds, personas);
   }, [initialValues, personas]);
 
   React.useEffect(() => {
@@ -68,14 +67,9 @@ export function TeamDialog({
       return;
     }
 
-    const availablePersonaIds = getAvailablePersonaIds();
     setName(initialValues.name);
     setTeamDescription(initialValues.description ?? "");
-    setSelectedPersonaIds(
-      initialValues.personaIds.filter((personaId) =>
-        availablePersonaIds.has(personaId),
-      ),
-    );
+    setSelectedPersonaIds(copySelectedPersonaIds(initialValues.personaIds));
   }, [initialValues, open]);
 
   function handleOpenChange(next: boolean) {
@@ -101,13 +95,10 @@ export function TeamDialog({
       return;
     }
 
-    const availablePersonaIds = getAvailablePersonaIds();
     const baseInput = {
       name,
       description: teamDescription.trim() || undefined,
-      personaIds: selectedPersonaIds.filter((personaId) =>
-        availablePersonaIds.has(personaId),
-      ),
+      personaIds: filterAvailablePersonaIds(selectedPersonaIds, personas),
     };
 
     if ("id" in initialValues) {

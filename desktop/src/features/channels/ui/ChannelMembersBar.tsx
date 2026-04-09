@@ -8,6 +8,7 @@ import {
   usePersonasQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
+import { pickBotName } from "@/features/agents/lib/pickBotName";
 import {
   useBotRecents,
   pickQuickBotPersonas,
@@ -72,9 +73,9 @@ export function ChannelMembersBar({
   const { recentIds, pushRecent } = useBotRecents();
   const quickDrop = useQuickBotDrop(channel.id);
 
-  // Track in-flight instance numbers so rapid clicks don't produce duplicates.
+  // Track in-flight instance names so rapid clicks don't produce duplicates.
   // Cleared when the members query refetches with the new member.
-  const inflightCountRef = React.useRef<Record<string, number>>({});
+  const inflightNamesRef = React.useRef<Record<string, string[]>>({});
 
   // Resolve the 3 personas to show in the quick bar.
   const quickPersonas = React.useMemo(() => {
@@ -82,35 +83,34 @@ export function ChannelMembersBar({
 
     const resolved = pickQuickBotPersonas(allPersonas, recentIds);
 
-    // Reset in-flight counts when members list updates (the new bot appeared).
-    inflightCountRef.current = {};
+    // Reset in-flight names when members list updates (the new bot appeared).
+    inflightNamesRef.current = {};
 
-    // Compute instance names from current members
+    // Build the set of names already used in this channel
+    const usedNames = new Set(
+      members.map((m) => m.displayName ?? "").filter((n) => n.length > 0),
+    );
+
+    // Compute instance names from persona name pools
     return resolved.map((persona) => {
-      const prefix = `${persona.displayName}::`;
-      let maxNum = 0;
-      for (const member of members) {
-        const label = member.displayName ?? "";
-        if (label.startsWith(prefix)) {
-          const num = Number.parseInt(label.slice(prefix.length), 10);
-          if (!Number.isNaN(num) && num > maxNum) maxNum = num;
-        }
-      }
-      const inflight = inflightCountRef.current[persona.id] ?? 0;
-      const next = maxNum + 1 + inflight;
-      return {
-        persona,
-        instanceName: `${persona.displayName}::${String(next).padStart(2, "0")}`,
-      };
+      // Include in-flight names to avoid duplicates on rapid clicks
+      const inflight = inflightNamesRef.current[persona.id] ?? [];
+      const combinedUsed = new Set(usedNames);
+      for (const n of inflight) combinedUsed.add(n);
+
+      const instanceName = pickBotName(persona.namePool ?? [], combinedUsed);
+      return { persona, instanceName };
     });
   }, [allPersonas, recentIds, members]);
 
   const addBot = quickDrop.addBot;
   const handleQuickAdd = React.useCallback(
     async (persona: AgentPersona, instanceName: string) => {
-      // Optimistically bump the in-flight counter to avoid duplicate names.
-      inflightCountRef.current[persona.id] =
-        (inflightCountRef.current[persona.id] ?? 0) + 1;
+      // Optimistically track the chosen name to avoid duplicates on rapid clicks.
+      inflightNamesRef.current[persona.id] = [
+        ...(inflightNamesRef.current[persona.id] ?? []),
+        instanceName,
+      ];
       pushRecent(persona.id);
       await addBot(persona, instanceName);
     },

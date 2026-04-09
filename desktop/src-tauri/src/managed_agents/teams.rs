@@ -230,6 +230,7 @@ mod tests {
             system_prompt: prompt.to_string(),
             provider: None,
             model: None,
+            name_pool: Vec::new(),
             is_builtin: false,
             is_active: true,
             created_at: "2026-03-20T00:00:00Z".to_string(),

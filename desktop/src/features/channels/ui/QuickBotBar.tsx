@@ -87,7 +87,7 @@ export function QuickBotBar({ personas, pending, onAdd }: QuickBotBarProps) {
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
-                Add {persona.displayName} → {instanceName}
+                Add {instanceName} ({persona.displayName})
               </TooltipContent>
             </Tooltip>
           );

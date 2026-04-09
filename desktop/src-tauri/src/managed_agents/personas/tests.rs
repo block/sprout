@@ -12,6 +12,7 @@ fn custom_persona(id: &str, display_name: &str) -> PersonaRecord {
         system_prompt: "Custom prompt".to_string(),
         provider: None,
         model: None,
+        name_pool: Vec::new(),
         is_builtin: false,
         is_active: true,
         created_at: "2026-03-19T00:00:00Z".to_string(),
@@ -63,6 +64,33 @@ fn merge_personas_restores_builtin_defaults() {
     assert_eq!(reviewer.created_at, original_created_at);
     assert_eq!(reviewer.updated_at, original_updated_at);
     assert!(reviewer.is_active);
+}
+
+#[test]
+fn merge_personas_restores_builtin_name_pool_and_preserves_is_active() {
+    let mut solo = custom_persona("builtin:solo", "Solo");
+    solo.is_builtin = true;
+    solo.avatar_url = None;
+    solo.is_active = true;
+    solo.name_pool = vec!["Definitely Not Solo".to_string()];
+
+    let (records, changed) = merge_personas(vec![solo], "2026-03-19T00:00:00Z");
+
+    assert!(changed);
+    let solo = records
+        .iter()
+        .find(|record| record.id == "builtin:solo")
+        .expect("solo built-in should exist");
+    let expected_name_pool = BUILT_IN_PERSONAS
+        .iter()
+        .find(|persona| persona.id == "builtin:solo")
+        .expect("solo built-in definition should exist")
+        .name_pool
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(solo.name_pool, expected_name_pool);
+    assert!(solo.is_active);
 }
 
 #[test]

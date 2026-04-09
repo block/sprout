@@ -58,6 +58,12 @@ pub fn create_persona(
         .lock()
         .map_err(|error| error.to_string())?;
     let mut personas = load_personas(&app)?;
+    let name_pool: Vec<String> = input
+        .name_pool
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     let persona = PersonaRecord {
         id: Uuid::new_v4().to_string(),
         display_name,
@@ -65,6 +71,7 @@ pub fn create_persona(
         system_prompt,
         provider,
         model,
+        name_pool,
         is_builtin: false,
         is_active: true,
         created_at: now.clone(),
@@ -106,6 +113,12 @@ pub fn update_persona(
     persona.system_prompt = system_prompt;
     persona.provider = provider;
     persona.model = model;
+    persona.name_pool = input
+        .name_pool
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     persona.updated_at = now_iso();
 
     save_personas(&app, &personas)?;
@@ -278,7 +291,7 @@ pub async fn export_persona_to_json(
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
     // Load persona data under lock, then drop lock before dialog.
-    let (display_name, system_prompt, avatar_url, provider, model) = {
+    let (display_name, system_prompt, avatar_url, provider, model, name_pool) = {
         let _store_guard = state
             .managed_agents_store_lock
             .lock()
@@ -294,6 +307,7 @@ pub async fn export_persona_to_json(
             persona.avatar_url.clone(),
             persona.provider.clone(),
             persona.model.clone(),
+            persona.name_pool.clone(),
         )
     };
 
@@ -303,6 +317,7 @@ pub async fn export_persona_to_json(
         avatar_url.as_deref(),
         provider.as_deref(),
         model.as_deref(),
+        &name_pool,
     )?;
 
     let slug = crate::util::slugify(&display_name, "persona", 50);

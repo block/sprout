@@ -9,7 +9,8 @@ import {
   KIND_TYPING_INDICATOR,
 } from "@/shared/constants/kinds";
 
-type TypingState = Record<string, number>;
+type TypingEntry = { expiresAt: number; firstSeenAt: number };
+type TypingState = Record<string, TypingEntry>;
 
 const TYPING_INDICATOR_TTL_MS = 8_000;
 const TYPING_PRUNE_INTERVAL_MS = 1_000;
@@ -19,9 +20,9 @@ function pruneTypingState(state: TypingState, now = Date.now()) {
   let changed = false;
   const next: TypingState = {};
 
-  for (const [pubkey, expiresAt] of Object.entries(state)) {
-    if (expiresAt > now) {
-      next[pubkey] = expiresAt;
+  for (const [pubkey, entry] of Object.entries(state)) {
+    if (entry.expiresAt > now) {
+      next[pubkey] = entry;
       continue;
     }
 
@@ -83,10 +84,18 @@ export function useChannelTyping(
       return;
     }
 
-    setTypingByPubkey((current) => ({
-      ...pruneTypingState(current),
-      [typingPubkey]: Date.now() + TYPING_INDICATOR_TTL_MS,
-    }));
+    const now = Date.now();
+    setTypingByPubkey((current) => {
+      const pruned = pruneTypingState(current, now);
+      const existing = pruned[typingPubkey];
+      return {
+        ...pruned,
+        [typingPubkey]: {
+          expiresAt: now + TYPING_INDICATOR_TTL_MS,
+          firstSeenAt: existing?.firstSeenAt ?? now,
+        },
+      };
+    });
   });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: channel changes should clear local typing state
@@ -185,7 +194,7 @@ export function useChannelTyping(
   return useMemo(
     () =>
       Object.entries(typingByPubkey)
-        .sort((left, right) => right[1] - left[1])
+        .sort((left, right) => left[1].firstSeenAt - right[1].firstSeenAt)
         .map(([pubkey]) => pubkey),
     [typingByPubkey],
   );
