@@ -202,6 +202,7 @@ pub async fn verify_imeta_blobs(
         let mut m_value = String::new();
         let mut size_value: u64 = 0;
         let mut thumb_value = String::new();
+        let mut image_value = String::new();
 
         for part in tag.iter().skip(1) {
             let mut parts = part.splitn(2, ' ');
@@ -212,6 +213,7 @@ pub async fn verify_imeta_blobs(
                 "m" => m_value = value.to_string(),
                 "size" => size_value = value.parse().unwrap_or(0),
                 "thumb" => thumb_value = value.to_string(),
+                "image" => image_value = value.to_string(),
                 _ => {}
             }
         }
@@ -261,6 +263,27 @@ pub async fn verify_imeta_blobs(
                 return Err(format!(
                     "imeta thumb references missing thumbnail: {x_value}"
                 ));
+            }
+        }
+
+        // 5. If image (poster frame) is claimed, HEAD the poster blob.
+        //    Poster frames are independent blobs — extract hash from the image
+        //    URL itself, not from x_value.
+        if !image_value.is_empty() {
+            if let (Some(img_hash), Some(img_ext)) = (
+                extract_hash_from_media_url(&image_value),
+                extract_ext_from_media_url(&image_value),
+            ) {
+                let img_key = format!("{img_hash}.{img_ext}");
+                let img_exists = storage
+                    .head(&img_key)
+                    .await
+                    .map_err(|e| format!("storage error checking poster image: {e}"))?;
+                if !img_exists {
+                    return Err(format!(
+                        "imeta image references missing poster frame: {img_hash}"
+                    ));
+                }
             }
         }
     }
