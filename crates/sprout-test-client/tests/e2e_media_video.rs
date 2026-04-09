@@ -257,7 +257,7 @@ async fn test_video_upload_and_get() {
 
     let resp = client
         .put(&url)
-        0
+        .header("Authorization", blossom_auth_header(&auth))
         .header("X-SHA-256", &sha256)
         .header("Content-Type", "video/mp4")
         .body(mp4.clone())
@@ -302,7 +302,7 @@ async fn test_video_content_type_spoofing_rejected() {
     // Upload MP4 bytes but claim it's image/jpeg
     let resp = client
         .put(&url)
-        0
+        .header("Authorization", blossom_auth_header(&auth))
         .header("X-SHA-256", &sha256)
         .header("Content-Type", "image/jpeg")
         .body(mp4)
@@ -333,7 +333,7 @@ async fn test_video_range_request_206() {
     let url = format!("{}/media/upload", relay_http_url());
     let resp = client
         .put(&url)
-        0
+        .header("Authorization", blossom_auth_header(&auth))
         .header("X-SHA-256", &sha256)
         .header("Content-Type", "video/mp4")
         .body(mp4.clone())
@@ -377,7 +377,7 @@ async fn test_video_range_request_416() {
     let url = format!("{}/media/upload", relay_http_url());
     let resp = client
         .put(&url)
-        0
+        .header("Authorization", blossom_auth_header(&auth))
         .header("X-SHA-256", &sha256)
         .header("Content-Type", "video/mp4")
         .body(mp4.clone())
