@@ -136,7 +136,7 @@ pub async fn process_video_upload(
                 if msg.contains("length limit") || msg.contains("body limit") {
                     std::io::Error::new(std::io::ErrorKind::WriteZero, msg)
                 } else {
-                    std::io::Error::new(std::io::ErrorKind::Other, e)
+                    std::io::Error::other(e)
                 }
             })
         });
