@@ -290,13 +290,13 @@ pub async fn verify_imeta_blobs(
         //    on it) and MIME must be an image type.
         if !image_value.is_empty() {
             if let Some(img_hash) = extract_hash_from_media_url(&image_value) {
-                let img_sidecar = storage
-                    .get_sidecar(img_hash)
-                    .await
-                    .map_err(|_| format!("imeta image references nonexistent poster: {img_hash}"))?;
+                let img_sidecar = storage.get_sidecar(img_hash).await.map_err(|_| {
+                    format!("imeta image references nonexistent poster: {img_hash}")
+                })?;
 
                 // Poster frame must be an image, not video or other type.
-                const IMAGE_MIMES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+                const IMAGE_MIMES: &[&str] =
+                    &["image/jpeg", "image/png", "image/gif", "image/webp"];
                 if !IMAGE_MIMES.contains(&img_sidecar.mime_type.as_str()) {
                     return Err(format!(
                         "imeta image poster MIME must be image type, got {}",
