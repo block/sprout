@@ -81,7 +81,7 @@ export function MembersSidebar({
     const canRemoveMember =
       (selfMember?.role === "admin" && member.pubkey !== currentPubkey) ||
       (selfMember?.role === "owner" && isBot(member)) ||
-      isMyBot(member) ||
+      (selfMember && isMyBot(member)) ||
       (currentPubkey && member.pubkey === currentPubkey);
     const memberLabel = formatMemberName(member, currentPubkey);
     const profile =

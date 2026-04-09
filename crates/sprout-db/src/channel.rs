@@ -427,6 +427,8 @@ pub async fn remove_member(
         let actor_role: MemberRole = actor_role_str.parse().map_err(|_| {
             DbError::InvalidData(format!("invalid role in database: {actor_role_str}"))
         })?;
+        // Safe to query outside the transaction: agent_owner_pubkey is immutable
+        // (set once at token mint, first-mint-wins).
         if !actor_role.is_elevated()
             && !crate::user::is_agent_owner(pool, pubkey, actor_pubkey).await?
         {
