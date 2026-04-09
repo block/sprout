@@ -80,13 +80,13 @@ export function PersonaCatalogSection({
             return (
               <div
                 className={cn(
-                  "group relative flex flex-col gap-4 rounded-xl border bg-card/80 p-3 shadow-sm transition-colors",
+                  "group relative flex flex-col gap-4 rounded-xl border p-3 shadow-sm transition-[background-color,border-color,box-shadow]",
                   isPending
                     ? "cursor-not-allowed opacity-70"
-                    : "cursor-pointer hover:border-primary/40 hover:bg-primary/[0.03]",
+                    : "cursor-pointer",
                   isSelected
-                    ? "border-primary/40 bg-primary/[0.04]"
-                    : "border-border/70",
+                    ? "border-primary bg-primary/10 text-foreground"
+                    : "border-border/80 bg-background/60 hover:bg-accent hover:text-accent-foreground",
                 )}
                 data-testid={`persona-catalog-card-${persona.id}`}
                 data-state={isSelected ? "selected" : "available"}
@@ -98,7 +98,7 @@ export function PersonaCatalogSection({
                     isSelected,
                   )}
                   aria-pressed={isSelected}
-                  className="absolute inset-0 z-0 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  className="absolute inset-0 z-0 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2"
                   data-testid={`persona-catalog-card-target-${persona.id}`}
                   disabled={isPending}
                   onClick={() => {
@@ -123,7 +123,12 @@ export function PersonaCatalogSection({
                     {preview}
                   </p>
 
-                  <div className="mt-auto flex items-center justify-between gap-3 border-t border-border/60 pt-3">
+                  <div
+                    className={cn(
+                      "mt-auto flex items-center justify-between gap-3 border-t pt-3",
+                      isSelected ? "border-primary/20" : "border-border/60",
+                    )}
+                  >
                     <Button
                       className="pointer-events-auto"
                       data-testid={`persona-catalog-details-${persona.id}`}

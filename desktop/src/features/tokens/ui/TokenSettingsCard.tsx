@@ -673,10 +673,7 @@ export function TokenSettingsCard({
   const hasReachedTokenLimit = activeTokens.length >= MAX_ACTIVE_TOKENS;
 
   return (
-    <section
-      className="rounded-xl border border-border/80 bg-card/80 p-4 shadow-sm"
-      data-testid="settings-tokens"
-    >
+    <section className="min-w-0" data-testid="settings-tokens">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">

@@ -1,3 +1,5 @@
+import { Check } from "lucide-react";
+
 import { cn } from "@/shared/lib/cn";
 
 import { personaCatalogCopy } from "./personaLibraryCopy";
@@ -12,12 +14,13 @@ export function PersonaCatalogSelectionBadge({
   return (
     <span
       className={cn(
-        "whitespace-nowrap rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em]",
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em]",
         isActive
-          ? "bg-primary/15 text-primary"
-          : "bg-muted text-muted-foreground",
+          ? "bg-primary text-primary-foreground shadow-sm"
+          : "border border-border/70 bg-background/85 text-muted-foreground",
       )}
     >
+      {isActive ? <Check className="h-3 w-3" /> : null}
       {isActive
         ? personaCatalogCopy.selectedState
         : personaCatalogCopy.availableState}
