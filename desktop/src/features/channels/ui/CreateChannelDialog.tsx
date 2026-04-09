@@ -303,167 +303,162 @@ export function CreateChannelDialog({
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Create a {label}</DialogTitle>
-          <DialogDescription>
-            {channelType === "stream"
-              ? "Streams are for real-time conversation."
-              : "Forums are for threaded discussion."}
-          </DialogDescription>
-        </DialogHeader>
-
+      <DialogContent className="max-w-3xl overflow-hidden p-0">
         <form
-          className="space-y-4"
+          className="flex max-h-[85vh] flex-col"
           data-testid={`create-${channelType}-form`}
           onSubmit={(event) => {
             void handleSubmit(event);
           }}
         >
-          {/* Name */}
-          <div className="space-y-1.5">
-            <label
-              className="text-sm font-medium"
-              htmlFor="create-channel-name"
-            >
-              Name
-            </label>
-            <Input
-              autoCapitalize="none"
-              autoComplete="off"
-              autoCorrect="off"
-              data-testid={`create-${channelType}-name`}
-              disabled={isPending}
-              id="create-channel-name"
-              onChange={(event) => {
-                setErrorMessage(undefined);
-                setName(event.target.value);
-              }}
-              placeholder={
-                channelType === "stream"
-                  ? "release-notes"
-                  : "design-discussions"
-              }
-              ref={nameInputRef}
-              spellCheck={false}
-              value={name}
-            />
-          </div>
+          <DialogHeader className="border-b border-border/60 px-6 py-5 pr-14">
+            <DialogTitle>Create a {label}</DialogTitle>
+            <DialogDescription>
+              {channelType === "stream"
+                ? "Streams are for real-time conversation."
+                : "Forums are for threaded discussion."}
+            </DialogDescription>
+          </DialogHeader>
 
-          {/* Description */}
-          <div className="space-y-1.5">
-            <label
-              className="text-sm font-medium"
-              htmlFor="create-channel-description"
-            >
-              Description{" "}
-              <span className="font-normal text-muted-foreground">
-                (optional)
-              </span>
-            </label>
-            <Input
-              autoComplete="off"
-              data-testid={`create-${channelType}-description`}
-              disabled={isPending}
-              id="create-channel-description"
-              onChange={(event) => {
-                setErrorMessage(undefined);
-                setDescription(event.target.value);
-              }}
-              placeholder={
-                channelType === "stream"
-                  ? "What this channel is for"
-                  : "What this forum is for"
-              }
-              value={description}
-            />
-          </div>
-
-          {/* Visibility + Ephemeral toggles */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                checked={visibility === "private"}
-                data-testid={`create-${channelType}-visibility`}
+          <div className="space-y-5 overflow-y-auto px-6 py-5">
+            {/* Name */}
+            <div className="space-y-1.5">
+              <div className="text-sm font-medium">Name</div>
+              <Input
+                autoCapitalize="none"
+                autoComplete="off"
+                autoCorrect="off"
+                data-testid={`create-${channelType}-name`}
                 disabled={isPending}
-                id={visibilityId}
-                onCheckedChange={(checked) =>
-                  setVisibility(checked === true ? "private" : "open")
+                id="create-channel-name"
+                onChange={(event) => {
+                  setErrorMessage(undefined);
+                  setName(event.target.value);
+                }}
+                placeholder={
+                  channelType === "stream"
+                    ? "release-notes"
+                    : "design-discussions"
                 }
+                ref={nameInputRef}
+                spellCheck={false}
+                value={name}
               />
-              <label
-                className="flex cursor-pointer items-center gap-1.5 text-sm select-none peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
-                htmlFor={visibilityId}
-              >
-                <Lock className="h-3.5 w-3.5" />
-                Private {label}
-              </label>
             </div>
-            <div className="flex items-center gap-2">
-              <Checkbox
-                checked={ephemeral}
+
+            {/* Description */}
+            <div className="space-y-1.5">
+              <div className="text-sm font-medium">
+                Description{" "}
+                <span className="font-normal text-muted-foreground">
+                  (optional)
+                </span>
+              </div>
+              <Input
+                autoComplete="off"
+                data-testid={`create-${channelType}-description`}
                 disabled={isPending}
-                id={ephemeralId}
-                onCheckedChange={(checked) => setEphemeral(checked === true)}
+                id="create-channel-description"
+                onChange={(event) => {
+                  setErrorMessage(undefined);
+                  setDescription(event.target.value);
+                }}
+                placeholder={
+                  channelType === "stream"
+                    ? "What this channel is for"
+                    : "What this forum is for"
+                }
+                value={description}
               />
-              <label
-                className="flex cursor-pointer items-center gap-1.5 text-sm select-none peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
-                htmlFor={ephemeralId}
-              >
-                <Zap className="h-3.5 w-3.5" />
-                Ephemeral — auto-archives after 1 day of inactivity
-              </label>
             </div>
+
+            {/* Visibility + Ephemeral toggles */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  checked={visibility === "private"}
+                  data-testid={`create-${channelType}-visibility`}
+                  disabled={isPending}
+                  id={visibilityId}
+                  onCheckedChange={(checked) =>
+                    setVisibility(checked === true ? "private" : "open")
+                  }
+                />
+                <label
+                  className="flex cursor-pointer items-center gap-1.5 text-sm select-none peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
+                  htmlFor={visibilityId}
+                >
+                  <Lock className="h-3.5 w-3.5" />
+                  Private {label}
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  checked={ephemeral}
+                  disabled={isPending}
+                  id={ephemeralId}
+                  onCheckedChange={(checked) => setEphemeral(checked === true)}
+                />
+                <label
+                  className="flex cursor-pointer items-center gap-1.5 text-sm select-none peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
+                  htmlFor={ephemeralId}
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  Ephemeral — auto-archives after 1 day of inactivity
+                </label>
+              </div>
+            </div>
+
+            {/* Add people */}
+            <PeopleSearch
+              disabled={isPending}
+              onRemove={(pubkey) =>
+                setSelectedPeople((current) =>
+                  current.filter((u) => u.pubkey !== pubkey),
+                )
+              }
+              onSelect={(user) =>
+                setSelectedPeople((current) => [...current, user])
+              }
+              selectedPeople={selectedPeople}
+            />
+
+            {/* Add bots — persona pills with stepper */}
+            <AddChannelBotPersonasSection
+              canToggleSelections={!isPending}
+              includeGeneric={false}
+              isLoading={personasQuery.isLoading}
+              onToggleGeneric={() => {}}
+              onSetPersonaCount={(personaId, count) => {
+                setPersonaCounts((current) => {
+                  const next = new Map(current);
+                  if (count <= 0) {
+                    next.delete(personaId);
+                  } else {
+                    next.set(personaId, count);
+                  }
+                  return next;
+                });
+              }}
+              personas={personas}
+              selectedPersonaCounts={personaCounts}
+            />
+
+            {/* Error message */}
+            {errorMessage ? (
+              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                {errorMessage}
+              </p>
+            ) : null}
           </div>
 
-          {/* Add people */}
-          <PeopleSearch
-            disabled={isPending}
-            onRemove={(pubkey) =>
-              setSelectedPeople((current) =>
-                current.filter((u) => u.pubkey !== pubkey),
-              )
-            }
-            onSelect={(user) =>
-              setSelectedPeople((current) => [...current, user])
-            }
-            selectedPeople={selectedPeople}
-          />
-
-          {/* Add bots — persona pills with stepper */}
-          <AddChannelBotPersonasSection
-            canToggleSelections={!isPending}
-            includeGeneric={false}
-            isLoading={personasQuery.isLoading}
-            onToggleGeneric={() => {}}
-            onSetPersonaCount={(personaId, count) => {
-              setPersonaCounts((current) => {
-                const next = new Map(current);
-                if (count <= 0) {
-                  next.delete(personaId);
-                } else {
-                  next.set(personaId, count);
-                }
-                return next;
-              });
-            }}
-            personas={personas}
-            selectedPersonaCounts={personaCounts}
-          />
-
-          {/* Error message */}
-          {errorMessage ? (
-            <p className="text-sm text-destructive">{errorMessage}</p>
-          ) : null}
-
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-2 pt-2">
+          <div className="flex justify-end gap-2 border-t border-border/60 px-6 py-4">
             <Button
               disabled={isPending}
               onClick={() => onOpenChange(false)}
               size="sm"
               type="button"
-              variant="ghost"
+              variant="outline"
             >
               Cancel
             </Button>
