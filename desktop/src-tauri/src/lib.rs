@@ -205,6 +205,12 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Defense-in-depth cap: refuse to buffer responses larger than this into RAM.
+/// Range requests (≤16 MiB from server) always fit. Full GETs for huge videos
+/// get a clear 413 instead of OOM — the <video> element always uses range
+/// requests for seeking, so this only catches edge cases.
+const MAX_PROXY_RESPONSE: u64 = 20 * 1024 * 1024;
+
 /// Proxy media requests through the Rust backend so they traverse the WARP tunnel.
 ///
 /// WKWebView's networking stack bypasses WARP, causing 403s from Cloudflare Access.
@@ -229,14 +235,21 @@ async fn handle_sprout_media(
         return error_response(404, "not found");
     }
 
+    let has_range = request.headers().contains_key("range");
     let upstream_url = format!("{base}{path_and_query}");
 
-    let result = state
+    // Forward Range header if present — enables video seeking through the proxy.
+    let mut upstream = state
         .http_client
         .get(&upstream_url)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await;
+        .timeout(std::time::Duration::from_secs(60));
+    if let Some(range) = request.headers().get("range") {
+        if let Ok(v) = range.to_str() {
+            upstream = upstream.header("range", v);
+        }
+    }
+
+    let result = upstream.send().await;
 
     match result {
         Ok(resp) => {
@@ -248,12 +261,57 @@ async fn handle_sprout_media(
                 .unwrap_or("application/octet-stream")
                 .to_string();
 
+            // Propagate range-related headers so <video> seeking works.
+            let content_range = resp
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let accept_ranges = resp
+                .headers()
+                .get("accept-ranges")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let content_length = resp
+                .headers()
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
+            // OOM guard: if this is a non-range GET and the upstream body is
+            // larger than our cap, bail with 413 instead of buffering into RAM.
+            // Tauri's protocol handler requires Vec<u8> so we can't truly stream.
+            if !has_range {
+                if let Some(ref cl) = content_length {
+                    if let Ok(len) = cl.parse::<u64>() {
+                        if len > MAX_PROXY_RESPONSE {
+                            return error_response(
+                                413,
+                                "response too large — use range requests for video playback",
+                            );
+                        }
+                    }
+                }
+            }
+
             match resp.bytes().await {
-                Ok(bytes) => http::Response::builder()
-                    .status(status)
-                    .header("content-type", &content_type)
-                    .body(bytes.to_vec())
-                    .unwrap_or_else(|_| error_response(500, "response build failed")),
+                Ok(bytes) => {
+                    let mut builder = http::Response::builder()
+                        .status(status)
+                        .header("content-type", &content_type);
+                    if let Some(ref cr) = content_range {
+                        builder = builder.header("content-range", cr);
+                    }
+                    if let Some(ref ar) = accept_ranges {
+                        builder = builder.header("accept-ranges", ar);
+                    }
+                    if let Some(ref cl) = content_length {
+                        builder = builder.header("content-length", cl);
+                    }
+                    builder
+                        .body(bytes.to_vec())
+                        .unwrap_or_else(|_| error_response(500, "response build failed"))
+                }
                 Err(_) => error_response(502, "failed to read upstream body"),
             }
         }

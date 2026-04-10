@@ -92,6 +92,8 @@ type RawChannel = {
   archived_at: string | null;
   participants: string[];
   participant_pubkeys: string[];
+  ttl_seconds: number | null;
+  ttl_deadline: string | null;
 };
 
 type RawChannelWithMembership = RawChannel & {
@@ -465,6 +467,8 @@ function toRawChannel(channel: MockChannel): RawChannelWithMembership {
     archived_at: channel.archived_at,
     participants: [...channel.participants],
     participant_pubkeys: [...channel.participant_pubkeys],
+    ttl_seconds: channel.ttl_seconds ?? null,
+    ttl_deadline: channel.ttl_deadline ?? null,
     is_member: channel.members.some(
       (member) =>
         member.pubkey === MOCK_IDENTITY_PUBKEY ||
@@ -511,11 +515,15 @@ function createMockChannel(
     | "updated_at"
     | "participant_pubkeys"
     | "participants"
+    | "ttl_seconds"
+    | "ttl_deadline"
   > & {
     created_minutes_ago: number;
     members: RawChannelMember[];
     participant_pubkeys?: string[];
     participants?: string[];
+    ttl_seconds?: number | null;
+    ttl_deadline?: string | null;
     updated_minutes_ago?: number;
   },
 ): MockChannel {
@@ -526,6 +534,8 @@ function createMockChannel(
     members: cloneMembers(seed.members),
     participant_pubkeys: [...(seed.participant_pubkeys ?? [])],
     participants: [...(seed.participants ?? [])],
+    ttl_seconds: seed.ttl_seconds ?? null,
+    ttl_deadline: seed.ttl_deadline ?? null,
     updated_at: isoMinutesAgo(
       seed.updated_minutes_ago ?? seed.created_minutes_ago,
     ),
@@ -2181,10 +2191,15 @@ async function handleCreateChannel(
     channelType: "stream" | "forum";
     visibility: "open" | "private";
     description?: string;
+    ttlSeconds?: number;
   },
   config: E2eConfig | undefined,
 ) {
   const identity = getIdentity(config);
+  const ttlDeadline =
+    typeof args.ttlSeconds === "number"
+      ? new Date(Date.now() + args.ttlSeconds * 1_000).toISOString()
+      : null;
   if (!identity) {
     const owner = createCurrentMember(config, "owner");
     const channel = createMockChannel({
@@ -2202,6 +2217,8 @@ async function handleCreateChannel(
       topic_set_at: null,
       purpose_set_by: null,
       purpose_set_at: null,
+      ttl_seconds: args.ttlSeconds ?? null,
+      ttl_deadline: ttlDeadline,
       topic_required: false,
       max_members: null,
       nip29_group_id: null,
@@ -2222,6 +2239,9 @@ async function handleCreateChannel(
   ];
   if (args.description) {
     tags.push(["about", args.description]);
+  }
+  if (typeof args.ttlSeconds === "number") {
+    tags.push(["ttl", String(args.ttlSeconds)]);
   }
   await submitSignedEvent(config, { kind: 9007, content: "", tags });
 

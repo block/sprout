@@ -52,9 +52,8 @@ export function editPersonaDialogState(
   persona: AgentPersona,
 ): PersonaDialogState {
   return {
-    title: `Edit ${persona.displayName}`,
-    description:
-      "Update this saved persona. New deployments will use the updated values.",
+    title: "Edit persona",
+    description: "",
     submitLabel: "Save changes",
     initialValues: {
       id: persona.id,

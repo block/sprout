@@ -18,6 +18,11 @@ pub struct BlobDescriptor {
     pub dim: Option<String>,
     pub blurhash: Option<String>,
     pub thumb: Option<String>,
+    /// Video duration in seconds. `None` for non-video blobs.
+    pub duration: Option<f64>,
+    /// NIP-71 poster frame URL. `None` for non-video blobs or if extraction failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -95,8 +100,14 @@ fn fd_real_path(_file: &std::fs::File) -> Result<std::path::PathBuf, String> {
     Err("fd_real_path not supported on this platform".to_string())
 }
 
-/// MIME allowlist — must match the server's `ALLOWED_MIME_TYPES`.
-const ALLOWED_MIME: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+/// MIME allowlist — must match the server's allowed types.
+const ALLOWED_MIME: &[&str] = &[
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "video/mp4",
+];
 
 fn detect_and_validate_mime(body: &[u8]) -> Result<String, String> {
     let mime = infer::get(body)
@@ -108,12 +119,17 @@ fn detect_and_validate_mime(body: &[u8]) -> Result<String, String> {
     Ok(mime)
 }
 
-fn sign_blossom_upload_auth(keys: &Keys, sha256: &str) -> Result<nostr::Event, String> {
+fn sign_blossom_upload_auth(
+    keys: &Keys,
+    sha256: &str,
+    expiry_secs: u64,
+) -> Result<nostr::Event, String> {
     let now = Timestamp::now().as_u64();
     let mut tags = vec![
         Tag::parse(vec!["t", "upload"]).map_err(|e| e.to_string())?,
         Tag::parse(vec!["x", sha256]).map_err(|e| e.to_string())?,
-        Tag::parse(vec!["expiration", &(now + 300).to_string()]).map_err(|e| e.to_string())?,
+        Tag::parse(vec!["expiration", &(now + expiry_secs).to_string()])
+            .map_err(|e| e.to_string())?,
     ];
     let base_url = relay_api_base_url();
     if let Some(domain) = extract_server_authority(&base_url) {
@@ -126,6 +142,10 @@ fn sign_blossom_upload_auth(keys: &Keys, sha256: &str) -> Result<nostr::Event, S
 }
 
 /// Execute the upload HTTP request. Shared by all upload entry points.
+// TODO(v2): Stream large video files to the relay instead of buffering in RAM.
+// Current approach works for videos up to ~100MB but will OOM on 500MB files.
+// Fix: use reqwest's Body::wrap_stream() to stream from the temp file directly.
+// The server already supports streaming upload via process_video_upload.
 async fn do_upload(
     body: Vec<u8>,
     mime: &str,
@@ -133,9 +153,17 @@ async fn do_upload(
 ) -> Result<BlobDescriptor, String> {
     let sha256 = hex::encode(Sha256::digest(&body));
 
+    // Video uploads get a 1-hour auth window to survive slow connections;
+    // images use 5 minutes. Must match the server-side max_age_secs values
+    // in process_upload (600s) and process_video_upload (3600s).
+    let expiry_secs = if mime.starts_with("video/") {
+        3600
+    } else {
+        300
+    };
     let auth_event = {
         let keys = state.keys.lock().map_err(|e| e.to_string())?;
-        sign_blossom_upload_auth(&keys, &sha256)?
+        sign_blossom_upload_auth(&keys, &sha256, expiry_secs)?
     };
 
     let auth_header = format!(
@@ -213,6 +241,243 @@ pub async fn upload_media(
     do_upload(body, &mime, &state).await
 }
 
+// ── Video transcode helpers ──────────────────────────────────────────────────
+
+/// Check if ffmpeg is available on PATH.
+fn find_ffmpeg() -> Result<(), String> {
+    match std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(s) if s.success() => Ok(()),
+        Ok(_) => Err(
+            "ffmpeg was found but returned an error — it may be broken or misconfigured"
+                .to_string(),
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(
+            "ffmpeg is required for video uploads but was not found.\n\n\
+             Install it:\n  \
+             macOS:   brew install ffmpeg\n  \
+             Linux:   sudo apt install ffmpeg\n  \
+             Windows: winget install ffmpeg"
+                .to_string(),
+        ),
+        Err(e) => Err(format!("failed to check for ffmpeg: {e}")),
+    }
+}
+
+/// Detect if a file is a video based on magic bytes.
+fn is_video_file(buf: &[u8]) -> bool {
+    infer::get(buf).map_or(false, |t| t.mime_type().starts_with("video/"))
+}
+
+/// Maximum wall-clock time for an ffmpeg transcode before we kill it.
+/// 10 minutes is generous for any reasonable video; pathological inputs
+/// (crafted to cause exponential decode time) get killed instead of
+/// blocking a Tokio worker thread indefinitely.
+const FFMPEG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Run an ffmpeg command with a wall-clock timeout.
+///
+/// Spawns the child process, polls `try_wait()` every 500ms, and kills it
+/// if the deadline is exceeded. Returns the same `Output` as `Command::output()`.
+///
+/// **IMPORTANT**: callers MUST pass `-loglevel error` (or `quiet`) to ffmpeg.
+/// This function reads stderr only after the child exits. If ffmpeg writes
+/// enough progress/diagnostic output to fill the OS pipe buffer (~64 KiB),
+/// the child blocks on write() and never exits — causing a false timeout.
+/// `-loglevel error` suppresses progress spam, keeping stderr small.
+fn run_ffmpeg_with_timeout(
+    cmd: &mut std::process::Command,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn ffmpeg: {e}"))?;
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // Process exited — collect output.
+                let stdout = child.stdout.take().map_or_else(Vec::new, |mut s| {
+                    let mut buf = Vec::new();
+                    let _ = std::io::Read::read_to_end(&mut s, &mut buf);
+                    buf
+                });
+                let stderr = child.stderr.take().map_or_else(Vec::new, |mut s| {
+                    let mut buf = Vec::new();
+                    let _ = std::io::Read::read_to_end(&mut s, &mut buf);
+                    buf
+                });
+                return Ok(std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) => {
+                // Still running — check deadline.
+                if std::time::Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait(); // reap zombie
+                    return Err(format!("ffmpeg timed out after {}s", timeout.as_secs()));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(e) => return Err(format!("failed to wait on ffmpeg: {e}")),
+        }
+    }
+}
+
+/// Transcode any video file to H.264/AAC/MP4/fast-start via ffmpeg.
+///
+/// Always re-encodes — handles HEVC, VP9, ProRes, non-faststart MP4, 10-bit,
+/// wrong pixel format, MOV containers, etc. Output is guaranteed to pass the
+/// relay's `validate_video_file()`.
+///
+/// Returns the path to a temp file. Caller must clean up.
+fn transcode_to_mp4(source: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    find_ffmpeg()?;
+
+    // UUID-based temp path — unique across concurrent uploads.
+    let output =
+        std::env::temp_dir().join(format!("sprout-transcode-{}.mp4", uuid::Uuid::new_v4()));
+
+    let result = run_ffmpeg_with_timeout(
+        std::process::Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error"]) // suppress progress spam — prevents stderr pipe deadlock
+            .arg("-i")
+            .arg(source) // OsStr — handles non-UTF-8 paths on Unix
+            .args([
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "23",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+            ])
+            .arg(&output)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped()),
+        FFMPEG_TIMEOUT,
+    )?;
+
+    if !result.status.success() {
+        let _ = std::fs::remove_file(&output);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        let detail = stderr
+            .lines()
+            .rev()
+            .find(|l| !l.is_empty() && !l.starts_with("  "))
+            .unwrap_or("unknown error");
+        return Err(format!("Video conversion failed: {detail}"));
+    }
+
+    Ok(output)
+}
+
+/// Extract a single JPEG poster frame from a transcoded MP4 via ffmpeg.
+///
+/// Seeks to 1 second (avoids black leader frames), falls back to first frame
+/// for videos shorter than 1 second. Output is scaled to 640px wide with even
+/// dimensions. Returns the path to a temp JPEG. Caller must clean up.
+///
+/// Best-effort: returns `Err` on failure — callers should log and continue
+/// without a poster rather than failing the entire video upload.
+fn extract_poster_frame(mp4_path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let output = std::env::temp_dir().join(format!("sprout-poster-{}.jpg", uuid::Uuid::new_v4()));
+
+    // Poster extraction is a single-frame decode — 30s is generous.
+    let poster_timeout = std::time::Duration::from_secs(30);
+
+    // Try seeking to 1s first (avoids black first frames from fade-ins).
+    let result = run_ffmpeg_with_timeout(
+        std::process::Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error"])
+            .arg("-ss")
+            .arg("1")
+            .arg("-i")
+            .arg(mp4_path)
+            .args(["-vframes", "1", "-vf", "scale=640:-2", "-q:v", "2"])
+            .arg(&output)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped()),
+        poster_timeout,
+    )?;
+
+    // If seek to 1s failed (video shorter than 1s), retry from first frame.
+    if !result.status.success()
+        || !output.exists()
+        || std::fs::metadata(&output).map_or(true, |m| m.len() == 0)
+    {
+        if !result.status.success() {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            eprintln!("sprout-desktop: poster seek-to-1s failed, trying first frame: {stderr}");
+        }
+        let _ = std::fs::remove_file(&output);
+        let fallback = run_ffmpeg_with_timeout(
+            std::process::Command::new("ffmpeg")
+                .args(["-y", "-loglevel", "error"])
+                .arg("-i")
+                .arg(mp4_path)
+                .args(["-vframes", "1", "-vf", "scale=640:-2", "-q:v", "2"])
+                .arg(&output)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped()),
+            poster_timeout,
+        )?;
+
+        if !fallback.status.success() || !output.exists() {
+            let stderr = String::from_utf8_lossy(&fallback.stderr);
+            eprintln!("sprout-desktop: poster frame extraction failed: {stderr}");
+            let _ = std::fs::remove_file(&output);
+            return Err("ffmpeg could not extract a poster frame".to_string());
+        }
+    }
+
+    Ok(output)
+}
+
+/// Transcode video and extract poster frame. Returns (video_bytes, Option<poster_bytes>).
+///
+/// Poster extraction is best-effort — if it fails, returns `None` for the poster
+/// and the video bytes are still valid. All temp files are cleaned up.
+fn transcode_and_extract_poster(
+    source: &std::path::Path,
+) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+    let transcoded = transcode_to_mp4(source)?;
+
+    // Extract poster from the transcoded file (not the original — guarantees decodability).
+    let poster_bytes = match extract_poster_frame(&transcoded) {
+        Ok(poster_path) => {
+            let bytes = std::fs::read(&poster_path).ok();
+            let _ = std::fs::remove_file(&poster_path);
+            bytes
+        }
+        Err(e) => {
+            eprintln!("sprout-desktop: poster extraction failed (non-fatal): {e}");
+            None
+        }
+    };
+
+    let video_bytes =
+        std::fs::read(&transcoded).map_err(|e| format!("failed to read transcoded file: {e}"));
+    let _ = std::fs::remove_file(&transcoded);
+
+    Ok((video_bytes?, poster_bytes))
+}
+
 /// Open a native file dialog, read the selected file, and upload it.
 ///
 /// All file I/O happens in trusted Rust — the renderer never touches the
@@ -235,7 +500,12 @@ pub async fn pick_and_upload_media(
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
-        .add_filter("Images", &["jpg", "jpeg", "png", "gif", "webp"])
+        .add_filter(
+            "Media",
+            &[
+                "jpg", "jpeg", "png", "gif", "webp", "mp4", "mov", "mkv", "webm", "avi",
+            ],
+        )
         .pick_file(move |path| {
             let _ = tx.send(path);
         });
@@ -246,26 +516,65 @@ pub async fn pick_and_upload_media(
         None => return Ok(None),
     };
 
-    // Use the same fd-first pattern as upload_media: open the file to pin
-    // the inode, then read from the handle. Prevents a local attacker from
-    // swapping the selected path between dialog return and read.
-    let path = file_path.as_path().ok_or("invalid path")?;
-    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let path = file_path.as_path().ok_or("invalid path")?.to_path_buf();
 
-    use std::io::Read;
-    let mut body = Vec::new();
-    file.read_to_end(&mut body)
-        .map_err(|e| format!("failed to read file: {e}"))?;
-    drop(file);
+    // Pin the inode by opening the fd BEFORE spawn_blocking. This prevents a
+    // local attacker from swapping the file between dialog return and read.
+    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+
+    // All sync I/O (sniff, transcode, read) runs off the async runtime to
+    // avoid blocking Tokio worker threads during long ffmpeg transcodes.
+    let (body, poster_bytes) =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+            use std::io::Read;
+
+            // Sniff magic bytes from the pinned fd — no re-open, no TOCTOU.
+            let mut header = [0u8; 4096];
+            let n = file.read(&mut header).map_err(|e| e.to_string())?;
+
+            if is_video_file(&header[..n]) {
+                // ffmpeg needs a path, not an fd. Resolve the fd's real path
+                // so we pass the actual inode's location, not the original
+                // (potentially swapped) pathname. Same pattern as upload_media.
+                // IMPORTANT: keep `file` alive (fd open) until after transcode
+                // completes — this prevents the inode from being unlinked or
+                // the resolved path from becoming stale during the ffmpeg run.
+                let fd_path = fd_real_path(&file)?;
+                let result = transcode_and_extract_poster(&fd_path);
+                drop(file); // release fd only after ffmpeg is done
+                result
+            } else {
+                // Image: read the rest from the already-open fd (TOCTOU-safe).
+                let mut bytes = header[..n].to_vec();
+                file.read_to_end(&mut bytes)
+                    .map_err(|e| format!("failed to read file: {e}"))?;
+                Ok((bytes, None))
+            }
+        })
+        .await
+        .map_err(|e| format!("transcode task failed: {e}"))??;
 
     let mime = detect_and_validate_mime(&body)?;
-    do_upload(body, &mime, &state).await.map(Some)
+
+    // Upload video first, then poster (best-effort). If poster upload fails,
+    // the video descriptor is returned without an image field.
+    let mut descriptor = do_upload(body, &mime, &state).await?;
+
+    if let Some(poster) = poster_bytes {
+        match do_upload(poster, "image/jpeg", &state).await {
+            Ok(poster_desc) => descriptor.image = Some(poster_desc.url),
+            Err(e) => eprintln!("sprout-desktop: poster upload failed (non-fatal): {e}"),
+        }
+    }
+
+    Ok(Some(descriptor))
 }
 
 /// Upload raw bytes directly (for paste and drag-drop).
 ///
 /// The renderer already has the bytes in memory from the clipboard/drag event.
-/// Passing them via IPC avoids granting the renderer filesystem write access.
+/// If the bytes are a video, they're written to a temp file, transcoded via
+/// ffmpeg, and the transcoded output is uploaded instead.
 #[tauri::command]
 pub async fn upload_media_bytes(
     data: Vec<u8>,
@@ -274,8 +583,41 @@ pub async fn upload_media_bytes(
     if data.is_empty() {
         return Err("empty upload".to_string());
     }
-    let mime = detect_and_validate_mime(&data)?;
-    do_upload(data, &mime, &state).await
+
+    let (body, poster_bytes) = if is_video_file(&data) {
+        // Video: write to temp → transcode + extract poster → read results.
+        // All blocking I/O runs off the async runtime via spawn_blocking.
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+            let tmp_input =
+                std::env::temp_dir().join(format!("sprout-drop-{}", uuid::Uuid::new_v4()));
+            // Cleanup guard: remove temp file on ALL exit paths (including write failure).
+            let result = (|| {
+                std::fs::write(&tmp_input, &data)
+                    .map_err(|e| format!("failed to write temp file: {e}"))?;
+                transcode_and_extract_poster(&tmp_input)
+            })();
+            let _ = std::fs::remove_file(&tmp_input);
+            result
+        })
+        .await
+        .map_err(|e| format!("transcode task failed: {e}"))??
+    } else {
+        (data, None)
+    };
+
+    let mime = detect_and_validate_mime(&body)?;
+
+    // Upload video first, then poster (best-effort).
+    let mut descriptor = do_upload(body, &mime, &state).await?;
+
+    if let Some(poster) = poster_bytes {
+        match do_upload(poster, "image/jpeg", &state).await {
+            Ok(poster_desc) => descriptor.image = Some(poster_desc.url),
+            Err(e) => eprintln!("sprout-desktop: poster upload failed (non-fatal): {e}"),
+        }
+    }
+
+    Ok(descriptor)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -337,5 +679,33 @@ mod tests {
     fn test_detect_and_validate_mime_rejects_text() {
         let text = b"hello world";
         assert!(detect_and_validate_mime(text).is_err());
+    }
+
+    #[test]
+    fn test_is_video_file_mp4() {
+        // Minimal ftyp box (MP4 magic bytes)
+        let ftyp: &[u8] = &[
+            0x00, 0x00, 0x00, 0x14, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm', 0x00, 0x00,
+            0x00, 0x00, b'i', b's', b'o', b'm',
+        ];
+        assert!(is_video_file(ftyp));
+    }
+
+    #[test]
+    fn test_is_video_file_jpeg_is_not_video() {
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0];
+        assert!(!is_video_file(&jpeg));
+    }
+
+    #[test]
+    fn test_is_video_file_empty() {
+        assert!(!is_video_file(&[]));
+    }
+
+    #[test]
+    fn test_find_ffmpeg_runs() {
+        // This test verifies the function doesn't panic.
+        // It may pass or fail depending on whether ffmpeg is installed.
+        let _ = find_ffmpeg();
     }
 }

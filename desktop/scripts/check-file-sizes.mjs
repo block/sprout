@@ -42,14 +42,19 @@ const overrides = new Map([
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
   ["src/shared/api/relayClientSession.ts", 790], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
-  ["src-tauri/src/commands/agents.rs", 849], // remote agent lifecycle routing (local + provider branches) + scope enforcement; rustfmt adds line breaks around long tuple/closure blocks
+  ["src-tauri/src/lib.rs", 550], // sprout-media:// proxy now forwards Range headers + propagates Content-Range/Accept-Ranges for video seeking
+  ["src-tauri/src/commands/media.rs", 720], // ffmpeg video transcode + poster frame extraction + run_ffmpeg_with_timeout (find_ffmpeg, is_video_file, transcode_to_mp4, extract_poster_frame, transcode_and_extract_poster) + spawn_blocking wrappers + tests
+  ["src-tauri/src/commands/agents.rs", 860], // remote agent lifecycle routing (local + provider branches) + scope enforcement + mcp_toolsets field; rustfmt adds line breaks around long tuple/closure blocks
   ["src-tauri/src/managed_agents/runtime.rs", 650], // KNOWN_AGENT_BINARIES const + process_belongs_to_us FFI (macOS proc_name + Linux /proc/comm) + terminate_process + start/stop/sync lifecycle
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests
   ["src/features/agents/hooks.ts", 520], // agent query/mutation surface now includes built-in persona library activation
-  ["src/features/agents/ui/AgentsView.tsx", 850], // remote agent lifecycle controls + persona/team management + built-in catalog/library state orchestration
+  ["src/features/agents/ui/AgentsView.tsx", 880], // remote agent lifecycle controls + persona/team management + persona import-update dialog wiring + built-in catalog/library state orchestration
+  ["src/features/agents/ui/TeamDialog.tsx", 530], // team create/edit dialog with persona multi-select, import button, window drag detection, removal confirmation
+  ["src/features/agents/ui/TeamImportUpdateDialog.tsx", 660], // team import diff preview with member matching/updating/adding/removing sections, LCS line counts, removal confirmation
+  ["src/features/agents/ui/useTeamActions.ts", 510], // team CRUD + export + import + import-update orchestration with query invalidation
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
-  ["src/shared/api/types.ts", 530], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields
+  ["src/shared/api/types.ts", 535], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields + mcpToolsets
 ]);
 
 async function walkFiles(directory) {

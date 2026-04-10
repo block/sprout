@@ -2,6 +2,7 @@ import * as React from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
+  managedAgentsQueryKey,
   personasQueryKey,
   teamsQueryKey,
   useCreateTeamMutation,
@@ -16,12 +17,19 @@ import {
   exportTeamToJson,
   parseTeamFile,
 } from "@/shared/api/tauriTeams";
+import {
+  createPersona,
+  deletePersona,
+  updatePersona,
+} from "@/shared/api/tauriPersonas";
 import type {
+  AgentPersona,
   AgentTeam,
   Channel,
   CreateTeamInput,
   UpdateTeamInput,
 } from "@/shared/api/types";
+import { buildTeamImportPlan } from "./teamImportPlan";
 
 type TeamDialogState = {
   description: string;
@@ -38,6 +46,15 @@ type ActionMessages = {
 type RefetchCallbacks = {
   refetchManagedAgents: () => void;
   refetchRelayAgents: () => void;
+};
+
+type TeamImportUpdateApplyInput = {
+  personas: AgentPersona[];
+  updateTeamInfo: boolean;
+  selectedUpdatedPersonaIds: string[];
+  selectedNewMemberIndexes: number[];
+  missingPersonaIdsToRemove: string[];
+  deleteRemovedAgents: boolean;
 };
 
 export function useTeamActions(
@@ -65,6 +82,14 @@ export function useTeamActions(
     preview: ParsedTeamPreview;
     fileName: string;
   } | null>(null);
+  const [teamImportTarget, setTeamImportTarget] =
+    React.useState<AgentTeam | null>(null);
+  const [teamImportTargetPreview, setTeamImportTargetPreview] = React.useState<{
+    preview: ParsedTeamPreview;
+    fileName: string;
+  } | null>(null);
+  const [isApplyingTeamImportUpdate, setIsApplyingTeamImportUpdate] =
+    React.useState(false);
 
   const teams = teamsQuery.data ?? [];
 
@@ -169,19 +194,212 @@ export function useTeamActions(
     });
   }
 
-  function handleImportFile(fileBytes: number[], fileName: string) {
+  async function handleImportFile(fileBytes: number[], fileName: string) {
     actions.setActionNoticeMessage(null);
     actions.setActionErrorMessage(null);
-    void (async () => {
-      try {
-        const preview = await parseTeamFile(fileBytes, fileName);
-        setTeamImportPreview({ preview, fileName });
-      } catch (err) {
-        actions.setActionErrorMessage(
-          err instanceof Error ? err.message : "Failed to parse team file.",
+    try {
+      const preview = await parseTeamFile(fileBytes, fileName);
+      setTeamImportPreview({ preview, fileName });
+    } catch (err) {
+      actions.setActionErrorMessage(
+        err instanceof Error ? err.message : "Failed to parse team file.",
+      );
+    }
+  }
+
+  async function handleEditDialogImportUpdateFile(
+    teamId: string,
+    fileBytes: number[],
+    fileName: string,
+  ) {
+    actions.setActionNoticeMessage(null);
+    actions.setActionErrorMessage(null);
+
+    const team = teams.find((candidate) => candidate.id === teamId);
+    if (!team) {
+      const message = "Team not found. Refresh and try again.";
+      actions.setActionErrorMessage(message);
+      throw new Error(message);
+    }
+
+    try {
+      const preview = await parseTeamFile(fileBytes, fileName);
+      setTeamImportTarget(team);
+      setTeamImportTargetPreview({ preview, fileName });
+      setTeamDialogState(null);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to parse team file.";
+      actions.setActionErrorMessage(message);
+      throw err instanceof Error ? err : new Error(message);
+    }
+  }
+
+  function closeImportUpdateDialog() {
+    setTeamImportTarget(null);
+    setTeamImportTargetPreview(null);
+    setIsApplyingTeamImportUpdate(false);
+  }
+
+  function clearImportUpdateAndReturnToEdit() {
+    if (!teamImportTarget) {
+      closeImportUpdateDialog();
+      return;
+    }
+
+    const team = teamImportTarget;
+    closeImportUpdateDialog();
+    openEditDialog(team);
+  }
+
+  async function handleTeamImportUpdateApply({
+    personas,
+    updateTeamInfo,
+    selectedUpdatedPersonaIds,
+    selectedNewMemberIndexes,
+    missingPersonaIdsToRemove,
+    deleteRemovedAgents,
+  }: TeamImportUpdateApplyInput) {
+    if (!teamImportTarget || !teamImportTargetPreview) {
+      throw new Error("No team import update is currently open.");
+    }
+
+    actions.setActionNoticeMessage(null);
+    actions.setActionErrorMessage(null);
+    setIsApplyingTeamImportUpdate(true);
+
+    const plan = buildTeamImportPlan({
+      team: teamImportTarget,
+      personas,
+      preview: teamImportTargetPreview.preview,
+    });
+    const selectedUpdatedPersonaIdSet = new Set(selectedUpdatedPersonaIds);
+    const selectedNewMemberIndexSet = new Set(selectedNewMemberIndexes);
+    const removePersonaIdSet = new Set(missingPersonaIdsToRemove);
+
+    try {
+      let updatedMembersCount = 0;
+      for (const member of plan.membersToUpdate) {
+        if (!selectedUpdatedPersonaIdSet.has(member.existing.id)) {
+          continue;
+        }
+        await updatePersona({
+          id: member.existing.id,
+          displayName: member.imported.display_name,
+          systemPrompt: member.imported.system_prompt,
+          avatarUrl: member.imported.avatar_url ?? undefined,
+          provider: member.existing.provider ?? undefined,
+          model: member.existing.model ?? undefined,
+          namePool: [...member.existing.namePool],
+        });
+        updatedMembersCount += 1;
+      }
+
+      const createdPersonaIdsByImportedIndex = new Map<number, string>();
+      for (const member of plan.newMembers) {
+        if (!selectedNewMemberIndexSet.has(member.importedIndex)) {
+          continue;
+        }
+        const created = await createPersona({
+          displayName: member.imported.display_name,
+          systemPrompt: member.imported.system_prompt,
+          avatarUrl: member.imported.avatar_url ?? undefined,
+        });
+        createdPersonaIdsByImportedIndex.set(member.importedIndex, created.id);
+      }
+
+      const matchedPersonaIdsByImportedIndex = new Map<number, string>();
+      for (const member of plan.matchedMembers) {
+        matchedPersonaIdsByImportedIndex.set(
+          member.importedIndex,
+          member.existing.id,
         );
       }
-    })();
+
+      const nextPersonaIds: string[] = [];
+      for (
+        let importedIndex = 0;
+        importedIndex < teamImportTargetPreview.preview.personas.length;
+        importedIndex += 1
+      ) {
+        const matchedId = matchedPersonaIdsByImportedIndex.get(importedIndex);
+        if (matchedId) {
+          nextPersonaIds.push(matchedId);
+          continue;
+        }
+
+        const createdId = createdPersonaIdsByImportedIndex.get(importedIndex);
+        if (createdId) {
+          nextPersonaIds.push(createdId);
+        }
+      }
+
+      const removedMembers = plan.missingMembers.filter((member) =>
+        removePersonaIdSet.has(member.existing.id),
+      );
+      const keptMissingMembers = plan.missingMembers.filter(
+        (member) => !removePersonaIdSet.has(member.existing.id),
+      );
+      for (const member of keptMissingMembers) {
+        nextPersonaIds.push(member.existing.id);
+      }
+
+      const nextTeamName = updateTeamInfo
+        ? teamImportTargetPreview.preview.name
+        : teamImportTarget.name;
+      const nextTeamDescription = updateTeamInfo
+        ? (teamImportTargetPreview.preview.description ?? undefined)
+        : (teamImportTarget.description ?? undefined);
+
+      await updateTeamMutation.mutateAsync({
+        id: teamImportTarget.id,
+        name: nextTeamName,
+        description: nextTeamDescription,
+        personaIds: nextPersonaIds,
+      });
+
+      let deletedAgentsCount = 0;
+      const deleteFailures: string[] = [];
+      const addedMembersCount = createdPersonaIdsByImportedIndex.size;
+      if (deleteRemovedAgents && removedMembers.length > 0) {
+        for (const member of removedMembers) {
+          try {
+            await deletePersona(member.existing.id);
+            deletedAgentsCount += 1;
+          } catch (error) {
+            const reason =
+              error instanceof Error ? error.message : String(error);
+            deleteFailures.push(`${member.existing.displayName}: ${reason}`);
+          }
+        }
+      }
+
+      actions.setActionNoticeMessage(
+        `Updated "${nextTeamName}" from import. ${updatedMembersCount} member${updatedMembersCount === 1 ? "" : "s"} updated, ${addedMembersCount} added, ${removedMembers.length} removed from the team${deleteRemovedAgents ? `, and ${deletedAgentsCount} removed from My Agents` : ""}.`,
+      );
+
+      if (deleteFailures.length > 0) {
+        actions.setActionErrorMessage(
+          `Team updated, but ${deleteFailures.length} agent${deleteFailures.length === 1 ? "" : "s"} could not be removed: ${deleteFailures.join("; ")}`,
+        );
+      }
+
+      closeImportUpdateDialog();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: personasQueryKey }),
+        queryClient.invalidateQueries({ queryKey: teamsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
+      ]);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to apply imported team update.";
+      actions.setActionErrorMessage(message);
+      throw error instanceof Error ? error : new Error(message);
+    } finally {
+      setIsApplyingTeamImportUpdate(false);
+    }
   }
 
   function handleTeamImportComplete(
@@ -220,12 +438,26 @@ export function useTeamActions(
     })();
   }
 
+  async function handleDeleteRemovedPersonas(personaIds: string[]) {
+    for (const id of personaIds) {
+      try {
+        await deletePersona(id);
+      } catch {
+        // Best-effort: persona may already be deleted or in use elsewhere.
+      }
+    }
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: personasQueryKey }),
+      queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
+    ]);
+  }
+
   function openEditDialog(team: AgentTeam) {
     actions.setActionNoticeMessage(null);
     actions.setActionErrorMessage(null);
     setTeamDialogState({
-      title: `Edit ${team.name}`,
-      description: "Update this team's name, description, or personas.",
+      title: "Edit team",
+      description: "",
       submitLabel: "Save changes",
       initialValues: {
         id: team.id,
@@ -251,12 +483,20 @@ export function useTeamActions(
     setTeamToAddToChannel,
     teamImportPreview,
     setTeamImportPreview,
+    teamImportTarget,
+    teamImportTargetPreview,
+    isApplyingTeamImportUpdate,
     handleTeamSubmit,
+    handleDeleteRemovedPersonas,
     handleDeleteTeam,
     handleTeamDeployed,
     handleExportTeam,
     handleImportFile,
+    handleEditDialogImportUpdateFile,
     handleTeamImportComplete,
+    handleTeamImportUpdateApply,
+    closeImportUpdateDialog,
+    clearImportUpdateAndReturnToEdit,
     openCreateDialog,
     openDuplicateDialog,
     openEditDialog,

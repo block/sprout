@@ -130,7 +130,7 @@ export function PersonasSection({
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
           {personas.map((persona) => (
             <div
-              className="rounded-xl border border-border/70 bg-card/80 p-2 shadow-sm"
+              className="overflow-hidden rounded-xl border border-border/70 bg-card/80 p-2 shadow-sm"
               data-testid={`library-persona-${persona.id}`}
               key={persona.id}
             >

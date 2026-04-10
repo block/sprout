@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { useEphemeralChannelDisplay } from "@/features/channels/useEphemeralChannelDisplay";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
@@ -24,6 +25,8 @@ export function useActiveChannelHeader(
   const activeDmProfilesQuery = useUsersBatchQuery(activeDmParticipantPubkeys, {
     enabled: activeDmParticipantPubkeys.length > 0,
   });
+  const activeChannelEphemeralDisplay =
+    useEphemeralChannelDisplay(activeChannel);
   const activeDmPresenceStatus: PresenceStatus | null =
     activeDmParticipantPubkeys.length > 0
       ? (activeDmPresenceQuery.data?.[
@@ -40,5 +43,6 @@ export function useActiveChannelHeader(
         )
       : "Channels",
     activeDmPresenceStatus,
+    activeChannelEphemeralDisplay,
   };
 }

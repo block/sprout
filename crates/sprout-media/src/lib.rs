@@ -13,6 +13,7 @@ pub mod validation;
 
 pub use config::MediaConfig;
 pub use error::MediaError;
-pub use storage::{BlobHeadMeta, BlobMeta, MediaStorage};
+pub use storage::{BlobHeadMeta, BlobMeta, ByteStream, MediaStorage};
 pub use types::BlobDescriptor;
-pub use upload::process_upload;
+pub use upload::{process_upload, process_video_upload};
+pub use validation::{validate_video_file, VideoMeta};

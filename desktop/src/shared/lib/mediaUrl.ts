@@ -15,7 +15,7 @@
 // Matches: https://anything.com/media/{64-hex}.{ext}
 // Also matches thumbnails: /media/{64-hex}.thumb.jpg
 const RELAY_MEDIA_RE =
-  /^(?:https?:\/\/[^/]+)\/media\/([\da-f]{64}(?:\.thumb)?\.(?:jpg|png|gif|webp)(?:\?.*)?)$/;
+  /^(?:https?:\/\/[^/]+)\/media\/([\da-f]{64}(?:\.thumb)?\.(?:jpg|png|gif|webp|mp4)(?:\?.*)?)$/;
 
 /**
  * If `url` looks like a Blossom relay media URL, rewrite it to go through

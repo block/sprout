@@ -1,10 +1,13 @@
 import * as React from "react";
+import { RefreshCw, Upload } from "lucide-react";
 
 import type {
   AcpProvider,
   CreatePersonaInput,
   UpdatePersonaInput,
 } from "@/shared/api/types";
+import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -15,6 +18,12 @@ import {
 } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
+import {
+  getImportButtonLabel,
+  getImportButtonTone,
+  getImportErrorLabel,
+  IMPORT_ERROR_VISIBILITY_MS,
+} from "./personaDialogImportState";
 
 type PersonaDialogProps = {
   open: boolean;
@@ -24,10 +33,16 @@ type PersonaDialogProps = {
   initialValues: CreatePersonaInput | UpdatePersonaInput | null;
   error: Error | null;
   isPending: boolean;
+  isImportPending?: boolean;
   providers: AcpProvider[];
   providersLoading?: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (input: CreatePersonaInput | UpdatePersonaInput) => Promise<void>;
+  onImportUpdateFile?: (
+    personaId: string,
+    fileBytes: number[],
+    fileName: string,
+  ) => Promise<void>;
 };
 
 export function PersonaDialog({
@@ -38,10 +53,12 @@ export function PersonaDialog({
   initialValues,
   error,
   isPending,
+  isImportPending = false,
   providers,
   providersLoading = false,
   onOpenChange,
   onSubmit,
+  onImportUpdateFile,
 }: PersonaDialogProps) {
   const [displayName, setDisplayName] = React.useState("");
   const [avatarUrl, setAvatarUrl] = React.useState("");
@@ -49,6 +66,17 @@ export function PersonaDialog({
   const [provider, setProvider] = React.useState("");
   const [model, setModel] = React.useState("");
   const [namePoolText, setNamePoolText] = React.useState("");
+  const [isImportingUpdate, setIsImportingUpdate] = React.useState(false);
+  const [importErrorMessage, setImportErrorMessage] = React.useState<
+    string | null
+  >(null);
+  const [isWindowFileDragOver, setIsWindowFileDragOver] = React.useState(false);
+  const isEditMode = Boolean(initialValues && "id" in initialValues);
+  const editPersonaId =
+    isEditMode && initialValues && "id" in initialValues
+      ? initialValues.id
+      : null;
+  const canImportPersonaUpdate = isEditMode && Boolean(onImportUpdateFile);
 
   React.useEffect(() => {
     if (!open || !initialValues) {
@@ -66,7 +94,117 @@ export function PersonaDialog({
         : undefined
       )?.join(", ") ?? "",
     );
+    setImportErrorMessage(null);
+    setIsImportingUpdate(false);
   }, [initialValues, open]);
+
+  React.useEffect(() => {
+    if (!open || !canImportPersonaUpdate) {
+      setIsWindowFileDragOver(false);
+      return;
+    }
+
+    let dragDepth = 0;
+
+    function isFileDrag(event: DragEvent): boolean {
+      return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+    }
+
+    function handleWindowDragEnter(event: DragEvent) {
+      if (!isFileDrag(event)) {
+        return;
+      }
+      dragDepth += 1;
+      setIsWindowFileDragOver(true);
+    }
+
+    function handleWindowDragOver(event: DragEvent) {
+      if (!isFileDrag(event)) {
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "copy";
+      }
+      setIsWindowFileDragOver(true);
+    }
+
+    function handleWindowDragLeave(event: DragEvent) {
+      if (!isFileDrag(event)) {
+        return;
+      }
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) {
+        setIsWindowFileDragOver(false);
+      }
+    }
+
+    function handleWindowDrop(event: DragEvent) {
+      if (!isFileDrag(event)) {
+        return;
+      }
+      event.preventDefault();
+      dragDepth = 0;
+      setIsWindowFileDragOver(false);
+    }
+
+    window.addEventListener("dragenter", handleWindowDragEnter);
+    window.addEventListener("dragover", handleWindowDragOver);
+    window.addEventListener("dragleave", handleWindowDragLeave);
+    window.addEventListener("drop", handleWindowDrop);
+
+    return () => {
+      window.removeEventListener("dragenter", handleWindowDragEnter);
+      window.removeEventListener("dragover", handleWindowDragOver);
+      window.removeEventListener("dragleave", handleWindowDragLeave);
+      window.removeEventListener("drop", handleWindowDrop);
+    };
+  }, [canImportPersonaUpdate, open]);
+
+  React.useEffect(() => {
+    if (!open || !importErrorMessage) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setImportErrorMessage(null);
+    }, IMPORT_ERROR_VISIBILITY_MS);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [importErrorMessage, open]);
+
+  async function handleImportUpdateSelection(
+    fileBytes: number[],
+    fileName: string,
+  ) {
+    if (!editPersonaId || !onImportUpdateFile) {
+      return;
+    }
+
+    setImportErrorMessage(null);
+    setIsImportingUpdate(true);
+    try {
+      await onImportUpdateFile(editPersonaId, fileBytes, fileName);
+    } catch (error) {
+      setImportErrorMessage(
+        getImportErrorLabel(error instanceof Error ? error.message : null),
+      );
+    } finally {
+      setIsImportingUpdate(false);
+    }
+  }
+
+  const {
+    fileInputRef: importFileInputRef,
+    isDragOver: isImportDragOver,
+    dropHandlers: importDropHandlers,
+    handleFileChange: handleImportFileChange,
+    openFilePicker: openImportFilePicker,
+  } = useFileImportZone({
+    onImportFile: (fileBytes, fileName) => {
+      void handleImportUpdateSelection(fileBytes, fileName);
+    },
+  });
 
   function handleOpenChange(next: boolean) {
     if (!next) {
@@ -76,6 +214,9 @@ export function PersonaDialog({
       setProvider("");
       setModel("");
       setNamePoolText("");
+      setImportErrorMessage(null);
+      setIsImportingUpdate(false);
+      setIsWindowFileDragOver(false);
     }
 
     onOpenChange(next);
@@ -110,13 +251,26 @@ export function PersonaDialog({
     await onSubmit(baseInput);
   }
 
+  const importButtonTone = getImportButtonTone({
+    isWindowFileDragOver,
+    isImportDragOver,
+    importErrorMessage,
+  });
+  const importButtonLabel = getImportButtonLabel({
+    isWindowFileDragOver,
+    isImportDragOver,
+    importErrorMessage,
+  });
+
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
       <DialogContent className="max-w-2xl overflow-hidden p-0">
         <div className="flex max-h-[85vh] flex-col">
           <DialogHeader className="shrink-0 border-b border-border/60 px-6 py-5 pr-14">
             <DialogTitle>{title}</DialogTitle>
-            <DialogDescription>{description}</DialogDescription>
+            {description.trim().length > 0 ? (
+              <DialogDescription>{description}</DialogDescription>
+            ) : null}
           </DialogHeader>
 
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
@@ -255,27 +409,70 @@ export function PersonaDialog({
             ) : null}
           </div>
 
-          <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 px-6 py-4">
-            <Button
-              onClick={() => handleOpenChange(false)}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={
-                displayName.trim().length === 0 ||
-                systemPrompt.trim().length === 0 ||
-                isPending
-              }
-              onClick={() => void handleSubmit()}
-              size="sm"
-              type="button"
-            >
-              {isPending ? "Saving..." : submitLabel}
-            </Button>
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border/60 px-6 py-4">
+            <div className="flex min-h-8 items-center">
+              {canImportPersonaUpdate ? (
+                <>
+                  <input
+                    accept=".json,.png,.zip"
+                    className="hidden"
+                    onChange={handleImportFileChange}
+                    ref={importFileInputRef}
+                    type="file"
+                  />
+                  <button
+                    className={cn(
+                      "inline-flex h-8 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors",
+                      importButtonTone === "drag"
+                        ? "border-dashed border-primary/70 bg-primary/10 text-primary"
+                        : importButtonTone === "error"
+                          ? "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/15"
+                          : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
+                    )}
+                    disabled={isPending || isImportPending || isImportingUpdate}
+                    type="button"
+                    {...importDropHandlers}
+                    onClick={openImportFilePicker}
+                    title={
+                      importButtonTone === "error"
+                        ? importButtonLabel
+                        : undefined
+                    }
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    <span className="max-w-[16rem] truncate">
+                      {importButtonLabel}
+                    </span>
+                    {isImportingUpdate ? (
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    ) : null}
+                  </button>
+                </>
+              ) : null}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={() => handleOpenChange(false)}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={
+                  displayName.trim().length === 0 ||
+                  systemPrompt.trim().length === 0 ||
+                  isPending
+                }
+                onClick={() => void handleSubmit()}
+                size="sm"
+                type="button"
+              >
+                {isPending ? "Saving..." : submitLabel}
+              </Button>
+            </div>
           </div>
         </div>
       </DialogContent>

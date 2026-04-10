@@ -24,3 +24,22 @@ export function filterAvailablePersonaIds(
   const availablePersonaIds = getAvailablePersonaIds(personas);
   return personaIds.filter((personaId) => availablePersonaIds.has(personaId));
 }
+
+export function orderPersonasByInitiallySelected(
+  personas: AgentPersona[],
+  initialSelectedPersonaIds: string[],
+): AgentPersona[] {
+  const selectedIds = new Set(initialSelectedPersonaIds);
+  const selected: AgentPersona[] = [];
+  const unselected: AgentPersona[] = [];
+
+  for (const persona of personas) {
+    if (selectedIds.has(persona.id)) {
+      selected.push(persona);
+    } else {
+      unselected.push(persona);
+    }
+  }
+
+  return [...selected, ...unselected];
+}
