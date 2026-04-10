@@ -438,6 +438,20 @@ export function useTeamActions(
     })();
   }
 
+  async function handleDeleteRemovedPersonas(personaIds: string[]) {
+    for (const id of personaIds) {
+      try {
+        await deletePersona(id);
+      } catch {
+        // Best-effort: persona may already be deleted or in use elsewhere.
+      }
+    }
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: personasQueryKey }),
+      queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
+    ]);
+  }
+
   function openEditDialog(team: AgentTeam) {
     actions.setActionNoticeMessage(null);
     actions.setActionErrorMessage(null);
@@ -473,6 +487,7 @@ export function useTeamActions(
     teamImportTargetPreview,
     isApplyingTeamImportUpdate,
     handleTeamSubmit,
+    handleDeleteRemovedPersonas,
     handleDeleteTeam,
     handleTeamDeployed,
     handleExportTeam,

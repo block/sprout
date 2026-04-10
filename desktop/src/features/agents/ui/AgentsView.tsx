@@ -755,6 +755,7 @@ export function AgentsView() {
             teamActions.setTeamDialogState(null);
           }
         }}
+        onDeleteRemovedPersonas={teamActions.handleDeleteRemovedPersonas}
         onSubmit={teamActions.handleTeamSubmit}
         open={teamActions.teamDialogState !== null}
         personas={libraryPersonas}

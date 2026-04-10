@@ -2,14 +2,6 @@ import * as React from "react";
 import { Users } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
-import {
-  AlertDialog,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
 import {
@@ -20,6 +12,7 @@ import {
 } from "@/shared/ui/dialog";
 import type { ParsedTeamPreview } from "@/shared/api/tauriTeams";
 import type { AgentPersona, AgentTeam } from "@/shared/api/types";
+import { RemoveMembersConfirmDialog } from "./RemoveMembersConfirmDialog";
 import { buildTeamImportPlan } from "./teamImportPlan";
 import {
   getAddMemberSecondaryText,
@@ -188,13 +181,9 @@ export function TeamImportUpdateDialog({
       <p
         className={`shrink-0 text-xs font-medium tabular-nums transition-opacity ${opacityClass}`}
       >
-        <span className={addedClass}>
-          +{addedLines}
-        </span>
+        <span className={addedClass}>+{addedLines}</span>
         <span className={separatorClass}> / </span>
-        <span className={removedClass}>
-          -{removedLines}
-        </span>
+        <span className={removedClass}>-{removedLines}</span>
       </p>
     );
   }
@@ -388,15 +377,17 @@ export function TeamImportUpdateDialog({
                         <p className="text-sm font-medium">
                           Members that will be updated{" "}
                           <span className="font-bold">
-                            ({selectedUpdatedCount}/{plan.membersToUpdate.length})
+                            ({selectedUpdatedCount}/
+                            {plan.membersToUpdate.length})
                           </span>
                         </p>
                         {plan.membersToUpdate.length > 0 ? (
                           <div className="space-y-1">
                             {plan.membersToUpdate.map((member) => {
-                              const shouldUpdate = selectedUpdatedPersonaIds.has(
-                                member.existing.id,
-                              );
+                              const shouldUpdate =
+                                selectedUpdatedPersonaIds.has(
+                                  member.existing.id,
+                                );
                               const previewAvatarUrl = shouldUpdate
                                 ? (member.imported.avatar_url ??
                                   member.existing.avatarUrl)
@@ -535,9 +526,10 @@ export function TeamImportUpdateDialog({
                         {plan.missingMembers.length > 0 ? (
                           <div className="space-y-1">
                             {plan.missingMembers.map((member) => {
-                              const shouldRemove = missingPersonaIdsToRemove.has(
-                                member.existing.id,
-                              );
+                              const shouldRemove =
+                                missingPersonaIdsToRemove.has(
+                                  member.existing.id,
+                                );
                               return (
                                 <div
                                   className="flex items-center gap-3 rounded-lg border border-border/60 bg-card/80 px-3 py-2.5"
@@ -648,57 +640,16 @@ export function TeamImportUpdateDialog({
         </DialogContent>
       </Dialog>
 
-      <AlertDialog
-        onOpenChange={setConfirmRemovalOpen}
+      <RemoveMembersConfirmDialog
         open={confirmRemovalOpen}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Remove {removableCount} member{removableCount === 1 ? "" : "s"}?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              These members will be removed from this team:{" "}
-              {removableMembers
-                .map((member) => member.existing.displayName)
-                .join(", ")}
-              . Do you also want to remove those agents from My Agents?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <Button
-              onClick={() => setConfirmRemovalOpen(false)}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              Go back
-            </Button>
-            <Button
-              disabled={isPending}
-              onClick={() => {
-                void runApply(false);
-              }}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              Keep agents
-            </Button>
-            <Button
-              disabled={isPending}
-              onClick={() => {
-                void runApply(true);
-              }}
-              size="sm"
-              type="button"
-              variant="destructive"
-            >
-              Remove agents too
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        onOpenChange={setConfirmRemovalOpen}
+        isPending={isPending}
+        memberNames={removableMembers.map(
+          (member) => member.existing.displayName,
+        )}
+        onKeepAgents={() => void runApply(false)}
+        onRemoveAgents={() => void runApply(true)}
+      />
     </>
   );
 }
