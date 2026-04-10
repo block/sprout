@@ -10,14 +10,9 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
-import { BotIdenticon } from "./BotIdenticon";
 import { MessageActionBar } from "./MessageActionBar";
 import { MessageTimestamp } from "./MessageTimestamp";
 
-/** Returns true if this message is from a bot instance. */
-function isBotInstance(role?: string): boolean {
-  return role === "bot";
-}
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
@@ -178,13 +173,6 @@ export const MessageRow = React.memo(
           data-testid="message-row"
         >
           <div className="flex shrink-0 items-center gap-1">
-            {isBotInstance(message.role) ? (
-              <BotIdenticon
-                value={message.author}
-                size={20}
-                className="rounded"
-              />
-            ) : null}
             {message.pubkey ? (
               <UserProfilePopover pubkey={message.pubkey}>
                 <button

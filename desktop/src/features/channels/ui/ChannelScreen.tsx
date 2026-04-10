@@ -138,14 +138,51 @@ export function ChannelScreen({
     () => resolvedMessages[resolvedMessages.length - 1] ?? null,
     [resolvedMessages],
   );
-  const typingPubkeys = useChannelTyping(
-    activeChannel,
-    currentPubkey,
-    latestMessageEvent,
-  );
+  const typingLists = (
+    useChannelTyping as unknown as (
+      channel: Channel | null,
+      currentPubkey?: string,
+      latestMessageEvent?: RelayEvent | null,
+      activeThreadRootId?: string | null,
+    ) => unknown
+  )(activeChannel, currentPubkey, latestMessageEvent, threadRootId);
+  // Defensive normalization: if Vite hot reload leaves an older flat-array
+  // shape in memory, fall back to treating it as root-scope typing rather than
+  // crashing ChannelScreen while opening a channel.
+  const channelTypingPubkeys = React.useMemo(() => {
+    if (
+      typingLists &&
+      typeof typingLists === "object" &&
+      "channelTypingPubkeys" in typingLists
+    ) {
+      const value = (typingLists as { channelTypingPubkeys?: unknown })
+        .channelTypingPubkeys;
+      return Array.isArray(value) ? value : [];
+    }
+    return Array.isArray(typingLists) ? typingLists : [];
+  }, [typingLists]);
+  const threadTypingPubkeys = React.useMemo(() => {
+    if (
+      typingLists &&
+      typeof typingLists === "object" &&
+      "threadTypingPubkeys" in typingLists
+    ) {
+      const value = (typingLists as { threadTypingPubkeys?: unknown })
+        .threadTypingPubkeys;
+      return Array.isArray(value) ? value : [];
+    }
+    return [];
+  }, [typingLists]);
   const messageProfilePubkeys = React.useMemo(
-    () => [...new Set([...messageAuthorPubkeys, ...typingPubkeys])],
-    [messageAuthorPubkeys, typingPubkeys],
+    () =>
+      [
+        ...new Set([
+          ...messageAuthorPubkeys,
+          ...channelTypingPubkeys,
+          ...threadTypingPubkeys,
+        ]),
+      ],
+    [channelTypingPubkeys, messageAuthorPubkeys, threadTypingPubkeys],
   );
   const messageProfilesQuery = useUsersBatchQuery(messageProfilePubkeys, {
     enabled: messageProfilePubkeys.length > 0,
@@ -279,36 +316,49 @@ export function ChannelScreen({
     setReplyTargetId(null);
   }, []);
 
-  const handleSend = React.useCallback(
+  const handleSendMain = React.useCallback(
     async (
       content: string,
       mentionPubkeys: string[],
       mediaTags?: string[][],
     ) => {
-      const parentEventId = threadRootId ?? replyTargetId;
+      await sendMessageMutation.mutateAsync({
+        content,
+        mentionPubkeys,
+        parentEventId: replyTargetId,
+        mediaTags,
+      });
+      setReplyTargetId(null);
+    },
+    [replyTargetId, sendMessageMutation],
+  );
+  const handleSendThread = React.useCallback(
+    async (
+      content: string,
+      mentionPubkeys: string[],
+      mediaTags?: string[][],
+    ) => {
+      if (!threadRootId) {
+        await handleSendMain(content, mentionPubkeys, mediaTags);
+        return;
+      }
 
       await sendMessageMutation.mutateAsync({
         content,
         mentionPubkeys,
-        parentEventId,
+        parentEventId: threadRootId,
         mediaTags,
       });
-
-      if (threadRootId) {
-        setReplyTargetId(null);
-        if (activeChannelId) {
-          void queryClient.invalidateQueries({
-            queryKey: channelThreadKey(activeChannelId, threadRootId),
-          });
-        }
-      } else {
-        setReplyTargetId(null);
+      if (activeChannelId) {
+        void queryClient.invalidateQueries({
+          queryKey: channelThreadKey(activeChannelId, threadRootId),
+        });
       }
     },
     [
       activeChannelId,
+      handleSendMain,
       queryClient,
-      replyTargetId,
       sendMessageMutation,
       threadRootId,
     ],
@@ -518,15 +568,17 @@ export function ChannelScreen({
                 onEditSave={handleEditSave}
                 onOpenThread={handleOpenThread}
                 onReply={handleReplyOpenThread}
-                onSend={handleSend}
+                onSendMain={handleSendMain}
+                onSendThread={handleSendThread}
                 onToggleReaction={effectiveToggleReaction}
                 personaLookup={personaLookup}
                 profiles={messageProfiles}
                 replyTargetId={replyTargetId}
                 replyTargetMessage={replyTargetMessage}
+                channelTypingPubkeys={channelTypingPubkeys}
+                threadTypingPubkeys={threadTypingPubkeys}
                 threadRootId={threadRootId}
                 targetMessageId={targetMessageId}
-                typingPubkeys={typingPubkeys}
               />
             </React.Suspense>
           )

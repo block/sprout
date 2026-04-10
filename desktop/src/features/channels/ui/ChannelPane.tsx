@@ -10,6 +10,7 @@ import type { Channel } from "@/shared/api/types";
 
 type ChannelPaneProps = {
   activeChannel: Channel | null;
+  channelTypingPubkeys: string[];
   currentPubkey?: string;
   editTarget?: {
     author: string;
@@ -30,7 +31,12 @@ type ChannelPaneProps = {
   onEditSave?: (content: string) => Promise<void>;
   onOpenThread?: (message: TimelineMessage) => void;
   onReply: (message: TimelineMessage) => void;
-  onSend: (
+  onSendMain: (
+    content: string,
+    mentionPubkeys: string[],
+    mediaTags?: string[][],
+  ) => Promise<void>;
+  onSendThread: (
     content: string,
     mentionPubkeys: string[],
     mediaTags?: string[][],
@@ -47,12 +53,13 @@ type ChannelPaneProps = {
   replyTargetId: string | null;
   replyTargetMessage: TimelineMessage | null;
   targetMessageId: string | null;
+  threadTypingPubkeys: string[];
   threadRootId: string | null;
-  typingPubkeys: string[];
 };
 
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
+  channelTypingPubkeys,
   currentPubkey,
   editTarget = null,
   fetchOlder,
@@ -69,7 +76,8 @@ export const ChannelPane = React.memo(function ChannelPane({
   onEditSave,
   onOpenThread,
   onReply,
-  onSend,
+  onSendMain,
+  onSendThread,
   onTargetReached,
   onToggleReaction,
   personaLookup,
@@ -77,8 +85,8 @@ export const ChannelPane = React.memo(function ChannelPane({
   replyTargetId,
   replyTargetMessage,
   targetMessageId,
+  threadTypingPubkeys,
   threadRootId,
-  typingPubkeys,
 }: ChannelPaneProps) {
   const composerDisabled =
     !activeChannel ||
@@ -135,31 +143,31 @@ export const ChannelPane = React.memo(function ChannelPane({
           channel={activeChannel}
           currentPubkey={currentPubkey}
           profiles={profiles}
-          typingPubkeys={typingPubkeys}
+          typingPubkeys={channelTypingPubkeys}
         />
-        {!threadRootId ? (
-          <MessageComposer
-            channelId={activeChannel?.id ?? null}
-            channelName={activeChannel?.name ?? "channel"}
-            disabled={composerDisabled}
-            editTarget={editTarget}
-            isSending={isSending}
-            onCancelEdit={onCancelEdit}
-            onCancelReply={onCancelReply}
-            onEditSave={onEditSave}
-            onSend={onSend}
-            placeholder={mainPlaceholder}
-            replyTarget={
-              replyTargetMessage
-                ? {
-                    author: replyTargetMessage.author,
-                    body: replyTargetMessage.body,
-                    id: replyTargetMessage.id,
-                  }
-                : null
-            }
-          />
-        ) : null}
+        <MessageComposer
+          channelId={activeChannel?.id ?? null}
+          channelName={activeChannel?.name ?? "channel"}
+          disabled={composerDisabled}
+          draftKey={activeChannel ? `channel:${activeChannel.id}:root` : null}
+          editTarget={editTarget}
+          isSending={isSending}
+          onCancelEdit={onCancelEdit}
+          onCancelReply={onCancelReply}
+          onEditSave={onEditSave}
+          onSend={onSendMain}
+          placeholder={mainPlaceholder}
+          replyTarget={
+            replyTargetMessage
+              ? {
+                  author: replyTargetMessage.author,
+                  body: replyTargetMessage.body,
+                  id: replyTargetMessage.id,
+                }
+              : null
+          }
+          typingThreadRootId={null}
+        />
       </div>
 
       {threadRootId && activeChannel && onCloseThread ? (
@@ -167,13 +175,11 @@ export const ChannelPane = React.memo(function ChannelPane({
           channel={activeChannel}
           currentPubkey={currentPubkey}
           disabledComposer={composerDisabled}
-          editTarget={editTarget}
           isSending={isSending}
-          onCancelEdit={onCancelEdit}
           onClose={onCloseThread}
-          onEditSave={onEditSave}
-          onSend={onSend}
+          onSend={onSendThread}
           profiles={profiles}
+          threadTypingPubkeys={threadTypingPubkeys}
           rootEventId={threadRootId}
         />
       ) : null}

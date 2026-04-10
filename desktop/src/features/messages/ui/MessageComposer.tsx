@@ -19,6 +19,7 @@ import { MessageComposerToolbar } from "./MessageComposerToolbar";
 type MessageComposerProps = {
   channelId?: string | null;
   channelName: string;
+  draftKey?: string | null;
   disabled?: boolean;
   editTarget?: {
     author: string;
@@ -40,6 +41,8 @@ type MessageComposerProps = {
     body: string;
     id: string;
   } | null;
+  showReplyTargetBanner?: boolean;
+  typingThreadRootId?: string | null;
 };
 
 const MAX_TEXTAREA_ROWS = 4;
@@ -47,6 +50,7 @@ const MAX_TEXTAREA_ROWS = 4;
 export function MessageComposer({
   channelId = null,
   channelName,
+  draftKey = null,
   disabled = false,
   editTarget = null,
   isSending = false,
@@ -56,6 +60,8 @@ export function MessageComposer({
   onSend,
   placeholder,
   replyTarget = null,
+  showReplyTargetBanner = true,
+  typingThreadRootId = null,
 }: MessageComposerProps) {
   const [content, setContent] = React.useState("");
   const contentRef = React.useRef(content);
@@ -70,11 +76,16 @@ export function MessageComposer({
   contentRef.current = content;
 
   const drafts = useDrafts();
-  const previousChannelIdRef = React.useRef<string | null>(null);
+  const previousDraftKeyRef = React.useRef<string | null>(null);
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
-  const notifyTyping = useTypingBroadcast(channelId);
+  const notifyTyping = (
+    useTypingBroadcast as unknown as (
+      channelId: string | null | undefined,
+      threadRootId?: string | null,
+    ) => () => void
+  )(channelId, typingThreadRootId);
 
   const media = useMediaUpload(setContent);
 
@@ -86,34 +97,36 @@ export function MessageComposer({
   const onEditSaveRef = React.useRef(onEditSave);
   const editTargetRef = React.useRef(editTarget);
   const channelIdRef = React.useRef(channelId);
+  const draftKeyRef = React.useRef(draftKey);
   disabledRef.current = disabled;
   isSendingRef.current = isSending;
   onSendRef.current = onSend;
   onEditSaveRef.current = onEditSave;
   editTargetRef.current = editTarget;
   channelIdRef.current = channelId;
+  draftKeyRef.current = draftKey;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger — save draft for previous channel, restore draft for new channel, reset transient state
+  // biome-ignore lint/correctness/useExhaustiveDependencies: draftKey is the sole trigger — save current draft, restore scoped draft, reset transient state
   React.useEffect(() => {
-    // Save draft for the channel we're leaving
-    const prevId = previousChannelIdRef.current;
-    if (prevId) {
+    // Save draft for the composer scope we're leaving.
+    const prevKey = previousDraftKeyRef.current;
+    if (prevKey) {
       const currentContent = contentRef.current;
       const sel = draftSelectionRef.current;
       if (currentContent.trim().length > 0) {
-        drafts.saveDraft(prevId, {
+        drafts.saveDraft(prevKey, {
           content: currentContent,
           selectionEnd: sel.end,
           selectionStart: sel.start,
         });
       } else {
-        drafts.clearDraft(prevId);
+        drafts.clearDraft(prevKey);
       }
     }
-    previousChannelIdRef.current = channelId;
+    previousDraftKeyRef.current = draftKey;
 
-    // Restore draft for the channel we're entering
-    const saved = channelId ? drafts.loadDraft(channelId) : undefined;
+    // Restore draft for the composer scope we're entering.
+    const saved = draftKey ? drafts.loadDraft(draftKey) : undefined;
     if (saved) {
       setContent(saved.content);
       contentRef.current = saved.content;
@@ -136,7 +149,7 @@ export function MessageComposer({
     mentions.clearMentions();
     channelLinks.clearChannels();
     lineHeightRef.current = null;
-  }, [channelId]);
+  }, [draftKey]);
 
   const applyMentionInsert = React.useCallback(
     (suggestion: MentionSuggestion) => {
@@ -316,11 +329,11 @@ export function MessageComposer({
     channelLinks.clearChannels();
     setIsEmojiPickerOpen(false);
 
-    const sendChannelId = channelIdRef.current;
+    const sendDraftKey = draftKeyRef.current;
     try {
       await onSendRef.current(trimmed, pubkeys, mediaTags);
-      if (sendChannelId) {
-        drafts.clearDraft(sendChannelId);
+      if (sendDraftKey) {
+        drafts.clearDraft(sendDraftKey);
       }
     } catch {
       setContent(savedContent);
@@ -542,7 +555,7 @@ export function MessageComposer({
                 Cancel
               </Button>
             </div>
-          ) : replyTarget ? (
+          ) : replyTarget && showReplyTargetBanner ? (
             <div
               className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-border/70 bg-muted/40 px-3 py-2"
               data-testid="reply-target"

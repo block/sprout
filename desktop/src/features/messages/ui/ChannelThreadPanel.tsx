@@ -3,6 +3,7 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
+import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
 import { channelThreadKey } from "@/features/messages/lib/messageQueryKeys";
 import { getForumThread } from "@/shared/api/forum";
 import type { Channel } from "@/shared/api/types";
@@ -31,14 +32,8 @@ type ChannelThreadPanelProps = {
     mediaTags?: string[][],
   ) => Promise<void>;
   isSending: boolean;
-  editTarget?: {
-    author: string;
-    body: string;
-    id: string;
-  } | null;
-  onCancelEdit?: () => void;
-  onEditSave?: (content: string) => Promise<void>;
   disabledComposer: boolean;
+  threadTypingPubkeys: string[];
 };
 
 function ThreadReplyRow({
@@ -105,10 +100,8 @@ export function ChannelThreadPanel({
   onClose,
   onSend,
   isSending,
-  editTarget = null,
-  onCancelEdit,
-  onEditSave,
   disabledComposer,
+  threadTypingPubkeys,
 }: ChannelThreadPanelProps) {
   const { channels } = useChannelNavigation();
   const channelNames = React.useMemo(
@@ -218,17 +211,22 @@ export function ChannelThreadPanel({
         )}
       </div>
 
+      <TypingIndicatorRow
+        channel={channel}
+        currentPubkey={currentPubkey}
+        profiles={profiles}
+        typingPubkeys={threadTypingPubkeys}
+      />
       <div className="shrink-0 border-t border-border/60 bg-background/80 p-2 backdrop-blur-sm">
         <MessageComposer
           channelId={channel.id}
           channelName={channel.name}
           disabled={disabledComposer}
-          editTarget={editTarget}
+          draftKey={`channel:${channel.id}:thread:${rootEventId}`}
           isSending={isSending}
-          onCancelEdit={onCancelEdit}
-          onEditSave={onEditSave}
           onSend={onSend}
           placeholder={`Reply in thread…`}
+          typingThreadRootId={rootEventId}
         />
       </div>
     </aside>

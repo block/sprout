@@ -6,28 +6,28 @@ export type DraftState = {
   selectionEnd: number;
 };
 
-export function useDrafts() {
-  const draftsRef = React.useRef(new Map<string, DraftState>());
+const sharedDrafts = new Map<string, DraftState>();
 
+export function useDrafts() {
   const saveDraft = React.useCallback(
-    (channelId: string, draft: DraftState) => {
+    (draftKey: string, draft: DraftState) => {
       if (draft.content.trim().length === 0) {
         return;
       }
-      draftsRef.current.set(channelId, draft);
+      sharedDrafts.set(draftKey, draft);
     },
     [],
   );
 
   const loadDraft = React.useCallback(
-    (channelId: string): DraftState | undefined => {
-      return draftsRef.current.get(channelId);
+    (draftKey: string): DraftState | undefined => {
+      return sharedDrafts.get(draftKey);
     },
     [],
   );
 
-  const clearDraft = React.useCallback((channelId: string) => {
-    draftsRef.current.delete(channelId);
+  const clearDraft = React.useCallback((draftKey: string) => {
+    sharedDrafts.delete(draftKey);
   }, []);
 
   return { saveDraft, loadDraft, clearDraft };
