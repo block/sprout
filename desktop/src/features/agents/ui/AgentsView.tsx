@@ -46,12 +46,14 @@ import { ManagedAgentsSection } from "./ManagedAgentsSection";
 import { PersonaCatalogDialog } from "./PersonaCatalogDialog";
 import { PersonaDialog } from "./PersonaDialog";
 import { PersonaDeleteDialog } from "./PersonaDeleteDialog";
+import { PersonaImportUpdateDialog } from "./PersonaImportUpdateDialog";
 import { PersonasSection } from "./PersonasSection";
 import { RelayDirectorySection } from "./RelayDirectorySection";
 import { SecretRevealDialog } from "./SecretRevealDialog";
 import { TeamDeleteDialog } from "./TeamDeleteDialog";
 import { TeamDialog } from "./TeamDialog";
 import { TeamImportDialog } from "./TeamImportDialog";
+import { TeamImportUpdateDialog } from "./TeamImportUpdateDialog";
 import { TeamsSection } from "./TeamsSection";
 import { TokenRevealDialog } from "./TokenRevealDialog";
 import {
@@ -61,6 +63,7 @@ import {
   importPersonaDialogState,
   type PersonaDialogState,
 } from "./personaDialogState";
+import { usePersonaImportActions } from "./usePersonaImportActions";
 import { useTeamActions } from "./useTeamActions";
 
 type PersonaFeedbackSurface = "catalog" | "library";
@@ -115,6 +118,15 @@ export function AgentsView() {
     {
       refetchManagedAgents: () => void managedAgentsQuery.refetch(),
       refetchRelayAgents: () => void relayAgentsQuery.refetch(),
+    },
+  );
+  const personaImportActions = usePersonaImportActions(
+    personasQuery.data ?? [],
+    {
+      clearPersonaFeedback: () => clearPersonaFeedback("library"),
+      setPersonaNoticeMessage,
+      setPersonaErrorMessage,
+      setPersonaDialogState,
     },
   );
   const [batchImportResult, setBatchImportResult] =
@@ -684,11 +696,15 @@ export function AgentsView() {
               : null
         }
         initialValues={personaDialogState?.initialValues ?? null}
+        isImportPending={personaImportActions.isApplyingPersonaImportUpdate}
         isPending={
           createPersonaMutation.isPending || updatePersonaMutation.isPending
         }
         providers={acpProvidersQuery.data ?? []}
         providersLoading={acpProvidersQuery.isLoading}
+        onImportUpdateFile={
+          personaImportActions.handleEditDialogImportUpdateFile
+        }
         onOpenChange={(open) => {
           if (!open) {
             setPersonaDialogState(null);
@@ -743,15 +759,18 @@ export function AgentsView() {
               : null
         }
         initialValues={teamActions.teamDialogState?.initialValues ?? null}
+        isImportPending={teamActions.isApplyingTeamImportUpdate}
         isPending={
           teamActions.createTeamMutation.isPending ||
           teamActions.updateTeamMutation.isPending
         }
+        onImportUpdateFile={teamActions.handleEditDialogImportUpdateFile}
         onOpenChange={(open) => {
           if (!open) {
             teamActions.setTeamDialogState(null);
           }
         }}
+        onDeleteRemovedPersonas={teamActions.handleDeleteRemovedPersonas}
         onSubmit={teamActions.handleTeamSubmit}
         open={teamActions.teamDialogState !== null}
         personas={libraryPersonas}
@@ -809,6 +828,45 @@ export function AgentsView() {
         }}
         open={teamActions.teamImportPreview !== null}
         preview={teamActions.teamImportPreview?.preview ?? null}
+      />
+      <TeamImportUpdateDialog
+        fileName={teamActions.teamImportTargetPreview?.fileName ?? ""}
+        isPending={
+          teamActions.isApplyingTeamImportUpdate ||
+          teamActions.updateTeamMutation.isPending
+        }
+        onApply={teamActions.handleTeamImportUpdateApply}
+        onClear={teamActions.clearImportUpdateAndReturnToEdit}
+        onOpenChange={(open) => {
+          if (!open) {
+            teamActions.closeImportUpdateDialog();
+          }
+        }}
+        open={teamActions.teamImportTarget !== null}
+        personas={libraryPersonas}
+        preview={teamActions.teamImportTargetPreview?.preview ?? null}
+        team={teamActions.teamImportTarget}
+      />
+      <PersonaImportUpdateDialog
+        fileName={
+          personaImportActions.personaImportTargetPreview?.fileName ?? ""
+        }
+        isPending={
+          personaImportActions.isApplyingPersonaImportUpdate ||
+          updatePersonaMutation.isPending
+        }
+        onApply={personaImportActions.handleImportUpdateApply}
+        onClear={personaImportActions.clearImportUpdateAndReturnToEdit}
+        onOpenChange={(open) => {
+          if (!open) {
+            personaImportActions.closeImportUpdateDialog();
+          }
+        }}
+        open={personaImportActions.personaImportTarget !== null}
+        persona={personaImportActions.personaImportTarget}
+        preview={
+          personaImportActions.personaImportTargetPreview?.preview ?? null
+        }
       />
     </>
   );

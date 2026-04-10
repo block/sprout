@@ -5,6 +5,7 @@ import {
   copySelectedPersonaIds,
   countMissingPersonaIds,
   filterAvailablePersonaIds,
+  orderPersonasByInitiallySelected,
 } from "./teamDialogSelection.ts";
 
 function createPersona(id) {
@@ -62,5 +63,30 @@ test("filterAvailablePersonaIds drops missing personas at submit time", () => {
       [createPersona("persona:available")],
     ),
     ["persona:available"],
+  );
+});
+
+test("orderPersonasByInitiallySelected keeps initially selected personas at top", () => {
+  const personas = [
+    createPersona("persona:michelangelo"),
+    createPersona("persona:milhouse"),
+    createPersona("persona:ned"),
+    createPersona("persona:raphael"),
+  ];
+
+  const ordered = orderPersonasByInitiallySelected(personas, [
+    "persona:milhouse",
+    "persona:ned",
+    "persona:missing",
+  ]);
+
+  assert.deepEqual(
+    ordered.map((persona) => persona.id),
+    [
+      "persona:milhouse",
+      "persona:ned",
+      "persona:michelangelo",
+      "persona:raphael",
+    ],
   );
 });
