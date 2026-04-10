@@ -241,6 +241,17 @@ export function useTeamActions(
     setIsApplyingTeamImportUpdate(false);
   }
 
+  function clearImportUpdateAndReturnToEdit() {
+    if (!teamImportTarget) {
+      closeImportUpdateDialog();
+      return;
+    }
+
+    const team = teamImportTarget;
+    closeImportUpdateDialog();
+    openEditDialog(team);
+  }
+
   async function handleTeamImportUpdateApply({
     personas,
     updateTeamInfo,
@@ -470,6 +481,7 @@ export function useTeamActions(
     handleTeamImportComplete,
     handleTeamImportUpdateApply,
     closeImportUpdateDialog,
+    clearImportUpdateAndReturnToEdit,
     openCreateDialog,
     openDuplicateDialog,
     openEditDialog,

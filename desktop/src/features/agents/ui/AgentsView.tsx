@@ -820,6 +820,7 @@ export function AgentsView() {
           teamActions.updateTeamMutation.isPending
         }
         onApply={teamActions.handleTeamImportUpdateApply}
+        onClear={teamActions.clearImportUpdateAndReturnToEdit}
         onOpenChange={(open) => {
           if (!open) {
             teamActions.closeImportUpdateDialog();
