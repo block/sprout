@@ -6,6 +6,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::app_state::AppState;
+use crate::util::percent_encode;
 
 const DEFAULT_RELAY_WS_URL: &str = "ws://localhost:3000";
 
@@ -48,12 +49,43 @@ pub fn relay_api_base_url() -> String {
     relay_http_base_url(&relay_ws_url())
 }
 
+/// Build a relay API path from untrusted path segments by percent-encoding each segment.
+pub fn api_path(segments: &[&str]) -> String {
+    let mut path = String::from("/api");
+    for segment in segments {
+        path.push('/');
+        path.push_str(&percent_encode(segment));
+    }
+    path
+}
+
+fn validate_api_path(path: &str) -> Result<(), String> {
+    let path_only = path
+        .split_once('?')
+        .map(|(prefix, _)| prefix)
+        .unwrap_or(path);
+
+    if !path_only.starts_with('/') {
+        return Err("API paths must start with '/'".to_string());
+    }
+
+    if path_only
+        .split('/')
+        .any(|segment| matches!(segment, "." | ".."))
+    {
+        return Err("API path contains unsafe traversal segments".to_string());
+    }
+
+    Ok(())
+}
+
 pub fn build_authed_request(
     client: &reqwest::Client,
     method: Method,
     path: &str,
     state: &AppState,
 ) -> Result<reqwest::RequestBuilder, String> {
+    validate_api_path(path)?;
     let url = format!("{}{}", relay_api_base_url(), path);
     let request = client.request(method, url);
 
@@ -144,6 +176,7 @@ pub fn build_token_management_request(
     path: &str,
     state: &AppState,
 ) -> Result<reqwest::RequestBuilder, String> {
+    validate_api_path(path)?;
     let url = format!("{}{}", relay_api_base_url(), path);
     let request = client.request(method, url);
 
@@ -242,6 +275,28 @@ pub async fn send_empty_request(request: reqwest::RequestBuilder) -> Result<(), 
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{api_path, validate_api_path};
+
+    #[test]
+    fn api_path_encodes_path_segments() {
+        let path = api_path(&["tokens", "../../etc/passwd"]);
+        assert_eq!(path, "/api/tokens/..%2F..%2Fetc%2Fpasswd");
+    }
+
+    #[test]
+    fn validate_api_path_rejects_traversal_segments() {
+        assert!(validate_api_path("/api/tokens/../admin").is_err());
+        assert!(validate_api_path("/api/tokens/./admin").is_err());
+    }
+
+    #[test]
+    fn validate_api_path_allows_encoded_segments() {
+        assert!(validate_api_path("/api/tokens/..%2Fadmin").is_ok());
+    }
 }
 
 // ── Signed-event submission ──────────────────────────────────────────────────

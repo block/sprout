@@ -93,7 +93,10 @@ pub(crate) async fn validate_webhook_urls(
 
             if let Some(host) = parsed.host_str() {
                 // Block loopback hostnames and cloud metadata endpoints.
-                if matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]") {
+                if matches!(
+                    host,
+                    "localhost" | "127.0.0.1" | "::1" | "[::1]" | "::" | "[::]"
+                ) {
                     return Err(format!(
                         "webhook URL in step '{}' targets loopback address",
                         step.id
@@ -354,6 +357,16 @@ mod tests {
         let err = validate_webhook_urls(&def).await.unwrap_err();
         assert!(
             err.contains("loopback") || err.contains("private"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ipv6_unspecified_is_rejected() {
+        let def = make_workflow(vec![webhook_step("s1", "http://[::]/evil")]);
+        let err = validate_webhook_urls(&def).await.unwrap_err();
+        assert!(
+            err.contains("loopback") || err.contains("private") || err.contains("internal"),
             "unexpected error: {err}"
         );
     }

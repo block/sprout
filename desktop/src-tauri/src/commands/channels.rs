@@ -5,7 +5,7 @@ use crate::{
     app_state::AppState,
     events,
     models::{ChannelDetailInfo, ChannelInfo, ChannelMembersResponse},
-    relay::{build_authed_request, send_json_request, submit_event},
+    relay::{api_path, build_authed_request, send_json_request, submit_event},
 };
 
 // ── Reads (unchanged) ────────────────────────────────────────────────────────
@@ -21,7 +21,7 @@ pub async fn get_channel_details(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<ChannelDetailInfo, String> {
-    let path = format!("/api/channels/{channel_id}");
+    let path = api_path(&["channels", &channel_id]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
@@ -31,7 +31,7 @@ pub async fn get_channel_members(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<ChannelMembersResponse, String> {
-    let path = format!("/api/channels/{channel_id}/members");
+    let path = api_path(&["channels", &channel_id, "members"]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
@@ -73,7 +73,8 @@ pub async fn create_channel(
     submit_event(builder, &state).await?;
 
     // Follow-up GET to return the full ChannelInfo the frontend expects.
-    let path = format!("/api/channels/{channel_uuid}");
+    let channel_uuid_string = channel_uuid.to_string();
+    let path = api_path(&["channels", &channel_uuid_string]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
@@ -90,7 +91,7 @@ pub async fn update_channel(
     submit_event(builder, &state).await?;
 
     // Follow-up GET to return the full ChannelDetailInfo.
-    let path = format!("/api/channels/{channel_id}");
+    let path = api_path(&["channels", &channel_id]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }

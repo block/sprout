@@ -9,8 +9,7 @@ use crate::{
         FeedResponse, ForumPostsResponse, ForumThreadResponse, GetFeedQuery, GetForumPostsQuery,
         GetForumThreadQuery, SearchQueryParams, SearchResponse, SendChannelMessageResponse,
     },
-    relay::{build_authed_request, relay_error_message, send_json_request, submit_event},
-    util::percent_encode,
+    relay::{api_path, build_authed_request, relay_error_message, send_json_request, submit_event},
 };
 
 // ── Reads (unchanged) ────────────────────────────────────────────────────────
@@ -51,7 +50,7 @@ pub async fn get_forum_posts(
     before: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<ForumPostsResponse, String> {
-    let path = format!("/api/channels/{channel_id}/messages");
+    let path = api_path(&["channels", &channel_id, "messages"]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?.query(
         &GetForumPostsQuery {
             limit,
@@ -71,7 +70,7 @@ pub async fn get_forum_thread(
     cursor: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ForumThreadResponse, String> {
-    let path = format!("/api/channels/{channel_id}/threads/{event_id}");
+    let path = api_path(&["channels", &channel_id, "threads", &event_id]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?
         .query(&GetForumThreadQuery { limit, cursor });
 
@@ -80,12 +79,8 @@ pub async fn get_forum_thread(
 
 #[tauri::command]
 pub async fn get_event(event_id: String, state: State<'_, AppState>) -> Result<String, String> {
-    let request = build_authed_request(
-        &state.http_client,
-        Method::GET,
-        &format!("/api/events/{event_id}"),
-        &state,
-    )?;
+    let path = api_path(&["events", &event_id]);
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     let response = request
         .send()
         .await
@@ -112,7 +107,7 @@ async fn resolve_thread_ref(
     let parent_eid =
         EventId::from_hex(parent_event_id).map_err(|e| format!("invalid parent event ID: {e}"))?;
 
-    let path = format!("/api/events/{parent_event_id}");
+    let path = api_path(&["events", parent_event_id]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, state)?;
     let response = request
         .send()
@@ -257,8 +252,7 @@ pub async fn remove_reaction(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // Fetch reactions to find our reaction event ID — same pattern as MCP.
-    let encoded_event_id = percent_encode(event_id.trim());
-    let path = format!("/api/messages/{encoded_event_id}/reactions");
+    let path = api_path(&["messages", event_id.trim(), "reactions"]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     let reactions: serde_json::Value = send_json_request(request).await?;
 
