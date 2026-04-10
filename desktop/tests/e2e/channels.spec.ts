@@ -879,6 +879,7 @@ test("members sidebar supports bulk remove for managed bots", async ({
     page.getByTestId("members-sidebar-agent-controls"),
   ).toBeVisible();
 
+  await page.getByTestId("members-sidebar-agent-controls").click();
   await page.getByTestId("members-sidebar-remove-all").click();
   await expect(page.getByTestId("members-sidebar-action-notice")).toContainText(
     "Removed 2 managed bots from this channel.",
@@ -1010,7 +1011,9 @@ test("bulk remove stays hidden when row-level remove is not allowed", async ({
     page.getByTestId(`sidebar-remove-member-${agentPubkey}`),
   ).toHaveCount(0);
   await page.keyboard.press("Escape");
+  await page.getByTestId("members-sidebar-agent-controls").click();
   await expect(page.getByTestId("members-sidebar-remove-all")).toHaveCount(0);
+  await page.keyboard.press("Escape");
 });
 
 test("open channel management supports join and leave", async ({ page }) => {

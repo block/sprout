@@ -1,6 +1,12 @@
-import { Play, Square, X } from "lucide-react";
+import { Ellipsis, Play, Square, Trash2 } from "lucide-react";
 
-import { MembersSidebarIconButton } from "./MembersSidebarIconButton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/shared/ui/dropdown-menu";
 
 type MembersSidebarAgentControlsProps = {
   canBulkRemove: boolean;
@@ -22,39 +28,51 @@ export function MembersSidebarAgentControls({
   onStopAll,
 }: MembersSidebarAgentControlsProps) {
   return (
-    <div
-      className="ml-auto flex w-[5.75rem] items-center justify-end gap-1"
-      data-testid="members-sidebar-agent-controls"
-    >
-      <MembersSidebarIconButton
-        actionLabel="Spawn or respawn all managed bots"
-        className="text-muted-foreground hover:text-foreground"
-        data-testid="members-sidebar-respawn-all"
-        disabled={disabled || !canBulkRespawn}
-        icon={<Play className="h-3.5 w-3.5" />}
-        onClick={onRespawnAll}
-        variant="ghost"
-      />
-      <MembersSidebarIconButton
-        actionLabel="Stop or shut down all managed bots"
-        className="text-muted-foreground hover:text-foreground"
-        data-testid="members-sidebar-stop-all"
-        disabled={disabled || !canBulkStop}
-        icon={<Square className="h-3.5 w-3.5" />}
-        onClick={onStopAll}
-        variant="ghost"
-      />
-      {canBulkRemove ? (
-        <MembersSidebarIconButton
-          actionLabel="Remove all managed bots from this channel"
-          className="text-muted-foreground hover:text-destructive"
-          data-testid="members-sidebar-remove-all"
-          disabled={disabled}
-          icon={<X className="h-3.5 w-3.5" />}
-          onClick={onRemoveAll}
-          variant="ghost"
-        />
-      ) : null}
-    </div>
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          data-testid="members-sidebar-agent-controls"
+          type="button"
+        >
+          <Ellipsis className="h-4 w-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        onCloseAutoFocus={(event) => event.preventDefault()}
+      >
+        <DropdownMenuItem
+          data-testid="members-sidebar-respawn-all"
+          disabled={disabled || !canBulkRespawn}
+          onClick={onRespawnAll}
+        >
+          <Play className="h-4 w-4" />
+          Spawn or respawn all
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          data-testid="members-sidebar-stop-all"
+          disabled={disabled || !canBulkStop}
+          onClick={onStopAll}
+        >
+          <Square className="h-4 w-4" />
+          Stop all
+        </DropdownMenuItem>
+        {canBulkRemove ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              data-testid="members-sidebar-remove-all"
+              disabled={disabled}
+              onClick={onRemoveAll}
+            >
+              <Trash2 className="h-4 w-4" />
+              Remove all from channel
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

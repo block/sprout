@@ -16,7 +16,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/shared/ui/sheet";
-import { TooltipProvider } from "@/shared/ui/tooltip";
 import { MembersSidebarAgentControls } from "./MembersSidebarAgentControls";
 import { ChannelMemberInviteCard } from "./ChannelMemberInviteCard";
 import { MembersSidebarMemberCard } from "./MembersSidebarMemberCard";
@@ -162,106 +161,104 @@ export function MembersSidebar({
         data-testid="members-sidebar"
         side="right"
       >
-        <TooltipProvider delayDuration={150}>
-          <SheetHeader className="space-y-2 border-b border-border/80 bg-muted/20 px-6 py-6 text-left">
-            <SheetTitle>Members</SheetTitle>
-            <SheetDescription>
-              People and bots in {channel.name}.
-            </SheetDescription>
-          </SheetHeader>
+        <SheetHeader className="space-y-2 border-b border-border/80 bg-muted/20 px-6 py-6 text-left">
+          <SheetTitle>Members</SheetTitle>
+          <SheetDescription>
+            People and bots in {channel.name}.
+          </SheetDescription>
+        </SheetHeader>
 
-          <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
-            {(canManageMembers || channel.visibility === "open") &&
-            channel.channelType !== "dm" ? (
-              <ChannelMemberInviteCard
-                existingMembers={rawMembers}
-                isPending={addMembersMutation.isPending}
-                onSubmit={(input) => addMembersMutation.mutateAsync(input)}
-                open={open}
-                requestErrorMessage={
-                  addMembersMutation.error instanceof Error
-                    ? addMembersMutation.error.message
-                    : null
-                }
-              />
-            ) : null}
+        <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
+          {(canManageMembers || channel.visibility === "open") &&
+          channel.channelType !== "dm" ? (
+            <ChannelMemberInviteCard
+              existingMembers={rawMembers}
+              isPending={addMembersMutation.isPending}
+              onSubmit={(input) => addMembersMutation.mutateAsync(input)}
+              open={open}
+              requestErrorMessage={
+                addMembersMutation.error instanceof Error
+                  ? addMembersMutation.error.message
+                  : null
+              }
+            />
+          ) : null}
 
-            <section className="space-y-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold tracking-tight">People</h2>
-                <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                  {people.length}
-                </span>
-              </div>
-              <div className="space-y-2" data-testid="members-sidebar-people">
-                {people.length > 0 ? (
-                  people.map((member) => renderMemberCard(member, false))
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    {membersQuery.isLoading
-                      ? "Loading members..."
-                      : "No people found."}
-                  </p>
-                )}
-              </div>
-            </section>
+          <section className="space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold tracking-tight">People</h2>
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                {people.length}
+              </span>
+            </div>
+            <div className="space-y-2" data-testid="members-sidebar-people">
+              {people.length > 0 ? (
+                people.map((member) => renderMemberCard(member, false))
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {membersQuery.isLoading
+                    ? "Loading members..."
+                    : "No people found."}
+                </p>
+              )}
+            </div>
+          </section>
 
-            <section className="space-y-2.5">
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold tracking-tight">Bots</h2>
-                <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                  {bots.length}
-                </span>
-                {hasControllableManagedBots ? (
-                  <MembersSidebarAgentControls
-                    canBulkRemove={hasRemovableManagedBots}
-                    canBulkRespawn={hasControllableManagedBots}
-                    canBulkStop={hasStoppableManagedBots}
-                    disabled={isActionPending || isArchived}
-                    onRemoveAll={() => {
-                      void handleRemoveAll();
-                    }}
-                    onRespawnAll={() => {
-                      void handleRespawnAll();
-                    }}
-                    onStopAll={() => {
-                      void handleStopAll();
-                    }}
-                  />
-                ) : null}
-              </div>
-              <div className="space-y-2" data-testid="members-sidebar-bots">
-                {bots.length > 0 ? (
-                  bots.map((member) => renderMemberCard(member, true))
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    {membersQuery.isLoading
-                      ? "Loading members..."
-                      : "No bots found."}
-                  </p>
-                )}
-              </div>
-            </section>
+          <section className="space-y-2.5">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold tracking-tight">Bots</h2>
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                {bots.length}
+              </span>
+              {hasControllableManagedBots ? (
+                <MembersSidebarAgentControls
+                  canBulkRemove={hasRemovableManagedBots}
+                  canBulkRespawn={hasControllableManagedBots}
+                  canBulkStop={hasStoppableManagedBots}
+                  disabled={isActionPending || isArchived}
+                  onRemoveAll={() => {
+                    void handleRemoveAll();
+                  }}
+                  onRespawnAll={() => {
+                    void handleRespawnAll();
+                  }}
+                  onStopAll={() => {
+                    void handleStopAll();
+                  }}
+                />
+              ) : null}
+            </div>
+            <div className="space-y-2" data-testid="members-sidebar-bots">
+              {bots.length > 0 ? (
+                bots.map((member) => renderMemberCard(member, true))
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {membersQuery.isLoading
+                    ? "Loading members..."
+                    : "No bots found."}
+                </p>
+              )}
+            </div>
+          </section>
 
-            {actionNoticeMessage ? (
-              <p
-                className="text-sm text-muted-foreground"
-                data-testid="members-sidebar-action-notice"
-              >
-                {actionNoticeMessage}
-              </p>
-            ) : null}
+          {actionNoticeMessage ? (
+            <p
+              className="text-sm text-muted-foreground"
+              data-testid="members-sidebar-action-notice"
+            >
+              {actionNoticeMessage}
+            </p>
+          ) : null}
 
-            {actionErrorMessage ? (
-              <p
-                className="text-sm text-destructive"
-                data-testid="members-sidebar-action-error"
-              >
-                {actionErrorMessage}
-              </p>
-            ) : null}
-          </div>
-        </TooltipProvider>
+          {actionErrorMessage ? (
+            <p
+              className="text-sm text-destructive"
+              data-testid="members-sidebar-action-error"
+            >
+              {actionErrorMessage}
+            </p>
+          ) : null}
+        </div>
       </SheetContent>
     </Sheet>
   );
