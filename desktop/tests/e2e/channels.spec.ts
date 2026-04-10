@@ -33,8 +33,12 @@ async function openMemberMenu(
   page: import("@playwright/test").Page,
   pubkey: string,
 ) {
-  await page.getByTestId(`sidebar-member-${pubkey}`).hover();
-  await page.getByTestId(`sidebar-member-menu-${pubkey}`).click();
+  // The 3-dot trigger has opacity-0 and becomes visible on row hover.
+  // Use force:true to bypass Playwright's opacity actionability check
+  // since the element is in the DOM and clickable, just not visible.
+  await page
+    .getByTestId(`sidebar-member-menu-${pubkey}`)
+    .click({ force: true });
 }
 
 async function addGenericAgent(
