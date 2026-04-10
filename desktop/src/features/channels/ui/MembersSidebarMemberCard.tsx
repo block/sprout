@@ -1,4 +1,4 @@
-import { Play, RotateCcw, Square, X } from "lucide-react";
+import { Ellipsis, Play, RotateCcw, Square, Trash2 } from "lucide-react";
 
 import {
   getManagedAgentPrimaryActionLabel,
@@ -12,8 +12,13 @@ import type {
   ManagedAgent,
   PresenceStatus,
 } from "@/shared/api/types";
-import { Button } from "@/shared/ui/button";
-import { MembersSidebarIconButton } from "./MembersSidebarIconButton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/shared/ui/dropdown-menu";
 
 type MembersSidebarMemberCardProps = {
   canRemoveMember: boolean;
@@ -64,9 +69,10 @@ export function MembersSidebarMemberCard({
   profileAvatarUrl,
 }: MembersSidebarMemberCardProps) {
   const roleLabel = formatRoleLabel(member, memberIsBot);
-  const actionLabel = managedAgent
-    ? getManagedAgentPrimaryActionLabel(managedAgent)
-    : null;
+  const disabled = isActionPending || isArchived;
+  const hasActions = memberIsBot
+    ? Boolean(managedAgent) || canRemoveMember
+    : canRemoveMember;
 
   return (
     <div
@@ -99,8 +105,6 @@ export function MembersSidebarMemberCard({
             {managedAgent ? (
               <>
                 <span aria-hidden="true">&middot;</span>
-                <span>Managed locally</span>
-                <span aria-hidden="true">&middot;</span>
                 <span
                   className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
                   data-testid={`sidebar-managed-agent-status-${member.pubkey}`}
@@ -112,64 +116,90 @@ export function MembersSidebarMemberCard({
           </div>
         </div>
       </div>
-      {memberIsBot ? (
-        <div className="flex w-[5.75rem] shrink-0 items-center justify-end gap-1">
-          {managedAgent ? (
-            <MembersSidebarIconButton
-              actionLabel={actionLabel ?? "Manage bot"}
-              className="text-muted-foreground hover:text-foreground"
-              data-testid={`sidebar-agent-action-${member.pubkey}`}
-              disabled={isActionPending || isArchived}
-              icon={getManagedAgentActionIcon(managedAgent)}
-              onClick={() => {
-                onManagedAgentAction(managedAgent);
-              }}
-              variant="ghost"
-            />
-          ) : null}
-          {canRemoveMember ? (
-            <MembersSidebarIconButton
-              actionLabel={`Remove ${memberLabel} from channel`}
-              className="text-muted-foreground hover:text-destructive"
-              data-testid={`sidebar-remove-member-${member.pubkey}`}
-              disabled={isActionPending || isArchived}
-              icon={<X className="h-3.5 w-3.5" />}
-              onClick={() => {
-                onRemoveMember(member);
-              }}
-              variant="ghost"
-            />
-          ) : null}
-        </div>
-      ) : canRemoveMember ? (
-        <div className="flex shrink-0 items-center">
-          <Button
-            className="h-7 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground"
-            data-testid={`sidebar-remove-member-${member.pubkey}`}
-            disabled={isActionPending || isArchived}
-            onClick={() => {
-              onRemoveMember(member);
-            }}
-            size="sm"
-            type="button"
-            variant="ghost"
-          >
-            Remove
-          </Button>
-        </div>
+      {hasActions ? (
+        <MemberActionsMenu
+          canRemoveMember={canRemoveMember}
+          disabled={disabled}
+          managedAgent={managedAgent}
+          member={member}
+          memberIsBot={memberIsBot}
+          onManagedAgentAction={onManagedAgentAction}
+          onRemoveMember={onRemoveMember}
+        />
       ) : null}
     </div>
   );
 }
 
+function MemberActionsMenu({
+  canRemoveMember,
+  disabled,
+  managedAgent,
+  member,
+  memberIsBot,
+  onManagedAgentAction,
+  onRemoveMember,
+}: {
+  canRemoveMember: boolean;
+  disabled: boolean;
+  managedAgent?: ManagedAgent;
+  member: ChannelMember;
+  memberIsBot: boolean;
+  onManagedAgentAction: (agent: ManagedAgent) => void;
+  onRemoveMember: (member: ChannelMember) => void;
+}) {
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          data-testid={`sidebar-member-menu-${member.pubkey}`}
+          type="button"
+        >
+          <Ellipsis className="h-4 w-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        onCloseAutoFocus={(event) => event.preventDefault()}
+      >
+        {memberIsBot && managedAgent ? (
+          <>
+            <DropdownMenuItem
+              data-testid={`sidebar-agent-action-${member.pubkey}`}
+              disabled={disabled}
+              onClick={() => onManagedAgentAction(managedAgent)}
+            >
+              {getManagedAgentActionIcon(managedAgent)}
+              {getManagedAgentPrimaryActionLabel(managedAgent)}
+            </DropdownMenuItem>
+            {canRemoveMember ? <DropdownMenuSeparator /> : null}
+          </>
+        ) : null}
+        {canRemoveMember ? (
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            data-testid={`sidebar-remove-member-${member.pubkey}`}
+            disabled={disabled}
+            onClick={() => onRemoveMember(member)}
+          >
+            <Trash2 className="h-4 w-4" />
+            Remove from channel
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function getManagedAgentActionIcon(agent: ManagedAgent) {
   if (isManagedAgentActive(agent)) {
-    return <Square className="h-3.5 w-3.5" />;
+    return <Square className="h-4 w-4" />;
   }
 
   if (agent.backend.type === "local" && agent.status === "stopped") {
-    return <RotateCcw className="h-3.5 w-3.5" />;
+    return <RotateCcw className="h-4 w-4" />;
   }
 
-  return <Play className="h-3.5 w-3.5" />;
+  return <Play className="h-4 w-4" />;
 }
