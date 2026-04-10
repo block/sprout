@@ -8,6 +8,7 @@ export type ImetaEntry = {
   alt?: string;
   thumb?: string;
   duration?: number;
+  image?: string;
 };
 
 export function parseImetaTags(tags: string[][]): Map<string, ImetaEntry> {
@@ -47,6 +48,9 @@ export function parseImetaTags(tags: string[][]): Map<string, ImetaEntry> {
           break;
         case "duration":
           entry.duration = parseFloat(val);
+          break;
+        case "image":
+          entry.image = val;
           break;
       }
     }

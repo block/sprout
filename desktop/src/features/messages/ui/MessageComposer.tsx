@@ -304,6 +304,7 @@ export function MessageComposer({
             ...(d.blurhash ? [`blurhash ${d.blurhash}`] : []),
             ...(d.thumb ? [`thumb ${d.thumb}`] : []),
             ...(d.duration != null ? [`duration ${d.duration}`] : []),
+            ...(d.image ? [`image ${d.image}`] : []),
           ])
         : undefined;
 

@@ -20,6 +20,9 @@ pub struct BlobDescriptor {
     pub thumb: Option<String>,
     /// Video duration in seconds. `None` for non-video blobs.
     pub duration: Option<f64>,
+    /// NIP-71 poster frame URL. `None` for non-video blobs or if extraction failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -309,6 +312,92 @@ fn transcode_to_mp4(source: &std::path::Path) -> Result<std::path::PathBuf, Stri
     Ok(output)
 }
 
+/// Extract a single JPEG poster frame from a transcoded MP4 via ffmpeg.
+///
+/// Seeks to 1 second (avoids black leader frames), falls back to first frame
+/// for videos shorter than 1 second. Output is scaled to 640px wide with even
+/// dimensions. Returns the path to a temp JPEG. Caller must clean up.
+///
+/// Best-effort: returns `Err` on failure — callers should log and continue
+/// without a poster rather than failing the entire video upload.
+fn extract_poster_frame(mp4_path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let output = std::env::temp_dir().join(format!("sprout-poster-{}.jpg", uuid::Uuid::new_v4()));
+
+    // Try seeking to 1s first (avoids black first frames from fade-ins).
+    let result = std::process::Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-ss")
+        .arg("1")
+        .arg("-i")
+        .arg(mp4_path)
+        .args(["-vframes", "1", "-vf", "scale=640:-2", "-q:v", "2"])
+        .arg(&output)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("ffmpeg poster extraction failed: {e}"))?;
+
+    // If seek to 1s failed (video shorter than 1s), retry from first frame.
+    if !result.status.success()
+        || !output.exists()
+        || std::fs::metadata(&output).map_or(true, |m| m.len() == 0)
+    {
+        if !result.status.success() {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            eprintln!("sprout-desktop: poster seek-to-1s failed, trying first frame: {stderr}");
+        }
+        let _ = std::fs::remove_file(&output);
+        let fallback = std::process::Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-i")
+            .arg(mp4_path)
+            .args(["-vframes", "1", "-vf", "scale=640:-2", "-q:v", "2"])
+            .arg(&output)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .map_err(|e| format!("ffmpeg poster fallback failed: {e}"))?;
+
+        if !fallback.status.success() || !output.exists() {
+            let stderr = String::from_utf8_lossy(&fallback.stderr);
+            eprintln!("sprout-desktop: poster frame extraction failed: {stderr}");
+            let _ = std::fs::remove_file(&output);
+            return Err("ffmpeg could not extract a poster frame".to_string());
+        }
+    }
+
+    Ok(output)
+}
+
+/// Transcode video and extract poster frame. Returns (video_bytes, Option<poster_bytes>).
+///
+/// Poster extraction is best-effort — if it fails, returns `None` for the poster
+/// and the video bytes are still valid. All temp files are cleaned up.
+fn transcode_and_extract_poster(
+    source: &std::path::Path,
+) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+    let transcoded = transcode_to_mp4(source)?;
+
+    // Extract poster from the transcoded file (not the original — guarantees decodability).
+    let poster_bytes = match extract_poster_frame(&transcoded) {
+        Ok(poster_path) => {
+            let bytes = std::fs::read(&poster_path).ok();
+            let _ = std::fs::remove_file(&poster_path);
+            bytes
+        }
+        Err(e) => {
+            eprintln!("sprout-desktop: poster extraction failed (non-fatal): {e}");
+            None
+        }
+    };
+
+    let video_bytes =
+        std::fs::read(&transcoded).map_err(|e| format!("failed to read transcoded file: {e}"));
+    let _ = std::fs::remove_file(&transcoded);
+
+    Ok((video_bytes?, poster_bytes))
+}
+
 /// Open a native file dialog, read the selected file, and upload it.
 ///
 /// All file I/O happens in trusted Rust — the renderer never touches the
@@ -351,31 +440,42 @@ pub async fn pick_and_upload_media(
 
     // All sync I/O (sniff, transcode, read) runs off the async runtime to
     // avoid blocking Tokio worker threads during long ffmpeg transcodes.
-    let body = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-        // Sniff magic bytes to decide: video → transcode, image → direct upload.
-        let header = {
-            use std::io::Read;
-            let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-            let mut buf = [0u8; 4096];
-            let n = file.read(&mut buf).map_err(|e| e.to_string())?;
-            buf[..n].to_vec()
-        };
+    let (body, poster_bytes) =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+            // Sniff magic bytes to decide: video → transcode + poster, image → direct upload.
+            let header = {
+                use std::io::Read;
+                let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+                let mut buf = [0u8; 4096];
+                let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+                buf[..n].to_vec()
+            };
 
-        if is_video_file(&header) {
-            let transcoded = transcode_to_mp4(&path)?;
-            let bytes = std::fs::read(&transcoded)
-                .map_err(|e| format!("failed to read transcoded file: {e}"));
-            let _ = std::fs::remove_file(&transcoded);
-            bytes
-        } else {
-            std::fs::read(&path).map_err(|e| format!("failed to read file: {e}"))
-        }
-    })
-    .await
-    .map_err(|e| format!("transcode task failed: {e}"))??;
+            if is_video_file(&header) {
+                transcode_and_extract_poster(&path)
+            } else {
+                let bytes =
+                    std::fs::read(&path).map_err(|e| format!("failed to read file: {e}"))?;
+                Ok((bytes, None))
+            }
+        })
+        .await
+        .map_err(|e| format!("transcode task failed: {e}"))??;
 
     let mime = detect_and_validate_mime(&body)?;
-    do_upload(body, &mime, &state).await.map(Some)
+
+    // Upload video first, then poster (best-effort). If poster upload fails,
+    // the video descriptor is returned without an image field.
+    let mut descriptor = do_upload(body, &mime, &state).await?;
+
+    if let Some(poster) = poster_bytes {
+        match do_upload(poster, "image/jpeg", &state).await {
+            Ok(poster_desc) => descriptor.image = Some(poster_desc.url),
+            Err(e) => eprintln!("sprout-desktop: poster upload failed (non-fatal): {e}"),
+        }
+    }
+
+    Ok(Some(descriptor))
 }
 
 /// Upload raw bytes directly (for paste and drag-drop).
@@ -392,30 +492,40 @@ pub async fn upload_media_bytes(
         return Err("empty upload".to_string());
     }
 
-    let body = if is_video_file(&data) {
-        // Video: write to temp → transcode → read result. All blocking I/O
-        // runs off the async runtime via spawn_blocking.
-        tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+    let (body, poster_bytes) = if is_video_file(&data) {
+        // Video: write to temp → transcode + extract poster → read results.
+        // All blocking I/O runs off the async runtime via spawn_blocking.
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
             let tmp_input =
                 std::env::temp_dir().join(format!("sprout-drop-{}", uuid::Uuid::new_v4()));
-            std::fs::write(&tmp_input, &data)
-                .map_err(|e| format!("failed to write temp file: {e}"))?;
-            let result = transcode_to_mp4(&tmp_input);
+            // Cleanup guard: remove temp file on ALL exit paths (including write failure).
+            let result = (|| {
+                std::fs::write(&tmp_input, &data)
+                    .map_err(|e| format!("failed to write temp file: {e}"))?;
+                transcode_and_extract_poster(&tmp_input)
+            })();
             let _ = std::fs::remove_file(&tmp_input);
-            let transcoded = result?;
-            let bytes = std::fs::read(&transcoded)
-                .map_err(|e| format!("failed to read transcoded file: {e}"));
-            let _ = std::fs::remove_file(&transcoded);
-            bytes
+            result
         })
         .await
         .map_err(|e| format!("transcode task failed: {e}"))??
     } else {
-        data
+        (data, None)
     };
 
     let mime = detect_and_validate_mime(&body)?;
-    do_upload(body, &mime, &state).await
+
+    // Upload video first, then poster (best-effort).
+    let mut descriptor = do_upload(body, &mime, &state).await?;
+
+    if let Some(poster) = poster_bytes {
+        match do_upload(poster, "image/jpeg", &state).await {
+            Ok(poster_desc) => descriptor.image = Some(poster_desc.url),
+            Err(e) => eprintln!("sprout-desktop: poster upload failed (non-fatal): {e}"),
+        }
+    }
+
+    Ok(descriptor)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

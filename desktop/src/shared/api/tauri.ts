@@ -724,6 +724,7 @@ export type BlobDescriptor = {
   blurhash?: string;
   thumb?: string;
   duration?: number;
+  image?: string;
 };
 
 export async function uploadMedia(

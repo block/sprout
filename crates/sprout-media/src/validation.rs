@@ -133,6 +133,11 @@ pub fn validate_video_file(path: &Path, config: &MediaConfig) -> Result<VideoMet
                 // Duration from mvhd timescale (track duration / timescale).
                 // Reject zero/negative (malformed) and >600s (too long).
                 // Must match imeta validation which requires duration > 0.0.
+                // Guard: timescale=0 causes division-by-zero in the mp4 crate's
+                // duration() method. Fail fast before it panics.
+                if track.timescale() == 0 {
+                    return Err(MediaError::InvalidVideo);
+                }
                 let duration_ms = track.duration().as_millis();
                 let duration_secs = duration_ms as f64 / 1000.0;
                 if duration_secs <= 0.0 {

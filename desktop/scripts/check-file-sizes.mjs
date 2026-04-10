@@ -43,7 +43,7 @@ const overrides = new Map([
   ["src/shared/api/relayClientSession.ts", 790], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
   ["src-tauri/src/lib.rs", 550], // sprout-media:// proxy now forwards Range headers + propagates Content-Range/Accept-Ranges for video seeking
-  ["src-tauri/src/commands/media.rs", 550], // ffmpeg video transcode pipeline (find_ffmpeg, is_video_file, transcode_to_mp4) + spawn_blocking wrappers + tests
+  ["src-tauri/src/commands/media.rs", 650], // ffmpeg video transcode + poster frame extraction (find_ffmpeg, is_video_file, transcode_to_mp4, extract_poster_frame, transcode_and_extract_poster) + spawn_blocking wrappers + tests
   ["src-tauri/src/commands/agents.rs", 849], // remote agent lifecycle routing (local + provider branches) + scope enforcement; rustfmt adds line breaks around long tuple/closure blocks
   ["src-tauri/src/managed_agents/runtime.rs", 650], // KNOWN_AGENT_BINARIES const + process_belongs_to_us FFI (macOS proc_name + Linux /proc/comm) + terminate_process + start/stop/sync lifecycle
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests

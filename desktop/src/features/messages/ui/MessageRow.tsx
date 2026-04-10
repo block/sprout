@@ -8,6 +8,7 @@ import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
+import { parseImetaTags } from "@/features/messages/lib/parseImeta";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
 import { BotIdenticon } from "./BotIdenticon";
@@ -59,6 +60,11 @@ export const MessageRow = React.memo(
       [profiles, message.tags],
     );
 
+    const imetaByUrl = React.useMemo(
+      () => (message.tags ? parseImetaTags(message.tags) : undefined),
+      [message.tags],
+    );
+
     const { channels } = useChannelNavigation();
     const channelNames = React.useMemo(
       () => channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
@@ -107,6 +113,7 @@ export const MessageRow = React.memo(
               channelNames={channelNames}
               className="max-w-3xl"
               content={message.body}
+              imetaByUrl={imetaByUrl}
               mentionNames={mentionNames}
               tight
             />

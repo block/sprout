@@ -233,6 +233,142 @@ else
 fi
 echo ""
 
+# ── Test 8: Poster frame upload + imeta validation ───────────────────────────
+# Upload a JPEG poster frame, then verify the server accepts an imeta tag
+# that links the video and poster via the NIP-71 `image` field.
+
+echo "Test 8: Upload poster frame (JPEG image)"
+POSTER_JPG="$TMPDIR/poster.jpg"
+ffmpeg -y -ss 0.5 -i "$TEST_MP4" -vframes 1 -vf "scale=640:-2" -q:v 2 \
+    "$POSTER_JPG" 2>/dev/null
+
+if [ ! -s "$POSTER_JPG" ]; then
+    # Fallback: first frame (video may be too short for 0.5s seek)
+    ffmpeg -y -i "$TEST_MP4" -vframes 1 -vf "scale=640:-2" -q:v 2 \
+        "$POSTER_JPG" 2>/dev/null
+fi
+
+POSTER_SIZE=$(wc -c < "$POSTER_JPG" | tr -d ' ')
+POSTER_SHA=$(shasum -a 256 "$POSTER_JPG" | cut -d' ' -f1)
+echo "  Poster: ${POSTER_SIZE} bytes, sha256=${POSTER_SHA:0:16}..."
+
+POSTER_AUTH="$(blossom_auth "$POSTER_SHA")"
+POSTER_RESP=$(curl -s -w "\n%{http_code}" \
+    -X PUT "$RELAY_URL/media/upload" \
+    -H "Authorization: $POSTER_AUTH" \
+    -H "Content-Type: image/jpeg" \
+    -H "X-SHA-256: $POSTER_SHA" \
+    --data-binary "@$POSTER_JPG")
+
+POSTER_HTTP=$(echo "$POSTER_RESP" | tail -1)
+POSTER_BODY=$(echo "$POSTER_RESP" | sed '$d')
+
+if [ "$POSTER_HTTP" = "200" ]; then
+    pass "Poster upload returned 200"
+    POSTER_URL=$(echo "$POSTER_BODY" | jq -r '.url // empty')
+    if [ -n "$POSTER_URL" ]; then
+        pass "Poster has url: ${POSTER_URL:0:60}..."
+    else
+        fail "Poster response missing url"
+    fi
+    # Poster should have dim but NOT duration
+    POSTER_DIM=$(echo "$POSTER_BODY" | jq -r '.dim // empty')
+    POSTER_DUR=$(echo "$POSTER_BODY" | jq -r '.duration // empty')
+    if [ -n "$POSTER_DIM" ]; then
+        pass "Poster has dim: $POSTER_DIM"
+    else
+        fail "Poster missing dim"
+    fi
+    if [ -z "$POSTER_DUR" ]; then
+        pass "Poster correctly omits duration"
+    else
+        fail "Poster should not have duration, got: $POSTER_DUR"
+    fi
+else
+    fail "Poster upload returned $POSTER_HTTP (expected 200)"
+    echo "    Body: $POSTER_BODY"
+fi
+echo ""
+
+# ── Test 9: GET poster frame ─────────────────────────────────────────────────
+
+echo "Test 9: GET poster frame"
+POSTER_GET_RESP=$(curl -s -o "$TMPDIR/poster_dl.jpg" -w "%{http_code}" \
+    "$RELAY_URL/media/${POSTER_SHA}.jpg")
+
+if [ "$POSTER_GET_RESP" = "200" ]; then
+    pass "GET poster returned 200"
+    POSTER_DL_SIZE=$(wc -c < "$TMPDIR/poster_dl.jpg" | tr -d ' ')
+    if [ "$POSTER_DL_SIZE" = "$POSTER_SIZE" ]; then
+        pass "Poster download size matches ($POSTER_DL_SIZE bytes)"
+    else
+        fail "Poster size mismatch: expected $POSTER_SIZE, got $POSTER_DL_SIZE"
+    fi
+else
+    fail "GET poster returned $POSTER_GET_RESP (expected 200)"
+fi
+echo ""
+
+# ── Test 10: Video + poster blobs coexist and are independently retrievable ──
+# The server links video and poster purely through the imeta tag at message
+# send time. Here we verify the prerequisite: both blobs exist, have correct
+# Content-Types, and are independently addressable.
+
+echo "Test 10: Video + poster blobs coexist"
+VIDEO_HEAD=$(curl -s -o /dev/null -w "%{http_code}" -I "$RELAY_URL/media/${SHA256}.mp4")
+POSTER_HEAD=$(curl -s -o /dev/null -w "%{http_code}" -I "$RELAY_URL/media/${POSTER_SHA}.jpg")
+
+if [ "$VIDEO_HEAD" = "200" ] && [ "$POSTER_HEAD" = "200" ]; then
+    pass "Both video and poster blobs exist (HEAD 200)"
+else
+    fail "Blob existence check failed: video=$VIDEO_HEAD poster=$POSTER_HEAD"
+fi
+
+# Verify poster is an image (not video) by checking Content-Type
+POSTER_CT=$(curl -s -I "$RELAY_URL/media/${POSTER_SHA}.jpg" | grep -i "content-type" | tr -d '\r' | awk '{print $2}')
+if echo "$POSTER_CT" | grep -qi "image/jpeg"; then
+    pass "Poster Content-Type is image/jpeg"
+else
+    fail "Poster Content-Type should be image/jpeg, got: $POSTER_CT"
+fi
+
+# Verify video and poster have different hashes (independent blobs)
+if [ "$SHA256" != "$POSTER_SHA" ]; then
+    pass "Video and poster have distinct content hashes"
+else
+    fail "Video and poster hashes should differ"
+fi
+echo ""
+
+# ── Test 11: Poster sidecar has correct metadata ─────────────────────────────
+# The server writes a JSON sidecar for every uploaded blob. Verify the poster
+# sidecar exists and has image MIME type (the server's verify_imeta_blobs
+# checks this at message send time).
+
+echo "Test 11: Poster sidecar metadata"
+# The bare-hash GET resolves via sidecar — if it returns 200 with image/jpeg
+# content-type, the sidecar is correctly configured.
+POSTER_BARE_RESP=$(curl -s -D "$TMPDIR/poster_bare_headers.txt" -o /dev/null -w "%{http_code}" \
+    "$RELAY_URL/media/${POSTER_SHA}")
+if [ "$POSTER_BARE_RESP" = "200" ]; then
+    pass "Poster bare-hash GET resolves via sidecar (200)"
+else
+    fail "Poster bare-hash GET returned $POSTER_BARE_RESP (expected 200)"
+fi
+
+# Verify Content-Type on the bare-hash response
+POSTER_BARE_CT=$(grep -i "content-type" "$TMPDIR/poster_bare_headers.txt" | tr -d '\r' | awk '{print $2}')
+if echo "$POSTER_BARE_CT" | grep -qi "image/jpeg"; then
+    pass "Poster bare-hash Content-Type is image/jpeg"
+else
+    fail "Poster bare-hash Content-Type should be image/jpeg, got: $POSTER_BARE_CT"
+fi
+
+# Note: Full imeta image validation (accept/reject at message send time) is
+# covered by Rust unit tests: test_imeta_image_poster_frame_accepted,
+# test_imeta_image_video_url_rejected, test_imeta_image_thumbnail_url_rejected.
+echo ""
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo "════════════════════════════════════════"
