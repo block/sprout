@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::merge::RespondToData;
+use crate::merge::TriggersData;
 use crate::pack::{self, LoadedPack, LoadedPersona, PackError};
 use crate::persona::split_model;
 
@@ -72,8 +72,8 @@ pub struct ResolvedMcpServer {
 /// Lifecycle hooks (pack-relative paths).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedHooks {
-    pub on_start: Option<PathBuf>,
-    pub on_stop: Option<PathBuf>,
+    pub on_start: Option<String>,
+    pub on_stop: Option<String>,
 }
 
 /// What triggers a response (renamed from respond_to per spec discussion).
@@ -104,22 +104,19 @@ pub struct ResolvedPack {
 /// Goose env vars are projected from model/temperature/context config.
 pub fn resolve_pack(pack_dir: &Path) -> Result<ResolvedPack, PackError> {
     let loaded = pack::load_pack(pack_dir)?;
-    resolve_loaded_pack(&loaded, pack_dir)
+    resolve_loaded_pack(&loaded)
 }
 
 /// Resolve from an already-loaded pack. Useful when you've already called
 /// `load_pack()` and want to avoid re-reading the filesystem.
-pub fn resolve_loaded_pack(
-    loaded: &LoadedPack,
-    pack_dir: &Path,
-) -> Result<ResolvedPack, PackError> {
+pub fn resolve_loaded_pack(loaded: &LoadedPack) -> Result<ResolvedPack, PackError> {
     let pack_version = &loaded.manifest.version;
     let pack_instructions = loaded.pack_instructions.as_deref();
     let shared_mcp = loaded.shared_mcp_config.as_ref();
 
     let mut personas = Vec::with_capacity(loaded.personas.len());
     for lp in &loaded.personas {
-        personas.push(resolve_one_persona(lp, pack_version, pack_instructions, shared_mcp, pack_dir));
+        personas.push(resolve_one_persona(lp, pack_version, pack_instructions, shared_mcp));
     }
 
     Ok(ResolvedPack {
@@ -151,7 +148,6 @@ fn resolve_one_persona(
     pack_version: &str,
     pack_instructions: Option<&str>,
     shared_mcp: Option<&serde_json::Value>,
-    pack_dir: &Path,
 ) -> ResolvedPersona {
     let system_prompt = compose_prompt(&lp.prompt, pack_instructions);
 
@@ -167,9 +163,9 @@ fn resolve_one_persona(
         _ => (None, None),
     };
 
-    let triggers = resolve_triggers(lp.respond_to.as_ref());
+    let triggers = resolve_triggers(lp.triggers.as_ref());
     let mcp_servers = merge_mcp_servers(shared_mcp, &lp.mcp_servers);
-    let hooks = resolve_hooks(lp.hooks.as_ref(), pack_dir);
+    let hooks = resolve_hooks(lp.hooks.as_ref());
     let goose_env_vars = project_env_vars(lp);
 
     // Version: pack version (LoadedPersona doesn't carry a per-persona version).
@@ -211,8 +207,8 @@ fn compose_prompt(persona_prompt: &str, pack_instructions: Option<&str>) -> Stri
 
 // ── Triggers resolution ───────────────────────────────────────────────────────
 
-/// Convert `RespondToData` to `ResolvedTriggers` (renamed per spec discussion).
-fn resolve_triggers(rt: Option<&RespondToData>) -> ResolvedTriggers {
+/// Convert `TriggersData` to `ResolvedTriggers`.
+fn resolve_triggers(rt: Option<&TriggersData>) -> ResolvedTriggers {
     match rt {
         Some(data) => ResolvedTriggers {
             mentions: data.mentions,
@@ -304,19 +300,21 @@ fn parse_mcp_server_config(name: &str, config: &serde_json::Value) -> Option<Res
 
 // ── Hooks resolution ──────────────────────────────────────────────────────────
 
-/// Resolve hooks to absolute paths (pack-relative → absolute).
-fn resolve_hooks(
-    hooks: Option<&crate::merge::HooksData>,
-    pack_dir: &Path,
-) -> Option<ResolvedHooks> {
+/// Store hook paths as raw relative strings (no path resolution).
+///
+/// Security: we intentionally do NOT resolve these to absolute paths.
+/// Hook paths come from untrusted persona frontmatter and could contain
+/// `../` traversal. Since hooks are not executed in this PR, we store
+/// them as-is. The PR that wires execution MUST validate through
+/// `safe_resolve()` before use.
+fn resolve_hooks(hooks: Option<&crate::merge::HooksData>) -> Option<ResolvedHooks> {
     let h = hooks?;
-    // Only return Some if at least one hook is set.
     if h.on_start.is_none() && h.on_stop.is_none() {
         return None;
     }
     Some(ResolvedHooks {
-        on_start: h.on_start.as_ref().map(|p| pack_dir.join(p)),
-        on_stop: h.on_stop.as_ref().map(|p| pack_dir.join(p)),
+        on_start: h.on_start.clone(),
+        on_stop: h.on_stop.clone(),
     })
 }
 
@@ -371,7 +369,7 @@ fn project_env_vars(persona: &LoadedPersona) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::merge::HooksData;
+    use crate::merge::{HooksData, TriggersData};
 
     // ── compose_prompt ────────────────────────────────────────────────────
 
@@ -398,8 +396,8 @@ mod tests {
     // ── resolve_triggers ──────────────────────────────────────────────────
 
     #[test]
-    fn triggers_from_respond_to_data() {
-        let data = RespondToData {
+    fn triggers_from_triggers_data() {
+        let data = TriggersData {
             mentions: false,
             keywords: vec!["security".into(), "CVE".into()],
             all_messages: false,
@@ -503,16 +501,17 @@ mod tests {
     // ── resolve_hooks ─────────────────────────────────────────────────────
 
     #[test]
-    fn hooks_resolved_to_absolute_paths() {
+    fn hooks_stored_as_raw_relative_paths() {
+        // Security: hooks are stored as raw strings, NOT resolved to absolute.
+        // Path traversal validation deferred to the PR that wires execution.
         let data = HooksData {
             on_start: Some("hooks/start.sh".into()),
             on_stop: Some("hooks/stop.sh".into()),
             on_message: None,
         };
-        let pack_dir = Path::new("/packs/my-pack");
-        let h = resolve_hooks(Some(&data), pack_dir).unwrap();
-        assert_eq!(h.on_start.unwrap(), PathBuf::from("/packs/my-pack/hooks/start.sh"));
-        assert_eq!(h.on_stop.unwrap(), PathBuf::from("/packs/my-pack/hooks/stop.sh"));
+        let h = resolve_hooks(Some(&data)).unwrap();
+        assert_eq!(h.on_start.as_deref(), Some("hooks/start.sh"));
+        assert_eq!(h.on_stop.as_deref(), Some("hooks/stop.sh"));
     }
 
     #[test]
@@ -522,12 +521,12 @@ mod tests {
             on_stop: None,
             on_message: None,
         };
-        assert!(resolve_hooks(Some(&data), Path::new("/x")).is_none());
+        assert!(resolve_hooks(Some(&data)).is_none());
     }
 
     #[test]
     fn hooks_none_when_absent() {
-        assert!(resolve_hooks(None, Path::new("/x")).is_none());
+        assert!(resolve_hooks(None).is_none());
     }
 
     // ── project_env_vars ──────────────────────────────────────────────────
@@ -850,7 +849,7 @@ mod tests {
             temperature,
             max_context_tokens,
             subscribe: vec![],
-            respond_to: None,
+            triggers: None,
             thread_replies: true,
             broadcast_replies: false,
             skills: vec![],
