@@ -396,6 +396,9 @@ declare global {
     __SPROUT_E2E__?: E2eConfig;
     __SPROUT_E2E_COMMANDS__?: string[];
     __SPROUT_E2E_WEBVIEW_ZOOM__?: number;
+    __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+      channelName: string;
+    }) => boolean;
     __SPROUT_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
@@ -1621,6 +1624,21 @@ function emitMockLiveEvent(channelId: string, event: RelayEvent) {
       }
     }
   }
+}
+
+function hasMockLiveSubscription(channelId: string) {
+  for (const socket of mockSockets.values()) {
+    for (const subscribedChannelId of socket.subscriptions.values()) {
+      if (
+        subscribedChannelId === channelId ||
+        subscribedChannelId === GLOBAL_MOCK_SUBSCRIPTION
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function recordMockMessage(channelId: string, event: RelayEvent) {
@@ -4006,6 +4024,16 @@ export function maybeInstallE2eTauriMocks() {
 
     return emitMockTypingIndicator(channel.id, pubkey ?? CHARLIE_PUBKEY);
   };
+  window.__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__ = ({ channelName }) => {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === channelName,
+    );
+    if (!channel) {
+      throw new Error(`Mock channel ${channelName} not found.`);
+    }
+
+    return hasMockLiveSubscription(channel.id);
+  };
   window.__SPROUT_E2E_PUSH_MOCK_FEED_ITEM__ = (item) => {
     const category = item.category === "mention" ? "mentions" : item.category;
     mockFeedOverrides[category].unshift(item);
@@ -4354,6 +4382,11 @@ export function maybeInstallE2eTauriMocks() {
         }
 
         return disconnectMockSocket((payload as { id: number }).id);
+      case "plugin:window|show":
+      case "plugin:window|unminimize":
+      case "plugin:window|set_focus":
+      case "plugin:window|set_badge_count":
+        return null;
       case "get_channel_workflows":
         return handleGetChannelWorkflows(
           payload as Parameters<typeof handleGetChannelWorkflows>[0],

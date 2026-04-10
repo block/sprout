@@ -40,6 +40,37 @@ async function ensureTimelineScrollable(
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight + 160);
 }
 
+async function openSearchDialogWithShortcut(
+  page: import("@playwright/test").Page,
+) {
+  const searchDialog = page.getByTestId("search-dialog");
+  const openSearchButton = page.getByTestId("open-search");
+  const shortcut = process.platform === "darwin" ? "Meta+K" : "Control+K";
+
+  await expect(openSearchButton).toBeVisible();
+  await expect
+    .poll(async () => {
+      if (await searchDialog.isVisible()) {
+        return true;
+      }
+
+      await page.keyboard.press(shortcut);
+      return searchDialog.isVisible();
+    })
+    .toBe(true);
+}
+
+async function openSearchDialogWithButton(
+  page: import("@playwright/test").Page,
+) {
+  const searchDialog = page.getByTestId("search-dialog");
+  const openSearchButton = page.getByTestId("open-search");
+
+  await expect(openSearchButton).toBeVisible();
+  await openSearchButton.click();
+  await expect(searchDialog).toBeVisible();
+}
+
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
@@ -141,11 +172,7 @@ test("opens relay-backed search from the sidebar and loads the exact result", as
 }) => {
   await page.goto("/");
 
-  await expect(page.getByTestId("open-search")).toBeVisible();
-  await page.keyboard.press(
-    process.platform === "darwin" ? "Meta+K" : "Control+K",
-  );
-  await expect(page.getByTestId("search-dialog")).toBeVisible();
+  await openSearchDialogWithShortcut(page);
 
   await page.getByTestId("search-input").fill("shipped");
   await expect(page.getByTestId("search-results")).toContainText(
@@ -171,10 +198,7 @@ test("search results use your resolved profile label instead of You", async ({
 }) => {
   await page.goto("/");
 
-  await page.keyboard.press(
-    process.platform === "darwin" ? "Meta+K" : "Control+K",
-  );
-  await expect(page.getByTestId("search-dialog")).toBeVisible();
+  await openSearchDialogWithButton(page);
 
   await page.getByTestId("search-input").fill("welcome");
   const results = page.getByTestId("search-results");
@@ -189,10 +213,7 @@ test("opens accessible unjoined channels from search in read-only mode", async (
 }) => {
   await page.goto("/");
 
-  await page.keyboard.press(
-    process.platform === "darwin" ? "Meta+K" : "Control+K",
-  );
-  await expect(page.getByTestId("search-dialog")).toBeVisible();
+  await openSearchDialogWithButton(page);
 
   await page.getByTestId("search-input").fill("critique");
   const results = page.getByTestId("search-results");
