@@ -85,7 +85,7 @@ sprout-huddle       (LiveKit audio/video integration — standalone, not wired i
 sprout-sdk          (typed Nostr event builders — used by sprout-mcp, sprout-acp, and sprout-cli)
 sprout-media        (Blossom/S3 media storage)
 sprout-cli          (agent-first CLI)
-sprout-admin        (operator CLI: mint/list API tokens)
+sprout-admin        (operator CLI: mint/list API tokens, unbind identities)
 sprout-test-client  (integration test harness + manual CLI)
 ```
 
@@ -179,8 +179,24 @@ The client must respond with `["AUTH", <signed-event>]` before submitting events
 | NIP-42 + Okta JWT | Challenge + JWKS-validated JWT in `auth_token` tag | Human SSO via Okta |
 | NIP-42 + API token | Challenge + `auth_token` tag, constant-time hash verify | Agent/service accounts |
 | HTTP Bearer JWT | `Authorization: Bearer <jwt>` header on REST endpoints | REST API clients |
+| NIP-42 + proxy identity | Identity JWT at upgrade + NIP-42 challenge | Corporate SSO via cf-doorman (proxy/hybrid mode) |
 
 On success, `ConnectionState.auth_state` transitions from `Pending` → `Authenticated(AuthContext)`. On failure → `Failed`. Unauthenticated EVENT/REQ messages are rejected with `["CLOSED", ...]` or `["OK", ..., false, "auth-required: ..."]`.
+
+#### Proxy Identity Mode (Corporate SSO)
+
+When `SPROUT_IDENTITY_MODE` is `proxy` or `hybrid`, the relay sits behind a trusted reverse proxy (cf-doorman) that injects an identity JWT via the `x-forwarded-identity-token` header. The flow adds a two-phase binding step:
+
+1. **WS Upgrade** — The relay validates the identity JWT (signature + expiry via JWKS), extracts `uid` and `username` claims, and stashes them as `PendingProxyIdentity` on the connection. No pubkey is known yet.
+2. **NIP-42 AUTH** — The client signs the challenge with its Nostr keypair. The AUTH handler verifies the signature, then calls `bind_or_validate_identity(uid, device_cn, pubkey)` to create or validate the binding. On success, `AuthState` transitions to `Authenticated`.
+3. **REST API** — Proxy-authenticated REST requests validate the identity JWT, then look up the existing `(uid, device_cn) → pubkey` binding from the `identity_bindings` table.
+4. **Registration** — `POST /api/identity/register` allows initial binding of a pubkey to a corporate identity via NIP-98 proof of key ownership.
+
+**Binding semantics:** Once a `(uid, device_cn)` pair is bound to a pubkey, the binding is immutable. A different pubkey for the same slot returns a 409 Conflict. Admin can unbind via `sprout-admin unbind-identity`.
+
+**Hybrid mode:** When the identity JWT header is absent, the connection falls through to standard NIP-42 auth (API tokens, Okta JWTs). This allows agents without corporate JWTs to authenticate alongside human users.
+
+**Security invariant:** The relay trusts proxy headers unconditionally. It **must** be deployed behind the trusted reverse proxy — direct access would allow header injection.
 
 ### Step 4: Active Loops
 
@@ -764,14 +780,17 @@ Sprout Relay ──WS──→ sprout-acp ──stdio (ACP/JSON-RPC)──→ Ag
 
 ### sprout-admin — Operator CLI
 
-**213 LOC.** Two subcommands:
+**~280 LOC.** Three subcommands:
 
 | Subcommand | Purpose |
 |------------|---------|
 | `mint-token` | Generate API token, store SHA-256 hash in DB, display raw token once |
 | `list-tokens` | List all active tokens (ID, name, scopes, created) |
+| `unbind-identity` | Remove identity binding(s) for key rotation or offboarding |
 
 `mint-token` options: `--name`, `--scopes` (comma-separated), optional `--pubkey`. If `--pubkey` omitted, generates a new keypair and displays `nsec` (bech32) and pubkey.
+
+`unbind-identity` options: `--uid` (required), optional `--device-cn` (omit to remove all devices), `--clear-name` (also clears verified_name from user records). Cache propagation delay: up to 2 minutes.
 
 Raw token is shown exactly once and never stored. Only the SHA-256 hash reaches the database.
 
@@ -818,6 +837,7 @@ Every security-sensitive operation uses an explicit, verified pattern. No implic
 | NIP-42 timestamp | ±60 second tolerance — prevents replay attacks |
 | AUTH events | Never stored in Postgres, never logged in audit chain |
 | Scopeless JWT | Defaults to `[MessagesRead]` only — least-privilege default |
+| Proxy identity | JWT validated via JWKS; headers trusted from cf-doorman only; `require_auth_token` forced true |
 
 ### Input Validation
 
@@ -890,6 +910,7 @@ Docker Compose provides the full local development stack. All services include h
 | `api_tokens` | API token records (hash only, never plaintext) |
 | `audit_log` | Hash-chain audit entries |
 | `delivery_log` | Delivery tracking (partitioned; Rust module pending) |
+| `identity_bindings` | Proxy mode: (uid, device_cn) → pubkey binding for corporate identity |
 
 ### Redis Key Patterns
 
@@ -939,7 +960,7 @@ These are verified gaps in the current implementation — not design aspirations
 | sprout-sdk | 1,237 | Shared library |
 | sprout-media | 977 | Media storage |
 | sprout-cli | 2,919 | Tooling |
-| sprout-admin | 213 | Tooling |
+| sprout-admin | ~280 | Tooling |
 | sprout-test-client | 9,319 | Tooling |
 | **Total** | **~72,126** | |
 

@@ -3,7 +3,9 @@ import * as React from "react";
 import type { TimelineMessage } from "@/features/messages/types";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import { resolveUserVerification } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
+import { VerifiedBadge } from "@/shared/ui/VerifiedBadge";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
@@ -65,6 +67,10 @@ export const MessageRow = React.memo(
       () => channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
       [channels],
     );
+
+    const verifiedName = message.pubkey
+      ? resolveUserVerification({ pubkey: message.pubkey, profiles })
+      : null;
 
     const visibleDepth = Math.min(message.depth, 6);
     const indentPx = visibleDepth * 28;
@@ -330,8 +336,11 @@ export const MessageRow = React.memo(
               <div className="flex min-w-0 items-start gap-1.5">
                 <div className="flex shrink-0 items-start">{avatarNode}</div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1">
                     {authorNode}
+                    {verifiedName ? (
+                      <VerifiedBadge verifiedName={verifiedName} />
+                    ) : null}
                     {message.personaDisplayName &&
                     message.personaDisplayName !== message.author ? (
                       <span className="text-xs text-muted-foreground">
@@ -352,8 +361,11 @@ export const MessageRow = React.memo(
             <>
               <div className="flex shrink-0 items-start">{avatarNode}</div>
               <div className="min-w-0 flex-1 space-y-1">
-                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1">
                   {authorNode}
+                  {verifiedName ? (
+                    <VerifiedBadge verifiedName={verifiedName} />
+                  ) : null}
                   {message.personaDisplayName &&
                   message.personaDisplayName !== message.author ? (
                     <span className="text-xs text-muted-foreground">

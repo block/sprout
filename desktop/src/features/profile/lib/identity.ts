@@ -69,10 +69,13 @@ export function resolveUserLabel(input: {
 
   const profile = getResolvedProfile(pubkey, profiles);
   const verifiedName = profile?.verifiedName?.trim();
+  const displayName = profile?.displayName?.trim();
+  if (displayName && verifiedName && displayName !== verifiedName) {
+    return `${displayName} (${verifiedName})`;
+  }
   if (verifiedName) {
     return verifiedName;
   }
-  const displayName = profile?.displayName?.trim();
   if (displayName) {
     return displayName;
   }
@@ -88,6 +91,14 @@ export function resolveUserLabel(input: {
   }
 
   return truncatePubkey(pubkey);
+}
+
+export function resolveUserVerification(input: {
+  pubkey: string;
+  profiles?: UserProfileLookup;
+}): string | null {
+  const profile = getResolvedProfile(input.pubkey, input.profiles);
+  return profile?.verifiedName?.trim() || null;
 }
 
 export function resolveUserSecondaryLabel(input: {

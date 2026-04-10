@@ -232,11 +232,7 @@ async fn nip11_or_ws_handler(
         {
             Some(jwt) => match state.auth.validate_identity_jwt(jwt).await {
                 Ok((identity_claims, scopes)) => {
-                    let device_cn = headers
-                        .get("x-block-client-cert-subject-cn")
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("unknown")
-                        .to_string();
+                    let device_cn = crate::api::extract_device_cn(&headers).to_string();
                     Some(crate::connection::PendingProxyIdentity {
                         uid: identity_claims.uid,
                         username: identity_claims.username,

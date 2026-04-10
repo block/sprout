@@ -63,6 +63,18 @@ pub async fn ensure_user_with_verified_name(
     Ok(())
 }
 
+/// Clear the verified corporate name from a user record.
+/// Used for employee offboarding / GDPR erasure.
+pub async fn clear_verified_name(pool: &PgPool, pubkey: &[u8]) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE users SET verified_name = NULL WHERE pubkey = $1 AND verified_name IS NOT NULL",
+    )
+    .bind(pubkey)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 /// Ensure a user record exists for the given pubkey (upsert).
 /// Creates with minimal fields if not present; no-op if already exists.
 pub async fn ensure_user(pool: &PgPool, pubkey: &[u8]) -> Result<()> {

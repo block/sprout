@@ -541,6 +541,26 @@ impl Db {
         identity_binding::get_bindings_for_uid(&self.pool, uid).await
     }
 
+    /// Delete all identity bindings for a given UID.
+    pub async fn delete_bindings_for_uid(&self, uid: &str) -> Result<u64> {
+        identity_binding::delete_bindings_for_uid(&self.pool, uid).await
+    }
+
+    /// Check whether a pubkey has any active identity binding.
+    pub async fn is_pubkey_identity_bound(&self, pubkey: &[u8]) -> Result<bool> {
+        identity_binding::is_pubkey_identity_bound(&self.pool, pubkey).await
+    }
+
+    /// Delete a specific identity binding.
+    pub async fn delete_identity_binding(&self, uid: &str, device_cn: &str) -> Result<bool> {
+        identity_binding::delete_identity_binding(&self.pool, uid, device_cn).await
+    }
+
+    /// Clear the verified corporate name from a user record.
+    pub async fn clear_verified_name(&self, pubkey: &[u8]) -> Result<bool> {
+        user::clear_verified_name(&self.pool, pubkey).await
+    }
+
     /// Get a single user record by pubkey.
     pub async fn get_user(&self, pubkey: &[u8]) -> Result<Option<user::UserProfile>> {
         user::get_user(&self.pool, pubkey).await

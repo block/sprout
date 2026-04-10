@@ -92,19 +92,8 @@ pub async fn identity_register(
             )
         })?;
 
-    // 2. Extract device identifier from client certificate CN
-    let device_cn = headers
-        .get("x-block-client-cert-subject-cn")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": "device_cn_required",
-                    "message": "x-block-client-cert-subject-cn header is required"
-                })),
-            )
-        })?;
+    // 2. Extract device identifier from client certificate CN (fallback to "default")
+    let device_cn = super::extract_device_cn(&headers);
 
     // 3. Verify NIP-98 auth to prove pubkey ownership
     let auth_header = headers
@@ -146,18 +135,16 @@ pub async fn identity_register(
         )
     })?;
 
-    let canonical_url = reconstruct_canonical_url(&headers, &state);
+    let canonical_url = reconstruct_canonical_url(&state);
 
-    let pubkey =
-        sprout_auth::verify_nip98_event(&event_json, &canonical_url, "POST", None).map_err(
-            |e| {
-                tracing::warn!("identity register: NIP-98 verification failed: {e}");
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(serde_json::json!({ "error": "nip98_invalid" })),
-                )
-            },
-        )?;
+    let pubkey = sprout_auth::verify_nip98_event(&event_json, &canonical_url, "POST", None)
+        .map_err(|e| {
+            tracing::warn!("identity register: NIP-98 verification failed: {e}");
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "nip98_invalid" })),
+            )
+        })?;
 
     let pubkey_bytes = pubkey.serialize().to_vec();
 
@@ -180,15 +167,30 @@ pub async fn identity_register(
         })?;
 
     match result {
-        sprout_db::BindingResult::Mismatch { existing_pubkey } => {
-            let existing_hex = nostr::PublicKey::from_slice(&existing_pubkey)
-                .map(|pk| pk.to_hex())
-                .unwrap_or_else(|_| hex::encode(&existing_pubkey));
+        sprout_db::BindingResult::Created => {
+            // Invalidate cached `false` so the identity-bound guard takes
+            // effect immediately on this relay instance.
+            state.identity_bound_cache.invalidate(&pubkey_bytes);
+            tracing::info!(
+                uid = %identity_claims.uid,
+                device_cn = %device_cn,
+                pubkey = %pubkey.to_hex(),
+                "identity binding created"
+            );
+        }
+        sprout_db::BindingResult::Matched => {
+            tracing::info!(
+                uid = %identity_claims.uid,
+                device_cn = %device_cn,
+                pubkey = %pubkey.to_hex(),
+                "identity binding matched"
+            );
+        }
+        sprout_db::BindingResult::Mismatch { .. } => {
             tracing::warn!(
                 uid = %identity_claims.uid,
                 device_cn = %device_cn,
                 presented = %pubkey.to_hex(),
-                existing = %existing_hex,
                 "identity binding mismatch"
             );
             return Err((
@@ -198,15 +200,6 @@ pub async fn identity_register(
                     "message": "this device is already bound to a different pubkey"
                 })),
             ));
-        }
-        ref status => {
-            tracing::info!(
-                uid = %identity_claims.uid,
-                device_cn = %device_cn,
-                pubkey = %pubkey.to_hex(),
-                status = ?status,
-                "identity binding resolved"
-            );
         }
     }
 
@@ -232,25 +225,11 @@ pub async fn identity_register(
     })))
 }
 
-/// Reconstruct the canonical URL for NIP-98 verification from proxy headers.
-fn reconstruct_canonical_url(headers: &HeaderMap, state: &AppState) -> String {
-    let proto = headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("https");
-    let host = headers
-        .get("x-forwarded-host")
-        .or_else(|| headers.get("host"))
-        .and_then(|v| v.to_str().ok());
-
-    if let Some(host) = host {
-        format!("{proto}://{host}/api/identity/register")
-    } else {
-        let base = state
-            .config
-            .relay_url
-            .replace("wss://", "https://")
-            .replace("ws://", "http://");
-        format!("{base}/api/identity/register")
-    }
+fn reconstruct_canonical_url(state: &AppState) -> String {
+    let base = state
+        .config
+        .relay_url
+        .replace("wss://", "https://")
+        .replace("ws://", "http://");
+    format!("{base}/api/identity/register")
 }

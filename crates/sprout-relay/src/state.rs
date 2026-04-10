@@ -197,6 +197,11 @@ pub struct AppState {
     /// Membership cache: (channel_id, pubkey_bytes) → is_member.
     /// Short TTL (10s) — membership changes are rare but must propagate.
     pub membership_cache: Arc<moka::sync::Cache<(Uuid, Vec<u8>), bool>>,
+    /// Identity binding cache: pubkey_bytes → is_bound.
+    /// 2-minute TTL — bindings rarely change; unbind propagates within minutes.
+    /// Used to enforce "once bound, always require JWT" in hybrid mode
+    /// without hitting the DB on every request.
+    pub identity_bound_cache: Arc<moka::sync::Cache<Vec<u8>, bool>>,
 
     /// Bounded channel for search indexing — prevents OOM if Typesense is slow/down.
     /// Capacity 1000: at ~1KB/event that's ~1MB of backlog before we start dropping.
@@ -280,6 +285,12 @@ impl AppState {
                     .time_to_live(std::time::Duration::from_secs(10))
                     .build(),
             ),
+            identity_bound_cache: Arc::new(
+                moka::sync::Cache::builder()
+                    .max_capacity(10_000)
+                    .time_to_live(std::time::Duration::from_secs(120))
+                    .build(),
+            ),
 
             search_index_tx,
             media_storage: Arc::new(media_storage),
@@ -293,6 +304,28 @@ impl AppState {
     /// Called before Redis publish so the multi-node consumer can skip the echo.
     pub fn mark_local_event(&self, event_id: &nostr::EventId) {
         self.local_event_ids.insert(event_id.to_bytes(), ());
+    }
+
+    /// Check whether a pubkey has an active identity binding (cached).
+    ///
+    /// In hybrid mode, a bound pubkey must authenticate via identity JWT —
+    /// standard auth (API tokens, NIP-42) is rejected. Returns `false`
+    /// when identity mode is not `Hybrid` (guard is a no-op).
+    pub async fn is_identity_bound(&self, pubkey_bytes: &[u8]) -> bool {
+        if self.auth.identity_config().mode != sprout_auth::IdentityMode::Hybrid {
+            return false;
+        }
+        if let Some(cached) = self.identity_bound_cache.get(pubkey_bytes) {
+            return cached;
+        }
+        let bound = self
+            .db
+            .is_pubkey_identity_bound(pubkey_bytes)
+            .await
+            .unwrap_or(false);
+        self.identity_bound_cache
+            .insert(pubkey_bytes.to_vec(), bound);
+        bound
     }
 }
 

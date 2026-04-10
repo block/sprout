@@ -67,6 +67,18 @@ pub struct IdentityConfig {
     /// JWT claim name containing the human-readable username.
     #[serde(default = "default_user_claim")]
     pub user_claim: String,
+    /// JWKS endpoint URL for the identity provider (e.g. cf-doorman).
+    /// Falls back to the main Okta/JWKS URI if empty.
+    #[serde(default)]
+    pub jwks_uri: String,
+    /// Expected JWT issuer claim for identity JWTs.
+    /// Falls back to the main Okta issuer if empty.
+    #[serde(default)]
+    pub issuer: String,
+    /// Expected JWT audience claim for identity JWTs.
+    /// Falls back to the main Okta audience if empty.
+    #[serde(default)]
+    pub audience: String,
 }
 
 impl Default for IdentityConfig {
@@ -75,6 +87,9 @@ impl Default for IdentityConfig {
             mode: default_mode(),
             uid_claim: default_uid_claim(),
             user_claim: default_user_claim(),
+            jwks_uri: String::new(),
+            issuer: String::new(),
+            audience: String::new(),
         }
     }
 }

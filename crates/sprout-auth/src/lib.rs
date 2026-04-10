@@ -338,24 +338,43 @@ impl AuthService {
     /// Validate a proxy-injected identity JWT and extract the corporate identity claims.
     ///
     /// Used in proxy identity mode where cf-doorman injects `x-forwarded-identity-token`.
-    /// Validates the JWT via JWKS (same infrastructure as Okta), extracts the `uid` and
-    /// `user` claims.
+    /// Validates the JWT via JWKS, extracts the `uid` and `user` claims.
     ///
-    /// Returns `(claims, all_known_scopes)` on success.
+    /// Uses identity-specific JWKS/issuer/audience config when set, falling back to the
+    /// main Okta config values.
+    ///
+    /// Returns `(claims, scopes)` on success. Scopes exclude admin privileges.
     pub async fn validate_identity_jwt(
         &self,
         jwt: &str,
     ) -> Result<(identity::ProxyIdentityClaims, Vec<Scope>), AuthError> {
+        // Use identity-specific JWKS URI, falling back to the main JWKS config.
+        let jwks_uri = if self.config.identity.jwks_uri.is_empty() {
+            &self.config.okta.jwks_uri
+        } else {
+            &self.config.identity.jwks_uri
+        };
+        let issuer = if self.config.identity.issuer.is_empty() {
+            &self.config.okta.issuer
+        } else {
+            &self.config.identity.issuer
+        };
+        let audience = if self.config.identity.audience.is_empty() {
+            &self.config.okta.audience
+        } else {
+            &self.config.identity.audience
+        };
+
         let cached = self
             .jwks_cache
             .get_or_refresh(
-                &self.config.okta.jwks_uri,
+                jwks_uri,
                 self.config.okta.jwks_refresh_secs,
                 &self.http_client,
             )
             .await?;
 
-        let claims = cached.validate(jwt, &self.config.okta.issuer, &self.config.okta.audience)?;
+        let claims = cached.validate(jwt, issuer, audience)?;
 
         let uid = claims
             .get(&self.config.identity.uid_claim)
@@ -374,10 +393,19 @@ impl AuthService {
         let username = claims
             .get(&self.config.identity.user_claim)
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
+            .ok_or_else(|| {
+                tracing::warn!(
+                    user_claim = %self.config.identity.user_claim,
+                    "identity JWT missing user claim — rejecting"
+                );
+                AuthError::InvalidJwt(format!(
+                    "missing '{}' claim in identity JWT",
+                    self.config.identity.user_claim
+                ))
+            })?
             .to_string();
 
-        let scopes = Scope::all_known();
+        let scopes = Scope::all_non_admin();
 
         Ok((identity::ProxyIdentityClaims { uid, username }, scopes))
     }

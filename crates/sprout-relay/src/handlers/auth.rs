@@ -100,15 +100,14 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         let pubkey_bytes = event.pubkey.serialize().to_vec();
         match state
             .db
-            .bind_or_validate_identity(
-                &proxy.uid,
-                &proxy.device_cn,
-                &pubkey_bytes,
-                &proxy.username,
-            )
+            .bind_or_validate_identity(&proxy.uid, &proxy.device_cn, &pubkey_bytes, &proxy.username)
             .await
         {
             Ok(sprout_db::BindingResult::Created) => {
+                // Invalidate cached `false` so the identity-bound guard takes
+                // effect immediately — prevents a 2-min window where the pubkey
+                // could still authenticate via standard auth.
+                state.identity_bound_cache.invalidate(&pubkey_bytes);
                 info!(conn_id = %conn_id, uid = %proxy.uid, device_cn = %proxy.device_cn,
                       pubkey = %event.pubkey.to_hex(), "identity binding created");
             }
@@ -251,6 +250,21 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 &record.scopes,
             ) {
                 Ok((pubkey, scopes)) => {
+                    // Identity-bound pubkey guard — bound pubkeys must use identity JWT.
+                    if state.is_identity_bound(&pubkey.serialize()).await {
+                        warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(),
+                              "identity-bound pubkey attempted API token auth without JWT");
+                        metrics::counter!("sprout_auth_failures_total", "reason" => "identity_bound_no_jwt")
+                            .increment(1);
+                        *conn.auth_state.write().await = AuthState::Failed;
+                        conn.send(RelayMessage::ok(
+                            &event_id_hex,
+                            false,
+                            "auth-required: this pubkey is bound to a corporate identity — present x-forwarded-identity-token",
+                        ));
+                        return;
+                    }
+
                     info!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "API token auth successful");
                     // Update last_used_at asynchronously — non-fatal if it fails.
                     let db = state.db.clone();
@@ -323,6 +337,21 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     return;
                 }
             }
+            // Identity-bound pubkey guard — bound pubkeys must use identity JWT.
+            if state.is_identity_bound(&pubkey.serialize()).await {
+                warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(),
+                      "identity-bound pubkey attempted standard auth without JWT");
+                metrics::counter!("sprout_auth_failures_total", "reason" => "identity_bound_no_jwt")
+                    .increment(1);
+                *conn.auth_state.write().await = AuthState::Failed;
+                conn.send(RelayMessage::ok(
+                    &event_id_hex,
+                    false,
+                    "auth-required: this pubkey is bound to a corporate identity — present x-forwarded-identity-token",
+                ));
+                return;
+            }
+
             info!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "NIP-42 auth successful");
             *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
             state

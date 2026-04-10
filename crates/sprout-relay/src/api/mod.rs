@@ -91,6 +91,16 @@ use sprout_auth::Scope;
 
 use crate::state::AppState;
 
+/// Extract the device common name from the `x-block-client-cert-subject-cn` header,
+/// defaulting to `"default"` when the header is absent (e.g. Cloudflare Tunnel
+/// deployments without mTLS client certificates).
+pub(crate) fn extract_device_cn(headers: &axum::http::HeaderMap) -> &str {
+    headers
+        .get("x-block-client-cert-subject-cn")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("default")
+}
+
 // ── Auth context types ────────────────────────────────────────────────────────
 
 /// How the REST request was authenticated.
@@ -135,6 +145,25 @@ pub struct RestAuthContext {
     pub channel_ids: Option<Vec<Uuid>>,
 }
 
+/// In hybrid identity mode, reject a pubkey that has an identity binding
+/// but authenticated via standard auth (no JWT).
+async fn reject_if_identity_bound(
+    pubkey_bytes: &[u8],
+    state: &AppState,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if state.is_identity_bound(pubkey_bytes).await {
+        tracing::warn!("auth: identity-bound pubkey attempted standard auth without JWT");
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "identity_jwt_required",
+                "message": "this pubkey is bound to a corporate identity — present x-forwarded-identity-token"
+            })),
+        ));
+    }
+    Ok(())
+}
+
 /// Extract the full auth context from request headers.
 ///
 /// Auth resolution order:
@@ -167,8 +196,11 @@ pub(crate) async fn extract_auth_context(
             .get("x-forwarded-identity-token")
             .and_then(|v| v.to_str().ok())
         {
-            let (identity_claims, scopes) =
-                state.auth.validate_identity_jwt(identity_jwt).await.map_err(|e| {
+            let (identity_claims, scopes) = state
+                .auth
+                .validate_identity_jwt(identity_jwt)
+                .await
+                .map_err(|e| {
                     tracing::warn!("auth: identity JWT validation failed: {e}");
                     (
                         StatusCode::UNAUTHORIZED,
@@ -176,10 +208,7 @@ pub(crate) async fn extract_auth_context(
                     )
                 })?;
 
-            let device_cn = headers
-                .get("x-block-client-cert-subject-cn")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("unknown");
+            let device_cn = extract_device_cn(headers);
 
             // Look up the pubkey binding for this (uid, device_cn).
             let binding = state
@@ -217,13 +246,6 @@ pub(crate) async fn extract_auth_context(
             })?;
             let pubkey_bytes = binding.pubkey;
 
-            if let Err(e) = state
-                .db
-                .ensure_user_with_verified_name(&pubkey_bytes, &identity_claims.username)
-                .await
-            {
-                tracing::warn!("ensure_user_with_verified_name failed: {e}");
-            }
             return Ok(RestAuthContext {
                 pubkey,
                 pubkey_bytes,
@@ -335,6 +357,7 @@ pub(crate) async fn extract_auth_context(
                 ) {
                     Ok((pubkey, scopes)) => {
                         let pubkey_bytes = pubkey.serialize().to_vec();
+                        reject_if_identity_bound(&pubkey_bytes, state).await?;
                         if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
                             tracing::warn!("ensure_user failed: {e}");
                         }
@@ -378,6 +401,7 @@ pub(crate) async fn extract_auth_context(
                 match state.auth.validate_bearer_jwt(token).await {
                     Ok((pubkey, scopes)) => {
                         let pubkey_bytes = pubkey.serialize().to_vec();
+                        reject_if_identity_bound(&pubkey_bytes, state).await?;
                         if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
                             tracing::warn!("ensure_user failed: {e}");
                         }

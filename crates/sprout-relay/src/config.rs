@@ -146,6 +146,15 @@ impl Config {
         if let Ok(user_claim) = std::env::var("SPROUT_IDENTITY_USER_CLAIM") {
             auth.identity.user_claim = user_claim;
         }
+        if let Ok(jwks_uri) = std::env::var("SPROUT_IDENTITY_JWKS_URI") {
+            auth.identity.jwks_uri = jwks_uri;
+        }
+        if let Ok(issuer) = std::env::var("SPROUT_IDENTITY_ISSUER") {
+            auth.identity.issuer = issuer;
+        }
+        if let Ok(audience) = std::env::var("SPROUT_IDENTITY_AUDIENCE") {
+            auth.identity.audience = audience;
+        }
 
         // When identity mode is active the relay sits behind a trusted proxy
         // (cf-doorman) — force require_auth_token so the NIP-42 fallback path
