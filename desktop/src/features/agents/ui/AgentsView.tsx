@@ -52,6 +52,7 @@ import { SecretRevealDialog } from "./SecretRevealDialog";
 import { TeamDeleteDialog } from "./TeamDeleteDialog";
 import { TeamDialog } from "./TeamDialog";
 import { TeamImportDialog } from "./TeamImportDialog";
+import { TeamImportUpdateDialog } from "./TeamImportUpdateDialog";
 import { TeamsSection } from "./TeamsSection";
 import { TokenRevealDialog } from "./TokenRevealDialog";
 import {
@@ -743,10 +744,12 @@ export function AgentsView() {
               : null
         }
         initialValues={teamActions.teamDialogState?.initialValues ?? null}
+        isImportPending={teamActions.isApplyingTeamImportUpdate}
         isPending={
           teamActions.createTeamMutation.isPending ||
           teamActions.updateTeamMutation.isPending
         }
+        onImportUpdateFile={teamActions.handleEditDialogImportUpdateFile}
         onOpenChange={(open) => {
           if (!open) {
             teamActions.setTeamDialogState(null);
@@ -809,6 +812,23 @@ export function AgentsView() {
         }}
         open={teamActions.teamImportPreview !== null}
         preview={teamActions.teamImportPreview?.preview ?? null}
+      />
+      <TeamImportUpdateDialog
+        fileName={teamActions.teamImportTargetPreview?.fileName ?? ""}
+        isPending={
+          teamActions.isApplyingTeamImportUpdate ||
+          teamActions.updateTeamMutation.isPending
+        }
+        onApply={teamActions.handleTeamImportUpdateApply}
+        onOpenChange={(open) => {
+          if (!open) {
+            teamActions.closeImportUpdateDialog();
+          }
+        }}
+        open={teamActions.teamImportTarget !== null}
+        personas={libraryPersonas}
+        preview={teamActions.teamImportTargetPreview?.preview ?? null}
+        team={teamActions.teamImportTarget}
       />
     </>
   );

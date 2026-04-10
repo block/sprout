@@ -1,4 +1,5 @@
 import * as React from "react";
+import { RefreshCw, Upload } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type {
@@ -6,6 +7,8 @@ import type {
   CreateTeamInput,
   UpdateTeamInput,
 } from "@/shared/api/types";
+import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
 import {
@@ -33,8 +36,14 @@ type TeamDialogProps = {
   personas: AgentPersona[];
   error: Error | null;
   isPending: boolean;
+  isImportPending?: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (input: CreateTeamInput | UpdateTeamInput) => Promise<void>;
+  onImportUpdateFile?: (
+    teamId: string,
+    fileBytes: number[],
+    fileName: string,
+  ) => Promise<void>;
 };
 
 export function TeamDialog({
@@ -46,14 +55,24 @@ export function TeamDialog({
   personas,
   error,
   isPending,
+  isImportPending = false,
   onOpenChange,
   onSubmit,
+  onImportUpdateFile,
 }: TeamDialogProps) {
   const [name, setName] = React.useState("");
   const [teamDescription, setTeamDescription] = React.useState("");
   const [selectedPersonaIds, setSelectedPersonaIds] = React.useState<string[]>(
     [],
   );
+  const [isImportingUpdate, setIsImportingUpdate] = React.useState(false);
+  const [importErrorMessage, setImportErrorMessage] = React.useState<
+    string | null
+  >(null);
+  const isEditMode = Boolean(initialValues && "id" in initialValues);
+  const editTeamId = isEditMode ? initialValues.id : null;
+  const canImportTeamUpdate = isEditMode && Boolean(onImportUpdateFile);
+  const [isWindowFileDragOver, setIsWindowFileDragOver] = React.useState(false);
   const missingInitialPersonaCount = React.useMemo(() => {
     if (!initialValues) {
       return 0;
@@ -70,13 +89,116 @@ export function TeamDialog({
     setName(initialValues.name);
     setTeamDescription(initialValues.description ?? "");
     setSelectedPersonaIds(copySelectedPersonaIds(initialValues.personaIds));
+    setImportErrorMessage(null);
+    setIsImportingUpdate(false);
   }, [initialValues, open]);
+
+  React.useEffect(() => {
+    if (!open || !canImportTeamUpdate) {
+      setIsWindowFileDragOver(false);
+      return;
+    }
+
+    let dragDepth = 0;
+
+    function isFileDrag(event: DragEvent): boolean {
+      return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+    }
+
+    function handleWindowDragEnter(event: DragEvent) {
+      if (!isFileDrag(event)) {
+        return;
+      }
+      dragDepth += 1;
+      setIsWindowFileDragOver(true);
+    }
+
+    function handleWindowDragOver(event: DragEvent) {
+      if (!isFileDrag(event)) {
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "copy";
+      }
+      setIsWindowFileDragOver(true);
+    }
+
+    function handleWindowDragLeave(event: DragEvent) {
+      if (!isFileDrag(event)) {
+        return;
+      }
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) {
+        setIsWindowFileDragOver(false);
+      }
+    }
+
+    function handleWindowDrop(event: DragEvent) {
+      if (!isFileDrag(event)) {
+        return;
+      }
+      event.preventDefault();
+      dragDepth = 0;
+      setIsWindowFileDragOver(false);
+    }
+
+    window.addEventListener("dragenter", handleWindowDragEnter);
+    window.addEventListener("dragover", handleWindowDragOver);
+    window.addEventListener("dragleave", handleWindowDragLeave);
+    window.addEventListener("drop", handleWindowDrop);
+
+    return () => {
+      window.removeEventListener("dragenter", handleWindowDragEnter);
+      window.removeEventListener("dragover", handleWindowDragOver);
+      window.removeEventListener("dragleave", handleWindowDragLeave);
+      window.removeEventListener("drop", handleWindowDrop);
+    };
+  }, [canImportTeamUpdate, open]);
+
+  async function handleImportUpdateSelection(
+    fileBytes: number[],
+    fileName: string,
+  ) {
+    if (!editTeamId || !onImportUpdateFile) {
+      return;
+    }
+
+    setImportErrorMessage(null);
+    setIsImportingUpdate(true);
+    try {
+      await onImportUpdateFile(editTeamId, fileBytes, fileName);
+    } catch (error) {
+      setImportErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Failed to parse team import file.",
+      );
+    } finally {
+      setIsImportingUpdate(false);
+    }
+  }
+
+  const {
+    fileInputRef: importFileInputRef,
+    isDragOver: isImportDragOver,
+    dropHandlers: importDropHandlers,
+    handleFileChange: handleImportFileChange,
+    openFilePicker: openImportFilePicker,
+  } = useFileImportZone({
+    onImportFile: (fileBytes, fileName) => {
+      void handleImportUpdateSelection(fileBytes, fileName);
+    },
+  });
 
   function handleOpenChange(next: boolean) {
     if (!next) {
       setName("");
       setTeamDescription("");
       setSelectedPersonaIds([]);
+      setImportErrorMessage(null);
+      setIsImportingUpdate(false);
+      setIsWindowFileDragOver(false);
     }
 
     onOpenChange(next);
@@ -225,29 +347,72 @@ export function TeamDialog({
                 {error.message}
               </p>
             ) : null}
+            {importErrorMessage ? (
+              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                {importErrorMessage}
+              </p>
+            ) : null}
           </div>
 
-          <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 px-6 py-4">
-            <Button
-              onClick={() => handleOpenChange(false)}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={
-                name.trim().length === 0 ||
-                selectedPersonaIds.length === 0 ||
-                isPending
-              }
-              onClick={() => void handleSubmit()}
-              size="sm"
-              type="button"
-            >
-              {isPending ? "Saving..." : submitLabel}
-            </Button>
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border/60 px-6 py-4">
+            <div className="flex min-h-8 items-center">
+              {canImportTeamUpdate ? (
+                <>
+                  <input
+                    accept=".json"
+                    className="hidden"
+                    onChange={handleImportFileChange}
+                    ref={importFileInputRef}
+                    type="file"
+                  />
+                  <button
+                    className={cn(
+                      "inline-flex h-8 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors",
+                      isWindowFileDragOver || isImportDragOver
+                        ? "border-dashed border-primary/70 bg-primary/10 text-primary"
+                        : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
+                    )}
+                    disabled={isPending || isImportPending || isImportingUpdate}
+                    type="button"
+                    {...importDropHandlers}
+                    onClick={openImportFilePicker}
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    <span>
+                      {isWindowFileDragOver || isImportDragOver
+                        ? "Drop .team.json to import"
+                        : "Import"}
+                    </span>
+                    {isImportingUpdate ? (
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    ) : null}
+                  </button>
+                </>
+              ) : null}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={() => handleOpenChange(false)}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={
+                  name.trim().length === 0 ||
+                  selectedPersonaIds.length === 0 ||
+                  isPending
+                }
+                onClick={() => void handleSubmit()}
+                size="sm"
+                type="button"
+              >
+                {isPending ? "Saving..." : submitLabel}
+              </Button>
+            </div>
           </div>
         </div>
       </DialogContent>
