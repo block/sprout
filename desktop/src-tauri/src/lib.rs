@@ -378,6 +378,7 @@ pub fn run() {
             get_feed,
             search_messages,
             send_channel_message,
+            get_channel_messages,
             get_forum_posts,
             get_forum_thread,
             edit_message,

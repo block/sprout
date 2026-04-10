@@ -9,6 +9,7 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { DayDivider } from "./DayDivider";
 import { MessageRow } from "./MessageRow";
+import { MessageThreadSummary } from "./MessageThreadSummary";
 import { SystemMessageRow } from "./SystemMessageRow";
 
 type TimelineMessageListProps = {
@@ -18,6 +19,7 @@ type TimelineMessageListProps = {
   messages: TimelineMessage[];
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
+  onOpenThread?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
   onToggleReaction?: (
     message: TimelineMessage,
@@ -36,6 +38,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   messages,
   onDelete,
   onEdit,
+  onOpenThread,
   onReply,
   onToggleReaction,
   personaLookup,
@@ -70,25 +73,35 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       );
     } else {
       elements.push(
-        <MessageRow
-          key={message.id}
-          activeReplyTargetId={activeReplyTargetId}
-          highlighted={message.id === highlightedMessageId}
-          message={message}
-          onDelete={
-            onDelete && currentPubkey && message.pubkey === currentPubkey
-              ? onDelete
-              : undefined
-          }
-          onEdit={
-            onEdit && currentPubkey && message.pubkey === currentPubkey
-              ? onEdit
-              : undefined
-          }
-          onToggleReaction={onToggleReaction}
-          onReply={onReply}
-          profiles={profiles}
-        />,
+        <React.Fragment key={message.id}>
+          <MessageRow
+            activeReplyTargetId={activeReplyTargetId}
+            highlighted={message.id === highlightedMessageId}
+            message={message}
+            onDelete={
+              onDelete && currentPubkey && message.pubkey === currentPubkey
+                ? onDelete
+                : undefined
+            }
+            onEdit={
+              onEdit && currentPubkey && message.pubkey === currentPubkey
+                ? onEdit
+                : undefined
+            }
+            onToggleReaction={onToggleReaction}
+            onReply={onReply}
+            profiles={profiles}
+          />
+          {message.depth === 0 &&
+          message.threadSummary &&
+          message.threadSummary.descendantCount > 0 ? (
+            <MessageThreadSummary
+              message={message}
+              onOpenThread={onOpenThread}
+              profiles={profiles}
+            />
+          ) : null}
+        </React.Fragment>,
       );
     }
   }

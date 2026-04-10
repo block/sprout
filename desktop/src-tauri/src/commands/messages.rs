@@ -56,6 +56,28 @@ pub async fn get_forum_posts(
         &GetForumPostsQuery {
             limit,
             before,
+            kinds: Some(sprout_core::kind::KIND_FORUM_POST.to_string()),
+            with_threads: true,
+        },
+    );
+
+    send_json_request(request).await
+}
+
+#[tauri::command]
+pub async fn get_channel_messages(
+    channel_id: String,
+    limit: Option<u32>,
+    before: Option<i64>,
+    kinds: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<ForumPostsResponse, String> {
+    let path = format!("/api/channels/{channel_id}/messages");
+    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?.query(
+        &GetForumPostsQuery {
+            limit,
+            before,
+            kinds,
             with_threads: true,
         },
     );

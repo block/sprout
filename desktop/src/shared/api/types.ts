@@ -154,6 +154,7 @@ export type RelayEvent = {
   content: string;
   sig: string;
   pending?: boolean;
+  threadSummary?: ThreadSummary | null;
 };
 
 export type SendChannelMessageResult = {

@@ -28,6 +28,7 @@ type MessageTimelineProps = {
   profiles?: UserProfileLookup;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
+  onOpenThread?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
   onToggleReaction?: (
     message: TimelineMessage,
@@ -53,6 +54,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   profiles,
   onDelete,
   onEdit,
+  onOpenThread,
   onReply,
   onToggleReaction,
   targetMessageId = null,
@@ -159,6 +161,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                 messages={messages}
                 onDelete={onDelete}
                 onEdit={onEdit}
+                onOpenThread={onOpenThread}
                 onReply={onReply}
                 onToggleReaction={onToggleReaction}
                 personaLookup={personaLookup}

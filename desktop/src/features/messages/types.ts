@@ -1,3 +1,5 @@
+import type { ThreadSummary } from "@/shared/api/types";
+
 export type TimelineReaction = {
   emoji: string;
   count: number;
@@ -26,4 +28,5 @@ export type TimelineMessage = {
   kind?: number;
   tags?: string[][];
   reactions?: TimelineReaction[];
+  threadSummary?: ThreadSummary | null;
 };

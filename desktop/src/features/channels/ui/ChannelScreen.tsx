@@ -247,7 +247,6 @@ export function ChannelScreen({
     handleDelete,
     handleEdit,
     handleEditSave,
-    handleReply,
     handleToggleReaction,
   } = useChannelPaneHandlers({
     deleteMessageMutation,
@@ -263,10 +262,17 @@ export function ChannelScreen({
   const handleReplyOpenThread = React.useCallback(
     (message: TimelineMessage) => {
       setThreadRootId(message.rootId ?? message.id);
-      handleReply(message);
+      setReplyTargetId(null);
+      setEditTargetId(null);
     },
-    [handleReply],
+    [],
   );
+
+  const handleOpenThread = React.useCallback((message: TimelineMessage) => {
+    setThreadRootId(message.rootId ?? message.id);
+    setReplyTargetId(null);
+    setEditTargetId(null);
+  }, []);
 
   const handleCloseThread = React.useCallback(() => {
     setThreadRootId(null);
@@ -279,11 +285,9 @@ export function ChannelScreen({
       mentionPubkeys: string[],
       mediaTags?: string[][],
     ) => {
-      const parentEventId = threadRootId
-        ? (replyTargetId ?? threadRootId)
-        : replyTargetId;
+      const parentEventId = threadRootId ?? replyTargetId;
 
-      const result = await sendMessageMutation.mutateAsync({
+      await sendMessageMutation.mutateAsync({
         content,
         mentionPubkeys,
         parentEventId,
@@ -291,7 +295,7 @@ export function ChannelScreen({
       });
 
       if (threadRootId) {
-        setReplyTargetId(result.id);
+        setReplyTargetId(null);
         if (activeChannelId) {
           void queryClient.invalidateQueries({
             queryKey: channelThreadKey(activeChannelId, threadRootId),
@@ -512,6 +516,7 @@ export function ChannelScreen({
                 onDelete={handleDelete}
                 onEdit={handleEdit}
                 onEditSave={handleEditSave}
+                onOpenThread={handleOpenThread}
                 onReply={handleReplyOpenThread}
                 onSend={handleSend}
                 onToggleReaction={effectiveToggleReaction}

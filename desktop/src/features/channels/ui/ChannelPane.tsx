@@ -28,6 +28,7 @@ type ChannelPaneProps = {
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onEditSave?: (content: string) => Promise<void>;
+  onOpenThread?: (message: TimelineMessage) => void;
   onReply: (message: TimelineMessage) => void;
   onSend: (
     content: string,
@@ -66,6 +67,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onDelete,
   onEdit,
   onEditSave,
+  onOpenThread,
   onReply,
   onSend,
   onTargetReached,
@@ -123,6 +125,7 @@ export const ChannelPane = React.memo(function ChannelPane({
           messages={messages}
           onDelete={onDelete}
           onEdit={onEdit}
+          onOpenThread={onOpenThread}
           onReply={onReply}
           onTargetReached={onTargetReached}
           onToggleReaction={onToggleReaction}
@@ -167,20 +170,10 @@ export const ChannelPane = React.memo(function ChannelPane({
           editTarget={editTarget}
           isSending={isSending}
           onCancelEdit={onCancelEdit}
-          onCancelReply={onCancelReply}
           onClose={onCloseThread}
           onEditSave={onEditSave}
           onSend={onSend}
           profiles={profiles}
-          replyTarget={
-            replyTargetMessage
-              ? {
-                  author: replyTargetMessage.author,
-                  body: replyTargetMessage.body,
-                  id: replyTargetMessage.id,
-                }
-              : null
-          }
           rootEventId={threadRootId}
         />
       ) : null}

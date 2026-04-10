@@ -190,6 +190,30 @@ type RawSendChannelMessageResult = {
   created_at: number;
 };
 
+type RawThreadSummary = {
+  reply_count: number;
+  descendant_count: number;
+  last_reply_at: number | null;
+  participants: string[];
+};
+
+type RawChannelMessage = {
+  event_id: string;
+  pubkey: string;
+  content: string;
+  kind: number;
+  created_at: number;
+  channel_id: string;
+  tags: string[][];
+  thread_summary: RawThreadSummary | null;
+  reactions: unknown;
+};
+
+type RawChannelMessagesResponse = {
+  messages: RawChannelMessage[];
+  next_cursor: number | null;
+};
+
 type RawToken = {
   id: string;
   name: string;
@@ -678,6 +702,52 @@ export async function searchMessages(
     hits: response.hits.map(fromRawSearchHit),
     found: response.found,
   };
+}
+
+function fromRawThreadSummary(summary: RawThreadSummary) {
+  return {
+    replyCount: summary.reply_count,
+    descendantCount: summary.descendant_count,
+    lastReplyAt: summary.last_reply_at,
+    participants: summary.participants,
+  };
+}
+
+function fromRawChannelMessage(message: RawChannelMessage): RelayEvent {
+  return {
+    id: message.event_id,
+    pubkey: message.pubkey,
+    created_at: message.created_at,
+    kind: message.kind,
+    tags: message.tags,
+    content: message.content,
+    sig: "",
+    threadSummary: message.thread_summary
+      ? fromRawThreadSummary(message.thread_summary)
+      : null,
+  };
+}
+
+export async function getChannelMessages(input: {
+  channelId: string;
+  limit?: number;
+  before?: number;
+  kinds?: number[];
+}): Promise<RelayEvent[]> {
+  const response = await invokeTauri<RawChannelMessagesResponse>(
+    "get_channel_messages",
+    {
+      channelId: input.channelId,
+      limit: input.limit ?? null,
+      before: input.before ?? null,
+      kinds:
+        input.kinds && input.kinds.length > 0
+          ? input.kinds.join(",")
+          : null,
+    },
+  );
+
+  return response.messages.map(fromRawChannelMessage);
 }
 
 export async function getEventById(eventId: string): Promise<RelayEvent> {

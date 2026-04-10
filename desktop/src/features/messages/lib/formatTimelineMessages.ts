@@ -1,4 +1,9 @@
-import type { Channel, ChannelMember, RelayEvent } from "@/shared/api/types";
+import type {
+  Channel,
+  ChannelMember,
+  RelayEvent,
+  ThreadSummary,
+} from "@/shared/api/types";
 
 import type {
   TimelineMessage,
@@ -324,6 +329,7 @@ export function formatTimelineMessages(
         const reactions = reactionsByEventId.get(event.id);
         return reactions ? [...reactions.values()] : undefined;
       })(),
+      threadSummary: event.threadSummary ?? null,
     };
   });
 }
@@ -369,6 +375,16 @@ export function collectMessageAuthorPubkeys(events: RelayEvent[]) {
           requireChannelTagForPTags: true,
         }).toLowerCase(),
       );
+    }
+
+    const threadSummary = event.threadSummary as
+      | ThreadSummary
+      | null
+      | undefined;
+    if (threadSummary?.participants) {
+      for (const pk of threadSummary.participants) {
+        pubkeys.add(pk.toLowerCase());
+      }
     }
   }
 

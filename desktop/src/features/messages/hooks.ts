@@ -1,15 +1,17 @@
-import { useEffect, useEffectEvent } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { updateChannelLastMessageAt } from "@/features/channels/lib/channelCache";
 import {
   channelMessagesKey,
+  channelThreadKey,
   dedupeMessagesById,
   normalizeTimelineMessages,
   sortMessages,
 } from "@/features/messages/lib/messageQueryKeys";
 import {
   buildReplyTags,
+  getThreadReference,
   normalizeMentionPubkeys,
   resolveReplyRootId,
 } from "@/features/messages/lib/threading";
@@ -18,11 +20,17 @@ import {
   addReaction,
   deleteMessage,
   editMessage,
+  getChannelMessages,
   removeReaction,
   sendChannelMessage,
 } from "@/shared/api/tauri";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
-import { KIND_STREAM_MESSAGE } from "@/shared/constants/kinds";
+import {
+  KIND_DELETION,
+  KIND_STREAM_MESSAGE,
+  KIND_STREAM_MESSAGE_DIFF,
+  KIND_SYSTEM_MESSAGE,
+} from "@/shared/constants/kinds";
 
 type MessageQueryContext = {
   optimisticId: string;
@@ -31,6 +39,12 @@ type MessageQueryContext = {
 };
 
 const CHANNEL_HISTORY_LIMIT = 200;
+const TOP_LEVEL_TIMELINE_KINDS = [
+  KIND_STREAM_MESSAGE,
+  40001,
+  KIND_STREAM_MESSAGE_DIFF,
+  KIND_SYSTEM_MESSAGE,
+];
 
 function mergeMessagesWithNormalizer(
   current: RelayEvent[],
@@ -63,6 +77,43 @@ export function mergeTimelineCacheMessages(
     incoming,
     normalizeTimelineMessages,
   );
+}
+
+async function fetchTopLevelMessagesWithThreadSummaries(channelId: string) {
+  return getChannelMessages({
+    channelId,
+    kinds: TOP_LEVEL_TIMELINE_KINDS,
+    limit: CHANNEL_HISTORY_LIMIT,
+  });
+}
+
+async function fetchMergedChannelHistory(channelId: string) {
+  const [history, topLevelMessages] = await Promise.all([
+    relayClient.fetchChannelHistory(channelId, CHANNEL_HISTORY_LIMIT),
+    fetchTopLevelMessagesWithThreadSummaries(channelId),
+  ]);
+
+  return normalizeTimelineMessages([...history, ...topLevelMessages]);
+}
+
+function mergeThreadSummariesIntoCache(
+  current: RelayEvent[],
+  topLevelMessages: RelayEvent[],
+) {
+  return normalizeTimelineMessages([...current, ...topLevelMessages]);
+}
+
+function eventAffectsThreadSummary(event: RelayEvent) {
+  if (event.kind === KIND_DELETION) {
+    return true;
+  }
+
+  return getThreadReference(event.tags).parentId !== null;
+}
+
+function getThreadRootId(event: RelayEvent) {
+  const thread = getThreadReference(event.tags);
+  return thread.rootId ?? thread.parentId;
 }
 
 function createOptimisticMessage(
@@ -126,54 +177,71 @@ export function useChannelMessagesQuery(channel: Channel | null) {
         throw new Error("No channel selected.");
       }
 
-      const history = await relayClient.fetchChannelHistory(
-        channel.id,
-        CHANNEL_HISTORY_LIMIT,
-      );
       const currentMessages =
         queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];
-      const mergedHistory = normalizeTimelineMessages([
-        ...currentMessages,
-        ...history,
-      ]);
+      const mergedHistory = await fetchMergedChannelHistory(channel.id);
 
-      return mergedHistory;
+      return normalizeTimelineMessages([...currentMessages, ...mergedHistory]);
     },
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 5 * 60 * 1_000,
   });
 }
 
-export function useChannelSubscription(channel: Channel | null) {
+export function useChannelSubscription(channel: Channel | null): {
+  latestLiveEvent: RelayEvent | null;
+} {
   const queryClient = useQueryClient();
   const channelId = channel?.id ?? null;
   const channelType = channel?.channelType ?? null;
+  const [latestLiveEvent, setLatestLiveEvent] = useState<RelayEvent | null>(
+    null,
+  );
+  const latestLiveEventChannelRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (latestLiveEventChannelRef.current !== channelId) {
+      setLatestLiveEvent(null);
+      latestLiveEventChannelRef.current = channelId;
+    }
+  }, [channelId]);
+
   const syncLatestHistory = useEffectEvent(async () => {
     if (!channelId) {
       return;
     }
 
-    const history = await relayClient.fetchChannelHistory(
-      channelId,
-      CHANNEL_HISTORY_LIMIT,
-    );
+    const history = await fetchMergedChannelHistory(channelId);
 
     queryClient.setQueryData<RelayEvent[]>(
       channelMessagesKey(channelId),
-      (current = []) => {
-        const mergedHistory = normalizeTimelineMessages([
-          ...current,
-          ...history,
-        ]);
+      (current = []) => normalizeTimelineMessages([...current, ...history]),
+    );
+  });
+  const refreshThreadSummaries = useEffectEvent(async () => {
+    if (!channelId) {
+      return;
+    }
 
-        return mergedHistory;
-      },
+    const topLevelMessages = await fetchTopLevelMessagesWithThreadSummaries(
+      channelId,
+    );
+    queryClient.setQueryData<RelayEvent[]>(
+      channelMessagesKey(channelId),
+      (current = []) => mergeThreadSummariesIntoCache(current, topLevelMessages),
     );
   });
 
   const appendMessage = useEffectEvent((event: RelayEvent) => {
     if (!channelId) {
       return;
+    }
+
+    if (
+      event.kind === KIND_STREAM_MESSAGE ||
+      event.kind === KIND_STREAM_MESSAGE_DIFF
+    ) {
+      setLatestLiveEvent(event);
     }
 
     updateChannelLastMessageAt(
@@ -185,6 +253,23 @@ export function useChannelSubscription(channel: Channel | null) {
       channelMessagesKey(channelId),
       (current = []) => mergeTimelineCacheMessages(current, event),
     );
+
+    const threadRootId = getThreadRootId(event);
+    if (threadRootId) {
+      void queryClient.invalidateQueries({
+        queryKey: channelThreadKey(channelId, threadRootId),
+      });
+    }
+
+    if (eventAffectsThreadSummary(event)) {
+      void refreshThreadSummaries().catch((error) => {
+        console.error(
+          "Failed to refresh thread summaries after channel event",
+          channelId,
+          error,
+        );
+      });
+    }
   });
 
   useEffect(() => {
@@ -242,6 +327,8 @@ export function useChannelSubscription(channel: Channel | null) {
       }
     };
   }, [channelId, channelType]);
+
+  return { latestLiveEvent };
 }
 
 export function useSendMessageMutation(
@@ -397,6 +484,12 @@ export function useSendMessageMutation(
           return mergeTimelineCacheMessages(withoutOptimistic, message);
         },
       );
+
+      if (_variables.parentEventId) {
+        void queryClient.invalidateQueries({
+          queryKey: channelMessagesKey(channel.id),
+        });
+      }
     },
   });
 }
@@ -435,6 +528,9 @@ export function useDeleteMessageMutation(channel: Channel | null) {
         channelMessagesKey(channel.id),
         (current = []) => current.filter((message) => message.id !== eventId),
       );
+      void queryClient.invalidateQueries({
+        queryKey: channelMessagesKey(channel.id),
+      });
     },
   });
 }

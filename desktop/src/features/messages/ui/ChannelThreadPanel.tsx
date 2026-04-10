@@ -1,4 +1,4 @@
-import { MessageSquare, X } from "lucide-react";
+import { X } from "lucide-react";
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 
@@ -25,12 +25,6 @@ type ChannelThreadPanelProps = {
   profiles?: UserProfileLookup;
   rootEventId: string;
   onClose: () => void;
-  replyTarget: {
-    author: string;
-    body: string;
-    id: string;
-  } | null;
-  onCancelReply: () => void;
   onSend: (
     content: string,
     mentionPubkeys: string[],
@@ -109,8 +103,6 @@ export function ChannelThreadPanel({
   profiles,
   rootEventId,
   onClose,
-  replyTarget,
-  onCancelReply,
   onSend,
   isSending,
   editTarget = null,
@@ -138,14 +130,8 @@ export function ChannelThreadPanel({
       className="flex h-full min-h-0 w-[min(100%,420px)] shrink-0 flex-col border-l border-border/60 bg-muted/20"
       data-testid="channel-thread-panel"
     >
-      <header className="flex shrink-0 items-center gap-2 border-b border-border/60 px-3 py-2">
-        <MessageSquare className="h-4 w-4 text-muted-foreground" aria-hidden />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold">Thread</p>
-          <p className="truncate text-[11px] text-muted-foreground">
-            #{channel.name}
-          </p>
-        </div>
+      <header className="flex shrink-0 items-center justify-between border-b border-border/60 px-3 py-2">
+        <p className="truncate text-sm font-semibold">Thread</p>
         <Button
           aria-label="Close thread"
           className="h-8 w-8 shrink-0 p-0"
@@ -240,11 +226,9 @@ export function ChannelThreadPanel({
           editTarget={editTarget}
           isSending={isSending}
           onCancelEdit={onCancelEdit}
-          onCancelReply={onCancelReply}
           onEditSave={onEditSave}
           onSend={onSend}
           placeholder={`Reply in thread…`}
-          replyTarget={replyTarget}
         />
       </div>
     </aside>

@@ -349,6 +349,8 @@ pub struct GetForumPostsQuery {
     pub limit: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub before: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kinds: Option<String>,
     pub with_threads: bool,
 }
 
