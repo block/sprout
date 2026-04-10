@@ -202,7 +202,7 @@ export function TeamsSection({
                         onClick={() => onAddToChannel(team)}
                       >
                         <Rocket className="h-4 w-4" />
-                        <span>Deploy to channel</span>
+                        Deploy to channel
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
@@ -210,21 +210,21 @@ export function TeamsSection({
                         onClick={() => onEdit(team)}
                       >
                         <Pencil className="h-4 w-4" />
-                        <span>Edit</span>
+                        Edit
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         disabled={isPending || hasMissingPersonas}
                         onClick={() => onDuplicate(team)}
                       >
                         <CopyPlus className="h-4 w-4" />
-                        <span>Duplicate</span>
+                        Duplicate
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         disabled={isPending || hasMissingPersonas}
                         onClick={() => onExport(team)}
                       >
                         <Download className="h-4 w-4" />
-                        <span>Export</span>
+                        Export
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
@@ -233,7 +233,7 @@ export function TeamsSection({
                         onClick={() => onDelete(team)}
                       >
                         <Trash2 className="h-4 w-4" />
-                        <span>Delete</span>
+                        Delete
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>

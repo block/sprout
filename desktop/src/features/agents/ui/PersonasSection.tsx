@@ -155,7 +155,7 @@ export function PersonasSection({
                         onClick={() => onEdit(persona)}
                       >
                         <Pencil className="h-4 w-4" />
-                        <span>Edit</span>
+                        Edit
                       </DropdownMenuItem>
                     ) : null}
                     <DropdownMenuItem
@@ -163,14 +163,14 @@ export function PersonasSection({
                       onClick={() => onDuplicate(persona)}
                     >
                       <CopyPlus className="h-4 w-4" />
-                      <span>Duplicate</span>
+                      Duplicate
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       disabled={isPending}
                       onClick={() => onExport(persona)}
                     >
                       <Download className="h-4 w-4" />
-                      <span>Export</span>
+                      Export
                     </DropdownMenuItem>
                     {persona.isBuiltIn ? (
                       <DropdownMenuItem
@@ -179,7 +179,7 @@ export function PersonasSection({
                         onClick={() => onDeactivate(persona)}
                       >
                         <Trash2 className="h-4 w-4" />
-                        <span>Remove from My Agents</span>
+                        Remove from My Agents
                       </DropdownMenuItem>
                     ) : (
                       <DropdownMenuItem
@@ -188,7 +188,7 @@ export function PersonasSection({
                         onClick={() => onDelete(persona)}
                       >
                         <Trash2 className="h-4 w-4" />
-                        <span>Delete</span>
+                        Delete
                       </DropdownMenuItem>
                     )}
                   </DropdownMenuContent>

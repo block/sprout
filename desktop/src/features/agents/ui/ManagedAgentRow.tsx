@@ -321,14 +321,14 @@ function AgentActionsMenu({
               onClick={() => onStart(agent.pubkey)}
             >
               <Play className="h-4 w-4" />
-              <span>{isActive ? "Redeploy" : "Deploy"}</span>
+              {isActive ? "Redeploy" : "Deploy"}
             </DropdownMenuItem>
             <DropdownMenuItem
               disabled={isActionPending}
               onClick={() => onStop(agent.pubkey)}
             >
               <Square className="h-4 w-4" />
-              <span>Shutdown</span>
+              Shutdown
             </DropdownMenuItem>
           </>
         ) : isActive ? (
@@ -337,7 +337,7 @@ function AgentActionsMenu({
             onClick={() => onStop(agent.pubkey)}
           >
             <Square className="h-4 w-4" />
-            <span>Stop</span>
+            Stop
           </DropdownMenuItem>
         ) : (
           <DropdownMenuItem
@@ -345,7 +345,7 @@ function AgentActionsMenu({
             onClick={() => onStart(agent.pubkey)}
           >
             <Play className="h-4 w-4" />
-            <span>Spawn</span>
+            Spawn
           </DropdownMenuItem>
         )}
 
@@ -354,7 +354,7 @@ function AgentActionsMenu({
           onClick={() => onAddToChannel(agent)}
         >
           <UserPlus className="h-4 w-4" />
-          <span>Add to channel</span>
+          Add to channel
         </DropdownMenuItem>
 
         <DropdownMenuItem
@@ -362,20 +362,20 @@ function AgentActionsMenu({
           onClick={() => onMintToken(agent.pubkey, agent.name)}
         >
           <KeyRound className="h-4 w-4" />
-          <span>Mint token</span>
+          Mint token
         </DropdownMenuItem>
 
         <DropdownMenuItem
           onClick={() => navigator.clipboard.writeText(agent.pubkey)}
         >
           <Clipboard className="h-4 w-4" />
-          <span>Copy pubkey</span>
+          Copy pubkey
         </DropdownMenuItem>
 
         {agent.backend.type === "local" ? (
           <DropdownMenuItem onClick={() => onOpenLogs(agent.pubkey)}>
             <FileText className="h-4 w-4" />
-            <span>View logs</span>
+            View logs
           </DropdownMenuItem>
         ) : null}
 
@@ -387,11 +387,9 @@ function AgentActionsMenu({
             }
           >
             <Power className="h-4 w-4" />
-            <span>
-              {agent.startOnAppLaunch
-                ? "Disable auto-start"
-                : "Enable auto-start"}
-            </span>
+            {agent.startOnAppLaunch
+              ? "Disable auto-start"
+              : "Enable auto-start"}
           </DropdownMenuItem>
         ) : null}
 
@@ -403,7 +401,7 @@ function AgentActionsMenu({
           onClick={() => onDelete(agent.pubkey)}
         >
           <Trash2 className="h-4 w-4" />
-          <span>Delete</span>
+          Delete
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
