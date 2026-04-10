@@ -29,6 +29,7 @@ type PersonasSectionProps = {
   isLoading: boolean;
   isPending: boolean;
   onCreate: () => void;
+  onCreateWithAI?: () => void;
   onChooseCatalog: () => void;
   onDuplicate: (persona: AgentPersona) => void;
   onEdit: (persona: AgentPersona) => void;
@@ -47,6 +48,7 @@ export function PersonasSection({
   isLoading,
   isPending,
   onCreate,
+  onCreateWithAI,
   onChooseCatalog,
   onDuplicate,
   onEdit,
@@ -99,6 +101,7 @@ export function PersonasSection({
             isPending={isPending}
             layout="header"
             onCreate={onCreate}
+            onCreateWithAI={onCreateWithAI}
             onChooseCatalog={onChooseCatalog}
           />
         </div>
@@ -224,6 +227,7 @@ export function PersonasSection({
               isPending={isPending}
               layout="empty"
               onCreate={onCreate}
+              onCreateWithAI={onCreateWithAI}
               onChooseCatalog={onChooseCatalog}
               onImport={openFilePicker}
             />

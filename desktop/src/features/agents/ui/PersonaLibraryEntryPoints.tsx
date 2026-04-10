@@ -1,4 +1,4 @@
-import { Upload } from "lucide-react";
+import { Sparkles, Upload } from "lucide-react";
 
 import { Button } from "@/shared/ui/button";
 
@@ -10,6 +10,7 @@ type PersonaLibraryEntryPointsProps = {
   isPending: boolean;
   layout: "header" | "empty";
   onCreate: () => void;
+  onCreateWithAI?: () => void;
   onChooseCatalog?: () => void;
   onImport?: () => void;
 };
@@ -19,6 +20,7 @@ export function PersonaLibraryEntryPoints({
   isPending,
   layout,
   onCreate,
+  onCreateWithAI,
   onChooseCatalog,
   onImport,
 }: PersonaLibraryEntryPointsProps) {
@@ -38,6 +40,18 @@ export function PersonaLibraryEntryPoints({
           variant={chooseVariant}
         >
           {personaLibraryCopy.chooseFromCatalog}
+        </Button>
+      ) : null}
+      {onCreateWithAI ? (
+        <Button
+          disabled={isPending}
+          onClick={onCreateWithAI}
+          size="sm"
+          type="button"
+          variant={createVariant}
+        >
+          <Sparkles className="h-4 w-4" />
+          Create with AI
         </Button>
       ) : null}
       <CreateNewButton

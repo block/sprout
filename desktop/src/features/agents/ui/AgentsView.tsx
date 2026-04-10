@@ -44,6 +44,7 @@ import { BatchImportDialog } from "./BatchImportDialog";
 import { CreateAgentDialog } from "./CreateAgentDialog";
 import { ManagedAgentsSection } from "./ManagedAgentsSection";
 import { PersonaCatalogDialog } from "./PersonaCatalogDialog";
+import { PersonaChatSheet } from "./PersonaChatSheet";
 import { PersonaDialog } from "./PersonaDialog";
 import { PersonaDeleteDialog } from "./PersonaDeleteDialog";
 import { PersonasSection } from "./PersonasSection";
@@ -61,6 +62,7 @@ import {
   importPersonaDialogState,
   type PersonaDialogState,
 } from "./personaDialogState";
+import { usePersonaChat } from "./usePersonaChat";
 import { useTeamActions } from "./useTeamActions";
 
 type PersonaFeedbackSurface = "catalog" | "library";
@@ -120,6 +122,11 @@ export function AgentsView() {
   const [batchImportResult, setBatchImportResult] =
     React.useState<ParsePersonaFilesResult | null>(null);
   const [batchImportFileName, setBatchImportFileName] = React.useState("");
+  const personaChat = usePersonaChat(
+    createPersonaMutation,
+    teamActions,
+    setPersonaNoticeMessage,
+  );
   const [isCatalogDialogOpen, setIsCatalogDialogOpen] = React.useState(false);
   const managedAgents = React.useMemo(
     () =>
@@ -515,6 +522,10 @@ export function AgentsView() {
                 clearPersonaFeedback("library");
                 setPersonaDialogState(createPersonaDialogState());
               }}
+              onCreateWithAI={() => {
+                clearPersonaFeedback("library");
+                personaChat.setIsOpen(true);
+              }}
               onDelete={(persona) => {
                 clearPersonaFeedback("library");
                 setPersonaToDelete(persona);
@@ -673,6 +684,16 @@ export function AgentsView() {
           }
         }}
         token={revealedToken?.token ?? null}
+      />
+      <PersonaChatSheet
+        isPending={
+          createPersonaMutation.isPending ||
+          teamActions.createTeamMutation.isPending
+        }
+        onConfirmCreate={personaChat.handleConfirmCreate}
+        onOpenChange={personaChat.setIsOpen}
+        onSendMessage={personaChat.sendMessage}
+        open={personaChat.isOpen}
       />
       <PersonaDialog
         description={personaDialogState?.description ?? ""}
