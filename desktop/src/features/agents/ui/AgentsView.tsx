@@ -23,7 +23,6 @@ import {
 import { getPersonaLibraryState } from "@/features/agents/lib/catalog";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
-import { sendChannelMessage } from "@/shared/api/tauri";
 import {
   parsePersonaFiles,
   type ParsePersonaFilesResult,
@@ -65,6 +64,11 @@ import {
 } from "./personaDialogState";
 import { usePersonaImportActions } from "./usePersonaImportActions";
 import { useTeamActions } from "./useTeamActions";
+import {
+  deleteManagedAgentWithRules,
+  startManagedAgentWithRules,
+  stopManagedAgentWithRules,
+} from "../lib/managedAgentControlActions";
 
 type PersonaFeedbackSurface = "catalog" | "library";
 
@@ -166,27 +170,6 @@ export function AgentsView() {
   );
   const managedPresenceQuery = usePresenceQuery(managedPubkeyList);
 
-  /** Resolve a relay-agent's first channel UUID for sending !shutdown. */
-  function resolveAgentChannelId(pubkey: string): string | null {
-    const relayAgents = relayAgentsQuery.data ?? [];
-    const relayAgent = relayAgents.find((ra) => ra.pubkey === pubkey);
-    // Prefer channelIds (new relay with json_agg). Fall back to resolving
-    // channel names via the channels query (old relay without channel_ids).
-    if (relayAgent?.channelIds?.length) {
-      return relayAgent.channelIds[0];
-    }
-    // Fallback: resolve channel name → UUID via the channels query.
-    // Only use this when the match is unambiguous — if multiple channels
-    // share the same name (e.g. across teams), we can't be sure which one
-    // the agent is in, and sending !shutdown to the wrong channel would
-    // silently miss the agent. Return null to surface the error to the user.
-    const channelName = relayAgent?.channels?.[0];
-    if (!channelName) return null;
-    const channels = channelsQuery.data ?? [];
-    const matches = channels.filter((ch) => ch.name === channelName);
-    return matches.length === 1 ? matches[0].id : null;
-  }
-
   // Clear log selection if the agent was removed
   React.useEffect(() => {
     if (
@@ -214,7 +197,15 @@ export function AgentsView() {
     clearActionFeedback();
 
     try {
-      await startMutation.mutateAsync(pubkey);
+      const agent = managedAgents.find(
+        (candidate) => candidate.pubkey === pubkey,
+      );
+      if (!agent) return;
+
+      await startManagedAgentWithRules({
+        agent,
+        startManagedAgent: startMutation.mutateAsync,
+      });
     } catch (error) {
       setActionErrorMessage(
         error instanceof Error ? error.message : "Failed to start agent.",
@@ -229,22 +220,14 @@ export function AgentsView() {
       const agent = managedAgents.find((a) => a.pubkey === pubkey);
       if (!agent) return;
 
-      if (agent.backend.type === "provider") {
-        // Remote agent: send !shutdown mention via relay REST API.
-        const channelId = resolveAgentChannelId(pubkey);
-        if (!channelId) {
-          setActionErrorMessage("Cannot stop: agent is not in any channel");
-          return;
-        }
-        await sendChannelMessage(channelId, "!shutdown", undefined, undefined, [
-          pubkey,
-        ]);
-        setActionNoticeMessage(
-          "Shutdown command sent. Agent will stop shortly.",
-        );
-      } else {
-        // Local agent: existing stop flow
-        await stopMutation.mutateAsync(pubkey);
+      const result = await stopManagedAgentWithRules({
+        agent,
+        channels: channelsQuery.data ?? [],
+        relayAgents: relayAgentsQuery.data ?? [],
+        stopManagedAgent: stopMutation.mutateAsync,
+      });
+      if (result.noticeMessage) {
+        setActionNoticeMessage(result.noticeMessage);
       }
     } catch (error) {
       setActionErrorMessage(
@@ -257,59 +240,18 @@ export function AgentsView() {
     clearActionFeedback();
 
     try {
-      // For remote agents, send !shutdown before deleting to avoid orphaning.
       const agent = managedAgents.find((a) => a.pubkey === pubkey);
-      if (agent?.backend.type === "provider" && agent.backendAgentId) {
-        const presence =
-          managedPresenceQuery.data?.[pubkey.trim().toLowerCase()];
-        const channelId = resolveAgentChannelId(pubkey);
-        if (channelId) {
-          // If the agent is still online, send !shutdown and warn that
-          // deletion proceeds without waiting for confirmed exit.
-          if (presence === "online" || presence === "away") {
-            await sendChannelMessage(
-              channelId,
-              "!shutdown",
-              undefined,
-              undefined,
-              [pubkey],
-            );
-            // eslint-disable-next-line no-alert
-            const confirmed = window.confirm(
-              "Shutdown command sent, but the agent may still be running. " +
-                "Deleting now removes the local record — the remote deployment " +
-                "will be orphaned if shutdown hasn't completed. Continue?",
-            );
-            if (!confirmed) return;
-          } else {
-            // Offline presence means the process isn't connected, but the
-            // remote infrastructure (VM/container) may still exist. Confirm
-            // before removing the local record — it's the only management handle.
-            // eslint-disable-next-line no-alert
-            const confirmed = window.confirm(
-              "This agent is offline but the remote deployment may still exist. " +
-                "Deleting removes the local management record. Continue?",
-            );
-            if (!confirmed) return;
-          }
-        } else {
-          // Can't send shutdown — warn user about orphaning.
-          // eslint-disable-next-line no-alert
-          const confirmed = window.confirm(
-            "This agent is deployed but not in any channel. " +
-              "Deleting will orphan the remote deployment (it will keep running). Continue?",
-          );
-          if (!confirmed) return;
-        }
-      }
-      // Pass forceRemoteDelete for deployed provider agents — the backend
-      // rejects deletion of deployed remote agents without this flag.
-      const isDeployedRemote =
-        agent?.backend.type === "provider" && agent?.backendAgentId;
-      await deleteMutation.mutateAsync({
-        pubkey,
-        forceRemoteDelete: isDeployedRemote ? true : undefined,
+      if (!agent) return;
+
+      const result = await deleteManagedAgentWithRules({
+        agent,
+        channels: channelsQuery.data ?? [],
+        deleteManagedAgent: deleteMutation.mutateAsync,
+        presenceLookup: managedPresenceQuery.data,
+        relayAgents: relayAgentsQuery.data ?? [],
       });
+      if (result.cancelled) return;
+
       if (logAgentPubkey === pubkey) {
         setLogAgentPubkey(null);
       }

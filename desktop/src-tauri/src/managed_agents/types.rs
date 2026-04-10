@@ -45,6 +45,8 @@ pub struct RelayAgentInfo {
     pub name: String,
     pub agent_type: String,
     pub channels: Vec<String>,
+    #[serde(default)]
+    pub channel_ids: Vec<String>,
     pub capabilities: Vec<String>,
     pub status: String,
 }

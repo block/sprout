@@ -150,6 +150,7 @@ export function ChannelMenuButton({
           hasUnread &&
           "font-semibold text-sidebar-foreground hover:text-sidebar-foreground",
       )}
+      data-channel-id={channel.id}
       data-testid={`channel-${channel.name}`}
       isActive={isActive}
       onClick={() => onSelectChannel(channel.id)}
