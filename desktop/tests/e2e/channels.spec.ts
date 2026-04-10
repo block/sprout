@@ -29,6 +29,99 @@ async function openMembersSidebar(
   await expect(page.getByTestId("members-sidebar")).toBeVisible();
 }
 
+async function addGenericAgent(
+  page: import("@playwright/test").Page,
+  channelName: string,
+  agentName: string,
+) {
+  await page.getByTestId(`channel-${channelName}`).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await page.getByTestId("channel-add-bot-trigger").click();
+  await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
+  await page.getByRole("button", { name: "Generic" }).click();
+  await page.locator("#channel-generic-name").fill(agentName);
+  await page
+    .locator("#channel-generic-prompt")
+    .fill("Watch the channel and help when asked.");
+  await page.getByRole("button", { name: "Add agent" }).click();
+  await expect(page.getByRole("heading", { name: "Add agents" })).toHaveCount(
+    0,
+  );
+}
+
+async function getManagedAgentPubkey(
+  page: import("@playwright/test").Page,
+  agentName: string,
+) {
+  await page.getByTestId("open-agents-view").click();
+  const managedAgentRow = page
+    .locator('[data-testid^="managed-agent-"]')
+    .filter({ hasText: agentName });
+  await expect(managedAgentRow).toHaveCount(1);
+  const managedAgentTestId = await managedAgentRow
+    .first()
+    .getAttribute("data-testid");
+  if (!managedAgentTestId) {
+    throw new Error("Managed agent row test id missing.");
+  }
+
+  return managedAgentTestId.replace("managed-agent-", "");
+}
+
+async function readCommandLog(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    return (
+      (
+        window as Window & {
+          __SPROUT_E2E_COMMANDS__?: string[];
+        }
+      ).__SPROUT_E2E_COMMANDS__ ?? []
+    );
+  });
+}
+
+async function invokeMockCommand<T>(
+  page: import("@playwright/test").Page,
+  command: string,
+  payload?: Record<string, unknown>,
+) {
+  await page.waitForFunction(() => {
+    return Boolean(
+      (
+        window as Window & {
+          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+        }
+      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__,
+    );
+  });
+
+  return page.evaluate(
+    async ({
+      command,
+      payload,
+    }: {
+      command: string;
+      payload?: Record<string, unknown>;
+    }) => {
+      const invoke = (
+        window as Window & {
+          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+            command: string,
+            payload?: Record<string, unknown>,
+          ) => Promise<unknown>;
+        }
+      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__;
+
+      if (!invoke) {
+        throw new Error("Mock bridge is not installed.");
+      }
+
+      return invoke(command, payload);
+    },
+    { command, payload },
+  ) as Promise<T>;
+}
+
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
@@ -699,35 +792,8 @@ test("removing a channel-scoped agent also cleans up the managed agent record", 
   const agentName = `cleanup-agent-${Date.now()}`;
 
   await page.goto("/");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
-
-  await page.getByTestId("channel-add-bot-trigger").click();
-  await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
-
-  await page.getByRole("button", { name: "Generic" }).click();
-  await page.locator("#channel-generic-name").fill(agentName);
-  await page
-    .locator("#channel-generic-prompt")
-    .fill("Watch the channel and help when asked.");
-  await page.getByRole("button", { name: "Add agent" }).click();
-  await expect(page.getByRole("heading", { name: "Add agents" })).toHaveCount(
-    0,
-  );
-
-  await page.getByTestId("open-agents-view").click();
-  const managedAgentRow = page
-    .locator('[data-testid^="managed-agent-"]')
-    .filter({ hasText: agentName });
-  await expect(managedAgentRow).toHaveCount(1);
-
-  const managedAgentTestId = await managedAgentRow
-    .first()
-    .getAttribute("data-testid");
-  if (!managedAgentTestId) {
-    throw new Error("Managed agent row test id missing.");
-  }
-  const agentPubkey = managedAgentTestId.replace("managed-agent-", "");
+  await addGenericAgent(page, "general", agentName);
+  const agentPubkey = await getManagedAgentPubkey(page, agentName);
 
   await page.getByTestId("channel-general").click();
   await openMembersSidebar(page, "general");
@@ -742,16 +808,201 @@ test("removing a channel-scoped agent also cleans up the managed agent record", 
   await page.getByTestId("open-agents-view").click();
   await expect(page.getByTestId(`managed-agent-${agentPubkey}`)).toHaveCount(0);
 
-  const commands = await page.evaluate(() => {
-    return (
-      (
-        window as Window & {
-          __SPROUT_E2E_COMMANDS__?: string[];
-        }
-      ).__SPROUT_E2E_COMMANDS__ ?? []
-    );
-  });
+  const commands = await readCommandLog(page);
   expect(commands).toContain("delete_managed_agent");
+});
+
+test("members sidebar can respawn a stopped managed bot", async ({ page }) => {
+  const agentName = `sidebar-agent-${Date.now()}`;
+
+  await page.goto("/");
+  await addGenericAgent(page, "general", agentName);
+
+  const agentPubkey = await getManagedAgentPubkey(page, agentName);
+  const baselineCommands = await readCommandLog(page);
+  const baselineStartCount = baselineCommands.filter(
+    (command) => command === "start_managed_agent",
+  ).length;
+  const baselineStopCount = baselineCommands.filter(
+    (command) => command === "stop_managed_agent",
+  ).length;
+
+  await openMembersSidebar(page, "general");
+
+  const agentAction = page.getByTestId(`sidebar-agent-action-${agentPubkey}`);
+  const agentStatus = page.getByTestId(
+    `sidebar-managed-agent-status-${agentPubkey}`,
+  );
+
+  await expect(agentStatus).toContainText("Running");
+  await expect(agentAction).toHaveAttribute("aria-label", "Stop");
+
+  await agentAction.click();
+  await expect(agentStatus).toContainText("Stopped");
+  await expect(agentAction).toHaveAttribute("aria-label", "Respawn");
+
+  await agentAction.click();
+  await expect(agentStatus).toContainText("Running");
+  await expect(agentAction).toHaveAttribute("aria-label", "Stop");
+  await expect(page.getByTestId("members-sidebar-action-notice")).toContainText(
+    `Respawned ${agentName}.`,
+  );
+
+  const commands = await readCommandLog(page);
+  expect(
+    commands.filter((command) => command === "start_managed_agent").length,
+  ).toBe(baselineStartCount + 1);
+  expect(
+    commands.filter((command) => command === "stop_managed_agent").length,
+  ).toBe(baselineStopCount + 1);
+});
+
+test("members sidebar supports bulk remove for managed bots", async ({
+  page,
+}) => {
+  const firstAgentName = `sidebar-remove-a-${Date.now()}`;
+  const secondAgentName = `sidebar-remove-b-${Date.now()}`;
+
+  await page.goto("/");
+  await addGenericAgent(page, "general", firstAgentName);
+  await addGenericAgent(page, "general", secondAgentName);
+
+  const firstAgentPubkey = await getManagedAgentPubkey(page, firstAgentName);
+  const secondAgentPubkey = await getManagedAgentPubkey(page, secondAgentName);
+
+  await openMembersSidebar(page, "general");
+  await expect(
+    page.getByTestId("members-sidebar-agent-controls"),
+  ).toBeVisible();
+
+  await page.getByTestId("members-sidebar-remove-all").click();
+  await expect(page.getByTestId("members-sidebar-action-notice")).toContainText(
+    "Removed 2 managed bots from this channel.",
+  );
+  await expect(
+    page.getByTestId(`sidebar-member-${firstAgentPubkey}`),
+  ).toHaveCount(0);
+  await expect(
+    page.getByTestId(`sidebar-member-${secondAgentPubkey}`),
+  ).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("members-sidebar")).not.toBeVisible();
+
+  await page.getByTestId("open-agents-view").click();
+  await expect(
+    page.getByTestId(`managed-agent-${firstAgentPubkey}`),
+  ).toHaveCount(0);
+  await expect(
+    page.getByTestId(`managed-agent-${secondAgentPubkey}`),
+  ).toHaveCount(0);
+
+  const commands = await readCommandLog(page);
+  expect(
+    commands.filter((command) => command === "remove_channel_member"),
+  ).toHaveLength(2);
+  expect(
+    commands.filter((command) => command === "delete_managed_agent"),
+  ).toHaveLength(2);
+});
+
+test("removing a multi-channel managed bot keeps its record until it is orphaned", async ({
+  page,
+}) => {
+  const agentName = `multi-channel-agent-${Date.now()}`;
+  const secondChannelName = `multi-home-${Date.now()}`;
+
+  await page.goto("/");
+  await addGenericAgent(page, "general", agentName);
+  const agentPubkey = await getManagedAgentPubkey(page, agentName);
+
+  await page.getByRole("button", { name: "Create a stream" }).click();
+  await page.getByTestId("create-stream-name").fill(secondChannelName);
+  await page
+    .getByTestId("create-stream-description")
+    .fill("Second home for managed bot cleanup coverage");
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
+  await expect(page.getByTestId("chat-title")).toHaveText(secondChannelName);
+
+  const secondChannelId = await page
+    .getByTestId(`channel-${secondChannelName}`)
+    .getAttribute("data-channel-id");
+  if (!secondChannelId) {
+    throw new Error("Second channel id missing.");
+  }
+
+  await invokeMockCommand(page, "add_channel_members", {
+    channelId: secondChannelId,
+    pubkeys: [agentPubkey],
+    role: "bot",
+  });
+
+  await openMembersSidebar(page, "general");
+  await page.getByTestId(`sidebar-remove-member-${agentPubkey}`).click();
+  await expect(
+    page.getByTestId(`sidebar-remove-member-${agentPubkey}`),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("members-sidebar")).not.toBeVisible();
+
+  await page.getByTestId("open-agents-view").click();
+  await expect(page.getByTestId(`managed-agent-${agentPubkey}`)).toHaveCount(1);
+
+  let commands = await readCommandLog(page);
+  expect(
+    commands.filter((command) => command === "remove_channel_member"),
+  ).toHaveLength(2);
+  expect(
+    commands.filter((command) => command === "delete_managed_agent"),
+  ).toHaveLength(0);
+
+  await openMembersSidebar(page, secondChannelName);
+  await page.getByTestId(`sidebar-remove-member-${agentPubkey}`).click();
+  await expect(
+    page.getByTestId(`sidebar-remove-member-${agentPubkey}`),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("members-sidebar")).not.toBeVisible();
+
+  await page.getByTestId("open-agents-view").click();
+  await expect(page.getByTestId(`managed-agent-${agentPubkey}`)).toHaveCount(0);
+
+  commands = await readCommandLog(page);
+  expect(
+    commands.filter((command) => command === "remove_channel_member"),
+  ).toHaveLength(3);
+  expect(
+    commands.filter((command) => command === "delete_managed_agent"),
+  ).toHaveLength(1);
+});
+
+test("bulk remove stays hidden when row-level remove is not allowed", async ({
+  page,
+}) => {
+  const agentName = `sidebar-permission-agent-${Date.now()}`;
+
+  await page.goto("/");
+  await addGenericAgent(page, "general", agentName);
+  const agentPubkey = await getManagedAgentPubkey(page, agentName);
+
+  await invokeMockCommand(page, "add_channel_members", {
+    channelId: "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e",
+    pubkeys: [agentPubkey],
+    role: "bot",
+  });
+
+  await openMembersSidebar(page, "design");
+
+  await expect(
+    page.getByTestId(`sidebar-agent-action-${agentPubkey}`),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId(`sidebar-remove-member-${agentPubkey}`),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("members-sidebar-remove-all")).toHaveCount(0);
 });
 
 test("open channel management supports join and leave", async ({ page }) => {

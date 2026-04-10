@@ -278,6 +278,7 @@ type RawRelayAgent = {
   name: string;
   agent_type: string;
   channels: string[];
+  channel_ids: string[];
   capabilities: string[];
   status: PresenceStatus;
 };
@@ -616,6 +617,7 @@ function cloneRelayAgent(agent: RawRelayAgent): RawRelayAgent {
   return {
     ...agent,
     channels: [...agent.channels],
+    channel_ids: [...agent.channel_ids],
     capabilities: [...agent.capabilities],
   };
 }
@@ -1060,6 +1062,10 @@ let mockRelayAgents: RawRelayAgent[] = [
     name: "alice",
     agent_type: "goose",
     channels: ["general", "agents"],
+    channel_ids: [
+      "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+      "94a444a4-c0a3-5966-ab05-530c6ddc2301",
+    ],
     capabilities: ["search", "summaries", "workflows"],
     status: "online",
   },
@@ -1068,6 +1074,7 @@ let mockRelayAgents: RawRelayAgent[] = [
     name: "charlie",
     agent_type: "codex",
     channels: ["general"],
+    channel_ids: ["9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
     capabilities: ["code", "reviews"],
     status: "away",
   },
@@ -1328,17 +1335,36 @@ function syncMockRelayAgentsFromManagedAgents() {
       !mockManagedAgents.some((managed) => managed.pubkey === agent.pubkey),
   );
   const managedAgentsAsRelay: RawRelayAgent[] = mockManagedAgents.map(
-    (agent) => ({
-      pubkey: agent.pubkey,
-      name: agent.name,
-      agent_type: agent.agent_command,
-      channels: ["agents"],
-      capabilities: ["messages", "channels", "mcp"],
-      status: agent.status === "running" ? "online" : "offline",
-    }),
+    (agent) => {
+      const memberships = getManagedAgentRelayMembership(agent.pubkey);
+
+      return {
+        pubkey: agent.pubkey,
+        name: agent.name,
+        agent_type: agent.agent_command,
+        channels: memberships.channels,
+        channel_ids: memberships.channelIds,
+        capabilities: ["messages", "channels", "mcp"],
+        status:
+          agent.status === "running" || agent.status === "deployed"
+            ? "online"
+            : "offline",
+      };
+    },
   );
 
   mockRelayAgents = [...baseAgents, ...managedAgentsAsRelay];
+}
+
+function getManagedAgentRelayMembership(pubkey: string) {
+  const memberships = mockChannels.filter((channel) =>
+    channel.members.some((member) => member.pubkey === pubkey),
+  );
+
+  return {
+    channelIds: memberships.map((channel) => channel.id),
+    channels: memberships.map((channel) => channel.name),
+  };
 }
 
 function getConfig(): E2eConfig | undefined {
@@ -2583,6 +2609,7 @@ async function handleAddChannelMembers(
 
     syncMockChannel(channel);
     touchMockChannel(channel);
+    syncMockRelayAgentsFromManagedAgents();
     return {
       added,
       errors,
@@ -2624,6 +2651,7 @@ async function handleRemoveChannelMember(
     );
     syncMockChannel(channel);
     touchMockChannel(channel);
+    syncMockRelayAgentsFromManagedAgents();
     return;
   }
 
