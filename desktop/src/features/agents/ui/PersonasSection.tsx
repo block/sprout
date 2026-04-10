@@ -127,7 +127,7 @@ export function PersonasSection({
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
           {personas.map((persona) => (
             <div
-              className="rounded-xl border border-border/70 bg-card/80 p-2 shadow-sm"
+              className="overflow-hidden rounded-xl border border-border/70 bg-card/80 p-2 shadow-sm"
               data-testid={`library-persona-${persona.id}`}
               key={persona.id}
             >
@@ -155,13 +155,7 @@ export function PersonasSection({
                         onClick={() => onEdit(persona)}
                       >
                         <Pencil className="h-4 w-4" />
-                        <div className="flex flex-col">
-                          <span>Edit</span>
-                          <span className="text-xs font-normal text-muted-foreground">
-                            Edit this persona&apos;s name, avatar, and system
-                            prompt
-                          </span>
-                        </div>
+                        Edit
                       </DropdownMenuItem>
                     ) : null}
                     <DropdownMenuItem
@@ -169,26 +163,14 @@ export function PersonasSection({
                       onClick={() => onDuplicate(persona)}
                     >
                       <CopyPlus className="h-4 w-4" />
-                      <div className="flex flex-col">
-                        <span>Duplicate</span>
-                        <span className="text-xs font-normal text-muted-foreground">
-                          Create a copy of this persona you can customize
-                          independently
-                        </span>
-                      </div>
+                      Duplicate
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       disabled={isPending}
                       onClick={() => onExport(persona)}
                     >
                       <Download className="h-4 w-4" />
-                      <div className="flex flex-col">
-                        <span>Export</span>
-                        <span className="text-xs font-normal text-muted-foreground">
-                          Save this persona as a .persona.json file you can
-                          share or back up
-                        </span>
-                      </div>
+                      Export
                     </DropdownMenuItem>
                     {persona.isBuiltIn ? (
                       <DropdownMenuItem
@@ -197,12 +179,7 @@ export function PersonasSection({
                         onClick={() => onDeactivate(persona)}
                       >
                         <Trash2 className="h-4 w-4" />
-                        <div className="flex flex-col">
-                          <span>Remove from My Agents</span>
-                          <span className="text-xs font-normal text-muted-foreground">
-                            Remove this built-in persona from your agent library
-                          </span>
-                        </div>
+                        Remove from My Agents
                       </DropdownMenuItem>
                     ) : (
                       <DropdownMenuItem
@@ -211,12 +188,7 @@ export function PersonasSection({
                         onClick={() => onDelete(persona)}
                       >
                         <Trash2 className="h-4 w-4" />
-                        <div className="flex flex-col">
-                          <span>Delete</span>
-                          <span className="text-xs font-normal text-muted-foreground">
-                            Permanently delete this persona
-                          </span>
-                        </div>
+                        Delete
                       </DropdownMenuItem>
                     )}
                   </DropdownMenuContent>

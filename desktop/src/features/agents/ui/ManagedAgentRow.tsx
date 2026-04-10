@@ -321,26 +321,14 @@ function AgentActionsMenu({
               onClick={() => onStart(agent.pubkey)}
             >
               <Play className="h-4 w-4" />
-              <div className="flex flex-col">
-                <span>{isActive ? "Redeploy" : "Deploy"}</span>
-                <span className="text-xs font-normal text-muted-foreground">
-                  {isActive
-                    ? "Push a new deployment to the provider"
-                    : "Deploy this agent to the provider"}
-                </span>
-              </div>
+              {isActive ? "Redeploy" : "Deploy"}
             </DropdownMenuItem>
             <DropdownMenuItem
               disabled={isActionPending}
               onClick={() => onStop(agent.pubkey)}
             >
               <Square className="h-4 w-4" />
-              <div className="flex flex-col">
-                <span>Shutdown</span>
-                <span className="text-xs font-normal text-muted-foreground">
-                  Stop the provider deployment and free its resources
-                </span>
-              </div>
+              Shutdown
             </DropdownMenuItem>
           </>
         ) : isActive ? (
@@ -349,12 +337,7 @@ function AgentActionsMenu({
             onClick={() => onStop(agent.pubkey)}
           >
             <Square className="h-4 w-4" />
-            <div className="flex flex-col">
-              <span>Stop</span>
-              <span className="text-xs font-normal text-muted-foreground">
-                Stop the running ACP harness process
-              </span>
-            </div>
+            Stop
           </DropdownMenuItem>
         ) : (
           <DropdownMenuItem
@@ -362,12 +345,7 @@ function AgentActionsMenu({
             onClick={() => onStart(agent.pubkey)}
           >
             <Play className="h-4 w-4" />
-            <div className="flex flex-col">
-              <span>Spawn</span>
-              <span className="text-xs font-normal text-muted-foreground">
-                Launch the local ACP harness process for this agent
-              </span>
-            </div>
+            Spawn
           </DropdownMenuItem>
         )}
 
@@ -376,13 +354,7 @@ function AgentActionsMenu({
           onClick={() => onAddToChannel(agent)}
         >
           <UserPlus className="h-4 w-4" />
-          <div className="flex flex-col">
-            <span>Add to channel</span>
-            <span className="text-xs font-normal text-muted-foreground">
-              Invite this agent to a channel so it can participate in
-              conversations
-            </span>
-          </div>
+          Add to channel
         </DropdownMenuItem>
 
         <DropdownMenuItem
@@ -390,36 +362,20 @@ function AgentActionsMenu({
           onClick={() => onMintToken(agent.pubkey, agent.name)}
         >
           <KeyRound className="h-4 w-4" />
-          <div className="flex flex-col">
-            <span>Mint token</span>
-            <span className="text-xs font-normal text-muted-foreground">
-              Generate a bearer token this agent uses to authenticate with the
-              relay
-            </span>
-          </div>
+          Mint token
         </DropdownMenuItem>
 
         <DropdownMenuItem
           onClick={() => navigator.clipboard.writeText(agent.pubkey)}
         >
           <Clipboard className="h-4 w-4" />
-          <div className="flex flex-col">
-            <span>Copy pubkey</span>
-            <span className="text-xs font-normal text-muted-foreground">
-              Copy the agent&apos;s public key to the clipboard
-            </span>
-          </div>
+          Copy pubkey
         </DropdownMenuItem>
 
         {agent.backend.type === "local" ? (
           <DropdownMenuItem onClick={() => onOpenLogs(agent.pubkey)}>
             <FileText className="h-4 w-4" />
-            <div className="flex flex-col">
-              <span>View logs</span>
-              <span className="text-xs font-normal text-muted-foreground">
-                Show the ACP harness stdout/stderr log inline
-              </span>
-            </div>
+            View logs
           </DropdownMenuItem>
         ) : null}
 
@@ -431,18 +387,9 @@ function AgentActionsMenu({
             }
           >
             <Power className="h-4 w-4" />
-            <div className="flex flex-col">
-              <span>
-                {agent.startOnAppLaunch
-                  ? "Disable auto-start"
-                  : "Enable auto-start"}
-              </span>
-              <span className="text-xs font-normal text-muted-foreground">
-                {agent.startOnAppLaunch
-                  ? "Stop launching this agent automatically when the desktop app starts"
-                  : "Launch this agent automatically every time the desktop app starts"}
-              </span>
-            </div>
+            {agent.startOnAppLaunch
+              ? "Disable auto-start"
+              : "Enable auto-start"}
           </DropdownMenuItem>
         ) : null}
 
@@ -454,12 +401,7 @@ function AgentActionsMenu({
           onClick={() => onDelete(agent.pubkey)}
         >
           <Trash2 className="h-4 w-4" />
-          <div className="flex flex-col">
-            <span>Delete</span>
-            <span className="text-xs font-normal text-muted-foreground">
-              Permanently remove this agent profile from the desktop app
-            </span>
-          </div>
+          Delete
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

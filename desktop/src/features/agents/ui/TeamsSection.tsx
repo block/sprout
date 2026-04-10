@@ -202,12 +202,7 @@ export function TeamsSection({
                         onClick={() => onAddToChannel(team)}
                       >
                         <Rocket className="h-4 w-4" />
-                        <div className="flex flex-col">
-                          <span>Deploy to channel</span>
-                          <span className="text-xs font-normal text-muted-foreground">
-                            Add all personas in this team to a channel at once
-                          </span>
-                        </div>
+                        Deploy to channel
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
@@ -215,39 +210,21 @@ export function TeamsSection({
                         onClick={() => onEdit(team)}
                       >
                         <Pencil className="h-4 w-4" />
-                        <div className="flex flex-col">
-                          <span>Edit</span>
-                          <span className="text-xs font-normal text-muted-foreground">
-                            Edit this team&apos;s name, description, and persona
-                            membership
-                          </span>
-                        </div>
+                        Edit
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         disabled={isPending || hasMissingPersonas}
                         onClick={() => onDuplicate(team)}
                       >
                         <CopyPlus className="h-4 w-4" />
-                        <div className="flex flex-col">
-                          <span>Duplicate</span>
-                          <span className="text-xs font-normal text-muted-foreground">
-                            Create a copy of this team you can customize
-                            independently
-                          </span>
-                        </div>
+                        Duplicate
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         disabled={isPending || hasMissingPersonas}
                         onClick={() => onExport(team)}
                       >
                         <Download className="h-4 w-4" />
-                        <div className="flex flex-col">
-                          <span>Export</span>
-                          <span className="text-xs font-normal text-muted-foreground">
-                            Save this team as a .team.json file you can share or
-                            back up
-                          </span>
-                        </div>
+                        Export
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
@@ -256,12 +233,7 @@ export function TeamsSection({
                         onClick={() => onDelete(team)}
                       >
                         <Trash2 className="h-4 w-4" />
-                        <div className="flex flex-col">
-                          <span>Delete</span>
-                          <span className="text-xs font-normal text-muted-foreground">
-                            Permanently delete this team
-                          </span>
-                        </div>
+                        Delete
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>

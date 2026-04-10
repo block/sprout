@@ -2,6 +2,7 @@ import { Info } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { AgentPersona } from "@/shared/api/types";
+import { cn } from "@/shared/lib/cn";
 import { promptPreview } from "@/shared/lib/promptPreview";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
@@ -21,7 +22,7 @@ export function PersonaIdentity({
   const preview = promptPreview(persona.systemPrompt);
 
   return (
-    <div className={className}>
+    <div className={cn("min-w-0 flex-1", className)}>
       <div className="flex min-w-0 items-center gap-2.5">
         <ProfileAvatar
           avatarUrl={persona.avatarUrl}
@@ -29,7 +30,7 @@ export function PersonaIdentity({
           label={persona.displayName}
         />
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <p className="truncate text-sm font-semibold tracking-tight">
               {persona.displayName}
             </p>
