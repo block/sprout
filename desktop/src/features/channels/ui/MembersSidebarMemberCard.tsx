@@ -113,7 +113,7 @@ export function MembersSidebarMemberCard({
         </div>
       </div>
       {memberIsBot ? (
-        <div className="flex shrink-0 items-center gap-0.5">
+        <div className="flex w-[5.75rem] shrink-0 items-center justify-end gap-1">
           {managedAgent ? (
             <MembersSidebarIconButton
               actionLabel={actionLabel ?? "Manage bot"}

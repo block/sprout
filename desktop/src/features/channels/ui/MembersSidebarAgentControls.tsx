@@ -23,7 +23,7 @@ export function MembersSidebarAgentControls({
 }: MembersSidebarAgentControlsProps) {
   return (
     <div
-      className="ml-auto flex flex-wrap items-center gap-1"
+      className="ml-auto flex w-[5.75rem] items-center justify-end gap-1"
       data-testid="members-sidebar-agent-controls"
     >
       <MembersSidebarIconButton
