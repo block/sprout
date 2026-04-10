@@ -60,6 +60,9 @@ test("editPersonaDialogState preserves the persona id for updates", () => {
     updatedAt: "2025-01-02T00:00:00Z",
   });
 
+  assert.equal(state.title, "Edit persona");
+  assert.equal(state.description, "");
+  assert.equal(state.submitLabel, "Save changes");
   assert.deepEqual(state.initialValues, {
     id: "persona-2",
     displayName: "Ralph",
