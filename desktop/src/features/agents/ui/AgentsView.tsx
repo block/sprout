@@ -26,10 +26,8 @@ import { usePresenceQuery } from "@/features/presence/hooks";
 import { sendChannelMessage } from "@/shared/api/tauri";
 import {
   parsePersonaFiles,
-  type ParsedPersonaPreview,
   type ParsePersonaFilesResult,
 } from "@/shared/api/tauriPersonas";
-import { updatePersona as updatePersonaApi } from "@/shared/api/tauriPersonas";
 import { isSingleItemFile } from "@/shared/lib/fileMagic";
 
 import type {
@@ -49,7 +47,6 @@ import { PersonaCatalogDialog } from "./PersonaCatalogDialog";
 import { PersonaDialog } from "./PersonaDialog";
 import { PersonaDeleteDialog } from "./PersonaDeleteDialog";
 import { PersonaImportUpdateDialog } from "./PersonaImportUpdateDialog";
-import { buildPersonaImportPlan } from "./personaImportPlan";
 import { PersonasSection } from "./PersonasSection";
 import { RelayDirectorySection } from "./RelayDirectorySection";
 import { SecretRevealDialog } from "./SecretRevealDialog";
@@ -66,6 +63,7 @@ import {
   importPersonaDialogState,
   type PersonaDialogState,
 } from "./personaDialogState";
+import { usePersonaImportActions } from "./usePersonaImportActions";
 import { useTeamActions } from "./useTeamActions";
 
 type PersonaFeedbackSurface = "catalog" | "library";
@@ -122,18 +120,18 @@ export function AgentsView() {
       refetchRelayAgents: () => void relayAgentsQuery.refetch(),
     },
   );
+  const personaImportActions = usePersonaImportActions(
+    personasQuery.data ?? [],
+    {
+      clearPersonaFeedback: () => clearPersonaFeedback("library"),
+      setPersonaNoticeMessage,
+      setPersonaErrorMessage,
+      setPersonaDialogState,
+    },
+  );
   const [batchImportResult, setBatchImportResult] =
     React.useState<ParsePersonaFilesResult | null>(null);
   const [batchImportFileName, setBatchImportFileName] = React.useState("");
-  const [personaImportTarget, setPersonaImportTarget] =
-    React.useState<AgentPersona | null>(null);
-  const [personaImportTargetPreview, setPersonaImportTargetPreview] =
-    React.useState<{
-      preview: ParsedPersonaPreview;
-      fileName: string;
-    } | null>(null);
-  const [isApplyingPersonaImportUpdate, setIsApplyingPersonaImportUpdate] =
-    React.useState(false);
   const [isCatalogDialogOpen, setIsCatalogDialogOpen] = React.useState(false);
   const managedAgents = React.useMemo(
     () =>
@@ -475,131 +473,6 @@ export function AgentsView() {
     }
   }
 
-  async function handleEditDialogPersonaImportUpdateFile(
-    personaId: string,
-    fileBytes: number[],
-    fileName: string,
-  ) {
-    clearPersonaFeedback("library");
-
-    const persona = libraryPersonas.find(
-      (candidate) => candidate.id === personaId,
-    );
-    if (!persona) {
-      const message = "Persona not found. Refresh and try again.";
-      setPersonaErrorMessage(message);
-      throw new Error(message);
-    }
-
-    try {
-      const result = await parsePersonaFiles(fileBytes, fileName);
-      if (result.personas.length === 0) {
-        const message = "No valid personas found in file.";
-        setPersonaErrorMessage(message);
-        throw new Error(message);
-      }
-      const preview = result.personas[0];
-      setPersonaImportTarget(persona);
-      setPersonaImportTargetPreview({ preview, fileName });
-      setPersonaDialogState(null);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to parse persona file.";
-      setPersonaErrorMessage(message);
-      throw err instanceof Error ? err : new Error(message);
-    }
-  }
-
-  function closePersonaImportUpdateDialog() {
-    setPersonaImportTarget(null);
-    setPersonaImportTargetPreview(null);
-    setIsApplyingPersonaImportUpdate(false);
-  }
-
-  function clearPersonaImportUpdateAndReturnToEdit() {
-    if (!personaImportTarget) {
-      closePersonaImportUpdateDialog();
-      return;
-    }
-
-    const persona = personaImportTarget;
-    closePersonaImportUpdateDialog();
-    clearPersonaFeedback("library");
-    setPersonaDialogState(editPersonaDialogState(persona));
-  }
-
-  async function handlePersonaImportUpdateApply({
-    selectedFields,
-  }: {
-    selectedFields: string[];
-  }) {
-    if (!personaImportTarget || !personaImportTargetPreview) {
-      throw new Error("No persona import update is currently open.");
-    }
-
-    clearPersonaFeedback("library");
-    setIsApplyingPersonaImportUpdate(true);
-
-    const plan = buildPersonaImportPlan({
-      persona: personaImportTarget,
-      preview: personaImportTargetPreview.preview,
-    });
-
-    const selectedFieldSet = new Set(selectedFields);
-    const preview = personaImportTargetPreview.preview;
-    const existing = personaImportTarget;
-
-    try {
-      const updateInput: UpdatePersonaInput = {
-        id: existing.id,
-        displayName: selectedFieldSet.has("displayName")
-          ? preview.displayName
-          : existing.displayName,
-        systemPrompt: selectedFieldSet.has("systemPrompt")
-          ? preview.systemPrompt
-          : existing.systemPrompt,
-        avatarUrl: selectedFieldSet.has("avatarUrl")
-          ? (preview.avatarDataUrl ?? undefined)
-          : (existing.avatarUrl ?? undefined),
-        provider: selectedFieldSet.has("provider")
-          ? (preview.provider ?? undefined)
-          : (existing.provider ?? undefined),
-        model: selectedFieldSet.has("model")
-          ? (preview.model ?? undefined)
-          : (existing.model ?? undefined),
-        namePool: selectedFieldSet.has("namePool")
-          ? preview.namePool.length > 0
-            ? preview.namePool
-            : undefined
-          : existing.namePool.length > 0
-            ? [...existing.namePool]
-            : undefined,
-      };
-
-      await updatePersonaApi(updateInput);
-
-      const updatedFieldCount = plan.fields.filter((field) =>
-        selectedFieldSet.has(field.field),
-      ).length;
-
-      setPersonaNoticeMessage(
-        `Updated "${updateInput.displayName}" from import. ${updatedFieldCount} field${updatedFieldCount === 1 ? "" : "s"} updated.`,
-      );
-
-      closePersonaImportUpdateDialog();
-      await queryClient.invalidateQueries({ queryKey: personasQueryKey });
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Failed to apply imported persona update.";
-      setPersonaErrorMessage(message);
-      throw error instanceof Error ? error : new Error(message);
-    } finally {
-      setIsApplyingPersonaImportUpdate(false);
-    }
-  }
-
   const isActionPending =
     startMutation.isPending ||
     stopMutation.isPending ||
@@ -823,13 +696,15 @@ export function AgentsView() {
               : null
         }
         initialValues={personaDialogState?.initialValues ?? null}
-        isImportPending={isApplyingPersonaImportUpdate}
+        isImportPending={personaImportActions.isApplyingPersonaImportUpdate}
         isPending={
           createPersonaMutation.isPending || updatePersonaMutation.isPending
         }
         providers={acpProvidersQuery.data ?? []}
         providersLoading={acpProvidersQuery.isLoading}
-        onImportUpdateFile={handleEditDialogPersonaImportUpdateFile}
+        onImportUpdateFile={
+          personaImportActions.handleEditDialogImportUpdateFile
+        }
         onOpenChange={(open) => {
           if (!open) {
             setPersonaDialogState(null);
@@ -973,20 +848,25 @@ export function AgentsView() {
         team={teamActions.teamImportTarget}
       />
       <PersonaImportUpdateDialog
-        fileName={personaImportTargetPreview?.fileName ?? ""}
-        isPending={
-          isApplyingPersonaImportUpdate || updatePersonaMutation.isPending
+        fileName={
+          personaImportActions.personaImportTargetPreview?.fileName ?? ""
         }
-        onApply={handlePersonaImportUpdateApply}
-        onClear={clearPersonaImportUpdateAndReturnToEdit}
+        isPending={
+          personaImportActions.isApplyingPersonaImportUpdate ||
+          updatePersonaMutation.isPending
+        }
+        onApply={personaImportActions.handleImportUpdateApply}
+        onClear={personaImportActions.clearImportUpdateAndReturnToEdit}
         onOpenChange={(open) => {
           if (!open) {
-            closePersonaImportUpdateDialog();
+            personaImportActions.closeImportUpdateDialog();
           }
         }}
-        open={personaImportTarget !== null}
-        persona={personaImportTarget}
-        preview={personaImportTargetPreview?.preview ?? null}
+        open={personaImportActions.personaImportTarget !== null}
+        persona={personaImportActions.personaImportTarget}
+        preview={
+          personaImportActions.personaImportTargetPreview?.preview ?? null
+        }
       />
     </>
   );
