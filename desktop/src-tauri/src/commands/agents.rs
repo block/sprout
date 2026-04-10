@@ -6,14 +6,15 @@ use crate::{
     managed_agents::{
         build_managed_agent_summary, default_token_scopes, discover_provider_candidates,
         ensure_persona_is_active, find_managed_agent_mut, invoke_provider, load_managed_agents,
-        load_personas, managed_agent_avatar_url, managed_agent_log_path, mint_token_via_api,
-        normalize_agent_args, provider_deploy, read_log_tail, resolve_provider_binary,
-        save_managed_agents, start_managed_agent_process, stop_managed_agent_process,
-        sync_managed_agent_processes, validate_provider_config, BackendKind, BackendProviderInfo,
-        CreateManagedAgentRequest, CreateManagedAgentResponse, ManagedAgentLogResponse,
-        ManagedAgentRecord, ManagedAgentSummary, MintManagedAgentTokenRequest,
-        MintManagedAgentTokenResponse, DEFAULT_ACP_COMMAND, DEFAULT_AGENT_COMMAND,
-        DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
+        load_personas, managed_agent_avatar_url, managed_agent_log_path, managed_agents_base_dir,
+        mint_token_via_api, normalize_agent_args, provider_deploy, read_log_tail,
+        resolve_provider_binary, save_managed_agents, start_managed_agent_process,
+        stop_managed_agent_process, sync_managed_agent_processes, validate_provider_config,
+        BackendKind, BackendProviderInfo, CreateManagedAgentRequest, CreateManagedAgentResponse,
+        ManagedAgentLogResponse, ManagedAgentRecord, ManagedAgentSummary,
+        MintManagedAgentTokenRequest, MintManagedAgentTokenResponse, DEFAULT_ACP_COMMAND,
+        DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
+        DEFAULT_MCP_COMMAND,
     },
     relay::{relay_ws_url, sync_managed_agent_profile},
     util::now_iso,
@@ -339,6 +340,26 @@ pub async fn create_managed_agent(
                 .collect::<Vec<_>>(),
         );
 
+        // For pack-backed personas, resolve the installed pack path and the
+        // persona's internal name (slug). ACP's resolve_persona_by_name()
+        // matches on this internal name, NOT display_name.
+        let pack_metadata: Option<(std::path::PathBuf, String)> = requested_persona_id
+            .as_deref()
+            .and_then(|pid| {
+                let personas = load_personas(&app).ok()?;
+                let persona = personas.iter().find(|p| p.id == pid)?;
+                let pack_id = persona.source_pack.as_deref()?;
+                let base = managed_agents_base_dir(&app).ok()?;
+                let pack_path = base.join("packs").join(pack_id);
+                // Resolve the pack to find the internal name for this persona.
+                // Match by display_name since that's what PersonaRecord stores.
+                let resolved = sprout_persona::resolve::resolve_pack(&pack_path).ok()?;
+                let resolved_persona = resolved.personas.iter().find(|rp| {
+                    rp.display_name == persona.display_name
+                })?;
+                Some((pack_path, resolved_persona.name.clone()))
+            });
+
         let record = crate::managed_agents::ManagedAgentRecord {
             pubkey: pubkey.clone(),
             name: name.clone(),
@@ -397,6 +418,15 @@ pub async fn create_managed_agent(
             backend: input.backend.clone(),
             backend_agent_id: None,
             provider_binary_path,
+            // If the persona came from a pack, record the installed pack path
+            // and the persona's internal name within the pack so the runtime
+            // can resolve pack-specific config at startup via ACP.
+            //
+            // Important: persona_name_in_pack must be the internal `name` slug
+            // (e.g., "lep"), NOT the display_name (e.g., "Lep"). ACP's
+            // resolve_persona_by_name() matches on the internal name.
+            persona_pack_path: pack_metadata.as_ref().map(|(path, _)| path.clone()),
+            persona_name_in_pack: pack_metadata.as_ref().map(|(_, name)| name.clone()),
             created_at: now_iso(),
             updated_at: now_iso(),
             last_started_at: None,
