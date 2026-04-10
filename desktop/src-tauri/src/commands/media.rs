@@ -273,6 +273,59 @@ fn is_video_file(buf: &[u8]) -> bool {
     infer::get(buf).map_or(false, |t| t.mime_type().starts_with("video/"))
 }
 
+/// Maximum wall-clock time for an ffmpeg transcode before we kill it.
+/// 10 minutes is generous for any reasonable video; pathological inputs
+/// (crafted to cause exponential decode time) get killed instead of
+/// blocking a Tokio worker thread indefinitely.
+const FFMPEG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Run an ffmpeg command with a wall-clock timeout.
+///
+/// Spawns the child process, polls `try_wait()` every 500ms, and kills it
+/// if the deadline is exceeded. Returns the same `Output` as `Command::output()`.
+fn run_ffmpeg_with_timeout(
+    cmd: &mut std::process::Command,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn ffmpeg: {e}"))?;
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // Process exited — collect output.
+                let stdout = child.stdout.take().map_or_else(Vec::new, |mut s| {
+                    let mut buf = Vec::new();
+                    let _ = std::io::Read::read_to_end(&mut s, &mut buf);
+                    buf
+                });
+                let stderr = child.stderr.take().map_or_else(Vec::new, |mut s| {
+                    let mut buf = Vec::new();
+                    let _ = std::io::Read::read_to_end(&mut s, &mut buf);
+                    buf
+                });
+                return Ok(std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) => {
+                // Still running — check deadline.
+                if std::time::Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait(); // reap zombie
+                    return Err(format!("ffmpeg timed out after {}s", timeout.as_secs()));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(e) => return Err(format!("failed to wait on ffmpeg: {e}")),
+        }
+    }
+}
+
 /// Transcode any video file to H.264/AAC/MP4/fast-start via ffmpeg.
 ///
 /// Always re-encodes — handles HEVC, VP9, ProRes, non-faststart MP4, 10-bit,
@@ -287,31 +340,32 @@ fn transcode_to_mp4(source: &std::path::Path) -> Result<std::path::PathBuf, Stri
     let output =
         std::env::temp_dir().join(format!("sprout-transcode-{}.mp4", uuid::Uuid::new_v4()));
 
-    let result = std::process::Command::new("ffmpeg")
-        .arg("-y")
-        .arg("-i")
-        .arg(source) // OsStr — handles non-UTF-8 paths on Unix
-        .args([
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "23",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-movflags",
-            "+faststart",
-        ])
-        .arg(&output)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| format!("failed to run ffmpeg: {e}"))?;
+    let result = run_ffmpeg_with_timeout(
+        std::process::Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-i")
+            .arg(source) // OsStr — handles non-UTF-8 paths on Unix
+            .args([
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "23",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+            ])
+            .arg(&output)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped()),
+        FFMPEG_TIMEOUT,
+    )?;
 
     if !result.status.success() {
         let _ = std::fs::remove_file(&output);
@@ -338,19 +392,23 @@ fn transcode_to_mp4(source: &std::path::Path) -> Result<std::path::PathBuf, Stri
 fn extract_poster_frame(mp4_path: &std::path::Path) -> Result<std::path::PathBuf, String> {
     let output = std::env::temp_dir().join(format!("sprout-poster-{}.jpg", uuid::Uuid::new_v4()));
 
+    // Poster extraction is a single-frame decode — 30s is generous.
+    let poster_timeout = std::time::Duration::from_secs(30);
+
     // Try seeking to 1s first (avoids black first frames from fade-ins).
-    let result = std::process::Command::new("ffmpeg")
-        .arg("-y")
-        .arg("-ss")
-        .arg("1")
-        .arg("-i")
-        .arg(mp4_path)
-        .args(["-vframes", "1", "-vf", "scale=640:-2", "-q:v", "2"])
-        .arg(&output)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| format!("ffmpeg poster extraction failed: {e}"))?;
+    let result = run_ffmpeg_with_timeout(
+        std::process::Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-ss")
+            .arg("1")
+            .arg("-i")
+            .arg(mp4_path)
+            .args(["-vframes", "1", "-vf", "scale=640:-2", "-q:v", "2"])
+            .arg(&output)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped()),
+        poster_timeout,
+    )?;
 
     // If seek to 1s failed (video shorter than 1s), retry from first frame.
     if !result.status.success()
@@ -362,16 +420,17 @@ fn extract_poster_frame(mp4_path: &std::path::Path) -> Result<std::path::PathBuf
             eprintln!("sprout-desktop: poster seek-to-1s failed, trying first frame: {stderr}");
         }
         let _ = std::fs::remove_file(&output);
-        let fallback = std::process::Command::new("ffmpeg")
-            .arg("-y")
-            .arg("-i")
-            .arg(mp4_path)
-            .args(["-vframes", "1", "-vf", "scale=640:-2", "-q:v", "2"])
-            .arg(&output)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .output()
-            .map_err(|e| format!("ffmpeg poster fallback failed: {e}"))?;
+        let fallback = run_ffmpeg_with_timeout(
+            std::process::Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i")
+                .arg(mp4_path)
+                .args(["-vframes", "1", "-vf", "scale=640:-2", "-q:v", "2"])
+                .arg(&output)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped()),
+            poster_timeout,
+        )?;
 
         if !fallback.status.success() || !output.exists() {
             let stderr = String::from_utf8_lossy(&fallback.stderr);
