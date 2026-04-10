@@ -146,7 +146,6 @@ export function ChannelMenuButton({
   return (
     <SidebarMenuButton
       className={cn(
-        ephemeralDisplay && "group-data-[collapsible=icon]:relative",
         !isActive &&
           hasUnread &&
           "font-semibold text-sidebar-foreground hover:text-sidebar-foreground",

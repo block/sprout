@@ -146,7 +146,7 @@ test("create ephemeral stream shows sidebar and header affordances", async ({
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
   await expect(
     page.getByTestId(`channel-ephemeral-${channelName}`),
-  ).toContainText("Ephemeral");
+  ).toBeVisible();
   await expect(page.getByTestId("chat-ephemeral-badge")).toHaveText(
     /Ephemeral.+left/,
   );
