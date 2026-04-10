@@ -113,7 +113,7 @@ export function MembersSidebarMemberCard({
         </div>
       </div>
       {memberIsBot ? (
-        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="flex shrink-0 items-center gap-0.5">
           {managedAgent ? (
             <MembersSidebarIconButton
               actionLabel={actionLabel ?? "Manage bot"}
@@ -142,7 +142,7 @@ export function MembersSidebarMemberCard({
           ) : null}
         </div>
       ) : canRemoveMember ? (
-        <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="flex shrink-0 items-center">
           <Button
             className="h-7 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground"
             data-testid={`sidebar-remove-member-${member.pubkey}`}
