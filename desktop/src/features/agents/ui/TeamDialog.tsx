@@ -22,9 +22,16 @@ import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
 import { personaCatalogCopy } from "./personaLibraryCopy";
 import {
+  getImportButtonLabel,
+  getImportButtonTone,
+  getImportErrorLabel,
+  IMPORT_ERROR_VISIBILITY_MS,
+} from "./teamDialogImportState";
+import {
   copySelectedPersonaIds,
   countMissingPersonaIds,
   filterAvailablePersonaIds,
+  orderPersonasByInitiallySelected,
 } from "./teamDialogSelection";
 
 type TeamDialogProps = {
@@ -65,6 +72,8 @@ export function TeamDialog({
   const [selectedPersonaIds, setSelectedPersonaIds] = React.useState<string[]>(
     [],
   );
+  const [initialSelectedPersonaIdsForSort, setInitialSelectedPersonaIdsForSort] =
+    React.useState<string[]>([]);
   const [isImportingUpdate, setIsImportingUpdate] = React.useState(false);
   const [importErrorMessage, setImportErrorMessage] = React.useState<
     string | null
@@ -89,6 +98,9 @@ export function TeamDialog({
     setName(initialValues.name);
     setTeamDescription(initialValues.description ?? "");
     setSelectedPersonaIds(copySelectedPersonaIds(initialValues.personaIds));
+    setInitialSelectedPersonaIdsForSort(
+      copySelectedPersonaIds(initialValues.personaIds),
+    );
     setImportErrorMessage(null);
     setIsImportingUpdate(false);
   }, [initialValues, open]);
@@ -156,6 +168,18 @@ export function TeamDialog({
     };
   }, [canImportTeamUpdate, open]);
 
+  React.useEffect(() => {
+    if (!open || !importErrorMessage) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setImportErrorMessage(null);
+    }, IMPORT_ERROR_VISIBILITY_MS);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [importErrorMessage, open]);
+
   async function handleImportUpdateSelection(
     fileBytes: number[],
     fileName: string,
@@ -170,9 +194,7 @@ export function TeamDialog({
       await onImportUpdateFile(editTeamId, fileBytes, fileName);
     } catch (error) {
       setImportErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Failed to parse team import file.",
+        getImportErrorLabel(error instanceof Error ? error.message : null),
       );
     } finally {
       setIsImportingUpdate(false);
@@ -196,6 +218,7 @@ export function TeamDialog({
       setName("");
       setTeamDescription("");
       setSelectedPersonaIds([]);
+      setInitialSelectedPersonaIdsForSort([]);
       setImportErrorMessage(null);
       setIsImportingUpdate(false);
       setIsWindowFileDragOver(false);
@@ -231,13 +254,31 @@ export function TeamDialog({
     await onSubmit(baseInput);
   }
 
+  const importButtonTone = getImportButtonTone({
+    isWindowFileDragOver,
+    isImportDragOver,
+    importErrorMessage,
+  });
+  const importButtonLabel = getImportButtonLabel({
+    isWindowFileDragOver,
+    isImportDragOver,
+    importErrorMessage,
+  });
+  const orderedPersonas = React.useMemo(
+    () =>
+      orderPersonasByInitiallySelected(personas, initialSelectedPersonaIdsForSort),
+    [initialSelectedPersonaIdsForSort, personas],
+  );
+
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
       <DialogContent className="max-w-2xl overflow-hidden p-0">
         <div className="flex max-h-[85vh] flex-col">
           <DialogHeader className="shrink-0 border-b border-border/60 px-6 py-5 pr-14">
             <DialogTitle>{title}</DialogTitle>
-            <DialogDescription>{description}</DialogDescription>
+            {description.trim().length > 0 ? (
+              <DialogDescription>{description}</DialogDescription>
+            ) : null}
           </DialogHeader>
 
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
@@ -294,7 +335,7 @@ export function TeamDialog({
                   aria-label="Personas"
                   aria-multiselectable="true"
                 >
-                  {personas.map((persona) => {
+                  {orderedPersonas.map((persona) => {
                     const isSelected = selectedPersonaIds.includes(persona.id);
 
                     return (
@@ -347,11 +388,6 @@ export function TeamDialog({
                 {error.message}
               </p>
             ) : null}
-            {importErrorMessage ? (
-              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                {importErrorMessage}
-              </p>
-            ) : null}
           </div>
 
           <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border/60 px-6 py-4">
@@ -368,20 +404,25 @@ export function TeamDialog({
                   <button
                     className={cn(
                       "inline-flex h-8 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors",
-                      isWindowFileDragOver || isImportDragOver
+                      importButtonTone === "drag"
                         ? "border-dashed border-primary/70 bg-primary/10 text-primary"
+                        : importButtonTone === "error"
+                          ? "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/15"
                         : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
                     )}
                     disabled={isPending || isImportPending || isImportingUpdate}
                     type="button"
                     {...importDropHandlers}
                     onClick={openImportFilePicker}
+                    title={
+                      importButtonTone === "error"
+                        ? importButtonLabel
+                        : undefined
+                    }
                   >
                     <Upload className="h-3.5 w-3.5" />
-                    <span>
-                      {isWindowFileDragOver || isImportDragOver
-                        ? "Drop .team.json to import"
-                        : "Import"}
+                    <span className="max-w-[16rem] truncate">
+                      {importButtonLabel}
                     </span>
                     {isImportingUpdate ? (
                       <RefreshCw className="h-3.5 w-3.5 animate-spin" />

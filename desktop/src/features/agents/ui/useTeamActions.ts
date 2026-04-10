@@ -442,8 +442,8 @@ export function useTeamActions(
     actions.setActionNoticeMessage(null);
     actions.setActionErrorMessage(null);
     setTeamDialogState({
-      title: `Edit ${team.name}`,
-      description: "Update this team's name, description, or personas.",
+      title: "Edit team",
+      description: "",
       submitLabel: "Save changes",
       initialValues: {
         id: team.id,
