@@ -21,6 +21,11 @@ import {
 import type { ParsedTeamPreview } from "@/shared/api/tauriTeams";
 import type { AgentPersona, AgentTeam } from "@/shared/api/types";
 import { buildTeamImportPlan } from "./teamImportPlan";
+import {
+  getAddMemberSecondaryText,
+  getMissingMemberSecondaryText,
+  hasAnyImportChanges,
+} from "./teamImportUpdateState";
 
 type TeamImportUpdateDialogProps = {
   open: boolean;
@@ -303,6 +308,7 @@ export function TeamImportUpdateDialog({
           getTeamSnapshotLines(preview.name, preview.description),
         )
       : { addedLines: 0, removedLines: 0 };
+  const hasChanges = hasAnyImportChanges(plan, teamLineChanges);
 
   return (
     <>
@@ -331,258 +337,266 @@ export function TeamImportUpdateDialog({
 
               {preview && plan ? (
                 <div className="space-y-4">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium">Team info</p>
-                    <div className="flex items-center gap-3 rounded-lg border border-border/60 bg-card/80 px-3 py-2.5">
-                      <Checkbox
-                        checked={updateTeamInfo}
-                        disabled={isPending}
-                        onCheckedChange={(checked) =>
-                          setUpdateTeamInfo(Boolean(checked))
-                        }
-                      />
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-                        <Users className="h-4 w-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold tracking-tight">
-                          {updateTeamInfo
-                            ? getTeamNamePreview(preview.name)
-                            : getTeamNamePreview(team?.name)}
-                        </p>
-                        <p
-                          className={`truncate text-xs ${
-                            updateTeamInfo
-                              ? "text-foreground"
-                              : "text-muted-foreground"
-                          }`}
-                        >
-                          {updateTeamInfo
-                            ? getPromptPreview(
-                                preview.description ?? "",
-                                "No team description in import.",
-                              )
-                            : getPromptPreview(
-                                team?.description ?? "",
-                                "No current team description.",
-                              )}
-                        </p>
-                      </div>
-                      {renderLineChangeSummary(
-                        teamLineChanges.addedLines,
-                        teamLineChanges.removedLines,
-                        updateTeamInfo,
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium">
-                      Members that will be updated{" "}
-                      <span className="font-bold">
-                        ({selectedUpdatedCount}/{plan.membersToUpdate.length})
-                      </span>
-                    </p>
-                    {plan.membersToUpdate.length > 0 ? (
+                  {hasChanges ? (
+                    <>
                       <div className="space-y-1">
-                        {plan.membersToUpdate.map((member) => {
-                          const shouldUpdate = selectedUpdatedPersonaIds.has(
-                            member.existing.id,
-                          );
-                          const previewAvatarUrl = shouldUpdate
-                            ? (member.imported.avatar_url ??
-                              member.existing.avatarUrl)
-                            : member.existing.avatarUrl;
-                          const previewName = shouldUpdate
-                            ? member.imported.display_name
-                            : member.existing.displayName;
-                          const previewPrompt = shouldUpdate
-                            ? getPromptPreview(
-                                member.imported.system_prompt,
-                                "No member text in import.",
-                              )
-                            : getPromptPreview(
-                                member.existing.systemPrompt,
-                                "No current member text.",
+                        <p className="text-sm font-medium">Team info</p>
+                        <div className="flex items-center gap-3 rounded-lg border border-border/60 bg-card/80 px-3 py-2.5">
+                          <Checkbox
+                            checked={updateTeamInfo}
+                            disabled={isPending}
+                            onCheckedChange={(checked) =>
+                              setUpdateTeamInfo(Boolean(checked))
+                            }
+                          />
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                            <Users className="h-4 w-4" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-semibold tracking-tight">
+                              {updateTeamInfo
+                                ? getTeamNamePreview(preview.name)
+                                : getTeamNamePreview(team?.name)}
+                            </p>
+                            <p
+                              className={`truncate text-xs ${
+                                updateTeamInfo
+                                  ? "text-foreground"
+                                  : "text-muted-foreground"
+                              }`}
+                            >
+                              {updateTeamInfo
+                                ? getPromptPreview(
+                                    preview.description ?? "",
+                                    "No team description in import.",
+                                  )
+                                : getPromptPreview(
+                                    team?.description ?? "",
+                                    "No current team description.",
+                                  )}
+                            </p>
+                          </div>
+                          {renderLineChangeSummary(
+                            teamLineChanges.addedLines,
+                            teamLineChanges.removedLines,
+                            updateTeamInfo,
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium">
+                          Members that will be updated{" "}
+                          <span className="font-bold">
+                            ({selectedUpdatedCount}/{plan.membersToUpdate.length})
+                          </span>
+                        </p>
+                        {plan.membersToUpdate.length > 0 ? (
+                          <div className="space-y-1">
+                            {plan.membersToUpdate.map((member) => {
+                              const shouldUpdate = selectedUpdatedPersonaIds.has(
+                                member.existing.id,
                               );
-
-                          return (
-                            <div
-                              className="flex items-center gap-3 rounded-lg border border-border/60 bg-card/80 px-3 py-2.5"
-                              key={member.existing.id}
-                            >
-                              <Checkbox
-                                checked={shouldUpdate}
-                                disabled={isPending}
-                                onCheckedChange={(checked) =>
-                                  toggleUpdatedPersona(
-                                    member.existing.id,
-                                    Boolean(checked),
+                              const previewAvatarUrl = shouldUpdate
+                                ? (member.imported.avatar_url ??
+                                  member.existing.avatarUrl)
+                                : member.existing.avatarUrl;
+                              const previewName = shouldUpdate
+                                ? member.imported.display_name
+                                : member.existing.displayName;
+                              const previewPrompt = shouldUpdate
+                                ? getPromptPreview(
+                                    member.imported.system_prompt,
+                                    "No member text in import.",
                                   )
-                                }
-                              />
-                              <ProfileAvatar
-                                avatarUrl={previewAvatarUrl}
-                                className="h-8 w-8 rounded-lg text-xs"
-                                label={previewName}
-                              />
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm font-semibold tracking-tight">
-                                  {previewName}
-                                </p>
-                                <p
-                                  className={`truncate text-xs ${
-                                    shouldUpdate
-                                      ? "text-foreground"
-                                      : "text-muted-foreground"
-                                  }`}
-                                >
-                                  {previewPrompt}
-                                </p>
-                              </div>
-                              {renderLineChangeSummary(
-                                member.addedLines,
-                                member.removedLines,
-                                shouldUpdate,
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">
-                        No existing members need updates.
-                      </p>
-                    )}
-                  </div>
+                                : getPromptPreview(
+                                    member.existing.systemPrompt,
+                                    "No current member text.",
+                                  );
 
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium">
-                      Add members{" "}
-                      <span className="font-bold">
-                        ({selectedNewCount}/{plan.newMembers.length})
-                      </span>
-                    </p>
-                    {plan.newMembers.length > 0 ? (
-                      <div className="space-y-1">
-                        {plan.newMembers.map((member) => {
-                          const shouldAdd = selectedNewMemberIndexes.has(
-                            member.importedIndex,
-                          );
-                          return (
-                            <div
-                              className="flex items-center gap-3 rounded-lg border border-border/60 bg-card/80 px-3 py-2.5"
-                              key={`${member.importedIndex}-${member.imported.display_name}`}
-                            >
-                              <Checkbox
-                                checked={shouldAdd}
-                                disabled={isPending}
-                                onCheckedChange={(checked) =>
-                                  toggleNewMember(
-                                    member.importedIndex,
-                                    Boolean(checked),
-                                  )
-                                }
-                              />
-                              <ProfileAvatar
-                                avatarUrl={member.imported.avatar_url}
-                                className="h-8 w-8 rounded-lg text-xs"
-                                label={member.imported.display_name}
-                              />
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm font-semibold tracking-tight">
-                                  {member.imported.display_name}
-                                </p>
-                                <p
-                                  className={`truncate text-xs ${
-                                    shouldAdd
-                                      ? "text-foreground"
-                                      : "text-muted-foreground"
-                                  }`}
+                              return (
+                                <div
+                                  className="flex items-center gap-3 rounded-lg border border-border/60 bg-card/80 px-3 py-2.5"
+                                  key={member.existing.id}
                                 >
-                                  {shouldAdd
-                                    ? getPromptPreview(
-                                        member.imported.system_prompt,
-                                        "No member text in import.",
+                                  <Checkbox
+                                    checked={shouldUpdate}
+                                    disabled={isPending}
+                                    onCheckedChange={(checked) =>
+                                      toggleUpdatedPersona(
+                                        member.existing.id,
+                                        Boolean(checked),
                                       )
-                                    : "Will not be added to this team"}
-                                </p>
-                              </div>
-                              {renderLineChangeSummary(
-                                member.addedLines,
-                                0,
-                                shouldAdd,
-                              )}
-                            </div>
-                          );
-                        })}
+                                    }
+                                  />
+                                  <ProfileAvatar
+                                    avatarUrl={previewAvatarUrl}
+                                    className="h-8 w-8 rounded-lg text-xs"
+                                    label={previewName}
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-sm font-semibold tracking-tight">
+                                      {previewName}
+                                    </p>
+                                    <p
+                                      className={`truncate text-xs ${
+                                        shouldUpdate
+                                          ? "text-foreground"
+                                          : "text-muted-foreground"
+                                      }`}
+                                    >
+                                      {previewPrompt}
+                                    </p>
+                                  </div>
+                                  {renderLineChangeSummary(
+                                    member.addedLines,
+                                    member.removedLines,
+                                    shouldUpdate,
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </div>
 
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium">
-                      Remove members not in import{" "}
-                      <span className="font-bold">
-                        ({removableCount}/{plan.missingMembers.length})
-                      </span>
-                    </p>
-                    {plan.missingMembers.length > 0 ? (
                       <div className="space-y-1">
-                        {plan.missingMembers.map((member) => {
-                          const shouldRemove = missingPersonaIdsToRemove.has(
-                            member.existing.id,
-                          );
-                          return (
-                            <div
-                              className="flex items-center gap-3 rounded-lg border border-border/60 bg-card/80 px-3 py-2.5"
-                              key={member.existing.id}
-                            >
-                              <Checkbox
-                                checked={shouldRemove}
-                                disabled={isPending}
-                                onCheckedChange={(checked) =>
-                                  toggleMissingPersona(
-                                    member.existing.id,
-                                    Boolean(checked),
-                                  )
-                                }
-                              />
-                              <ProfileAvatar
-                                avatarUrl={member.existing.avatarUrl}
-                                className="h-8 w-8 rounded-lg text-xs"
-                                label={member.existing.displayName}
-                              />
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm font-semibold tracking-tight">
-                                  {member.existing.displayName}
-                                </p>
-                                <p
-                                  className={`truncate text-xs ${
-                                    shouldRemove
-                                      ? "text-foreground"
-                                      : "text-muted-foreground"
-                                  }`}
+                        <p className="text-sm font-medium">
+                          Add members{" "}
+                          <span className="font-bold">
+                            ({selectedNewCount}/{plan.newMembers.length})
+                          </span>
+                        </p>
+                        {plan.newMembers.length > 0 ? (
+                          <div className="space-y-1">
+                            {plan.newMembers.map((member) => {
+                              const shouldAdd = selectedNewMemberIndexes.has(
+                                member.importedIndex,
+                              );
+                              return (
+                                <div
+                                  className="flex items-center gap-3 rounded-lg border border-border/60 bg-card/80 px-3 py-2.5"
+                                  key={`${member.importedIndex}-${member.imported.display_name}`}
                                 >
-                                  {shouldRemove
-                                    ? "Will be removed from this team"
-                                    : getPromptPreview(
-                                        member.existing.systemPrompt,
-                                        "No current member text.",
+                                  <Checkbox
+                                    checked={shouldAdd}
+                                    disabled={isPending}
+                                    onCheckedChange={(checked) =>
+                                      toggleNewMember(
+                                        member.importedIndex,
+                                        Boolean(checked),
+                                      )
+                                    }
+                                  />
+                                  <ProfileAvatar
+                                    avatarUrl={member.imported.avatar_url}
+                                    className="h-8 w-8 rounded-lg text-xs"
+                                    label={member.imported.display_name}
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-sm font-semibold tracking-tight">
+                                      {member.imported.display_name}
+                                    </p>
+                                    <p
+                                      className={`truncate text-xs ${
+                                        shouldAdd
+                                          ? "text-foreground"
+                                          : "text-muted-foreground"
+                                      }`}
+                                    >
+                                      {getAddMemberSecondaryText(
+                                        shouldAdd,
+                                        getPromptPreview(
+                                          member.imported.system_prompt,
+                                          "No member text in import.",
+                                        ),
                                       )}
-                                </p>
-                              </div>
-                              {renderLineChangeSummary(
-                                0,
-                                member.removedLines,
-                                shouldRemove,
-                              )}
-                            </div>
-                          );
-                        })}
+                                    </p>
+                                  </div>
+                                  {renderLineChangeSummary(
+                                    member.addedLines,
+                                    0,
+                                    shouldAdd,
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </div>
+
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium">
+                          Remove members not in import{" "}
+                          <span className="font-bold">
+                            ({removableCount}/{plan.missingMembers.length})
+                          </span>
+                        </p>
+                        {plan.missingMembers.length > 0 ? (
+                          <div className="space-y-1">
+                            {plan.missingMembers.map((member) => {
+                              const shouldRemove = missingPersonaIdsToRemove.has(
+                                member.existing.id,
+                              );
+                              return (
+                                <div
+                                  className="flex items-center gap-3 rounded-lg border border-border/60 bg-card/80 px-3 py-2.5"
+                                  key={member.existing.id}
+                                >
+                                  <Checkbox
+                                    checked={shouldRemove}
+                                    disabled={isPending}
+                                    onCheckedChange={(checked) =>
+                                      toggleMissingPersona(
+                                        member.existing.id,
+                                        Boolean(checked),
+                                      )
+                                    }
+                                  />
+                                  <ProfileAvatar
+                                    avatarUrl={member.existing.avatarUrl}
+                                    className="h-8 w-8 rounded-lg text-xs"
+                                    label={member.existing.displayName}
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-sm font-semibold tracking-tight">
+                                      {member.existing.displayName}
+                                    </p>
+                                    <p
+                                      className={`truncate text-xs ${
+                                        shouldRemove
+                                          ? "text-foreground"
+                                          : "text-muted-foreground"
+                                      }`}
+                                    >
+                                      {getMissingMemberSecondaryText(
+                                        shouldRemove,
+                                        getPromptPreview(
+                                          member.existing.systemPrompt,
+                                          "No current member text.",
+                                        ),
+                                      )}
+                                    </p>
+                                  </div>
+                                  {renderLineChangeSummary(
+                                    0,
+                                    member.removedLines,
+                                    shouldRemove,
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border/60 bg-card/60 px-4 py-10 text-center">
+                      <p className="text-sm font-semibold tracking-tight text-muted-foreground">
+                        no changes
+                      </p>
+                    </div>
+                  )}
 
                   {plan.unresolvedPersonaIds.length > 0 ? (
                     <p className="rounded-lg border border-amber-300/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800">
