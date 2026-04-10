@@ -112,7 +112,7 @@ function createMarkdownComponents(
           // biome-ignore lint/a11y/useMediaCaption: user-uploaded video, no captions available
           <video
             controls
-            preload="metadata"
+            preload="auto"
             className="max-h-96 rounded-2xl border border-border/70"
             src={resolvedSrc}
           />
