@@ -1,0 +1,751 @@
+//! Pack resolution: produces fully resolved, ACP-ready output.
+//!
+//! `resolve_pack()` is the main entry point. It loads a pack directory,
+//! applies merge policy, composes prompts, merges MCP servers, and projects
+//! env vars. The output (`ResolvedPack`) is designed backward from ACP's
+//! `Config` — every field maps directly to what the runtime consumes.
+//!
+//! Design principles:
+//! - **Pure**: no env access, no network, no side effects.
+//! - **Complete**: all merge/compose/project logic lives here.
+//! - **ACP-shaped**: `ResolvedPersona` maps 1:1 to ACP's needs.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use crate::merge::RespondToData;
+use crate::pack::{self, LoadedPack, LoadedPersona, PackError};
+use crate::persona::split_model;
+
+// ── Public types ──────────────────────────────────────────────────────────────
+
+/// A fully resolved persona — ready for ACP consumption.
+/// All merge, composition, and projection is done.
+#[derive(Debug, Clone)]
+pub struct ResolvedPersona {
+    // Identity
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub avatar: Option<String>,
+    pub version: String,
+
+    // Effective prompt (persona body + pack_instructions appended)
+    pub system_prompt: String,
+
+    // Effective behavior (all precedence levels 3-5 resolved)
+    pub model: Option<ResolvedModel>,
+    pub temperature: Option<f64>,
+    pub max_context_tokens: Option<u64>,
+    pub subscribe: Vec<String>,
+    pub triggers: ResolvedTriggers,
+    pub thread_replies: bool,
+    pub broadcast_replies: bool,
+
+    // Effective MCP (pack shared + persona merged, literals preserved)
+    pub mcp_servers: Vec<ResolvedMcpServer>,
+
+    // Hooks (parsed, not executed)
+    pub hooks: Option<ResolvedHooks>,
+
+    // Skills (bare names)
+    pub skills: Vec<String>,
+
+    // Env var projection for goose subprocess
+    pub goose_env_vars: Vec<(String, String)>,
+}
+
+/// Provider + model ID, split from `"provider:model-id"`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedModel {
+    pub provider: String,
+    pub model_id: String,
+}
+
+/// An MCP server with env values as literals (no interpolation in this PR).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedMcpServer {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
+/// Lifecycle hooks (pack-relative paths).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedHooks {
+    pub on_start: Option<PathBuf>,
+    pub on_stop: Option<PathBuf>,
+}
+
+/// What triggers a response (renamed from respond_to per spec discussion).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedTriggers {
+    pub mentions: bool,
+    pub keywords: Vec<String>,
+    pub all_messages: bool,
+}
+
+/// A fully resolved pack.
+#[derive(Debug)]
+pub struct ResolvedPack {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub personas: Vec<ResolvedPersona>,
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+/// Load, validate, merge, and resolve a pack directory.
+///
+/// Returns a `ResolvedPack` with fully typed, ACP-ready output for each
+/// persona. All merge policy (levels 3-5) is applied. MCP servers are
+/// merged with literal env passthrough (no `${VAR}` interpolation).
+/// Goose env vars are projected from model/temperature/context config.
+pub fn resolve_pack(pack_dir: &Path) -> Result<ResolvedPack, PackError> {
+    let loaded = pack::load_pack(pack_dir)?;
+    resolve_loaded_pack(&loaded, pack_dir)
+}
+
+/// Resolve from an already-loaded pack. Useful when you've already called
+/// `load_pack()` and want to avoid re-reading the filesystem.
+pub fn resolve_loaded_pack(
+    loaded: &LoadedPack,
+    pack_dir: &Path,
+) -> Result<ResolvedPack, PackError> {
+    let pack_version = &loaded.manifest.version;
+    let pack_instructions = loaded.pack_instructions.as_deref();
+    let shared_mcp = loaded.shared_mcp_config.as_ref();
+
+    let mut personas = Vec::with_capacity(loaded.personas.len());
+    for lp in &loaded.personas {
+        personas.push(resolve_persona(lp, pack_version, pack_instructions, shared_mcp, pack_dir));
+    }
+
+    Ok(ResolvedPack {
+        id: loaded.manifest.id.clone(),
+        name: loaded.manifest.name.clone(),
+        version: loaded.manifest.version.clone(),
+        // PackManifestData doesn't carry description; use pack name as fallback.
+        description: String::new(),
+        personas,
+    })
+}
+
+// ── Per-persona resolution ────────────────────────────────────────────────────
+
+fn resolve_persona(
+    lp: &LoadedPersona,
+    pack_version: &str,
+    pack_instructions: Option<&str>,
+    shared_mcp: Option<&serde_json::Value>,
+    pack_dir: &Path,
+) -> ResolvedPersona {
+    let system_prompt = compose_prompt(&lp.prompt, pack_instructions);
+    let model = lp.model.as_deref().and_then(resolve_model);
+    let triggers = resolve_triggers(lp.respond_to.as_ref());
+    let mcp_servers = merge_mcp_servers(shared_mcp, &lp.mcp_servers);
+    let hooks = resolve_hooks(lp.hooks.as_ref(), pack_dir);
+    let goose_env_vars = project_env_vars(lp);
+
+    // Version: persona version if set, otherwise pack version.
+    let version = lp
+        .source_path
+        .to_str()
+        .and_then(|_| None::<String>) // persona doesn't store version directly
+        .unwrap_or_else(|| pack_version.to_owned());
+
+    ResolvedPersona {
+        name: lp.name.clone(),
+        display_name: lp.display_name.clone(),
+        description: lp.description.clone(),
+        avatar: lp.avatar.clone(),
+        version,
+        system_prompt,
+        model,
+        temperature: lp.temperature,
+        max_context_tokens: lp.max_context_tokens,
+        subscribe: lp.subscribe.clone(),
+        triggers,
+        thread_replies: lp.thread_replies,
+        broadcast_replies: lp.broadcast_replies,
+        mcp_servers,
+        hooks,
+        skills: lp.skills.clone(),
+        goose_env_vars,
+    }
+}
+
+// ── Compose prompt ────────────────────────────────────────────────────────────
+
+/// Compose the effective system prompt: persona body + pack instructions.
+fn compose_prompt(persona_prompt: &str, pack_instructions: Option<&str>) -> String {
+    match pack_instructions {
+        Some(instructions) if !instructions.trim().is_empty() => {
+            format!("{persona_prompt}\n\n---\n# Team Instructions\n{instructions}")
+        }
+        _ => persona_prompt.to_owned(),
+    }
+}
+
+// ── Model resolution ──────────────────────────────────────────────────────────
+
+/// Split `"provider:model-id"` into a `ResolvedModel`.
+fn resolve_model(model_str: &str) -> Option<ResolvedModel> {
+    if model_str.trim().is_empty() {
+        return None;
+    }
+    let (provider, model_id) = split_model(model_str);
+    Some(ResolvedModel {
+        provider: provider.unwrap_or("").to_owned(),
+        model_id: model_id.to_owned(),
+    })
+}
+
+// ── Triggers resolution ───────────────────────────────────────────────────────
+
+/// Convert `RespondToData` to `ResolvedTriggers` (renamed per spec discussion).
+fn resolve_triggers(rt: Option<&RespondToData>) -> ResolvedTriggers {
+    match rt {
+        Some(data) => ResolvedTriggers {
+            mentions: data.mentions,
+            keywords: data.keywords.clone(),
+            all_messages: data.all_messages,
+        },
+        None => ResolvedTriggers {
+            mentions: true,
+            keywords: Vec::new(),
+            all_messages: false,
+        },
+    }
+}
+
+// ── MCP server merge ──────────────────────────────────────────────────────────
+
+/// Merge pack-level shared MCP servers with per-persona servers.
+///
+/// Pack shared servers come from `.mcp.json` (a map of `name → config`).
+/// Per-persona servers come from frontmatter `mcp_servers:` (a list).
+/// Name collision: persona wins (replaces pack server with same name).
+///
+/// Env values are passed through as literals — no `${VAR}` interpolation.
+fn merge_mcp_servers(
+    shared_mcp: Option<&serde_json::Value>,
+    persona_servers: &[serde_json::Value],
+) -> Vec<ResolvedMcpServer> {
+    let mut by_name: HashMap<String, ResolvedMcpServer> = HashMap::new();
+
+    // 1. Pack-level shared servers from .mcp.json
+    if let Some(shared) = shared_mcp {
+        // .mcp.json format: { "mcpServers": { "name": { "command": ..., "args": [...], "env": {...} } } }
+        if let Some(servers_obj) = shared
+            .get("mcpServers")
+            .and_then(|v| v.as_object())
+        {
+            for (name, config) in servers_obj {
+                if let Some(server) = parse_mcp_server_config(name, config) {
+                    by_name.insert(name.clone(), server);
+                }
+            }
+        }
+    }
+
+    // 2. Per-persona servers (persona wins on name collision)
+    for server_val in persona_servers {
+        if let Some(name) = server_val.get("name").and_then(|v| v.as_str()) {
+            if let Some(server) = parse_mcp_server_config(name, server_val) {
+                by_name.insert(name.to_owned(), server);
+            }
+        }
+    }
+
+    // Return in deterministic order (sorted by name)
+    let mut servers: Vec<_> = by_name.into_values().collect();
+    servers.sort_by(|a, b| a.name.cmp(&b.name));
+    servers
+}
+
+/// Parse a single MCP server config from JSON.
+fn parse_mcp_server_config(name: &str, config: &serde_json::Value) -> Option<ResolvedMcpServer> {
+    let command = config.get("command").and_then(|v| v.as_str())?.to_owned();
+    let args = config
+        .get("args")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let env = config
+        .get("env")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(ResolvedMcpServer {
+        name: name.to_owned(),
+        command,
+        args,
+        env,
+    })
+}
+
+// ── Hooks resolution ──────────────────────────────────────────────────────────
+
+/// Resolve hooks to absolute paths (pack-relative → absolute).
+fn resolve_hooks(
+    hooks: Option<&crate::merge::HooksData>,
+    pack_dir: &Path,
+) -> Option<ResolvedHooks> {
+    let h = hooks?;
+    // Only return Some if at least one hook is set.
+    if h.on_start.is_none() && h.on_stop.is_none() {
+        return None;
+    }
+    Some(ResolvedHooks {
+        on_start: h.on_start.as_ref().map(|p| pack_dir.join(p)),
+        on_stop: h.on_stop.as_ref().map(|p| pack_dir.join(p)),
+    })
+}
+
+// ── Env var projection ────────────────────────────────────────────────────────
+
+/// Project persona config into goose subprocess env vars.
+///
+/// Pure function — does NOT read the current process env.
+/// ACP is responsible for filtering based on operator precedence (level 1).
+fn project_env_vars(persona: &LoadedPersona) -> Vec<(String, String)> {
+    let mut vars = Vec::new();
+
+    if let Some(model_str) = &persona.model {
+        let (provider, model_id) = split_model(model_str);
+        if let Some(p) = provider {
+            vars.push(("GOOSE_PROVIDER".to_owned(), p.to_owned()));
+        }
+        vars.push(("GOOSE_MODEL".to_owned(), model_id.to_owned()));
+    }
+
+    if let Some(temp) = persona.temperature {
+        vars.push(("GOOSE_TEMPERATURE".to_owned(), temp.to_string()));
+    }
+
+    if let Some(ctx) = persona.max_context_tokens {
+        vars.push(("GOOSE_CONTEXT_LIMIT".to_owned(), ctx.to_string()));
+    }
+
+    vars
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::merge::HooksData;
+
+    // ── compose_prompt ────────────────────────────────────────────────────
+
+    #[test]
+    fn compose_prompt_body_only() {
+        let result = compose_prompt("You are a bot.", None);
+        assert_eq!(result, "You are a bot.");
+    }
+
+    #[test]
+    fn compose_prompt_with_instructions() {
+        let result = compose_prompt("You are a bot.", Some("Follow the rules."));
+        assert!(result.starts_with("You are a bot."));
+        assert!(result.contains("# Team Instructions"));
+        assert!(result.contains("Follow the rules."));
+    }
+
+    #[test]
+    fn compose_prompt_empty_instructions_ignored() {
+        let result = compose_prompt("You are a bot.", Some("   "));
+        assert_eq!(result, "You are a bot.");
+    }
+
+    // ── resolve_model ─────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_model_with_provider() {
+        let m = resolve_model("anthropic:claude-sonnet-4-20250514").unwrap();
+        assert_eq!(m.provider, "anthropic");
+        assert_eq!(m.model_id, "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn resolve_model_without_provider() {
+        let m = resolve_model("gpt-4o").unwrap();
+        assert_eq!(m.provider, "");
+        assert_eq!(m.model_id, "gpt-4o");
+    }
+
+    #[test]
+    fn resolve_model_empty_returns_none() {
+        assert!(resolve_model("").is_none());
+        assert!(resolve_model("  ").is_none());
+    }
+
+    // ── resolve_triggers ──────────────────────────────────────────────────
+
+    #[test]
+    fn triggers_from_respond_to_data() {
+        let data = RespondToData {
+            mentions: false,
+            keywords: vec!["security".into(), "CVE".into()],
+            all_messages: false,
+        };
+        let t = resolve_triggers(Some(&data));
+        assert!(!t.mentions);
+        assert_eq!(t.keywords, vec!["security", "CVE"]);
+        assert!(!t.all_messages);
+    }
+
+    #[test]
+    fn triggers_default_when_none() {
+        let t = resolve_triggers(None);
+        assert!(t.mentions);
+        assert!(t.keywords.is_empty());
+        assert!(!t.all_messages);
+    }
+
+    // ── merge_mcp_servers ─────────────────────────────────────────────────
+
+    #[test]
+    fn mcp_merge_shared_only() {
+        let shared = serde_json::json!({
+            "mcpServers": {
+                "sprout-mcp": {
+                    "command": "npx",
+                    "args": ["-y", "sprout-mcp"],
+                    "env": { "TOKEN": "abc" }
+                }
+            }
+        });
+        let result = merge_mcp_servers(Some(&shared), &[]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "sprout-mcp");
+        assert_eq!(result[0].command, "npx");
+        assert_eq!(result[0].env, vec![("TOKEN".into(), "abc".into())]);
+    }
+
+    #[test]
+    fn mcp_merge_persona_wins_on_collision() {
+        let shared = serde_json::json!({
+            "mcpServers": {
+                "my-server": {
+                    "command": "old-cmd",
+                    "args": [],
+                    "env": {}
+                }
+            }
+        });
+        let persona = vec![serde_json::json!({
+            "name": "my-server",
+            "command": "new-cmd",
+            "args": ["--flag"],
+            "env": { "KEY": "val" }
+        })];
+        let result = merge_mcp_servers(Some(&shared), &persona);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].command, "new-cmd");
+        assert_eq!(result[0].args, vec!["--flag"]);
+    }
+
+    #[test]
+    fn mcp_merge_both_sources_combined() {
+        let shared = serde_json::json!({
+            "mcpServers": {
+                "alpha": { "command": "alpha-cmd" }
+            }
+        });
+        let persona = vec![serde_json::json!({
+            "name": "beta",
+            "command": "beta-cmd"
+        })];
+        let result = merge_mcp_servers(Some(&shared), &persona);
+        assert_eq!(result.len(), 2);
+        // Sorted by name
+        assert_eq!(result[0].name, "alpha");
+        assert_eq!(result[1].name, "beta");
+    }
+
+    #[test]
+    fn mcp_merge_no_shared_no_persona() {
+        let result = merge_mcp_servers(None, &[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn mcp_env_literals_preserved() {
+        // ${VAR_NAME} should pass through as-is (no interpolation in this PR)
+        let persona = vec![serde_json::json!({
+            "name": "test",
+            "command": "cmd",
+            "env": { "PATH": "${HOME}/bin", "SECRET": "${MY_SECRET}" }
+        })];
+        let result = merge_mcp_servers(None, &persona);
+        assert_eq!(result.len(), 1);
+        let env: HashMap<String, String> = result[0].env.iter().cloned().collect();
+        assert_eq!(env["PATH"], "${HOME}/bin");
+        assert_eq!(env["SECRET"], "${MY_SECRET}");
+    }
+
+    // ── resolve_hooks ─────────────────────────────────────────────────────
+
+    #[test]
+    fn hooks_resolved_to_absolute_paths() {
+        let data = HooksData {
+            on_start: Some("hooks/start.sh".into()),
+            on_stop: Some("hooks/stop.sh".into()),
+            on_message: None,
+        };
+        let pack_dir = Path::new("/packs/my-pack");
+        let h = resolve_hooks(Some(&data), pack_dir).unwrap();
+        assert_eq!(h.on_start.unwrap(), PathBuf::from("/packs/my-pack/hooks/start.sh"));
+        assert_eq!(h.on_stop.unwrap(), PathBuf::from("/packs/my-pack/hooks/stop.sh"));
+    }
+
+    #[test]
+    fn hooks_none_when_empty() {
+        let data = HooksData {
+            on_start: None,
+            on_stop: None,
+            on_message: None,
+        };
+        assert!(resolve_hooks(Some(&data), Path::new("/x")).is_none());
+    }
+
+    #[test]
+    fn hooks_none_when_absent() {
+        assert!(resolve_hooks(None, Path::new("/x")).is_none());
+    }
+
+    // ── project_env_vars ──────────────────────────────────────────────────
+
+    #[test]
+    fn env_vars_projected_from_model() {
+        let lp = stub_persona(Some("anthropic:claude-sonnet-4-20250514"), None, None);
+        let vars = project_env_vars(&lp);
+        let map: HashMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert_eq!(map["GOOSE_PROVIDER"], "anthropic");
+        assert_eq!(map["GOOSE_MODEL"], "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn env_vars_model_without_provider() {
+        let lp = stub_persona(Some("gpt-4o"), None, None);
+        let vars = project_env_vars(&lp);
+        let map: HashMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert!(!map.contains_key("GOOSE_PROVIDER"));
+        assert_eq!(map["GOOSE_MODEL"], "gpt-4o");
+    }
+
+    #[test]
+    fn env_vars_temperature_and_context() {
+        let lp = stub_persona(None, Some(0.7), Some(8192));
+        let vars = project_env_vars(&lp);
+        let map: HashMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert_eq!(map["GOOSE_TEMPERATURE"], "0.7");
+        assert_eq!(map["GOOSE_CONTEXT_LIMIT"], "8192");
+    }
+
+    #[test]
+    fn env_vars_empty_when_no_config() {
+        let lp = stub_persona(None, None, None);
+        let vars = project_env_vars(&lp);
+        assert!(vars.is_empty());
+    }
+
+    #[test]
+    fn env_vars_full_projection() {
+        let lp = stub_persona(Some("openai:gpt-4o"), Some(0.5), Some(16384));
+        let vars = project_env_vars(&lp);
+        assert_eq!(vars.len(), 4); // PROVIDER, MODEL, TEMPERATURE, CONTEXT_LIMIT
+    }
+
+    // ── Full pipeline (resolve_pack via filesystem) ───────────────────────
+
+    #[test]
+    fn resolve_minimal_pack() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::create_dir_all(dir.join(".plugin")).unwrap();
+        std::fs::create_dir_all(dir.join("agents")).unwrap();
+
+        std::fs::write(
+            dir.join(".plugin/plugin.json"),
+            r#"{
+                "id": "com.test.minimal",
+                "name": "Minimal Pack",
+                "version": "0.1.0",
+                "personas": ["agents/bot.persona.md"]
+            }"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.join("agents/bot.persona.md"),
+            "---\nname: bot\ndisplay_name: Bot\ndescription: A test bot.\n---\nYou are Bot.\n",
+        )
+        .unwrap();
+
+        let pack = resolve_pack(dir).unwrap();
+        assert_eq!(pack.id, "com.test.minimal");
+        assert_eq!(pack.personas.len(), 1);
+
+        let p = &pack.personas[0];
+        assert_eq!(p.name, "bot");
+        assert_eq!(p.system_prompt, "You are Bot.\n");
+        assert!(p.model.is_none());
+        assert!(p.triggers.mentions); // built-in default
+        assert!(p.mcp_servers.is_empty());
+        assert!(p.goose_env_vars.is_empty());
+    }
+
+    #[test]
+    fn resolve_pack_with_instructions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::create_dir_all(dir.join(".plugin")).unwrap();
+        std::fs::create_dir_all(dir.join("agents")).unwrap();
+
+        std::fs::write(
+            dir.join(".plugin/plugin.json"),
+            r#"{
+                "id": "com.test.instructions",
+                "name": "Instructions Pack",
+                "version": "1.0.0",
+                "personas": ["agents/bot.persona.md"],
+                "pack_instructions": "instructions.md"
+            }"#,
+        )
+        .unwrap();
+
+        std::fs::write(dir.join("instructions.md"), "Always be helpful.").unwrap();
+
+        std::fs::write(
+            dir.join("agents/bot.persona.md"),
+            "---\nname: bot\ndisplay_name: Bot\ndescription: A bot.\nmodel: anthropic:claude-sonnet-4-20250514\n---\nYou are Bot.\n",
+        )
+        .unwrap();
+
+        let pack = resolve_pack(dir).unwrap();
+        let p = &pack.personas[0];
+
+        // Prompt composed with instructions
+        assert!(p.system_prompt.contains("You are Bot."));
+        assert!(p.system_prompt.contains("# Team Instructions"));
+        assert!(p.system_prompt.contains("Always be helpful."));
+
+        // Model resolved
+        let m = p.model.as_ref().unwrap();
+        assert_eq!(m.provider, "anthropic");
+        assert_eq!(m.model_id, "claude-sonnet-4-20250514");
+
+        // Env vars projected
+        let env_map: HashMap<&str, &str> = p
+            .goose_env_vars
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(env_map["GOOSE_PROVIDER"], "anthropic");
+        assert_eq!(env_map["GOOSE_MODEL"], "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn resolve_multi_persona_pack() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::create_dir_all(dir.join(".plugin")).unwrap();
+        std::fs::create_dir_all(dir.join("agents")).unwrap();
+
+        std::fs::write(
+            dir.join(".plugin/plugin.json"),
+            r#"{
+                "id": "com.test.multi",
+                "name": "Multi Pack",
+                "version": "2.0.0",
+                "personas": ["agents/pip.persona.md", "agents/lep.persona.md"],
+                "defaults": {
+                    "model": "anthropic:claude-sonnet-4-20250514",
+                    "temperature": 0.7,
+                    "thread_replies": true
+                }
+            }"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.join("agents/pip.persona.md"),
+            "---\nname: pip\ndisplay_name: Pip\ndescription: The lead.\nmodel: anthropic:claude-4-opus-20250514\nsubscribe:\n  - '#reviews'\n---\nYou are Pip.\n",
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.join("agents/lep.persona.md"),
+            "---\nname: lep\ndisplay_name: Lep\ndescription: The analyst.\ntemperature: 0.3\n---\nYou are Lep.\n",
+        )
+        .unwrap();
+
+        let pack = resolve_pack(dir).unwrap();
+        assert_eq!(pack.personas.len(), 2);
+
+        let pip = pack.personas.iter().find(|p| p.name == "pip").unwrap();
+        let lep = pack.personas.iter().find(|p| p.name == "lep").unwrap();
+
+        // pip overrides model
+        assert_eq!(pip.model.as_ref().unwrap().model_id, "claude-4-opus-20250514");
+        // lep inherits model from defaults
+        assert_eq!(lep.model.as_ref().unwrap().model_id, "claude-sonnet-4-20250514");
+
+        // pip inherits temperature from defaults
+        assert_eq!(pip.temperature, Some(0.7));
+        // lep overrides temperature
+        assert_eq!(lep.temperature, Some(0.3));
+
+        // pip has explicit subscribe
+        assert_eq!(pip.subscribe, vec!["#reviews"]);
+        // lep has no subscribe (empty from defaults)
+        assert!(lep.subscribe.is_empty());
+
+        // Both inherit thread_replies from defaults
+        assert!(pip.thread_replies);
+        assert!(lep.thread_replies);
+    }
+
+    // ── Test helpers ──────────────────────────────────────────────────────
+
+    fn stub_persona(
+        model: Option<&str>,
+        temperature: Option<f64>,
+        max_context_tokens: Option<u64>,
+    ) -> LoadedPersona {
+        LoadedPersona {
+            source_path: PathBuf::from("test.persona.md"),
+            name: "test".into(),
+            display_name: "Test".into(),
+            description: "A test persona.".into(),
+            avatar: None,
+            model: model.map(str::to_owned),
+            temperature,
+            max_context_tokens,
+            subscribe: vec![],
+            respond_to: None,
+            thread_replies: true,
+            broadcast_replies: false,
+            skills: vec![],
+            mcp_servers: vec![],
+            hooks: None,
+            prompt: "You are a test.".into(),
+        }
+    }
+}
