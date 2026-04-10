@@ -283,6 +283,12 @@ const FFMPEG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 ///
 /// Spawns the child process, polls `try_wait()` every 500ms, and kills it
 /// if the deadline is exceeded. Returns the same `Output` as `Command::output()`.
+///
+/// **IMPORTANT**: callers MUST pass `-loglevel error` (or `quiet`) to ffmpeg.
+/// This function reads stderr only after the child exits. If ffmpeg writes
+/// enough progress/diagnostic output to fill the OS pipe buffer (~64 KiB),
+/// the child blocks on write() and never exits — causing a false timeout.
+/// `-loglevel error` suppresses progress spam, keeping stderr small.
 fn run_ffmpeg_with_timeout(
     cmd: &mut std::process::Command,
     timeout: std::time::Duration,
@@ -342,7 +348,7 @@ fn transcode_to_mp4(source: &std::path::Path) -> Result<std::path::PathBuf, Stri
 
     let result = run_ffmpeg_with_timeout(
         std::process::Command::new("ffmpeg")
-            .arg("-y")
+            .args(["-y", "-loglevel", "error"]) // suppress progress spam — prevents stderr pipe deadlock
             .arg("-i")
             .arg(source) // OsStr — handles non-UTF-8 paths on Unix
             .args([
@@ -398,7 +404,7 @@ fn extract_poster_frame(mp4_path: &std::path::Path) -> Result<std::path::PathBuf
     // Try seeking to 1s first (avoids black first frames from fade-ins).
     let result = run_ffmpeg_with_timeout(
         std::process::Command::new("ffmpeg")
-            .arg("-y")
+            .args(["-y", "-loglevel", "error"])
             .arg("-ss")
             .arg("1")
             .arg("-i")
@@ -422,7 +428,7 @@ fn extract_poster_frame(mp4_path: &std::path::Path) -> Result<std::path::PathBuf
         let _ = std::fs::remove_file(&output);
         let fallback = run_ffmpeg_with_timeout(
             std::process::Command::new("ffmpeg")
-                .arg("-y")
+                .args(["-y", "-loglevel", "error"])
                 .arg("-i")
                 .arg(mp4_path)
                 .args(["-vframes", "1", "-vf", "scale=640:-2", "-q:v", "2"])
