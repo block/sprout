@@ -17,6 +17,7 @@ type UserAvatarProps = {
   size?: UserAvatarSize;
   accent?: boolean;
   className?: string;
+  testId?: string;
 };
 
 export function UserAvatar({
@@ -25,6 +26,7 @@ export function UserAvatar({
   size = "md",
   accent = false,
   className,
+  testId,
 }: UserAvatarProps) {
   const [failedUrl, setFailedUrl] = React.useState<string | null>(null);
   const hasError = failedUrl === avatarUrl;
@@ -43,6 +45,7 @@ export function UserAvatar({
       <img
         alt={`${displayName} avatar`}
         className={cn(base, "bg-secondary object-cover")}
+        data-testid={testId ? `${testId}-image` : undefined}
         onError={() => setFailedUrl(avatarUrl)}
         referrerPolicy="no-referrer"
         src={rewriteRelayUrl(avatarUrl)}
@@ -59,6 +62,7 @@ export function UserAvatar({
           ? "bg-primary text-primary-foreground"
           : "bg-secondary text-secondary-foreground",
       )}
+      data-testid={testId ? `${testId}-fallback` : undefined}
     >
       {initials}
     </div>

@@ -194,6 +194,7 @@ export const MessageRow = React.memo(
                     accent={message.accent}
                     avatarUrl={message.avatarUrl ?? null}
                     displayName={message.author}
+                    testId="message-avatar"
                   />
                 </button>
               </UserProfilePopover>
@@ -203,6 +204,7 @@ export const MessageRow = React.memo(
                 avatarUrl={message.avatarUrl ?? null}
                 className="shrink-0"
                 displayName={message.author}
+                testId="message-avatar"
               />
             )}
           </div>
