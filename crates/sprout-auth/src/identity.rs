@@ -1,6 +1,6 @@
 //! Corporate identity mode for the Sprout relay.
 //!
-//! Supports proxy-based identity where an upstream reverse proxy (e.g. cf-doorman)
+//! Supports proxy-based identity where an upstream auth proxy
 //! injects identity JWTs. The relay extracts corporate identity claims and binds
 //! the client's self-generated pubkey to them.
 
@@ -15,7 +15,7 @@ pub enum IdentityMode {
     /// Identity mode is disabled — standard Nostr key-based authentication.
     #[default]
     Disabled,
-    /// A reverse proxy (e.g. cf-doorman) injects identity JWTs into requests.
+    /// An auth proxy injects identity JWTs into requests.
     /// All connections **must** present a valid identity JWT — no fallback.
     Proxy,
     /// Transitional mode: proxy identity is preferred for human users, but
@@ -67,7 +67,7 @@ pub struct IdentityConfig {
     /// JWT claim name containing the human-readable username.
     #[serde(default = "default_user_claim")]
     pub user_claim: String,
-    /// JWKS endpoint URL for the identity provider (e.g. cf-doorman).
+    /// JWKS endpoint URL for the identity provider (e.g. the auth proxy).
     /// Falls back to the main Okta/JWKS URI if empty.
     #[serde(default)]
     pub jwks_uri: String,
@@ -79,6 +79,12 @@ pub struct IdentityConfig {
     /// Falls back to the main Okta audience if empty.
     #[serde(default)]
     pub audience: String,
+    /// HTTP header containing the identity JWT injected by the auth proxy.
+    #[serde(default = "default_identity_jwt_header")]
+    pub identity_jwt_header: String,
+    /// HTTP header containing the device common name from the client certificate.
+    #[serde(default = "default_device_cn_header")]
+    pub device_cn_header: String,
 }
 
 impl Default for IdentityConfig {
@@ -90,6 +96,8 @@ impl Default for IdentityConfig {
             jwks_uri: String::new(),
             issuer: String::new(),
             audience: String::new(),
+            identity_jwt_header: default_identity_jwt_header(),
+            device_cn_header: default_device_cn_header(),
         }
     }
 }
@@ -104,6 +112,14 @@ fn default_uid_claim() -> String {
 
 fn default_user_claim() -> String {
     "user".to_string()
+}
+
+fn default_identity_jwt_header() -> String {
+    "x-forwarded-identity-token".to_string()
+}
+
+fn default_device_cn_header() -> String {
+    "x-block-client-cert-subject-cn".to_string()
 }
 
 // Custom serde for IdentityMode as a lowercase string.
@@ -174,5 +190,7 @@ mod tests {
         assert_eq!(config.mode, IdentityMode::Disabled);
         assert_eq!(config.uid_claim, "uid");
         assert_eq!(config.user_claim, "user");
+        assert_eq!(config.identity_jwt_header, "x-forwarded-identity-token");
+        assert_eq!(config.device_cn_header, "x-block-client-cert-subject-cn");
     }
 }

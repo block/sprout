@@ -179,13 +179,13 @@ The client must respond with `["AUTH", <signed-event>]` before submitting events
 | NIP-42 + Okta JWT | Challenge + JWKS-validated JWT in `auth_token` tag | Human SSO via Okta |
 | NIP-42 + API token | Challenge + `auth_token` tag, constant-time hash verify | Agent/service accounts |
 | HTTP Bearer JWT | `Authorization: Bearer <jwt>` header on REST endpoints | REST API clients |
-| NIP-42 + proxy identity | Identity JWT at upgrade + NIP-42 challenge | Corporate SSO via cf-doorman (proxy/hybrid mode) |
+| NIP-42 + proxy identity | Identity JWT at upgrade + NIP-42 challenge | Corporate SSO via auth proxy (proxy/hybrid mode) |
 
 On success, `ConnectionState.auth_state` transitions from `Pending` → `Authenticated(AuthContext)`. On failure → `Failed`. Unauthenticated EVENT/REQ messages are rejected with `["CLOSED", ...]` or `["OK", ..., false, "auth-required: ..."]`.
 
 #### Proxy Identity Mode (Corporate SSO)
 
-When `SPROUT_IDENTITY_MODE` is `proxy` or `hybrid`, the relay sits behind a trusted reverse proxy (cf-doorman) that injects an identity JWT via the `x-forwarded-identity-token` header. The flow adds a two-phase binding step:
+When `SPROUT_IDENTITY_MODE` is `proxy` or `hybrid`, the relay sits behind a trusted auth proxy that injects an identity JWT via the configured header (`SPROUT_IDENTITY_JWT_HEADER`). The flow adds a two-phase binding step:
 
 1. **WS Upgrade** — The relay validates the identity JWT (signature + expiry via JWKS), extracts `uid` and `username` claims, and stashes them as `PendingProxyIdentity` on the connection. No pubkey is known yet.
 2. **NIP-42 AUTH** — The client signs the challenge with its Nostr keypair. The AUTH handler verifies the signature, then calls `bind_or_validate_identity(uid, device_cn, pubkey)` to create or validate the binding. On success, `AuthState` transitions to `Authenticated`.
@@ -837,7 +837,7 @@ Every security-sensitive operation uses an explicit, verified pattern. No implic
 | NIP-42 timestamp | ±60 second tolerance — prevents replay attacks |
 | AUTH events | Never stored in Postgres, never logged in audit chain |
 | Scopeless JWT | Defaults to `[MessagesRead]` only — least-privilege default |
-| Proxy identity | JWT validated via JWKS; headers trusted from cf-doorman only; `require_auth_token` forced true |
+| Proxy identity | JWT validated via JWKS; headers trusted from auth proxy only; `require_auth_token` forced true |
 
 ### Input Validation
 

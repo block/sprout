@@ -39,7 +39,7 @@ pub struct PendingProxyIdentity {
     pub uid: String,
     /// Human-readable username from the identity JWT.
     pub username: String,
-    /// Device common name from the `x-block-client-cert-subject-cn` header.
+    /// Device common name from the client certificate header.
     pub device_cn: String,
     /// Permission scopes granted by the identity JWT.
     pub scopes: Vec<sprout_auth::Scope>,

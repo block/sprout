@@ -95,10 +95,8 @@ pub async fn initialize_identity(
             let nip98_b64 = {
                 let keys = state.keys.lock().map_err(|e| e.to_string())?;
                 let tags = vec![
-                    Tag::parse(vec!["u", &register_url])
-                        .map_err(|e| format!("u tag: {e}"))?,
-                    Tag::parse(vec!["method", "POST"])
-                        .map_err(|e| format!("method tag: {e}"))?,
+                    Tag::parse(vec!["u", &register_url]).map_err(|e| format!("u tag: {e}"))?,
+                    Tag::parse(vec!["method", "POST"]).map_err(|e| format!("method tag: {e}"))?,
                 ];
                 let event = EventBuilder::new(Kind::HttpAuth, "")
                     .tags(tags)

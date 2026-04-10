@@ -91,12 +91,15 @@ use sprout_auth::Scope;
 
 use crate::state::AppState;
 
-/// Extract the device common name from the `x-block-client-cert-subject-cn` header,
-/// defaulting to `"default"` when the header is absent (e.g. Cloudflare Tunnel
-/// deployments without mTLS client certificates).
-pub(crate) fn extract_device_cn(headers: &axum::http::HeaderMap) -> &str {
+/// Extract the device common name from the configured device CN header,
+/// defaulting to `"default"` when the header is absent (e.g. deployments
+/// without mTLS client certificates).
+pub(crate) fn extract_device_cn<'a>(
+    headers: &'a axum::http::HeaderMap,
+    header_name: &str,
+) -> &'a str {
     headers
-        .get("x-block-client-cert-subject-cn")
+        .get(header_name)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("default")
 }
@@ -114,7 +117,7 @@ pub enum RestAuthMethod {
     Nip98,
     /// `X-Pubkey: <hex>` — dev mode only (`require_auth_token=false`).
     DevPubkey,
-    /// `x-forwarded-identity-token` — proxy identity mode (cf-doorman).
+    /// Identity JWT header — proxy identity mode (auth proxy).
     ProxyIdentity,
 }
 
@@ -157,7 +160,7 @@ async fn reject_if_identity_bound(
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({
                 "error": "identity_jwt_required",
-                "message": "this pubkey is bound to a corporate identity — present x-forwarded-identity-token"
+                "message": "this pubkey is bound to a corporate identity — connect via the auth proxy"
             })),
         ));
     }
@@ -184,7 +187,7 @@ pub(crate) async fn extract_auth_context(
     let require_auth = state.config.require_auth_token;
 
     // ── 0. Proxy / hybrid identity mode ──────────────────────────────────
-    // When identity_mode is proxy or hybrid, cf-doorman injects
+    // When identity_mode is proxy or hybrid, the auth proxy injects
     // x-forwarded-identity-token for human users. The relay validates the JWT,
     // extracts uid + device_cn, and looks up the pubkey binding from the DB.
     //   - Proxy:  header is mandatory — reject if missing.
@@ -193,7 +196,7 @@ pub(crate) async fn extract_auth_context(
     let identity_mode = &state.auth.identity_config().mode;
     if identity_mode.is_proxy() {
         if let Some(identity_jwt) = headers
-            .get("x-forwarded-identity-token")
+            .get(&*state.auth.identity_config().identity_jwt_header)
             .and_then(|v| v.to_str().ok())
         {
             let (identity_claims, scopes) = state
@@ -208,7 +211,8 @@ pub(crate) async fn extract_auth_context(
                     )
                 })?;
 
-            let device_cn = extract_device_cn(headers);
+            let device_cn =
+                extract_device_cn(headers, &state.auth.identity_config().device_cn_header);
 
             // Look up the pubkey binding for this (uid, device_cn).
             let binding = state
@@ -255,14 +259,12 @@ pub(crate) async fn extract_auth_context(
                 channel_ids: None,
             });
         } else if *identity_mode == sprout_auth::IdentityMode::Proxy {
-            tracing::warn!(
-                "auth: proxy mode enabled but x-forwarded-identity-token header missing"
-            );
+            tracing::warn!("auth: proxy mode enabled but identity JWT header missing");
             return Err((
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({
                     "error": "identity_token_required",
-                    "message": "x-forwarded-identity-token header is required in proxy identity mode"
+                    "message": "identity JWT header is required in proxy identity mode"
                 })),
             ));
         }

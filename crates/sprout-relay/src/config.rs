@@ -155,9 +155,15 @@ impl Config {
         if let Ok(audience) = std::env::var("SPROUT_IDENTITY_AUDIENCE") {
             auth.identity.audience = audience;
         }
+        if let Ok(jwt_header) = std::env::var("SPROUT_IDENTITY_JWT_HEADER") {
+            auth.identity.identity_jwt_header = jwt_header;
+        }
+        if let Ok(cn_header) = std::env::var("SPROUT_IDENTITY_DEVICE_CN_HEADER") {
+            auth.identity.device_cn_header = cn_header;
+        }
 
         // When identity mode is active the relay sits behind a trusted proxy
-        // (cf-doorman) — force require_auth_token so the NIP-42 fallback path
+        // (auth proxy) — force require_auth_token so the NIP-42 fallback path
         // cannot be used with bare keypair-only auth.
         let require_auth_token = if identity_mode.is_proxy() {
             if !require_auth_token {
@@ -166,8 +172,8 @@ impl Config {
                 );
             }
             tracing::warn!(
-                "Identity mode: {identity_mode} — relay trusts x-forwarded-identity-token headers. \
-                 Ensure the relay is reachable ONLY via the trusted reverse proxy (cf-doorman). \
+                "Identity mode: {identity_mode} — relay trusts proxy-injected identity headers. \
+                 Ensure the relay is reachable ONLY via the trusted auth proxy. \
                  Direct access to the relay port would allow header injection."
             );
             auth.okta.require_token = true;

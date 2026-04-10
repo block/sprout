@@ -196,7 +196,8 @@ pub fn build_health_router(state: Arc<AppState>) -> Router {
 /// TCP connections populate it via `into_make_service_with_connect_info`; UDS
 /// connections fall back to `0.0.0.0:0`.
 ///
-/// In proxy identity mode, the `x-forwarded-identity-token` header is validated
+/// In proxy identity mode, the identity JWT header (configured via
+/// `SPROUT_IDENTITY_JWT_HEADER`) is validated
 /// at upgrade time and the connection is pre-authenticated (NIP-42 is skipped).
 async fn nip11_or_ws_handler(
     State(state): State<Arc<AppState>>,
@@ -227,12 +228,16 @@ async fn nip11_or_ws_handler(
     let identity_mode = &state.auth.identity_config().mode;
     let proxy_identity = if identity_mode.is_proxy() {
         match headers
-            .get("x-forwarded-identity-token")
+            .get(&*state.auth.identity_config().identity_jwt_header)
             .and_then(|v| v.to_str().ok())
         {
             Some(jwt) => match state.auth.validate_identity_jwt(jwt).await {
                 Ok((identity_claims, scopes)) => {
-                    let device_cn = crate::api::extract_device_cn(&headers).to_string();
+                    let device_cn = crate::api::extract_device_cn(
+                        &headers,
+                        &state.auth.identity_config().device_cn_header,
+                    )
+                    .to_string();
                     Some(crate::connection::PendingProxyIdentity {
                         uid: identity_claims.uid,
                         username: identity_claims.username,
@@ -246,7 +251,7 @@ async fn nip11_or_ws_handler(
                 }
             },
             None if *identity_mode == sprout_auth::IdentityMode::Proxy => {
-                tracing::warn!("ws: proxy mode enabled but x-forwarded-identity-token missing");
+                tracing::warn!("ws: proxy mode enabled but identity JWT header missing");
                 return (StatusCode::UNAUTHORIZED, "identity token required").into_response();
             }
             // Hybrid: no identity token — proceed to standard NIP-42 auth.

@@ -337,7 +337,7 @@ impl AuthService {
 
     /// Validate a proxy-injected identity JWT and extract the corporate identity claims.
     ///
-    /// Used in proxy identity mode where cf-doorman injects `x-forwarded-identity-token`.
+    /// Used in proxy identity mode where the auth proxy injects an identity JWT.
     /// Validates the JWT via JWKS, extracts the `uid` and `user` claims.
     ///
     /// Uses identity-specific JWKS/issuer/audience config when set, falling back to the

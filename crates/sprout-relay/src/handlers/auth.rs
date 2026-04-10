@@ -260,8 +260,8 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         conn.send(RelayMessage::ok(
                             &event_id_hex,
                             false,
-                            "auth-required: this pubkey is bound to a corporate identity — present x-forwarded-identity-token",
-                        ));
+                            "auth-required: this pubkey is bound to a corporate identity — connect via the auth proxy",
+                            ));
                         return;
                     }
 
@@ -347,7 +347,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 conn.send(RelayMessage::ok(
                     &event_id_hex,
                     false,
-                    "auth-required: this pubkey is bound to a corporate identity — present x-forwarded-identity-token",
+                    "auth-required: this pubkey is bound to a corporate identity — connect via the auth proxy",
                 ));
                 return;
             }

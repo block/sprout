@@ -28,7 +28,7 @@ pub struct RelayInfo {
     pub version: String,
     /// Protocol and resource limits advertised to clients.
     pub limitation: Option<RelayLimitation>,
-    /// Corporate identity mode: `"proxy"` or `"disabled"`.
+    /// Corporate identity mode: `"disabled"`, `"proxy"`, or `"hybrid"`.
     pub identity_mode: String,
 }
 

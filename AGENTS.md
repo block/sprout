@@ -93,8 +93,8 @@ thread root events. Any code that inserts replies must update these counters —
 check existing reply handlers for the pattern.
 
 **Identity binding (proxy mode)**: In corporate deployments the relay sits
-behind a trusted reverse proxy (cf-doorman) that injects
-`x-forwarded-identity-token` and `x-block-client-cert-subject-cn` headers.
+behind a trusted auth proxy that injects identity JWT and device CN headers
+(configured via `SPROUT_IDENTITY_JWT_HEADER` and `SPROUT_IDENTITY_DEVICE_CN_HEADER`).
 `SPROUT_IDENTITY_MODE` controls behaviour:
 
 - `disabled` (default) — standard Nostr key-based auth only.

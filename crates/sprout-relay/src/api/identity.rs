@@ -8,10 +8,10 @@
 //!
 //! # Trusted-proxy assumption
 //!
-//! The relay trusts the `x-forwarded-identity-token` and
-//! `x-block-client-cert-subject-cn` headers unconditionally.
-//! It MUST be deployed behind a trusted reverse proxy (cf-doorman) that is the
-//! sole source of these headers.
+//! The relay trusts the identity JWT and device CN headers (configured via
+//! `SPROUT_IDENTITY_JWT_HEADER` and `SPROUT_IDENTITY_DEVICE_CN_HEADER`)
+//! unconditionally.  It MUST be deployed behind a trusted auth proxy that is
+//! the sole source of these headers.
 
 use std::sync::Arc;
 
@@ -32,8 +32,8 @@ use crate::state::AppState;
 ///
 /// # Headers
 ///
-/// - `x-forwarded-identity-token`: Corporate identity JWT (injected by cf-doorman)
-/// - `x-block-client-cert-subject-cn`: Device identifier from client certificate
+/// - Identity JWT header (`SPROUT_IDENTITY_JWT_HEADER`): Corporate identity JWT (injected by auth proxy)
+/// - Device CN header (`SPROUT_IDENTITY_DEVICE_CN_HEADER`): Device identifier from client certificate
 /// - `Authorization: Nostr <base64>`: NIP-98 signed event proving pubkey ownership
 ///
 /// # Binding semantics
@@ -68,14 +68,14 @@ pub async fn identity_register(
 
     // 1. Validate proxy identity JWT → extract uid + username
     let identity_jwt = headers
-        .get("x-forwarded-identity-token")
+        .get(&*state.auth.identity_config().identity_jwt_header)
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| {
             (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({
                     "error": "identity_token_required",
-                    "message": "x-forwarded-identity-token header is required"
+                    "message": "identity JWT header is required"
                 })),
             )
         })?;
@@ -93,7 +93,8 @@ pub async fn identity_register(
         })?;
 
     // 2. Extract device identifier from client certificate CN (fallback to "default")
-    let device_cn = super::extract_device_cn(&headers);
+    let device_cn =
+        super::extract_device_cn(&headers, &state.auth.identity_config().device_cn_header);
 
     // 3. Verify NIP-98 auth to prove pubkey ownership
     let auth_header = headers
