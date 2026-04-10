@@ -45,7 +45,7 @@ const overrides = new Map([
   ["src-tauri/src/commands/agents.rs", 849], // remote agent lifecycle routing (local + provider branches) + scope enforcement; rustfmt adds line breaks around long tuple/closure blocks
   ["src-tauri/src/managed_agents/runtime.rs", 650], // KNOWN_AGENT_BINARIES const + process_belongs_to_us FFI (macOS proc_name + Linux /proc/comm) + terminate_process + start/stop/sync lifecycle
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests
-  ["src/features/agents/hooks.ts", 520], // agent query/mutation surface now includes built-in persona library activation
+  ["src/features/agents/hooks.ts", 550], // agent query/mutation surface + seedManagedAgentsCache optimistic helper
   ["src/features/agents/ui/AgentsView.tsx", 850], // remote agent lifecycle controls + persona/team management + built-in catalog/library state orchestration
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display

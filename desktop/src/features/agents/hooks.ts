@@ -78,6 +78,24 @@ export type EnsureGooseInChannelResult = AttachManagedAgentToChannelResult & {
   created: boolean;
 };
 
+/**
+ * Optimistically append newly-created agents to the managed-agents cache so
+ * that system messages (e.g. "You added Gears to the channel") can resolve the
+ * bot's display name immediately, without waiting for the query refetch.
+ */
+function seedManagedAgentsCache(
+  queryClient: ReturnType<typeof useQueryClient>,
+  agents: ManagedAgent[],
+) {
+  if (agents.length === 0) return;
+  queryClient.setQueryData<ManagedAgent[]>(managedAgentsQueryKey, (old) => {
+    const existing = old ?? [];
+    const existingPubkeys = new Set(existing.map((a) => a.pubkey));
+    const newAgents = agents.filter((a) => !existingPubkeys.has(a.pubkey));
+    return newAgents.length > 0 ? [...existing, ...newAgents] : existing;
+  });
+}
+
 async function invalidateAgentQueries(
   queryClient: ReturnType<typeof useQueryClient>,
   channelId: string | null,
@@ -344,6 +362,9 @@ export function useAttachManagedAgentToChannelMutation(
 
       return attachManagedAgentToChannel(channelId, input);
     },
+    onSuccess: (result) => {
+      seedManagedAgentsCache(queryClient, [result.agent]);
+    },
     onSettled: async () => {
       await invalidateAgentQueries(queryClient, channelId);
     },
@@ -363,6 +384,9 @@ export function useEnsureChannelAgentPresetMutation(channelId: string | null) {
 
       return ensureChannelAgentPresetInChannel(channelId, input);
     },
+    onSuccess: (result) => {
+      seedManagedAgentsCache(queryClient, [result.agent]);
+    },
     onSettled: async () => {
       await invalidateAgentQueries(queryClient, channelId);
     },
@@ -381,6 +405,9 @@ export function useCreateChannelManagedAgentMutation(channelId: string | null) {
       }
 
       return createChannelManagedAgent(channelId, input);
+    },
+    onSuccess: (result) => {
+      seedManagedAgentsCache(queryClient, [result.agent]);
     },
     onSettled: async () => {
       await invalidateAgentQueries(queryClient, channelId);
@@ -402,6 +429,12 @@ export function useCreateChannelManagedAgentsMutation(
       }
 
       return createChannelManagedAgents(channelId, inputs);
+    },
+    onSuccess: (result) => {
+      seedManagedAgentsCache(
+        queryClient,
+        result.successes.map((s) => s.agent),
+      );
     },
     onSettled: async () => {
       await invalidateAgentQueries(queryClient, channelId);
@@ -435,6 +468,9 @@ export function useEnsureGooseInChannelMutation(channelId: string | null) {
         started: attached.started,
         created: attached.created,
       };
+    },
+    onSuccess: (result) => {
+      seedManagedAgentsCache(queryClient, [result.agent]);
     },
     onSettled: async () => {
       await invalidateAgentQueries(queryClient, channelId);
