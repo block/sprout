@@ -138,9 +138,12 @@ export function EditAgentDialog({
             : undefined,
       };
 
-      const updated = await updateMutation.mutateAsync(input);
+      const result = await updateMutation.mutateAsync(input);
+      if (result.profileSyncError) {
+        console.warn("Relay profile sync failed:", result.profileSyncError);
+      }
       handleOpenChange(false);
-      onUpdated?.(updated);
+      onUpdated?.(result.agent);
     } catch {
       // React Query stores the error; keep dialog open and render it inline.
     }

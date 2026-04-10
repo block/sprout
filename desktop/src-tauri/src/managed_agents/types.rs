@@ -312,6 +312,13 @@ pub struct UpdateManagedAgentRequest {
     pub mcp_command: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateManagedAgentResponse {
+    pub agent: ManagedAgentSummary,
+    pub profile_sync_error: Option<String>,
+}
+
 /// Response from `get_agent_models` — normalized model info for the frontend.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

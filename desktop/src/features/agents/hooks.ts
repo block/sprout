@@ -202,13 +202,13 @@ export function useUpdateManagedAgentMutation() {
 
   return useMutation({
     mutationFn: (input: UpdateManagedAgentInput) => updateManagedAgent(input),
-    onSuccess: (updated) => {
+    onSuccess: (result) => {
       queryClient.setQueryData<ManagedAgent[]>(
         managedAgentsQueryKey,
         (current) => {
           if (!current) return current;
           return current.map((agent) =>
-            agent.pubkey === updated.pubkey ? updated : agent,
+            agent.pubkey === result.agent.pubkey ? result.agent : agent,
           );
         },
       );
