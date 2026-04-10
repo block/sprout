@@ -105,13 +105,27 @@ function createMarkdownComponents(
       <h3 className="font-semibold tracking-tight">{children}</h3>
     ),
     hr: () => <hr className="border-border/80" />,
-    img: ({ alt, src }) => (
-      <img
-        alt={alt}
-        className="max-h-96 rounded-2xl border border-border/70 object-cover"
-        src={src ? rewriteRelayUrl(src) : src}
-      />
-    ),
+    img: ({ alt, src }) => {
+      const resolvedSrc = src ? rewriteRelayUrl(src) : src;
+      if (resolvedSrc?.endsWith(".mp4")) {
+        return (
+          // biome-ignore lint/a11y/useMediaCaption: user-uploaded video, no captions available
+          <video
+            controls
+            preload="metadata"
+            className="max-h-96 rounded-2xl border border-border/70"
+            src={resolvedSrc}
+          />
+        );
+      }
+      return (
+        <img
+          alt={alt}
+          className="max-h-96 rounded-2xl border border-border/70 object-cover"
+          src={resolvedSrc}
+        />
+      );
+    },
     li: ({ children }) => <li className={listItemClassName}>{children}</li>,
     ol: ({ children }) => (
       <ol className={cn("list-decimal", listClassName)}>{children}</ol>

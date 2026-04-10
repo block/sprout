@@ -231,12 +231,18 @@ async fn handle_sprout_media(
 
     let upstream_url = format!("{base}{path_and_query}");
 
-    let result = state
+    // Forward Range header if present — enables video seeking through the proxy.
+    let mut upstream = state
         .http_client
         .get(&upstream_url)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await;
+        .timeout(std::time::Duration::from_secs(60));
+    if let Some(range) = request.headers().get("range") {
+        if let Ok(v) = range.to_str() {
+            upstream = upstream.header("range", v);
+        }
+    }
+
+    let result = upstream.send().await;
 
     match result {
         Ok(resp) => {
@@ -248,12 +254,41 @@ async fn handle_sprout_media(
                 .unwrap_or("application/octet-stream")
                 .to_string();
 
+            // Propagate range-related headers so <video> seeking works.
+            let content_range = resp
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let accept_ranges = resp
+                .headers()
+                .get("accept-ranges")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let content_length = resp
+                .headers()
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
             match resp.bytes().await {
-                Ok(bytes) => http::Response::builder()
-                    .status(status)
-                    .header("content-type", &content_type)
-                    .body(bytes.to_vec())
-                    .unwrap_or_else(|_| error_response(500, "response build failed")),
+                Ok(bytes) => {
+                    let mut builder = http::Response::builder()
+                        .status(status)
+                        .header("content-type", &content_type);
+                    if let Some(ref cr) = content_range {
+                        builder = builder.header("content-range", cr);
+                    }
+                    if let Some(ref ar) = accept_ranges {
+                        builder = builder.header("accept-ranges", ar);
+                    }
+                    if let Some(ref cl) = content_length {
+                        builder = builder.header("content-length", cl);
+                    }
+                    builder
+                        .body(bytes.to_vec())
+                        .unwrap_or_else(|_| error_response(500, "response build failed"))
+                }
                 Err(_) => error_response(502, "failed to read upstream body"),
             }
         }

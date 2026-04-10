@@ -7,6 +7,7 @@ export type ImetaEntry = {
   blurhash?: string;
   alt?: string;
   thumb?: string;
+  duration?: number;
 };
 
 export function parseImetaTags(tags: string[][]): Map<string, ImetaEntry> {
@@ -43,6 +44,9 @@ export function parseImetaTags(tags: string[][]): Map<string, ImetaEntry> {
           break;
         case "thumb":
           entry.thumb = val;
+          break;
+        case "duration":
+          entry.duration = parseFloat(val);
           break;
       }
     }

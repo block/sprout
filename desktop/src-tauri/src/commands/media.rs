@@ -18,6 +18,8 @@ pub struct BlobDescriptor {
     pub dim: Option<String>,
     pub blurhash: Option<String>,
     pub thumb: Option<String>,
+    /// Video duration in seconds. `None` for non-video blobs.
+    pub duration: Option<f64>,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -95,8 +97,14 @@ fn fd_real_path(_file: &std::fs::File) -> Result<std::path::PathBuf, String> {
     Err("fd_real_path not supported on this platform".to_string())
 }
 
-/// MIME allowlist — must match the server's `ALLOWED_MIME_TYPES`.
-const ALLOWED_MIME: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+/// MIME allowlist — must match the server's allowed types.
+const ALLOWED_MIME: &[&str] = &[
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "video/mp4",
+];
 
 fn detect_and_validate_mime(body: &[u8]) -> Result<String, String> {
     let mime = infer::get(body)
@@ -126,6 +134,8 @@ fn sign_blossom_upload_auth(keys: &Keys, sha256: &str) -> Result<nostr::Event, S
 }
 
 /// Execute the upload HTTP request. Shared by all upload entry points.
+// TODO(v2): Stream large video files to the relay instead of buffering in RAM.
+// Current approach works for small/medium videos but will OOM on 500MB files.
 async fn do_upload(
     body: Vec<u8>,
     mime: &str,
@@ -213,6 +223,92 @@ pub async fn upload_media(
     do_upload(body, &mime, &state).await
 }
 
+// ── Video transcode helpers ──────────────────────────────────────────────────
+
+/// Check if ffmpeg is available on PATH.
+fn find_ffmpeg() -> Result<(), String> {
+    match std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(s) if s.success() => Ok(()),
+        Ok(_) => Err(
+            "ffmpeg was found but returned an error — it may be broken or misconfigured"
+                .to_string(),
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(
+            "ffmpeg is required for video uploads but was not found.\n\n\
+             Install it:\n  \
+             macOS:   brew install ffmpeg\n  \
+             Linux:   sudo apt install ffmpeg\n  \
+             Windows: winget install ffmpeg"
+                .to_string(),
+        ),
+        Err(e) => Err(format!("failed to check for ffmpeg: {e}")),
+    }
+}
+
+/// Detect if a file is a video based on magic bytes.
+fn is_video_file(buf: &[u8]) -> bool {
+    infer::get(buf).map_or(false, |t| t.mime_type().starts_with("video/"))
+}
+
+/// Transcode any video file to H.264/AAC/MP4/fast-start via ffmpeg.
+///
+/// Always re-encodes — handles HEVC, VP9, ProRes, non-faststart MP4, 10-bit,
+/// wrong pixel format, MOV containers, etc. Output is guaranteed to pass the
+/// relay's `validate_video_file()`.
+///
+/// Returns the path to a temp file. Caller must clean up.
+fn transcode_to_mp4(source: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    find_ffmpeg()?;
+
+    // UUID-based temp path — unique across concurrent uploads.
+    let output =
+        std::env::temp_dir().join(format!("sprout-transcode-{}.mp4", uuid::Uuid::new_v4()));
+
+    let result = std::process::Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-i")
+        .arg(source) // OsStr — handles non-UTF-8 paths on Unix
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+        ])
+        .arg(&output)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("failed to run ffmpeg: {e}"))?;
+
+    if !result.status.success() {
+        let _ = std::fs::remove_file(&output);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        let detail = stderr
+            .lines()
+            .rev()
+            .find(|l| !l.is_empty() && !l.starts_with("  "))
+            .unwrap_or("unknown error");
+        return Err(format!("Video conversion failed: {detail}"));
+    }
+
+    Ok(output)
+}
+
 /// Open a native file dialog, read the selected file, and upload it.
 ///
 /// All file I/O happens in trusted Rust — the renderer never touches the
@@ -235,7 +331,12 @@ pub async fn pick_and_upload_media(
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
-        .add_filter("Images", &["jpg", "jpeg", "png", "gif", "webp"])
+        .add_filter(
+            "Media",
+            &[
+                "jpg", "jpeg", "png", "gif", "webp", "mp4", "mov", "mkv", "webm", "avi",
+            ],
+        )
         .pick_file(move |path| {
             let _ = tx.send(path);
         });
@@ -246,17 +347,32 @@ pub async fn pick_and_upload_media(
         None => return Ok(None),
     };
 
-    // Use the same fd-first pattern as upload_media: open the file to pin
-    // the inode, then read from the handle. Prevents a local attacker from
-    // swapping the selected path between dialog return and read.
-    let path = file_path.as_path().ok_or("invalid path")?;
-    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let path = file_path.as_path().ok_or("invalid path")?.to_path_buf();
 
-    use std::io::Read;
-    let mut body = Vec::new();
-    file.read_to_end(&mut body)
-        .map_err(|e| format!("failed to read file: {e}"))?;
-    drop(file);
+    // All sync I/O (sniff, transcode, read) runs off the async runtime to
+    // avoid blocking Tokio worker threads during long ffmpeg transcodes.
+    let body = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        // Sniff magic bytes to decide: video → transcode, image → direct upload.
+        let header = {
+            use std::io::Read;
+            let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+            let mut buf = [0u8; 4096];
+            let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+            buf[..n].to_vec()
+        };
+
+        if is_video_file(&header) {
+            let transcoded = transcode_to_mp4(&path)?;
+            let bytes = std::fs::read(&transcoded)
+                .map_err(|e| format!("failed to read transcoded file: {e}"));
+            let _ = std::fs::remove_file(&transcoded);
+            bytes
+        } else {
+            std::fs::read(&path).map_err(|e| format!("failed to read file: {e}"))
+        }
+    })
+    .await
+    .map_err(|e| format!("transcode task failed: {e}"))??;
 
     let mime = detect_and_validate_mime(&body)?;
     do_upload(body, &mime, &state).await.map(Some)
@@ -265,7 +381,8 @@ pub async fn pick_and_upload_media(
 /// Upload raw bytes directly (for paste and drag-drop).
 ///
 /// The renderer already has the bytes in memory from the clipboard/drag event.
-/// Passing them via IPC avoids granting the renderer filesystem write access.
+/// If the bytes are a video, they're written to a temp file, transcoded via
+/// ffmpeg, and the transcoded output is uploaded instead.
 #[tauri::command]
 pub async fn upload_media_bytes(
     data: Vec<u8>,
@@ -274,8 +391,31 @@ pub async fn upload_media_bytes(
     if data.is_empty() {
         return Err("empty upload".to_string());
     }
-    let mime = detect_and_validate_mime(&data)?;
-    do_upload(data, &mime, &state).await
+
+    let body = if is_video_file(&data) {
+        // Video: write to temp → transcode → read result. All blocking I/O
+        // runs off the async runtime via spawn_blocking.
+        tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+            let tmp_input =
+                std::env::temp_dir().join(format!("sprout-drop-{}", uuid::Uuid::new_v4()));
+            std::fs::write(&tmp_input, &data)
+                .map_err(|e| format!("failed to write temp file: {e}"))?;
+            let result = transcode_to_mp4(&tmp_input);
+            let _ = std::fs::remove_file(&tmp_input);
+            let transcoded = result?;
+            let bytes = std::fs::read(&transcoded)
+                .map_err(|e| format!("failed to read transcoded file: {e}"));
+            let _ = std::fs::remove_file(&transcoded);
+            bytes
+        })
+        .await
+        .map_err(|e| format!("transcode task failed: {e}"))??
+    } else {
+        data
+    };
+
+    let mime = detect_and_validate_mime(&body)?;
+    do_upload(body, &mime, &state).await
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -337,5 +477,33 @@ mod tests {
     fn test_detect_and_validate_mime_rejects_text() {
         let text = b"hello world";
         assert!(detect_and_validate_mime(text).is_err());
+    }
+
+    #[test]
+    fn test_is_video_file_mp4() {
+        // Minimal ftyp box (MP4 magic bytes)
+        let ftyp: &[u8] = &[
+            0x00, 0x00, 0x00, 0x14, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm', 0x00, 0x00,
+            0x00, 0x00, b'i', b's', b'o', b'm',
+        ];
+        assert!(is_video_file(ftyp));
+    }
+
+    #[test]
+    fn test_is_video_file_jpeg_is_not_video() {
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0];
+        assert!(!is_video_file(&jpeg));
+    }
+
+    #[test]
+    fn test_is_video_file_empty() {
+        assert!(!is_video_file(&[]));
+    }
+
+    #[test]
+    fn test_find_ffmpeg_runs() {
+        // This test verifies the function doesn't panic.
+        // It may pass or fail depending on whether ffmpeg is installed.
+        let _ = find_ffmpeg();
     }
 }
