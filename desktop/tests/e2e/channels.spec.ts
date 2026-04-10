@@ -29,6 +29,29 @@ async function openMembersSidebar(
   await expect(page.getByTestId("members-sidebar")).toBeVisible();
 }
 
+async function waitForMockLiveSubscription(
+  page: import("@playwright/test").Page,
+  channelName: string,
+) {
+  await expect
+    .poll(async () => {
+      return page.evaluate((currentChannelName) => {
+        return (
+          (
+            window as Window & {
+              __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+                channelName: string;
+              }) => boolean;
+            }
+          ).__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            channelName: currentChannelName,
+          }) ?? false
+        );
+      }, channelName);
+    })
+    .toBe(true);
+}
+
 async function openMemberMenu(
   page: import("@playwright/test").Page,
   pubkey: string,
@@ -452,7 +475,7 @@ test("shows and clears typing indicators for active channel bots", async ({
 
   await page.getByTestId("channel-agents").click();
   await expect(page.getByTestId("chat-title")).toHaveText("agents");
-  await page.waitForTimeout(300);
+  await waitForMockLiveSubscription(page, "agents");
 
   await page.evaluate((pubkey) => {
     window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
@@ -495,7 +518,7 @@ test("typing indicator shows avatars and maintains stable name order", async ({
 
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
-  await page.waitForTimeout(300);
+  await waitForMockLiveSubscription(page, "general");
 
   // Alice starts typing first
   await page.evaluate((pubkey) => {
