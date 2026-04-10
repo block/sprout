@@ -174,7 +174,11 @@ impl AcpClient {
     /// Spawn the agent binary as a subprocess and connect to its stdio pipes.
     ///
     /// After spawning, call [`initialize`](Self::initialize) before any other method.
-    pub async fn spawn(command: &str, args: &[String]) -> Result<Self, AcpError> {
+    pub async fn spawn(
+        command: &str,
+        args: &[String],
+        extra_env: &[(String, String)],
+    ) -> Result<Self, AcpError> {
         use std::process::Stdio;
 
         let mut cmd = tokio::process::Command::new(command);
@@ -186,6 +190,14 @@ impl AcpClient {
             // Ensure the child is killed when the AcpClient is dropped (best-effort).
             // Callers MUST still call shutdown().await for guaranteed cleanup.
             .kill_on_drop(true);
+
+        // Per-persona env vars (e.g., GOOSE_PROVIDER, GOOSE_MODEL).
+        // Only injected if not already set in parent env (operator precedence).
+        for (key, value) in extra_env {
+            if std::env::var(key).is_err() {
+                cmd.env(key, value);
+            }
+        }
 
         // Spawn the agent in its own process group so SIGKILL doesn't propagate
         // to the harness's own process group on Unix.
@@ -1614,7 +1626,7 @@ mod tests {
     // ── Async integration tests with real subprocess ──────────────────────
 
     async fn spawn_script(script: &str) -> AcpClient {
-        AcpClient::spawn("bash", &["-c".into(), script.into()])
+        AcpClient::spawn("bash", &["-c".into(), script.into()], &[])
             .await
             .expect("failed to spawn test script")
     }

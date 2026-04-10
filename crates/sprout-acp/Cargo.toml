@@ -15,6 +15,7 @@ path = "src/main.rs"
 # Internal
 sprout-core = { workspace = true }
 sprout-sdk = { workspace = true }
+sprout-persona = { path = "../sprout-persona" }
 
 # Nostr
 nostr = { workspace = true }

@@ -516,15 +516,27 @@ pub fn start_managed_agent_process(
         "GOOSE_MODE",
         std::env::var("GOOSE_MODE").unwrap_or_else(|_| "auto".to_string()),
     );
-    if let Some(system_prompt) = &record.system_prompt {
-        command.env("SPROUT_ACP_SYSTEM_PROMPT", system_prompt);
-    } else {
+    // For pack-backed agents, let ACP resolve config from the pack at startup.
+    // Do NOT set SPROUT_ACP_SYSTEM_PROMPT or SPROUT_ACP_MODEL — those would
+    // override persona values per the precedence rule (CLI/env > persona > default).
+    if let (Some(pack_path), Some(persona_name)) =
+        (&record.persona_pack_path, &record.persona_name_in_pack)
+    {
+        command.env("SPROUT_ACP_PERSONA_PACK", pack_path);
+        command.env("SPROUT_ACP_PERSONA_NAME", persona_name);
         command.env_remove("SPROUT_ACP_SYSTEM_PROMPT");
-    }
-    if let Some(model) = &record.model {
-        command.env("SPROUT_ACP_MODEL", model);
-    } else {
         command.env_remove("SPROUT_ACP_MODEL");
+    } else {
+        if let Some(system_prompt) = &record.system_prompt {
+            command.env("SPROUT_ACP_SYSTEM_PROMPT", system_prompt);
+        } else {
+            command.env_remove("SPROUT_ACP_SYSTEM_PROMPT");
+        }
+        if let Some(model) = &record.model {
+            command.env("SPROUT_ACP_MODEL", model);
+        } else {
+            command.env_remove("SPROUT_ACP_MODEL");
+        }
     }
     command.env_remove("SPROUT_ACP_PRIVATE_KEY");
     command.env_remove("SPROUT_ACP_API_TOKEN");
