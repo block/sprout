@@ -15,6 +15,7 @@ use crate::error::MediaError;
 pub fn verify_blossom_auth_event(
     auth_event: &nostr::Event,
     server_domain: Option<&str>,
+    max_age_secs: u64,
 ) -> Result<(), MediaError> {
     // 1. Verify Schnorr signature
     auth_event
@@ -84,8 +85,7 @@ pub fn verify_blossom_auth_event(
     if created > now + 5 {
         return Err(MediaError::TimestampOutOfWindow);
     }
-    const MAX_AGE_SECS: u64 = 600; // 10 minutes
-    if now > created + MAX_AGE_SECS {
+    if now > created + max_age_secs {
         return Err(MediaError::TimestampOutOfWindow);
     }
 
@@ -117,8 +117,9 @@ pub fn verify_blossom_upload_auth(
     auth_event: &nostr::Event,
     sha256: &str,
     server_domain: Option<&str>,
+    max_age_secs: u64,
 ) -> Result<(), MediaError> {
-    verify_blossom_auth_event(auth_event, server_domain)?;
+    verify_blossom_auth_event(auth_event, server_domain, max_age_secs)?;
 
     // At least one x tag must match the body sha256 (BUD-11 §6)
     let has_matching_x = auth_event
@@ -156,7 +157,7 @@ mod tests {
         let keys = Keys::generate();
         let sha256 = "a".repeat(64);
         let event = build_valid_auth(&keys, &sha256);
-        assert!(verify_blossom_upload_auth(&event, &sha256, None).is_ok());
+        assert!(verify_blossom_upload_auth(&event, &sha256, None, 600).is_ok());
     }
 
     #[test]
@@ -164,7 +165,7 @@ mod tests {
         let keys = Keys::generate();
         let sha256 = "a".repeat(64);
         let event = build_valid_auth(&keys, &sha256);
-        assert!(verify_blossom_auth_event(&event, None).is_ok());
+        assert!(verify_blossom_auth_event(&event, None, 600).is_ok());
     }
 
     #[test]
@@ -174,7 +175,7 @@ mod tests {
         let event = build_valid_auth(&keys, &sha256);
         let wrong_hash = "b".repeat(64);
         assert!(matches!(
-            verify_blossom_upload_auth(&event, &wrong_hash, None),
+            verify_blossom_upload_auth(&event, &wrong_hash, None, 600),
             Err(MediaError::HashMismatch)
         ));
     }
@@ -194,7 +195,7 @@ mod tests {
             .sign_with_keys(&keys)
             .unwrap();
         assert!(matches!(
-            verify_blossom_upload_auth(&event, &sha256, None),
+            verify_blossom_upload_auth(&event, &sha256, None, 600),
             Err(MediaError::InvalidAuthKind)
         ));
     }
@@ -216,7 +217,7 @@ mod tests {
             .sign_with_keys(&keys)
             .unwrap();
         // Should pass because at least one x tag matches
-        assert!(verify_blossom_upload_auth(&event, &sha256, None).is_ok());
+        assert!(verify_blossom_upload_auth(&event, &sha256, None, 600).is_ok());
     }
 
     #[test]
@@ -236,14 +237,16 @@ mod tests {
             .unwrap();
         // Should fail — server tag present but doesn't match our domain
         assert!(matches!(
-            verify_blossom_upload_auth(&event, &sha256, Some("sprout.example.com")),
+            verify_blossom_upload_auth(&event, &sha256, Some("sprout.example.com"), 600),
             Err(MediaError::ServerMismatch)
         ));
         // Should pass when our domain matches
-        assert!(verify_blossom_upload_auth(&event, &sha256, Some("other.example.com")).is_ok());
+        assert!(
+            verify_blossom_upload_auth(&event, &sha256, Some("other.example.com"), 600).is_ok()
+        );
         // Should fail when server_domain is None — fail closed
         assert!(matches!(
-            verify_blossom_upload_auth(&event, &sha256, None),
+            verify_blossom_upload_auth(&event, &sha256, None, 600),
             Err(MediaError::ServerMismatch)
         ));
     }
@@ -254,7 +257,7 @@ mod tests {
         let sha256 = "a".repeat(64);
         let event = build_valid_auth(&keys, &sha256);
         // No server tags → passes regardless of our domain
-        assert!(verify_blossom_upload_auth(&event, &sha256, Some("any.domain.com")).is_ok());
+        assert!(verify_blossom_upload_auth(&event, &sha256, Some("any.domain.com"), 600).is_ok());
     }
 
     #[test]
@@ -273,7 +276,7 @@ mod tests {
             .sign_with_keys(&keys)
             .unwrap();
         assert!(matches!(
-            verify_blossom_auth_event(&event, None),
+            verify_blossom_auth_event(&event, None, 600),
             Err(MediaError::InvalidAuthEvent)
         ));
     }
