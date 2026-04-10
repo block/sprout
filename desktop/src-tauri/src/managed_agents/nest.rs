@@ -76,10 +76,26 @@ pub fn ensure_nest_at(root: &Path) -> Result<(), String> {
     }
 
     // Write AGENTS.md only if it doesn't already exist.
+    // Uses create_new (O_CREAT|O_EXCL) to atomically check-and-create,
+    // closing the TOCTOU gap that exists() + write() would leave open.
+    // Also guarantees we never clobber a user-edited file.
     let agents_md = root.join("AGENTS.md");
-    if !agents_md.exists() {
-        fs::write(&agents_md, AGENTS_MD)
-            .map_err(|e| format!("write {}: {e}", agents_md.display()))?;
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&agents_md)
+    {
+        Ok(mut file) => {
+            use std::io::Write;
+            file.write_all(AGENTS_MD.as_bytes())
+                .map_err(|e| format!("write {}: {e}", agents_md.display()))?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // File already exists — leave it alone (idempotent).
+        }
+        Err(e) => {
+            return Err(format!("create {}: {e}", agents_md.display()));
+        }
     }
 
     // Set owner-only permissions on root and all subdirectories.
