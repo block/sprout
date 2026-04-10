@@ -29,6 +29,14 @@ async function openMembersSidebar(
   await expect(page.getByTestId("members-sidebar")).toBeVisible();
 }
 
+async function openMemberMenu(
+  page: import("@playwright/test").Page,
+  pubkey: string,
+) {
+  await page.getByTestId(`sidebar-member-${pubkey}`).hover();
+  await page.getByTestId(`sidebar-member-menu-${pubkey}`).click();
+}
+
 async function addGenericAgent(
   page: import("@playwright/test").Page,
   channelName: string,
@@ -717,6 +725,7 @@ test("members sidebar can invite and remove members", async ({ page }) => {
   ).toContainText("charlie");
   await expect(page.getByTestId("channel-members-trigger")).toContainText("4");
 
+  await openMemberMenu(page, TEST_IDENTITIES.charlie.pubkey);
   await page
     .getByTestId(`sidebar-remove-member-${TEST_IDENTITIES.charlie.pubkey}`)
     .click();
@@ -798,8 +807,7 @@ test("removing a channel-scoped agent also cleans up the managed agent record", 
   await page.getByTestId("channel-general").click();
   await openMembersSidebar(page, "general");
 
-  const memberMenu = page.getByTestId(`sidebar-member-menu-${agentPubkey}`);
-  await memberMenu.click();
+  await openMemberMenu(page, agentPubkey);
   await page.getByTestId(`sidebar-remove-member-${agentPubkey}`).click();
   await expect(page.getByTestId(`sidebar-member-${agentPubkey}`)).toHaveCount(
     0,
@@ -831,19 +839,18 @@ test("members sidebar can respawn a stopped managed bot", async ({ page }) => {
 
   await openMembersSidebar(page, "general");
 
-  const memberMenu = page.getByTestId(`sidebar-member-menu-${agentPubkey}`);
   const agentStatus = page.getByTestId(
     `sidebar-managed-agent-status-${agentPubkey}`,
   );
+  const agentAction = page.getByTestId(`sidebar-agent-action-${agentPubkey}`);
 
   await expect(agentStatus).toContainText("Running");
-  await memberMenu.click();
-  const agentAction = page.getByTestId(`sidebar-agent-action-${agentPubkey}`);
+  await openMemberMenu(page, agentPubkey);
   await expect(agentAction).toContainText("Stop");
   await agentAction.click();
 
   await expect(agentStatus).toContainText("Stopped");
-  await memberMenu.click();
+  await openMemberMenu(page, agentPubkey);
   await expect(agentAction).toContainText("Respawn");
   await agentAction.click();
 
@@ -946,7 +953,7 @@ test("removing a multi-channel managed bot keeps its record until it is orphaned
   });
 
   await openMembersSidebar(page, "general");
-  await page.getByTestId(`sidebar-member-menu-${agentPubkey}`).click();
+  await openMemberMenu(page, agentPubkey);
   await page.getByTestId(`sidebar-remove-member-${agentPubkey}`).click();
   await expect(page.getByTestId(`sidebar-member-${agentPubkey}`)).toHaveCount(
     0,
@@ -966,7 +973,7 @@ test("removing a multi-channel managed bot keeps its record until it is orphaned
   ).toHaveLength(0);
 
   await openMembersSidebar(page, secondChannelName);
-  await page.getByTestId(`sidebar-member-menu-${agentPubkey}`).click();
+  await openMemberMenu(page, agentPubkey);
   await page.getByTestId(`sidebar-remove-member-${agentPubkey}`).click();
   await expect(page.getByTestId(`sidebar-member-${agentPubkey}`)).toHaveCount(
     0,
@@ -1003,7 +1010,7 @@ test("bulk remove stays hidden when row-level remove is not allowed", async ({
 
   await openMembersSidebar(page, "design");
 
-  await page.getByTestId(`sidebar-member-menu-${agentPubkey}`).click();
+  await openMemberMenu(page, agentPubkey);
   await expect(
     page.getByTestId(`sidebar-agent-action-${agentPubkey}`),
   ).toBeVisible();
