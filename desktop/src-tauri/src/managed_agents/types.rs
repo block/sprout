@@ -77,6 +77,10 @@ pub struct ManagedAgentRecord {
     /// creation by matching this ID against the fresh session/new response.
     #[serde(default)]
     pub model: Option<String>,
+    /// Comma-separated toolset string forwarded as SPROUT_TOOLSETS to the MCP subprocess.
+    /// When None, the MCP server uses its own default ("default" toolset).
+    #[serde(default)]
+    pub mcp_toolsets: Option<String>,
     #[serde(default = "default_start_on_app_launch")]
     pub start_on_app_launch: bool,
     #[serde(default)]
@@ -117,6 +121,7 @@ pub struct ManagedAgentSummary {
     pub parallelism: u32,
     pub system_prompt: Option<String>,
     pub model: Option<String>,
+    pub mcp_toolsets: Option<String>,
     pub has_api_token: bool,
     pub backend: BackendKind,
     pub backend_agent_id: Option<String>,
@@ -151,6 +156,7 @@ pub struct CreateManagedAgentRequest {
     pub system_prompt: Option<String>,
     pub avatar_url: Option<String>,
     pub model: Option<String>,
+    pub mcp_toolsets: Option<String>,
     #[serde(default)]
     pub mint_token: bool,
     #[serde(default)]
@@ -271,6 +277,8 @@ pub struct UpdateManagedAgentRequest {
     pub model: Option<Option<String>>,
     #[serde(default)]
     pub system_prompt: Option<Option<String>>,
+    #[serde(default)]
+    pub mcp_toolsets: Option<Option<String>>,
 }
 
 /// Response from `get_agent_models` — normalized model info for the frontend.

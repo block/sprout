@@ -407,6 +407,7 @@ pub fn build_managed_agent_summary(
         parallelism: record.parallelism,
         system_prompt: record.system_prompt.clone(),
         model: record.model.clone(),
+        mcp_toolsets: record.mcp_toolsets.clone(),
         has_api_token: record.api_token.is_some(),
         backend: record.backend.clone(),
         backend_agent_id: record.backend_agent_id.clone(),
@@ -525,6 +526,11 @@ pub fn start_managed_agent_process(
         command.env("SPROUT_ACP_MODEL", model);
     } else {
         command.env_remove("SPROUT_ACP_MODEL");
+    }
+    if let Some(toolsets) = &record.mcp_toolsets {
+        command.env("SPROUT_TOOLSETS", toolsets);
+    } else {
+        command.env_remove("SPROUT_TOOLSETS");
     }
     command.env_remove("SPROUT_ACP_PRIVATE_KEY");
     command.env_remove("SPROUT_ACP_API_TOKEN");

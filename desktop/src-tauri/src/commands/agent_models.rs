@@ -130,6 +130,13 @@ pub fn update_managed_agent(
     if let Some(prompt_update) = input.system_prompt {
         record.system_prompt = prompt_update;
     }
+    if let Some(toolsets_update) = input.mcp_toolsets {
+        record.mcp_toolsets = toolsets_update
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string);
+    }
     record.updated_at = now_iso();
 
     save_managed_agents(&app, &records)?;
