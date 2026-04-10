@@ -122,6 +122,155 @@ test("create stream with name and description", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 });
 
+test("create ephemeral stream shows sidebar and header affordances", async ({
+  page,
+}) => {
+  const channelName = `ephemeral-stream-${Date.now()}`;
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Create a stream" }).click();
+  await page.getByTestId("create-stream-name").fill(channelName);
+  await page
+    .getByTestId("create-stream-description")
+    .fill("Auto-cleaned test stream");
+  await page
+    .getByTestId("create-stream-form")
+    .getByLabel("Ephemeral — auto-archives after 1 day of inactivity")
+    .click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
+
+  await expect(page.getByTestId("stream-list")).toContainText(channelName);
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await expect(
+    page.getByTestId(`channel-ephemeral-${channelName}`),
+  ).toBeVisible();
+  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveText(
+    /Ephemeral.+left/,
+  );
+
+  await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+  await expect(
+    page.getByTestId(`channel-ephemeral-${channelName}`),
+  ).toBeVisible();
+});
+
+test("ephemeral countdown refreshes when switching channels after a clock jump", async ({
+  page,
+}) => {
+  const firstChannelName = "ephemeral-alpha";
+  const secondChannelName = "ephemeral-beta";
+  const initialTime = new Date("2026-04-09T00:00:00.000Z");
+  const shiftedTime = new Date("2026-04-09T02:00:00.000Z");
+
+  await page.clock.setFixedTime(initialTime);
+  await page.goto("/");
+
+  for (const channelName of [firstChannelName, secondChannelName]) {
+    await page.getByRole("button", { name: "Create a stream" }).click();
+    await page.getByTestId("create-stream-name").fill(channelName);
+    await page
+      .getByTestId("create-stream-description")
+      .fill("Auto-cleaned test stream");
+    await page
+      .getByTestId("create-stream-form")
+      .getByLabel("Ephemeral — auto-archives after 1 day of inactivity")
+      .click();
+    await page
+      .getByTestId("create-stream-form")
+      .getByRole("button", { name: "Create" })
+      .click();
+    await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  }
+
+  await page.clock.setFixedTime(shiftedTime);
+  await expect
+    .poll(() => page.evaluate(() => Date.now()))
+    .toBe(shiftedTime.getTime());
+
+  await page.getByTestId(`channel-${firstChannelName}`).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(firstChannelName);
+  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveText(
+    /Ephemeral.+22h left/,
+  );
+});
+
+test("archived channels stay out of all sidebar sections", async ({ page }) => {
+  const archivedStreamName = `archived-stream-${Date.now()}`;
+  const archivedForumName = `archived-forum-${Date.now()}`;
+
+  await page.goto("/");
+  await page.waitForFunction(() => {
+    return Boolean(
+      (
+        window as Window & {
+          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+        }
+      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__,
+    );
+  });
+  await page.evaluate(
+    async ({
+      archivedForumName,
+      archivedStreamName,
+      outsiderPubkey,
+    }: {
+      archivedForumName: string;
+      archivedStreamName: string;
+      outsiderPubkey: string;
+    }) => {
+      const invoke = (
+        window as Window & {
+          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+            command: string,
+            payload?: Record<string, unknown>,
+          ) => Promise<{ id: string }>;
+        }
+      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__;
+
+      if (!invoke) {
+        throw new Error("Mock bridge is not installed.");
+      }
+
+      const stream = await invoke("create_channel", {
+        channelType: "stream",
+        name: archivedStreamName,
+        visibility: "open",
+      });
+      const forum = await invoke("create_channel", {
+        channelType: "forum",
+        name: archivedForumName,
+        visibility: "open",
+      });
+      const directMessage = await invoke("open_dm", {
+        pubkeys: [outsiderPubkey],
+      });
+
+      for (const channel of [stream, forum, directMessage]) {
+        await invoke("archive_channel", { channelId: channel.id });
+      }
+    },
+    {
+      archivedForumName,
+      archivedStreamName,
+      outsiderPubkey: TEST_IDENTITIES.outsider.pubkey,
+    },
+  );
+
+  await page.reload();
+
+  await expect(page.getByTestId("stream-list")).not.toContainText(
+    archivedStreamName,
+  );
+  await expect(page.getByTestId("forum-list")).not.toContainText(
+    archivedForumName,
+  );
+  await expect(page.getByTestId("dm-list")).toContainText("alice-tyler");
+  await expect(page.getByTestId("dm-list")).not.toContainText("outsider");
+});
+
 test("create stream with special characters", async ({ page }) => {
   const channelName = `dev ops-${Date.now()}`;
 
