@@ -353,6 +353,9 @@ pub async fn create_managed_agent(
                 let pack_path = base.join("packs").join(pack_id);
                 // Resolve the pack to find the internal name for this persona.
                 // Match by display_name since that's what PersonaRecord stores.
+                // TODO: fragile if two personas share display_name. Long-term fix:
+                // store internal `name` on PersonaRecord during import (requires
+                // adding a field to types.rs).
                 let resolved = sprout_persona::resolve::resolve_pack(&pack_path).ok()?;
                 let resolved_persona = resolved.personas.iter().find(|rp| {
                     rp.display_name == persona.display_name

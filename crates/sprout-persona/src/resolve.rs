@@ -74,6 +74,7 @@ pub struct ResolvedMcpServer {
 pub struct ResolvedHooks {
     pub on_start: Option<String>,
     pub on_stop: Option<String>,
+    pub on_message: Option<String>,
 }
 
 /// What triggers a response (renamed from respond_to per spec discussion).
@@ -123,7 +124,7 @@ pub fn resolve_loaded_pack(loaded: &LoadedPack) -> Result<ResolvedPack, PackErro
         id: loaded.manifest.id.clone(),
         name: loaded.manifest.name.clone(),
         version: loaded.manifest.version.clone(),
-        // PackManifestData doesn't carry description; use pack name as fallback.
+        // Pack-level description not yet wired through PackManifestData.
         description: String::new(),
         personas,
     })
@@ -309,12 +310,13 @@ fn parse_mcp_server_config(name: &str, config: &serde_json::Value) -> Option<Res
 /// `safe_resolve()` before use.
 fn resolve_hooks(hooks: Option<&crate::merge::HooksData>) -> Option<ResolvedHooks> {
     let h = hooks?;
-    if h.on_start.is_none() && h.on_stop.is_none() {
+    if h.on_start.is_none() && h.on_stop.is_none() && h.on_message.is_none() {
         return None;
     }
     Some(ResolvedHooks {
         on_start: h.on_start.clone(),
         on_stop: h.on_stop.clone(),
+        on_message: h.on_message.clone(),
     })
 }
 
