@@ -10,8 +10,9 @@ mod util;
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use commands::*;
 use managed_agents::{
-    find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents, save_managed_agents,
-    start_managed_agent_process, sync_managed_agent_processes, BackendKind, ManagedAgentProcess,
+    ensure_nest, find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents,
+    save_managed_agents, start_managed_agent_process, sync_managed_agent_processes, BackendKind,
+    ManagedAgentProcess,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -386,6 +387,13 @@ pub fn run() {
             let state = app_handle.state::<AppState>();
             resolve_persisted_identity(&app_handle, &state)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+            // Create the Sprout nest (~/.sprout) before agents are restored,
+            // so default_agent_workdir() resolves to the nest directory.
+            // Non-fatal: agents fall back to $HOME if nest creation fails.
+            if let Err(error) = ensure_nest() {
+                eprintln!("sprout-desktop: failed to create nest: {error}");
+            }
 
             // Keep launch-time agent restoration off the synchronous setup path
             // so the frontend can mount and reveal the window promptly.
