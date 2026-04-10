@@ -1,6 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use tauri::AppHandle;
+use uuid::Uuid;
 
 use crate::{
     managed_agents::{managed_agents_base_dir, PersonaRecord},
@@ -404,6 +405,7 @@ fn built_in_persona_records(now: &str) -> Vec<PersonaRecord> {
             name_pool: persona.name_pool.iter().map(|s| s.to_string()).collect(),
             is_builtin: true,
             is_active: false,
+            source_pack: None,
             created_at: now.to_string(),
             updated_at: now.to_string(),
         })
@@ -547,6 +549,188 @@ pub fn validate_persona_activation_change(
     }
 
     Ok(())
+}
+
+// ── Pack import ───────────────────────────────────────────────────────────────
+
+/// Packs directory: `<AppDataDir>/agents/packs/`
+fn packs_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = managed_agents_base_dir(app)?.join("packs");
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create packs dir: {e}"))?;
+    Ok(dir)
+}
+
+/// Validate pack ID: only `[a-zA-Z0-9._-]+` allowed (Lep F2: zip-slip defense).
+fn validate_pack_id(id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err("pack ID is empty".into());
+    }
+    if id.len() > 128 {
+        return Err(format!("pack ID too long: {} chars (max 128)", id.len()));
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    {
+        return Err(format!(
+            "pack ID contains invalid characters: \"{id}\". Only [a-zA-Z0-9._-] allowed."
+        ));
+    }
+    Ok(())
+}
+
+/// Copy a directory tree, skipping symlinks (Lep F2: zip-slip defense).
+fn copy_dir_no_symlinks(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| format!("failed to create {}: {e}", dst.display()))?;
+    for entry in
+        fs::read_dir(src).map_err(|e| format!("failed to read {}: {e}", src.display()))?
+    {
+        let entry = entry.map_err(|e| format!("dir entry error: {e}"))?;
+        let ft = entry
+            .file_type()
+            .map_err(|e| format!("file type error: {e}"))?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if ft.is_symlink() {
+            // Skip symlinks — defense against symlink escape attacks.
+            continue;
+        } else if ft.is_dir() {
+            copy_dir_no_symlinks(&src_path, &dst_path)?;
+        } else if ft.is_file() {
+            fs::copy(&src_path, &dst_path)
+                .map_err(|e| format!("failed to copy {}: {e}", src_path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Import a persona pack from a directory into the app's pack storage.
+///
+/// 1. Validate + resolve the pack at the source path
+/// 2. Sanitize pack ID (Lep F2)
+/// 3. Check for existing pack with same ID
+/// 4. Copy pack to `<AppDataDir>/agents/packs/<pack-id>/` (no symlinks)
+/// 5. Re-validate the copy (Lep F2: defense-in-depth)
+/// 6. Create PersonaRecords for each persona
+/// 7. Merge into personas.json
+pub fn import_persona_pack(
+    app: &AppHandle,
+    source_dir: &std::path::Path,
+) -> Result<Vec<PersonaRecord>, String> {
+    // 1. Validate + resolve at source
+    let resolved = sprout_persona::resolve::resolve_pack(source_dir)
+        .map_err(|e| format!("pack validation failed: {e}"))?;
+
+    // 2. Sanitize pack ID
+    validate_pack_id(&resolved.id)?;
+
+    // 3. Check for existing pack
+    let packs = packs_dir(app)?;
+    let dest = packs.join(&resolved.id);
+    if dest.exists() {
+        return Err(format!(
+            "Pack \"{}\" is already installed. Uninstall it first.",
+            resolved.id
+        ));
+    }
+
+    // 4. Copy pack (no symlinks)
+    copy_dir_no_symlinks(source_dir, &dest)?;
+
+    // 5. Re-validate the copy (defense-in-depth)
+    sprout_persona::resolve::resolve_pack(&dest).map_err(|e| {
+        // Clean up failed copy
+        let _ = fs::remove_dir_all(&dest);
+        format!("pack re-validation failed after copy: {e}")
+    })?;
+
+    // 6. Create PersonaRecords
+    let now = now_iso();
+    let new_personas: Vec<PersonaRecord> = resolved
+        .personas
+        .iter()
+        .map(|p| PersonaRecord {
+            id: Uuid::new_v4().to_string(),
+            display_name: p.display_name.clone(),
+            avatar_url: p.avatar.clone(),
+            system_prompt: p.system_prompt.clone(),
+            provider: p.provider.clone(),
+            model: p.model.clone(),
+            name_pool: Vec::new(),
+            is_builtin: false,
+            is_active: true,
+            source_pack: Some(resolved.id.clone()),
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        })
+        .collect();
+
+    // 7. Merge into personas.json
+    let mut personas = load_personas(app)?;
+    personas.extend(new_personas.clone());
+    save_personas(app, &personas)?;
+
+    Ok(new_personas)
+}
+
+/// Uninstall a persona pack: remove pack directory + pack PersonaRecords.
+pub fn uninstall_persona_pack(app: &AppHandle, pack_id: &str) -> Result<(), String> {
+    validate_pack_id(pack_id)?;
+
+    // Remove pack directory
+    let packs = packs_dir(app)?;
+    let pack_dir = packs.join(pack_id);
+    if pack_dir.exists() {
+        fs::remove_dir_all(&pack_dir)
+            .map_err(|e| format!("failed to remove pack directory: {e}"))?;
+    }
+
+    // Remove pack PersonaRecords
+    let mut personas = load_personas(app)?;
+    personas.retain(|p| p.source_pack.as_deref() != Some(pack_id));
+    save_personas(app, &personas)?;
+
+    Ok(())
+}
+
+/// List installed packs (by scanning packs directory).
+pub fn list_installed_packs(app: &AppHandle) -> Result<Vec<PackSummary>, String> {
+    let packs = packs_dir(app)?;
+    let mut summaries = Vec::new();
+
+    if !packs.exists() {
+        return Ok(summaries);
+    }
+
+    for entry in fs::read_dir(&packs).map_err(|e| format!("failed to read packs dir: {e}"))? {
+        let entry = entry.map_err(|e| format!("dir entry error: {e}"))?;
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let pack_dir = entry.path();
+        if let Ok(resolved) = sprout_persona::resolve::resolve_pack(&pack_dir) {
+            summaries.push(PackSummary {
+                id: resolved.id,
+                name: resolved.name,
+                version: resolved.version,
+                persona_count: resolved.personas.len(),
+                path: pack_dir,
+            });
+        }
+    }
+
+    Ok(summaries)
+}
+
+/// Summary of an installed pack (for listing).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PackSummary {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub persona_count: usize,
+    pub path: PathBuf,
 }
 
 pub fn load_personas(app: &AppHandle) -> Result<Vec<PersonaRecord>, String> {

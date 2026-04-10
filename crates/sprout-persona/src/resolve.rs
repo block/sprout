@@ -11,7 +11,7 @@
 //! - **ACP-shaped**: `ResolvedPersona` maps 1:1 to ACP's needs.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::merge::TriggersData;
 use crate::pack::{self, LoadedPack, LoadedPersona, PackError};
@@ -369,6 +369,8 @@ fn project_env_vars(persona: &LoadedPersona) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
     use crate::merge::{HooksData, TriggersData};
 
     // ── compose_prompt ────────────────────────────────────────────────────
