@@ -429,9 +429,7 @@ export function PersonaDialog({
                           ? "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/15"
                           : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
                     )}
-                    disabled={
-                      isPending || isImportPending || isImportingUpdate
-                    }
+                    disabled={isPending || isImportPending || isImportingUpdate}
                     type="button"
                     {...importDropHandlers}
                     onClick={openImportFilePicker}

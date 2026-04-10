@@ -28,9 +28,7 @@ type PersonaImportUpdateDialogProps = {
   isPending: boolean;
   onClear: () => void;
   onOpenChange: (open: boolean) => void;
-  onApply: (input: {
-    selectedFields: string[];
-  }) => Promise<void>;
+  onApply: (input: { selectedFields: string[] }) => Promise<void>;
 };
 
 export function PersonaImportUpdateDialog({
@@ -156,82 +154,77 @@ export function PersonaImportUpdateDialog({
             {preview && plan ? (
               <div className="space-y-4">
                 {hasChanges ? (
-                  <>
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">
+                      Fields that will be updated{" "}
+                      <span className="font-bold">
+                        ({selectedCount}/{plan.fields.length})
+                      </span>
+                    </p>
                     <div className="space-y-1">
-                      <p className="text-sm font-medium">
-                        Fields that will be updated{" "}
-                        <span className="font-bold">
-                          ({selectedCount}/{plan.fields.length})
-                        </span>
-                      </p>
-                      <div className="space-y-1">
-                        {plan.fields.map((fieldChange) => {
-                          const shouldUpdate = selectedFields.has(
-                            fieldChange.field,
-                          );
-                          const previewText = getFieldSecondaryText(
-                            shouldUpdate,
-                            getFieldPreview(
-                              fieldChange.importedValue,
-                              `No ${fieldChange.label.toLowerCase()} in import.`,
-                            ),
-                            getFieldPreview(
-                              fieldChange.existingValue,
-                              `No current ${fieldChange.label.toLowerCase()}.`,
-                            ),
-                          );
+                      {plan.fields.map((fieldChange) => {
+                        const shouldUpdate = selectedFields.has(
+                          fieldChange.field,
+                        );
+                        const previewText = getFieldSecondaryText(
+                          shouldUpdate,
+                          getFieldPreview(
+                            fieldChange.importedValue,
+                            `No ${fieldChange.label.toLowerCase()} in import.`,
+                          ),
+                          getFieldPreview(
+                            fieldChange.existingValue,
+                            `No current ${fieldChange.label.toLowerCase()}.`,
+                          ),
+                        );
 
-                          return (
-                            <div
-                              className="flex items-center gap-3 rounded-lg border border-border/60 bg-card/80 px-3 py-2.5"
-                              key={fieldChange.field}
-                            >
-                              <Checkbox
-                                checked={shouldUpdate}
-                                disabled={isPending}
-                                onCheckedChange={(checked) =>
-                                  toggleField(
-                                    fieldChange.field,
-                                    Boolean(checked),
-                                  )
+                        return (
+                          <div
+                            className="flex items-center gap-3 rounded-lg border border-border/60 bg-card/80 px-3 py-2.5"
+                            key={fieldChange.field}
+                          >
+                            <Checkbox
+                              checked={shouldUpdate}
+                              disabled={isPending}
+                              onCheckedChange={(checked) =>
+                                toggleField(fieldChange.field, Boolean(checked))
+                              }
+                            />
+                            {fieldChange.field === "avatarUrl" ? (
+                              <ProfileAvatar
+                                avatarUrl={
+                                  shouldUpdate
+                                    ? fieldChange.importedValue || null
+                                    : fieldChange.existingValue || null
                                 }
+                                className="h-8 w-8 rounded-lg text-xs"
+                                label={persona?.displayName ?? ""}
                               />
-                              {fieldChange.field === "avatarUrl" ? (
-                                <ProfileAvatar
-                                  avatarUrl={
-                                    shouldUpdate
-                                      ? fieldChange.importedValue || null
-                                      : fieldChange.existingValue || null
-                                  }
-                                  className="h-8 w-8 rounded-lg text-xs"
-                                  label={persona?.displayName ?? ""}
-                                />
-                              ) : null}
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm font-semibold tracking-tight">
-                                  {fieldChange.label}
-                                </p>
-                                <p
-                                  className={`truncate text-xs ${
-                                    shouldUpdate
-                                      ? "text-foreground"
-                                      : "text-muted-foreground"
-                                  }`}
-                                >
-                                  {previewText}
-                                </p>
-                              </div>
-                              {renderLineChangeSummary(
-                                fieldChange.addedLines,
-                                fieldChange.removedLines,
-                                shouldUpdate,
-                              )}
+                            ) : null}
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-semibold tracking-tight">
+                                {fieldChange.label}
+                              </p>
+                              <p
+                                className={`truncate text-xs ${
+                                  shouldUpdate
+                                    ? "text-foreground"
+                                    : "text-muted-foreground"
+                                }`}
+                              >
+                                {previewText}
+                              </p>
                             </div>
-                          );
-                        })}
-                      </div>
+                            {renderLineChangeSummary(
+                              fieldChange.addedLines,
+                              fieldChange.removedLines,
+                              shouldUpdate,
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                  </>
+                  </div>
                 ) : (
                   <div className="rounded-lg border border-dashed border-border/60 bg-card/60 px-4 py-10 text-center">
                     <p className="text-sm font-semibold tracking-tight text-muted-foreground">

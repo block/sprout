@@ -177,7 +177,7 @@ export function buildTeamImportPlan({
   const personaById = new Map(personas.map((persona) => [persona.id, persona]));
   const matchedImportedIndexes = new Set<number>();
   const matchedMembers: TeamImportMatchedMember[] = [];
-  const missingMembers: TeamImportMissingMember[] = [];
+  const missingMembers: { existing: AgentPersona }[] = [];
   const unresolvedPersonaIds: string[] = [];
 
   for (const personaId of team.personaIds) {
