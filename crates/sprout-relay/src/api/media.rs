@@ -47,9 +47,14 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
 
         // 1. Extract and validate Blossom auth event
         let auth_event = extract_blossom_auth(headers)?;
+        // Use the permissive window (3600s) here because we don't know the
+        // content type yet.  The upload functions re-verify with the correct
+        // per-type window (600s for images, 3600s for video) after the body
+        // has been consumed and the SHA-256 computed.
         sprout_media::auth::verify_blossom_auth_event(
             &auth_event,
             state.config.media.server_domain.as_deref(),
+            3600,
         )?;
 
         // 2. Require X-SHA-256 header (BUD-11: mandatory for PUT /upload)

@@ -119,12 +119,17 @@ fn detect_and_validate_mime(body: &[u8]) -> Result<String, String> {
     Ok(mime)
 }
 
-fn sign_blossom_upload_auth(keys: &Keys, sha256: &str) -> Result<nostr::Event, String> {
+fn sign_blossom_upload_auth(
+    keys: &Keys,
+    sha256: &str,
+    expiry_secs: u64,
+) -> Result<nostr::Event, String> {
     let now = Timestamp::now().as_u64();
     let mut tags = vec![
         Tag::parse(vec!["t", "upload"]).map_err(|e| e.to_string())?,
         Tag::parse(vec!["x", sha256]).map_err(|e| e.to_string())?,
-        Tag::parse(vec!["expiration", &(now + 300).to_string()]).map_err(|e| e.to_string())?,
+        Tag::parse(vec!["expiration", &(now + expiry_secs).to_string()])
+            .map_err(|e| e.to_string())?,
     ];
     let base_url = relay_api_base_url();
     if let Some(domain) = extract_server_authority(&base_url) {
@@ -138,7 +143,9 @@ fn sign_blossom_upload_auth(keys: &Keys, sha256: &str) -> Result<nostr::Event, S
 
 /// Execute the upload HTTP request. Shared by all upload entry points.
 // TODO(v2): Stream large video files to the relay instead of buffering in RAM.
-// Current approach works for small/medium videos but will OOM on 500MB files.
+// Current approach works for videos up to ~100MB but will OOM on 500MB files.
+// Fix: use reqwest's Body::wrap_stream() to stream from the temp file directly.
+// The server already supports streaming upload via process_video_upload.
 async fn do_upload(
     body: Vec<u8>,
     mime: &str,
@@ -146,9 +153,17 @@ async fn do_upload(
 ) -> Result<BlobDescriptor, String> {
     let sha256 = hex::encode(Sha256::digest(&body));
 
+    // Video uploads get a 1-hour auth window to survive slow connections;
+    // images use 5 minutes. Must match the server-side max_age_secs values
+    // in process_upload (600s) and process_video_upload (3600s).
+    let expiry_secs = if mime.starts_with("video/") {
+        3600
+    } else {
+        300
+    };
     let auth_event = {
         let keys = state.keys.lock().map_err(|e| e.to_string())?;
-        sign_blossom_upload_auth(&keys, &sha256)?
+        sign_blossom_upload_auth(&keys, &sha256, expiry_secs)?
     };
 
     let auth_header = format!(
@@ -438,24 +453,36 @@ pub async fn pick_and_upload_media(
 
     let path = file_path.as_path().ok_or("invalid path")?.to_path_buf();
 
+    // Pin the inode by opening the fd BEFORE spawn_blocking. This prevents a
+    // local attacker from swapping the file between dialog return and read.
+    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+
     // All sync I/O (sniff, transcode, read) runs off the async runtime to
     // avoid blocking Tokio worker threads during long ffmpeg transcodes.
     let (body, poster_bytes) =
         tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
-            // Sniff magic bytes to decide: video → transcode + poster, image → direct upload.
-            let header = {
-                use std::io::Read;
-                let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-                let mut buf = [0u8; 4096];
-                let n = file.read(&mut buf).map_err(|e| e.to_string())?;
-                buf[..n].to_vec()
-            };
+            use std::io::Read;
 
-            if is_video_file(&header) {
-                transcode_and_extract_poster(&path)
+            // Sniff magic bytes from the pinned fd — no re-open, no TOCTOU.
+            let mut header = [0u8; 4096];
+            let n = file.read(&mut header).map_err(|e| e.to_string())?;
+
+            if is_video_file(&header[..n]) {
+                // ffmpeg needs a path, not an fd. Resolve the fd's real path
+                // so we pass the actual inode's location, not the original
+                // (potentially swapped) pathname. Same pattern as upload_media.
+                // IMPORTANT: keep `file` alive (fd open) until after transcode
+                // completes — this prevents the inode from being unlinked or
+                // the resolved path from becoming stale during the ffmpeg run.
+                let fd_path = fd_real_path(&file)?;
+                let result = transcode_and_extract_poster(&fd_path);
+                drop(file); // release fd only after ffmpeg is done
+                result
             } else {
-                let bytes =
-                    std::fs::read(&path).map_err(|e| format!("failed to read file: {e}"))?;
+                // Image: read the rest from the already-open fd (TOCTOU-safe).
+                let mut bytes = header[..n].to_vec();
+                file.read_to_end(&mut bytes)
+                    .map_err(|e| format!("failed to read file: {e}"))?;
                 Ok((bytes, None))
             }
         })

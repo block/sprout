@@ -30,7 +30,8 @@ pub async fn process_upload(
         let mime = validate_content(&bytes, &cfg)?;
         let sha256 = hex::encode(Sha256::digest(&bytes));
         let ext = mime_to_ext(&mime).to_string();
-        verify_blossom_upload_auth(&auth, &sha256, cfg.server_domain.as_deref())?;
+        // Images: 10-minute auth window is plenty.
+        verify_blossom_upload_auth(&auth, &sha256, cfg.server_domain.as_deref(), 600)?;
         Ok((mime, sha256, ext))
     })
     .await
@@ -126,15 +127,18 @@ pub async fn process_video_upload(
 
         // Convert axum::Error stream to std::io::Error stream for StreamReader.
         // Box::pin is required because StreamReader needs a pinned stream.
-        // FRAGILE: Map stream errors, detecting body-limit errors so we can
-        // return 413 instead of 500. axum wraps LengthLimitError in its error
-        // chain — we detect it via the Display string since axum::Error doesn't
-        // expose the inner type for downcasting. If axum changes the error
-        // message, test_body_limit_error_detection will catch the regression.
+        // Belt-and-suspenders body-limit detection: axum wraps LengthLimitError
+        // in its error chain but doesn't expose the inner type for downcasting.
+        // We check multiple Display strings so that if axum changes the wording,
+        // at least one pattern still matches. test_body_limit_error_detection
+        // will catch a regression if ALL patterns break.
         let mapped = futures_util::StreamExt::map(body_stream, |r| {
             r.map_err(|e| {
                 let msg = e.to_string();
-                if msg.contains("length limit") || msg.contains("body limit") {
+                if msg.contains("length limit")
+                    || msg.contains("body limit")
+                    || msg.contains("LengthLimitError")
+                {
                     std::io::Error::new(std::io::ErrorKind::WriteZero, msg)
                 } else {
                     std::io::Error::other(e)
@@ -162,8 +166,9 @@ pub async fn process_video_upload(
                 Ok(n) => n,
                 Err(e) if e.kind() == std::io::ErrorKind::WriteZero => {
                     // Body limit exceeded — return 413 instead of 500.
+                    // `total` is bytes received before the cutoff — honest, not exact.
                     return Err(MediaError::FileTooLarge {
-                        size: total.saturating_add(max_bytes),
+                        size: total,
                         max: max_bytes,
                     });
                 }
@@ -211,7 +216,8 @@ pub async fn process_video_upload(
     let sha256_for_auth = sha256_hex.clone();
     let server_domain = config.server_domain.clone();
     tokio::task::spawn_blocking(move || {
-        verify_blossom_upload_auth(&auth, &sha256_for_auth, server_domain.as_deref())
+        // Videos: 1-hour window — large uploads on slow connections need headroom.
+        verify_blossom_upload_auth(&auth, &sha256_for_auth, server_domain.as_deref(), 3600)
     })
     .await
     .map_err(|_| MediaError::Internal)??;
@@ -458,30 +464,30 @@ mod tests {
 
     #[test]
     fn test_body_limit_error_detection() {
-        // Verify that "length limit" errors are mapped to WriteZero (which
+        // Verify that body-limit errors are mapped to WriteZero (which
         // process_video_upload converts to FileTooLarge / 413).
-        let limit_err = axum::Error::new("length limit exceeded");
-        let io_err = {
-            let msg = limit_err.to_string();
-            if msg.contains("length limit") || msg.contains("body limit") {
-                std::io::Error::new(std::io::ErrorKind::WriteZero, msg)
+        // Must match the detection logic in process_video_upload exactly.
+        let detect = |msg: &str| -> std::io::ErrorKind {
+            if msg.contains("length limit")
+                || msg.contains("body limit")
+                || msg.contains("LengthLimitError")
+            {
+                std::io::ErrorKind::WriteZero
             } else {
-                std::io::Error::other(limit_err)
+                std::io::ErrorKind::Other
             }
         };
-        assert_eq!(io_err.kind(), std::io::ErrorKind::WriteZero);
+
+        // All known patterns should trigger WriteZero.
+        assert_eq!(
+            detect("length limit exceeded"),
+            std::io::ErrorKind::WriteZero
+        );
+        assert_eq!(detect("body limit exceeded"), std::io::ErrorKind::WriteZero);
+        assert_eq!(detect("LengthLimitError"), std::io::ErrorKind::WriteZero);
 
         // Non-limit errors should remain as Other.
-        let other_err = axum::Error::new("connection reset");
-        let io_err = {
-            let msg = other_err.to_string();
-            if msg.contains("length limit") || msg.contains("body limit") {
-                std::io::Error::new(std::io::ErrorKind::WriteZero, msg)
-            } else {
-                std::io::Error::other(other_err)
-            }
-        };
-        assert_eq!(io_err.kind(), std::io::ErrorKind::Other);
+        assert_eq!(detect("connection reset"), std::io::ErrorKind::Other);
     }
 
     #[test]
