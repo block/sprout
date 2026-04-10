@@ -1,11 +1,11 @@
 import { ArrowLeft, MessageSquare, MoreHorizontal, Trash2 } from "lucide-react";
 import * as React from "react";
 
-import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import {
   resolveUserLabel,
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 import type { ForumThreadResponse, ThreadReply } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
@@ -123,11 +123,10 @@ function ReplyRow({
   return (
     <div className="group px-4 py-3" data-forum-event-id={reply.eventId}>
       <div className="flex items-center gap-2">
-        <ProfileAvatar
+        <UserAvatar
           avatarUrl={replyAvatarUrl}
-          className="h-6 w-6 rounded-full text-[10px]"
-          iconClassName="h-3 w-3"
-          label={replyAuthorLabel}
+          displayName={replyAuthorLabel}
+          size="sm"
         />
         <span className="text-sm font-medium text-foreground">
           {replyAuthorLabel}
@@ -281,11 +280,9 @@ export function ForumThreadPanel({
           data-forum-event-id={post.eventId}
         >
           <div className="flex items-center gap-2">
-            <ProfileAvatar
+            <UserAvatar
               avatarUrl={postAvatarUrl}
-              className="h-8 w-8 rounded-full text-xs"
-              iconClassName="h-4 w-4"
-              label={postAuthorLabel}
+              displayName={postAuthorLabel}
             />
             <div>
               <span className="text-sm font-semibold text-foreground">

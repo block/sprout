@@ -29,9 +29,10 @@ export function UserProfilePopover({
   pubkey,
 }: UserProfilePopoverProps) {
   const [open, setOpen] = React.useState(false);
+  const [showAllNotes, setShowAllNotes] = React.useState(false);
   const profileQuery = useUserProfileQuery(open ? pubkey : undefined);
   const notesQuery = useUserNotesQuery(open ? pubkey : undefined, {
-    limit: 3,
+    limit: showAllNotes ? 20 : 3,
   });
   const presenceQuery = usePresenceQuery(open ? [pubkey] : [], {
     enabled: open,
@@ -100,10 +101,23 @@ export function UserProfilePopover({
               className="border-t border-border/60 pt-3"
               data-testid="user-profile-notes"
             >
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Recent Notes
-              </p>
-              <div className="space-y-2">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Recent Notes
+                </p>
+                {notes.length >= 3 ? (
+                  <button
+                    className="text-[11px] text-primary hover:underline"
+                    onClick={() => setShowAllNotes(!showAllNotes)}
+                    type="button"
+                  >
+                    {showAllNotes ? "Show less" : "View all"}
+                  </button>
+                ) : null}
+              </div>
+              <div
+                className={`space-y-2 ${showAllNotes ? "max-h-64 overflow-y-auto" : ""}`}
+              >
                 {notes.map((note) => (
                   <article
                     className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2"

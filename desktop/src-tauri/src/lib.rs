@@ -494,6 +494,10 @@ pub fn run() {
             trigger_workflow,
             grant_approval,
             deny_approval,
+            publish_note,
+            get_contact_list,
+            set_contact_list,
+            get_notes_timeline,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
