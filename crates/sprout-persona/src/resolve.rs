@@ -50,10 +50,10 @@ pub struct ResolvedPersona {
     // Effective MCP (pack shared + persona merged, literals preserved)
     pub mcp_servers: Vec<ResolvedMcpServer>,
 
-    // Hooks (parsed, not executed)
+    // Hooks (parsed, not executed — reserved for future use, not yet wired)
     pub hooks: Option<ResolvedHooks>,
 
-    // Skills (bare names)
+    // Skills (bare names — reserved for future use, not yet wired)
     pub skills: Vec<String>,
 
     // Env var projection for goose subprocess
@@ -322,10 +322,28 @@ fn resolve_hooks(
 
 // ── Env var projection ────────────────────────────────────────────────────────
 
+/// Allowlist of env vars that persona packs may project.
+///
+/// Security boundary: pack authors cannot inject arbitrary env vars
+/// (PATH, LD_PRELOAD, SPROUT_PRIVATE_KEY, etc.). Only these four
+/// GOOSE_* vars are permitted. The projection function below only
+/// produces these keys by construction, but the allowlist makes the
+/// boundary explicit and testable.
+pub const PERSONA_ENV_ALLOWLIST: &[&str] = &[
+    "GOOSE_PROVIDER",
+    "GOOSE_MODEL",
+    "GOOSE_TEMPERATURE",
+    "GOOSE_CONTEXT_LIMIT",
+];
+
 /// Project persona config into goose subprocess env vars.
 ///
 /// Pure function — does NOT read the current process env.
 /// ACP is responsible for filtering based on operator precedence (level 1).
+///
+/// Only produces vars in [`PERSONA_ENV_ALLOWLIST`]. This is enforced by
+/// construction (the function only maps known config fields to known var
+/// names) and verified by the `env_vars_only_allowlisted` test.
 fn project_env_vars(persona: &LoadedPersona) -> Vec<(String, String)> {
     let mut vars = Vec::new();
 
@@ -553,6 +571,20 @@ mod tests {
         let lp = stub_persona(Some("openai:gpt-4o"), Some(0.5), Some(16384));
         let vars = project_env_vars(&lp);
         assert_eq!(vars.len(), 4); // PROVIDER, MODEL, TEMPERATURE, CONTEXT_LIMIT
+    }
+
+    #[test]
+    fn env_vars_only_allowlisted() {
+        // Security: verify all projected vars are in the allowlist.
+        // A malicious pack cannot inject PATH, LD_PRELOAD, etc.
+        let lp = stub_persona(Some("openai:gpt-4o"), Some(0.5), Some(16384));
+        let vars = project_env_vars(&lp);
+        for (key, _) in &vars {
+            assert!(
+                PERSONA_ENV_ALLOWLIST.contains(&key.as_str()),
+                "env var '{key}' is not in PERSONA_ENV_ALLOWLIST"
+            );
+        }
     }
 
     // ── Full pipeline (resolve_pack via filesystem) ───────────────────────
