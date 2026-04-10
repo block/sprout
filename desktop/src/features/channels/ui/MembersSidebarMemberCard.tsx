@@ -1,4 +1,4 @@
-import { Play, RotateCcw, Square, UserMinus } from "lucide-react";
+import { Play, RotateCcw, Square, X } from "lucide-react";
 
 import {
   getManagedAgentPrimaryActionLabel,
@@ -70,7 +70,7 @@ export function MembersSidebarMemberCard({
 
   return (
     <div
-      className="flex items-center justify-between gap-3 rounded-xl border border-border/80 bg-background px-3 py-2.5"
+      className="group flex items-center justify-between gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-muted/40"
       data-testid={`sidebar-member-${member.pubkey}`}
     >
       <div className="flex min-w-0 items-center gap-3">
@@ -113,28 +113,27 @@ export function MembersSidebarMemberCard({
         </div>
       </div>
       {memberIsBot ? (
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
           {managedAgent ? (
             <MembersSidebarIconButton
               actionLabel={actionLabel ?? "Manage bot"}
+              className="text-muted-foreground hover:text-foreground"
               data-testid={`sidebar-agent-action-${member.pubkey}`}
               disabled={isActionPending || isArchived}
               icon={getManagedAgentActionIcon(managedAgent)}
               onClick={() => {
                 onManagedAgentAction(managedAgent);
               }}
-              variant={
-                isManagedAgentActive(managedAgent) ? "outline" : "default"
-              }
+              variant="ghost"
             />
           ) : null}
           {canRemoveMember ? (
             <MembersSidebarIconButton
               actionLabel={`Remove ${memberLabel} from channel`}
-              className="text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-destructive"
               data-testid={`sidebar-remove-member-${member.pubkey}`}
               disabled={isActionPending || isArchived}
-              icon={<UserMinus className="h-4 w-4" />}
+              icon={<X className="h-3.5 w-3.5" />}
               onClick={() => {
                 onRemoveMember(member);
               }}
@@ -143,9 +142,9 @@ export function MembersSidebarMemberCard({
           ) : null}
         </div>
       ) : canRemoveMember ? (
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100">
           <Button
-            className="h-8 rounded-full px-2.5 text-xs text-muted-foreground hover:text-foreground"
+            className="h-7 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground"
             data-testid={`sidebar-remove-member-${member.pubkey}`}
             disabled={isActionPending || isArchived}
             onClick={() => {
@@ -165,12 +164,12 @@ export function MembersSidebarMemberCard({
 
 function getManagedAgentActionIcon(agent: ManagedAgent) {
   if (isManagedAgentActive(agent)) {
-    return <Square className="h-4 w-4" />;
+    return <Square className="h-3.5 w-3.5" />;
   }
 
   if (agent.backend.type === "local" && agent.status === "stopped") {
-    return <RotateCcw className="h-4 w-4" />;
+    return <RotateCcw className="h-3.5 w-3.5" />;
   }
 
-  return <Play className="h-4 w-4" />;
+  return <Play className="h-3.5 w-3.5" />;
 }

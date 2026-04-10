@@ -29,7 +29,7 @@ export function MembersSidebarIconButton({
         <span className="inline-flex">
           <Button
             aria-label={actionLabel}
-            className={cn("h-8 w-8 rounded-full", className)}
+            className={cn("h-7 w-7 rounded-md", className)}
             data-testid={testId}
             disabled={disabled}
             onClick={onClick}
