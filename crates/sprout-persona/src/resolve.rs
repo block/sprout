@@ -30,14 +30,19 @@ pub struct ResolvedPersona {
     pub avatar: Option<String>,
     pub version: String,
 
-    // Effective prompt (persona body + pack_instructions appended)
+    // → Config.system_prompt (persona body + pack_instructions)
     pub system_prompt: String,
 
-    // Effective behavior (all precedence levels 3-5 resolved)
-    pub model: Option<ResolvedModel>,
+    // → Config.model (plain model ID, post-split)
+    pub model: Option<String>,
+    // → PersonaRecord.provider (for desktop display / GOOSE_PROVIDER env)
+    pub provider: Option<String>,
     pub temperature: Option<f64>,
     pub max_context_tokens: Option<u64>,
+
+    // → Config.subscribe_mode + channels_override
     pub subscribe: Vec<String>,
+    // → mapped to ACP filter rules at startup
     pub triggers: ResolvedTriggers,
     pub thread_replies: bool,
     pub broadcast_replies: bool,
@@ -53,13 +58,6 @@ pub struct ResolvedPersona {
 
     // Env var projection for goose subprocess
     pub goose_env_vars: Vec<(String, String)>,
-}
-
-/// Provider + model ID, split from `"provider:model-id"`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ResolvedModel {
-    pub provider: String,
-    pub model_id: String,
 }
 
 /// An MCP server with env values as literals (no interpolation in this PR).
@@ -121,7 +119,7 @@ pub fn resolve_loaded_pack(
 
     let mut personas = Vec::with_capacity(loaded.personas.len());
     for lp in &loaded.personas {
-        personas.push(resolve_persona(lp, pack_version, pack_instructions, shared_mcp, pack_dir));
+        personas.push(resolve_one_persona(lp, pack_version, pack_instructions, shared_mcp, pack_dir));
     }
 
     Ok(ResolvedPack {
@@ -134,9 +132,21 @@ pub fn resolve_loaded_pack(
     })
 }
 
+/// Resolve a single persona by name from a pack directory.
+///
+/// Convenience wrapper: loads the pack, finds the named persona, resolves it.
+/// Returns `PackError::PersonaNotFound` if no persona with that name exists.
+pub fn resolve_persona_by_name(pack_dir: &Path, name: &str) -> Result<ResolvedPersona, PackError> {
+    let pack = resolve_pack(pack_dir)?;
+    pack.personas
+        .into_iter()
+        .find(|p| p.name == name)
+        .ok_or_else(|| PackError::PersonaNotFound(pack_dir.join(name)))
+}
+
 // ── Per-persona resolution ────────────────────────────────────────────────────
 
-fn resolve_persona(
+fn resolve_one_persona(
     lp: &LoadedPersona,
     pack_version: &str,
     pack_instructions: Option<&str>,
@@ -144,18 +154,26 @@ fn resolve_persona(
     pack_dir: &Path,
 ) -> ResolvedPersona {
     let system_prompt = compose_prompt(&lp.prompt, pack_instructions);
-    let model = lp.model.as_deref().and_then(resolve_model);
+
+    // Split "provider:model-id" into separate fields (V3 contract).
+    let (provider, model) = match lp.model.as_deref() {
+        Some(s) if !s.trim().is_empty() => {
+            let (prov, id) = split_model(s);
+            (
+                prov.filter(|p| !p.is_empty()).map(str::to_owned),
+                Some(id.to_owned()),
+            )
+        }
+        _ => (None, None),
+    };
+
     let triggers = resolve_triggers(lp.respond_to.as_ref());
     let mcp_servers = merge_mcp_servers(shared_mcp, &lp.mcp_servers);
     let hooks = resolve_hooks(lp.hooks.as_ref(), pack_dir);
     let goose_env_vars = project_env_vars(lp);
 
-    // Version: persona version if set, otherwise pack version.
-    let version = lp
-        .source_path
-        .to_str()
-        .and_then(|_| None::<String>) // persona doesn't store version directly
-        .unwrap_or_else(|| pack_version.to_owned());
+    // Version: pack version (LoadedPersona doesn't carry a per-persona version).
+    let version = pack_version.to_owned();
 
     ResolvedPersona {
         name: lp.name.clone(),
@@ -165,6 +183,7 @@ fn resolve_persona(
         version,
         system_prompt,
         model,
+        provider,
         temperature: lp.temperature,
         max_context_tokens: lp.max_context_tokens,
         subscribe: lp.subscribe.clone(),
@@ -188,20 +207,6 @@ fn compose_prompt(persona_prompt: &str, pack_instructions: Option<&str>) -> Stri
         }
         _ => persona_prompt.to_owned(),
     }
-}
-
-// ── Model resolution ──────────────────────────────────────────────────────────
-
-/// Split `"provider:model-id"` into a `ResolvedModel`.
-fn resolve_model(model_str: &str) -> Option<ResolvedModel> {
-    if model_str.trim().is_empty() {
-        return None;
-    }
-    let (provider, model_id) = split_model(model_str);
-    Some(ResolvedModel {
-        provider: provider.unwrap_or("").to_owned(),
-        model_id: model_id.to_owned(),
-    })
 }
 
 // ── Triggers resolution ───────────────────────────────────────────────────────
@@ -370,28 +375,6 @@ mod tests {
     fn compose_prompt_empty_instructions_ignored() {
         let result = compose_prompt("You are a bot.", Some("   "));
         assert_eq!(result, "You are a bot.");
-    }
-
-    // ── resolve_model ─────────────────────────────────────────────────────
-
-    #[test]
-    fn resolve_model_with_provider() {
-        let m = resolve_model("anthropic:claude-sonnet-4-20250514").unwrap();
-        assert_eq!(m.provider, "anthropic");
-        assert_eq!(m.model_id, "claude-sonnet-4-20250514");
-    }
-
-    #[test]
-    fn resolve_model_without_provider() {
-        let m = resolve_model("gpt-4o").unwrap();
-        assert_eq!(m.provider, "");
-        assert_eq!(m.model_id, "gpt-4o");
-    }
-
-    #[test]
-    fn resolve_model_empty_returns_none() {
-        assert!(resolve_model("").is_none());
-        assert!(resolve_model("  ").is_none());
     }
 
     // ── resolve_triggers ──────────────────────────────────────────────────
@@ -606,6 +589,7 @@ mod tests {
         assert_eq!(p.name, "bot");
         assert_eq!(p.system_prompt, "You are Bot.\n");
         assert!(p.model.is_none());
+        assert!(p.provider.is_none());
         assert!(p.triggers.mentions); // built-in default
         assert!(p.mcp_servers.is_empty());
         assert!(p.goose_env_vars.is_empty());
@@ -646,10 +630,9 @@ mod tests {
         assert!(p.system_prompt.contains("# Team Instructions"));
         assert!(p.system_prompt.contains("Always be helpful."));
 
-        // Model resolved
-        let m = p.model.as_ref().unwrap();
-        assert_eq!(m.provider, "anthropic");
-        assert_eq!(m.model_id, "claude-sonnet-4-20250514");
+        // Model split into separate fields (V3 contract)
+        assert_eq!(p.model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(p.provider.as_deref(), Some("anthropic"));
 
         // Env vars projected
         let env_map: HashMap<&str, &str> = p
@@ -703,9 +686,11 @@ mod tests {
         let lep = pack.personas.iter().find(|p| p.name == "lep").unwrap();
 
         // pip overrides model
-        assert_eq!(pip.model.as_ref().unwrap().model_id, "claude-4-opus-20250514");
+        assert_eq!(pip.model.as_deref(), Some("claude-4-opus-20250514"));
+        assert_eq!(pip.provider.as_deref(), Some("anthropic"));
         // lep inherits model from defaults
-        assert_eq!(lep.model.as_ref().unwrap().model_id, "claude-sonnet-4-20250514");
+        assert_eq!(lep.model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(lep.provider.as_deref(), Some("anthropic"));
 
         // pip inherits temperature from defaults
         assert_eq!(pip.temperature, Some(0.7));
@@ -720,6 +705,100 @@ mod tests {
         // Both inherit thread_replies from defaults
         assert!(pip.thread_replies);
         assert!(lep.thread_replies);
+    }
+
+    // ── resolve_persona_by_name ──────────────────────────────────────────
+
+    #[test]
+    fn resolve_persona_by_name_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::create_dir_all(dir.join(".plugin")).unwrap();
+        std::fs::create_dir_all(dir.join("agents")).unwrap();
+
+        std::fs::write(
+            dir.join(".plugin/plugin.json"),
+            r#"{"id":"t","name":"T","version":"1.0.0","personas":["agents/a.persona.md","agents/b.persona.md"]}"#,
+        ).unwrap();
+        std::fs::write(
+            dir.join("agents/a.persona.md"),
+            "---\nname: alpha\ndisplay_name: Alpha\ndescription: First.\n---\nAlpha prompt.\n",
+        ).unwrap();
+        std::fs::write(
+            dir.join("agents/b.persona.md"),
+            "---\nname: beta\ndisplay_name: Beta\ndescription: Second.\n---\nBeta prompt.\n",
+        ).unwrap();
+
+        let p = resolve_persona_by_name(dir, "beta").unwrap();
+        assert_eq!(p.name, "beta");
+        assert_eq!(p.display_name, "Beta");
+        assert!(p.system_prompt.contains("Beta prompt."));
+    }
+
+    #[test]
+    fn resolve_persona_by_name_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::create_dir_all(dir.join(".plugin")).unwrap();
+        std::fs::create_dir_all(dir.join("agents")).unwrap();
+
+        std::fs::write(
+            dir.join(".plugin/plugin.json"),
+            r#"{"id":"t","name":"T","version":"1.0.0","personas":["agents/a.persona.md"]}"#,
+        ).unwrap();
+        std::fs::write(
+            dir.join("agents/a.persona.md"),
+            "---\nname: alpha\ndisplay_name: Alpha\ndescription: First.\n---\n",
+        ).unwrap();
+
+        let err = resolve_persona_by_name(dir, "nonexistent").unwrap_err();
+        assert!(matches!(err, PackError::PersonaNotFound(_)));
+    }
+
+    // ── model split ───────────────────────────────────────────────────────
+
+    #[test]
+    fn model_split_provider_and_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::create_dir_all(dir.join(".plugin")).unwrap();
+        std::fs::create_dir_all(dir.join("agents")).unwrap();
+
+        std::fs::write(
+            dir.join(".plugin/plugin.json"),
+            r#"{"id":"t","name":"T","version":"1.0.0","personas":["agents/a.persona.md"]}"#,
+        ).unwrap();
+        std::fs::write(
+            dir.join("agents/a.persona.md"),
+            "---\nname: a\ndisplay_name: A\ndescription: A.\nmodel: openai:gpt-4o\n---\n",
+        ).unwrap();
+
+        let pack = resolve_pack(dir).unwrap();
+        let p = &pack.personas[0];
+        assert_eq!(p.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(p.provider.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn model_no_provider() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::create_dir_all(dir.join(".plugin")).unwrap();
+        std::fs::create_dir_all(dir.join("agents")).unwrap();
+
+        std::fs::write(
+            dir.join(".plugin/plugin.json"),
+            r#"{"id":"t","name":"T","version":"1.0.0","personas":["agents/a.persona.md"]}"#,
+        ).unwrap();
+        std::fs::write(
+            dir.join("agents/a.persona.md"),
+            "---\nname: a\ndisplay_name: A\ndescription: A.\nmodel: gpt-4o\n---\n",
+        ).unwrap();
+
+        let pack = resolve_pack(dir).unwrap();
+        let p = &pack.personas[0];
+        assert_eq!(p.model.as_deref(), Some("gpt-4o"));
+        assert!(p.provider.is_none());
     }
 
     // ── Test helpers ──────────────────────────────────────────────────────
