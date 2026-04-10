@@ -152,7 +152,7 @@ function MemberActionsMenu({
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-all group-hover:opacity-100 hover:bg-muted hover:text-foreground data-[state=open]:opacity-100"
           data-testid={`sidebar-member-menu-${member.pubkey}`}
           type="button"
         >
