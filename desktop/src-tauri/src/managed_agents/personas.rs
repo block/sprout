@@ -406,6 +406,7 @@ fn built_in_persona_records(now: &str) -> Vec<PersonaRecord> {
             is_builtin: true,
             is_active: false,
             source_pack: None,
+            source_pack_persona_slug: None,
             created_at: now.to_string(),
             updated_at: now.to_string(),
         })
@@ -568,12 +569,23 @@ fn validate_pack_id(id: &str) -> Result<(), String> {
     if id.len() > 128 {
         return Err(format!("pack ID too long: {} chars (max 128)", id.len()));
     }
+    // Character allowlist: [a-zA-Z0-9._-]
     if !id
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
     {
         return Err(format!(
             "pack ID contains invalid characters: \"{id}\". Only [a-zA-Z0-9._-] allowed."
+        ));
+    }
+    // Path traversal defense: block ".", "..", leading dots, and IDs with
+    // no alphanumeric characters (e.g., "---", "...").
+    if id.starts_with('.') {
+        return Err(format!("pack ID \"{id}\" must not start with '.'"));
+    }
+    if !id.chars().any(|c| c.is_ascii_alphanumeric()) {
+        return Err(format!(
+            "pack ID \"{id}\" must contain at least one alphanumeric character"
         ));
     }
     Ok(())
@@ -661,6 +673,7 @@ pub fn import_persona_pack(
             is_builtin: false,
             is_active: true,
             source_pack: Some(resolved.id.clone()),
+            source_pack_persona_slug: Some(p.name.clone()),
             created_at: now.clone(),
             updated_at: now.clone(),
         })
