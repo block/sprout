@@ -86,7 +86,7 @@ export function TeamsSection({
           </p>
         </div>
         <input
-          accept=".json"
+          accept=".json,.zip"
           className="hidden"
           onChange={handleFileChange}
           ref={fileInputRef}

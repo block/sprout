@@ -30,8 +30,8 @@ const rules = [
 
 // Exceptions should stay rare and temporary. Prefer splitting files instead.
 const overrides = new Map([
-  ["src-tauri/src/managed_agents/personas.rs", 600], // built-in persona system prompts (Solo, Ralph, Scout, Reviewer) keep this file slightly above the default cap even with tests extracted
-  ["src-tauri/src/managed_agents/persona_card.rs", 800], // PNG/ZIP persona card codec + provider/model/namePool fields + 27 unit tests (~350 lines of tests); rustfmt adds line breaks around long literals/builders
+  ["src-tauri/src/managed_agents/personas.rs", 830], // built-in persona system prompts + persona pack import/uninstall/list + uninstall safety check
+  ["src-tauri/src/managed_agents/persona_card.rs", 970], // PNG/ZIP/MD persona card codec + pack-zip detection + nested root finder + provider/model/namePool fields + 27 unit tests
   ["src/app/AppShell.tsx", 860], // message edit state + handlers + ChannelPane edit prop threading + scrollback pagination + workflows view + memory-leak safeguards
   ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
@@ -42,10 +42,10 @@ const overrides = new Map([
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
   ["src/shared/api/relayClientSession.ts", 790], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
-  ["src-tauri/src/lib.rs", 560], // sprout-media:// proxy + Range headers + Sprout nest init (ensure_nest) in setup()
+  ["src-tauri/src/lib.rs", 570], // sprout-media:// proxy + Range headers + Sprout nest init (ensure_nest) in setup() + persona pack commands
   ["src-tauri/src/commands/media.rs", 720], // ffmpeg video transcode + poster frame extraction + run_ffmpeg_with_timeout (find_ffmpeg, is_video_file, transcode_to_mp4, extract_poster_frame, transcode_and_extract_poster) + spawn_blocking wrappers + tests
-  ["src-tauri/src/commands/agents.rs", 860], // remote agent lifecycle routing (local + provider branches) + scope enforcement + mcp_toolsets field; rustfmt adds line breaks around long tuple/closure blocks
-  ["src-tauri/src/managed_agents/runtime.rs", 650], // KNOWN_AGENT_BINARIES const + process_belongs_to_us FFI (macOS proc_name + Linux /proc/comm) + terminate_process + start/stop/sync lifecycle
+  ["src-tauri/src/commands/agents.rs", 880], // remote agent lifecycle routing (local + provider branches) + scope enforcement + persona pack metadata wiring + mcp_toolsets field
+  ["src-tauri/src/managed_agents/runtime.rs", 690], // KNOWN_AGENT_BINARIES const + process_belongs_to_us FFI (macOS proc_name + Linux /proc/comm) + terminate_process + start/stop/sync lifecycle + pack persona live-read
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests
   ["src/features/agents/hooks.ts", 520], // agent query/mutation surface now includes built-in persona library activation
   ["src/features/agents/ui/AgentsView.tsx", 880], // remote agent lifecycle controls + persona/team management + persona import-update dialog wiring + built-in catalog/library state orchestration
@@ -54,7 +54,7 @@ const overrides = new Map([
   ["src/features/agents/ui/useTeamActions.ts", 510], // team CRUD + export + import + import-update orchestration with query invalidation
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
-  ["src/shared/api/types.ts", 535], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields + mcpToolsets
+  ["src/shared/api/types.ts", 540], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields + mcpToolsets + sourcePack
 ]);
 
 async function walkFiles(directory) {

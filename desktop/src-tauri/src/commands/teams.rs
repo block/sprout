@@ -146,6 +146,9 @@ pub async fn export_team_to_json(
     save_json_with_dialog(&app, &filename, &json_bytes).await
 }
 
+/// Max zip size for pack imports via team import (100 MB, same as persona zip limit).
+const MAX_TEAM_ZIP_BYTES: usize = 100 * 1024 * 1024;
+
 #[tauri::command]
 pub fn parse_team_file(
     file_bytes: Vec<u8>,
@@ -154,8 +157,87 @@ pub fn parse_team_file(
     if file_bytes.is_empty() {
         return Err("File is empty.".to_string());
     }
+
+    // Detect zip files (persona packs) BEFORE the JSON size check — zips can be larger.
+    if file_bytes.len() >= 4 && file_bytes[..4] == [0x50, 0x4B, 0x03, 0x04] {
+        if file_bytes.len() > MAX_TEAM_ZIP_BYTES {
+            return Err("ZIP file is too large (max 100 MB).".to_string());
+        }
+        return parse_team_from_pack_zip(&file_bytes);
+    }
+
     if file_bytes.len() > MAX_TEAM_JSON_BYTES {
         return Err("File is too large (max 5 MB).".to_string());
     }
+
     parse_team_json(&file_bytes)
+}
+
+/// Parse a persona pack zip as a team: pack name → team name, personas → members.
+fn parse_team_from_pack_zip(zip_bytes: &[u8]) -> Result<ParsedTeamPreview, String> {
+    use crate::managed_agents::TeamPersonaPreview;
+
+    // Extract to tempdir and resolve the pack directly — gives us structured
+    // access to pack name without parsing formatted strings.
+    let tmp = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {e}"))?;
+    let cursor = std::io::Cursor::new(zip_bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| format!("Invalid ZIP archive: {e}"))?;
+
+    let max_decompressed: usize = 100 * 1024 * 1024; // 100 MB
+    let mut total_decompressed: usize = 0;
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read ZIP entry: {e}"))?;
+        let safe_name = match entry.enclosed_name() {
+            Some(name) => name.to_path_buf(),
+            None => continue,
+        };
+        let out_path = tmp.path().join(&safe_name);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out_path).map_err(|e| format!("Failed to create dir: {e}"))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent dir: {e}"))?;
+            }
+            let mut data = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut data)
+                .map_err(|e| format!("Read error: {e}"))?;
+            total_decompressed += data.len();
+            if total_decompressed > max_decompressed {
+                return Err("ZIP decompressed content exceeds 100MB limit".to_string());
+            }
+            std::fs::write(&out_path, &data).map_err(|e| format!("Write error: {e}"))?;
+        }
+    }
+
+    let pack_root = crate::managed_agents::find_plugin_json(tmp.path())
+        .ok_or_else(|| "No .plugin/plugin.json found in ZIP".to_string())?;
+    let resolved = sprout_persona::resolve::resolve_pack(&pack_root)
+        .map_err(|e| format!("Pack validation failed: {e}"))?;
+
+    if resolved.personas.is_empty() {
+        return Err("Pack contains no personas.".to_string());
+    }
+
+    Ok(ParsedTeamPreview {
+        name: resolved.name,
+        description: if resolved.description.is_empty() {
+            None
+        } else {
+            Some(resolved.description)
+        },
+        personas: resolved
+            .personas
+            .into_iter()
+            .map(|p| TeamPersonaPreview {
+                display_name: p.display_name,
+                system_prompt: p.system_prompt,
+                avatar_url: None,
+            })
+            .collect(),
+    })
 }

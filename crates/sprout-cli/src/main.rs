@@ -453,6 +453,26 @@ enum Cmd {
         #[arg(long)]
         pubkey: String,
     },
+
+    // ---- Pack (local) ------------------------------------------------------
+    /// Persona pack operations (local, no relay connection needed)
+    #[command(subcommand)]
+    Pack(PackCmd),
+}
+
+/// Subcommands for `sprout pack`.
+#[derive(Subcommand)]
+enum PackCmd {
+    /// Validate a persona pack directory
+    Validate {
+        /// Path to the pack directory
+        path: String,
+    },
+    /// Inspect a persona pack — show metadata and effective config
+    Inspect {
+        /// Path to the pack directory
+        path: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +521,14 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     // Passes --private-key flag; cmd_auth falls back to SPROUT_PRIVATE_KEY env var.
     if let Cmd::Auth = &cli.command {
         return commands::auth::cmd_auth(&relay_url, cli.private_key.as_deref()).await;
+    }
+
+    // Pack commands are local-only — no relay connection needed.
+    if let Cmd::Pack(ref sub) = cli.command {
+        return match sub {
+            PackCmd::Validate { path } => commands::pack::cmd_validate(path),
+            PackCmd::Inspect { path } => commands::pack::cmd_inspect(path),
+        };
     }
 
     // Auth resolution: token > private_key (auto-mint) > pubkey > error
@@ -811,6 +839,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             commands::social::cmd_get_contact_list(&client, &pubkey).await
         }
 
+        // ---- Pack (local) --------------------------------------------------
+        Cmd::Pack(_) => unreachable!("handled above"),
+
         // ---- Auth & Tokens -------------------------------------------------
         Cmd::Auth => unreachable!("handled above"),
         Cmd::ListTokens => commands::auth::cmd_list_tokens(&client).await,
@@ -862,10 +893,10 @@ mod tests {
         assert!(super::parse_bool_flag("--approved", "").is_err());
     }
 
-    /// Parity: the CLI exposes exactly the expected 53 commands.
+    /// Parity: the CLI exposes exactly the expected 54 commands.
     /// If a command is added or removed, this test forces a conscious update.
     #[test]
-    fn command_inventory_is_53() {
+    fn command_inventory_is_54() {
         let expected: Vec<&str> = vec![
             "add-channel-member",
             "add-dm-member",
@@ -902,6 +933,7 @@ mod tests {
             "list-tokens",
             "list-workflows",
             "open-dm",
+            "pack",
             "publish-note",
             "remove-channel-member",
             "remove-reaction",
@@ -932,8 +964,8 @@ mod tests {
 
         assert_eq!(
             actual.len(),
-            53,
-            "Expected 53 commands, got {}. Actual: {:?}",
+            54,
+            "Expected 54 commands, got {}. Actual: {:?}",
             actual.len(),
             actual
         );

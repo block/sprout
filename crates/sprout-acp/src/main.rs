@@ -541,7 +541,12 @@ async fn tokio_main() -> Result<()> {
         // This matches the run_models pattern and prevents zombie leaks on
         // init timeout (the cancelled future would drop the AcpClient via
         // Drop which is best-effort only).
-        let spawn_result = AcpClient::spawn(&config.agent_command, &config.agent_args).await;
+        let spawn_result = AcpClient::spawn(
+            &config.agent_command,
+            &config.agent_args,
+            &config.persona_env_vars,
+        )
+        .await;
         match spawn_result {
             Ok(mut acp) => {
                 match tokio::time::timeout(Duration::from_secs(60), acp.initialize()).await {
@@ -912,9 +917,10 @@ async fn tokio_main() -> Result<()> {
                 tracing::info!(agent = idx, "slot refill: spawning background respawn");
                 let cmd = config.agent_command.clone();
                 let args = config.agent_args.clone();
+                let env = config.persona_env_vars.clone();
                 let guard = RespawnGuard::new(idx, respawn_tx.clone());
                 respawn_tasks.spawn(async move {
-                    let result = spawn_and_init(&cmd, &args).await;
+                    let result = spawn_and_init(&cmd, &args, &env).await;
                     guard.send(result);
                 });
             }
@@ -1837,12 +1843,13 @@ fn recover_panicked_agent(
     slot.respawn_in_flight = true;
     let cmd = config.agent_command.clone();
     let args = config.agent_args.clone();
+    let env = config.persona_env_vars.clone();
     let guard = RespawnGuard::new(i, respawn_tx.clone());
     respawn_tasks.spawn(async move {
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
-        let result = spawn_and_init(&cmd, &args).await;
+        let result = spawn_and_init(&cmd, &args, &env).await;
         guard.send(result);
     });
 }
@@ -1983,6 +1990,7 @@ fn spawn_respawn_task(
     // Spawn the actual work (shutdown + sleep + spawn + init) off the main loop.
     let cmd = config.agent_command.clone();
     let args = config.agent_args.clone();
+    let env = config.persona_env_vars.clone();
     let guard = RespawnGuard::new(index, respawn_tx.clone());
     respawn_tasks.spawn(async move {
         // Shutdown old agent (reap child, prevent zombie).
@@ -1994,7 +2002,7 @@ fn spawn_respawn_task(
             tokio::time::sleep(delay).await;
         }
 
-        let result = spawn_and_init(&cmd, &args).await;
+        let result = spawn_and_init(&cmd, &args, &env).await;
         guard.send(result);
     });
 
@@ -2007,8 +2015,12 @@ fn spawn_respawn_task(
 ///
 /// Takes owned args so it can run in a background `tokio::spawn` task without
 /// borrowing `Config`. All respawn/refill paths use this.
-async fn spawn_and_init(command: &str, args: &[String]) -> Result<AcpClient> {
-    let mut acp = AcpClient::spawn(command, args)
+async fn spawn_and_init(
+    command: &str,
+    args: &[String],
+    extra_env: &[(String, String)],
+) -> Result<AcpClient> {
+    let mut acp = AcpClient::spawn(command, args, extra_env)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
 
@@ -2045,7 +2057,8 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
         .to_string();
 
     // Spawn outside the timeout so we always own the child for cleanup.
-    let mut client = match AcpClient::spawn(&args.agent_command, &agent_args).await {
+    // `models` subcommand doesn't use persona packs — no extra env.
+    let mut client = match AcpClient::spawn(&args.agent_command, &agent_args, &[]).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("error: failed to spawn agent: {e}");

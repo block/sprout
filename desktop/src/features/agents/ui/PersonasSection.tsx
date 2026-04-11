@@ -72,7 +72,7 @@ export function PersonasSection({
       {isDragOver ? (
         <div className="pointer-events-none absolute -inset-1 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/50 bg-background/80 backdrop-blur-sm">
           <p className="text-sm font-medium text-primary">
-            Drop .persona.json, .persona.png, or .zip to import
+            Drop .persona.md, .persona.json, .persona.png, or .zip to import
           </p>
         </div>
       ) : null}
@@ -87,7 +87,7 @@ export function PersonasSection({
           </p>
         </div>
         <input
-          accept=".json,.png,.zip"
+          accept=".md,.json,.png,.zip"
           className="hidden"
           onChange={handleFileChange}
           ref={fileInputRef}
@@ -180,6 +180,11 @@ export function PersonasSection({
                       >
                         <Trash2 className="h-4 w-4" />
                         Remove from My Agents
+                      </DropdownMenuItem>
+                    ) : persona.sourcePack ? (
+                      <DropdownMenuItem disabled>
+                        <Trash2 className="h-4 w-4" />
+                        Managed by pack
                       </DropdownMenuItem>
                     ) : (
                       <DropdownMenuItem
