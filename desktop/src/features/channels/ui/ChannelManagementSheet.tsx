@@ -4,10 +4,12 @@ import {
   DoorClosed,
   DoorOpen,
   FileText,
+  FolderOpen,
   Hash,
   Lock,
   MessageSquare,
   Users,
+  X,
 } from "lucide-react";
 import * as React from "react";
 
@@ -47,6 +49,12 @@ import {
   SheetTitle,
 } from "@/shared/ui/sheet";
 import { Textarea } from "@/shared/ui/textarea";
+import {
+  getProjectDir,
+  setProjectDir,
+  startFileWatcher,
+  stopFileWatcher,
+} from "@/shared/api/tauri";
 import { ChannelCanvas } from "./ChannelCanvas";
 
 type ChannelManagementSheetProps = {
@@ -150,6 +158,14 @@ export function ChannelManagementSheet({
   const [topicDraft, setTopicDraft] = React.useState("");
   const [purposeDraft, setPurposeDraft] = React.useState("");
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = React.useState(false);
+  const [projectDirDraft, setProjectDirDraft] = React.useState("");
+  const [projectDirSaved, setProjectDirSaved] = React.useState<string | null>(
+    null,
+  );
+  const [projectDirError, setProjectDirError] = React.useState<string | null>(
+    null,
+  );
+  const [projectDirSaving, setProjectDirSaving] = React.useState(false);
 
   // Sync drafts from server only when the sheet opens or the channel changes —
   // not on every background refetch, which would clobber in-flight edits.
@@ -175,6 +191,13 @@ export function ChannelManagementSheet({
     setDescriptionDraft(detail.description);
     setTopicDraft(detail.topic ?? "");
     setPurposeDraft(detail.purpose ?? "");
+
+    // Load project directory config.
+    void getProjectDir(detail.id).then((dir) => {
+      setProjectDirDraft(dir ?? "");
+      setProjectDirSaved(dir);
+      setProjectDirError(null);
+    });
   }, [detail, open]);
 
   if (!channel) {
@@ -328,6 +351,123 @@ export function ChannelManagementSheet({
               channelId={channelId}
               isArchived={isArchived}
             />
+          </Section>
+
+          <Separator />
+
+          <Section
+            description="Watch a local directory for file changes and show inline diffs in the timeline."
+            title="Project directory"
+          >
+            <form
+              className="space-y-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!channelId) return;
+                const trimmed = projectDirDraft.trim();
+                setProjectDirSaving(true);
+                setProjectDirError(null);
+                void (async () => {
+                  try {
+                    const dirOrNull = trimmed || null;
+                    await setProjectDir(channelId, dirOrNull);
+                    setProjectDirSaved(dirOrNull);
+                    if (dirOrNull) {
+                      await startFileWatcher(channelId);
+                    } else {
+                      await stopFileWatcher(channelId);
+                    }
+                  } catch (error) {
+                    setProjectDirError(
+                      error instanceof Error
+                        ? error.message
+                        : "Failed to set project directory.",
+                    );
+                  } finally {
+                    setProjectDirSaving(false);
+                  }
+                })();
+              }}
+            >
+              <div className="space-y-1.5">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="channel-project-dir"
+                >
+                  Directory path
+                </label>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <FolderOpen className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      className="pl-9"
+                      data-testid="channel-management-project-dir"
+                      id="channel-project-dir"
+                      onChange={(event) =>
+                        setProjectDirDraft(event.target.value)
+                      }
+                      placeholder="/path/to/project"
+                      value={projectDirDraft}
+                    />
+                  </div>
+                  {projectDirSaved ? (
+                    <Button
+                      className="h-9 w-9 shrink-0 p-0"
+                      onClick={() => {
+                        setProjectDirDraft("");
+                        if (!channelId) return;
+                        setProjectDirSaving(true);
+                        setProjectDirError(null);
+                        void (async () => {
+                          try {
+                            await setProjectDir(channelId, null);
+                            await stopFileWatcher(channelId);
+                            setProjectDirSaved(null);
+                          } catch (error) {
+                            setProjectDirError(
+                              error instanceof Error
+                                ? error.message
+                                : "Failed to clear project directory.",
+                            );
+                          } finally {
+                            setProjectDirSaving(false);
+                          }
+                        })();
+                      }}
+                      size="sm"
+                      title="Clear project directory"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  data-testid="channel-management-save-project-dir"
+                  disabled={projectDirSaving}
+                  size="sm"
+                  type="submit"
+                  variant="outline"
+                >
+                  {projectDirSaving
+                    ? "Saving..."
+                    : projectDirSaved
+                      ? "Update"
+                      : "Watch directory"}
+                </Button>
+                {projectDirSaved ? (
+                  <span className="text-xs text-emerald-600">
+                    Watching
+                  </span>
+                ) : null}
+              </div>
+              {projectDirError ? (
+                <p className="text-sm text-destructive">{projectDirError}</p>
+              ) : null}
+            </form>
           </Section>
 
           <Separator />

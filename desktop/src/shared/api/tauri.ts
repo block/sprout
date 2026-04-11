@@ -1070,3 +1070,30 @@ export async function probeBackendProvider(
     binaryPath,
   });
 }
+
+// ── File watcher (local diffs) ────────────────────────────────────────────────
+
+export async function getProjectDir(
+  channelId: string,
+): Promise<string | null> {
+  return invokeTauri<string | null>("get_project_dir", { channelId });
+}
+
+export async function setProjectDir(
+  channelId: string,
+  path: string | null,
+): Promise<void> {
+  await invokeTauri("set_project_dir", { channelId, path });
+}
+
+export async function startFileWatcher(channelId: string): Promise<void> {
+  await invokeTauri("start_file_watcher", { channelId });
+}
+
+export async function stopFileWatcher(channelId: string): Promise<void> {
+  await invokeTauri("stop_file_watcher", { channelId });
+}
+
+export async function resnapshotProjectDir(channelId: string): Promise<void> {
+  await invokeTauri("resnapshot_project_dir", { channelId });
+}

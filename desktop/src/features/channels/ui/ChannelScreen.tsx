@@ -33,6 +33,7 @@ import {
 } from "@/features/messages/lib/threading";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
+import { useLocalFileDiffs } from "@/features/messages/useLocalFileDiffs";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
@@ -104,6 +105,28 @@ export function ChannelScreen({
     markChannelRead(activeChannelId, activeReadAt);
   }, [activeChannelId, activeReadAt, markChannelRead]);
 
+  // Auto-start file watcher when switching to a channel with a configured project dir.
+  React.useEffect(() => {
+    if (!activeChannelId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { getProjectDir, startFileWatcher } = await import(
+          "@/shared/api/tauri"
+        );
+        const dir = await getProjectDir(activeChannelId);
+        if (dir && !cancelled) {
+          await startFileWatcher(activeChannelId);
+        }
+      } catch {
+        // Silently ignore — watcher will start when user configures it.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChannelId]);
+
   const {
     activeChannelTitle,
     activeDmPresenceStatus,
@@ -139,6 +162,7 @@ export function ChannelScreen({
     currentPubkey,
     latestMessageEvent,
   );
+  const { localDiffs } = useLocalFileDiffs(activeChannelId);
   const messageProfilePubkeys = React.useMemo(
     () => [...new Set([...messageAuthorPubkeys, ...typingPubkeys])],
     [messageAuthorPubkeys, typingPubkeys],
@@ -213,15 +237,29 @@ export function ChannelScreen({
       resolvedMessages,
     ],
   );
+  // Merge local file-diff events into the timeline (sorted by createdAt).
+  const mergedTimelineMessages = React.useMemo(() => {
+    if (localDiffs.length === 0) {
+      return timelineMessages;
+    }
+    const merged = [...timelineMessages, ...localDiffs];
+    merged.sort((a, b) => a.createdAt - b.createdAt);
+    return merged;
+  }, [timelineMessages, localDiffs]);
+
   const replyTargetMessage = React.useMemo(
     () =>
-      timelineMessages.find((message) => message.id === replyTargetId) ?? null,
-    [replyTargetId, timelineMessages],
+      mergedTimelineMessages.find(
+        (message) => message.id === replyTargetId,
+      ) ?? null,
+    [replyTargetId, mergedTimelineMessages],
   );
   const editTargetMessage = React.useMemo(
     () =>
-      timelineMessages.find((message) => message.id === editTargetId) ?? null,
-    [editTargetId, timelineMessages],
+      mergedTimelineMessages.find(
+        (message) => message.id === editTargetId,
+      ) ?? null,
+    [editTargetId, mergedTimelineMessages],
   );
 
   const {
@@ -452,7 +490,7 @@ export function ChannelScreen({
                 }
                 isSending={sendMessageMutation.isPending}
                 isTimelineLoading={isTimelineLoading}
-                messages={timelineMessages}
+                messages={mergedTimelineMessages}
                 onCancelEdit={handleCancelEdit}
                 onCancelReply={handleCancelReply}
                 onDelete={handleDelete}

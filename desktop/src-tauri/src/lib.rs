@@ -1,6 +1,7 @@
 mod app_state;
 mod commands;
 mod events;
+mod file_watcher;
 mod managed_agents;
 mod migration;
 mod models;
@@ -371,6 +372,7 @@ pub fn run() {
             });
         })
         .manage(build_app_state())
+        .manage(file_watcher::FileWatcherState::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
             let shutdown_started = Arc::clone(&restore_shutdown_started);
@@ -494,6 +496,11 @@ pub fn run() {
             trigger_workflow,
             grant_approval,
             deny_approval,
+            file_watcher::get_project_dir,
+            file_watcher::set_project_dir,
+            file_watcher::start_file_watcher,
+            file_watcher::stop_file_watcher,
+            file_watcher::resnapshot_project_dir,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
