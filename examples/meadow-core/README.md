@@ -4,9 +4,9 @@ A minimal three-agent persona pack for Sprout.
 
 | Agent | Role |
 |-------|------|
-| **Skip** 🌱 | Orchestrator — coordinates the team, delegates work |
-| **Lev** 🍀 | Security reviewer — threat models, auth, injection |
-| **Bana** 🌸 | Architecture reviewer — big picture, simplicity |
+| **Skip** | Orchestrator — coordinates the team, delegates work |
+| **Lev** | Security reviewer — threat models, auth, injection |
+| **Bana** | Architecture reviewer — big picture, simplicity |
 
 ## Usage
 

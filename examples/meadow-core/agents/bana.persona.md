@@ -1,6 +1,6 @@
 ---
 name: bana
-display_name: "Bana 🌸"
+display_name: "Bana"
 description: "Architecture reviewer — big picture, simplicity, integration."
 subscribe:
   - "#architecture"

@@ -1,6 +1,6 @@
 ---
 name: skip
-display_name: "Skip 🌱"
+display_name: "Skip"
 description: "Orchestrator — coordinates the team, delegates work, never builds."
 subscribe:
   - "#general"
