@@ -152,9 +152,13 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         let auth_ctx = sprout_auth::AuthContext {
             pubkey: event.pubkey,
             scopes: proxy.scopes,
+            channel_ids: None,
             auth_method: sprout_auth::AuthMethod::ProxyIdentity,
         };
         *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
+        state
+            .conn_manager
+            .set_authenticated_pubkey(conn_id, pubkey_bytes.clone());
         conn.send(RelayMessage::ok(&event_id_hex, true, ""));
         return;
     }

@@ -342,5 +342,5 @@ CREATE TABLE identity_bindings (
     CONSTRAINT chk_identity_bindings_pubkey_len CHECK (LENGTH(pubkey) = 32)
 );
 
-CREATE INDEX idx_identity_bindings_pubkey ON identity_bindings(pubkey);
+CREATE UNIQUE INDEX idx_identity_bindings_pubkey ON identity_bindings(pubkey);
 CREATE INDEX idx_identity_bindings_uid ON identity_bindings(uid);

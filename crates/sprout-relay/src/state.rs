@@ -318,14 +318,19 @@ impl AppState {
         if let Some(cached) = self.identity_bound_cache.get(pubkey_bytes) {
             return cached;
         }
-        let bound = self
-            .db
-            .is_pubkey_identity_bound(pubkey_bytes)
-            .await
-            .unwrap_or(false);
-        self.identity_bound_cache
-            .insert(pubkey_bytes.to_vec(), bound);
-        bound
+        match self.db.is_pubkey_identity_bound(pubkey_bytes).await {
+            Ok(bound) => {
+                self.identity_bound_cache
+                    .insert(pubkey_bytes.to_vec(), bound);
+                bound
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "identity binding check failed — denying access");
+                // Fail closed: treat DB errors as "bound" so the caller
+                // rejects standard auth and requires identity JWT.
+                true
+            }
+        }
     }
 }
 

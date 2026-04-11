@@ -405,7 +405,7 @@ impl AuthService {
             })?
             .to_string();
 
-        let scopes = Scope::all_non_admin();
+        let scopes = extract_scopes_from_claims(&claims);
 
         Ok((identity::ProxyIdentityClaims { uid, username }, scopes))
     }

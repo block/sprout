@@ -40,7 +40,7 @@ const overrides = new Map([
   ["src/features/settings/ui/SettingsView.tsx", 600],
   ["src/features/sidebar/ui/AppSidebar.tsx", 860], // channels + forums creation forms + Pulse nav
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
-  ["src/shared/api/relayClientSession.ts", 840], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore + subscribeToChannelLive (huddle TTS) + subscribeToHuddleEvents (huddle indicator) + identity bootstrap
+  ["src/shared/api/relayClientSession.ts", 845], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore + subscribeToChannelLive (huddle TTS) + subscribeToHuddleEvents (huddle indicator) + identity bootstrap
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
   ["src-tauri/src/lib.rs", 710], // sprout-media:// proxy + Range headers + Sprout nest init (ensure_nest) in setup() + huddle command registration + PTT global shortcut handler + persona pack commands + app_handle storage for event emission
   ["src-tauri/src/commands/media.rs", 720], // ffmpeg video transcode + poster frame extraction + run_ffmpeg_with_timeout (find_ffmpeg, is_video_file, transcode_to_mp4, extract_poster_frame, transcode_and_extract_poster) + spawn_blocking wrappers + tests
@@ -67,7 +67,7 @@ const overrides = new Map([
   ["src-tauri/src/huddle/tts.rs", 1030], // TTS pipeline + session warmup + cancel/shutdown handling + apply_fades + 18 unit tests for remote interrupt mechanism
   ["src-tauri/src/commands/pairing.rs", 550], // NIP-AB pairing actor: 3 Tauri commands + background WS task + NIP-42 auth + event parsing helpers
   ["src-tauri/src/lib.rs", 715], // +4 lines for PairingHandle managed state + 3 pairing command registrations
-  ["src/shared/api/tauri.ts", 1110], // +14 lines for 3 NIP-AB pairing command wrappers
+  ["src/shared/api/tauri.ts", 1140], // +14 lines for 3 NIP-AB pairing command wrappers + identity bootstrap commands
 ]);
 
 async function walkFiles(directory) {
