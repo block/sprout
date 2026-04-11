@@ -176,14 +176,7 @@ export const MessageRow = React.memo(
           data-message-id={message.id}
           data-testid="message-row"
         >
-          <div className="flex shrink-0 items-start gap-1">
-            {isBotInstance(message.role) ? (
-              <BotIdenticon
-                value={message.author}
-                size={20}
-                className="rounded"
-              />
-            ) : null}
+          <div className="flex shrink-0 items-start">
             {message.pubkey ? (
               <UserProfilePopover pubkey={message.pubkey}>
                 <button
@@ -226,6 +219,13 @@ export const MessageRow = React.memo(
                   {message.author}
                 </h3>
               )}
+              {isBotInstance(message.role) ? (
+                <BotIdenticon
+                  value={message.author}
+                  size={14}
+                  className="shrink-0 rounded-sm"
+                />
+              ) : null}
               {message.personaDisplayName ? (
                 <span className="text-xs text-muted-foreground">
                   {message.personaDisplayName}
@@ -236,19 +236,23 @@ export const MessageRow = React.memo(
                 </p>
               ) : null}
               <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-                <MessageActionBar
-                  activeReplyTargetId={activeReplyTargetId}
-                  message={message}
-                  onDelete={onDelete}
-                  onEdit={onEdit}
-                  onReactionSelect={
-                    canToggleReactions ? handleReactionSelect : undefined
-                  }
-                  onReply={onReply}
-                  reactionErrorMessage={reactionErrorMessage}
-                  reactionPending={reactionPending}
-                  reactions={reactions}
-                />
+                <div className="relative">
+                  <div className="absolute right-0 top-1/2 -translate-y-1/2">
+                    <MessageActionBar
+                      activeReplyTargetId={activeReplyTargetId}
+                      message={message}
+                      onDelete={onDelete}
+                      onEdit={onEdit}
+                      onReactionSelect={
+                        canToggleReactions ? handleReactionSelect : undefined
+                      }
+                      onReply={onReply}
+                      reactionErrorMessage={reactionErrorMessage}
+                      reactionPending={reactionPending}
+                      reactions={reactions}
+                    />
+                  </div>
+                </div>
                 {message.pending ? (
                   <p className="font-medium uppercase tracking-[0.14em] text-primary/80">
                     Sending
