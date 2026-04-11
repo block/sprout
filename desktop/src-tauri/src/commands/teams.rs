@@ -157,5 +157,43 @@ pub fn parse_team_file(
     if file_bytes.len() > MAX_TEAM_JSON_BYTES {
         return Err("File is too large (max 5 MB).".to_string());
     }
+
+    // Detect zip files (persona packs) by magic bytes.
+    if file_bytes.len() >= 4 && file_bytes[..4] == [0x50, 0x4B, 0x03, 0x04] {
+        return parse_team_from_pack_zip(&file_bytes);
+    }
+
     parse_team_json(&file_bytes)
+}
+
+/// Parse a persona pack zip as a team: pack name → team name, personas → members.
+fn parse_team_from_pack_zip(zip_bytes: &[u8]) -> Result<ParsedTeamPreview, String> {
+    use crate::managed_agents::{parse_zip_pack, TeamPersonaPreview};
+
+    let result = parse_zip_pack(zip_bytes)?;
+    if result.personas.is_empty() {
+        return Err("Pack contains no personas.".to_string());
+    }
+
+    // Extract pack name from source_file format: "persona_name (Pack Name)"
+    let pack_name = result.personas[0]
+        .source_file
+        .rsplit_once('(')
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+        .unwrap_or("Imported Pack")
+        .to_string();
+
+    Ok(ParsedTeamPreview {
+        name: pack_name,
+        description: None,
+        personas: result
+            .personas
+            .into_iter()
+            .map(|p| TeamPersonaPreview {
+                display_name: p.display_name,
+                system_prompt: p.system_prompt,
+                avatar_url: p.avatar_data_url,
+            })
+            .collect(),
+    })
 }
