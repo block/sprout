@@ -1,4 +1,5 @@
-import { Bot, Home, Lock, PenSquare, Plus, Search, Zap } from "lucide-react";
+// biome-ignore format: keep compact to stay within file size limit
+import { Activity, Bot, Home, Lock, PenSquare, Plus, Search, Zap } from "lucide-react";
 import * as React from "react";
 
 /** Default TTL for ephemeral channels: 1 day of inactivity. */
@@ -65,7 +66,7 @@ type AppSidebarProps = {
   selfPresenceStatus: PresenceStatus;
   errorMessage?: string;
   selectedChannelId: string | null;
-  selectedView: "home" | "channel" | "agents" | "workflows";
+  selectedView: "home" | "channel" | "agents" | "workflows" | "pulse";
   unreadChannelIds: Set<string>;
   onCreateChannel: (input: {
     name: string;
@@ -85,6 +86,7 @@ type AppSidebarProps = {
   onHideDm: (channelId: string) => void;
   onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
   onSelectAgents: () => void;
+  onSelectPulse: () => void;
   onSelectWorkflows: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
@@ -537,6 +539,7 @@ export function AppSidebar({
   onHideDm,
   onOpenDm,
   onSelectAgents,
+  onSelectPulse,
   onSelectWorkflows,
   onSelectHome,
   onSelectChannel,
@@ -633,6 +636,18 @@ export function AppSidebar({
                 {Math.min(homeBadgeCount, 99)}
               </SidebarMenuBadge>
             ) : null}
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              data-testid="open-pulse-view"
+              isActive={selectedView === "pulse"}
+              onClick={onSelectPulse}
+              tooltip="Pulse"
+              type="button"
+            >
+              <Activity className="h-4 w-4" />
+              <span>Pulse</span>
+            </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton

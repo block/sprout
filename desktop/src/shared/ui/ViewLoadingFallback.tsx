@@ -1,6 +1,11 @@
 import { Skeleton } from "@/shared/ui/skeleton";
 
-type ViewLoadingFallbackKind = "agents" | "channel" | "forum" | "workflows";
+type ViewLoadingFallbackKind =
+  | "agents"
+  | "channel"
+  | "forum"
+  | "pulse"
+  | "workflows";
 
 type ViewLoadingFallbackProps = {
   includeHeader?: boolean;
@@ -255,6 +260,7 @@ export function ViewLoadingFallback({
       {kind === "workflows" ? <WorkflowsLoadingBody /> : null}
       {kind === "channel" ? <ChannelLoadingBody /> : null}
       {kind === "forum" ? <ForumLoadingBody /> : null}
+      {kind === "pulse" ? <ChannelLoadingBody /> : null}
     </div>
   );
 }

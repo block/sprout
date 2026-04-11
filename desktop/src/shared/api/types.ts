@@ -481,6 +481,9 @@ export type {
   TriggerWorkflowResponse,
 } from "@/shared/api/workflowTypes";
 export type {
+  ContactEntry,
+  ContactListResponse,
+  PublishNoteResult,
   UserNote,
   UserNotesCursor,
   UserNotesResponse,

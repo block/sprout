@@ -68,6 +68,17 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goPulse = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/pulse",
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goWorkflows = React.useCallback(
     (behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -193,6 +204,7 @@ export function useAppNavigation() {
     goChannel,
     goForumPost,
     goHome,
+    goPulse,
     goWorkflow,
     goWorkflows,
     openSearchHit,

@@ -38,7 +38,7 @@ const overrides = new Map([
   ["src/features/messages/hooks.ts", 500], // message query/mutation hooks + optimistic updates
   ["src/features/messages/ui/MessageComposer.tsx", 700], // media upload handlers (paste, drop, dialog) + channelId reset effect + edit mode (pre-fill, save, cancel, escape)
   ["src/features/settings/ui/SettingsView.tsx", 600],
-  ["src/features/sidebar/ui/AppSidebar.tsx", 850], // channels + forums creation forms
+  ["src/features/sidebar/ui/AppSidebar.tsx", 860], // channels + forums creation forms + Pulse nav
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
   ["src/shared/api/relayClientSession.ts", 790], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions

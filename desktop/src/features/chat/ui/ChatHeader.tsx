@@ -1,4 +1,13 @@
-import { Bot, CircleDot, FileText, Hash, Home, Lock, Zap } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  CircleDot,
+  FileText,
+  Hash,
+  Home,
+  Lock,
+  Zap,
+} from "lucide-react";
 import type * as React from "react";
 
 import type { ChannelType, ChannelVisibility } from "@/shared/api/types";
@@ -9,7 +18,7 @@ type ChatHeaderProps = {
   description: string;
   channelType?: ChannelType;
   visibility?: ChannelVisibility;
-  mode?: "home" | "channel" | "agents" | "workflows";
+  mode?: "home" | "channel" | "agents" | "workflows" | "pulse";
   statusBadge?: React.ReactNode;
 };
 
@@ -20,7 +29,7 @@ function ChannelIcon({
 }: {
   channelType?: ChannelType;
   visibility?: ChannelVisibility;
-  mode?: "home" | "channel" | "agents" | "workflows";
+  mode?: "home" | "channel" | "agents" | "workflows" | "pulse";
 }) {
   if (mode === "home") {
     return <Home className="h-5 w-5 text-primary" />;
@@ -32,6 +41,10 @@ function ChannelIcon({
 
   if (mode === "workflows") {
     return <Zap className="h-5 w-5 text-primary" />;
+  }
+
+  if (mode === "pulse") {
+    return <Activity className="h-5 w-5 text-primary" />;
   }
 
   if (channelType === "dm") {

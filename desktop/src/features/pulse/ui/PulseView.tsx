@@ -1,0 +1,412 @@
+import { Filter, RefreshCw } from "lucide-react";
+import * as React from "react";
+
+import { useRelayAgentsQuery } from "@/features/agents/hooks";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
+import {
+  useContactListQuery,
+  useFollowMutation,
+  useMyNotesQuery,
+  usePublishNoteMutation,
+  useTimelineQuery,
+  useUnfollowMutation,
+} from "@/features/pulse/hooks";
+import { groupAgentNotes } from "@/features/pulse/lib/groupAgentNotes";
+import { AgentActivityCard } from "@/features/pulse/ui/AgentActivityCard";
+import { ComposeNote } from "@/features/pulse/ui/ComposeNote";
+import { NoteCard } from "@/features/pulse/ui/NoteCard";
+import type { UserNote } from "@/shared/api/socialTypes";
+import type { RelayAgent, UserProfileSummary } from "@/shared/api/types";
+import { Button } from "@/shared/ui/button";
+import { Skeleton } from "@/shared/ui/skeleton";
+
+type PulseTab = "foryou" | "people" | "agents" | "mine";
+
+type PulseViewProps = {
+  currentPubkey?: string;
+};
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-12 text-center">
+      <p className="text-sm text-muted-foreground">{message}</p>
+    </div>
+  );
+}
+
+function TimelineSkeleton() {
+  return (
+    <div className="space-y-1">
+      {[1, 2, 3, 4].map((i) => (
+        <div className="flex gap-3 px-4 py-3 sm:px-6" key={i}>
+          <Skeleton className="h-8 w-8 shrink-0 rounded-full" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-3.5 w-32" />
+            <Skeleton className="h-4 w-full max-w-md" />
+            <Skeleton className="h-4 w-3/4 max-w-sm" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Agent filter dropdown ──────────────────────────────────────────────────
+
+function AgentFilter({
+  agents,
+  profiles,
+  selectedPubkey,
+  onSelect,
+}: {
+  agents: RelayAgent[];
+  profiles: Record<string, UserProfileSummary>;
+  selectedPubkey: string | null;
+  onSelect: (pubkey: string | null) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [open]);
+
+  const selectedName = selectedPubkey
+    ? (profiles[selectedPubkey.toLowerCase()]?.displayName ??
+      agents.find((a) => a.pubkey === selectedPubkey)?.name ??
+      `${selectedPubkey.slice(0, 8)}...`)
+    : null;
+
+  return (
+    <div className="relative" ref={ref}>
+      <Button
+        className="h-7 gap-1.5 px-2 text-xs"
+        onClick={() => setOpen(!open)}
+        size="sm"
+        variant={selectedPubkey ? "secondary" : "ghost"}
+      >
+        <Filter className="h-3 w-3" />
+        {selectedName ?? "All agents"}
+      </Button>
+      {open ? (
+        <div className="absolute right-0 top-8 z-50 max-h-48 w-48 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg">
+          <button
+            className={`w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent ${
+              !selectedPubkey ? "bg-accent font-medium" : ""
+            }`}
+            onClick={() => {
+              onSelect(null);
+              setOpen(false);
+            }}
+            type="button"
+          >
+            All agents
+          </button>
+          {agents.map((agent) => {
+            const name =
+              profiles[agent.pubkey.toLowerCase()]?.displayName ??
+              agent.name ??
+              `${agent.pubkey.slice(0, 8)}...`;
+            return (
+              <button
+                className={`w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent ${
+                  selectedPubkey === agent.pubkey ? "bg-accent font-medium" : ""
+                }`}
+                key={agent.pubkey}
+                onClick={() => {
+                  onSelect(agent.pubkey);
+                  setOpen(false);
+                }}
+                type="button"
+              >
+                {name}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ── Main PulseView ─────────────────────────────────────────────────────────
+
+export function PulseView({ currentPubkey }: PulseViewProps) {
+  const [activeTab, setActiveTab] = React.useState<PulseTab>("foryou");
+  const [agentFilter, setAgentFilter] = React.useState<string | null>(null);
+
+  // ── Contact list & follow state ────────────────────────────────────────
+  const contactListQuery = useContactListQuery(currentPubkey);
+  const contacts = contactListQuery.data?.contacts ?? [];
+  const contactPubkeys = React.useMemo(
+    () => contacts.map((c) => c.pubkey),
+    [contacts],
+  );
+  const followingSet = React.useMemo(
+    () => new Set(contactPubkeys),
+    [contactPubkeys],
+  );
+
+  // People-only pubkeys (contacts + self, no agents)
+  const peoplePubkeys = React.useMemo(
+    () =>
+      currentPubkey
+        ? [...new Set([currentPubkey, ...contactPubkeys])]
+        : contactPubkeys,
+    [currentPubkey, contactPubkeys],
+  );
+
+  // ── Agents ─────────────────────────────────────────────────────────────
+  const relayAgentsQuery = useRelayAgentsQuery();
+  const relayAgents = relayAgentsQuery.data ?? [];
+  const agentPubkeys = React.useMemo(
+    () => relayAgents.map((a) => a.pubkey),
+    [relayAgents],
+  );
+  const agentPubkeySet = React.useMemo(
+    () => new Set(agentPubkeys),
+    [agentPubkeys],
+  );
+  const agentStatusMap = React.useMemo(() => {
+    const map: Record<string, "online" | "away" | "offline"> = {};
+    for (const a of relayAgents) {
+      map[a.pubkey] = a.status;
+    }
+    return map;
+  }, [relayAgents]);
+
+  // ── "For You" combined pubkeys (contacts + agents + self) ──────────────
+  const forYouPubkeys = React.useMemo(
+    () => [...new Set([...peoplePubkeys, ...agentPubkeys])],
+    [peoplePubkeys, agentPubkeys],
+  );
+
+  // ── Queries per tab ────────────────────────────────────────────────────
+  const forYouQuery = useTimelineQuery(forYouPubkeys, activeTab === "foryou");
+  const peopleQuery = useTimelineQuery(peoplePubkeys, activeTab === "people");
+  const agentTimelineQuery = useTimelineQuery(
+    agentFilter ? [agentFilter] : agentPubkeys,
+    activeTab === "agents",
+  );
+  const myNotesQuery = useMyNotesQuery(
+    activeTab === "mine" ? currentPubkey : undefined,
+  );
+  const publishMutation = usePublishNoteMutation(currentPubkey);
+  const followMutation = useFollowMutation(currentPubkey);
+  const unfollowMutation = useUnfollowMutation(currentPubkey);
+
+  // ── Visible notes per tab ──────────────────────────────────────────────
+  const visibleNotes: UserNote[] = React.useMemo(() => {
+    if (activeTab === "foryou") {
+      return forYouQuery.data?.notes ?? [];
+    }
+    if (activeTab === "people") {
+      // Filter out agent notes from the people timeline.
+      return (peopleQuery.data?.notes ?? []).filter(
+        (n) => !agentPubkeySet.has(n.pubkey),
+      );
+    }
+    if (activeTab === "agents") {
+      return agentTimelineQuery.data?.notes ?? [];
+    }
+    return myNotesQuery.data?.notes ?? [];
+  }, [
+    activeTab,
+    forYouQuery.data,
+    peopleQuery.data,
+    agentTimelineQuery.data,
+    myNotesQuery.data,
+    agentPubkeySet,
+  ]);
+
+  // Agent note groups for the agents tab.
+  const agentNoteGroups = React.useMemo(
+    () => (activeTab === "agents" ? groupAgentNotes(visibleNotes) : []),
+    [activeTab, visibleNotes],
+  );
+
+  // ── Profile lookups ────────────────────────────────────────────────────
+  const notePubkeys = React.useMemo(
+    () => [...new Set(visibleNotes.map((n) => n.pubkey))],
+    [visibleNotes],
+  );
+  const profilesQuery = useUsersBatchQuery(notePubkeys, {
+    enabled: notePubkeys.length > 0,
+  });
+  const profiles: Record<string, UserProfileSummary> =
+    profilesQuery.data?.profiles ?? {};
+
+  // ── Loading / refresh state ────────────────────────────────────────────
+  const activeQuery =
+    activeTab === "foryou"
+      ? forYouQuery
+      : activeTab === "people"
+        ? peopleQuery
+        : activeTab === "agents"
+          ? agentTimelineQuery
+          : myNotesQuery;
+  const isLoading = activeQuery.isLoading;
+  const isRefetching = activeQuery.isRefetching;
+
+  function handleRefresh() {
+    void activeQuery.refetch();
+  }
+
+  function handleFollow(pubkey: string) {
+    followMutation.mutate(pubkey);
+  }
+
+  function handleUnfollow(pubkey: string) {
+    unfollowMutation.mutate(pubkey);
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────
+  const emptyMessages: Record<PulseTab, string> = {
+    foryou:
+      "No notes yet. Follow people and agents to build your personalized feed.",
+    people: "No notes yet. Follow people to see their updates here.",
+    agents:
+      agentPubkeys.length === 0
+        ? "No agents registered yet."
+        : "No agent notes yet. Agents will post updates as they work.",
+    mine: "You haven't posted any notes yet.",
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 border-b border-border/60 px-4 sm:px-6">
+        <TabButton
+          active={activeTab === "foryou"}
+          label="For You"
+          onClick={() => setActiveTab("foryou")}
+        />
+        <TabButton
+          active={activeTab === "people"}
+          label="People"
+          onClick={() => setActiveTab("people")}
+        />
+        <TabButton
+          active={activeTab === "agents"}
+          count={relayAgents.length}
+          label="Agents"
+          onClick={() => setActiveTab("agents")}
+        />
+        <TabButton
+          active={activeTab === "mine"}
+          label="My Notes"
+          onClick={() => setActiveTab("mine")}
+        />
+
+        <div className="ml-auto flex items-center gap-1">
+          {activeTab === "agents" && relayAgents.length > 1 ? (
+            <AgentFilter
+              agents={relayAgents}
+              onSelect={setAgentFilter}
+              profiles={profiles}
+              selectedPubkey={agentFilter}
+            />
+          ) : null}
+          <Button
+            className="h-7 w-7"
+            disabled={isRefetching}
+            onClick={handleRefresh}
+            size="icon"
+            variant="ghost"
+          >
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${isRefetching ? "animate-spin" : ""}`}
+            />
+          </Button>
+        </div>
+      </div>
+
+      {/* Timeline */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {isLoading ? (
+          <TimelineSkeleton />
+        ) : activeTab === "agents" ? (
+          agentNoteGroups.length === 0 ? (
+            <EmptyState message={emptyMessages.agents} />
+          ) : (
+            agentNoteGroups.map((group) => (
+              <AgentActivityCard
+                agentStatus={agentStatusMap[group.pubkey]}
+                group={group}
+                key={`${group.pubkey}-${group.latestAt}`}
+                profile={profiles[group.pubkey.toLowerCase()] ?? null}
+              />
+            ))
+          )
+        ) : visibleNotes.length === 0 ? (
+          <EmptyState message={emptyMessages[activeTab]} />
+        ) : (
+          visibleNotes.map((note) => (
+            <NoteCard
+              isAgent={agentPubkeySet.has(note.pubkey)}
+              isFollowing={followingSet.has(note.pubkey)}
+              isOwnNote={note.pubkey === currentPubkey}
+              key={note.id}
+              note={note}
+              onFollow={handleFollow}
+              onUnfollow={handleUnfollow}
+              profile={profiles[note.pubkey.toLowerCase()] ?? null}
+            />
+          ))
+        )}
+      </div>
+
+      <ComposeNote
+        errorMessage={
+          publishMutation.error instanceof Error
+            ? publishMutation.error.message
+            : publishMutation.error
+              ? String(publishMutation.error)
+              : undefined
+        }
+        isPending={publishMutation.isPending}
+        onPublish={async (content) => {
+          await publishMutation.mutateAsync({ content });
+        }}
+      />
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  count,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  count?: number;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+        active
+          ? "border-primary text-foreground"
+          : "border-transparent text-muted-foreground hover:text-foreground"
+      }`}
+      onClick={onClick}
+      type="button"
+    >
+      {label}
+      {count != null && count > 0 ? (
+        <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-muted-foreground">
+          {count}
+        </span>
+      ) : null}
+    </button>
+  );
+}
