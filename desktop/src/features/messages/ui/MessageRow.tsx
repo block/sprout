@@ -176,7 +176,7 @@ export const MessageRow = React.memo(
           data-message-id={message.id}
           data-testid="message-row"
         >
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="mt-px flex shrink-0 items-start gap-1">
             {isBotInstance(message.role) ? (
               <BotIdenticon
                 value={message.author}
