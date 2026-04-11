@@ -9,7 +9,7 @@ export const personaLibraryCopy = {
   emptyDescription:
     "Choose one from Persona Catalog, add your own persona, or import one to get started.",
   emptyImportHint:
-    "Or drop a .persona.json, .persona.png, or .zip file here to import.",
+    "Or drop a .persona.md, .persona.json, .persona.png, or .zip file here to import.",
 } as const;
 
 export const personaCatalogCopy = {

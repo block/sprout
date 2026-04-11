@@ -414,7 +414,7 @@ export function PersonaDialog({
               {canImportPersonaUpdate ? (
                 <>
                   <input
-                    accept=".json,.png,.zip"
+                    accept=".md,.json,.png,.zip"
                     className="hidden"
                     onChange={handleImportFileChange}
                     ref={importFileInputRef}
