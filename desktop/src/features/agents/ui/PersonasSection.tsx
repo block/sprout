@@ -149,7 +149,7 @@ export function PersonasSection({
                     align="end"
                     onCloseAutoFocus={(event) => event.preventDefault()}
                   >
-                    {!persona.isBuiltIn && !persona.sourcePack ? (
+                    {!persona.isBuiltIn ? (
                       <DropdownMenuItem
                         disabled={isPending}
                         onClick={() => onEdit(persona)}
