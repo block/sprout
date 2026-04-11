@@ -1,22 +1,4 @@
-# Persona Pack Specification V7
-
-> **Status**: Draft  
-> **Replaces**: PERSONA_PACK_SPEC_V6.md  
-> **Last Updated**: 2026-04-10  
-> **Changes from V6**:
-> - **Flattened namespace**: All behavioral config fields (`model`, `temperature`, `subscribe`,
->   `respond_to`, `max_context_tokens`, `thread_replies`, `broadcast_replies`) are now **top-level
->   frontmatter fields** in `.persona.md` — the `sprout:` wrapper block is gone.
-> - **`plugin.json` cleanup**: `sprout.defaults` becomes `defaults`; `sprout.personas` becomes
->   `personas`. The `sprout` wrapper object in `plugin.json` is eliminated. OPS-standard fields
->   remain at the top level as before.
-> - **Generic field names for cross-project portability**: No vendor prefix required to adopt this
->   persona format. Since the Open Plugin Spec has zero model configuration, there are no field
->   name collisions.
-> - All V6 corrections, architecture, precedence model logic, build requirements, and merge
->   semantics are preserved — only field references are updated.
-
----
+# Persona Pack Specification
 
 ## 1. Overview & Goals
 
@@ -33,23 +15,6 @@ server config, pack-level instructions, lifecycle hooks, and distribution metada
 2. **Composable** — skills and MCP servers shared across agents; per-agent overrides additive
 3. **OPS-compatible** — discoverable by any OPS-compatible tool
 4. **Harness-honest** — explicit about what goose does vs. what sprout-acp does
-5. **Build-honest** — features requiring new sprout-acp implementation are labeled as such
-
-### What This Spec Corrects (V1, V2, and V3 Errors)
-
-| V1/V2/V3 Assumption | Reality | Fix |
-|---------------------|---------|-----|
-| `--skill-path` CLI flag exists | Does not exist in goose | Skills copied to `.agents/skills/` by harness |
-| `--rules-dir` flag exists | Does not exist | Rules injected via user message prefix |
-| `--system-prompt-file` flag works in ACP mode | Does not exist in goose-acp | Use `agent.extend_system_prompt()` (BR-1) |
-| `.mdc` rules files supported | Goose does not read `.mdc` files | Concept eliminated |
-| `skills/` at pack root is discovered | Goose scans `.agents/skills/`, not `skills/` | Skills go to `.agents/skills/` |
-| Goose has a hook system | Zero hook support in goose codebase | Hooks are harness-only |
-| `[System]` block injection is implemented | Not implemented in goose-acp today | Marked as BR-1 |
-| Directory name is fallback when `name:` absent | **No fallback — skill silently skipped** | Both `name:` and `description:` required |
-| Per-persona env vars set before subprocess | `AcpClient::spawn` inherits parent env only | Marked as BR-6 |
-| SSE MCP transport works | goose-acp rejects SSE with an error | Use stdio or streamable_http |
-| `$AGENT_CWD` is an env var goose reads | It's `NewSessionRequest.cwd` in the ACP protocol | Reframed throughout |
 
 ---
 
@@ -89,7 +54,7 @@ ignore unknown fields.
     "model": "anthropic:claude-sonnet-4-20250514",
     "temperature": 0.7,
     "max_context_tokens": 128000,
-    "respond_to": {
+    "triggers": {
       "mentions": true,
       "keywords": [],
       "all_messages": false
@@ -115,7 +80,7 @@ subscribe:
 pip gets Opus; lep, thistle, and berry get Sonnet. Temperature 0.7 applies to all four because
 none of them override it.
 
-> **Note**: `subscribe` and `respond_to` in `defaults` are valid but unusual — most packs set
+> **Note**: `subscribe` and `triggers` in `defaults` are valid but unusual — most packs set
 > these per-persona since agents typically monitor different channels and respond to different
 > triggers.
 
@@ -181,12 +146,12 @@ A persona file is a markdown document with YAML frontmatter. The **YAML frontmat
 identity, skills, MCP servers, and behavioral config. The **markdown body** (everything after the
 closing `---`) is the agent's persona prompt text.
 
-> **Build Requirement**: Delivery of the persona prompt as a true goose system prompt requires
-> sprout-acp to call `agent.extend_system_prompt()` (or `agent.override_system_prompt()`) after
+> **Note**: Delivery of the persona prompt as a true goose system prompt requires sprout-acp to
+> call `agent.extend_system_prompt()` (or `agent.override_system_prompt()`) after
 > `create_agent_for_session()` in `on_new_session()`. These methods exist in
 > `crates/goose/src/agents/agent.rs` but are **not currently called from the ACP path**. Until
 > this is implemented, sprout-acp prepends the persona prompt as a `[System]` prefix in the user
-> message text (see Section 11). See Section 15 for the full build requirements list.
+> message text (see Section 11). True system prompt injection is planned — see Section 15.
 
 ### Full Schema
 
@@ -219,7 +184,7 @@ mcp_servers:
 subscribe:
   - "#security-reviews"
   - "#code-reviews"
-respond_to:
+triggers:
   mentions: true
   keywords: ["security", "vulnerability", "CVE"]
 model: "anthropic:claude-sonnet-4-20250514"
@@ -250,7 +215,7 @@ You are Lep, a security-focused code reviewer on the Meadow team.
 | `skills` | string[] | ❌ | Pack-relative paths to skill directories for this agent only. |
 | `mcp_servers` | object[] | ❌ | Per-persona MCP servers. Merged with pack-level `.mcp.json`. |
 | `subscribe` | string[] | ❌ | Channels to monitor. See Section 9. |
-| `respond_to` | object | ❌ | Controls which messages trigger a response. See Section 9. |
+| `triggers` | object | ❌ | Controls which messages activate a response. See Section 9. |
 | `model` | string | ❌ | Model to use. See Section 9. |
 | `temperature` | float | ❌ | Sampling temperature. See Section 9. |
 | `max_context_tokens` | int | ❌ | Context window limit. See Section 9. |
@@ -261,8 +226,8 @@ You are Lep, a security-focused code reviewer on the Meadow team.
 ### Markdown Body (Persona Prompt)
 
 Everything after the closing `---` is the persona prompt text. Pack-level `instructions.md` is
-appended after it. Embed the prompt directly — do not reference external files, `--system-prompt-file`
-(does not exist in goose-acp), or `.mdc` rule files (goose does not read them).
+appended after it. Embed the prompt directly — do not reference external files or `.mdc` rule
+files (goose does not read them).
 
 ---
 
@@ -369,7 +334,7 @@ description: "Reviews code for security vulnerabilities using OWASP Top 10 and s
 ```
 
 Both `name:` and `description:` are **required**. A skill missing either field is silently skipped
-by goose. `sprout pack validate` (BR-2) must flag missing fields as errors.
+by goose. `sprout pack validate` (planned) must flag missing fields as errors.
 
 ---
 
@@ -549,7 +514,7 @@ which uses Opus.
     "model": "anthropic:claude-sonnet-4-20250514",
     "temperature": 0.7,
     "max_context_tokens": 128000,
-    "respond_to": {
+    "triggers": {
       "mentions": true,
       "keywords": [],
       "all_messages": false
@@ -561,7 +526,7 @@ which uses Opus.
 }
 ```
 
-> **Note**: `subscribe` and `respond_to` in `defaults` are valid but unusual — most packs set
+> **Note**: `subscribe` and `triggers` in `defaults` are valid but unusual — most packs set
 > these per-persona since agents typically monitor different channels and respond to different
 > triggers.
 
@@ -603,9 +568,9 @@ sprout-acp MUST NOT override them with pack/persona values. sprout-acp only inje
 fields that are NOT already set in the parent environment. This ensures operators can always
 override pack configuration by setting env vars on the sprout-acp process.
 
-**Implementation**: when constructing the child process environment (BR-6), sprout-acp checks
-`std::env::var(key)` for each env var. If the parent already has it set, skip injection. If not,
-inject the resolved pack/persona value.
+**Implementation**: when constructing the child process environment (planned — see Section 15),
+sprout-acp checks `std::env::var(key)` for each env var. If the parent already has it set, skip
+injection. If not, inject the resolved pack/persona value.
 
 ### Empty and `null` Semantics
 
@@ -622,8 +587,8 @@ behavioral config frontmatter fields:
 - **`subscribe: []`** — an empty array is NOT treated as absent. It means "subscribe to nothing."
   This is an intentional override that prevents pack defaults from applying.
 
-- **`respond_to: {}`** — an empty object is NOT treated as absent. It means "use default sub-field
-  values." This overrides the pack default `respond_to` object entirely, and each sub-field falls
+- **`triggers: {}`** — an empty object is NOT treated as absent. It means "use default sub-field
+  values." This overrides the pack default `triggers` object entirely, and each sub-field falls
   through to its built-in default.
 
 > **Rule of thumb**: `null` = absent (fall through). Empty containers (`[]`, `{}`) = present
@@ -635,9 +600,9 @@ Field merging is **shallow replacement** — there is no deep merge. The rules a
 
 - **Simple fields** (`model`, `temperature`, `max_context_tokens`, `thread_replies`,
   `broadcast_replies`): the first defined value in the precedence chain wins entirely.
-- **Object fields** (`respond_to`): if the persona sets `respond_to`, the entire object replaces
-  the pack default. Individual sub-keys are not merged. If the persona does not set `respond_to`,
-  the pack default `respond_to` object is used as-is.
+- **Object fields** (`triggers`): if the persona sets `triggers`, the entire object replaces
+  the pack default. Individual sub-keys are not merged. If the persona does not set `triggers`,
+  the pack default `triggers` object is used as-is.
 - **Array fields** (`subscribe`): if the persona sets `subscribe`, the entire array replaces the
   pack default. There is no union or append behavior. If the persona does not set `subscribe`, the
   pack default `subscribe` array is used as-is.
@@ -646,12 +611,12 @@ Field merging is **shallow replacement** — there is no deep merge. The rules a
 
 Pack default (`defaults` in `plugin.json`):
 ```json
-"respond_to": { "mentions": true, "keywords": ["security"], "all_messages": false }
+"triggers": { "mentions": true, "keywords": ["security"], "all_messages": false }
 ```
 
 Persona override (frontmatter):
 ```yaml
-respond_to:
+triggers:
   mentions: true
   all_messages: true
 ```
@@ -661,7 +626,7 @@ Effective result for that persona:
 { "mentions": true, "all_messages": true }
 ```
 
-Note: `keywords` is **gone** — the persona's `respond_to` replaced the entire object. There is no
+Note: `keywords` is **gone** — the persona's `triggers` replaced the entire object. There is no
 implicit inheritance of sub-keys.
 
 **Example — array replacement**:
@@ -684,12 +649,12 @@ Effective result: `["#security-reviews", "#code-reviews"]` — `#general` is not
 
 Pack default (`defaults` in `plugin.json`):
 ```json
-"respond_to": { "mentions": true, "keywords": ["security"], "all_messages": false }
+"triggers": { "mentions": true, "keywords": ["security"], "all_messages": false }
 ```
 
 Persona override (frontmatter):
 ```yaml
-respond_to: {}
+triggers: {}
 ```
 
 Effective result for that persona:
@@ -697,7 +662,7 @@ Effective result for that persona:
 { "mentions": true, "keywords": [], "all_messages": false }
 ```
 
-Note: `respond_to: {}` is NOT absent — it overrides the pack default entirely. Each sub-field
+Note: `triggers: {}` is NOT absent — it overrides the pack default entirely. Each sub-field
 falls through to its **built-in default** (not the pack default). `mentions` defaults to `true`,
 `keywords` to `[]`, `all_messages` to `false`.
 
@@ -710,10 +675,10 @@ apply to both.
 | Field | Type | Built-in Default | Valid Range / Values | Description |
 |-------|------|-----------------|----------------------|-------------|
 | `subscribe` | string[] | `[]` | Any channel name strings | Channels to monitor. `#` prefix stripped before relay calls. |
-| `respond_to` | object | see sub-fields | — | Controls which messages trigger a response. Replaced as a whole unit on override. |
-| `respond_to.mentions` | bool | `true` | `true` / `false` | Respond when @mentioned. |
-| `respond_to.keywords` | string[] | `[]` | Any strings | Respond when message contains any keyword (case-insensitive). |
-| `respond_to.all_messages` | bool | `false` | `true` / `false` | Respond to every message in subscribed channels. |
+| `triggers` | object | see sub-fields | — | Controls which messages activate a response. Replaced as a whole unit on override. |
+| `triggers.mentions` | bool | `true` | `true` / `false` | Respond when @mentioned. |
+| `triggers.keywords` | string[] | `[]` | Any strings | Respond when message contains any keyword (case-insensitive). |
+| `triggers.all_messages` | bool | `false` | `true` / `false` | Respond to every message in subscribed channels. |
 | `model` | string | none (goose uses operator default) | `"provider:model-id"` format | Model to use. Split on first `:` → `GOOSE_PROVIDER` + `GOOSE_MODEL`. |
 | `temperature` | float | `0.7` | Provider-dependent (typically 0.0–2.0). sprout-acp passes through without range validation; `sprout pack validate` checks type only (must be a number), not range. | Sampling temperature → `GOOSE_TEMPERATURE`. |
 | `max_context_tokens` | int | none (provider default) | Positive integer | Context window limit → `GOOSE_CONTEXT_LIMIT`. |
@@ -721,9 +686,9 @@ apply to both.
 | `broadcast_replies` | bool | `false` | `true` / `false` | Also surface thread replies to the main channel. |
 
 **Unknown keys** in `defaults` (in `plugin.json`) or in a persona's frontmatter behavioral config
-fields are **validation errors** in `sprout pack validate` (BR-2) — this catches typos like
-`temprature` at validate time. At deploy time, sprout-acp logs a `WARN` and ignores the unknown
-key, remaining fail-soft:
+fields are **validation errors** in `sprout pack validate` — this catches typos like `temprature`
+at validate time. At deploy time, sprout-acp logs a `WARN` and ignores the unknown key, remaining
+fail-soft:
 
 ```
 WARN: Unknown key "temprature" in defaults (plugin.json); ignoring
@@ -738,7 +703,7 @@ subscribe:
   - "#security-reviews"
   - "#code-reviews"
 
-respond_to:
+triggers:
   mentions: true
   keywords:
     - "security"
@@ -768,7 +733,7 @@ effective configuration per persona **before** injecting environment variables i
 process. The env vars set reflect the fully-resolved values — not the raw persona frontmatter.
 
 sprout-acp translates persona behavioral config fields to goose configuration via environment
-variables injected into the child process at spawn time (requires BR-6):
+variables injected into the child process at spawn time (planned — see Section 15):
 
 | Persona field | Env var(s) | Notes |
 |---|---|---|
@@ -781,8 +746,9 @@ If `model` is omitted from both the persona frontmatter and `defaults`, sprout-a
 
 > **Current limitation**: `AcpClient::spawn` (in `crates/sprout-acp/src/acp.rs`) inherits the
 > parent process environment — there are no `.env()` calls. In a multi-persona deployment, env
-> vars set on the parent affect **all** spawned agents. Per-persona model config requires BR-6.
-> Until then, per-persona model configuration is only safe with one sprout-acp process per persona.
+> vars set on the parent affect **all** spawned agents. Per-persona model config requires
+> per-subprocess env var injection (planned — see Section 15). Until then, per-persona model
+> configuration is only safe with one sprout-acp process per persona.
 >
 > **Alternative**: goose-acp implements `session/set_model` (`on_set_model()` in `server.rs`,
 > ACP unstable). This could set the model per-session after `session/new` without env var
@@ -878,7 +844,7 @@ How each pack component reaches the running agent:
 | Persona prompt | User message prefix | `[System]` block prepended to user message text by sprout-acp | ❌ No |
 | Pack instructions | User message prefix | Appended to `[System]` block in user message text | ❌ No |
 | Lifecycle hooks | Harness internal | sprout-acp fires shell commands directly | ❌ No |
-| Model/provider | Child process env vars | `GOOSE_PROVIDER`, `GOOSE_MODEL`, `GOOSE_TEMPERATURE`, `GOOSE_CONTEXT_LIMIT` (requires BR-6) | ❌ No |
+| Model/provider | Child process env vars | `GOOSE_PROVIDER`, `GOOSE_MODEL`, `GOOSE_TEMPERATURE`, `GOOSE_CONTEXT_LIMIT` (planned — see Section 15) | ❌ No |
 | Behavioral config | Harness internal | sprout-acp subscription + dispatch logic | ❌ No |
 | Pack defaults (`defaults`) | Harness internal | Resolved at deploy time by sprout-acp into per-persona effective config; never passed to goose directly | ❌ No |
 
@@ -910,11 +876,11 @@ Available skills: code-review, security-review, shared
 Load a skill with: load(source: "skill-name")
 ```
 
-### True System Prompt Injection — Build Requirement (BR-1)
+### True System Prompt Injection — Planned
 
 The `[System]` prefix re-sends the full persona prompt on every turn. True system prompt injection
 — calling `agent.extend_system_prompt()` after `create_agent_for_session()` in `on_new_session()`
-— fires once at session creation. See BR-1 in Section 15.
+— fires once at session creation. This is planned work; see Section 15.
 
 ### What Does NOT Work (Anti-Pattern Reference)
 
@@ -928,7 +894,7 @@ The `[System]` prefix re-sends the full persona prompt on every turn. True syste
 | Hooks in goose config | Goose has no hook system |
 | SSE transport in `.mcp.json` | goose-acp rejects SSE; use stdio or streamable_http |
 | SKILL.md without `name:` or `description:` | Skill silently skipped; no fallback |
-| Setting `GOOSE_MODEL` on parent process (multi-persona) | Affects all agents; use per-subprocess injection (BR-6) |
+| Setting `GOOSE_MODEL` on parent process (multi-persona) | Affects all agents; use per-subprocess injection (planned) |
 | Expecting `defaults` sub-key inheritance | No deep merge; object/array fields replaced entirely |
 
 ---
@@ -968,15 +934,15 @@ both with the same caution as any untrusted prompt content.
 
 ### From V6 (sprout-namespaced) Format
 
-Field mapping from V6 `.persona.md` to V7 `.persona.md`:
+Field mapping from V6 `.persona.md` to current `.persona.md`:
 
-| V6 location | V7 location |
+| V6 location | Current location |
 |---|---|
 | `sprout.model` | `model` (top-level frontmatter) |
 | `sprout.temperature` | `temperature` (top-level frontmatter) |
 | `sprout.max_context_tokens` | `max_context_tokens` (top-level frontmatter) |
 | `sprout.subscribe` | `subscribe` (top-level frontmatter) |
-| `sprout.respond_to` | `respond_to` (top-level frontmatter) |
+| `sprout.respond_to` | `triggers` (top-level frontmatter) |
 | `sprout.thread_replies` | `thread_replies` (top-level frontmatter) |
 | `sprout.broadcast_replies` | `broadcast_replies` (top-level frontmatter) |
 | `plugin.json` → `sprout.defaults` | `plugin.json` → `defaults` (top-level) |
@@ -994,7 +960,7 @@ sprout:
     - "#security-reviews"
 ```
 
-**V7 persona frontmatter** (after):
+**Current persona frontmatter** (after):
 ```yaml
 model: "anthropic:claude-sonnet-4-20250514"
 temperature: 0.3
@@ -1010,7 +976,7 @@ subscribe:
 }
 ```
 
-**V7 `plugin.json`** (after):
+**Current `plugin.json`** (after):
 ```json
 "personas": ["agents/pip.persona.md"],
 "defaults": { "model": "anthropic:claude-sonnet-4-20250514" }
@@ -1038,40 +1004,35 @@ Field mapping from flat JSON (`personas/lep.json`) to `.persona.md`:
 
 ### Backward Compatibility
 
-sprout-acp supports both V6 (namespaced `sprout:` block) and V7 (flat top-level fields) formats
-during the transition period. The V6 namespaced format is deprecated as of the version that ships
-this spec and will be removed in the next major version.
+sprout-acp supports both V6 (namespaced `sprout:` block) and the current (flat top-level fields)
+formats during the transition period. The V6 namespaced format is deprecated and will be removed
+in the next major version.
 
 ---
 
 ## 14. Open Questions / Future Work
 
-### Closed Questions
-
-1. ~~**`--system-prompt-file` in ACP mode**~~: **Closed.** The flag does not exist in goose-acp.
-   sprout-acp uses `agent.extend_system_prompt()` instead (see BR-1).
-
 ### Unresolved
 
-2. **`session/set_model` as env var alternative**: goose-acp implements `on_set_model()` (ACP
+1. **`session/set_model` as env var alternative**: goose-acp implements `on_set_model()` (ACP
    unstable feature). sprout-acp could call `session/set_model` after `session/new` to set the
    model per-session without env var injection. This avoids the `AcpClient::spawn` limitation for
    model (but not provider, temperature, or context limit). Deferred pending stability of the ACP
    unstable feature.
 
-3. **`CONTEXT_FILE_NAMES` env var**: Goose supports this env var to control which filenames are
+2. **`CONTEXT_FILE_NAMES` env var**: Goose supports this env var to control which filenames are
    scanned for hints. Should sprout-acp set this to include pack-specific filenames? Deferred
    pending use case.
 
-4. **Skill versioning**: Skills are identified by load key only. If two packs provide a skill with
+3. **Skill versioning**: Skills are identified by load key only. If two packs provide a skill with
    the same name, the no-overwrite rule means the first-installed wins silently. A versioned skill
    format (e.g., `code-review@1.2.0`) would resolve this.
 
-5. **Pack signing**: Phase 3 registry needs a signing scheme. Ed25519 keypairs tied to pack author
+4. **Pack signing**: Phase 3 registry needs a signing scheme. Ed25519 keypairs tied to pack author
    identity is the likely approach, but not yet designed.
 
-6. **Multi-pack conflicts**: What happens when two installed packs define agents that subscribe to
-   the same channel with overlapping `respond_to` rules? Need a conflict resolution policy.
+5. **Multi-pack conflicts**: What happens when two installed packs define agents that subscribe to
+   the same channel with overlapping `triggers` rules? Need a conflict resolution policy.
 
 ### Future Work
 
@@ -1079,19 +1040,19 @@ this spec and will be removed in the next major version.
 
 ---
 
-## 15. Build Requirements
+## 15. Planned Features
 
-Features required by this spec but not yet implemented. These are implementation tasks.
+Features required by this spec but not yet implemented.
 
 | ID | What | Where |
 |----|------|-------|
-| BR-1 | True system prompt injection: call `agent.extend_system_prompt()` after `create_agent_for_session()` in `on_new_session()`. Current `[System]` prefix re-sends persona prompt on every turn; true injection fires once at session creation. | `goose/src/agents/agent.rs` + `goose-acp/src/server.rs` `on_new_session()` |
-| BR-2 | `sprout pack validate` CLI: schema-validate `plugin.json` (including `defaults` — unknown keys are errors, type mismatches are errors); check `.persona.md` required identity fields; validate per-persona behavioral config fields against the canonical schema; verify all `skills:` and `hooks:` paths exist; error on `SKILL.md` missing `name:` or `description:`; warn when `name:` differs from directory name. | `sprout-cli` / `sprout-admin` |
-| BR-3 | Skill collision warning: emit `WARN` when a pack skill is skipped because a skill with the same load key already exists in `.agents/skills/`. | sprout-acp skill copy logic |
-| BR-4 | `$AGENT_CWD` resolution: determine `NewSessionRequest.cwd` from (1) `AGENT_CWD` env var, (2) `std::env::current_dir()`, (3) error and refuse to start. | sprout-acp startup / session init |
-| BR-5 | Skill parse failure warning: emit `WARN` when `parse_skill_content` returns `None` (missing `name:`, missing `description:`, or malformed frontmatter). Currently goose silently skips. Until fixed in goose, sprout-acp should pre-validate during skill copy. | `goose/src/agents/platform_extensions/summon.rs` `parse_skill_content()` |
-| BR-6 | Per-subprocess env var injection: extend `AcpClient::spawn` to accept `Vec<(String, String)>` injected via `Command::env()`. Required so `GOOSE_PROVIDER`, `GOOSE_MODEL`, `GOOSE_TEMPERATURE`, and `GOOSE_CONTEXT_LIMIT` can differ per persona without affecting all agents. sprout-acp must check `std::env::var(key)` before injecting — if the parent environment already has the key set, skip injection (operator env vars take precedence, level 1). | `sprout-acp/src/acp.rs` `AcpClient::spawn()` |
+| PF-1 | True system prompt injection: call `agent.extend_system_prompt()` after `create_agent_for_session()` in `on_new_session()`. Current `[System]` prefix re-sends persona prompt on every turn; true injection fires once at session creation. | `goose/src/agents/agent.rs` + `goose-acp/src/server.rs` `on_new_session()` |
+| PF-2 | `sprout pack validate` CLI: schema-validate `plugin.json` (including `defaults` — unknown keys are errors, type mismatches are errors); check `.persona.md` required identity fields; validate per-persona behavioral config fields against the canonical schema; verify all `skills:` and `hooks:` paths exist; error on `SKILL.md` missing `name:` or `description:`; warn when `name:` differs from directory name. | `sprout-cli` / `sprout-admin` |
+| PF-3 | Skill collision warning: emit `WARN` when a pack skill is skipped because a skill with the same load key already exists in `.agents/skills/`. | sprout-acp skill copy logic |
+| PF-4 | `$AGENT_CWD` resolution: determine `NewSessionRequest.cwd` from (1) `AGENT_CWD` env var, (2) `std::env::current_dir()`, (3) error and refuse to start. | sprout-acp startup / session init |
+| PF-5 | Skill parse failure warning: emit `WARN` when `parse_skill_content` returns `None` (missing `name:`, missing `description:`, or malformed frontmatter). Currently goose silently skips. Until fixed in goose, sprout-acp should pre-validate during skill copy. | `goose/src/agents/platform_extensions/summon.rs` `parse_skill_content()` |
+| PF-6 | Per-subprocess env var injection: extend `AcpClient::spawn` to accept `Vec<(String, String)>` injected via `Command::env()`. Required so `GOOSE_PROVIDER`, `GOOSE_MODEL`, `GOOSE_TEMPERATURE`, and `GOOSE_CONTEXT_LIMIT` can differ per persona without affecting all agents. sprout-acp must check `std::env::var(key)` before injecting — if the parent environment already has the key set, skip injection (operator env vars take precedence, level 1). | `sprout-acp/src/acp.rs` `AcpClient::spawn()` |
 
 ---
 
-*End of Persona Pack Specification V7*
+*End of Persona Pack Specification*
