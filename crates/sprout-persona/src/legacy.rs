@@ -462,7 +462,7 @@ mod tests {
         assert!(desc.chars().count() <= 120);
         assert!(desc.ends_with('…'));
         // Verify it's valid UTF-8 (would panic on construction if not).
-        assert!(desc.len() > 0);
+        assert!(!desc.is_empty());
     }
 
     #[test]

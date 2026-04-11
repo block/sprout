@@ -298,8 +298,8 @@ mod tests {
         assert_eq!(resolved.max_context_tokens, None);
         assert_eq!(resolved.subscribe, None);
         assert_eq!(resolved.triggers, None);
-        assert_eq!(resolved.thread_replies, true); // built-in default
-        assert_eq!(resolved.broadcast_replies, false); // built-in default
+        assert!(resolved.thread_replies); // built-in default
+        assert!(!resolved.broadcast_replies); // built-in default
     }
 
     #[test]
@@ -313,7 +313,7 @@ mod tests {
         let resolved = resolve_persona_config(&persona, Some(&defaults));
         assert_eq!(resolved.model.as_deref(), Some("gpt-4o"));
         assert_eq!(resolved.temperature, Some(0.7));
-        assert_eq!(resolved.thread_replies, false);
+        assert!(!resolved.thread_replies);
         assert_eq!(resolved.subscribe, Some(vec!["general".to_owned()]));
     }
 

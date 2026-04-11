@@ -149,7 +149,7 @@ pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
         mcp_config: pm.mcp_config,
         defaults: pm
             .defaults
-            .map(|d| serde_json::to_value(d))
+            .map(serde_json::to_value)
             .transpose()
             .map_err(|e| PackError::ManifestParse(format!("failed to serialize defaults: {e}")))?,
     };
