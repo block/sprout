@@ -32,6 +32,7 @@ import { truncatePubkey } from "./agentUi";
 
 export function ManagedAgentRow({
   agent,
+  channelNames,
   isActionPending,
   isLogSelected,
   logContent,
@@ -48,6 +49,7 @@ export function ManagedAgentRow({
   onToggleStartOnAppLaunch,
 }: {
   agent: ManagedAgent;
+  channelNames: string[];
   isActionPending: boolean;
   isLogSelected: boolean;
   logContent: string | null;
@@ -66,9 +68,7 @@ export function ManagedAgentRow({
   const isActive = agent.status === "running" || agent.status === "deployed";
   const isLocal = agent.backend.type === "local";
   const runtimeSource =
-    agent.backend.type === "local"
-      ? `ACP ${agent.acpCommand}`
-      : `Provider ${agent.backend.id}`;
+    agent.backend.type === "provider" ? `Provider ${agent.backend.id}` : null;
   const personaLabel = agent.personaId
     ? (personaLabelsById[agent.personaId] ?? null)
     : null;
@@ -105,6 +105,7 @@ export function ManagedAgentRow({
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(120px,0.8fr)_minmax(0,1.1fr)] lg:gap-4">
               <AgentSummary
                 agent={agent}
+                channelNames={channelNames}
                 isExpandable
                 isLogSelected={isLogSelected}
                 personaLabel={personaLabel}
@@ -123,6 +124,7 @@ export function ManagedAgentRow({
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(120px,0.8fr)_minmax(0,1.1fr)] lg:gap-4">
               <AgentSummary
                 agent={agent}
+                channelNames={channelNames}
                 isExpandable={false}
                 isLogSelected={false}
                 personaLabel={personaLabel}
@@ -175,12 +177,14 @@ export function ManagedAgentRow({
 
 function AgentSummary({
   agent,
+  channelNames,
   isExpandable,
   isLogSelected,
   personaLabel,
   presenceStatus,
 }: {
   agent: ManagedAgent;
+  channelNames: string[];
   isExpandable: boolean;
   isLogSelected: boolean;
   personaLabel: string | null;
@@ -222,12 +226,19 @@ function AgentSummary({
             ) : (
               <span>Remote deployment</span>
             )}
-            {isExpandable ? (
-              <span>
-                {isLogSelected ? "Logs visible inline" : "Click to view logs"}
-              </span>
-            ) : null}
           </div>
+          {channelNames.length > 0 ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {channelNames.map((name) => (
+                <span
+                  className="inline-flex rounded-md bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                  key={name}
+                >
+                  # {name}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -259,7 +270,7 @@ function RuntimeBlock({
   runtimeSource,
 }: {
   agent: ManagedAgent;
-  runtimeSource: string;
+  runtimeSource: string | null;
 }) {
   return (
     <div className="space-y-1 lg:pt-0.5">
@@ -269,10 +280,12 @@ function RuntimeBlock({
       <p className="truncate font-mono text-xs text-foreground">
         {agent.agentCommand}
       </p>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        <span>{runtimeSource}</span>
-        {agent.model ? <span>{agent.model}</span> : null}
-      </div>
+      {runtimeSource || agent.model ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {runtimeSource ? <span>{runtimeSource}</span> : null}
+          {agent.model ? <span>{agent.model}</span> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,6 +1,9 @@
+import * as React from "react";
+import { ChevronDown, ChevronRight, Search } from "lucide-react";
+
 import type { RelayAgent } from "@/shared/api/types";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
-import { Skeleton } from "@/shared/ui/skeleton";
+import { Input } from "@/shared/ui/input";
 import { truncatePubkey } from "./agentUi";
 
 export function RelayDirectorySection({
@@ -14,125 +17,131 @@ export function RelayDirectorySection({
   managedPubkeys: Set<string>;
   relayAgents: RelayAgent[];
 }) {
-  const sortedAgents = [...relayAgents].sort((left, right) => {
-    const leftManaged = managedPubkeys.has(left.pubkey);
-    const rightManaged = managedPubkeys.has(right.pubkey);
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  const [searchQuery, setSearchQuery] = React.useState("");
 
-    if (leftManaged !== rightManaged) {
-      return leftManaged ? -1 : 1;
-    }
+  // Only show agents that are NOT managed locally — those are already in the
+  // managed agents section above.
+  const otherAgents = React.useMemo(
+    () => relayAgents.filter((agent) => !managedPubkeys.has(agent.pubkey)),
+    [relayAgents, managedPubkeys],
+  );
 
-    return left.name.localeCompare(right.name);
-  });
+  const filteredAgents = React.useMemo(() => {
+    if (!searchQuery.trim()) return otherAgents;
+    const query = searchQuery.toLowerCase();
+    return otherAgents.filter(
+      (agent) =>
+        agent.name.toLowerCase().includes(query) ||
+        agent.agentType.toLowerCase().includes(query) ||
+        agent.channels.some((ch) => ch.toLowerCase().includes(query)),
+    );
+  }, [otherAgents, searchQuery]);
+
+  const sortedAgents = React.useMemo(
+    () =>
+      [...filteredAgents].sort((left, right) =>
+        left.name.localeCompare(right.name),
+      ),
+    [filteredAgents],
+  );
+
+  if (isLoading || otherAgents.length === 0) return null;
 
   return (
-    <section className="space-y-4">
-      <div>
+    <section className="space-y-3">
+      <button
+        className="flex w-full items-center gap-2 text-left"
+        onClick={() => setIsExpanded((prev) => !prev)}
+        type="button"
+      >
+        {isExpanded ? (
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        )}
         <h3 className="text-sm font-semibold tracking-tight">
           Relay directory
         </h3>
-        <p className="text-sm text-muted-foreground">
-          Bot and agent identities visible to the current desktop user.
-        </p>
-      </div>
+        <span className="text-sm text-muted-foreground">
+          ({otherAgents.length} other agent{otherAgents.length !== 1 ? "s" : ""}
+          )
+        </span>
+      </button>
 
-      {isLoading ? (
-        <div className="overflow-hidden rounded-xl border border-border/70 bg-card/80 shadow-sm">
-          <div className="grid gap-0">
-            {["directory-1", "directory-2", "directory-3"].map((key) => (
-              <div
-                className="grid grid-cols-[minmax(0,2fr)_auto_minmax(0,1fr)_minmax(0,1.6fr)_auto] items-center gap-4 border-b border-border/60 px-4 py-3 last:border-b-0"
-                key={key}
-              >
-                <div className="min-w-0 space-y-2">
-                  <Skeleton className="h-4 w-28" />
-                  <Skeleton className="h-3 w-24" />
-                </div>
-                <Skeleton className="h-6 w-16 rounded-full" />
-                <Skeleton className="h-4 w-16" />
-                <Skeleton className="h-4 w-32" />
-                <Skeleton className="h-5 w-12 rounded-full" />
-              </div>
-            ))}
+      {isExpanded ? (
+        <>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search by name, type, or channel..."
+              value={searchQuery}
+            />
           </div>
-        </div>
-      ) : null}
 
-      {!isLoading && relayAgents.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center">
-          <p className="text-sm font-semibold tracking-tight">
-            No relay-visible agents yet
-          </p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Start one of your local harnesses or join an existing bot to a
-            channel and it will appear here.
-          </p>
-        </div>
-      ) : null}
-
-      {!isLoading && relayAgents.length > 0 ? (
-        <div className="overflow-hidden rounded-xl border border-border/70 bg-card/80 shadow-sm">
-          <div className="overflow-x-auto">
-            <table
-              className="w-full border-collapse text-left text-sm"
-              data-testid="relay-directory-table"
-            >
-              <thead className="bg-muted/35 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3">Agent</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Type</th>
-                  <th className="px-4 py-3">Channels</th>
-                  <th className="px-4 py-3">Source</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedAgents.map((agent) => {
-                  const isManagedLocally = managedPubkeys.has(agent.pubkey);
-
-                  return (
-                    <tr
-                      className="border-b border-border/60 last:border-b-0"
-                      key={agent.pubkey}
-                    >
-                      <td className="min-w-[16rem] px-4 py-3 align-top">
-                        <div className="min-w-0">
-                          <p className="truncate font-medium text-foreground">
-                            {agent.name}
-                          </p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {truncatePubkey(agent.pubkey)}
-                          </p>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 align-top">
-                        <PresenceBadge
-                          className="px-2.5 py-0.5 text-[11px]"
-                          status={agent.status}
-                        />
-                      </td>
-                      <td className="px-4 py-3 align-top text-muted-foreground">
-                        {agent.agentType || "Unknown"}
-                      </td>
-                      <td className="max-w-[20rem] px-4 py-3 align-top text-muted-foreground">
-                        <span className="block truncate">
-                          {agent.channels.length > 0
-                            ? agent.channels.join(", ")
-                            : "No visible channel memberships"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 align-top">
-                        <span className="inline-flex rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                          {isManagedLocally ? "Local" : "Relay"}
-                        </span>
-                      </td>
+          {sortedAgents.length === 0 ? (
+            <p className="px-1 py-3 text-sm text-muted-foreground">
+              {searchQuery.trim()
+                ? "No agents match your search."
+                : "No other agents on this relay."}
+            </p>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-border/70 bg-card/80 shadow-sm">
+              <div className="overflow-x-auto">
+                <table
+                  className="w-full border-collapse text-left text-sm"
+                  data-testid="relay-directory-table"
+                >
+                  <thead className="bg-muted/35 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-3">Agent</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3">Type</th>
+                      <th className="px-4 py-3">Channels</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                  </thead>
+                  <tbody>
+                    {sortedAgents.map((agent) => (
+                      <tr
+                        className="border-b border-border/60 last:border-b-0"
+                        key={agent.pubkey}
+                      >
+                        <td className="min-w-[16rem] px-4 py-3 align-top">
+                          <div className="min-w-0">
+                            <p className="truncate font-medium text-foreground">
+                              {agent.name}
+                            </p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {truncatePubkey(agent.pubkey)}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 align-top">
+                          <PresenceBadge
+                            className="px-2.5 py-0.5 text-[11px]"
+                            status={agent.status}
+                          />
+                        </td>
+                        <td className="px-4 py-3 align-top text-muted-foreground">
+                          {agent.agentType || "Unknown"}
+                        </td>
+                        <td className="max-w-[20rem] px-4 py-3 align-top text-muted-foreground">
+                          <span className="block truncate">
+                            {agent.channels.length > 0
+                              ? agent.channels.join(", ")
+                              : "No visible channel memberships"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
       ) : null}
 
       {error ? (
