@@ -149,7 +149,7 @@ export function PersonasSection({
                     align="end"
                     onCloseAutoFocus={(event) => event.preventDefault()}
                   >
-                    {!persona.isBuiltIn ? (
+                    {!persona.isBuiltIn && !persona.sourcePack ? (
                       <DropdownMenuItem
                         disabled={isPending}
                         onClick={() => onEdit(persona)}
@@ -180,6 +180,11 @@ export function PersonasSection({
                       >
                         <Trash2 className="h-4 w-4" />
                         Remove from My Agents
+                      </DropdownMenuItem>
+                    ) : persona.sourcePack ? (
+                      <DropdownMenuItem disabled>
+                        <Trash2 className="h-4 w-4" />
+                        Managed by pack
                       </DropdownMenuItem>
                     ) : (
                       <DropdownMenuItem

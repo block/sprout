@@ -226,7 +226,9 @@ export function buildTeamImportPlan({
     }
   });
 
-  const membersToUpdate = matchedMembers.filter((member) => member.hasChanges);
+  const membersToUpdate = matchedMembers.filter(
+    (member) => member.hasChanges && !member.existing.sourcePack,
+  );
 
   return {
     matchedMembers,
