@@ -42,8 +42,8 @@ pub enum PackError {
     #[error("persona file not found: {0}")]
     PersonaNotFound(PathBuf),
 
-    #[error("invalid persona file {path}: {reason}")]
-    PersonaParse { path: PathBuf, reason: String },
+    #[error("invalid file {path}: {reason}")]
+    FileParse { path: PathBuf, reason: String },
 
     #[error("path traversal rejected: {0}")]
     PathTraversal(String),
@@ -157,32 +157,20 @@ pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
     let pack_defaults = manifest.defaults.clone();
 
     // 2 & 3. Personas
+    let persona_size_limit =
+        (persona::MAX_FRONTMATTER_BYTES + persona::MAX_BODY_BYTES + 200) as u64;
     let mut personas = Vec::with_capacity(manifest.personas.len());
     for rel_path in &manifest.personas {
         let abs_path = safe_resolve(&pack_root, rel_path)?;
         if !abs_path.exists() {
             return Err(PackError::PersonaNotFound(abs_path));
         }
-        let file_len = std::fs::metadata(&abs_path)
-            .map_err(|e| PackError::PersonaParse {
-                path: abs_path.clone(),
-                reason: format!("cannot stat file: {e}"),
-            })?
-            .len();
-        let size_limit = (persona::MAX_FRONTMATTER_BYTES + persona::MAX_BODY_BYTES + 200) as u64;
-        if file_len > size_limit {
-            return Err(PackError::PersonaParse {
-                path: abs_path,
-                reason: format!("file too large: {file_len} bytes (max {size_limit})"),
-            });
-        }
-        let content = read_file(&abs_path)?;
+        let content = read_bounded_file(&abs_path, persona_size_limit)?;
         let persona = parse_persona_file(&abs_path, &content, pack_defaults.as_ref())?;
         personas.push(persona);
     }
 
     // 4. Pack instructions
-    // Size limit for text files (instructions, mcp config): generous but bounded.
     let text_size_limit =
         (crate::persona::MAX_FRONTMATTER_BYTES + crate::persona::MAX_BODY_BYTES + 200) as u64;
 
@@ -190,46 +178,17 @@ pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
         Some(rel) => {
             let abs = safe_resolve(&pack_root, rel)?;
             if !abs.exists() {
-                return Err(PackError::PersonaParse {
+                return Err(PackError::FileParse {
                     path: abs,
                     reason: format!("pack_instructions file not found: {rel}"),
                 });
             }
-            let meta = std::fs::metadata(&abs).map_err(|e| PackError::PersonaParse {
-                path: abs.clone(),
-                reason: format!("cannot stat file: {e}"),
-            })?;
-            if meta.len() > text_size_limit {
-                return Err(PackError::PersonaParse {
-                    path: abs,
-                    reason: format!(
-                        "file too large: {} bytes (max {})",
-                        meta.len(),
-                        text_size_limit
-                    ),
-                });
-            }
-            Some(read_file(&abs)?)
+            Some(read_bounded_file(&abs, text_size_limit)?)
         }
         None => {
-            // Conventional fallback — missing is fine when not explicitly declared.
             let path = pack_root.join("instructions.md");
             if path.exists() {
-                let meta = std::fs::metadata(&path).map_err(|e| PackError::PersonaParse {
-                    path: path.clone(),
-                    reason: format!("cannot stat file: {e}"),
-                })?;
-                if meta.len() > text_size_limit {
-                    return Err(PackError::PersonaParse {
-                        path,
-                        reason: format!(
-                            "file too large: {} bytes (max {})",
-                            meta.len(),
-                            text_size_limit
-                        ),
-                    });
-                }
-                Some(read_file(&path)?)
+                Some(read_bounded_file(&path, text_size_limit)?)
             } else {
                 None
             }
@@ -247,46 +206,19 @@ pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
         Some(rel) => {
             let abs = safe_resolve(&pack_root, rel)?;
             if !abs.exists() {
-                return Err(PackError::PersonaParse {
+                return Err(PackError::FileParse {
                     path: abs,
                     reason: format!("mcp_config file not found: {rel}"),
                 });
             }
-            let meta = std::fs::metadata(&abs).map_err(|e| PackError::PersonaParse {
-                path: abs.clone(),
-                reason: format!("cannot stat file: {e}"),
-            })?;
-            if meta.len() > text_size_limit {
-                return Err(PackError::PersonaParse {
-                    path: abs.clone(),
-                    reason: format!(
-                        "file too large: {} bytes (max {})",
-                        meta.len(),
-                        text_size_limit
-                    ),
-                });
-            }
-            Some(parse_mcp(read_file(&abs)?, &abs)?)
+            let raw = read_bounded_file(&abs, text_size_limit)?;
+            Some(parse_mcp(raw, &abs)?)
         }
         None => {
-            // Conventional fallback — missing is fine when not explicitly declared.
             let path = pack_root.join(".mcp.json");
             if path.exists() {
-                let meta = std::fs::metadata(&path).map_err(|e| PackError::PersonaParse {
-                    path: path.clone(),
-                    reason: format!("cannot stat file: {e}"),
-                })?;
-                if meta.len() > text_size_limit {
-                    return Err(PackError::PersonaParse {
-                        path,
-                        reason: format!(
-                            "file too large: {} bytes (max {})",
-                            meta.len(),
-                            text_size_limit
-                        ),
-                    });
-                }
-                Some(parse_mcp(read_file(&path)?, &path)?)
+                let raw = read_bounded_file(&path, text_size_limit)?;
+                Some(parse_mcp(raw, &path)?)
             } else {
                 None
             }
@@ -448,6 +380,21 @@ fn read_file(path: &Path) -> Result<String, PackError> {
     })
 }
 
+/// Read a file with a size limit. Returns an error if the file exceeds `max_bytes`.
+fn read_bounded_file(path: &Path, max_bytes: u64) -> Result<String, PackError> {
+    let meta = std::fs::metadata(path).map_err(|e| PackError::FileParse {
+        path: path.to_path_buf(),
+        reason: format!("cannot stat file: {e}"),
+    })?;
+    if meta.len() > max_bytes {
+        return Err(PackError::FileParse {
+            path: path.to_path_buf(),
+            reason: format!("file too large: {} bytes (max {max_bytes})", meta.len()),
+        });
+    }
+    read_file(path)
+}
+
 /// Parse a `.persona.md` file.
 ///
 /// Delegates identity and prompt parsing to [`persona::parse_persona_md`],
@@ -458,14 +405,14 @@ fn parse_persona_file(
     pack_defaults: Option<&serde_json::Value>,
 ) -> Result<LoadedPersona, PackError> {
     let pc: PersonaConfig =
-        persona::parse_persona_md(content).map_err(|e| PackError::PersonaParse {
+        persona::parse_persona_md(content).map_err(|e| PackError::FileParse {
             path: path.to_path_buf(),
             reason: e.to_string(),
         })?;
 
     // Serialize the behavioral fields of PersonaConfig to JSON so the
     // existing merge logic can do precedence resolution unchanged.
-    let fm_json = serde_json::to_value(&pc).map_err(|e| PackError::PersonaParse {
+    let fm_json = serde_json::to_value(&pc).map_err(|e| PackError::FileParse {
         path: path.to_path_buf(),
         reason: e.to_string(),
     })?;

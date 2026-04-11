@@ -43,7 +43,7 @@ fn create_test_pack(dir: &Path) {
     "model": "anthropic:claude-sonnet-4-20250514",
     "temperature": 0.7,
     "max_context_tokens": 128000,
-    "respond_to": {
+    "triggers": {
       "mentions": true,
       "keywords": [],
       "all_messages": false
@@ -82,7 +82,7 @@ You are Pip, an orchestration agent. You coordinate the team.
 name: "lep"
 display_name: "Lep 🍀"
 description: "Security-focused code reviewer"
-respond_to:
+triggers:
   mentions: true
   keywords:
     - "security"
@@ -166,6 +166,25 @@ fn full_pipeline_load_and_validate() {
         "pip should have system prompt"
     );
 
+    // 5b. pip does NOT set triggers → must inherit pack-default triggers.
+    // This is the critical regression test for the respond_to/triggers fix.
+    let pip_rt = pip
+        .triggers
+        .as_ref()
+        .expect("pip should inherit triggers from pack defaults");
+    assert!(
+        pip_rt.mentions,
+        "pip should inherit mentions=true from defaults"
+    );
+    assert!(
+        pip_rt.keywords.is_empty(),
+        "pip should inherit empty keywords from defaults"
+    );
+    assert!(
+        !pip_rt.all_messages,
+        "pip should inherit all_messages=false from defaults"
+    );
+
     // 6. Check lep inherits pack defaults.
     assert_eq!(lep.display_name, "Lep 🍀");
     assert_eq!(
@@ -214,7 +233,7 @@ model: "anthropic:claude-sonnet-4-20250514"
 temperature: 0.3
 subscribe:
   - "#test-channel"
-respond_to:
+triggers:
   mentions: true
   keywords:
     - "test"
@@ -546,7 +565,7 @@ fn resolve_full_pipeline() {
     // Subscribe
     assert_eq!(pip.subscribe, vec!["#security-reviews"]);
 
-    // Triggers: lep has explicit respond_to
+    // Triggers: lep has explicit triggers
     assert!(lep.triggers.mentions);
     assert!(lep.triggers.keywords.contains(&"security".to_string()));
     assert!(lep.triggers.keywords.contains(&"vulnerability".to_string()));

@@ -63,8 +63,8 @@ pub struct BehavioralDefaults {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscribe: Option<Vec<String>>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub respond_to: Option<RespondTo>,
+    #[serde(skip_serializing_if = "Option::is_none", alias = "respond_to")]
+    pub triggers: Option<RespondTo>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_replies: Option<bool>,
@@ -281,7 +281,20 @@ mod tests {
     }
 
     #[test]
-    fn defaults_with_respond_to() {
+    fn defaults_with_triggers() {
+        let json = r#"{
+            "id": "p", "name": "P", "version": "1.0.0",
+            "defaults": {
+                "triggers": {"mentions": true, "keywords": ["hey"], "all_messages": false}
+            }
+        }"#;
+        let m = parse_manifest(json).unwrap();
+        let rt = m.defaults.unwrap().triggers.unwrap();
+        assert_eq!(rt.keywords, vec!["hey"]);
+    }
+
+    #[test]
+    fn defaults_with_legacy_respond_to_alias() {
         let json = r#"{
             "id": "p", "name": "P", "version": "1.0.0",
             "defaults": {
@@ -289,7 +302,7 @@ mod tests {
             }
         }"#;
         let m = parse_manifest(json).unwrap();
-        let rt = m.defaults.unwrap().respond_to.unwrap();
+        let rt = m.defaults.unwrap().triggers.unwrap();
         assert_eq!(rt.keywords, vec!["hey"]);
     }
 

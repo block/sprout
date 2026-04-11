@@ -228,10 +228,13 @@ fn advisory_check_respond_to_types(pack_dir: &Path, report: &mut ValidationRepor
         Err(_) => return,
     };
 
-    // Check defaults.respond_to
+    // Check defaults.triggers (or legacy alias defaults.respond_to)
     if let Some(defaults) = json.get("defaults").and_then(|v| v.as_object()) {
-        if let Some(rt) = defaults.get("respond_to") {
-            check_respond_to_value(rt, "defaults.respond_to", report);
+        if let Some(rt) = defaults
+            .get("triggers")
+            .or_else(|| defaults.get("respond_to"))
+        {
+            check_respond_to_value(rt, "defaults.triggers", report);
         }
     }
 }
@@ -340,13 +343,17 @@ fn advisory_check_manifest_keys(pack_dir: &Path, report: &mut ValidationReport) 
             }
         }
 
-        // Unknown keys in `defaults.respond_to`.
-        if let Some(rt) = defaults.get("respond_to").and_then(|v| v.as_object()) {
+        // Unknown keys in `defaults.triggers` (or legacy `defaults.respond_to`).
+        let triggers_obj = defaults
+            .get("triggers")
+            .or_else(|| defaults.get("respond_to"))
+            .and_then(|v| v.as_object());
+        if let Some(rt) = triggers_obj {
             let known_rt: HashSet<&str> = KNOWN_RESPOND_TO_KEYS.iter().copied().collect();
             for key in rt.keys() {
                 if !known_rt.contains(key.as_str()) {
                     report.warn(format!(
-                        "plugin.json defaults.respond_to: unknown key \"{key}\""
+                        "plugin.json defaults.triggers: unknown key \"{key}\""
                     ));
                 }
             }

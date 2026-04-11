@@ -110,7 +110,49 @@ pub fn resolve_pack(pack_dir: &Path) -> Result<ResolvedPack, PackError> {
 
 /// Resolve from an already-loaded pack. Useful when you've already called
 /// `load_pack()` and want to avoid re-reading the filesystem.
+///
+/// Runs semantic validation (zero personas, duplicate names, invalid slugs)
+/// before resolution. Returns `PackError` on failure.
 pub fn resolve_loaded_pack(loaded: &LoadedPack) -> Result<ResolvedPack, PackError> {
+    // Semantic validation — catch issues that load_pack() doesn't check.
+    if loaded.personas.is_empty() {
+        return Err(PackError::ManifestParse(
+            "pack contains zero personas".into(),
+        ));
+    }
+    let mut seen_names = std::collections::HashSet::new();
+    for p in &loaded.personas {
+        if !seen_names.insert(&p.name) {
+            return Err(PackError::FileParse {
+                path: p.source_path.clone(),
+                reason: format!("duplicate persona name \"{}\"", p.name),
+            });
+        }
+        if !p
+            .name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(PackError::FileParse {
+                path: p.source_path.clone(),
+                reason: format!(
+                    "persona name \"{}\" contains invalid characters (allowed: [a-zA-Z0-9_-])",
+                    p.name
+                ),
+            });
+        }
+        if p.name.len() > 64 {
+            return Err(PackError::FileParse {
+                path: p.source_path.clone(),
+                reason: format!(
+                    "persona name \"{}\" exceeds 64 characters (got {})",
+                    p.name,
+                    p.name.len()
+                ),
+            });
+        }
+    }
+
     let pack_version = &loaded.manifest.version;
     let pack_instructions = loaded.pack_instructions.as_deref();
     let shared_mcp = loaded.shared_mcp_config.as_ref();

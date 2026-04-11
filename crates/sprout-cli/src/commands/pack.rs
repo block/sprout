@@ -64,32 +64,29 @@ pub fn cmd_inspect(path: &str) -> Result<(), CliError> {
         process::exit(1);
     }
 
-    // Load the pack (validate + load in one step).
-    let pack = sprout_persona::pack::load_pack(pack_dir)
-        .map_err(|e| CliError::Other(format!("failed to load pack: {e}")))?;
+    // Resolve the pack — shows fully effective config (post-merge, post-split).
+    let pack = sprout_persona::resolve::resolve_pack(pack_dir)
+        .map_err(|e| CliError::Other(format!("failed to resolve pack: {e}")))?;
 
     // Header
-    println!("Pack: {} ({})", pack.manifest.name, pack.manifest.id);
-    println!("Version: {}", pack.manifest.version);
+    println!("Pack: {} ({})", pack.name, pack.id);
+    println!("Version: {}", pack.version);
     println!("Personas: {}", pack.personas.len());
-    if pack.pack_instructions.is_some() {
-        println!("Pack instructions: yes");
-    }
-    if pack.shared_mcp_config.is_some() {
-        println!("Shared MCP config: yes");
-    }
-    if pack.skills_dir.is_some() {
-        println!("Skills directory: yes");
-    }
     println!();
 
-    // Per-persona summary
+    // Per-persona summary (fully resolved effective config)
     for persona in &pack.personas {
         println!("  {}", persona.name);
         println!("    Display: {}", persona.display_name);
         println!("    Description: {}", persona.description);
 
-        if let Some(ref model) = persona.model {
+        if let Some(ref provider) = persona.provider {
+            if let Some(ref model) = persona.model {
+                println!("    Model: {provider}:{model}");
+            } else {
+                println!("    Provider: {provider}");
+            }
+        } else if let Some(ref model) = persona.model {
             println!("    Model: {model}");
         }
         if let Some(temp) = persona.temperature {
@@ -103,20 +100,19 @@ pub fn cmd_inspect(path: &str) -> Result<(), CliError> {
             println!("    Subscribe: {}", persona.subscribe.join(", "));
         }
 
-        if let Some(ref rt) = persona.respond_to {
-            let mut parts = Vec::new();
-            if rt.mentions {
-                parts.push("mentions".to_string());
-            }
-            if !rt.keywords.is_empty() {
-                parts.push(format!("keywords {:?}", rt.keywords));
-            }
-            if rt.all_messages {
-                parts.push("all_messages".to_string());
-            }
-            if !parts.is_empty() {
-                println!("    Respond to: {}", parts.join(" + "));
-            }
+        let rt = &persona.triggers;
+        let mut parts = Vec::new();
+        if rt.mentions {
+            parts.push("mentions".to_string());
+        }
+        if !rt.keywords.is_empty() {
+            parts.push(format!("keywords {:?}", rt.keywords));
+        }
+        if rt.all_messages {
+            parts.push("all_messages".to_string());
+        }
+        if !parts.is_empty() {
+            println!("    Triggers: {}", parts.join(" + "));
         }
 
         println!("    Thread replies: {}", persona.thread_replies);
@@ -134,16 +130,26 @@ pub fn cmd_inspect(path: &str) -> Result<(), CliError> {
             println!("    Avatar: {avatar}");
         }
 
-        let prompt_preview = if persona.prompt.len() > 80 {
-            format!("{}...", &persona.prompt[..77])
+        let prompt_preview = if persona.system_prompt.chars().count() > 80 {
+            let truncated: String = persona.system_prompt.chars().take(77).collect();
+            format!("{truncated}...")
         } else {
-            persona.prompt.clone()
+            persona.system_prompt.clone()
         };
         println!(
-            "    Prompt: {} chars ({})",
-            persona.prompt.len(),
+            "    System prompt: {} chars ({})",
+            persona.system_prompt.len(),
             prompt_preview.replace('\n', " ")
         );
+
+        if !persona.goose_env_vars.is_empty() {
+            let env_str: Vec<String> = persona
+                .goose_env_vars
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect();
+            println!("    Env vars: {}", env_str.join(", "));
+        }
         println!();
     }
 

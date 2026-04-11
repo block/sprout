@@ -197,7 +197,7 @@ struct Frontmatter {
     mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     subscribe: Option<Vec<String>>,
-    #[serde(rename = "respond_to")]
+    #[serde(alias = "respond_to")]
     triggers: Option<RespondTo>,
     model: Option<String>,
     temperature: Option<f64>,
@@ -639,15 +639,26 @@ You are Full Bot.
     }
 
     #[test]
-    fn parse_triggers_field_exists() {
-        // `triggers:` in YAML (via serde rename = "respond_to" the YAML key is
-        // still `respond_to`) — verify the field parses and round-trips correctly.
-        let src = "---\nname: bot\ndisplay_name: Bot\ndescription: A bot.\nrespond_to:\n  mentions: true\n  keywords: [hello, help]\n  all_messages: false\n---\n";
+    fn parse_triggers_canonical_key() {
+        // `triggers:` is the canonical YAML key (spec Section 4).
+        let src = "---\nname: bot\ndisplay_name: Bot\ndescription: A bot.\ntriggers:\n  mentions: true\n  keywords: [hello, help]\n  all_messages: false\n---\n";
         let p = parse_persona_md(src).unwrap();
         let t = p.triggers.expect("triggers should be Some");
         assert_eq!(t.mentions, Some(true));
         assert_eq!(t.keywords, vec!["hello", "help"]);
         assert_eq!(t.all_messages, Some(false));
+    }
+
+    #[test]
+    fn parse_triggers_legacy_respond_to_alias() {
+        // `respond_to:` is accepted as a legacy alias for `triggers:`.
+        let src = "---\nname: bot\ndisplay_name: Bot\ndescription: A bot.\nrespond_to:\n  mentions: true\n  keywords: [hello, help]\n  all_messages: false\n---\n";
+        let p = parse_persona_md(src).unwrap();
+        let t = p
+            .triggers
+            .expect("triggers should be Some via respond_to alias");
+        assert_eq!(t.mentions, Some(true));
+        assert_eq!(t.keywords, vec!["hello", "help"]);
     }
 
     #[test]

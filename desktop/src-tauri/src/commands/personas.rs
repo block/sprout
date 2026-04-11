@@ -110,6 +110,12 @@ pub fn update_persona(
     if persona.is_builtin {
         return Err("Built-in personas cannot be edited.".to_string());
     }
+    if persona.source_pack.is_some() {
+        return Err(
+            "Pack personas cannot be edited. Uninstall and re-import the pack to update."
+                .to_string(),
+        );
+    }
 
     persona.display_name = display_name;
     persona.avatar_url = avatar_url;

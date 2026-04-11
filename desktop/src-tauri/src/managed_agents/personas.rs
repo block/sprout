@@ -513,6 +513,13 @@ pub fn validate_persona_deletion(
         return Err("Built-in personas cannot be deleted.".to_string());
     }
 
+    if persona.source_pack.is_some() {
+        return Err(format!(
+            "{} belongs to a pack. Use \"Uninstall Pack\" to remove all pack personas together.",
+            persona.display_name
+        ));
+    }
+
     if referenced_by_team {
         return Err(format!(
             "{} is still referenced by a team. Remove it from those teams first.",
@@ -688,6 +695,28 @@ pub fn import_persona_pack(
 /// Uninstall a persona pack: remove pack directory + pack PersonaRecords.
 pub fn uninstall_persona_pack(app: &AppHandle, pack_id: &str) -> Result<(), String> {
     validate_pack_id(pack_id)?;
+
+    // Block uninstall if any managed agent still references this pack.
+    let agents = crate::managed_agents::load_managed_agents(app)?;
+    let referencing: Vec<&str> = agents
+        .iter()
+        .filter(|a| {
+            a.persona_pack_path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                == Some(pack_id)
+        })
+        .map(|a| a.name.as_str())
+        .collect();
+    if !referencing.is_empty() {
+        return Err(format!(
+            "Cannot uninstall pack \"{pack_id}\": {} agent(s) still reference it ({}). \
+             Delete or reconfigure them first.",
+            referencing.len(),
+            referencing.join(", ")
+        ));
+    }
 
     // Remove pack directory
     let packs = packs_dir(app)?;
