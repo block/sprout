@@ -176,7 +176,7 @@ export const MessageRow = React.memo(
           data-message-id={message.id}
           data-testid="message-row"
         >
-          <div className="mt-px flex shrink-0 items-start gap-1">
+          <div className="flex shrink-0 items-start gap-1">
             {isBotInstance(message.role) ? (
               <BotIdenticon
                 value={message.author}
@@ -193,6 +193,7 @@ export const MessageRow = React.memo(
                   <UserAvatar
                     accent={message.accent}
                     avatarUrl={message.avatarUrl ?? null}
+                    className="!h-[42px] !w-[42px]"
                     displayName={message.author}
                     testId="message-avatar"
                   />
@@ -202,7 +203,7 @@ export const MessageRow = React.memo(
               <UserAvatar
                 accent={message.accent}
                 avatarUrl={message.avatarUrl ?? null}
-                className="shrink-0"
+                className="shrink-0 !h-[42px] !w-[42px]"
                 displayName={message.author}
                 testId="message-avatar"
               />
