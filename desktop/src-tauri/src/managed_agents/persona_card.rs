@@ -292,26 +292,19 @@ pub fn parse_md_persona(md_bytes: &[u8]) -> Result<ParsedPersonaPreview, String>
 
 /// Detect whether a ZIP archive is a persona pack (has `.plugin/plugin.json`).
 /// If so, resolve it and return previews for all personas in the pack.
-/// Walk a directory tree to find `.plugin/plugin.json`. Returns the parent of `.plugin/`.
-/// Checks root, root/*, and root/*/* (covers all realistic zip layouts).
-fn find_plugin_json(root: &std::path::Path) -> Option<std::path::PathBuf> {
+/// Find `.plugin/plugin.json` in a directory. Returns the parent of `.plugin/`.
+/// Checks root and root/* only (matches pack detection scope in parse_zip_personas).
+pub fn find_plugin_json(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    // Root level: .plugin/plugin.json
     if root.join(".plugin").join("plugin.json").exists() {
         return Some(root.to_path_buf());
     }
+    // One folder deep: <folder>/.plugin/plugin.json (common zip layout)
     for entry in std::fs::read_dir(root).ok()?.flatten() {
         if entry.file_type().ok()?.is_dir() {
             let child = entry.path();
             if child.join(".plugin").join("plugin.json").exists() {
                 return Some(child);
-            }
-            // One more level
-            for sub in std::fs::read_dir(&child).into_iter().flatten().flatten() {
-                if sub.file_type().ok().map(|t| t.is_dir()).unwrap_or(false) {
-                    let grandchild = sub.path();
-                    if grandchild.join(".plugin").join("plugin.json").exists() {
-                        return Some(grandchild);
-                    }
-                }
             }
         }
     }
@@ -325,22 +318,26 @@ pub fn parse_zip_pack(zip_bytes: &[u8]) -> Result<ParsePersonaFilesResult, Strin
     let mut archive =
         zip::ZipArchive::new(cursor).map_err(|e| format!("Invalid ZIP archive: {e}"))?;
 
-    // Extract all files (skip symlinks, enforce size limit).
+    // Extract all files with safe path handling.
     let mut total_decompressed: usize = 0;
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
             .map_err(|e| format!("Failed to read ZIP entry: {e}"))?;
 
-        let raw_name = entry.name().to_string();
-        if raw_name.contains("..") || raw_name.starts_with('/') {
-            continue; // path traversal
-        }
-        if raw_name.starts_with("__MACOSX/") || raw_name.contains("/._") {
+        // enclosed_name() returns None for paths with traversal components
+        // (.., absolute paths, Windows drive prefixes). This is the canonical
+        // safe extraction check from the zip crate.
+        let safe_name = match entry.enclosed_name() {
+            Some(name) => name.to_path_buf(),
+            None => continue, // path traversal — skip
+        };
+        let name_str = safe_name.to_string_lossy();
+        if name_str.starts_with("__MACOSX/") || name_str.contains("/._") {
             continue; // macOS metadata
         }
 
-        let out_path = tmp.path().join(&raw_name);
+        let out_path = tmp.path().join(&safe_name);
         if entry.is_dir() {
             std::fs::create_dir_all(&out_path).map_err(|e| format!("Failed to create dir: {e}"))?;
         } else {
@@ -364,7 +361,7 @@ pub fn parse_zip_pack(zip_bytes: &[u8]) -> Result<ParsePersonaFilesResult, Strin
                 data.extend_from_slice(&chunk[..n]);
             }
             std::fs::write(&out_path, &data)
-                .map_err(|e| format!("Failed to write {}: {e}", raw_name))?;
+                .map_err(|e| format!("Failed to write {}: {e}", name_str))?;
         }
     }
 
@@ -409,13 +406,20 @@ pub fn parse_zip_personas(zip_bytes: &[u8]) -> Result<ParsePersonaFilesResult, S
         zip::ZipArchive::new(cursor).map_err(|e| format!("Invalid ZIP archive: {e}"))?;
 
     // Detect persona pack BEFORE entry limit — packs may have many files.
+    // Only match root-level or one-folder-deep (matches find_plugin_json scope).
     let is_pack = (0..archive.len()).any(|i| {
         archive
             .by_index(i)
             .ok()
             .map(|e| {
                 let name = e.name().trim_start_matches('/');
-                name == ".plugin/plugin.json" || name.ends_with("/.plugin/plugin.json")
+                // Root: ".plugin/plugin.json"
+                // One folder deep: "my-pack/.plugin/plugin.json"
+                name == ".plugin/plugin.json"
+                    || name
+                        .strip_suffix("/.plugin/plugin.json")
+                        .map(|prefix| !prefix.contains('/'))
+                        .unwrap_or(false)
             })
             .unwrap_or(false)
     });
