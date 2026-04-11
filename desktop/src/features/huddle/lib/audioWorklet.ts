@@ -51,6 +51,7 @@ export async function setupAudioWorklet(
 
   return {
     stop: () => {
+      workletNode.port.onmessage = null;
       source.disconnect();
       workletNode.disconnect();
       void audioContext.close();

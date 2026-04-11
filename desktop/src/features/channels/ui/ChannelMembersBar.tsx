@@ -1,7 +1,6 @@
 import { Headphones, Plus, Settings2, Users, Zap } from "lucide-react";
 import * as React from "react";
-import { invoke } from "@tauri-apps/api/core";
-
+import { useHuddle } from "@/features/huddle";
 import {
   useAcpProvidersQuery,
   useBackendProvidersQuery,
@@ -39,7 +38,7 @@ export function ChannelMembersBar({
 }: ChannelMembersBarProps) {
   const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
   const [isCreateWorkflowOpen, setIsCreateWorkflowOpen] = React.useState(false);
-  const [isStartingHuddle, setIsStartingHuddle] = React.useState(false);
+  const { startHuddle, isStarting: isStartingHuddle } = useHuddle();
   const membersQuery = useChannelMembersQuery(channel.id);
   const providersQuery = useAcpProvidersQuery();
   const backendProvidersQuery = useBackendProvidersQuery();
@@ -194,17 +193,10 @@ export function ChannelMembersBar({
           data-testid="channel-start-huddle-trigger"
           disabled={!canAddAgents || isStartingHuddle}
           onClick={async () => {
-            if (isStartingHuddle) return;
-            setIsStartingHuddle(true);
             try {
-              await invoke("start_huddle", {
-                parentChannelId: channel.id,
-                memberPubkeys: [],
-              });
+              await startHuddle(channel.id, []);
             } catch (e) {
               console.error("Failed to start huddle:", e);
-            } finally {
-              setIsStartingHuddle(false);
             }
           }}
           size="icon"

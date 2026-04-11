@@ -29,6 +29,7 @@ import {
 import { usePresenceSession } from "@/features/presence/hooks";
 import { useProfileQuery } from "@/features/profile/hooks";
 import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
+import { HuddleBar, HuddleProvider } from "@/features/huddle";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -385,6 +386,7 @@ export function AppShell() {
           },
         }}
       >
+        <HuddleProvider>
         <SidebarProvider className="h-dvh overflow-hidden overscroll-none">
           <div className="fixed left-[80px] top-[8px] z-50 flex items-center gap-1.5">
             <SidebarTrigger className="h-6 w-6 text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" />
@@ -517,6 +519,8 @@ export function AppShell() {
             }}
           />
 
+          <HuddleBar />
+
           {settingsOpen ? (
             <React.Suspense fallback={null}>
               <LazySettingsScreen
@@ -545,6 +549,7 @@ export function AppShell() {
             </React.Suspense>
           ) : null}
         </SidebarProvider>
+        </HuddleProvider>
       </AppShellProvider>
     </ChannelNavigationProvider>
   );

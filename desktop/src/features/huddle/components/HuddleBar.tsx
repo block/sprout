@@ -12,6 +12,7 @@ import * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
+import { useHuddle } from "../HuddleContext";
 import { AddAgentDialog, type AgentAddResult } from "./AddAgentDialog";
 import { ParticipantList } from "./ParticipantList";
 
@@ -27,12 +28,11 @@ type HuddleState = {
 };
 
 type HuddleBarProps = {
-  /** MediaStreamTrack for local mic — used for mute toggle */
-  localAudioTrack: MediaStreamTrack | null;
   className?: string;
 };
 
-export function HuddleBar({ localAudioTrack, className }: HuddleBarProps) {
+export function HuddleBar({ className }: HuddleBarProps) {
+  const { localAudioTrack, leaveHuddle } = useHuddle();
   const [state, setState] = React.useState<HuddleState | null>(null);
   const [isMuted, setIsMuted] = React.useState(false);
   const [ttsEnabled, setTtsEnabled] = React.useState(true);
@@ -49,8 +49,11 @@ export function HuddleBar({ localAudioTrack, className }: HuddleBarProps) {
         const s = await invoke<HuddleState>("get_huddle_state");
         if (!cancelled) setState(s);
       } catch {
-        // Command not yet registered or no active huddle — ignore
-        if (!cancelled) setState(null);
+        // Only clear state if we never had an active huddle.
+        // Transient errors shouldn't remove the control bar.
+        if (!cancelled) {
+          setState((prev) => (prev?.phase === "active" ? prev : null));
+        }
       }
     }
 
@@ -76,7 +79,7 @@ export function HuddleBar({ localAudioTrack, className }: HuddleBarProps) {
     if (isLeaving) return;
     setIsLeaving(true);
     try {
-      await invoke("leave_huddle");
+      await leaveHuddle();
       setState(null);
     } catch (e) {
       console.error("Failed to leave huddle:", e);
