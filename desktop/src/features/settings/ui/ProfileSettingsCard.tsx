@@ -117,10 +117,7 @@ export function ProfileSettingsCard({
   const nip05Handle = profile?.nip05Handle ?? "Not set";
 
   return (
-    <section
-      className="rounded-xl border border-border/80 bg-card/80 p-5 shadow-sm"
-      data-testid="settings-profile"
-    >
+    <section className="min-w-0" data-testid="settings-profile">
       <div className="flex min-w-0 items-start gap-4">
         <ProfileAvatar
           avatarUrl={resolvedAvatarUrl}

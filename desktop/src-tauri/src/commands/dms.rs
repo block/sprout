@@ -4,7 +4,7 @@ use tauri::State;
 use crate::{
     app_state::AppState,
     models::{ChannelInfo, OpenDmBody, OpenDmResponse},
-    relay::{build_authed_request, send_empty_request, send_json_request},
+    relay::{api_path, build_authed_request, send_empty_request, send_json_request},
 };
 
 #[tauri::command]
@@ -16,14 +16,14 @@ pub async fn open_dm(
         .json(&OpenDmBody { pubkeys: &pubkeys });
     let response: OpenDmResponse = send_json_request(request).await?;
 
-    let path = format!("/api/channels/{}", response.channel_id);
+    let path = api_path(&["channels", &response.channel_id]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
 
 #[tauri::command]
 pub async fn hide_dm(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let path = format!("/api/dms/{channel_id}/hide");
+    let path = api_path(&["dms", &channel_id, "hide"]);
     let request = build_authed_request(&state.http_client, Method::POST, &path, &state)?;
     send_empty_request(request).await
 }

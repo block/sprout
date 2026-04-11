@@ -40,6 +40,13 @@ export function useClassifiedMembers(
     [managedAgentPubkeys, relayAgentPubkeys],
   );
 
+  const isMyBot = React.useCallback(
+    (member: ChannelMember) => {
+      return managedAgentPubkeys.has(normalizePubkey(member.pubkey));
+    },
+    [managedAgentPubkeys],
+  );
+
   const { people, bots } = React.useMemo(() => {
     const peopleList: ChannelMember[] = [];
     const botList: ChannelMember[] = [];
@@ -66,6 +73,7 @@ export function useClassifiedMembers(
     peopleCount: people.length,
     botCount: bots.length,
     isBot,
+    isMyBot,
     managedAgentsQuery,
     relayAgentsQuery,
   };

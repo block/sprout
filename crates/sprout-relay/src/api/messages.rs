@@ -28,10 +28,19 @@ use super::{
 /// Returns Ok(()) if all tags are valid, or a human-readable error string.
 pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result<(), String> {
     const ALLOWED_IMETA_KEYS: &[&str] = &[
-        "url", "m", "x", "size", "dim", "blurhash", "alt", "thumb", "fallback",
+        "url", "m", "x", "size", "dim", "blurhash", "alt", "thumb", "fallback", "duration",
+        "bitrate", "image",
     ];
-    const SINGLETON_KEYS: &[&str] = &["url", "m", "x", "size", "dim", "blurhash", "thumb", "alt"];
-    const ALLOWED_MIME: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+    const SINGLETON_KEYS: &[&str] = &[
+        "url", "m", "x", "size", "dim", "blurhash", "thumb", "alt", "duration", "bitrate", "image",
+    ];
+    const ALLOWED_MIME: &[&str] = &[
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "video/mp4",
+    ];
 
     for tag in tags {
         if tag.first().map(|s| s.as_str()) != Some("imeta") {
@@ -76,7 +85,7 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
                 "m" => {
                     if !ALLOWED_MIME.contains(&value) {
                         return Err(
-                            "imeta m must be image/jpeg, image/png, image/gif, or image/webp"
+                            "imeta m must be a supported MIME type (image/jpeg, image/png, image/gif, image/webp, video/mp4)"
                                 .into(),
                         );
                     }
@@ -108,12 +117,64 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
                     }
                     thumb_value = value.to_string();
                 }
+                "duration" => {
+                    // NIP-71 standard field: seconds as float, strictly positive.
+                    // Zero-duration videos are semantically invalid; server-side
+                    // validate_video_file() also catches this via mvhd timescale.
+                    if let Ok(d) = value.parse::<f64>() {
+                        if d <= 0.0 || d.is_nan() || d.is_infinite() {
+                            return Err("imeta duration must be a positive finite number".into());
+                        }
+                    } else {
+                        return Err("imeta duration must be a valid float".into());
+                    }
+                }
+                "bitrate" => {
+                    // NIP-71 standard field: bits/sec as integer, positive
+                    if value.parse::<u64>().map_or(true, |b| b == 0) {
+                        return Err("imeta bitrate must be a positive integer".into());
+                    }
+                }
+                "image" => {
+                    // NIP-71 poster frame — must be a local media URL with an image extension.
+                    // Poster frames are independent blobs, NOT thumbnails.
+                    // Video URLs (e.g. .mp4) and thumbnail URLs (.thumb.jpg) are rejected.
+                    const IMAGE_EXTS: &[&str] = &["jpg", "png", "gif", "webp"];
+                    if !is_local_media_url(value, media_base_url) {
+                        return Err("imeta image must be a local /media/ path".into());
+                    }
+                    if value.contains(".thumb.") {
+                        return Err(
+                            "imeta image must reference a standalone poster frame, not a thumbnail"
+                                .into(),
+                        );
+                    }
+                    let ext = value.rsplit('.').next().unwrap_or("");
+                    if !IMAGE_EXTS.contains(&ext) {
+                        return Err(
+                            "imeta image must reference an image file (jpg, png, gif, webp), not video"
+                                .into(),
+                        );
+                    }
+                }
                 _ => {}
             }
         }
 
         if !has_url || !has_m || !has_x || !has_size {
             return Err("imeta tag must include url, m, x, and size".into());
+        }
+
+        // Video-only NIP-71 fields must not appear on image blobs.
+        let is_video = m_value == "video/mp4";
+        if !is_video {
+            for key in &["duration", "bitrate", "image"] {
+                if seen_keys.contains(*key) {
+                    return Err(format!(
+                        "imeta {key} is only valid for video/mp4, not {m_value}"
+                    ));
+                }
+            }
         }
 
         // Cross-check internal consistency: url hash must match x, url ext must match m.
@@ -128,7 +189,9 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
                 return Err("imeta url extension does not match m".into());
             }
         }
-        // Thumb hash must match x (same blob, different variant).
+        // Thumb URL hash segment must match x — thumbnails are keyed by their
+        // parent blob's hash (e.g. {video_hash}.thumb.jpg), not by their own
+        // content hash. This checks URL consistency, not content identity.
         if !thumb_value.is_empty() {
             if let Some(thumb_hash) = extract_hash_from_media_url(&thumb_value) {
                 if thumb_hash != x_value {
@@ -136,6 +199,9 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
                 }
             }
         }
+        // NIP-71 poster frame (`image`) is an independent blob with its own
+        // content hash — it cannot match the video's `x` hash. Validated as a
+        // local media URL with an image extension only (no hash cross-check).
     }
     Ok(())
 }
@@ -155,6 +221,8 @@ pub async fn verify_imeta_blobs(
         let mut m_value = String::new();
         let mut size_value: u64 = 0;
         let mut thumb_value = String::new();
+        let mut image_value = String::new();
+        let mut duration_value: f64 = 0.0;
 
         for part in tag.iter().skip(1) {
             let mut parts = part.splitn(2, ' ');
@@ -165,6 +233,8 @@ pub async fn verify_imeta_blobs(
                 "m" => m_value = value.to_string(),
                 "size" => size_value = value.parse().unwrap_or(0),
                 "thumb" => thumb_value = value.to_string(),
+                "image" => image_value = value.to_string(),
+                "duration" => duration_value = value.parse().unwrap_or(0.0),
                 _ => {}
             }
         }
@@ -202,6 +272,15 @@ pub async fn verify_imeta_blobs(
                 sidecar.size
             ));
         }
+        // Duration cross-check: if sidecar has duration and client claims one,
+        // they must agree within 0.1s tolerance (float rounding from mvhd).
+        if let Some(stored_dur) = sidecar.duration_secs {
+            if duration_value > 0.0 && (duration_value - stored_dur).abs() > 0.1 {
+                return Err(format!(
+                    "imeta duration ({duration_value}) does not match stored duration ({stored_dur})"
+                ));
+            }
+        }
 
         // 4. If thumb is claimed, HEAD the thumbnail object too.
         if !thumb_value.is_empty() {
@@ -213,6 +292,51 @@ pub async fn verify_imeta_blobs(
             if !thumb_exists {
                 return Err(format!(
                     "imeta thumb references missing thumbnail: {x_value}"
+                ));
+            }
+        }
+
+        // 5. If image (poster frame) is claimed, verify sidecar + blob.
+        //    Poster frames are independent blobs — extract hash from the image
+        //    URL itself, not from x_value. Sidecar must exist (serving is gated
+        //    on it) and MIME must be an image type.
+        if !image_value.is_empty() {
+            let img_hash = extract_hash_from_media_url(&image_value)
+                .ok_or_else(|| format!("imeta image URL has no extractable hash: {image_value}"))?;
+
+            let img_sidecar = storage
+                .get_sidecar(img_hash)
+                .await
+                .map_err(|_| format!("imeta image references nonexistent poster: {img_hash}"))?;
+
+            // Poster frame must be an image, not video or other type.
+            const IMAGE_MIMES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+            if !IMAGE_MIMES.contains(&img_sidecar.mime_type.as_str()) {
+                return Err(format!(
+                    "imeta image poster MIME must be image type, got {}",
+                    img_sidecar.mime_type
+                ));
+            }
+
+            // URL extension must match sidecar's canonical extension.
+            // Mismatch means the URL would 404 on serve (GET resolves via sidecar).
+            if let Some(url_ext) = extract_ext_from_media_url(&image_value) {
+                if url_ext != img_sidecar.ext {
+                    return Err(format!(
+                        "imeta image extension ({url_ext}) does not match stored extension ({})",
+                        img_sidecar.ext
+                    ));
+                }
+            }
+
+            let img_key = format!("{img_hash}.{}", img_sidecar.ext);
+            let img_exists = storage
+                .head(&img_key)
+                .await
+                .map_err(|e| format!("storage error checking poster image: {e}"))?;
+            if !img_exists {
+                return Err(format!(
+                    "imeta image references missing poster frame: {img_hash}"
                 ));
             }
         }
@@ -249,6 +373,7 @@ fn mime_to_canonical_ext(mime: &str) -> &str {
         "image/png" => "png",
         "image/gif" => "gif",
         "image/webp" => "webp",
+        "video/mp4" => "mp4",
         _ => "bin",
     }
 }
@@ -263,7 +388,7 @@ fn mime_to_canonical_ext(mime: &str) -> &str {
 ///     Thumbnails are always JPEG — only `.thumb.jpg` is accepted.
 ///     Rejects percent-encoded traversal, query strings, fragments, and external origins.
 fn is_local_media_url(url: &str, media_base_url: &str) -> bool {
-    const ALLOWED_EXTS: &[&str] = &["jpg", "png", "gif", "webp"];
+    const ALLOWED_EXTS: &[&str] = &["jpg", "png", "gif", "webp", "mp4"];
 
     // Extract the path portion after /media/
     let path_after_media = if let Some(rest) = url.strip_prefix("/media/") {
@@ -938,5 +1063,183 @@ mod tests {
     #[test]
     fn kinds_negative_is_error() {
         assert!(parse_kinds(Some("-1")).is_err());
+    }
+
+    // ── video / NIP-71 imeta tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_imeta_video_mp4_accepted() {
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/mp4".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+        ];
+        assert!(validate_imeta_tags(&[tag], BASE).is_ok());
+    }
+
+    #[test]
+    fn test_imeta_duration_valid() {
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/mp4".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+            "duration 29.5".into(),
+        ];
+        assert!(validate_imeta_tags(&[tag], BASE).is_ok());
+    }
+
+    #[test]
+    fn test_imeta_duration_negative_rejected() {
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/mp4".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+            "duration -5".into(),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("positive finite number"), "{err}");
+    }
+
+    #[test]
+    fn test_imeta_duration_zero_rejected() {
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/mp4".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+            "duration 0".into(),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("positive finite number"), "{err}");
+    }
+
+    #[test]
+    fn test_imeta_duration_non_float_rejected() {
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/mp4".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+            "duration abc".into(),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("valid float"), "{err}");
+    }
+
+    #[test]
+    fn test_imeta_bitrate_valid() {
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/mp4".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+            "bitrate 1500000".into(),
+        ];
+        assert!(validate_imeta_tags(&[tag], BASE).is_ok());
+    }
+
+    #[test]
+    fn test_imeta_bitrate_zero_rejected() {
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/mp4".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+            "bitrate 0".into(),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("positive integer"), "{err}");
+    }
+
+    #[test]
+    fn test_imeta_image_poster_frame_accepted() {
+        // Poster frame is an independent blob with its own hash — different from
+        // the video's x hash. This must be accepted (no hash cross-check).
+        let poster_hash = "b".repeat(64);
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/mp4".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+            format!("image /media/{poster_hash}.jpg"),
+        ];
+        assert!(validate_imeta_tags(&[tag], BASE).is_ok());
+    }
+
+    #[test]
+    fn test_imeta_image_video_url_rejected() {
+        // NIP-71 image field is a still poster frame — .mp4 must be rejected
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/mp4".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+            format!("image /media/{HASH}.mp4"),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(
+            err.contains("image file") && err.contains("not video"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_imeta_image_thumbnail_url_rejected() {
+        // Poster frame must be a standalone blob, not a thumbnail variant.
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/mp4".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+            format!("image /media/{HASH}.thumb.jpg"),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("standalone poster frame"), "{err}");
+    }
+
+    #[test]
+    fn test_imeta_duration_on_image_rejected() {
+        // Video-only NIP-71 fields must not appear on image blobs.
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.jpg"),
+            "m image/jpeg".into(),
+            format!("x {HASH}"),
+            "size 100000".into(),
+            "duration 5.0".into(),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("only valid for video/mp4"), "{err}");
+    }
+
+    #[test]
+    fn test_imeta_video_quicktime_rejected() {
+        let tag = vec![
+            "imeta".into(),
+            format!("url /media/{HASH}.mp4"),
+            "m video/quicktime".into(),
+            format!("x {HASH}"),
+            "size 5000000".into(),
+        ];
+        let err = validate_imeta_tags(&[tag], BASE).unwrap_err();
+        assert!(err.contains("supported MIME type"), "{err}");
+    }
+
+    #[test]
+    fn test_local_media_url_mp4_accepted() {
+        assert!(is_local_media_url(&format!("/media/{HASH}.mp4"), BASE));
     }
 }

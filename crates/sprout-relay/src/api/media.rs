@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
+use axum::http::header;
 use axum::{
-    body::Bytes,
     extract::{FromRequestParts, Path, State},
     http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -47,9 +47,14 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
 
         // 1. Extract and validate Blossom auth event
         let auth_event = extract_blossom_auth(headers)?;
+        // Use the permissive window (3600s) here because we don't know the
+        // content type yet.  The upload functions re-verify with the correct
+        // per-type window (600s for images, 3600s for video) after the body
+        // has been consumed and the SHA-256 computed.
         sprout_media::auth::verify_blossom_auth_event(
             &auth_event,
             state.config.media.server_domain.as_deref(),
+            3600,
         )?;
 
         // 2. Require X-SHA-256 header (BUD-11: mandatory for PUT /upload)
@@ -98,6 +103,7 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
 ///   - `Authorization: Nostr <base64(kind:24242 event)>` — Blossom auth
 ///   - `X-SHA-256: <hex>` — Required per BUD-11
 ///   - `X-Auth-Token: sprout_*` — API token for scope resolution (optional in dev mode)
+///   - `Content-Type: video/mp4` — routes to video validation path; all other types use image path
 ///   - Raw binary body (the file bytes)
 ///
 /// Returns a [`BlobDescriptor`] JSON on success.
@@ -107,19 +113,48 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
 pub async fn upload_blob(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedUpload,
-    body: Bytes,
+    headers: HeaderMap,
+    body: axum::body::Body,
 ) -> Result<Json<BlobDescriptor>, MediaError> {
-    let descriptor = sprout_media::process_upload(
-        &state.media_storage,
-        &state.config.media,
-        &auth.auth_event,
-        body,
-    )
-    .await?;
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let descriptor = if content_type.starts_with("video/") {
+        // Video path: stream body directly to disk — never fully buffered in RAM.
+        let content_length = headers
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        sprout_media::process_video_upload(
+            &state.media_storage,
+            &state.config.media,
+            &auth.auth_event,
+            body.into_data_stream(),
+            content_length,
+        )
+        .await?
+    } else {
+        // Image path: collect body to bytes (bounded by transport-layer limit).
+        let max = state.config.media.max_image_bytes;
+        let bytes = axum::body::to_bytes(body, max as usize)
+            .await
+            .map_err(|_| MediaError::FileTooLarge { size: 0, max })?;
+        sprout_media::process_upload(
+            &state.media_storage,
+            &state.config.media,
+            &auth.auth_event,
+            bytes,
+        )
+        .await?
+    };
 
     // Normalize MIME to a known set to bound label cardinality.
     let mime_label = match descriptor.mime_type.as_str() {
-        "image/jpeg" | "image/png" | "image/gif" | "image/webp" => &descriptor.mime_type,
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "video/mp4" => {
+            &descriptor.mime_type
+        }
         _ => "other",
     };
     metrics::counter!("sprout_media_uploads_total", "mime" => mime_label.to_owned()).increment(1);
@@ -160,7 +195,7 @@ pub async fn upload_blob(
 /// Where `{ext}` ∈ {"jpg", "png", "gif", "webp"} for primary blobs (uploads canonicalize to .jpg, not .jpeg).
 /// Rejects path traversal, leading underscores, and any non-hex first segment.
 fn validate_media_path(sha256_ext: &str) -> Result<(), MediaError> {
-    const ALLOWED_EXTS: &[&str] = &["jpg", "png", "gif", "webp"];
+    const ALLOWED_EXTS: &[&str] = &["jpg", "png", "gif", "webp", "mp4"];
 
     let segments: Vec<&str> = sha256_ext.split('.').collect();
 
@@ -196,15 +231,32 @@ fn validate_media_path(sha256_ext: &str) -> Result<(), MediaError> {
     Ok(())
 }
 
-/// GET /media/{sha256_ext} — Blossom BUD-01 serve blob.
+/// Maximum bytes returned in a single 206 range response (16 MiB).
+///
+/// Caps memory per request and prevents clients from using range requests to
+/// bypass the intent of chunked delivery. Clients that need more simply issue
+/// additional range requests.
+const MAX_RANGE_CHUNK: u64 = 16 * 1024 * 1024;
+
+/// GET /media/{sha256_ext} — Blossom BUD-01 serve blob, with HTTP 206 range support.
 ///
 /// `sha256_ext` is either:
 ///   - `<sha256>.<ext>` — direct key (e.g. `abc123.jpg`)
 ///   - `<sha256>` — bare hash; extension resolved from sidecar
 ///   - `<sha256>.thumb.jpg` — thumbnail variant
+///
+/// Range request behaviour (RFC 9110 §14.2):
+///   - No `Range` header → 200 with full body
+///   - `Range: bytes=START-END` → 206 with slice; `Content-Range: bytes START-END/TOTAL`
+///   - Unsatisfiable range (start ≥ total) → 416 with `Content-Range: bytes */TOTAL`
+///   - Suffix ranges (`bytes=-N`) → 206 with last N bytes (RFC 9110 §14.1.2)
+///   - Chunk capped at 16 MiB; clients request additional ranges for the rest
+///
+/// All responses include `Accept-Ranges: bytes` so video players know seeking is supported.
 pub async fn get_blob(
     State(state): State<Arc<AppState>>,
     Path(sha256_ext): Path<String>,
+    req_headers: HeaderMap,
 ) -> Result<Response, MediaError> {
     validate_media_path(&sha256_ext)?;
 
@@ -240,19 +292,132 @@ pub async fn get_blob(
     };
 
     let key = resolve_s3_key(&state.media_storage, &sha256_ext).await?;
-    let bytes = state.media_storage.get(&key).await?;
 
-    Ok((
-        [
-            ("content-type", content_type.as_str()),
-            ("cache-control", "public, max-age=31536000, immutable"),
-            ("content-disposition", "inline"),
-            ("content-security-policy", "default-src 'none'"),
-            ("x-content-type-options", "nosniff"),
-        ],
-        bytes,
-    )
-        .into_response())
+    // Parse optional Range header.
+    let range_header = req_headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned());
+
+    // Extract single-range value, if present. Multi-range (comma-separated) is
+    // unsupported — we ignore it and serve the full body per RFC 9110 §14.2:
+    // "A server MAY ignore the Range header field."
+    let single_range = range_header.filter(|r| !r.contains(','));
+
+    match single_range {
+        None => {
+            // Full response — 200 OK. Stream from S3 — never loads full blob into RAM.
+            let total = state
+                .media_storage
+                .head_with_metadata(&key)
+                .await?
+                .ok_or(MediaError::NotFound)?
+                .size;
+            let stream = state.media_storage.get_stream(&key).await?;
+            let resp = axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, &content_type)
+                .header(header::CONTENT_LENGTH, total.to_string())
+                .header(header::CONTENT_DISPOSITION, "inline")
+                .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+                .header(header::CONTENT_SECURITY_POLICY, "default-src 'none'")
+                .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+                .header(header::ACCEPT_RANGES, "bytes")
+                .body(axum::body::Body::from_stream(stream))
+                .map_err(|_| MediaError::Internal)?;
+            Ok(resp)
+        }
+        Some(range_str) => {
+            // Single-range request — HEAD first to get total size without loading the blob.
+            let total = state
+                .media_storage
+                .head_with_metadata(&key)
+                .await?
+                .ok_or(MediaError::NotFound)?
+                .size;
+
+            // Parse range: "bytes=START-END", "bytes=START-", or "bytes=-N" (suffix).
+            let parsed = parse_byte_range(&range_str, total);
+            match parsed {
+                Some((start, end)) => {
+                    if start >= total {
+                        return axum::response::Response::builder()
+                            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                            .header(header::CONTENT_RANGE, format!("bytes */{total}"))
+                            .body(axum::body::Body::empty())
+                            .map_err(|_| MediaError::Internal);
+                    }
+
+                    // Clamp end to total-1, then cap chunk size.
+                    let end = end.min(total.saturating_sub(1));
+                    let end = end
+                        .min(start.saturating_add(MAX_RANGE_CHUNK - 1))
+                        .min(total.saturating_sub(1));
+
+                    // S3-native range GET — never loads the full blob into RAM.
+                    let chunk = state.media_storage.get_range(&key, start, end).await?;
+                    let content_range = format!("bytes {start}-{end}/{total}");
+
+                    Ok(axum::response::Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(header::CONTENT_TYPE, &content_type)
+                        .header(header::CONTENT_RANGE, content_range)
+                        .header(header::CONTENT_LENGTH, chunk.len().to_string())
+                        .header(header::CONTENT_DISPOSITION, "inline")
+                        .header(header::ACCEPT_RANGES, "bytes")
+                        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+                        .header(header::CONTENT_SECURITY_POLICY, "default-src 'none'")
+                        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+                        .body(axum::body::Body::from(chunk))
+                        .map_err(|_| MediaError::Internal)?)
+                }
+                None => Ok(axum::response::Response::builder()
+                    .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                    .header(header::CONTENT_RANGE, format!("bytes */{total}"))
+                    .body(axum::body::Body::empty())
+                    .map_err(|_| MediaError::Internal)?),
+            }
+        }
+    }
+}
+
+/// Parse a `Range: bytes=START-END` header value.
+///
+/// Returns `Some((start, end))` for a valid absolute or suffix range.
+/// Supported forms:
+///   - `bytes=START-END` → absolute range
+///   - `bytes=START-`    → from START to end of file
+///   - `bytes=-N`        → last N bytes (suffix range, per RFC 9110 §14.1.2)
+///
+/// Returns `None` for malformed values or non-bytes units — callers respond with 416.
+fn parse_byte_range(range: &str, total: u64) -> Option<(u64, u64)> {
+    let range = range.strip_prefix("bytes=")?;
+
+    // Suffix range: "bytes=-N" → last N bytes of the file.
+    if let Some(suffix) = range.strip_prefix('-') {
+        let n: u64 = suffix.parse().ok()?;
+        if n == 0 || total == 0 {
+            return None;
+        }
+        let start = total.saturating_sub(n);
+        return Some((start, total - 1));
+    }
+
+    let (start_str, end_str) = range.split_once('-')?;
+    let start: u64 = start_str.parse().ok()?;
+
+    // Open-ended range: "bytes=START-" → from start to end of file.
+    let end: u64 = if end_str.is_empty() {
+        u64::MAX
+    } else {
+        end_str.parse().ok()?
+    };
+
+    if start > end {
+        return None;
+    }
+
+    Some((start, end))
 }
 
 /// HEAD /media/{sha256_ext} — Blossom BUD-01 existence check.
@@ -304,6 +469,7 @@ pub async fn head_blob(
                 [
                     ("content-type", content_type.as_str()),
                     ("content-length", size_str.as_str()),
+                    ("accept-ranges", "bytes"),
                     ("cache-control", "public, max-age=31536000, immutable"),
                 ],
             )
@@ -326,7 +492,7 @@ async fn resolve_s3_key(
     storage: &sprout_media::MediaStorage,
     sha256_ext: &str,
 ) -> Result<String, MediaError> {
-    const ALLOWED_EXTS: &[&str] = &["jpg", "png", "gif", "webp"];
+    const ALLOWED_EXTS: &[&str] = &["jpg", "png", "gif", "webp", "mp4"];
 
     if sha256_ext.contains('.') {
         Ok(sha256_ext.to_string())
@@ -456,7 +622,7 @@ mod tests {
 
     #[test]
     fn test_validate_media_path_hash_ext() {
-        for ext in &["jpg", "png", "gif", "webp"] {
+        for ext in &["jpg", "png", "gif", "webp", "mp4"] {
             assert!(validate_media_path(&format!("{VALID_HASH}.{ext}")).is_ok());
         }
     }
@@ -501,5 +667,66 @@ mod tests {
     #[test]
     fn test_validate_media_path_rejects_empty() {
         assert!(validate_media_path("").is_err());
+    }
+
+    // ── Range request parsing ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_byte_range_basic() {
+        assert_eq!(parse_byte_range("bytes=0-499", 1000), Some((0, 499)));
+        assert_eq!(parse_byte_range("bytes=500-999", 1000), Some((500, 999)));
+    }
+
+    #[test]
+    fn test_parse_byte_range_open_ended() {
+        // "bytes=500-" means from 500 to end of file
+        assert_eq!(parse_byte_range("bytes=500-", 1000), Some((500, u64::MAX)));
+    }
+
+    #[test]
+    fn test_parse_byte_range_suffix() {
+        // "bytes=-500" on a 1000-byte file → last 500 bytes
+        assert_eq!(parse_byte_range("bytes=-500", 1000), Some((500, 999)));
+    }
+
+    #[test]
+    fn test_parse_byte_range_suffix_larger_than_file() {
+        // Suffix larger than file → clamp to start of file
+        assert_eq!(parse_byte_range("bytes=-5000", 1000), Some((0, 999)));
+    }
+
+    #[test]
+    fn test_parse_byte_range_suffix_zero() {
+        // "bytes=-0" is nonsensical → None
+        assert_eq!(parse_byte_range("bytes=-0", 1000), None);
+    }
+
+    #[test]
+    fn test_parse_byte_range_suffix_empty_file() {
+        // Suffix on empty file → None
+        assert_eq!(parse_byte_range("bytes=-500", 0), None);
+    }
+
+    #[test]
+    fn test_parse_byte_range_rejects_inverted() {
+        // start > end is invalid
+        assert_eq!(parse_byte_range("bytes=999-0", 1000), None);
+    }
+
+    #[test]
+    fn test_parse_byte_range_rejects_non_bytes_unit() {
+        assert_eq!(parse_byte_range("items=0-10", 1000), None);
+    }
+
+    #[test]
+    fn test_parse_byte_range_rejects_malformed() {
+        assert_eq!(parse_byte_range("bytes=abc-def", 1000), None);
+        assert_eq!(parse_byte_range("garbage", 1000), None);
+        assert_eq!(parse_byte_range("bytes=", 1000), None);
+    }
+
+    #[test]
+    fn test_parse_byte_range_zero_start() {
+        assert_eq!(parse_byte_range("bytes=0-0", 1000), Some((0, 0)));
     }
 }

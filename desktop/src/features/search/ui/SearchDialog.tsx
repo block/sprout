@@ -30,6 +30,8 @@ const MIN_QUERY_LENGTH = 2;
 
 function describeSearchHit(hit: SearchHit) {
   switch (hit.kind) {
+    case 1:
+      return "Note";
     case 45001:
       return "Forum post";
     case 45003:

@@ -11,7 +11,7 @@ use crate::{
         GetUserNotesQuery, GetUsersBatchBody, ProfileInfo, SearchUsersResponse, SetPresenceBody,
         SetPresenceResponse, UserNotesResponse, UsersBatchResponse,
     },
-    relay::{build_authed_request, send_json_request, submit_event},
+    relay::{api_path, build_authed_request, send_json_request, submit_event},
 };
 
 #[tauri::command]
@@ -81,7 +81,7 @@ pub async fn get_user_profile(
     state: State<'_, AppState>,
 ) -> Result<ProfileInfo, String> {
     let path = match pubkey {
-        Some(pubkey) => format!("/api/users/{pubkey}/profile"),
+        Some(pubkey) => api_path(&["users", &pubkey, "profile"]),
         None => "/api/users/me/profile".to_string(),
     };
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;

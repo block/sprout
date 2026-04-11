@@ -343,11 +343,6 @@ pub async fn mint_token_via_api(
 
     // Build NIP-98 auth header signed by the AGENT's keys (not the desktop user's).
     let payload_hash = hex::encode(Sha256::digest(&body_bytes));
-    let forwarded_proto = if url.starts_with("http://") {
-        "http"
-    } else {
-        "https"
-    };
     let tags = vec![
         Tag::parse(vec!["u", &url]).map_err(|e| format!("url tag failed: {e}"))?,
         Tag::parse(vec!["method", "POST"]).map_err(|e| format!("method tag failed: {e}"))?,
@@ -365,7 +360,6 @@ pub async fn mint_token_via_api(
         .request(Method::POST, &url)
         .header("Authorization", auth_header)
         .header("Content-Type", "application/json")
-        .header("X-Forwarded-Proto", forwarded_proto)
         .body(body_bytes);
 
     let response: crate::models::MintTokenResponse = send_json_request(request).await?;

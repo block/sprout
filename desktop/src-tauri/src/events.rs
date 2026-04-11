@@ -356,3 +356,48 @@ pub fn build_profile(
     let content = serde_json::Value::Object(map).to_string();
     Ok(EventBuilder::new(Kind::Custom(0), content))
 }
+
+// ── Social notes ────────────────────────────────────────────────────────────
+
+/// Kind 1 — NIP-01 short text note (global, no channel scope).
+pub fn build_note(
+    content: &str,
+    reply_to_event_id: Option<EventId>,
+) -> Result<EventBuilder, String> {
+    check_content(content)?;
+    let mut tags = Vec::new();
+    if let Some(parent) = reply_to_event_id {
+        tags.push(tag(vec!["e", &parent.to_hex(), "", "reply"])?);
+    }
+    Ok(EventBuilder::new(Kind::TextNote, content).tags(tags))
+}
+
+/// Maximum contacts per contact list event.
+const MAX_CONTACTS: usize = 10_000;
+
+/// Kind 3 — NIP-02 contact list (replaceable, full snapshot).
+pub fn build_contact_list(
+    contacts: &[(&str, Option<&str>, Option<&str>)],
+) -> Result<EventBuilder, String> {
+    if contacts.len() > MAX_CONTACTS {
+        return Err(format!(
+            "too many contacts (max {MAX_CONTACTS}, got {})",
+            contacts.len()
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut tags = Vec::new();
+    for &(pubkey, relay_url, petname) in contacts {
+        check_pubkey(pubkey)?;
+        let lower = pubkey.to_ascii_lowercase();
+        if seen.insert(lower.clone()) {
+            tags.push(tag(vec![
+                "p",
+                &lower,
+                relay_url.unwrap_or(""),
+                petname.unwrap_or(""),
+            ])?);
+        }
+    }
+    Ok(EventBuilder::new(Kind::ContactList, "").tags(tags))
+}

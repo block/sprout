@@ -42,7 +42,7 @@ import {
   SidebarTrigger,
 } from "@/shared/ui/sidebar";
 
-type AppView = "home" | "channel" | "agents" | "workflows";
+type AppView = "home" | "channel" | "agents" | "workflows" | "pulse";
 const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
 
 const LazySettingsScreen = React.lazy(async () => {
@@ -93,6 +93,13 @@ function deriveShellRoute(pathname: string): {
     };
   }
 
+  if (pathname === "/pulse") {
+    return {
+      selectedChannelId: null,
+      selectedView: "pulse",
+    };
+  }
+
   return {
     selectedChannelId: null,
     selectedView: "home",
@@ -113,7 +120,7 @@ export function AppShell() {
     React.useState<BrowseDialogType>(null);
   const location = useLocation();
   const queryClient = useQueryClient();
-  const { goAgents, goChannel, goHome, goWorkflows, openSearchHit } =
+  const { goAgents, goChannel, goHome, goPulse, goWorkflows, openSearchHit } =
     useAppNavigation();
   const { canGoBack, canGoForward, goBack, goForward } =
     useBackForwardControls();
@@ -470,6 +477,9 @@ export function AppShell() {
             }}
             onSelectHome={() => {
               void goHome();
+            }}
+            onSelectPulse={() => {
+              void goPulse();
             }}
             onSelectSettings={handleOpenSettings}
             onSelectWorkflows={() => {

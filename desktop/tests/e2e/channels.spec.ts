@@ -29,6 +29,138 @@ async function openMembersSidebar(
   await expect(page.getByTestId("members-sidebar")).toBeVisible();
 }
 
+async function waitForMockLiveSubscription(
+  page: import("@playwright/test").Page,
+  channelName: string,
+) {
+  await expect
+    .poll(async () => {
+      return page.evaluate((currentChannelName) => {
+        return (
+          (
+            window as Window & {
+              __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+                channelName: string;
+              }) => boolean;
+            }
+          ).__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            channelName: currentChannelName,
+          }) ?? false
+        );
+      }, channelName);
+    })
+    .toBe(true);
+}
+
+async function openMemberMenu(
+  page: import("@playwright/test").Page,
+  pubkey: string,
+) {
+  const row = page.getByTestId(`sidebar-member-${pubkey}`);
+  const trigger = page.getByTestId(`sidebar-member-menu-${pubkey}`);
+  await row.scrollIntoViewIfNeeded();
+  await row.hover();
+  // Workaround: @radix-ui/react-dropdown-menu@2.1.16 ignores pointer-based
+  // re-opens after a menu item click (onCloseAutoFocus race). Opening via
+  // keyboard (focus + Enter) is reliable. Revisit if Radix fixes this.
+  await trigger.focus();
+  await trigger.press("Enter");
+  await expect(trigger).toHaveAttribute("data-state", "open");
+}
+
+async function addGenericAgent(
+  page: import("@playwright/test").Page,
+  channelName: string,
+  agentName: string,
+) {
+  await page.getByTestId(`channel-${channelName}`).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await page.getByTestId("channel-add-bot-trigger").click();
+  await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
+  await page.getByRole("button", { name: "Generic" }).click();
+  await page.locator("#channel-generic-name").fill(agentName);
+  await page
+    .locator("#channel-generic-prompt")
+    .fill("Watch the channel and help when asked.");
+  await page.getByRole("button", { name: "Add agent" }).click();
+  await expect(page.getByRole("heading", { name: "Add agents" })).toHaveCount(
+    0,
+  );
+}
+
+async function getManagedAgentPubkey(
+  page: import("@playwright/test").Page,
+  agentName: string,
+) {
+  await page.getByTestId("open-agents-view").click();
+  const managedAgentRow = page
+    .locator('[data-testid^="managed-agent-"]')
+    .filter({ hasText: agentName });
+  await expect(managedAgentRow).toHaveCount(1);
+  const managedAgentTestId = await managedAgentRow
+    .first()
+    .getAttribute("data-testid");
+  if (!managedAgentTestId) {
+    throw new Error("Managed agent row test id missing.");
+  }
+
+  return managedAgentTestId.replace("managed-agent-", "");
+}
+
+async function readCommandLog(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    return (
+      (
+        window as Window & {
+          __SPROUT_E2E_COMMANDS__?: string[];
+        }
+      ).__SPROUT_E2E_COMMANDS__ ?? []
+    );
+  });
+}
+
+async function invokeMockCommand<T>(
+  page: import("@playwright/test").Page,
+  command: string,
+  payload?: Record<string, unknown>,
+) {
+  await page.waitForFunction(() => {
+    return Boolean(
+      (
+        window as Window & {
+          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+        }
+      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__,
+    );
+  });
+
+  return page.evaluate(
+    async ({
+      command,
+      payload,
+    }: {
+      command: string;
+      payload?: Record<string, unknown>;
+    }) => {
+      const invoke = (
+        window as Window & {
+          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+            command: string,
+            payload?: Record<string, unknown>,
+          ) => Promise<unknown>;
+        }
+      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__;
+
+      if (!invoke) {
+        throw new Error("Mock bridge is not installed.");
+      }
+
+      return invoke(command, payload);
+    },
+    { command, payload },
+  ) as Promise<T>;
+}
+
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
@@ -122,6 +254,155 @@ test("create stream with name and description", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 });
 
+test("create ephemeral stream shows sidebar and header affordances", async ({
+  page,
+}) => {
+  const channelName = `ephemeral-stream-${Date.now()}`;
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Create a stream" }).click();
+  await page.getByTestId("create-stream-name").fill(channelName);
+  await page
+    .getByTestId("create-stream-description")
+    .fill("Auto-cleaned test stream");
+  await page
+    .getByTestId("create-stream-form")
+    .getByLabel("Ephemeral — auto-archives after 1 day of inactivity")
+    .click();
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
+
+  await expect(page.getByTestId("stream-list")).toContainText(channelName);
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await expect(
+    page.getByTestId(`channel-ephemeral-${channelName}`),
+  ).toBeVisible();
+  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveText(
+    /Ephemeral.+left/,
+  );
+
+  await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+  await expect(
+    page.getByTestId(`channel-ephemeral-${channelName}`),
+  ).toBeVisible();
+});
+
+test("ephemeral countdown refreshes when switching channels after a clock jump", async ({
+  page,
+}) => {
+  const firstChannelName = "ephemeral-alpha";
+  const secondChannelName = "ephemeral-beta";
+  const initialTime = new Date("2026-04-09T00:00:00.000Z");
+  const shiftedTime = new Date("2026-04-09T02:00:00.000Z");
+
+  await page.clock.setFixedTime(initialTime);
+  await page.goto("/");
+
+  for (const channelName of [firstChannelName, secondChannelName]) {
+    await page.getByRole("button", { name: "Create a stream" }).click();
+    await page.getByTestId("create-stream-name").fill(channelName);
+    await page
+      .getByTestId("create-stream-description")
+      .fill("Auto-cleaned test stream");
+    await page
+      .getByTestId("create-stream-form")
+      .getByLabel("Ephemeral — auto-archives after 1 day of inactivity")
+      .click();
+    await page
+      .getByTestId("create-stream-form")
+      .getByRole("button", { name: "Create" })
+      .click();
+    await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  }
+
+  await page.clock.setFixedTime(shiftedTime);
+  await expect
+    .poll(() => page.evaluate(() => Date.now()))
+    .toBe(shiftedTime.getTime());
+
+  await page.getByTestId(`channel-${firstChannelName}`).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(firstChannelName);
+  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveText(
+    /Ephemeral.+22h left/,
+  );
+});
+
+test("archived channels stay out of all sidebar sections", async ({ page }) => {
+  const archivedStreamName = `archived-stream-${Date.now()}`;
+  const archivedForumName = `archived-forum-${Date.now()}`;
+
+  await page.goto("/");
+  await page.waitForFunction(() => {
+    return Boolean(
+      (
+        window as Window & {
+          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+        }
+      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__,
+    );
+  });
+  await page.evaluate(
+    async ({
+      archivedForumName,
+      archivedStreamName,
+      outsiderPubkey,
+    }: {
+      archivedForumName: string;
+      archivedStreamName: string;
+      outsiderPubkey: string;
+    }) => {
+      const invoke = (
+        window as Window & {
+          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+            command: string,
+            payload?: Record<string, unknown>,
+          ) => Promise<{ id: string }>;
+        }
+      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__;
+
+      if (!invoke) {
+        throw new Error("Mock bridge is not installed.");
+      }
+
+      const stream = await invoke("create_channel", {
+        channelType: "stream",
+        name: archivedStreamName,
+        visibility: "open",
+      });
+      const forum = await invoke("create_channel", {
+        channelType: "forum",
+        name: archivedForumName,
+        visibility: "open",
+      });
+      const directMessage = await invoke("open_dm", {
+        pubkeys: [outsiderPubkey],
+      });
+
+      for (const channel of [stream, forum, directMessage]) {
+        await invoke("archive_channel", { channelId: channel.id });
+      }
+    },
+    {
+      archivedForumName,
+      archivedStreamName,
+      outsiderPubkey: TEST_IDENTITIES.outsider.pubkey,
+    },
+  );
+
+  await page.reload();
+
+  await expect(page.getByTestId("stream-list")).not.toContainText(
+    archivedStreamName,
+  );
+  await expect(page.getByTestId("forum-list")).not.toContainText(
+    archivedForumName,
+  );
+  await expect(page.getByTestId("dm-list")).toContainText("alice-tyler");
+  await expect(page.getByTestId("dm-list")).not.toContainText("outsider");
+});
+
 test("create stream with special characters", async ({ page }) => {
   const channelName = `dev ops-${Date.now()}`;
 
@@ -194,7 +475,7 @@ test("shows and clears typing indicators for active channel bots", async ({
 
   await page.getByTestId("channel-agents").click();
   await expect(page.getByTestId("chat-title")).toHaveText("agents");
-  await page.waitForTimeout(300);
+  await waitForMockLiveSubscription(page, "agents");
 
   await page.evaluate((pubkey) => {
     window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
@@ -237,7 +518,7 @@ test("typing indicator shows avatars and maintains stable name order", async ({
 
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
-  await page.waitForTimeout(300);
+  await waitForMockLiveSubscription(page, "general");
 
   // Alice starts typing first
   await page.evaluate((pubkey) => {
@@ -475,6 +756,7 @@ test("members sidebar can invite and remove members", async ({ page }) => {
   ).toContainText("charlie");
   await expect(page.getByTestId("channel-members-trigger")).toContainText("4");
 
+  await openMemberMenu(page, TEST_IDENTITIES.charlie.pubkey);
   await page
     .getByTestId(`sidebar-remove-member-${TEST_IDENTITIES.charlie.pubkey}`)
     .click();
@@ -550,59 +832,247 @@ test("removing a channel-scoped agent also cleans up the managed agent record", 
   const agentName = `cleanup-agent-${Date.now()}`;
 
   await page.goto("/");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
-
-  await page.getByTestId("channel-add-bot-trigger").click();
-  await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
-
-  await page.getByRole("button", { name: "Generic" }).click();
-  await page.locator("#channel-generic-name").fill(agentName);
-  await page
-    .locator("#channel-generic-prompt")
-    .fill("Watch the channel and help when asked.");
-  await page.getByRole("button", { name: "Add agent" }).click();
-  await expect(page.getByRole("heading", { name: "Add agents" })).toHaveCount(
-    0,
-  );
-
-  await page.getByTestId("open-agents-view").click();
-  const managedAgentRow = page
-    .locator('[data-testid^="managed-agent-"]')
-    .filter({ hasText: agentName });
-  await expect(managedAgentRow).toHaveCount(1);
-
-  const managedAgentTestId = await managedAgentRow
-    .first()
-    .getAttribute("data-testid");
-  if (!managedAgentTestId) {
-    throw new Error("Managed agent row test id missing.");
-  }
-  const agentPubkey = managedAgentTestId.replace("managed-agent-", "");
+  await addGenericAgent(page, "general", agentName);
+  const agentPubkey = await getManagedAgentPubkey(page, agentName);
 
   await page.getByTestId("channel-general").click();
   await openMembersSidebar(page, "general");
 
-  const removeButton = page.getByTestId(`sidebar-remove-member-${agentPubkey}`);
-  await expect(removeButton).toBeVisible();
-  await removeButton.click();
-  await expect(removeButton).toHaveCount(0);
+  await openMemberMenu(page, agentPubkey);
+  await page.getByTestId(`sidebar-remove-member-${agentPubkey}`).click();
+  await expect(page.getByTestId(`sidebar-member-${agentPubkey}`)).toHaveCount(
+    0,
+  );
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("members-sidebar")).not.toBeVisible();
 
   await page.getByTestId("open-agents-view").click();
   await expect(page.getByTestId(`managed-agent-${agentPubkey}`)).toHaveCount(0);
 
-  const commands = await page.evaluate(() => {
-    return (
-      (
-        window as Window & {
-          __SPROUT_E2E_COMMANDS__?: string[];
-        }
-      ).__SPROUT_E2E_COMMANDS__ ?? []
-    );
-  });
+  const commands = await readCommandLog(page);
   expect(commands).toContain("delete_managed_agent");
+});
+
+test("members sidebar can respawn a stopped managed bot", async ({ page }) => {
+  const agentName = `sidebar-agent-${Date.now()}`;
+
+  await page.goto("/");
+  await addGenericAgent(page, "general", agentName);
+
+  const agentPubkey = await getManagedAgentPubkey(page, agentName);
+  const baselineCommands = await readCommandLog(page);
+  const baselineStartCount = baselineCommands.filter(
+    (command) => command === "start_managed_agent",
+  ).length;
+  const baselineStopCount = baselineCommands.filter(
+    (command) => command === "stop_managed_agent",
+  ).length;
+
+  await openMembersSidebar(page, "general");
+
+  const agentStatus = page.getByTestId(
+    `sidebar-managed-agent-status-${agentPubkey}`,
+  );
+  const agentAction = page.getByTestId(`sidebar-agent-action-${agentPubkey}`);
+
+  await expect(agentStatus).toContainText("Running");
+  await openMemberMenu(page, agentPubkey);
+  await expect(agentAction).toContainText("Stop");
+  await agentAction.click();
+
+  await expect(agentStatus).toContainText("Stopped");
+  await openMemberMenu(page, agentPubkey);
+  await expect(agentAction).toContainText("Respawn");
+  await agentAction.click();
+
+  await expect(agentStatus).toContainText("Running");
+  await expect(page.getByTestId("members-sidebar-action-notice")).toContainText(
+    `Respawned ${agentName}.`,
+  );
+
+  const commands = await readCommandLog(page);
+  expect(
+    commands.filter((command) => command === "start_managed_agent").length,
+  ).toBe(baselineStartCount + 1);
+  expect(
+    commands.filter((command) => command === "stop_managed_agent").length,
+  ).toBe(baselineStopCount + 1);
+});
+
+test("members sidebar supports bulk remove for managed bots", async ({
+  page,
+}) => {
+  const firstAgentName = `sidebar-remove-a-${Date.now()}`;
+  const secondAgentName = `sidebar-remove-b-${Date.now()}`;
+
+  await page.goto("/");
+  await addGenericAgent(page, "general", firstAgentName);
+  await addGenericAgent(page, "general", secondAgentName);
+
+  const firstAgentPubkey = await getManagedAgentPubkey(page, firstAgentName);
+  const secondAgentPubkey = await getManagedAgentPubkey(page, secondAgentName);
+
+  await openMembersSidebar(page, "general");
+  await expect(
+    page.getByTestId("members-sidebar-agent-controls"),
+  ).toBeVisible();
+
+  await page.getByTestId("members-sidebar-agent-controls").click();
+  await page.getByTestId("members-sidebar-remove-all").click();
+  await expect(page.getByTestId("members-sidebar-action-notice")).toContainText(
+    "Removed 2 managed bots from this channel.",
+  );
+  await expect(
+    page.getByTestId(`sidebar-member-${firstAgentPubkey}`),
+  ).toHaveCount(0);
+  await expect(
+    page.getByTestId(`sidebar-member-${secondAgentPubkey}`),
+  ).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("members-sidebar")).not.toBeVisible();
+
+  await page.getByTestId("open-agents-view").click();
+  await expect(
+    page.getByTestId(`managed-agent-${firstAgentPubkey}`),
+  ).toHaveCount(0);
+  await expect(
+    page.getByTestId(`managed-agent-${secondAgentPubkey}`),
+  ).toHaveCount(0);
+
+  const commands = await readCommandLog(page);
+  expect(
+    commands.filter((command) => command === "remove_channel_member"),
+  ).toHaveLength(2);
+  expect(
+    commands.filter((command) => command === "delete_managed_agent"),
+  ).toHaveLength(2);
+});
+
+test("removing a multi-channel managed bot keeps its record until it is orphaned", async ({
+  page,
+}) => {
+  const agentName = `multi-channel-agent-${Date.now()}`;
+  const secondChannelName = `multi-home-${Date.now()}`;
+
+  await page.goto("/");
+  await addGenericAgent(page, "general", agentName);
+  const agentPubkey = await getManagedAgentPubkey(page, agentName);
+
+  await page.getByRole("button", { name: "Create a stream" }).click();
+  await page.getByTestId("create-stream-name").fill(secondChannelName);
+  await page
+    .getByTestId("create-stream-description")
+    .fill("Second home for managed bot cleanup coverage");
+  await page
+    .getByTestId("create-stream-form")
+    .getByRole("button", { name: "Create" })
+    .click();
+  await expect(page.getByTestId("chat-title")).toHaveText(secondChannelName);
+
+  const secondChannelId = await page
+    .getByTestId(`channel-${secondChannelName}`)
+    .getAttribute("data-channel-id");
+  if (!secondChannelId) {
+    throw new Error("Second channel id missing.");
+  }
+
+  await invokeMockCommand(page, "add_channel_members", {
+    channelId: secondChannelId,
+    pubkeys: [agentPubkey],
+    role: "bot",
+  });
+
+  // Snapshot command counts before removals so assertions are relative.
+  const baseline = await readCommandLog(page);
+  const baselineRemoves = baseline.filter(
+    (c) => c === "remove_channel_member",
+  ).length;
+  const baselineDeletes = baseline.filter(
+    (c) => c === "delete_managed_agent",
+  ).length;
+
+  await openMembersSidebar(page, "general");
+  await openMemberMenu(page, agentPubkey);
+  await page.getByTestId(`sidebar-remove-member-${agentPubkey}`).click();
+  await expect(page.getByTestId(`sidebar-member-${agentPubkey}`)).toHaveCount(
+    0,
+  );
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("members-sidebar")).not.toBeVisible();
+
+  await page.getByTestId("open-agents-view").click();
+  await expect(page.getByTestId(`managed-agent-${agentPubkey}`)).toHaveCount(1);
+
+  let commands = await readCommandLog(page);
+  // First removal: 1 remove_channel_member, bot still in second channel
+  // so no delete_managed_agent yet.
+  expect(
+    commands.filter((c) => c === "remove_channel_member").length -
+      baselineRemoves,
+  ).toBe(1);
+  expect(
+    commands.filter((c) => c === "delete_managed_agent").length -
+      baselineDeletes,
+  ).toBe(0);
+
+  await openMembersSidebar(page, secondChannelName);
+  await openMemberMenu(page, agentPubkey);
+  await page.getByTestId(`sidebar-remove-member-${agentPubkey}`).click();
+  await expect(page.getByTestId(`sidebar-member-${agentPubkey}`)).toHaveCount(
+    0,
+  );
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("members-sidebar")).not.toBeVisible();
+
+  await page.getByTestId("open-agents-view").click();
+  await expect(page.getByTestId(`managed-agent-${agentPubkey}`)).toHaveCount(0);
+
+  commands = await readCommandLog(page);
+  // Second removal: bot is now orphaned, so cleanup deletes the managed agent.
+  expect(
+    commands.filter((c) => c === "remove_channel_member").length -
+      baselineRemoves,
+  ).toBe(2);
+  expect(
+    commands.filter((c) => c === "delete_managed_agent").length -
+      baselineDeletes,
+  ).toBe(1);
+});
+
+test("bulk remove stays hidden when row-level remove is not allowed", async ({
+  page,
+}) => {
+  const alicePubkey =
+    "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f";
+
+  await page.goto("/");
+
+  // Join the "design" channel (unjoined by default) via the channel browser.
+  // The user becomes a regular member — not admin/owner.
+  await page.getByTestId("browse-channels").click();
+  await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
+  await page
+    .getByTestId("browse-channel-design")
+    .getByRole("button", { name: "Join" })
+    .click();
+  await expect(page.getByTestId("chat-title")).toHaveText("design");
+
+  await openMembersSidebar(page, "design");
+
+  // Alice is a relay-observed bot in design (present in mockRelayAgents) that
+  // the user does not manage locally. Since there is no local managed agent
+  // for alice, hasActions is false and no 3-dot menu renders.
+  await expect(page.getByTestId(`sidebar-member-${alicePubkey}`)).toBeVisible();
+  await expect(
+    page.getByTestId(`sidebar-member-menu-${alicePubkey}`),
+  ).toHaveCount(0);
+
+  // Bulk agent controls only render when hasControllableManagedBots is true.
+  // Since no bots in design have a local managed agent, the controls are absent.
+  await expect(page.getByTestId("members-sidebar-agent-controls")).toHaveCount(
+    0,
+  );
 });
 
 test("open channel management supports join and leave", async ({ page }) => {

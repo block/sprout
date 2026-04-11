@@ -402,6 +402,12 @@ pub async fn create_managed_agent(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
+            mcp_toolsets: input
+                .mcp_toolsets
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
             // Provider agents don't auto-start with the desktop — they're
             // managed externally. Force false to avoid persisting a flag the
             // app will never honor.

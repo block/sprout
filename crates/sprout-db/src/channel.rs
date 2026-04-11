@@ -405,11 +405,14 @@ pub async fn add_member(
 
 /// Remove a member from a channel (soft delete).
 ///
-/// `actor_pubkey` must be an active owner/admin, or the member removing themselves.
+/// `actor_pubkey` must be an active owner/admin, the agent's owner, or the member
+/// removing themselves.
 ///
 /// Returns `Err(DbError::MemberNotFound)` if the target is not an active member.
-/// The authorization check and the UPDATE run inside a transaction to prevent a
+/// The actor's role check and the UPDATE run inside a transaction to prevent a
 /// TOCTOU race where the actor's role changes between the check and the update.
+/// The `is_agent_owner` check runs outside the transaction against the main pool
+/// because `agent_owner_pubkey` is immutable (set once at token mint).
 pub async fn remove_member(
     pool: &PgPool,
     channel_id: Uuid,
@@ -426,9 +429,13 @@ pub async fn remove_member(
         let actor_role: MemberRole = actor_role_str.parse().map_err(|_| {
             DbError::InvalidData(format!("invalid role in database: {actor_role_str}"))
         })?;
-        if !actor_role.is_elevated() {
+        // Safe to query outside the transaction: agent_owner_pubkey is immutable
+        // (set once at token mint, first-mint-wins).
+        if !actor_role.is_elevated()
+            && !crate::user::is_agent_owner(pool, pubkey, actor_pubkey).await?
+        {
             return Err(DbError::AccessDenied(
-                "only owners/admins may remove other members".to_string(),
+                "only owners/admins or the agent's owner may remove other members".to_string(),
             ));
         }
     }
@@ -1146,4 +1153,127 @@ pub async fn reap_expired_ephemeral_channels(pool: &PgPool) -> Result<Vec<Uuid>>
             Ok(id)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::user::{ensure_user, set_agent_owner};
+    use nostr::Keys;
+
+    const TEST_DB_URL: &str = "postgres://sprout:sprout_dev@localhost:5432/sprout";
+
+    async fn setup_pool() -> PgPool {
+        PgPool::connect(TEST_DB_URL)
+            .await
+            .expect("connect to test DB")
+    }
+
+    fn random_pubkey() -> Vec<u8> {
+        Keys::generate().public_key().serialize().to_vec()
+    }
+
+    /// Agent owner (non-admin) can remove their own bot from a channel.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn test_agent_owner_can_remove_bot() {
+        let pool = setup_pool().await;
+        let owner_pk = random_pubkey();
+        let agent_pk = random_pubkey();
+
+        // Create users and set agent ownership
+        ensure_user(&pool, &owner_pk).await.expect("ensure owner");
+        ensure_user(&pool, &agent_pk).await.expect("ensure agent");
+        set_agent_owner(&pool, &agent_pk, &owner_pk)
+            .await
+            .expect("set agent owner");
+
+        // Create a channel owned by someone else entirely
+        let channel_owner_pk = random_pubkey();
+        ensure_user(&pool, &channel_owner_pk)
+            .await
+            .expect("ensure channel owner");
+        let channel = create_channel(
+            &pool,
+            "test-bot-remove",
+            ChannelType::Stream,
+            ChannelVisibility::Open,
+            None,
+            &channel_owner_pk,
+            None,
+        )
+        .await
+        .expect("create channel");
+
+        // Add owner and agent as regular members
+        add_member(&pool, channel.id, &owner_pk, MemberRole::Member, None)
+            .await
+            .expect("add owner as member");
+        add_member(&pool, channel.id, &agent_pk, MemberRole::Member, None)
+            .await
+            .expect("add agent as member");
+
+        // Owner should be able to remove their agent
+        remove_member(&pool, channel.id, &agent_pk, &owner_pk)
+            .await
+            .expect("agent owner should be able to remove their bot");
+
+        // Verify the agent is no longer a member
+        assert!(
+            !is_member(&pool, channel.id, &agent_pk)
+                .await
+                .expect("is_member check"),
+            "agent should no longer be a member"
+        );
+    }
+
+    /// A random non-admin, non-owner user cannot remove someone else's bot.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn test_random_user_cannot_remove_bot() {
+        let pool = setup_pool().await;
+        let owner_pk = random_pubkey();
+        let agent_pk = random_pubkey();
+        let random_pk = random_pubkey();
+
+        // Create users and set agent ownership
+        ensure_user(&pool, &owner_pk).await.expect("ensure owner");
+        ensure_user(&pool, &agent_pk).await.expect("ensure agent");
+        ensure_user(&pool, &random_pk).await.expect("ensure random");
+        set_agent_owner(&pool, &agent_pk, &owner_pk)
+            .await
+            .expect("set agent owner");
+
+        // Create a channel
+        let channel_owner_pk = random_pubkey();
+        ensure_user(&pool, &channel_owner_pk)
+            .await
+            .expect("ensure channel owner");
+        let channel = create_channel(
+            &pool,
+            "test-bot-no-remove",
+            ChannelType::Stream,
+            ChannelVisibility::Open,
+            None,
+            &channel_owner_pk,
+            None,
+        )
+        .await
+        .expect("create channel");
+
+        // Add random user and agent as regular members
+        add_member(&pool, channel.id, &random_pk, MemberRole::Member, None)
+            .await
+            .expect("add random as member");
+        add_member(&pool, channel.id, &agent_pk, MemberRole::Member, None)
+            .await
+            .expect("add agent as member");
+
+        // Random user should NOT be able to remove the agent
+        let result = remove_member(&pool, channel.id, &agent_pk, &random_pk).await;
+        assert!(
+            result.is_err(),
+            "random user should not be able to remove someone else's bot"
+        );
+    }
 }

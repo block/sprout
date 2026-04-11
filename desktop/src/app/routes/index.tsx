@@ -10,7 +10,7 @@ export const Route = createFileRoute("/")({
 });
 
 function HomeRouteComponent() {
-  const { goChannel } = useAppNavigation();
+  const { goChannel, goPulse } = useAppNavigation();
   const channelsQuery = useChannelsQuery();
   const identityQuery = useIdentityQuery();
   const channels = channelsQuery.data ?? [];
@@ -22,6 +22,9 @@ function HomeRouteComponent() {
       currentPubkey={identityQuery.data?.pubkey}
       onOpenChannel={(channelId) => {
         void goChannel(channelId);
+      }}
+      onOpenPulse={() => {
+        void goPulse();
       }}
     />
   );

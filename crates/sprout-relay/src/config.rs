@@ -177,6 +177,10 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(10 * 1024 * 1024),
+            max_video_bytes: std::env::var("SPROUT_MAX_VIDEO_BYTES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(500 * 1024 * 1024),
             public_base_url: std::env::var("SPROUT_MEDIA_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:3000/media".to_string()),
             server_domain: std::env::var("SPROUT_MEDIA_SERVER_DOMAIN")

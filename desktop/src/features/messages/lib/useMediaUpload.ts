@@ -6,7 +6,17 @@ import {
   uploadMediaBytes,
 } from "@/shared/api/tauri";
 
-const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const ALLOWED_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "video/mp4",
+  "video/quicktime",
+  "video/x-matroska",
+  "video/webm",
+  "video/x-msvideo",
+];
 
 type UploadState = {
   status: "idle" | "uploading" | "error";
@@ -26,7 +36,10 @@ export function useMediaUpload(
 
   const onUploaded = React.useCallback(
     (descriptor: BlobDescriptor) => {
-      const markdown = `\n![image](${descriptor.url})\n`;
+      const isVideo = descriptor.type === "video/mp4";
+      const markdown = isVideo
+        ? `\n![video](${descriptor.url})\n`
+        : `\n![image](${descriptor.url})\n`;
       setContent((prev) => prev + markdown);
       setPendingImeta((prev) => [...prev, descriptor]);
       setUploadState({ status: "idle" });
@@ -60,7 +73,8 @@ export function useMediaUpload(
       if (!ALLOWED_TYPES.includes(file.type)) {
         setUploadState({
           status: "error",
-          message: "Only JPEG, PNG, GIF, and WebP images are supported",
+          message:
+            "Unsupported file type. Supported: JPEG, PNG, GIF, WebP, MP4, MOV, MKV, WebM, AVI",
         });
         return;
       }
@@ -87,11 +101,11 @@ export function useMediaUpload(
   const handlePaste = React.useCallback(
     async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
       const items = Array.from(event.clipboardData.items);
-      const imageItem = items.find((item) => ALLOWED_TYPES.includes(item.type));
-      if (!imageItem) return;
+      const mediaItem = items.find((item) => ALLOWED_TYPES.includes(item.type));
+      if (!mediaItem) return;
 
       event.preventDefault();
-      const file = imageItem.getAsFile();
+      const file = mediaItem.getAsFile();
       if (!file) return;
 
       setUploadState({ status: "uploading" });

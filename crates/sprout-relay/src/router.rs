@@ -30,11 +30,16 @@ use crate::state::AppState;
 /// own `RequestBodyLimitLayer` before merging; the outer layer adds tracing and
 /// CORS once over the combined router.
 pub fn build_router(state: Arc<AppState>) -> Router {
-    // ── Media routes: body limit derived from config ─────────────────────────
-    // Transport limit is max_image_bytes (50MB). GIFs have a stricter app-level cap (10MB)
-    // enforced in validation.rs after MIME detection. This means GIF uploads up to 50MB are
-    // buffered before rejection — acceptable for V1; streaming validation deferred to V2.
-    let media_body_limit = state.config.media.max_image_bytes as usize;
+    // ── Media routes: body limit covers both images and video ────────────────
+    // Transport cap is the larger of image and video limits. Video uploads stream
+    // to disk (never fully buffered); images collect to bytes within this limit.
+    // Per-MIME app-level limits (GIF: 10 MB) are enforced in sprout-media
+    // validation after MIME detection.
+    let media_body_limit = state
+        .config
+        .media
+        .max_image_bytes
+        .max(state.config.media.max_video_bytes) as usize;
     let media_router = Router::new()
         .route("/media/upload", put(api::media::upload_blob))
         .route(

@@ -110,6 +110,28 @@ impl SubscriptionRegistry {
         }
     }
 
+    /// Remove all subscriptions on `conn_id` scoped to `channel_id`.
+    pub fn remove_channel_subscriptions(&self, conn_id: ConnId, channel_id: Uuid) -> Vec<SubId> {
+        let sub_ids: Vec<SubId> = self
+            .subs
+            .get(&conn_id)
+            .map(|conn_subs| {
+                conn_subs
+                    .iter()
+                    .filter_map(|(sub_id, (_, sub_channel_id))| {
+                        (*sub_channel_id == Some(channel_id)).then_some(sub_id.clone())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for sub_id in &sub_ids {
+            self.remove_subscription(conn_id, sub_id);
+        }
+
+        sub_ids
+    }
+
     /// Return all (conn_id, sub_id) pairs whose filters match the given event.
     pub fn fan_out(&self, event: &StoredEvent) -> Vec<(ConnId, SubId)> {
         let mut results = Vec::new();
@@ -712,5 +734,37 @@ mod tests {
             kind: Kind::TextNote,
         };
         assert!(registry.channel_kind_index.get(&key).is_none());
+    }
+
+    #[test]
+    fn test_remove_channel_subscriptions_only_evicts_target_channel() {
+        let registry = SubscriptionRegistry::new();
+        let conn_id = Uuid::new_v4();
+        let channel_a = Uuid::new_v4();
+        let channel_b = Uuid::new_v4();
+
+        registry.register(
+            conn_id,
+            "sub-a".to_string(),
+            vec![Filter::new().kind(Kind::TextNote)],
+            Some(channel_a),
+        );
+        registry.register(
+            conn_id,
+            "sub-b".to_string(),
+            vec![Filter::new().kind(Kind::TextNote)],
+            Some(channel_b),
+        );
+
+        let removed = registry.remove_channel_subscriptions(conn_id, channel_a);
+        assert_eq!(removed, vec!["sub-a".to_string()]);
+
+        let event_a = make_stored_event(Kind::TextNote, Some(channel_a));
+        assert!(registry.fan_out(&event_a).is_empty());
+
+        let event_b = make_stored_event(Kind::TextNote, Some(channel_b));
+        let matches_b = registry.fan_out(&event_b);
+        assert_eq!(matches_b.len(), 1);
+        assert_eq!(matches_b[0].1, "sub-b");
     }
 }

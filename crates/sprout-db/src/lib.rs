@@ -557,6 +557,11 @@ impl Db {
         user::get_agent_channel_policy(&self.pool, pubkey).await
     }
 
+    /// Check whether `actor_pubkey` is the agent owner of `target_pubkey`.
+    pub async fn is_agent_owner(&self, target_pubkey: &[u8], actor_pubkey: &[u8]) -> Result<bool> {
+        user::is_agent_owner(&self.pool, target_pubkey, actor_pubkey).await
+    }
+
     /// Set the channel_add_policy for a user.
     pub async fn set_channel_add_policy(&self, pubkey: &[u8], policy: &str) -> Result<()> {
         user::set_channel_add_policy(&self.pool, pubkey, policy).await

@@ -6,8 +6,9 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
-import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
+import { parseImetaTags } from "@/features/messages/lib/parseImeta";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
 import { BotIdenticon } from "./BotIdenticon";
@@ -46,7 +47,6 @@ export const MessageRow = React.memo(
     onReply?: (message: TimelineMessage) => void;
     profiles?: UserProfileLookup;
   }) {
-    const [hasAvatarError, setHasAvatarError] = React.useState(false);
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
     );
@@ -59,6 +59,11 @@ export const MessageRow = React.memo(
       [profiles, message.tags],
     );
 
+    const imetaByUrl = React.useMemo(
+      () => (message.tags ? parseImetaTags(message.tags) : undefined),
+      [message.tags],
+    );
+
     const { channels } = useChannelNavigation();
     const channelNames = React.useMemo(
       () => channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
@@ -67,13 +72,6 @@ export const MessageRow = React.memo(
 
     const visibleDepth = Math.min(message.depth, 6);
     const indentPx = visibleDepth * 28;
-    const initials = message.author
-      .split(" ")
-      .map((part) => part[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase();
-
     const getTag = (name: string) =>
       message.tags?.find((tag) => tag[0] === name)?.[1];
 
@@ -107,6 +105,7 @@ export const MessageRow = React.memo(
               channelNames={channelNames}
               className="max-w-3xl"
               content={message.body}
+              imetaByUrl={imetaByUrl}
               mentionNames={mentionNames}
               tight
             />
@@ -191,55 +190,22 @@ export const MessageRow = React.memo(
                   className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   type="button"
                 >
-                  {message.avatarUrl && !hasAvatarError ? (
-                    <img
-                      alt={`${message.author} avatar`}
-                      className="h-8 w-8 rounded-lg bg-secondary object-cover shadow-sm"
-                      data-testid="message-avatar-image"
-                      onError={() => {
-                        setHasAvatarError(true);
-                      }}
-                      referrerPolicy="no-referrer"
-                      src={rewriteRelayUrl(message.avatarUrl)}
-                    />
-                  ) : (
-                    <div
-                      className={cn(
-                        "flex h-8 w-8 items-center justify-center rounded-lg text-[11px] font-semibold shadow-sm",
-                        message.accent
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-secondary text-secondary-foreground",
-                      )}
-                      data-testid="message-avatar-fallback"
-                    >
-                      {initials}
-                    </div>
-                  )}
+                  <UserAvatar
+                    accent={message.accent}
+                    avatarUrl={message.avatarUrl ?? null}
+                    displayName={message.author}
+                    testId="message-avatar"
+                  />
                 </button>
               </UserProfilePopover>
-            ) : message.avatarUrl && !hasAvatarError ? (
-              <img
-                alt={`${message.author} avatar`}
-                className="h-8 w-8 shrink-0 rounded-lg bg-secondary object-cover shadow-sm"
-                data-testid="message-avatar-image"
-                onError={() => {
-                  setHasAvatarError(true);
-                }}
-                referrerPolicy="no-referrer"
-                src={rewriteRelayUrl(message.avatarUrl)}
-              />
             ) : (
-              <div
-                className={cn(
-                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold shadow-sm",
-                  message.accent
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-secondary text-secondary-foreground",
-                )}
-                data-testid="message-avatar-fallback"
-              >
-                {initials}
-              </div>
+              <UserAvatar
+                accent={message.accent}
+                avatarUrl={message.avatarUrl ?? null}
+                className="shrink-0"
+                displayName={message.author}
+                testId="message-avatar"
+              />
             )}
           </div>
 
