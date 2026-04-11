@@ -8,6 +8,7 @@
 //!
 //! HuddleState is stored in AppState and serialized for get_huddle_state.
 
+pub mod agents;
 pub mod models;
 pub mod stt;
 
@@ -338,7 +339,7 @@ pub async fn start_huddle(
     // channel_was_created tracks whether we need to archive on rollback.
     let mut channel_was_created = false;
 
-    let result: Result<LiveKitTokenResponse, String> = async {
+    let result: Result<(LiveKitTokenResponse, Vec<String>), String> = async {
         // 1. Create ephemeral channel.
         let create_builder = events::build_create_channel(
             ephemeral_uuid,
@@ -351,11 +352,16 @@ pub async fn start_huddle(
         submit_event(create_builder, &state).await?;
         channel_was_created = true;
 
-        // 2. Add members to the ephemeral channel (best-effort).
+        // 2. Add members to the ephemeral channel; only keep successfully enrolled ones.
+        let mut successful_agents: Vec<String> = Vec::new();
         for pubkey in &member_pubkeys {
             let add_builder = events::build_add_member(ephemeral_uuid, pubkey, None)?;
-            if let Err(e) = submit_event(add_builder, &state).await {
-                eprintln!("sprout-desktop: huddle add_member failed for {pubkey}: {e}");
+            match submit_event(add_builder, &state).await {
+                Ok(_) => successful_agents.push(pubkey.clone()),
+                Err(e) => {
+                    eprintln!("sprout-desktop: huddle add_member failed for {pubkey}: {e}");
+                    // Intentionally not added — policy rejected this agent.
+                }
             }
         }
 
@@ -371,12 +377,27 @@ pub async fn start_huddle(
         )?;
         submit_event(started_builder, &state).await?;
 
-        Ok(lk)
+        // 5. Post voice-mode guidelines as a regular kind:9 message.
+        //    We do NOT use kind:40099 — that is relay-signed; the client must not mint it.
+        //    Best-effort: don't fail the huddle if this fails.
+        if let Ok(msg_builder) = events::build_message(
+            ephemeral_uuid,
+            &format!("[System] {}", agents::VOICE_MODE_GUIDELINES),
+            None,
+            &[],
+            &[],
+        ) {
+            if let Err(e) = submit_event(msg_builder, &state).await {
+                eprintln!("sprout-desktop: voice-mode guidelines message failed: {e}");
+            }
+        }
+
+        Ok((lk, successful_agents))
     }
     .await;
 
     match result {
-        Ok(lk) => {
+        Ok((lk, successful_agents)) => {
             // 5. Store active state.
             {
                 let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
@@ -385,10 +406,9 @@ pub async fn start_huddle(
                 hs.livekit_token = Some(lk.token.clone());
                 hs.livekit_url = Some(lk.url.clone());
                 hs.livekit_room = Some(lk.room.clone());
-                // Fix 1: the UI sends agent pubkeys in member_pubkeys — store them
-                // separately so the transcription task can p-tag agents only.
+                // Only store agents that were successfully enrolled (Fix 1).
                 *hs.agent_pubkeys.lock().unwrap_or_else(|e| e.into_inner()) =
-                    member_pubkeys.clone();
+                    successful_agents.clone();
                 hs.participants = member_pubkeys;
             }
 
@@ -690,4 +710,63 @@ pub fn get_model_status(_state: State<'_, AppState>) -> Result<models::VoiceMode
     Ok(models::VoiceModelStatus {
         moonshine: manager.moonshine_status(),
     })
+}
+
+/// Add an agent to the active huddle.
+///
+/// Steps:
+/// 1. Validates the huddle is in the Active phase.
+/// 2. Adds the agent to both the ephemeral and parent channels (kind:9000).
+/// 3. Only appends the agent pubkey to `agent_pubkeys` if the ephemeral add
+///    succeeded — failed adds (policy rejection) are NOT p-tagged.
+///
+/// Returns a structured `AgentAddResult` so the frontend can surface
+/// parent-channel errors without treating them as hard failures.
+///
+/// The running ACP process for this agent auto-subscribes when it receives
+/// the kind:9000 membership notification — no separate process spawn needed.
+#[tauri::command]
+pub async fn add_agent_to_huddle(
+    agent_pubkey: String,
+    state: State<'_, AppState>,
+) -> Result<agents::AgentAddResult, String> {
+    let (eph_id, parent_id) = {
+        let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+        if hs.phase != HuddlePhase::Active {
+            return Err("no active huddle".to_string());
+        }
+        let eph = hs
+            .ephemeral_channel_id
+            .clone()
+            .ok_or("no ephemeral channel")?;
+        let parent = hs
+            .parent_channel_id
+            .clone()
+            .ok_or("no parent channel")?;
+        (eph, parent)
+    };
+
+    let eph_uuid = Uuid::parse_str(&eph_id).map_err(|e| e.to_string())?;
+    let parent_uuid = Uuid::parse_str(&parent_id).map_err(|e| e.to_string())?;
+
+    // Returns Err only if the ephemeral add fails — parent failure is in the result.
+    let result = agents::add_agent_to_huddle(eph_uuid, parent_uuid, &agent_pubkey, &state).await?;
+
+    // Ephemeral add succeeded — safe to register for p-tagging.
+    // Clone the Arc first so we can drop the outer HuddleState lock before
+    // acquiring the inner pubkeys lock (avoids the E0597 borrow-checker error).
+    {
+        let agent_pubkeys_arc = {
+            let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+            Arc::clone(&hs.agent_pubkeys)
+        };
+        let mut pubkeys = agent_pubkeys_arc
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !pubkeys.contains(&agent_pubkey) {
+            pubkeys.push(agent_pubkey);
+        }
+    }
+
+    Ok(result)
 }

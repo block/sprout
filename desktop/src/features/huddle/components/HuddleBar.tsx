@@ -1,9 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
-import { Mic, MicOff, PhoneOff, Users } from 'lucide-react';
+import { Mic, MicOff, PhoneOff, Plus, Users } from 'lucide-react';
 import * as React from 'react';
 
 import { cn } from '@/shared/lib/cn';
 import { Button } from '@/shared/ui/button';
+import { AddAgentDialog, type AgentAddResult } from './AddAgentDialog';
 import { ParticipantList } from './ParticipantList';
 
 // Shape returned by the `get_huddle_state` Tauri command
@@ -27,6 +28,8 @@ export function HuddleBar({ localAudioTrack, className }: HuddleBarProps) {
   const [state, setState] = React.useState<HuddleState | null>(null);
   const [isMuted, setIsMuted] = React.useState(false);
   const [isLeaving, setIsLeaving] = React.useState(false);
+  const [showAddAgent, setShowAddAgent] = React.useState(false);
+  const [agentAddError, setAgentAddError] = React.useState<string | null>(null);
 
   // Poll huddle state — replace with event listener once Rust emits events
   React.useEffect(() => {
@@ -96,6 +99,41 @@ export function HuddleBar({ localAudioTrack, className }: HuddleBarProps) {
       {/* Participant avatars */}
       {state.participants.length > 0 && (
         <ParticipantList participants={state.participants} />
+      )}
+
+      {/* Add agent button */}
+      <Button
+        aria-label="Add agent to huddle"
+        className="h-8 w-8"
+        onClick={() => setShowAddAgent(true)}
+        size="icon"
+        variant="secondary"
+      >
+        <Plus className="h-4 w-4" />
+      </Button>
+
+      {agentAddError && (
+        <span className="max-w-[180px] truncate rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
+          {agentAddError}
+        </span>
+      )}
+
+      {showAddAgent && (
+        <AddAgentDialog
+          onClose={() => setShowAddAgent(false)}
+          onAdd={async (pubkey: string): Promise<AgentAddResult> => {
+            setAgentAddError(null);
+            try {
+              return await invoke<AgentAddResult>('add_agent_to_huddle', {
+                agentPubkey: pubkey,
+              });
+            } catch (e: unknown) {
+              const msg = e instanceof Error ? e.message : String(e);
+              setAgentAddError(`Failed to add agent: ${msg}`);
+              throw e; // Re-throw so AddAgentDialog shows its inline error.
+            }
+          }}
+        />
       )}
 
       {/* Mute toggle */}

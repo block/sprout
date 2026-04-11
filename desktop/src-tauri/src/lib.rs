@@ -11,8 +11,8 @@ mod util;
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use commands::*;
 use huddle::{
-    download_voice_models, end_huddle, get_huddle_state, get_model_status, join_huddle,
-    leave_huddle, push_audio_pcm, start_huddle, start_stt_pipeline,
+    add_agent_to_huddle, download_voice_models, end_huddle, get_huddle_state, get_model_status,
+    join_huddle, leave_huddle, push_audio_pcm, start_huddle, start_stt_pipeline,
 };
 use managed_agents::{
     ensure_nest, find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents,
@@ -512,6 +512,7 @@ pub fn run() {
             start_stt_pipeline,
             download_voice_models,
             get_model_status,
+            add_agent_to_huddle,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
