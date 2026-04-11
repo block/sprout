@@ -103,7 +103,7 @@ export const MessageRow = React.memo(
           return (
             <Markdown
               channelNames={channelNames}
-              className="max-w-3xl"
+              className="max-w-full"
               content={message.body}
               imetaByUrl={imetaByUrl}
               mentionNames={mentionNames}
