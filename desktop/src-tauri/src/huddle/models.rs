@@ -35,20 +35,17 @@ const MOONSHINE_EXPECTED_FILES: &[&str] = &[
     "tokens.txt",
 ];
 
-const KOKORO_DOWNLOAD_URL: &str =
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/\
-     sherpa-onnx-kokoro-en-v0_19-int8.tar.bz2";
+const KOKORO_MODEL_URL: &str =
+    "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v0_19.onnx";
 
-/// Subdirectory name produced by `tar xjf` on the Kokoro archive.
-const KOKORO_ARCHIVE_SUBDIR: &str = "sherpa-onnx-kokoro-en-v0_19-int8";
+const KOKORO_VOICES_URL: &str =
+    "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices.bin";
 
 /// Final directory name under `~/.sprout/models/`.
 const KOKORO_MODEL_DIR_NAME: &str = "kokoro";
 
-/// All files/dirs that must be present for Kokoro to be considered ready.
-/// `espeak-ng-data` is a directory — we check for its existence as a path.
-const KOKORO_EXPECTED_FILES: &[&str] =
-    &["kokoro.onnx", "voices.bin", "tokens.txt", "espeak-ng-data"];
+/// All files that must be present for Kokoro to be considered ready.
+const KOKORO_EXPECTED_FILES: &[&str] = &["kokoro-v0_19.onnx", "voices.bin"];
 
 // ── Status types ──────────────────────────────────────────────────────────────
 
@@ -157,10 +154,10 @@ impl ModelManager {
         }
     }
 
-    /// Returns `true` if all expected Kokoro model files/dirs are present on disk.
+    /// Returns `true` if all expected Kokoro model files are present on disk.
     pub fn is_kokoro_ready(&self) -> bool {
         let dir = self.models_dir.join(KOKORO_MODEL_DIR_NAME);
-        KOKORO_EXPECTED_FILES.iter().all(|f| dir.join(f).exists())
+        KOKORO_EXPECTED_FILES.iter().all(|f| dir.join(f).is_file())
     }
 
     /// Current Kokoro download status.
@@ -409,9 +406,10 @@ impl ModelManager {
         Ok(())
     }
 
-    /// Download, extract, and verify the Kokoro TTS model archive.
+    /// Download and verify the Kokoro TTS model files directly from HuggingFace.
     ///
-    /// Follows the same atomic extract-verify-swap pattern as Moonshine.
+    /// Downloads `kokoro-v0_19.onnx` and `voices.bin` into `~/.sprout/models/kokoro/`.
+    /// Files are written to a temp directory first, then moved atomically.
     async fn download_kokoro_model(&self, http_client: reqwest::Client) -> Result<(), String> {
         fs::create_dir_all(&self.models_dir).map_err(|e| format!("create models dir: {e}"))?;
 
@@ -419,86 +417,77 @@ impl ModelManager {
             progress_percent: 0,
         });
 
-        let archive_path = self.models_dir.join("kokoro.tar.bz2");
+        let final_dir = self.models_dir.join(KOKORO_MODEL_DIR_NAME);
+        let temp_dir = self.models_dir.join("kokoro.tmp");
 
-        eprintln!("sprout-desktop: downloading Kokoro model from {KOKORO_DOWNLOAD_URL}");
-
-        let response = http_client
-            .get(KOKORO_DOWNLOAD_URL)
-            .send()
-            .await
-            .map_err(|e| format!("download request failed: {e}"))?;
-
-        if !response.status().is_success() {
-            return Err(format!(
-                "download HTTP {}: {}",
-                response.status().as_u16(),
-                response.status().canonical_reason().unwrap_or("unknown"),
-            ));
+        // Clean up any leftover temp dir from a prior failed attempt.
+        if temp_dir.exists() {
+            fs::remove_dir_all(&temp_dir).map_err(|e| format!("remove stale temp dir: {e}"))?;
         }
+        fs::create_dir_all(&temp_dir).map_err(|e| format!("create temp dir: {e}"))?;
 
-        let content_length = response.content_length();
+        // Download each file individually.
+        let downloads: &[(&str, &str)] = &[
+            (KOKORO_MODEL_URL, "kokoro-v0_19.onnx"),
+            (KOKORO_VOICES_URL, "voices.bin"),
+        ];
 
-        {
-            use tokio::io::AsyncWriteExt;
+        for (i, (url, filename)) in downloads.iter().enumerate() {
+            eprintln!("sprout-desktop: downloading Kokoro {filename} from {url}");
+
+            let response = http_client
+                .get(*url)
+                .send()
+                .await
+                .map_err(|e| format!("download {filename} request failed: {e}"))?;
+
+            if !response.status().is_success() {
+                let _ = fs::remove_dir_all(&temp_dir);
+                return Err(format!(
+                    "download {filename} HTTP {}: {}",
+                    response.status().as_u16(),
+                    response.status().canonical_reason().unwrap_or("unknown"),
+                ));
+            }
 
             let body = response
                 .bytes()
                 .await
-                .map_err(|e| format!("download stream error: {e}"))?;
-
-            if let Some(total) = content_length {
-                if total > 0 {
-                    let pct = ((body.len() as u64 * 100) / total).min(89) as u8;
-                    self.set_kokoro_status(ModelStatus::Downloading {
-                        progress_percent: pct,
-                    });
-                }
-            }
+                .map_err(|e| format!("download {filename} stream error: {e}"))?;
 
             eprintln!(
-                "sprout-desktop: downloaded {} bytes (kokoro), writing…",
-                body.len()
+                "sprout-desktop: downloaded {} bytes ({}), writing…",
+                body.len(),
+                filename
             );
 
-            let mut file = tokio::fs::File::create(&archive_path)
+            // Progress: split evenly across the two files (0–44 for first, 45–89 for second).
+            let pct = (((i as u8) * 45) + 10).min(89);
+            self.set_kokoro_status(ModelStatus::Downloading {
+                progress_percent: pct,
+            });
+
+            use tokio::io::AsyncWriteExt;
+            let dest = temp_dir.join(filename);
+            let mut file = tokio::fs::File::create(&dest)
                 .await
-                .map_err(|e| format!("create archive file: {e}"))?;
+                .map_err(|e| format!("create {filename}: {e}"))?;
             file.write_all(&body)
                 .await
-                .map_err(|e| format!("write archive: {e}"))?;
+                .map_err(|e| format!("write {filename}: {e}"))?;
             file.flush()
                 .await
-                .map_err(|e| format!("flush archive: {e}"))?;
+                .map_err(|e| format!("flush {filename}: {e}"))?;
         }
 
         self.set_kokoro_status(ModelStatus::Downloading {
             progress_percent: 90,
         });
 
-        let temp_dir = self.models_dir.join("kokoro.tmp");
-        let final_dir = self.models_dir.join(KOKORO_MODEL_DIR_NAME);
-
-        if temp_dir.exists() {
-            fs::remove_dir_all(&temp_dir).map_err(|e| format!("remove stale temp dir: {e}"))?;
-        }
-        fs::create_dir_all(&temp_dir).map_err(|e| format!("create temp dir: {e}"))?;
-
-        eprintln!("sprout-desktop: extracting Kokoro archive…");
-        extract_archive(&archive_path, &temp_dir)?;
-
-        let extracted_subdir = temp_dir.join(KOKORO_ARCHIVE_SUBDIR);
-        if !extracted_subdir.is_dir() {
-            let _ = fs::remove_dir_all(&temp_dir);
-            return Err(format!(
-                "expected subdir '{}' not found after extraction",
-                KOKORO_ARCHIVE_SUBDIR,
-            ));
-        }
-
+        // Verify all expected files landed in the temp dir.
         let missing: Vec<&str> = KOKORO_EXPECTED_FILES
             .iter()
-            .filter(|&&f| !extracted_subdir.join(f).exists())
+            .filter(|&&f| !temp_dir.join(f).is_file())
             .copied()
             .collect();
 
@@ -510,6 +499,7 @@ impl ModelManager {
             ));
         }
 
+        // Atomic swap: backup old dir, move new dir into place.
         let backup_dir = final_dir.with_extension("old");
         if final_dir.exists() {
             if backup_dir.exists() {
@@ -519,7 +509,7 @@ impl ModelManager {
                 .map_err(|e| format!("backup old kokoro model: {e}"))?;
         }
 
-        if let Err(e) = fs::rename(&extracted_subdir, &final_dir) {
+        if let Err(e) = fs::rename(&temp_dir, &final_dir) {
             if backup_dir.exists() {
                 let _ = fs::rename(&backup_dir, &final_dir);
             }
@@ -527,8 +517,6 @@ impl ModelManager {
         }
 
         let _ = fs::remove_dir_all(&backup_dir);
-        let _ = fs::remove_dir_all(&temp_dir);
-        let _ = fs::remove_file(&archive_path);
 
         eprintln!(
             "sprout-desktop: Kokoro model ready at {}",

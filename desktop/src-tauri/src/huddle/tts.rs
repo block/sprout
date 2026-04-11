@@ -6,14 +6,15 @@
 //! caller: pipeline.speak("Hello")
 //!   → bounded sync_channel (TEXT_QUEUE_DEPTH)
 //!   → tts_worker thread
-//!       sherpa-onnx Kokoro: text → f32 samples
+//!       kokoro-tts: text → f32 samples (24 kHz, mono)
 //!       rodio Player: play samples (blocks until done)
 //!       tts_active = true while playing, false when idle
 //!   → caller: pipeline.cancel()  → clears queue + stops current playback
 //! ```
 //!
-//! The worker runs on a dedicated `std::thread` (not async) because
-//! sherpa-onnx is CPU-bound and not Send-safe across await points.
+//! The worker runs on a dedicated `std::thread` with its own single-threaded
+//! tokio `Runtime` because kokoro-tts is async and the worker must not share
+//! the Tauri runtime (which may be multi-threaded and not available here).
 //!
 //! `tts_active` is an `Arc<AtomicBool>` shared with the STT pipeline so STT
 //! can gate microphone input while the agent is speaking.
@@ -42,6 +43,9 @@ const TEXT_QUEUE_DEPTH: usize = 8;
 /// How long the worker waits on the text channel before checking the shutdown flag.
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 
+/// Kokoro output sample rate (fixed by the model).
+const KOKORO_SAMPLE_RATE: u32 = 24_000;
+
 // ── Public pipeline handle ────────────────────────────────────────────────────
 
 /// Handle to the running TTS pipeline.
@@ -67,7 +71,7 @@ impl TtsPipeline {
     /// Spawn the TTS pipeline thread.
     ///
     /// `model_dir` must contain the Kokoro model files:
-    ///   `kokoro.onnx`, `voices.bin`, `tokens.txt`, `espeak-ng-data/`
+    ///   `kokoro-v0_19.onnx`, `voices.bin`
     ///
     /// `tts_active` is set to `true` while audio is playing and `false` when idle.
     /// Pass the same `Arc` to the STT pipeline to gate microphone input.
@@ -150,41 +154,30 @@ fn tts_worker(
     shutdown: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
 ) {
-    // ── 1. Initialise sherpa-onnx Kokoro TTS ──────────────────────────────────
-    use sherpa_onnx::{
-        GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsKokoroModelConfig,
-        OfflineTtsModelConfig,
+    use kokoro_tts::{KokoroTts, Voice};
+
+    // ── 1. Build a single-threaded tokio runtime for the async kokoro-tts API ─
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("sprout-desktop: TTS failed to build tokio runtime: {e}. TTS disabled.");
+            drain_text_channel(text_rx, &shutdown);
+            return;
+        }
     };
 
-    let model_dir_str = model_dir.to_string_lossy().into_owned();
+    // ── 2. Initialise kokoro-tts ───────────────────────────────────────────────
+    let model_path = model_dir.join("kokoro-v0_19.onnx");
+    let voices_path = model_dir.join("voices.bin");
 
-    let kokoro_cfg = OfflineTtsKokoroModelConfig {
-        model: Some(format!("{model_dir_str}/kokoro.onnx")),
-        voices: Some(format!("{model_dir_str}/voices.bin")),
-        tokens: Some(format!("{model_dir_str}/tokens.txt")),
-        data_dir: Some(format!("{model_dir_str}/espeak-ng-data")),
-        length_scale: 1.0,
-        lang: Some("en-us".into()),
-        ..Default::default()
-    };
-
-    let model_cfg = OfflineTtsModelConfig {
-        kokoro: kokoro_cfg,
-        num_threads: 1,
-        ..Default::default()
-    };
-
-    let tts_cfg = OfflineTtsConfig {
-        model: model_cfg,
-        max_num_sentences: 1,
-        ..Default::default()
-    };
-
-    let tts = match OfflineTts::create(&tts_cfg) {
-        Some(t) => t,
-        None => {
+    let tts = match rt.block_on(KokoroTts::new(&model_path, &voices_path)) {
+        Ok(t) => t,
+        Err(e) => {
             eprintln!(
-                "sprout-desktop: TTS Kokoro init failed (model_dir={}). TTS disabled.",
+                "sprout-desktop: TTS Kokoro init failed (model_dir={}): {e}. TTS disabled.",
                 model_dir.display()
             );
             drain_text_channel(text_rx, &shutdown);
@@ -192,13 +185,7 @@ fn tts_worker(
         }
     };
 
-    let gen_cfg = GenerationConfig {
-        speed: 1.0,
-        sid: 0,
-        ..Default::default()
-    };
-
-    // ── 2. Initialise rodio output device ─────────────────────────────────────
+    // ── 3. Initialise rodio output device ─────────────────────────────────────
     use rodio::{DeviceSinkBuilder, Player};
 
     let sink_handle = match DeviceSinkBuilder::open_default_sink() {
@@ -210,7 +197,7 @@ fn tts_worker(
         }
     };
 
-    // ── 3. Main loop ──────────────────────────────────────────────────────────
+    // ── 4. Main loop ──────────────────────────────────────────────────────────
     loop {
         if shutdown.load(Ordering::Acquire) {
             break;
@@ -244,28 +231,26 @@ fn tts_worker(
             continue;
         }
 
-        // Generate audio via Kokoro.
-        let audio = match tts.generate_with_config(&text, &gen_cfg, None::<fn(&[f32], f32) -> bool>)
-        {
-            Some(a) => a,
-            None => {
-                eprintln!("sprout-desktop: TTS generate_with_config returned None for: {text:?}");
+        // Generate audio via kokoro-tts (async, blocked on our runtime).
+        // Voice::AfHeart(1.0) — American female, natural speed.
+        let synth_result = rt.block_on(tts.synth(&text, Voice::AfHeart(1.0)));
+        let (samples, _duration) = match synth_result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("sprout-desktop: TTS synth failed for {text:?}: {e}");
                 continue;
             }
         };
 
-        let samples = audio.samples();
         if samples.is_empty() {
             continue;
         }
 
-        let sample_rate = audio.sample_rate() as u32;
-
-        // Build rodio SamplesBuffer from f32 samples.
+        // Build rodio SamplesBuffer from f32 samples (24 kHz, mono).
         use rodio::buffer::SamplesBuffer;
         let channels = NonZero::new(1u16).expect("1 is nonzero");
-        let rate = NonZero::new(sample_rate).unwrap_or(NonZero::new(24_000u32).unwrap());
-        let buf = SamplesBuffer::new(channels, rate, samples.to_vec());
+        let rate = NonZero::new(KOKORO_SAMPLE_RATE).expect("24000 is nonzero");
+        let buf = SamplesBuffer::new(channels, rate, samples);
 
         // Play via rodio Player (blocks until playback completes).
         tts_active.store(true, Ordering::Release);
