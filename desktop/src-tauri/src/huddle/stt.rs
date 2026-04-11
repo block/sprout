@@ -49,23 +49,53 @@ pub struct SttPipeline {
     shutdown: Arc<AtomicBool>,
     /// Worker thread handle — taken on drop to join cleanly.
     thread: Option<thread::JoinHandle<()>>,
+    /// TTS cancel flag shared with the TTS pipeline.
+    /// When VAD detects speech onset during TTS playback, the STT worker sets
+    /// this flag to trigger barge-in (stops TTS immediately).
+    /// Stored here so it lives as long as the pipeline; the worker holds a clone.
+    #[allow(dead_code)]
+    pub tts_cancel: Option<Arc<AtomicBool>>,
 }
 
 impl SttPipeline {
     /// Spawn the pipeline thread.
     ///
+    /// `tts_active` is a shared flag set by the TTS pipeline while audio is
+    /// playing. The STT worker uses it to:
+    ///   - discard accumulated speech (echo prevention / barge-in gating)
+    ///   - apply a 200 ms cooldown after TTS stops before re-enabling STT
+    ///   - detect barge-in: speech onset during TTS → set `tts_cancel`
+    ///
+    /// `tts_cancel` (optional) is the TTS pipeline's cancel flag. When the STT
+    /// worker detects speech onset while TTS is active, it sets this flag to
+    /// stop playback immediately (barge-in). Pass `None` if TTS is unavailable.
+    ///
     /// Returns `Err` only if the thread cannot be spawned (OS error).
     /// If model files are missing, the worker logs and exits cleanly —
     /// the pipeline handle is still returned but will never produce text.
-    pub fn new(model_dir: PathBuf) -> Result<Self, String> {
+    pub fn new(
+        model_dir: PathBuf,
+        tts_active: Arc<AtomicBool>,
+        tts_cancel: Option<Arc<AtomicBool>>,
+    ) -> Result<Self, String> {
         let (audio_tx, audio_rx) = mpsc::sync_channel::<Vec<u8>>(AUDIO_QUEUE_DEPTH);
         let (text_tx, text_rx) = mpsc::channel::<String>();
         let shutdown = Arc::new(AtomicBool::new(false));
 
         let shutdown_worker = Arc::clone(&shutdown);
+        let tts_cancel_worker = tts_cancel.as_ref().map(Arc::clone);
         let handle = thread::Builder::new()
             .name("stt-worker".into())
-            .spawn(move || stt_worker(model_dir, audio_rx, text_tx, shutdown_worker))
+            .spawn(move || {
+                stt_worker(
+                    model_dir,
+                    audio_rx,
+                    text_tx,
+                    shutdown_worker,
+                    tts_active,
+                    tts_cancel_worker,
+                )
+            })
             .map_err(|e| format!("failed to spawn stt-worker thread: {e}"))?;
 
         Ok(Self {
@@ -73,6 +103,7 @@ impl SttPipeline {
             text_rx: Mutex::new(text_rx),
             shutdown,
             thread: Some(handle),
+            tts_cancel,
         })
     }
 
@@ -126,11 +157,17 @@ const VAD_THRESHOLD: f32 = 0.5;
 /// How long the worker waits on the audio channel before checking the shutdown flag.
 const RECV_TIMEOUT: Duration = Duration::from_millis(50);
 
+/// 200 ms cooldown after TTS stops before STT re-enables.
+/// Prevents the tail of TTS audio from being transcribed as speech.
+const TTS_COOLDOWN: Duration = Duration::from_millis(200);
+
 fn stt_worker(
     model_dir: PathBuf,
     audio_rx: Receiver<Vec<u8>>,
     text_tx: mpsc::Sender<String>,
     shutdown: Arc<AtomicBool>,
+    tts_active: Arc<AtomicBool>,
+    tts_cancel: Option<Arc<AtomicBool>>,
 ) {
     // ── 1. Initialise rubato resampler (48 kHz → 16 kHz, mono) ───────────────
     use rubato::{Fft, FixedSync, Resampler};
@@ -163,6 +200,7 @@ fn stt_worker(
         drain_channel(audio_rx, &shutdown);
         return;
     }
+
 
     let model_dir_str = model_dir.to_string_lossy().into_owned();
 
@@ -198,13 +236,24 @@ fn stt_worker(
     let mut silence_frames: usize = 0;
     // Whether we're currently in a speech segment.
     let mut in_speech = false;
+    // Timestamp when TTS last stopped — used for the 200 ms cooldown.
+    let mut tts_stopped_at: Option<std::time::Instant> = None;
 
     // ── 5. Main loop ──────────────────────────────────────────────────────────
+    let mut tts_was_active = false;
     loop {
         // Check shutdown flag before blocking.
         if shutdown.load(Ordering::Acquire) {
             break;
         }
+
+        // Track TTS transitions to set the cooldown timer.
+        let tts_now = tts_active.load(Ordering::Acquire);
+        if tts_was_active && !tts_now {
+            // TTS just stopped — record the timestamp for the cooldown window.
+            tts_stopped_at = Some(std::time::Instant::now());
+        }
+        tts_was_active = tts_now;
 
         // Use recv_timeout so we can periodically check the shutdown flag.
         let bytes = match audio_rx.recv_timeout(RECV_TIMEOUT) {
@@ -237,6 +286,9 @@ fn stt_worker(
                     &mut in_speech,
                     &recognizer,
                     &text_tx,
+                    &tts_active,
+                    tts_cancel.as_deref(),
+                    &mut tts_stopped_at,
                 );
             }
         }
@@ -278,6 +330,12 @@ fn resample_chunk(
 
 /// Feed 16 kHz samples through the VAD and accumulate speech.
 /// Flushes to STT when silence exceeds threshold.
+///
+/// When `tts_active` is set:
+///   - Speech onset triggers barge-in: `tts_cancel` is set to stop TTS immediately.
+///   - Frames are NOT accumulated in `speech_buf` (echo prevention, Fix 4).
+///   - After TTS stops, a 200 ms cooldown prevents tail audio from being transcribed.
+#[allow(clippy::too_many_arguments)]
 fn process_16k_samples(
     samples: &[f32],
     leftover: &mut Vec<f32>,
@@ -287,6 +345,9 @@ fn process_16k_samples(
     in_speech: &mut bool,
     recognizer: &sherpa_onnx::OfflineRecognizer,
     text_tx: &mpsc::Sender<String>,
+    tts_active: &Arc<AtomicBool>,
+    tts_cancel: Option<&AtomicBool>,
+    tts_stopped_at: &mut Option<std::time::Instant>,
 ) {
     leftover.extend_from_slice(samples);
 
@@ -295,26 +356,57 @@ fn process_16k_samples(
         let prob = vad.predict_f32(&frame);
         let is_speech = prob > VAD_THRESHOLD;
 
+        let tts_playing = tts_active.load(Ordering::Acquire);
+
+        // Fix 2 + Fix 4: While TTS is playing, detect barge-in but skip accumulation.
+        if tts_playing {
+            if is_speech && !*in_speech {
+                // Speech onset during TTS → barge-in: cancel TTS immediately.
+                *in_speech = true;
+                if let Some(cancel) = tts_cancel {
+                    cancel.store(true, Ordering::Release);
+                }
+            } else if !is_speech {
+                *in_speech = false;
+            }
+            // Don't accumulate — skip to next frame (echo prevention).
+            speech_buf.clear();
+            continue;
+        }
+
+        // TTS not playing — check cooldown window.
+        if let Some(stopped) = *tts_stopped_at {
+            if stopped.elapsed() < TTS_COOLDOWN {
+                // Still in cooldown — discard but keep tracking speech state.
+                if !is_speech {
+                    *in_speech = false;
+                }
+                speech_buf.clear();
+                continue;
+            } else {
+                // Cooldown expired — clear the timer.
+                *tts_stopped_at = None;
+            }
+        }
+
         if is_speech {
             *silence_frames = 0;
             *in_speech = true;
             speech_buf.extend_from_slice(&frame);
-        } else {
-            if *in_speech {
-                // Still accumulate during brief silence gaps.
-                speech_buf.extend_from_slice(&frame);
-                *silence_frames += 1;
+        } else if *in_speech {
+            // Still accumulate during brief silence gaps.
+            speech_buf.extend_from_slice(&frame);
+            *silence_frames += 1;
 
-                if *silence_frames >= SILENCE_FLUSH_FRAMES {
-                    // End of utterance — transcribe.
-                    flush_to_stt(speech_buf, recognizer, text_tx);
-                    speech_buf.clear();
-                    *silence_frames = 0;
-                    *in_speech = false;
-                }
+            if *silence_frames >= SILENCE_FLUSH_FRAMES {
+                // End of utterance — transcribe.
+                flush_to_stt(speech_buf, recognizer, text_tx);
+                speech_buf.clear();
+                *silence_frames = 0;
+                *in_speech = false;
             }
-            // If not in speech, just discard the frame.
         }
+        // If not in speech and not accumulating, just discard the frame.
     }
 }
 

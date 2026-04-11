@@ -50,6 +50,7 @@ uuid = { version = "1", features = ["v4"] }
 png = "0.18"
 zip = "2"
 sherpa-onnx = "1.12"
+rodio = "0.22"
 earshot = "1.0"
 rubato = "2.0"
 audioadapter-buffers = "3.0"

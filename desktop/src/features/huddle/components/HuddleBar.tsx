@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { Mic, MicOff, PhoneOff, Plus, Users } from 'lucide-react';
+import { Mic, MicOff, PhoneOff, Plus, Users, Volume2, VolumeX } from 'lucide-react';
 import * as React from 'react';
 
 import { cn } from '@/shared/lib/cn';
@@ -27,6 +27,7 @@ type HuddleBarProps = {
 export function HuddleBar({ localAudioTrack, className }: HuddleBarProps) {
   const [state, setState] = React.useState<HuddleState | null>(null);
   const [isMuted, setIsMuted] = React.useState(false);
+  const [ttsEnabled, setTtsEnabled] = React.useState(true);
   const [isLeaving, setIsLeaving] = React.useState(false);
   const [showAddAgent, setShowAddAgent] = React.useState(false);
   const [agentAddError, setAgentAddError] = React.useState<string | null>(null);
@@ -146,6 +147,26 @@ export function HuddleBar({ localAudioTrack, className }: HuddleBarProps) {
         variant={isMuted ? 'destructive' : 'secondary'}
       >
         {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+      </Button>
+
+      {/* TTS toggle */}
+      <Button
+        aria-label={ttsEnabled ? 'Mute agent speech' : 'Unmute agent speech'}
+        aria-pressed={!ttsEnabled}
+        className="h-8 w-8"
+        onClick={async () => {
+          const next = !ttsEnabled;
+          try {
+            await invoke('set_tts_enabled', { enabled: next });
+            setTtsEnabled(next);
+          } catch (e) {
+            console.error('Failed to toggle TTS:', e);
+          }
+        }}
+        size="icon"
+        variant={ttsEnabled ? 'secondary' : 'destructive'}
+      >
+        {ttsEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
       </Button>
 
       {/* Leave button */}

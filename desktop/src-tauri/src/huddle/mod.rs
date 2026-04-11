@@ -10,11 +10,16 @@
 
 pub mod agents;
 pub mod models;
+pub mod preprocessing;
 pub mod stt;
+pub mod tts;
 
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::AtomicBool,
+    Arc, Mutex,
+};
 use tauri::State;
 use uuid::Uuid;
 
@@ -66,6 +71,15 @@ pub struct HuddleState {
     /// Active STT pipeline — not serialized, not cloned.
     #[serde(skip)]
     pub stt_pipeline: Option<Arc<stt::SttPipeline>>,
+    /// Active TTS pipeline — not serialized, not cloned.
+    #[serde(skip)]
+    pub tts_pipeline: Option<Arc<tts::TtsPipeline>>,
+    /// Whether TTS output is enabled (user-toggled).
+    pub tts_enabled: bool,
+    /// Shared flag: true while TTS is playing audio.
+    /// Shared with the STT pipeline for barge-in / echo gating.
+    #[serde(skip)]
+    pub tts_active: Arc<AtomicBool>,
 }
 
 fn serialize_agent_pubkeys<S>(
@@ -111,6 +125,9 @@ impl Clone for HuddleState {
             participants: self.participants.clone(),
             agent_pubkeys: Arc::new(Mutex::new(agent_pubkeys_snapshot)),
             stt_pipeline: None, // Never clone the pipeline handle.
+            tts_pipeline: None, // Never clone the pipeline handle.
+            tts_enabled: self.tts_enabled,
+            tts_active: Arc::clone(&self.tts_active),
         }
     }
 }
@@ -127,6 +144,9 @@ impl Default for HuddleState {
             participants: Vec::new(),
             agent_pubkeys: Arc::new(Mutex::new(Vec::new())),
             stt_pipeline: None,
+            tts_pipeline: None,
+            tts_enabled: true,
+            tts_active: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -169,8 +189,9 @@ async fn fetch_livekit_token(
 /// Attempt to start the STT pipeline if models are present.
 /// Silently skips if models are missing — huddle continues as voice-only.
 ///
-/// Fix 2: uses `models::is_moonshine_ready()` (checks all 4 expected files)
-/// instead of an ad hoc `tokens.txt` existence check.
+/// Creates the shared `tts_active` flag and passes it to the STT pipeline
+/// for barge-in / echo gating. The same flag is later passed to the TTS
+/// pipeline so it can signal when audio is playing.
 async fn maybe_start_stt_pipeline(state: &AppState, ephemeral_channel_id: &str) {
     if !models::is_moonshine_ready() {
         return; // Models not downloaded yet — voice-only mode.
@@ -180,7 +201,27 @@ async fn maybe_start_stt_pipeline(state: &AppState, ephemeral_channel_id: &str) 
         None => return,
     };
 
-    let pipeline = match stt::SttPipeline::new(model_dir) {
+    // Grab the shared tts_active flag from HuddleState.
+    let tts_active = {
+        let hs = match state.huddle_state.lock() {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        Arc::clone(&hs.tts_active)
+    };
+
+    // Grab the TTS cancel flag so STT can trigger barge-in.
+    let tts_cancel = {
+        let hs = match state.huddle_state.lock() {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        hs.tts_pipeline
+            .as_ref()
+            .map(|p| Arc::clone(&p.cancel))
+    };
+
+    let pipeline = match stt::SttPipeline::new(model_dir, tts_active, tts_cancel) {
         Ok(p) => Arc::new(p),
         Err(e) => {
             eprintln!("sprout-desktop: STT pipeline failed to start: {e}");
@@ -213,6 +254,46 @@ async fn maybe_start_stt_pipeline(state: &AppState, ephemeral_channel_id: &str) 
     }
 
     spawn_transcription_task(pipeline, channel_uuid, agent_pubkeys_arc, state);
+}
+
+/// Attempt to start the TTS pipeline if Kokoro models are present and TTS is enabled.
+/// Silently skips if models are missing or TTS is disabled.
+async fn maybe_start_tts_pipeline(state: &AppState) {
+    if !models::is_kokoro_ready() {
+        return; // Kokoro not downloaded yet — TTS unavailable.
+    }
+    let model_dir = match models::kokoro_model_dir() {
+        Some(d) => d,
+        None => return,
+    };
+
+    let (tts_active, tts_enabled) = {
+        let hs = match state.huddle_state.lock() {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        (Arc::clone(&hs.tts_active), hs.tts_enabled)
+    };
+
+    if !tts_enabled {
+        return;
+    }
+
+    let pipeline = match tts::TtsPipeline::new(model_dir, tts_active) {
+        Ok(p) => Arc::new(p),
+        Err(e) => {
+            eprintln!("sprout-desktop: TTS pipeline failed to start: {e}");
+            return;
+        }
+    };
+
+    {
+        let mut hs = match state.huddle_state.lock() {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        hs.tts_pipeline = Some(pipeline);
+    }
 }
 
 /// Spawn a tokio task that reads text_rx and posts kind:9 events.
@@ -412,8 +493,9 @@ pub async fn start_huddle(
                 hs.participants = member_pubkeys;
             }
 
-            // 6. Auto-start STT pipeline if models are ready.
+            // 6. Auto-start STT and TTS pipelines if models are ready.
             maybe_start_stt_pipeline(&state, &ephemeral_channel_id).await;
+            maybe_start_tts_pipeline(&state).await;
 
             Ok(HuddleJoinInfo {
                 ephemeral_channel_id,
@@ -500,8 +582,9 @@ pub async fn join_huddle(
         // Note: agent_pubkeys stays empty for joiners — agents were added by the creator.
     }
 
-    // 4. Auto-start STT pipeline if models are ready.
+    // 4. Auto-start STT and TTS pipelines if models are ready.
     maybe_start_stt_pipeline(&state, &ephemeral_channel_id).await;
+    maybe_start_tts_pipeline(&state).await;
 
     Ok(HuddleJoinInfo {
         ephemeral_channel_id,
@@ -542,11 +625,14 @@ pub async fn leave_huddle(state: State<'_, AppState>) -> Result<(), String> {
         }
     }
 
-    // Fix 5: signal the STT pipeline to stop before dropping state.
-    // The pipeline's Drop impl will join the worker thread for a clean exit.
+    // Signal the STT and TTS pipelines to stop before dropping state.
+    // The pipelines' Drop impls will join worker threads for a clean exit.
     {
         let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
         if let Some(ref pipeline) = hs.stt_pipeline {
+            pipeline.shutdown();
+        }
+        if let Some(ref pipeline) = hs.tts_pipeline {
             pipeline.shutdown();
         }
     }
@@ -603,11 +689,13 @@ pub async fn end_huddle(state: State<'_, AppState>) -> Result<(), String> {
         }
     }
 
-    // Fix 5: signal the STT pipeline to stop before dropping state.
-    // The pipeline's Drop impl will join the worker thread for a clean exit.
+    // Signal the STT and TTS pipelines to stop before dropping state.
     {
         let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
         if let Some(ref pipeline) = hs.stt_pipeline {
+            pipeline.shutdown();
+        }
+        if let Some(ref pipeline) = hs.tts_pipeline {
             pipeline.shutdown();
         }
     }
@@ -678,7 +766,13 @@ pub async fn start_stt_pipeline(state: State<'_, AppState>) -> Result<(), String
         ephemeral_channel_id.ok_or("no active huddle — start or join a huddle first")?;
     let channel_uuid = parse_channel_uuid(&ephemeral_channel_id)?;
 
-    let pipeline = Arc::new(stt::SttPipeline::new(model_dir)?);
+    let (tts_active, tts_cancel) = {
+        let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+        let cancel = hs.tts_pipeline.as_ref().map(|p| Arc::clone(&p.cancel));
+        (Arc::clone(&hs.tts_active), cancel)
+    };
+
+    let pipeline = Arc::new(stt::SttPipeline::new(model_dir, tts_active, tts_cancel)?);
 
     {
         let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
@@ -689,9 +783,9 @@ pub async fn start_stt_pipeline(state: State<'_, AppState>) -> Result<(), String
     Ok(())
 }
 
-/// Trigger a background download of voice models (Moonshine STT for Phase 2).
+/// Trigger a background download of voice models (Moonshine STT + Kokoro TTS).
 ///
-/// Returns immediately — download runs in a tokio background task.
+/// Returns immediately — downloads run in tokio background tasks.
 /// Poll `get_model_status` to track progress.
 /// Safe to call multiple times: no-op if already downloading or ready.
 #[tauri::command]
@@ -699,6 +793,7 @@ pub async fn download_voice_models(state: State<'_, AppState>) -> Result<(), Str
     let manager = models::global_model_manager()
         .ok_or("model manager unavailable (home directory could not be resolved)")?;
     manager.start_moonshine_download(state.http_client.clone());
+    manager.start_kokoro_download(state.http_client.clone());
     Ok(())
 }
 
@@ -709,7 +804,58 @@ pub fn get_model_status(_state: State<'_, AppState>) -> Result<models::VoiceMode
         .ok_or("model manager unavailable (home directory could not be resolved)")?;
     Ok(models::VoiceModelStatus {
         moonshine: manager.moonshine_status(),
+        kokoro: manager.kokoro_status(),
     })
+}
+
+/// Enable or disable TTS output.
+///
+/// When disabled, the TTS pipeline is shut down and audio output stops.
+/// When re-enabled, the pipeline is restarted if Kokoro models are available.
+#[tauri::command]
+pub async fn set_tts_enabled(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+        hs.tts_enabled = enabled;
+        if !enabled {
+            // Shut down the TTS pipeline immediately.
+            if let Some(ref pipeline) = hs.tts_pipeline {
+                pipeline.shutdown();
+            }
+            hs.tts_pipeline = None;
+        }
+    }
+
+    if enabled {
+        // Re-start TTS pipeline if models are available and huddle is active.
+        let phase = {
+            let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+            hs.phase.clone()
+        };
+        if phase == HuddlePhase::Active {
+            maybe_start_tts_pipeline(&state).await;
+        }
+    }
+
+    Ok(())
+}
+
+/// Speak an agent message via TTS.
+///
+/// Called by the WebView when it receives an incoming agent kind:9 message.
+/// The WebView already subscribes to channel messages — it calls this command
+/// for messages from non-human pubkeys so the agent's voice is heard.
+///
+/// No-op if TTS is disabled or no pipeline is active.
+#[tauri::command]
+pub fn speak_agent_message(text: String, state: State<'_, AppState>) -> Result<(), String> {
+    let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+    if hs.tts_enabled {
+        if let Some(ref pipeline) = hs.tts_pipeline {
+            pipeline.speak(text)?;
+        }
+    }
+    Ok(())
 }
 
 /// Add an agent to the active huddle.

@@ -2,7 +2,9 @@
 //!
 //! Mental model:
 //!   app launch → start_moonshine_download (background) → ~/.sprout/models/moonshine-tiny/
+//!   app launch → start_kokoro_download (background)    → ~/.sprout/models/kokoro/
 //!   STT pipeline → is_moonshine_ready() → moonshine_model_dir() → run inference
+//!   TTS pipeline → is_kokoro_ready()    → kokoro_model_dir()    → run synthesis
 //!
 //! Models are downloaded once and cached. No versioning in MVP — presence of
 //! all expected files is sufficient to consider the model ready.
@@ -33,6 +35,25 @@ const MOONSHINE_EXPECTED_FILES: &[&str] = &[
     "tokens.txt",
 ];
 
+const KOKORO_DOWNLOAD_URL: &str =
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/\
+     sherpa-onnx-kokoro-en-v0_19-int8.tar.bz2";
+
+/// Subdirectory name produced by `tar xjf` on the Kokoro archive.
+const KOKORO_ARCHIVE_SUBDIR: &str = "sherpa-onnx-kokoro-en-v0_19-int8";
+
+/// Final directory name under `~/.sprout/models/`.
+const KOKORO_MODEL_DIR_NAME: &str = "kokoro";
+
+/// All files/dirs that must be present for Kokoro to be considered ready.
+/// `espeak-ng-data` is a directory — we check for its existence as a path.
+const KOKORO_EXPECTED_FILES: &[&str] = &[
+    "kokoro.onnx",
+    "voices.bin",
+    "tokens.txt",
+    "espeak-ng-data",
+];
+
 // ── Status types ──────────────────────────────────────────────────────────────
 
 /// Download/readiness status for a single model.
@@ -49,6 +70,7 @@ pub enum ModelStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceModelStatus {
     pub moonshine: ModelStatus,
+    pub kokoro: ModelStatus,
 }
 
 // ── Platform-gated tar extraction ─────────────────────────────────────────────
@@ -89,6 +111,7 @@ pub struct ModelManager {
     /// `~/.sprout/models/`
     models_dir: PathBuf,
     moonshine_status: Arc<Mutex<ModelStatus>>,
+    kokoro_status: Arc<Mutex<ModelStatus>>,
 }
 
 impl ModelManager {
@@ -100,6 +123,7 @@ impl ModelManager {
         Some(Self {
             models_dir,
             moonshine_status: Arc::new(Mutex::new(ModelStatus::NotDownloaded)),
+            kokoro_status: Arc::new(Mutex::new(ModelStatus::NotDownloaded)),
         })
     }
 
@@ -126,6 +150,68 @@ impl ModelManager {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Returns the path to the Kokoro model directory, or `None` if not ready.
+    pub fn kokoro_model_dir(&self) -> Option<PathBuf> {
+        if self.is_kokoro_ready() {
+            Some(self.models_dir.join(KOKORO_MODEL_DIR_NAME))
+        } else {
+            None
+        }
+    }
+
+    /// Returns `true` if all expected Kokoro model files/dirs are present on disk.
+    pub fn is_kokoro_ready(&self) -> bool {
+        let dir = self.models_dir.join(KOKORO_MODEL_DIR_NAME);
+        KOKORO_EXPECTED_FILES
+            .iter()
+            .all(|f| dir.join(f).exists())
+    }
+
+    /// Current Kokoro download status.
+    pub fn kokoro_status(&self) -> ModelStatus {
+        self.kokoro_status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Trigger a background download of the Kokoro TTS model (~92 MB).
+    ///
+    /// Returns immediately. Progress is tracked via `kokoro_status()`.
+    /// No-op if the model is already ready or a download is already running.
+    pub fn start_kokoro_download(&self, http_client: reqwest::Client) {
+        // Fast path: already on disk — sync the status and return.
+        if self.is_kokoro_ready() {
+            *self.kokoro_status.lock().unwrap_or_else(|e| e.into_inner()) =
+                ModelStatus::Ready;
+            return;
+        }
+
+        // Atomically check-and-set before spawning.
+        {
+            let mut status = self
+                .kokoro_status
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            match *status {
+                ModelStatus::Downloading { .. } | ModelStatus::Ready => return,
+                _ => {}
+            }
+            *status = ModelStatus::Downloading { progress_percent: 0 };
+        }
+
+        let manager = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = manager.download_kokoro_model(http_client).await {
+                eprintln!("sprout-desktop: kokoro download failed: {e}");
+                *manager
+                    .kokoro_status
+                    .lock()
+                    .unwrap_or_else(|e2| e2.into_inner()) = ModelStatus::Error(e);
+            }
+        });
     }
 
     /// Trigger a background download of the Moonshine model.
@@ -176,6 +262,13 @@ impl ModelManager {
     fn set_status(&self, status: ModelStatus) {
         *self
             .moonshine_status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = status;
+    }
+
+    fn set_kokoro_status(&self, status: ModelStatus) {
+        *self
+            .kokoro_status
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = status;
     }
@@ -320,6 +413,130 @@ impl ModelManager {
         self.set_status(ModelStatus::Ready);
         Ok(())
     }
+
+    /// Download, extract, and verify the Kokoro TTS model archive.
+    ///
+    /// Follows the same atomic extract-verify-swap pattern as Moonshine.
+    async fn download_kokoro_model(&self, http_client: reqwest::Client) -> Result<(), String> {
+        fs::create_dir_all(&self.models_dir)
+            .map_err(|e| format!("create models dir: {e}"))?;
+
+        self.set_kokoro_status(ModelStatus::Downloading { progress_percent: 0 });
+
+        let archive_path = self.models_dir.join("kokoro.tar.bz2");
+
+        eprintln!("sprout-desktop: downloading Kokoro model from {KOKORO_DOWNLOAD_URL}");
+
+        let response = http_client
+            .get(KOKORO_DOWNLOAD_URL)
+            .send()
+            .await
+            .map_err(|e| format!("download request failed: {e}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "download HTTP {}: {}",
+                response.status().as_u16(),
+                response.status().canonical_reason().unwrap_or("unknown"),
+            ));
+        }
+
+        let content_length = response.content_length();
+
+        {
+            use tokio::io::AsyncWriteExt;
+
+            let body = response
+                .bytes()
+                .await
+                .map_err(|e| format!("download stream error: {e}"))?;
+
+            if let Some(total) = content_length {
+                if total > 0 {
+                    let pct = ((body.len() as u64 * 100) / total).min(89) as u8;
+                    self.set_kokoro_status(ModelStatus::Downloading { progress_percent: pct });
+                }
+            }
+
+            eprintln!("sprout-desktop: downloaded {} bytes (kokoro), writing…", body.len());
+
+            let mut file = tokio::fs::File::create(&archive_path)
+                .await
+                .map_err(|e| format!("create archive file: {e}"))?;
+            file.write_all(&body)
+                .await
+                .map_err(|e| format!("write archive: {e}"))?;
+            file.flush()
+                .await
+                .map_err(|e| format!("flush archive: {e}"))?;
+        }
+
+        self.set_kokoro_status(ModelStatus::Downloading { progress_percent: 90 });
+
+        let temp_dir = self.models_dir.join("kokoro.tmp");
+        let final_dir = self.models_dir.join(KOKORO_MODEL_DIR_NAME);
+
+        if temp_dir.exists() {
+            fs::remove_dir_all(&temp_dir)
+                .map_err(|e| format!("remove stale temp dir: {e}"))?;
+        }
+        fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("create temp dir: {e}"))?;
+
+        eprintln!("sprout-desktop: extracting Kokoro archive…");
+        extract_archive(&archive_path, &temp_dir)?;
+
+        let extracted_subdir = temp_dir.join(KOKORO_ARCHIVE_SUBDIR);
+        if !extracted_subdir.is_dir() {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return Err(format!(
+                "expected subdir '{}' not found after extraction",
+                KOKORO_ARCHIVE_SUBDIR,
+            ));
+        }
+
+        let missing: Vec<&str> = KOKORO_EXPECTED_FILES
+            .iter()
+            .filter(|&&f| !extracted_subdir.join(f).exists())
+            .copied()
+            .collect();
+
+        if !missing.is_empty() {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return Err(format!(
+                "kokoro model verification failed — missing: {}",
+                missing.join(", "),
+            ));
+        }
+
+        let backup_dir = final_dir.with_extension("old");
+        if final_dir.exists() {
+            if backup_dir.exists() {
+                let _ = fs::remove_dir_all(&backup_dir);
+            }
+            fs::rename(&final_dir, &backup_dir)
+                .map_err(|e| format!("backup old kokoro model: {e}"))?;
+        }
+
+        if let Err(e) = fs::rename(&extracted_subdir, &final_dir) {
+            if backup_dir.exists() {
+                let _ = fs::rename(&backup_dir, &final_dir);
+            }
+            return Err(format!("install new kokoro model: {e}"));
+        }
+
+        let _ = fs::remove_dir_all(&backup_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_file(&archive_path);
+
+        eprintln!(
+            "sprout-desktop: Kokoro model ready at {}",
+            final_dir.display()
+        );
+
+        self.set_kokoro_status(ModelStatus::Ready);
+        Ok(())
+    }
 }
 
 // ── Process-global singleton ──────────────────────────────────────────────────
@@ -347,5 +564,17 @@ pub fn moonshine_model_dir() -> Option<PathBuf> {
 pub fn is_moonshine_ready() -> bool {
     global_model_manager()
         .map(|m| m.is_moonshine_ready())
+        .unwrap_or(false)
+}
+
+/// Path to the Kokoro model directory, or `None` if not ready.
+pub fn kokoro_model_dir() -> Option<PathBuf> {
+    global_model_manager()?.kokoro_model_dir()
+}
+
+/// `true` if all expected Kokoro model files are present on disk.
+pub fn is_kokoro_ready() -> bool {
+    global_model_manager()
+        .map(|m| m.is_kokoro_ready())
         .unwrap_or(false)
 }
