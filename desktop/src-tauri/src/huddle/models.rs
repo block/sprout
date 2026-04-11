@@ -47,12 +47,8 @@ const KOKORO_MODEL_DIR_NAME: &str = "kokoro";
 
 /// All files/dirs that must be present for Kokoro to be considered ready.
 /// `espeak-ng-data` is a directory — we check for its existence as a path.
-const KOKORO_EXPECTED_FILES: &[&str] = &[
-    "kokoro.onnx",
-    "voices.bin",
-    "tokens.txt",
-    "espeak-ng-data",
-];
+const KOKORO_EXPECTED_FILES: &[&str] =
+    &["kokoro.onnx", "voices.bin", "tokens.txt", "espeak-ng-data"];
 
 // ── Status types ──────────────────────────────────────────────────────────────
 
@@ -164,9 +160,7 @@ impl ModelManager {
     /// Returns `true` if all expected Kokoro model files/dirs are present on disk.
     pub fn is_kokoro_ready(&self) -> bool {
         let dir = self.models_dir.join(KOKORO_MODEL_DIR_NAME);
-        KOKORO_EXPECTED_FILES
-            .iter()
-            .all(|f| dir.join(f).exists())
+        KOKORO_EXPECTED_FILES.iter().all(|f| dir.join(f).exists())
     }
 
     /// Current Kokoro download status.
@@ -184,22 +178,20 @@ impl ModelManager {
     pub fn start_kokoro_download(&self, http_client: reqwest::Client) {
         // Fast path: already on disk — sync the status and return.
         if self.is_kokoro_ready() {
-            *self.kokoro_status.lock().unwrap_or_else(|e| e.into_inner()) =
-                ModelStatus::Ready;
+            *self.kokoro_status.lock().unwrap_or_else(|e| e.into_inner()) = ModelStatus::Ready;
             return;
         }
 
         // Atomically check-and-set before spawning.
         {
-            let mut status = self
-                .kokoro_status
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut status = self.kokoro_status.lock().unwrap_or_else(|e| e.into_inner());
             match *status {
                 ModelStatus::Downloading { .. } | ModelStatus::Ready => return,
                 _ => {}
             }
-            *status = ModelStatus::Downloading { progress_percent: 0 };
+            *status = ModelStatus::Downloading {
+                progress_percent: 0,
+            };
         }
 
         let manager = self.clone();
@@ -225,8 +217,10 @@ impl ModelManager {
     pub fn start_moonshine_download(&self, http_client: reqwest::Client) {
         // Fast path: already on disk — sync the status and return.
         if self.is_moonshine_ready() {
-            *self.moonshine_status.lock().unwrap_or_else(|e| e.into_inner()) =
-                ModelStatus::Ready;
+            *self
+                .moonshine_status
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = ModelStatus::Ready;
             return;
         }
 
@@ -242,7 +236,9 @@ impl ModelManager {
                 ModelStatus::Downloading { .. } | ModelStatus::Ready => return,
                 _ => {}
             }
-            *status = ModelStatus::Downloading { progress_percent: 0 };
+            *status = ModelStatus::Downloading {
+                progress_percent: 0,
+            };
         } // lock released before spawn
 
         let manager = self.clone();
@@ -267,10 +263,7 @@ impl ModelManager {
     }
 
     fn set_kokoro_status(&self, status: ModelStatus) {
-        *self
-            .kokoro_status
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = status;
+        *self.kokoro_status.lock().unwrap_or_else(|e| e.into_inner()) = status;
     }
 
     /// Download, extract, and verify the Moonshine model archive.
@@ -280,10 +273,11 @@ impl ModelManager {
     /// previously working model untouched.
     async fn download_moonshine_model(&self, http_client: reqwest::Client) -> Result<(), String> {
         // 1. Ensure models directory exists.
-        fs::create_dir_all(&self.models_dir)
-            .map_err(|e| format!("create models dir: {e}"))?;
+        fs::create_dir_all(&self.models_dir).map_err(|e| format!("create models dir: {e}"))?;
 
-        self.set_status(ModelStatus::Downloading { progress_percent: 0 });
+        self.set_status(ModelStatus::Downloading {
+            progress_percent: 0,
+        });
 
         let archive_path = self.models_dir.join("moonshine-tiny.tar.bz2");
 
@@ -319,7 +313,9 @@ impl ModelManager {
             if let Some(total) = content_length {
                 if total > 0 {
                     let pct = ((body.len() as u64 * 100) / total).min(89) as u8;
-                    self.set_status(ModelStatus::Downloading { progress_percent: pct });
+                    self.set_status(ModelStatus::Downloading {
+                        progress_percent: pct,
+                    });
                 }
             }
 
@@ -336,7 +332,9 @@ impl ModelManager {
                 .map_err(|e| format!("flush archive: {e}"))?;
         }
 
-        self.set_status(ModelStatus::Downloading { progress_percent: 90 });
+        self.set_status(ModelStatus::Downloading {
+            progress_percent: 90,
+        });
 
         // 4. Extract into a temp directory so that a failure does not destroy
         //    any previously working model.
@@ -345,11 +343,9 @@ impl ModelManager {
 
         // Clean up any leftover temp dir from a prior failed attempt.
         if temp_dir.exists() {
-            fs::remove_dir_all(&temp_dir)
-                .map_err(|e| format!("remove stale temp dir: {e}"))?;
+            fs::remove_dir_all(&temp_dir).map_err(|e| format!("remove stale temp dir: {e}"))?;
         }
-        fs::create_dir_all(&temp_dir)
-            .map_err(|e| format!("create temp dir: {e}"))?;
+        fs::create_dir_all(&temp_dir).map_err(|e| format!("create temp dir: {e}"))?;
 
         eprintln!("sprout-desktop: extracting Moonshine archive…");
         extract_archive(&archive_path, &temp_dir)?;
@@ -388,8 +384,7 @@ impl ModelManager {
             if backup_dir.exists() {
                 let _ = fs::remove_dir_all(&backup_dir);
             }
-            fs::rename(&final_dir, &backup_dir)
-                .map_err(|e| format!("backup old model: {e}"))?;
+            fs::rename(&final_dir, &backup_dir).map_err(|e| format!("backup old model: {e}"))?;
         }
 
         // Bring new model into place; restore backup on failure.
@@ -418,10 +413,11 @@ impl ModelManager {
     ///
     /// Follows the same atomic extract-verify-swap pattern as Moonshine.
     async fn download_kokoro_model(&self, http_client: reqwest::Client) -> Result<(), String> {
-        fs::create_dir_all(&self.models_dir)
-            .map_err(|e| format!("create models dir: {e}"))?;
+        fs::create_dir_all(&self.models_dir).map_err(|e| format!("create models dir: {e}"))?;
 
-        self.set_kokoro_status(ModelStatus::Downloading { progress_percent: 0 });
+        self.set_kokoro_status(ModelStatus::Downloading {
+            progress_percent: 0,
+        });
 
         let archive_path = self.models_dir.join("kokoro.tar.bz2");
 
@@ -454,11 +450,16 @@ impl ModelManager {
             if let Some(total) = content_length {
                 if total > 0 {
                     let pct = ((body.len() as u64 * 100) / total).min(89) as u8;
-                    self.set_kokoro_status(ModelStatus::Downloading { progress_percent: pct });
+                    self.set_kokoro_status(ModelStatus::Downloading {
+                        progress_percent: pct,
+                    });
                 }
             }
 
-            eprintln!("sprout-desktop: downloaded {} bytes (kokoro), writing…", body.len());
+            eprintln!(
+                "sprout-desktop: downloaded {} bytes (kokoro), writing…",
+                body.len()
+            );
 
             let mut file = tokio::fs::File::create(&archive_path)
                 .await
@@ -471,17 +472,17 @@ impl ModelManager {
                 .map_err(|e| format!("flush archive: {e}"))?;
         }
 
-        self.set_kokoro_status(ModelStatus::Downloading { progress_percent: 90 });
+        self.set_kokoro_status(ModelStatus::Downloading {
+            progress_percent: 90,
+        });
 
         let temp_dir = self.models_dir.join("kokoro.tmp");
         let final_dir = self.models_dir.join(KOKORO_MODEL_DIR_NAME);
 
         if temp_dir.exists() {
-            fs::remove_dir_all(&temp_dir)
-                .map_err(|e| format!("remove stale temp dir: {e}"))?;
+            fs::remove_dir_all(&temp_dir).map_err(|e| format!("remove stale temp dir: {e}"))?;
         }
-        fs::create_dir_all(&temp_dir)
-            .map_err(|e| format!("create temp dir: {e}"))?;
+        fs::create_dir_all(&temp_dir).map_err(|e| format!("create temp dir: {e}"))?;
 
         eprintln!("sprout-desktop: extracting Kokoro archive…");
         extract_archive(&archive_path, &temp_dir)?;
@@ -548,9 +549,7 @@ static GLOBAL_MODEL_MANAGER: OnceLock<Option<ModelManager>> = OnceLock::new();
 
 /// Return a reference to the process-global `ModelManager`.
 pub fn global_model_manager() -> Option<&'static ModelManager> {
-    GLOBAL_MODEL_MANAGER
-        .get_or_init(ModelManager::new)
-        .as_ref()
+    GLOBAL_MODEL_MANAGER.get_or_init(ModelManager::new).as_ref()
 }
 
 // ── Standalone helpers (used by the STT pipeline) ────────────────────────────

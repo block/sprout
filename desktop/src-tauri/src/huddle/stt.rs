@@ -186,9 +186,7 @@ fn stt_worker(
     let mut vad = Detector::new(DefaultPredictor::new());
 
     // ── 3. Initialise sherpa-onnx recognizer ─────────────────────────────────
-    use sherpa_onnx::{
-        OfflineMoonshineModelConfig, OfflineRecognizer, OfflineRecognizerConfig,
-    };
+    use sherpa_onnx::{OfflineMoonshineModelConfig, OfflineRecognizer, OfflineRecognizerConfig};
 
     let tokens_path = model_dir.join("tokens.txt");
     if !tokens_path.exists() {
@@ -201,15 +199,14 @@ fn stt_worker(
         return;
     }
 
-
     let model_dir_str = model_dir.to_string_lossy().into_owned();
 
     let mut cfg = OfflineRecognizerConfig::default();
     cfg.model_config.moonshine = OfflineMoonshineModelConfig {
         preprocessor: Some(format!("{model_dir_str}/preprocessor.onnx")),
         encoder: Some(format!("{model_dir_str}/encoder.onnx")),
-        uncached_decoder: None,   // v1 layout only — not used with tiny int8
-        cached_decoder: None,     // v1 layout only — not used with tiny int8
+        uncached_decoder: None, // v1 layout only — not used with tiny int8
+        cached_decoder: None,   // v1 layout only — not used with tiny int8
         merged_decoder: Some(format!("{model_dir_str}/merged_decoder.onnx")), // v2 (tiny int8)
     };
     cfg.model_config.tokens = Some(tokens_path.to_string_lossy().into_owned());
@@ -303,10 +300,7 @@ fn stt_worker(
 
 /// Resample a mono 48 kHz chunk to 16 kHz using rubato.
 /// Returns the resampled samples (may be empty on error).
-fn resample_chunk(
-    resampler: &mut rubato::Fft<f32>,
-    chunk_48k: &[f32],
-) -> Vec<f32> {
+fn resample_chunk(resampler: &mut rubato::Fft<f32>, chunk_48k: &[f32]) -> Vec<f32> {
     use audioadapter_buffers::direct::InterleavedSlice;
     use rubato::Resampler;
 

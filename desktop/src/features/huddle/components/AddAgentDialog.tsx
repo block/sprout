@@ -1,13 +1,13 @@
-import { invoke } from '@tauri-apps/api/core';
-import { Bot } from 'lucide-react';
-import * as React from 'react';
+import { invoke } from "@tauri-apps/api/core";
+import { Bot } from "lucide-react";
+import * as React from "react";
 
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-} from '@/shared/ui/dialog';
+} from "@/shared/ui/dialog";
 
 type ManagedAgentSummary = {
   pubkey: string;
@@ -34,17 +34,17 @@ export function AddAgentDialog({ onClose, onAdd }: AddAgentDialogProps) {
   const [warning, setWarning] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    invoke<ManagedAgentSummary[]>('list_managed_agents')
+    invoke<ManagedAgentSummary[]>("list_managed_agents")
       .then(setAgents)
       .catch((e: unknown) => {
-        console.error('Failed to load agents:', e);
-        setError('Could not load agents.');
+        console.error("Failed to load agents:", e);
+        setError("Could not load agents.");
       })
       .finally(() => setLoading(false));
   }, []);
 
   // Only show agents that are currently running.
-  const runningAgents = agents.filter((a) => a.status === 'running');
+  const runningAgents = agents.filter((a) => a.status === "running");
 
   async function handleAdd(pubkey: string) {
     if (adding) return;
@@ -56,21 +56,28 @@ export function AddAgentDialog({ onClose, onAdd }: AddAgentDialogProps) {
       if (result.parent_error) {
         // Agent was added to the ephemeral channel but parent channel add failed.
         // Show as a warning — don't close the dialog so the user can see it.
-        setWarning(`Added to huddle, but parent channel failed: ${result.parent_error}`);
+        setWarning(
+          `Added to huddle, but parent channel failed: ${result.parent_error}`,
+        );
       } else {
         onClose();
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(`Failed to add agent: ${msg}`);
-      console.error('Failed to add agent to huddle:', e);
+      console.error("Failed to add agent to huddle:", e);
     } finally {
       setAdding(null);
     }
   }
 
   return (
-    <Dialog onOpenChange={(open) => { if (!open) onClose(); }} open>
+    <Dialog
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      open
+    >
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle>Add Agent to Huddle</DialogTitle>
@@ -114,7 +121,9 @@ export function AddAgentDialog({ onClose, onAdd }: AddAgentDialogProps) {
                   type="button"
                 >
                   <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="flex-1 truncate font-medium">{agent.name}</span>
+                  <span className="flex-1 truncate font-medium">
+                    {agent.name}
+                  </span>
                   <span className="shrink-0 text-xs text-muted-foreground">
                     {agent.status}
                   </span>

@@ -1,4 +1,4 @@
-import { LocalAudioTrack, Room } from 'livekit-client';
+import { LocalAudioTrack, Room } from "livekit-client";
 
 export interface HuddleConnection {
   room: Room;

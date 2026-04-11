@@ -1,15 +1,23 @@
-import { invoke } from '@tauri-apps/api/core';
-import { Mic, MicOff, PhoneOff, Plus, Users, Volume2, VolumeX } from 'lucide-react';
-import * as React from 'react';
+import { invoke } from "@tauri-apps/api/core";
+import {
+  Mic,
+  MicOff,
+  PhoneOff,
+  Plus,
+  Users,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
+import * as React from "react";
 
-import { cn } from '@/shared/lib/cn';
-import { Button } from '@/shared/ui/button';
-import { AddAgentDialog, type AgentAddResult } from './AddAgentDialog';
-import { ParticipantList } from './ParticipantList';
+import { cn } from "@/shared/lib/cn";
+import { Button } from "@/shared/ui/button";
+import { AddAgentDialog, type AgentAddResult } from "./AddAgentDialog";
+import { ParticipantList } from "./ParticipantList";
 
 // Shape returned by the `get_huddle_state` Tauri command
 type HuddleState = {
-  phase: 'idle' | 'creating' | 'connecting' | 'active' | 'leaving';
+  phase: "idle" | "creating" | "connecting" | "active" | "leaving";
   parent_channel_id: string | null;
   ephemeral_channel_id: string | null;
   livekit_token: string | null;
@@ -38,7 +46,7 @@ export function HuddleBar({ localAudioTrack, className }: HuddleBarProps) {
 
     async function poll() {
       try {
-        const s = await invoke<HuddleState>('get_huddle_state');
+        const s = await invoke<HuddleState>("get_huddle_state");
         if (!cancelled) setState(s);
       } catch {
         // Command not yet registered or no active huddle — ignore
@@ -62,16 +70,16 @@ export function HuddleBar({ localAudioTrack, className }: HuddleBarProps) {
     }
   }, [isMuted, localAudioTrack]);
 
-  if (!state || state.phase !== 'active') return null;
+  if (!state || state.phase !== "active") return null;
 
   async function handleLeave() {
     if (isLeaving) return;
     setIsLeaving(true);
     try {
-      await invoke('leave_huddle');
+      await invoke("leave_huddle");
       setState(null);
     } catch (e) {
-      console.error('Failed to leave huddle:', e);
+      console.error("Failed to leave huddle:", e);
     } finally {
       setIsLeaving(false);
     }
@@ -80,15 +88,15 @@ export function HuddleBar({ localAudioTrack, className }: HuddleBarProps) {
   return (
     <div
       className={cn(
-        'fixed bottom-4 left-1/2 z-50 -translate-x-1/2',
-        'flex items-center gap-3 rounded-xl px-4 py-2',
-        'bg-background/95 shadow-lg ring-1 ring-border backdrop-blur-sm',
+        "fixed bottom-4 left-1/2 z-50 -translate-x-1/2",
+        "flex items-center gap-3 rounded-xl px-4 py-2",
+        "bg-background/95 shadow-lg ring-1 ring-border backdrop-blur-sm",
         className,
       )}
     >
       {/* Room label */}
       <span className="max-w-[120px] truncate text-xs font-medium text-foreground">
-        {state.livekit_room ?? 'Huddle'}
+        {state.livekit_room ?? "Huddle"}
       </span>
 
       {/* Participant count */}
@@ -125,7 +133,7 @@ export function HuddleBar({ localAudioTrack, className }: HuddleBarProps) {
           onAdd={async (pubkey: string): Promise<AgentAddResult> => {
             setAgentAddError(null);
             try {
-              return await invoke<AgentAddResult>('add_agent_to_huddle', {
+              return await invoke<AgentAddResult>("add_agent_to_huddle", {
                 agentPubkey: pubkey,
               });
             } catch (e: unknown) {
@@ -139,34 +147,38 @@ export function HuddleBar({ localAudioTrack, className }: HuddleBarProps) {
 
       {/* Mute toggle */}
       <Button
-        aria-label={isMuted ? 'Unmute microphone' : 'Mute microphone'}
+        aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
         aria-pressed={isMuted}
         className="h-8 w-8"
         onClick={() => setIsMuted((m) => !m)}
         size="icon"
-        variant={isMuted ? 'destructive' : 'secondary'}
+        variant={isMuted ? "destructive" : "secondary"}
       >
         {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
       </Button>
 
       {/* TTS toggle */}
       <Button
-        aria-label={ttsEnabled ? 'Mute agent speech' : 'Unmute agent speech'}
+        aria-label={ttsEnabled ? "Mute agent speech" : "Unmute agent speech"}
         aria-pressed={!ttsEnabled}
         className="h-8 w-8"
         onClick={async () => {
           const next = !ttsEnabled;
           try {
-            await invoke('set_tts_enabled', { enabled: next });
+            await invoke("set_tts_enabled", { enabled: next });
             setTtsEnabled(next);
           } catch (e) {
-            console.error('Failed to toggle TTS:', e);
+            console.error("Failed to toggle TTS:", e);
           }
         }}
         size="icon"
-        variant={ttsEnabled ? 'secondary' : 'destructive'}
+        variant={ttsEnabled ? "secondary" : "destructive"}
       >
-        {ttsEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+        {ttsEnabled ? (
+          <Volume2 className="h-4 w-4" />
+        ) : (
+          <VolumeX className="h-4 w-4" />
+        )}
       </Button>
 
       {/* Leave button */}

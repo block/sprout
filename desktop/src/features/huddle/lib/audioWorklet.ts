@@ -15,12 +15,12 @@ export async function setupAudioWorklet(
   const audioContext = new AudioContext({ sampleRate: 48000 });
 
   // Resume after user gesture (required by autoplay policy)
-  if (audioContext.state === 'suspended') {
+  if (audioContext.state === "suspended") {
     await audioContext.resume();
   }
 
   // Load the worklet processor (must live in public/ for Vite to serve it)
-  await audioContext.audioWorklet.addModule('/worklet.js');
+  await audioContext.audioWorklet.addModule("/worklet.js");
 
   // Create source from the mic track
   const source = audioContext.createMediaStreamSource(
@@ -28,7 +28,7 @@ export async function setupAudioWorklet(
   );
 
   // Create worklet node
-  const workletNode = new AudioWorkletNode(audioContext, 'stt-tap-processor');
+  const workletNode = new AudioWorkletNode(audioContext, "stt-tap-processor");
 
   // Connect: mic → worklet (tap only — no playback)
   source.connect(workletNode);
@@ -41,11 +41,11 @@ export async function setupAudioWorklet(
       // Create a zero-copy Uint8Array view over the same underlying buffer.
       // Rust reinterprets the bytes as f32 on the other side.
       await window.__TAURI_INTERNALS__.invoke(
-        'push_audio_pcm',
+        "push_audio_pcm",
         new Uint8Array(float32.buffer, float32.byteOffset, float32.byteLength),
       );
     } catch (e) {
-      console.error('Failed to send PCM to Rust:', e);
+      console.error("Failed to send PCM to Rust:", e);
     }
   };
 

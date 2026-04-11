@@ -1,4 +1,4 @@
-import { cn } from '@/shared/lib/cn';
+import { cn } from "@/shared/lib/cn";
 
 // Legacy type kept for any callers that haven't migrated yet
 export type HuddleParticipant = {
@@ -13,11 +13,14 @@ type ParticipantListProps = {
   className?: string;
 };
 
-export function ParticipantList({ participants, className }: ParticipantListProps) {
+export function ParticipantList({
+  participants,
+  className,
+}: ParticipantListProps) {
   if (participants.length === 0) return null;
 
   return (
-    <div className={cn('flex items-center gap-1', className)}>
+    <div className={cn("flex items-center gap-1", className)}>
       {participants.map((pubkey) => (
         <ParticipantAvatar key={pubkey} pubkey={pubkey} />
       ))}
@@ -35,12 +38,12 @@ function ParticipantAvatar({ pubkey }: ParticipantAvatarProps) {
 
   // Derive a stable hue from the pubkey for a distinct avatar color
   const hue = parseInt(pubkey.slice(0, 4), 16) % 360;
-  const style = { backgroundColor: `hsl(${hue}, 60%, 55%)`, color: '#fff' };
+  const style = { backgroundColor: `hsl(${hue}, 60%, 55%)`, color: "#fff" };
 
   return (
     <div
       className={cn(
-        'flex h-7 w-7 items-center justify-center rounded-lg text-[9px] font-semibold shadow-sm',
+        "flex h-7 w-7 items-center justify-center rounded-lg text-[9px] font-semibold shadow-sm",
       )}
       style={style}
       title={pubkey}

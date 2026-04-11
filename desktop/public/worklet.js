@@ -36,4 +36,4 @@ class SttTapProcessor extends AudioWorkletProcessor {
   }
 }
 
-registerProcessor('stt-tap-processor', SttTapProcessor);
+registerProcessor("stt-tap-processor", SttTapProcessor);

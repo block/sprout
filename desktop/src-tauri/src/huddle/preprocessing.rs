@@ -180,7 +180,9 @@ fn strip_underscore_emphasis(text: &str) -> String {
                 if let Some(close) = (i + 1..len).find(|&j| {
                     chars[j] == '_'
                         && !chars[j - 1].is_whitespace()
-                        && (j + 1 >= len || chars[j + 1].is_whitespace() || chars[j + 1].is_ascii_punctuation())
+                        && (j + 1 >= len
+                            || chars[j + 1].is_whitespace()
+                            || chars[j + 1].is_ascii_punctuation())
                 }) {
                     // Emit the inner text without the delimiters.
                     for &ch in &chars[i + 1..close] {
@@ -205,9 +207,7 @@ fn strip_underscore_emphasis(text: &str) -> String {
 /// Covers the main Emoji block (U+1F300–U+1FAFF) and supplemental ranges.
 /// ASCII emoticons like `:)` are left as-is.
 fn strip_emoji(text: &str) -> String {
-    text.chars()
-        .filter(|&c| !is_emoji(c))
-        .collect()
+    text.chars().filter(|&c| !is_emoji(c)).collect()
 }
 
 #[inline]
@@ -298,9 +298,26 @@ fn expand_numeric_token(token: &str) -> String {
 /// Convert an integer 0–999 to English words.
 fn int_to_words(n: u32) -> String {
     const ONES: &[&str] = &[
-        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-        "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
-        "seventeen", "eighteen", "nineteen",
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
     ];
     const TENS: &[&str] = &[
         "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
@@ -425,7 +442,8 @@ mod tests {
 
     #[test]
     fn full_pipeline() {
-        let input = "**Agent says:** check https://relay.example.com at 11:30.\n```\nsome code\n```";
+        let input =
+            "**Agent says:** check https://relay.example.com at 11:30.\n```\nsome code\n```";
         let out = preprocess_for_tts(input);
         assert!(!out.contains("**"), "got: {out}");
         assert!(!out.contains("https://"), "got: {out}");

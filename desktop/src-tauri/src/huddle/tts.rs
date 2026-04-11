@@ -245,11 +245,8 @@ fn tts_worker(
         }
 
         // Generate audio via Kokoro.
-        let audio = match tts.generate_with_config(
-            &text,
-            &gen_cfg,
-            None::<fn(&[f32], f32) -> bool>,
-        ) {
+        let audio = match tts.generate_with_config(&text, &gen_cfg, None::<fn(&[f32], f32) -> bool>)
+        {
             Some(a) => a,
             None => {
                 eprintln!("sprout-desktop: TTS generate_with_config returned None for: {text:?}");

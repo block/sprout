@@ -55,10 +55,7 @@ pub async fn huddle_token(
         .generate_token(&room, &identity, &identity)
         .map_err(|e| internal_error(&format!("token generation failed: {e}")))?;
 
-    let livekit_url = state
-        .livekit_url
-        .as_deref()
-        .unwrap_or_default();
+    let livekit_url = state.livekit_url.as_deref().unwrap_or_default();
 
     if livekit_url.is_empty() {
         return Err(internal_error("livekit_url is not configured"));

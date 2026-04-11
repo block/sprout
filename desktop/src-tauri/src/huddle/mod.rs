@@ -16,10 +16,7 @@ pub mod tts;
 
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use std::sync::{
-    atomic::AtomicBool,
-    Arc, Mutex,
-};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use tauri::State;
 use uuid::Uuid;
 
@@ -82,10 +79,7 @@ pub struct HuddleState {
     pub tts_active: Arc<AtomicBool>,
 }
 
-fn serialize_agent_pubkeys<S>(
-    v: &Arc<Mutex<Vec<String>>>,
-    s: S,
-) -> Result<S::Ok, S::Error>
+fn serialize_agent_pubkeys<S>(v: &Arc<Mutex<Vec<String>>>, s: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -98,9 +92,7 @@ where
     seq.end()
 }
 
-fn deserialize_agent_pubkeys<'de, D>(
-    d: D,
-) -> Result<Arc<Mutex<Vec<String>>>, D::Error>
+fn deserialize_agent_pubkeys<'de, D>(d: D) -> Result<Arc<Mutex<Vec<String>>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -216,9 +208,7 @@ async fn maybe_start_stt_pipeline(state: &AppState, ephemeral_channel_id: &str) 
             Ok(h) => h,
             Err(_) => return,
         };
-        hs.tts_pipeline
-            .as_ref()
-            .map(|p| Arc::clone(&p.cancel))
+        hs.tts_pipeline.as_ref().map(|p| Arc::clone(&p.cancel))
     };
 
     let pipeline = match stt::SttPipeline::new(model_dir, tts_active, tts_cancel) {
@@ -451,11 +441,8 @@ pub async fn start_huddle(
         let lk = fetch_livekit_token(&ephemeral_channel_id, &state).await?;
 
         // 4. Emit HUDDLE_STARTED to parent channel — only now that token is confirmed.
-        let started_builder = events::build_huddle_started(
-            &parent_channel_id,
-            &ephemeral_channel_id,
-            &lk.room,
-        )?;
+        let started_builder =
+            events::build_huddle_started(&parent_channel_id, &ephemeral_channel_id, &lk.room)?;
         submit_event(started_builder, &state).await?;
 
         // 5. Post voice-mode guidelines as a regular kind:9 message.
@@ -885,10 +872,7 @@ pub async fn add_agent_to_huddle(
             .ephemeral_channel_id
             .clone()
             .ok_or("no ephemeral channel")?;
-        let parent = hs
-            .parent_channel_id
-            .clone()
-            .ok_or("no parent channel")?;
+        let parent = hs.parent_channel_id.clone().ok_or("no parent channel")?;
         (eph, parent)
     };
 
@@ -906,9 +890,7 @@ pub async fn add_agent_to_huddle(
             let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
             Arc::clone(&hs.agent_pubkeys)
         };
-        let mut pubkeys = agent_pubkeys_arc
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut pubkeys = agent_pubkeys_arc.lock().unwrap_or_else(|e| e.into_inner());
         if !pubkeys.contains(&agent_pubkey) {
             pubkeys.push(agent_pubkey);
         }

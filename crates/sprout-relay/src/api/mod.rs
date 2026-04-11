@@ -12,8 +12,6 @@
 
 /// Agent directory and status endpoints.
 pub mod agents;
-/// LiveKit huddle token endpoint.
-pub mod huddles;
 /// Workflow approval grant/deny endpoints.
 pub mod approvals;
 /// Canvas (shared document) endpoints.
@@ -28,6 +26,8 @@ pub mod dms;
 pub mod events;
 /// Personalized home feed endpoint.
 pub mod feed;
+/// LiveKit huddle token endpoint.
+pub mod huddles;
 /// Blossom-compatible media upload, retrieval, and existence check endpoints.
 pub mod media;
 /// Channel membership endpoints.
@@ -53,7 +53,6 @@ pub mod workflows;
 
 // Re-export all public handlers so router.rs can use `api::*_handler` unchanged.
 pub use agents::agents_handler;
-pub use huddles::huddle_token;
 pub use approvals::{deny_approval, deny_approval_by_hash, grant_approval, grant_approval_by_hash};
 pub use canvas::get_canvas;
 pub use channels::channels_handler;
@@ -61,6 +60,7 @@ pub use channels_metadata::get_channel_handler;
 pub use dms::{add_dm_member_handler, hide_dm_handler, list_dms_handler, open_dm_handler};
 pub use events::get_event;
 pub use feed::feed_handler;
+pub use huddles::huddle_token;
 pub use members::list_members;
 pub use messages::{get_thread, list_messages, validate_imeta_tags, verify_imeta_blobs};
 pub use presence::{presence_handler, set_presence_handler};
