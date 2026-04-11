@@ -227,8 +227,7 @@ export const MessageRow = React.memo(
                 />
               ) : null}
               {message.personaDisplayName &&
-              message.personaDisplayName !== message.author &&
-              !isBotInstance(message.role) ? (
+              message.personaDisplayName !== message.author ? (
                 <span className="text-xs text-muted-foreground">
                   {message.personaDisplayName}
                 </span>
