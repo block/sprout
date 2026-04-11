@@ -178,7 +178,7 @@ export const MessageRow = React.memo(
         >
           <div className="flex shrink-0 items-start">
             {message.pubkey ? (
-              <UserProfilePopover pubkey={message.pubkey}>
+              <UserProfilePopover pubkey={message.pubkey} role={message.role} botIdenticonValue={message.author}>
                 <button
                   className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   type="button"
@@ -206,7 +206,7 @@ export const MessageRow = React.memo(
           <div className="min-w-0 flex-1 space-y-1">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               {message.pubkey ? (
-                <UserProfilePopover pubkey={message.pubkey}>
+                <UserProfilePopover pubkey={message.pubkey} role={message.role} botIdenticonValue={message.author}>
                   <button
                     className="truncate rounded text-sm font-semibold tracking-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     type="button"
@@ -226,11 +226,13 @@ export const MessageRow = React.memo(
                   className="shrink-0 rounded-sm"
                 />
               ) : null}
-              {message.personaDisplayName ? (
+              {message.personaDisplayName &&
+              message.personaDisplayName !== message.author &&
+              !isBotInstance(message.role) ? (
                 <span className="text-xs text-muted-foreground">
                   {message.personaDisplayName}
                 </span>
-              ) : message.role ? (
+              ) : message.role && !isBotInstance(message.role) ? (
                 <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                   {message.role}
                 </p>
