@@ -233,6 +233,8 @@ mod tests {
             name_pool: Vec::new(),
             is_builtin: false,
             is_active: true,
+            source_pack: None,
+            source_pack_persona_slug: None,
             created_at: "2026-03-20T00:00:00Z".to_string(),
             updated_at: "2026-03-20T00:00:00Z".to_string(),
         }

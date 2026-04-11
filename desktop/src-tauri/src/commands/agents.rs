@@ -343,24 +343,17 @@ pub async fn create_managed_agent(
         // For pack-backed personas, resolve the installed pack path and the
         // persona's internal name (slug). ACP's resolve_persona_by_name()
         // matches on this internal name, NOT display_name.
-        let pack_metadata: Option<(std::path::PathBuf, String)> = requested_persona_id
-            .as_deref()
-            .and_then(|pid| {
+        let pack_metadata: Option<(std::path::PathBuf, String)> =
+            requested_persona_id.as_deref().and_then(|pid| {
                 let personas = load_personas(&app).ok()?;
                 let persona = personas.iter().find(|p| p.id == pid)?;
                 let pack_id = persona.source_pack.as_deref()?;
+                let slug = persona.source_pack_persona_slug.as_deref()?;
                 let base = managed_agents_base_dir(&app).ok()?;
                 let pack_path = base.join("packs").join(pack_id);
-                // Resolve the pack to find the internal name for this persona.
-                // Match by display_name since that's what PersonaRecord stores.
-                // TODO: fragile if two personas share display_name. Long-term fix:
-                // store internal `name` on PersonaRecord during import (requires
-                // adding a field to types.rs).
-                let resolved = sprout_persona::resolve::resolve_pack(&pack_path).ok()?;
-                let resolved_persona = resolved.personas.iter().find(|rp| {
-                    rp.display_name == persona.display_name
-                })?;
-                Some((pack_path, resolved_persona.name.clone()))
+                // Use the validated slug stored during import — no need to
+                // re-resolve the pack. The slug is [a-zA-Z0-9_-]+ by construction.
+                Some((pack_path, slug.to_owned()))
             });
 
         let record = crate::managed_agents::ManagedAgentRecord {

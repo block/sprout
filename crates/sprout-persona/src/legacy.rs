@@ -107,7 +107,13 @@ pub fn derive_name(id: &str) -> String {
     stripped
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string()
@@ -120,14 +126,9 @@ pub fn derive_name(id: &str) -> String {
 /// 2. Only model   → `"model-id"` (no colon)
 /// 3. Only provider → `None` (provider alone is not useful)
 /// 4. Neither      → `None`
-pub fn merge_provider_model(
-    provider: Option<&str>,
-    model: Option<&str>,
-) -> Option<String> {
+pub fn merge_provider_model(provider: Option<&str>, model: Option<&str>) -> Option<String> {
     match (provider, model) {
-        (Some(p), Some(m)) if !p.is_empty() && !m.is_empty() => {
-            Some(format!("{p}:{m}"))
-        }
+        (Some(p), Some(m)) if !p.is_empty() && !m.is_empty() => Some(format!("{p}:{m}")),
         (_, Some(m)) if !m.is_empty() => Some(m.to_string()),
         _ => None,
     }
@@ -167,9 +168,7 @@ pub fn derive_description(system_prompt: &str) -> String {
 /// + markdown body).
 ///
 /// Returns `(filename, content)` where filename is `{name}.persona.md`.
-pub fn legacy_to_persona_md(
-    record: &LegacyPersonaRecord,
-) -> Result<(String, String), LegacyError> {
+pub fn legacy_to_persona_md(record: &LegacyPersonaRecord) -> Result<(String, String), LegacyError> {
     let name = derive_name(&record.id);
     if name.is_empty() {
         return Err(LegacyError::Migration(format!(
@@ -182,16 +181,16 @@ pub fn legacy_to_persona_md(
     }
 
     let description = derive_description(&record.system_prompt);
-    let model = merge_provider_model(
-        record.provider.as_deref(),
-        record.model.as_deref(),
-    );
+    let model = merge_provider_model(record.provider.as_deref(), record.model.as_deref());
 
     // Build YAML frontmatter using serde_yaml for correct escaping.
     // BTreeMap keeps keys in alphabetical order for deterministic output.
     let mut fm = serde_json::Map::new();
     fm.insert("name".into(), serde_json::Value::String(name.clone()));
-    fm.insert("display_name".into(), serde_json::Value::String(record.display_name.clone()));
+    fm.insert(
+        "display_name".into(),
+        serde_json::Value::String(record.display_name.clone()),
+    );
     fm.insert("description".into(), serde_json::Value::String(description));
 
     if let Some(ref avatar) = record.avatar_url {
@@ -248,18 +247,22 @@ pub fn migrate_json_to_md(
             Ok((filename, content)) => {
                 let out_path = output_dir.join(&filename);
                 if out_path.exists() {
-                    report.diagnostics.push(ValidationDiagnostic::Warning(
-                        format!("output file already exists, skipping: {}", out_path.display()),
-                    ));
+                    report
+                        .diagnostics
+                        .push(ValidationDiagnostic::Warning(format!(
+                            "output file already exists, skipping: {}",
+                            out_path.display()
+                        )));
                     continue;
                 }
                 std::fs::write(&out_path, &content)?;
                 report.migrated.push(filename);
             }
             Err(e) => {
-                report.diagnostics.push(ValidationDiagnostic::Error(
-                    format!("failed to migrate {:?}: {e}", record.id),
-                ));
+                report.diagnostics.push(ValidationDiagnostic::Error(format!(
+                    "failed to migrate {:?}: {e}",
+                    record.id
+                )));
             }
         }
     }
@@ -303,7 +306,9 @@ impl std::fmt::Display for MigrationReport {
 /// This is the bridge between the old flat JSON format and the new V7 struct.
 /// Fields that don't exist in the legacy format (`skills`, `mcp_servers`,
 /// `subscribe`, `respond_to`, `hooks`, etc.) get their default/empty values.
-pub fn legacy_to_persona_config(record: &LegacyPersonaRecord) -> Result<PersonaConfig, LegacyError> {
+pub fn legacy_to_persona_config(
+    record: &LegacyPersonaRecord,
+) -> Result<PersonaConfig, LegacyError> {
     let name = derive_name(&record.id);
     if name.is_empty() {
         return Err(LegacyError::Migration(format!(
@@ -318,7 +323,9 @@ pub fn legacy_to_persona_config(record: &LegacyPersonaRecord) -> Result<PersonaC
     Ok(PersonaConfig {
         name,
         display_name: record.display_name.clone(),
-        avatar: record.avatar_url.as_ref()
+        avatar: record
+            .avatar_url
+            .as_ref()
             .filter(|a| !a.starts_with("data:") && !a.is_empty())
             .cloned(),
         description: derive_description(&record.system_prompt),
@@ -328,10 +335,7 @@ pub fn legacy_to_persona_config(record: &LegacyPersonaRecord) -> Result<PersonaC
         mcp_servers: Vec::new(),
         subscribe: None,
         triggers: None,
-        model: merge_provider_model(
-            record.provider.as_deref(),
-            record.model.as_deref(),
-        ),
+        model: merge_provider_model(record.provider.as_deref(), record.model.as_deref()),
         temperature: None,
         max_context_tokens: None,
         thread_replies: None,
@@ -443,7 +447,10 @@ mod tests {
     fn description_truncates_long_line() {
         let long = "x".repeat(200);
         let desc = derive_description(&long);
-        assert!(desc.chars().count() <= 120, "should be at most 120 chars (119 + ellipsis)");
+        assert!(
+            desc.chars().count() <= 120,
+            "should be at most 120 chars (119 + ellipsis)"
+        );
         assert!(desc.ends_with('…'));
     }
 
@@ -490,14 +497,35 @@ mod tests {
         assert_eq!(filename, "lep.persona.md");
         assert!(content.starts_with("---\n"), "should start with ---");
         // serde_yaml may or may not quote simple strings; check key: value pairs
-        assert!(content.contains("name:") && content.contains("lep"), "should contain name: lep");
-        assert!(content.contains("display_name:"), "should contain display_name");
-        assert!(content.contains("model:") && content.contains("anthropic:claude-sonnet-4-20250514"), "should contain model");
-        assert!(content.contains("avatar:") && content.contains("./avatars/lep.png"), "should contain avatar");
-        assert!(content.contains("You are Lep, a security reviewer."), "should contain system prompt");
+        assert!(
+            content.contains("name:") && content.contains("lep"),
+            "should contain name: lep"
+        );
+        assert!(
+            content.contains("display_name:"),
+            "should contain display_name"
+        );
+        assert!(
+            content.contains("model:") && content.contains("anthropic:claude-sonnet-4-20250514"),
+            "should contain model"
+        );
+        assert!(
+            content.contains("avatar:") && content.contains("./avatars/lep.png"),
+            "should contain avatar"
+        );
+        assert!(
+            content.contains("You are Lep, a security reviewer."),
+            "should contain system prompt"
+        );
         // name_pool should NOT appear
-        assert!(!content.contains("name_pool"), "name_pool should not appear");
-        assert!(!content.contains("clover"), "name_pool values should not appear");
+        assert!(
+            !content.contains("name_pool"),
+            "name_pool should not appear"
+        );
+        assert!(
+            !content.contains("clover"),
+            "name_pool values should not appear"
+        );
     }
 
     #[test]
@@ -622,7 +650,10 @@ mod tests {
         assert_eq!(config.name, "lep");
         assert_eq!(config.display_name, "Test Agent");
         assert_eq!(config.avatar.as_deref(), Some("./avatars/test.png"));
-        assert_eq!(config.model.as_deref(), Some("anthropic:claude-sonnet-4-20250514"));
+        assert_eq!(
+            config.model.as_deref(),
+            Some("anthropic:claude-sonnet-4-20250514")
+        );
         assert_eq!(config.prompt, "You are Lep.");
         assert!(config.skills.is_empty());
         assert!(config.mcp_servers.is_empty());
@@ -654,7 +685,10 @@ mod tests {
         let prompt = "\n  You are Lep.\n\nBe helpful.\n  ";
         let record = make_record("custom:lep", prompt);
         let config = legacy_to_persona_config(&record).unwrap();
-        assert_eq!(config.prompt, prompt, "prompt must be stored as-is, not trimmed");
+        assert_eq!(
+            config.prompt, prompt,
+            "prompt must be stored as-is, not trimmed"
+        );
     }
 
     // ── empty display_name validation ────────────────────────────────────
@@ -701,7 +735,10 @@ mod tests {
 
     #[test]
     fn round_trip_json_to_md_to_config() {
-        let record = make_record("custom:roundtrip", "You are a round-trip test agent.\n\nBe helpful.");
+        let record = make_record(
+            "custom:roundtrip",
+            "You are a round-trip test agent.\n\nBe helpful.",
+        );
         let (filename, md_content) = legacy_to_persona_md(&record).unwrap();
         assert_eq!(filename, "roundtrip.persona.md");
 
@@ -710,7 +747,10 @@ mod tests {
 
         assert_eq!(parsed.name, "roundtrip");
         assert_eq!(parsed.display_name, "Test Agent");
-        assert_eq!(parsed.model.as_deref(), Some("anthropic:claude-sonnet-4-20250514"));
+        assert_eq!(
+            parsed.model.as_deref(),
+            Some("anthropic:claude-sonnet-4-20250514")
+        );
         assert_eq!(parsed.avatar.as_deref(), Some("./avatars/test.png"));
         // The prompt should survive the round-trip.
         assert!(parsed.prompt.contains("You are a round-trip test agent."));

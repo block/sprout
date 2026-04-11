@@ -10,7 +10,7 @@
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct RespondToData {
+pub struct TriggersData {
     pub mentions: bool,
     pub keywords: Vec<String>,
     pub all_messages: bool,
@@ -28,8 +28,11 @@ pub struct ResolvedConfig {
     pub model: Option<String>,
     pub temperature: Option<f64>,
     pub max_context_tokens: Option<u64>,
-    pub subscribe: Vec<String>,
-    pub respond_to: Option<RespondToData>,
+    /// `None`       = absent (no persona or pack value) → caller uses its own default
+    /// `Some([])`   = intentional "subscribe to nothing"
+    /// `Some([..])` = explicit channel list
+    pub subscribe: Option<Vec<String>>,
+    pub triggers: Option<TriggersData>,
     pub thread_replies: bool,
     pub broadcast_replies: bool,
 }
@@ -99,38 +102,57 @@ pub fn resolve_persona_config(
     let temperature = merged.get("temperature").and_then(|v| v.as_f64());
     let max_context_tokens = merged.get("max_context_tokens").and_then(|v| v.as_u64());
 
-    let subscribe = merged
-        .get("subscribe")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
+    // subscribe: Option<Vec<String>>
+    //
+    // Read from persona frontmatter first to distinguish:
+    //   - absent / null  → None (fall through to pack default, then None)
+    //   - Some([])       → intentional "subscribe to nothing"
+    //   - Some([..])     → explicit channel list
+    //
+    // Pack default is only used when persona has no subscribe (None/null).
+    let subscribe = {
+        let persona_sub = persona_frontmatter.get("subscribe");
+        let default_sub = defaults.get("subscribe");
+        match (persona_sub, default_sub) {
+            // Persona has a non-null array → use it directly (may be empty).
+            (Some(serde_json::Value::Array(arr)), _) => Some(
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect(),
+            ),
+            // Persona absent or null → try pack default.
+            (None, Some(serde_json::Value::Array(arr)))
+            | (Some(serde_json::Value::Null), Some(serde_json::Value::Array(arr))) => Some(
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect(),
+            ),
+            // Neither side has subscribe.
+            _ => None,
+        }
+    };
 
-    // respond_to: SHALLOW REPLACEMENT (spec amendment S1).
+    // triggers: SHALLOW REPLACEMENT.
     //
-    // If persona has respond_to (non-null), it replaces the pack default
-    // entirely. Missing sub-fields fall to BUILT-IN defaults, not pack
-    // defaults. This is consistent with how subscribe and other fields work.
+    // If persona has triggers (non-null), it replaces the pack default entirely.
+    // Missing sub-fields fall to BUILT-IN defaults, not pack defaults.
     //
-    // If persona lacks respond_to (null or absent), use pack default.
+    // If persona lacks triggers (null or absent), use pack default.
     // If neither has it, None.
-    let respond_to = {
-        let persona_rt = persona_frontmatter.get("respond_to");
-        let default_rt = defaults.get("respond_to");
-        match (persona_rt, default_rt) {
-            // Neither side has respond_to.
+    let triggers = {
+        let persona_t = persona_frontmatter.get("triggers");
+        let default_t = defaults.get("triggers");
+        match (persona_t, default_t) {
+            // Neither side has triggers.
             (None, None)
             | (Some(serde_json::Value::Null), None)
             | (None, Some(serde_json::Value::Null))
             | (Some(serde_json::Value::Null), Some(serde_json::Value::Null)) => None,
-            // Persona has respond_to — use it directly (shallow replacement).
+            // Persona has triggers — use it directly (shallow replacement).
             // Pack default is ignored entirely.
-            (Some(v), _) if !v.is_null() => parse_respond_to(v),
+            (Some(v), _) if !v.is_null() => parse_triggers(v),
             // Persona absent/null — fall through to pack default.
-            (None, Some(v)) | (Some(serde_json::Value::Null), Some(v)) => parse_respond_to(v),
+            (None, Some(v)) | (Some(serde_json::Value::Null), Some(v)) => parse_triggers(v),
             _ => None,
         }
     };
@@ -150,7 +172,7 @@ pub fn resolve_persona_config(
         temperature,
         max_context_tokens,
         subscribe,
-        respond_to,
+        triggers,
         thread_replies,
         broadcast_replies,
     }
@@ -162,9 +184,9 @@ fn string_field(v: &serde_json::Value, key: &str) -> Option<String> {
     v.get(key).and_then(|v| v.as_str()).map(str::to_owned)
 }
 
-fn parse_respond_to(v: &serde_json::Value) -> Option<RespondToData> {
+fn parse_triggers(v: &serde_json::Value) -> Option<TriggersData> {
     let obj = v.as_object()?;
-    Some(RespondToData {
+    Some(TriggersData {
         mentions: obj
             .get("mentions")
             .and_then(|v| v.as_bool())
@@ -230,10 +252,10 @@ mod tests {
 
     #[test]
     fn empty_object_overrides_default() {
-        let persona = json!({ "respond_to": {} });
-        let defaults = json!({ "respond_to": { "mentions": true } });
+        let persona = json!({ "triggers": {} });
+        let defaults = json!({ "triggers": { "mentions": true } });
         let merged = merge_behavioral_config(&persona, &defaults);
-        assert_eq!(merged["respond_to"], json!({}));
+        assert_eq!(merged["triggers"], json!({}));
     }
 
     #[test]
@@ -259,9 +281,9 @@ mod tests {
             "subscribe": ["chan-default"],
         });
         let merged = merge_behavioral_config(&persona, &defaults);
-        assert_eq!(merged["model"], "gpt-4o");           // persona wins
-        assert_eq!(merged["temperature"], 0.9);          // null → default
-        assert_eq!(merged["thread_replies"], false);     // default used
+        assert_eq!(merged["model"], "gpt-4o"); // persona wins
+        assert_eq!(merged["temperature"], 0.9); // null → default
+        assert_eq!(merged["thread_replies"], false); // default used
         assert_eq!(merged["subscribe"], json!(["chan-x"])); // persona wins
     }
 
@@ -274,9 +296,9 @@ mod tests {
         assert_eq!(resolved.model, None);
         assert_eq!(resolved.temperature, None);
         assert_eq!(resolved.max_context_tokens, None);
-        assert!(resolved.subscribe.is_empty());
-        assert_eq!(resolved.respond_to, None);
-        assert_eq!(resolved.thread_replies, true);    // built-in default
+        assert_eq!(resolved.subscribe, None);
+        assert_eq!(resolved.triggers, None);
+        assert_eq!(resolved.thread_replies, true); // built-in default
         assert_eq!(resolved.broadcast_replies, false); // built-in default
     }
 
@@ -292,23 +314,23 @@ mod tests {
         assert_eq!(resolved.model.as_deref(), Some("gpt-4o"));
         assert_eq!(resolved.temperature, Some(0.7));
         assert_eq!(resolved.thread_replies, false);
-        assert_eq!(resolved.subscribe, vec!["general"]);
+        assert_eq!(resolved.subscribe, Some(vec!["general".to_owned()]));
     }
 
     #[test]
-    fn resolve_respond_to_parsed() {
+    fn resolve_triggers_parsed() {
         let persona = json!({
-            "respond_to": {
+            "triggers": {
                 "mentions": true,
                 "keywords": ["help", "sprout"],
                 "all_messages": false,
             }
         });
         let resolved = resolve_persona_config(&persona, None);
-        let rt = resolved.respond_to.unwrap();
-        assert!(rt.mentions);
-        assert_eq!(rt.keywords, vec!["help", "sprout"]);
-        assert!(!rt.all_messages);
+        let t = resolved.triggers.unwrap();
+        assert!(t.mentions);
+        assert_eq!(t.keywords, vec!["help", "sprout"]);
+        assert!(!t.all_messages);
     }
 
     #[test]
@@ -318,100 +340,123 @@ mod tests {
         assert_eq!(resolved.max_context_tokens, Some(8192));
     }
 
-    // ── respond_to shallow replacement (S1) ─────────────────────────────────
+    // ── triggers shallow replacement ─────────────────────────────────────────
 
     #[test]
-    fn respond_to_shallow_replacement_loses_pack_keywords() {
-        // S1: Persona sets `mentions: false` — entire respond_to replaces pack default.
-        // Pack's `keywords: ["foo"]` is LOST. Missing sub-fields get built-in defaults.
-        let persona = json!({ "respond_to": { "mentions": false } });
-        let defaults = json!({ "respond_to": { "mentions": true, "keywords": ["foo"] } });
+    fn triggers_shallow_replacement() {
+        // Persona sets `mentions: false` — entire triggers replaces pack default.
+        // Pack's `keywords: ["security"]` is LOST. Missing sub-fields get built-in defaults.
+        let persona = json!({ "triggers": { "mentions": false } });
+        let defaults = json!({ "triggers": { "mentions": true, "keywords": ["security"] } });
         let resolved = resolve_persona_config(&persona, Some(&defaults));
-        let rt = resolved.respond_to.unwrap();
-        assert!(!rt.mentions);
-        assert!(rt.keywords.is_empty(), "pack keywords should be lost under shallow replacement");
-        assert!(!rt.all_messages); // built-in default
+        let t = resolved.triggers.unwrap();
+        assert!(!t.mentions);
+        assert!(
+            t.keywords.is_empty(),
+            "pack keywords should be lost under shallow replacement"
+        );
+        assert!(!t.all_messages); // built-in default
     }
 
     #[test]
-    fn respond_to_empty_object_gets_builtin_defaults() {
-        // S1: Persona sets `respond_to: {}` — present but empty.
-        // All sub-fields fall to built-in defaults.
-        let persona = json!({ "respond_to": {} });
-        let defaults = json!({ "respond_to": { "mentions": false, "keywords": ["security"] } });
-        let resolved = resolve_persona_config(&persona, Some(&defaults));
-        let rt = resolved.respond_to.unwrap();
-        assert!(rt.mentions, "built-in default for mentions is true");
-        assert!(rt.keywords.is_empty(), "built-in default for keywords is empty");
-        assert!(!rt.all_messages, "built-in default for all_messages is false");
-    }
-
-    #[test]
-    fn respond_to_absent_inherits_pack_default() {
-        // S1: Persona has no respond_to — fall through to pack default.
+    fn triggers_absent_inherits_pack() {
+        // Persona has no triggers → pack default used entirely.
         let persona = json!({ "model": "gpt-4o" });
-        let defaults = json!({ "respond_to": { "mentions": false, "keywords": ["deploy"] } });
+        let defaults = json!({ "triggers": { "mentions": false, "keywords": ["deploy"] } });
         let resolved = resolve_persona_config(&persona, Some(&defaults));
-        let rt = resolved.respond_to.unwrap();
-        assert!(!rt.mentions);
-        assert_eq!(rt.keywords, vec!["deploy"]);
+        let t = resolved.triggers.unwrap();
+        assert!(!t.mentions);
+        assert_eq!(t.keywords, vec!["deploy"]);
     }
 
     #[test]
-    fn respond_to_null_inherits_pack_default() {
-        // S1: Persona explicitly sets respond_to: null — fall through to pack default.
-        let persona = json!({ "respond_to": null });
-        let defaults = json!({ "respond_to": { "all_messages": true } });
+    fn triggers_empty_gets_builtins() {
+        // Persona sets `triggers: {}` — present but empty.
+        // All sub-fields fall to built-in defaults.
+        let persona = json!({ "triggers": {} });
+        let defaults = json!({ "triggers": { "mentions": false, "keywords": ["security"] } });
         let resolved = resolve_persona_config(&persona, Some(&defaults));
-        let rt = resolved.respond_to.unwrap();
-        assert!(rt.all_messages);
+        let t = resolved.triggers.unwrap();
+        assert!(t.mentions, "built-in default for mentions is true");
+        assert!(
+            t.keywords.is_empty(),
+            "built-in default for keywords is empty"
+        );
+        assert!(
+            !t.all_messages,
+            "built-in default for all_messages is false"
+        );
     }
 
     #[test]
-    fn respond_to_persona_explicit_empty_keywords_overrides_pack() {
+    fn triggers_null_inherits_pack_default() {
+        // Persona explicitly sets triggers: null — fall through to pack default.
+        let persona = json!({ "triggers": null });
+        let defaults = json!({ "triggers": { "all_messages": true } });
+        let resolved = resolve_persona_config(&persona, Some(&defaults));
+        let t = resolved.triggers.unwrap();
+        assert!(t.all_messages);
+    }
+
+    #[test]
+    fn triggers_persona_explicit_empty_keywords_overrides_pack() {
         // Persona explicitly sets `keywords: []`; pack default has `keywords: ["foo"]`.
         // Under shallow replacement, persona wins entirely — pack is ignored.
-        let persona = json!({ "respond_to": { "keywords": [] } });
-        let defaults = json!({ "respond_to": { "keywords": ["foo"] } });
+        let persona = json!({ "triggers": { "keywords": [] } });
+        let defaults = json!({ "triggers": { "keywords": ["foo"] } });
         let resolved = resolve_persona_config(&persona, Some(&defaults));
-        let rt = resolved.respond_to.unwrap();
-        assert!(rt.keywords.is_empty());
+        let t = resolved.triggers.unwrap();
+        assert!(t.keywords.is_empty());
     }
 
     #[test]
-    fn respond_to_neither_side_returns_none() {
-        // Neither persona nor pack has respond_to — result is None.
+    fn triggers_neither_side_returns_none() {
+        // Neither persona nor pack has triggers — result is None.
         let persona = json!({ "model": "gpt-4o" });
         let resolved = resolve_persona_config(&persona, None);
-        assert!(resolved.respond_to.is_none());
+        assert!(resolved.triggers.is_none());
     }
 
-    // ── subscribe merge (S2) ─────────────────────────────────────────────────
+    // ── subscribe merge (Option<Vec<String>>) ────────────────────────────────
 
     #[test]
-    fn subscribe_null_falls_through_to_pack_default() {
-        // S2: persona subscribe: null → falls through to pack default.
+    fn subscribe_null_falls_through() {
+        // persona subscribe: null → falls through to pack default.
         let persona = json!({ "subscribe": null });
         let defaults = json!({ "subscribe": ["#general", "#alerts"] });
         let resolved = resolve_persona_config(&persona, Some(&defaults));
-        assert_eq!(resolved.subscribe, vec!["#general", "#alerts"]);
+        assert_eq!(
+            resolved.subscribe,
+            Some(vec!["#general".to_owned(), "#alerts".to_owned()])
+        );
     }
 
     #[test]
-    fn subscribe_empty_overrides_pack_default() {
-        // S2: persona subscribe: [] → intentional "subscribe to nothing".
+    fn subscribe_empty_overrides() {
+        // persona subscribe: [] → intentional "subscribe to nothing" — Some([]).
         let persona = json!({ "subscribe": [] });
         let defaults = json!({ "subscribe": ["#general"] });
         let resolved = resolve_persona_config(&persona, Some(&defaults));
-        assert!(resolved.subscribe.is_empty());
+        assert_eq!(resolved.subscribe, Some(vec![]));
     }
 
     #[test]
     fn subscribe_absent_falls_through_to_pack_default() {
-        // S2: persona has no subscribe field → falls through to pack default.
+        // persona has no subscribe field → falls through to pack default.
         let persona = json!({ "model": "gpt-4o" });
         let defaults = json!({ "subscribe": ["#security-reviews"] });
         let resolved = resolve_persona_config(&persona, Some(&defaults));
-        assert_eq!(resolved.subscribe, vec!["#security-reviews"]);
+        assert_eq!(
+            resolved.subscribe,
+            Some(vec!["#security-reviews".to_owned()])
+        );
+    }
+
+    #[test]
+    fn subscribe_absent_no_pack_is_none() {
+        // Neither persona nor pack has subscribe → None.
+        let persona = json!({ "model": "gpt-4o" });
+        let resolved = resolve_persona_config(&persona, None);
+        assert_eq!(resolved.subscribe, None);
     }
 }

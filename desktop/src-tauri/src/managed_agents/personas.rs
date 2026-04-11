@@ -594,9 +594,7 @@ fn validate_pack_id(id: &str) -> Result<(), String> {
 /// Copy a directory tree, skipping symlinks (Lep F2: zip-slip defense).
 fn copy_dir_no_symlinks(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
     fs::create_dir_all(dst).map_err(|e| format!("failed to create {}: {e}", dst.display()))?;
-    for entry in
-        fs::read_dir(src).map_err(|e| format!("failed to read {}: {e}", src.display()))?
-    {
+    for entry in fs::read_dir(src).map_err(|e| format!("failed to read {}: {e}", src.display()))? {
         let entry = entry.map_err(|e| format!("dir entry error: {e}"))?;
         let ft = entry
             .file_type()

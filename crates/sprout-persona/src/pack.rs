@@ -13,7 +13,6 @@
 ///   .mcp.json              ← optional shared MCP config
 ///   skills/                ← optional skills directory
 /// ```
-
 use std::{
     collections::HashMap,
     path::{Component, Path, PathBuf},
@@ -127,9 +126,10 @@ pub struct PackManifestData {
 /// 5. Read `.mcp.json` if present
 /// 6. Validate all paths resolve within `pack_root` (no path traversal)
 pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
-    let pack_root = pack_dir
-        .canonicalize()
-        .map_err(|e| PackError::Io { path: pack_dir.to_path_buf(), source: e })?;
+    let pack_root = pack_dir.canonicalize().map_err(|e| PackError::Io {
+        path: pack_dir.to_path_buf(),
+        source: e,
+    })?;
 
     // 1. Manifest
     let manifest_path = pack_root.join(".plugin").join("plugin.json");
@@ -181,7 +181,8 @@ pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
 
     // 4. Pack instructions
     // Size limit for text files (instructions, mcp config): generous but bounded.
-    let text_size_limit = (crate::persona::MAX_FRONTMATTER_BYTES + crate::persona::MAX_BODY_BYTES + 200) as u64;
+    let text_size_limit =
+        (crate::persona::MAX_FRONTMATTER_BYTES + crate::persona::MAX_BODY_BYTES + 200) as u64;
 
     let pack_instructions = match &manifest.pack_instructions {
         Some(rel) => {
@@ -192,15 +193,18 @@ pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
                     reason: format!("pack_instructions file not found: {rel}"),
                 });
             }
-            let meta = std::fs::metadata(&abs)
-                .map_err(|e| PackError::PersonaParse {
-                    path: abs.clone(),
-                    reason: format!("cannot stat file: {e}"),
-                })?;
+            let meta = std::fs::metadata(&abs).map_err(|e| PackError::PersonaParse {
+                path: abs.clone(),
+                reason: format!("cannot stat file: {e}"),
+            })?;
             if meta.len() > text_size_limit {
                 return Err(PackError::PersonaParse {
                     path: abs,
-                    reason: format!("file too large: {} bytes (max {})", meta.len(), text_size_limit),
+                    reason: format!(
+                        "file too large: {} bytes (max {})",
+                        meta.len(),
+                        text_size_limit
+                    ),
                 });
             }
             Some(read_file(&abs)?)
@@ -209,15 +213,18 @@ pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
             // Conventional fallback — missing is fine when not explicitly declared.
             let path = pack_root.join("instructions.md");
             if path.exists() {
-                let meta = std::fs::metadata(&path)
-                    .map_err(|e| PackError::PersonaParse {
-                        path: path.clone(),
-                        reason: format!("cannot stat file: {e}"),
-                    })?;
+                let meta = std::fs::metadata(&path).map_err(|e| PackError::PersonaParse {
+                    path: path.clone(),
+                    reason: format!("cannot stat file: {e}"),
+                })?;
                 if meta.len() > text_size_limit {
                     return Err(PackError::PersonaParse {
                         path,
-                        reason: format!("file too large: {} bytes (max {})", meta.len(), text_size_limit),
+                        reason: format!(
+                            "file too large: {} bytes (max {})",
+                            meta.len(),
+                            text_size_limit
+                        ),
                     });
                 }
                 Some(read_file(&path)?)
@@ -243,15 +250,18 @@ pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
                     reason: format!("mcp_config file not found: {rel}"),
                 });
             }
-            let meta = std::fs::metadata(&abs)
-                .map_err(|e| PackError::PersonaParse {
-                    path: abs.clone(),
-                    reason: format!("cannot stat file: {e}"),
-                })?;
+            let meta = std::fs::metadata(&abs).map_err(|e| PackError::PersonaParse {
+                path: abs.clone(),
+                reason: format!("cannot stat file: {e}"),
+            })?;
             if meta.len() > text_size_limit {
                 return Err(PackError::PersonaParse {
                     path: abs.clone(),
-                    reason: format!("file too large: {} bytes (max {})", meta.len(), text_size_limit),
+                    reason: format!(
+                        "file too large: {} bytes (max {})",
+                        meta.len(),
+                        text_size_limit
+                    ),
                 });
             }
             Some(parse_mcp(read_file(&abs)?, &abs)?)
@@ -260,15 +270,18 @@ pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
             // Conventional fallback — missing is fine when not explicitly declared.
             let path = pack_root.join(".mcp.json");
             if path.exists() {
-                let meta = std::fs::metadata(&path)
-                    .map_err(|e| PackError::PersonaParse {
-                        path: path.clone(),
-                        reason: format!("cannot stat file: {e}"),
-                    })?;
+                let meta = std::fs::metadata(&path).map_err(|e| PackError::PersonaParse {
+                    path: path.clone(),
+                    reason: format!("cannot stat file: {e}"),
+                })?;
                 if meta.len() > text_size_limit {
                     return Err(PackError::PersonaParse {
                         path,
-                        reason: format!("file too large: {} bytes (max {})", meta.len(), text_size_limit),
+                        reason: format!(
+                            "file too large: {} bytes (max {})",
+                            meta.len(),
+                            text_size_limit
+                        ),
                     });
                 }
                 Some(parse_mcp(read_file(&path)?, &path)?)
@@ -281,7 +294,11 @@ pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
     // 6. Skills directory
     let skills_dir = {
         let path = pack_root.join("skills");
-        if path.is_dir() { Some(path) } else { None }
+        if path.is_dir() {
+            Some(path)
+        } else {
+            None
+        }
     };
 
     Ok(LoadedPack {
@@ -301,10 +318,7 @@ pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
 /// - Skills not listed in any persona's `skills:` → all personas (shared)
 ///
 /// Returns a map of `persona_name → Vec<skill_name>`.
-pub fn resolve_skills(
-    pack_dir: &Path,
-    personas: &[LoadedPersona],
-) -> HashMap<String, Vec<String>> {
+pub fn resolve_skills(pack_dir: &Path, personas: &[LoadedPersona]) -> HashMap<String, Vec<String>> {
     // Normalize a persona skill path (e.g. `"./skills/security-review/"`,
     // `"skills/search"`, `"web-search"`) to just the final path component
     // so it can be compared against bare `read_dir` entry names.
@@ -410,9 +424,10 @@ fn safe_resolve(pack_root: &Path, relative: &str) -> Result<PathBuf, PackError> 
         return Ok(joined);
     }
 
-    let canonical = joined
-        .canonicalize()
-        .map_err(|e| PackError::Io { path: joined.clone(), source: e })?;
+    let canonical = joined.canonicalize().map_err(|e| PackError::Io {
+        path: joined.clone(),
+        source: e,
+    })?;
 
     // Step 3: must be inside pack_root.
     if !canonical.starts_with(pack_root) {
@@ -425,7 +440,10 @@ fn safe_resolve(pack_root: &Path, relative: &str) -> Result<PathBuf, PackError> 
 // ── Parsing helpers ───────────────────────────────────────────────────────────
 
 fn read_file(path: &Path) -> Result<String, PackError> {
-    std::fs::read_to_string(path).map_err(|e| PackError::Io { path: path.to_path_buf(), source: e })
+    std::fs::read_to_string(path).map_err(|e| PackError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })
 }
 
 /// Parse a `.persona.md` file.
@@ -558,14 +576,13 @@ You are Berry, a fast and direct worker.
         let root = make_pack(&dir, &[("berry", SIMPLE_PERSONA)]);
 
         fs::write(root.join("instructions.md"), "Pack-level instructions.").unwrap();
-        fs::write(
-            root.join(".mcp.json"),
-            r#"{"mcpServers": {}}"#,
-        )
-        .unwrap();
+        fs::write(root.join(".mcp.json"), r#"{"mcpServers": {}}"#).unwrap();
 
         let pack = load_pack(&root).unwrap();
-        assert_eq!(pack.pack_instructions.as_deref(), Some("Pack-level instructions."));
+        assert_eq!(
+            pack.pack_instructions.as_deref(),
+            Some("Pack-level instructions.")
+        );
         assert!(pack.shared_mcp_config.is_some());
     }
 

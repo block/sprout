@@ -7,8 +7,7 @@ use crate::{
     managed_agents::{
         encode_persona_json, import_persona_pack, list_installed_packs, load_managed_agents,
         load_personas, load_teams, parse_json_persona, parse_png_persona, parse_zip_personas,
-        save_managed_agents, save_personas,
-        uninstall_persona_pack as do_uninstall_persona_pack,
+        save_managed_agents, save_personas, uninstall_persona_pack as do_uninstall_persona_pack,
         validate_persona_activation_change, validate_persona_deletion, CreatePersonaRequest,
         PackSummary, ParsePersonaFilesResult, PersonaRecord, UpdatePersonaRequest,
     },
@@ -77,6 +76,7 @@ pub fn create_persona(
         is_builtin: false,
         is_active: true,
         source_pack: None,
+        source_pack_persona_slug: None,
         created_at: now.clone(),
         updated_at: now,
     };

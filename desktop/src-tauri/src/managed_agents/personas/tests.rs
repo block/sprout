@@ -1,7 +1,6 @@
 use super::{
-    ensure_persona_ids_are_active, ensure_persona_is_active, merge_personas,
-    validate_pack_id, validate_persona_activation_change, validate_persona_deletion,
-    BUILT_IN_PERSONAS,
+    ensure_persona_ids_are_active, ensure_persona_is_active, merge_personas, validate_pack_id,
+    validate_persona_activation_change, validate_persona_deletion, BUILT_IN_PERSONAS,
 };
 use crate::managed_agents::PersonaRecord;
 

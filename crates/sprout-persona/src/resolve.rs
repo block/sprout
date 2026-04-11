@@ -117,7 +117,12 @@ pub fn resolve_loaded_pack(loaded: &LoadedPack) -> Result<ResolvedPack, PackErro
 
     let mut personas = Vec::with_capacity(loaded.personas.len());
     for lp in &loaded.personas {
-        personas.push(resolve_one_persona(lp, pack_version, pack_instructions, shared_mcp));
+        personas.push(resolve_one_persona(
+            lp,
+            pack_version,
+            pack_instructions,
+            shared_mcp,
+        ));
     }
 
     Ok(ResolvedPack {
@@ -242,10 +247,7 @@ fn merge_mcp_servers(
     // 1. Pack-level shared servers from .mcp.json
     if let Some(shared) = shared_mcp {
         // .mcp.json format: { "mcpServers": { "name": { "command": ..., "args": [...], "env": {...} } } }
-        if let Some(servers_obj) = shared
-            .get("mcpServers")
-            .and_then(|v| v.as_object())
-        {
+        if let Some(servers_obj) = shared.get("mcpServers").and_then(|v| v.as_object()) {
             for (name, config) in servers_obj {
                 if let Some(server) = parse_mcp_server_config(name, config) {
                     by_name.insert(name.clone(), server);
@@ -758,11 +760,13 @@ mod tests {
         std::fs::write(
             dir.join("agents/a.persona.md"),
             "---\nname: alpha\ndisplay_name: Alpha\ndescription: First.\n---\nAlpha prompt.\n",
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             dir.join("agents/b.persona.md"),
             "---\nname: beta\ndisplay_name: Beta\ndescription: Second.\n---\nBeta prompt.\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let p = resolve_persona_by_name(dir, "beta").unwrap();
         assert_eq!(p.name, "beta");
@@ -780,11 +784,13 @@ mod tests {
         std::fs::write(
             dir.join(".plugin/plugin.json"),
             r#"{"id":"t","name":"T","version":"1.0.0","personas":["agents/a.persona.md"]}"#,
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             dir.join("agents/a.persona.md"),
             "---\nname: alpha\ndisplay_name: Alpha\ndescription: First.\n---\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let err = resolve_persona_by_name(dir, "nonexistent").unwrap_err();
         assert!(matches!(err, PackError::PersonaNotFound(_)));
@@ -802,11 +808,13 @@ mod tests {
         std::fs::write(
             dir.join(".plugin/plugin.json"),
             r#"{"id":"t","name":"T","version":"1.0.0","personas":["agents/a.persona.md"]}"#,
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             dir.join("agents/a.persona.md"),
             "---\nname: a\ndisplay_name: A\ndescription: A.\nmodel: openai:gpt-4o\n---\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let pack = resolve_pack(dir).unwrap();
         let p = &pack.personas[0];
@@ -824,11 +832,13 @@ mod tests {
         std::fs::write(
             dir.join(".plugin/plugin.json"),
             r#"{"id":"t","name":"T","version":"1.0.0","personas":["agents/a.persona.md"]}"#,
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             dir.join("agents/a.persona.md"),
             "---\nname: a\ndisplay_name: A\ndescription: A.\nmodel: gpt-4o\n---\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let pack = resolve_pack(dir).unwrap();
         let p = &pack.personas[0];
