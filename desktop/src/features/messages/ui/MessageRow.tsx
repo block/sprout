@@ -167,7 +167,7 @@ export const MessageRow = React.memo(
 
         <article
           className={cn(
-            "group/message flex items-start gap-2.5 rounded-2xl px-2 py-1 transition-colors",
+            "group/message flex items-start gap-2.5 rounded-2xl px-2 py-1.5 transition-colors",
             highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
             activeReplyTargetId === message.id
               ? "bg-muted/60 ring-1 ring-border"
@@ -203,7 +203,7 @@ export const MessageRow = React.memo(
             )}
           </div>
 
-          <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="min-w-0 flex-1 space-y-1">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               {message.pubkey ? (
                 <UserProfilePopover pubkey={message.pubkey}>
