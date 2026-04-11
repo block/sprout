@@ -169,6 +169,15 @@ export function AgentsView() {
     [managedAgents],
   );
   const managedPresenceQuery = usePresenceQuery(managedPubkeyList);
+  const channelsByPubkey = React.useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const ra of relayAgentsQuery.data ?? []) {
+      if (ra.channels.length > 0) {
+        map[ra.pubkey] = ra.channels;
+      }
+    }
+    return map;
+  }, [relayAgentsQuery.data]);
 
   // Clear log selection if the agent was removed
   React.useEffect(() => {
@@ -536,6 +545,7 @@ export function AgentsView() {
               actionErrorMessage={actionErrorMessage}
               actionNoticeMessage={actionNoticeMessage}
               agents={managedAgents}
+              channelsByPubkey={channelsByPubkey}
               error={
                 managedAgentsQuery.error instanceof Error
                   ? managedAgentsQuery.error
