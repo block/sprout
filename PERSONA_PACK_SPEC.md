@@ -233,6 +233,10 @@ files (goose does not read them).
 
 ## 5. Skills
 
+> **Implementation note**: Skill paths are stored as declared in persona frontmatter. Resolution
+> to `SKILL.md` `name:` fields and runtime copying to `$AGENT_CWD/.agents/skills/` is planned
+> for a future release.
+
 Skills are reusable instruction sets that agents load on demand. They are markdown files that teach
 the agent how to perform a specific task.
 
@@ -253,12 +257,14 @@ $AGENT_CWD/.agents/skills/<skill-name>/SKILL.md   ← sprout-acp uses this one
 ### `$AGENT_CWD` Definition
 
 Throughout this spec, **`$AGENT_CWD`** refers to the `cwd` field in the ACP `NewSessionRequest`
-— the working directory passed to goose-acp when creating a session. This is an ACP protocol
-field, not an environment variable that goose reads at runtime.
+— the working directory passed to goose-acp when creating a session. Goose does not read an
+`AGENT_CWD` environment variable at runtime; the value is delivered via the ACP protocol.
 
-sprout-acp determines what value to pass as `NewSessionRequest.cwd` in this order:
+However, operators can control this value by setting the `AGENT_CWD` environment variable on the
+sprout-acp process. sprout-acp determines what value to pass as `NewSessionRequest.cwd` in this
+order:
 
-1. The `AGENT_CWD` environment variable, if set.
+1. The `AGENT_CWD` environment variable on the sprout-acp process, if set.
 2. `std::env::current_dir()` as a fallback.
 3. If both fail, sprout-acp logs an error and **refuses to start**.
 
@@ -388,6 +394,10 @@ mcp_servers:
 
 ### Environment Variable Interpolation
 
+> **Implementation note**: MCP env var interpolation (`${VAR_NAME}` resolution) is planned but not
+> yet implemented. In the current release, `${VAR_NAME}` strings are passed through as literals
+> to goose, which resolves them via its own MCP server configuration handling.
+
 All `env` values are scanned for `${VAR_NAME}`. sprout-acp resolves from the process environment
 **before** passing to goose-acp. Unresolved variables cause a startup error:
 
@@ -421,6 +431,9 @@ contributors only).
 ---
 
 ## 8. Lifecycle Hooks
+
+> **Implementation note**: Hooks are parsed and validated at pack load time but not yet executed.
+> Hook execution is planned for a future release.
 
 Hooks are shell commands fired by sprout-acp at agent lifecycle points. **Goose has no hook system**
 — hooks are entirely a harness feature.

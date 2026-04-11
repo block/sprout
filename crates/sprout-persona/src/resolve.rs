@@ -130,7 +130,7 @@ pub fn resolve_loaded_pack(loaded: &LoadedPack) -> Result<ResolvedPack, PackErro
         name: loaded.manifest.name.clone(),
         version: loaded.manifest.version.clone(),
         // Pack-level description not yet wired through PackManifestData.
-        description: String::new(),
+        description: loaded.manifest.description.clone().unwrap_or_default(),
         personas,
     })
 }
@@ -174,7 +174,11 @@ fn resolve_one_persona(
     let hooks = resolve_hooks(lp.hooks.as_ref());
     let goose_env_vars = project_env_vars(lp);
 
-    // Version: pack version (LoadedPersona doesn't carry a per-persona version).
+    // Version: LoadedPersona has no per-persona version field — persona files
+    // don't declare a version in frontmatter. The pack version is used as-is.
+    // If per-persona versioning is added in the future, LoadedPersona should
+    // gain `version: Option<String>` and this line should become:
+    //   lp.version.clone().unwrap_or_else(|| pack_version.to_owned())
     let version = pack_version.to_owned();
 
     ResolvedPersona {

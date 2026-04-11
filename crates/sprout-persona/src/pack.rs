@@ -105,6 +105,7 @@ pub struct PackManifestData {
     pub id: String,
     pub name: String,
     pub version: String,
+    pub description: Option<String>,
     /// Relative paths to .persona.md files.
     pub personas: Vec<String>,
     pub pack_instructions: Option<String>,
@@ -142,6 +143,7 @@ pub fn load_pack(pack_dir: &Path) -> Result<LoadedPack, PackError> {
         id: pm.id,
         name: pm.name,
         version: pm.version,
+        description: pm.description,
         personas: pm.personas,
         pack_instructions: pm.pack_instructions,
         mcp_config: pm.mcp_config,
