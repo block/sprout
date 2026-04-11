@@ -104,6 +104,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/approvals/by-hash/{hash}/deny",
             post(api::deny_approval_by_hash),
         )
+        // Huddle routes
+        .route(
+            "/api/huddles/{channel_id}/token",
+            post(api::huddle_token),
+        )
         // Membership routes
         .route("/api/channels/{channel_id}/members", get(api::list_members))
         // Channel detail + metadata routes

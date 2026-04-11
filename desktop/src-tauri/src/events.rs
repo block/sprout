@@ -357,6 +357,62 @@ pub fn build_profile(
     Ok(EventBuilder::new(Kind::Custom(0), content))
 }
 
+// ── Huddles ──────────────────────────────────────────────────────────────────
+
+/// Kind 48100 — huddle started advisory posted to the parent channel.
+pub fn build_huddle_started(
+    parent_channel_id: &str,
+    ephemeral_channel_id: &str,
+    livekit_room: &str,
+) -> Result<EventBuilder, String> {
+    let content = serde_json::json!({
+        "ephemeral_channel_id": ephemeral_channel_id,
+        "livekit_room": livekit_room,
+    })
+    .to_string();
+    let tags = vec![tag(vec!["h", parent_channel_id])?];
+    Ok(EventBuilder::new(Kind::Custom(48100), content).tags(tags))
+}
+
+/// Kind 48101 — participant joined a huddle, posted to the parent channel.
+pub fn build_huddle_participant_joined(
+    parent_channel_id: &str,
+    ephemeral_channel_id: &str,
+) -> Result<EventBuilder, String> {
+    let content = serde_json::json!({
+        "ephemeral_channel_id": ephemeral_channel_id,
+    })
+    .to_string();
+    let tags = vec![tag(vec!["h", parent_channel_id])?];
+    Ok(EventBuilder::new(Kind::Custom(48101), content).tags(tags))
+}
+
+/// Kind 48102 — participant left a huddle, posted to the parent channel.
+pub fn build_huddle_participant_left(
+    parent_channel_id: &str,
+    ephemeral_channel_id: &str,
+) -> Result<EventBuilder, String> {
+    let content = serde_json::json!({
+        "ephemeral_channel_id": ephemeral_channel_id,
+    })
+    .to_string();
+    let tags = vec![tag(vec!["h", parent_channel_id])?];
+    Ok(EventBuilder::new(Kind::Custom(48102), content).tags(tags))
+}
+
+/// Kind 48103 — huddle ended, posted to the parent channel.
+pub fn build_huddle_ended(
+    parent_channel_id: &str,
+    ephemeral_channel_id: &str,
+) -> Result<EventBuilder, String> {
+    let content = serde_json::json!({
+        "ephemeral_channel_id": ephemeral_channel_id,
+    })
+    .to_string();
+    let tags = vec![tag(vec!["h", parent_channel_id])?];
+    Ok(EventBuilder::new(Kind::Custom(48103), content).tags(tags))
+}
+
 // ── Social notes ────────────────────────────────────────────────────────────
 
 /// Kind 1 — NIP-01 short text note (global, no channel scope).

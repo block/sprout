@@ -1,6 +1,7 @@
 mod app_state;
 mod commands;
 mod events;
+mod huddle;
 mod managed_agents;
 mod migration;
 mod models;
@@ -9,6 +10,7 @@ mod util;
 
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use commands::*;
+use huddle::{end_huddle, get_huddle_state, join_huddle, leave_huddle, push_audio_pcm, start_huddle};
 use managed_agents::{
     ensure_nest, find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents,
     save_managed_agents, start_managed_agent_process, sync_managed_agent_processes, BackendKind,
@@ -498,6 +500,12 @@ pub fn run() {
             get_contact_list,
             set_contact_list,
             get_notes_timeline,
+            start_huddle,
+            join_huddle,
+            leave_huddle,
+            end_huddle,
+            get_huddle_state,
+            push_audio_pcm,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

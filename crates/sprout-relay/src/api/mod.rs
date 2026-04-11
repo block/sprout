@@ -12,6 +12,8 @@
 
 /// Agent directory and status endpoints.
 pub mod agents;
+/// LiveKit huddle token endpoint.
+pub mod huddles;
 /// Workflow approval grant/deny endpoints.
 pub mod approvals;
 /// Canvas (shared document) endpoints.
@@ -51,6 +53,7 @@ pub mod workflows;
 
 // Re-export all public handlers so router.rs can use `api::*_handler` unchanged.
 pub use agents::agents_handler;
+pub use huddles::huddle_token;
 pub use approvals::{deny_approval, deny_approval_by_hash, grant_approval, grant_approval_by_hash};
 pub use canvas::get_canvas;
 pub use channels::channels_handler;

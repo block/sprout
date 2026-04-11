@@ -563,6 +563,96 @@ pub fn build_contact_list(
     Ok(EventBuilder::new(Kind::Custom(3), "", tags))
 }
 
+// ── Builder 26: build_huddle_started ─────────────────────────────────────────
+
+/// Build a huddle-started event (kind 48100).
+///
+/// Posted to the parent channel as an advisory UI hint that a huddle has begun.
+/// - `parent_channel_id`: the channel the huddle belongs to (h-tag)
+/// - `ephemeral_channel_id`: the short-lived channel UUID for the huddle session
+/// - `livekit_room`: LiveKit room name participants should join
+pub fn build_huddle_started(
+    parent_channel_id: Uuid,
+    ephemeral_channel_id: Uuid,
+    livekit_room: &str,
+) -> Result<EventBuilder, SdkError> {
+    let tags = vec![tag(&["h", &parent_channel_id.to_string()])?];
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "ephemeral_channel_id".into(),
+        serde_json::Value::String(ephemeral_channel_id.to_string()),
+    );
+    map.insert(
+        "livekit_room".into(),
+        serde_json::Value::String(livekit_room.into()),
+    );
+    let content = serde_json::Value::Object(map).to_string();
+    Ok(EventBuilder::new(Kind::Custom(48100), content, tags))
+}
+
+// ── Builder 27: build_huddle_participant_joined ───────────────────────────────
+
+/// Build a huddle-participant-joined event (kind 48101).
+///
+/// Posted to the parent channel when a participant enters the huddle.
+/// - `parent_channel_id`: the channel the huddle belongs to (h-tag)
+/// - `ephemeral_channel_id`: the short-lived channel UUID for the huddle session
+pub fn build_huddle_participant_joined(
+    parent_channel_id: Uuid,
+    ephemeral_channel_id: Uuid,
+) -> Result<EventBuilder, SdkError> {
+    let tags = vec![tag(&["h", &parent_channel_id.to_string()])?];
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "ephemeral_channel_id".into(),
+        serde_json::Value::String(ephemeral_channel_id.to_string()),
+    );
+    let content = serde_json::Value::Object(map).to_string();
+    Ok(EventBuilder::new(Kind::Custom(48101), content, tags))
+}
+
+// ── Builder 28: build_huddle_participant_left ─────────────────────────────────
+
+/// Build a huddle-participant-left event (kind 48102).
+///
+/// Posted to the parent channel when a participant exits the huddle.
+/// - `parent_channel_id`: the channel the huddle belongs to (h-tag)
+/// - `ephemeral_channel_id`: the short-lived channel UUID for the huddle session
+pub fn build_huddle_participant_left(
+    parent_channel_id: Uuid,
+    ephemeral_channel_id: Uuid,
+) -> Result<EventBuilder, SdkError> {
+    let tags = vec![tag(&["h", &parent_channel_id.to_string()])?];
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "ephemeral_channel_id".into(),
+        serde_json::Value::String(ephemeral_channel_id.to_string()),
+    );
+    let content = serde_json::Value::Object(map).to_string();
+    Ok(EventBuilder::new(Kind::Custom(48102), content, tags))
+}
+
+// ── Builder 29: build_huddle_ended ───────────────────────────────────────────
+
+/// Build a huddle-ended event (kind 48103).
+///
+/// Posted to the parent channel when the huddle session concludes.
+/// - `parent_channel_id`: the channel the huddle belongs to (h-tag)
+/// - `ephemeral_channel_id`: the short-lived channel UUID for the huddle session
+pub fn build_huddle_ended(
+    parent_channel_id: Uuid,
+    ephemeral_channel_id: Uuid,
+) -> Result<EventBuilder, SdkError> {
+    let tags = vec![tag(&["h", &parent_channel_id.to_string()])?];
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "ephemeral_channel_id".into(),
+        serde_json::Value::String(ephemeral_channel_id.to_string()),
+    );
+    let content = serde_json::Value::Object(map).to_string();
+    Ok(EventBuilder::new(Kind::Custom(48103), content, tags))
+}
+
 // ── Helper: extract_channel_id ───────────────────────────────────────────────
 
 /// Extract the channel UUID from an event's `h` tag.
@@ -1392,5 +1482,94 @@ mod tests {
         let contacts = vec![entry; MAX_CONTACTS + 1];
         let err = build_contact_list(&contacts).unwrap_err();
         assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    // ── build_huddle_started ──────────────────────────────────────────────────
+
+    #[test]
+    fn huddle_started_happy_path() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let ev = sign(build_huddle_started(parent, ephemeral, "my-room").unwrap());
+        assert_eq!(ev.kind.as_u16(), 48100);
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        let v: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
+        assert_eq!(v["ephemeral_channel_id"], ephemeral.to_string());
+        assert_eq!(v["livekit_room"], "my-room");
+    }
+
+    #[test]
+    fn huddle_started_h_tag_is_parent_not_ephemeral() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let ev = sign(build_huddle_started(parent, ephemeral, "room").unwrap());
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        assert!(!has_tag(&ev, "h", &ephemeral.to_string()));
+    }
+
+    // ── build_huddle_participant_joined ───────────────────────────────────────
+
+    #[test]
+    fn huddle_participant_joined_happy_path() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let ev = sign(build_huddle_participant_joined(parent, ephemeral).unwrap());
+        assert_eq!(ev.kind.as_u16(), 48101);
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        let v: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
+        assert_eq!(v["ephemeral_channel_id"], ephemeral.to_string());
+    }
+
+    #[test]
+    fn huddle_participant_joined_h_tag_is_parent_not_ephemeral() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let ev = sign(build_huddle_participant_joined(parent, ephemeral).unwrap());
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        assert!(!has_tag(&ev, "h", &ephemeral.to_string()));
+    }
+
+    // ── build_huddle_participant_left ─────────────────────────────────────────
+
+    #[test]
+    fn huddle_participant_left_happy_path() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let ev = sign(build_huddle_participant_left(parent, ephemeral).unwrap());
+        assert_eq!(ev.kind.as_u16(), 48102);
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        let v: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
+        assert_eq!(v["ephemeral_channel_id"], ephemeral.to_string());
+    }
+
+    #[test]
+    fn huddle_participant_left_h_tag_is_parent_not_ephemeral() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let ev = sign(build_huddle_participant_left(parent, ephemeral).unwrap());
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        assert!(!has_tag(&ev, "h", &ephemeral.to_string()));
+    }
+
+    // ── build_huddle_ended ────────────────────────────────────────────────────
+
+    #[test]
+    fn huddle_ended_happy_path() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let ev = sign(build_huddle_ended(parent, ephemeral).unwrap());
+        assert_eq!(ev.kind.as_u16(), 48103);
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        let v: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
+        assert_eq!(v["ephemeral_channel_id"], ephemeral.to_string());
+    }
+
+    #[test]
+    fn huddle_ended_h_tag_is_parent_not_ephemeral() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let ev = sign(build_huddle_ended(parent, ephemeral).unwrap());
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        assert!(!has_tag(&ev, "h", &ephemeral.to_string()));
     }
 }

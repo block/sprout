@@ -10,6 +10,7 @@ use sprout_db::{Db, DbConfig};
 use sprout_pubsub::PubSubManager;
 use sprout_search::{SearchConfig, SearchService};
 
+use sprout_huddle::{HuddleConfig, HuddleService};
 use sprout_relay::config::Config;
 use sprout_relay::metrics as relay_metrics;
 use sprout_relay::router::{build_health_router, build_router};
@@ -127,6 +128,26 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to initialize media storage: {e}"))?;
     info!("Media storage connected");
 
+    let huddle_service = match (
+        std::env::var("LIVEKIT_URL"),
+        std::env::var("LIVEKIT_API_KEY"),
+        std::env::var("LIVEKIT_API_SECRET"),
+    ) {
+        (Ok(url), Ok(key), Ok(secret)) => {
+            info!("LiveKit configured — huddles enabled");
+            let svc = HuddleService::new(HuddleConfig {
+                livekit_url: url.clone(),
+                livekit_api_key: key,
+                livekit_api_secret: secret,
+            });
+            Some((svc, url))
+        }
+        _ => {
+            info!("LiveKit not configured — huddles disabled");
+            None
+        }
+    };
+
     let state = Arc::new(AppState::new(
         config.clone(),
         db,
@@ -138,6 +159,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&workflow_engine),
         relay_keypair,
         media_storage,
+        huddle_service,
     ));
 
     // Wire the action sink — must happen after AppState (which creates
