@@ -34,19 +34,21 @@ export async function setupAudioWorklet(
   source.connect(workletNode);
 
   // Forward PCM batches to Rust via raw binary invoke
-  workletNode.port.onmessage = async (event: MessageEvent<Float32Array>) => {
+  workletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
     const float32 = event.data;
-    try {
-      // Tauri v2 InvokeBody::Raw only accepts ArrayBuffer | Uint8Array.
-      // Create a zero-copy Uint8Array view over the same underlying buffer.
-      // Rust reinterprets the bytes as f32 on the other side.
-      await window.__TAURI_INTERNALS__.invoke(
+    // Fire-and-forget — Rust side uses try_send which drops on backpressure.
+    // No await: prevents main-thread backpressure from slow Rust processing.
+    // Tauri v2 InvokeBody::Raw only accepts ArrayBuffer | Uint8Array.
+    // Create a zero-copy Uint8Array view over the same underlying buffer.
+    // Rust reinterprets the bytes as f32 on the other side.
+    window.__TAURI_INTERNALS__
+      .invoke(
         "push_audio_pcm",
         new Uint8Array(float32.buffer, float32.byteOffset, float32.byteLength),
-      );
-    } catch (e) {
-      console.error("Failed to send PCM to Rust:", e);
-    }
+      )
+      .catch(() => {
+        /* silently drop — Rust handles backpressure */
+      });
   };
 
   return {

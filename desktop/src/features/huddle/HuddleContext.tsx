@@ -26,8 +26,9 @@ interface HuddleContextValue {
     parentChannelId: string,
     memberPubkeys: string[],
   ) => Promise<void>;
-  /** Leave the current huddle — disconnects LiveKit, stops worklet, calls Rust leave_huddle */
-  leaveHuddle: () => Promise<void>;
+  /** Leave the current huddle — disconnects LiveKit, stops worklet, calls Rust leave_huddle.
+   *  Returns true if backend cleanup succeeded, false if it failed (caller may retry). */
+  leaveHuddle: () => Promise<boolean>;
 }
 
 const HuddleContext = React.createContext<HuddleContextValue | null>(null);
@@ -50,13 +51,8 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   >(null);
   /** Self pubkey — fetched once, used to filter out own messages from TTS */
   const selfPubkeyRef = React.useRef<string | null>(null);
-  const analyserRef = React.useRef<{
-    ctx: AudioContext;
-    analyser: AnalyserNode;
-    raf: number;
-  } | null>(null);
 
-  const leaveHuddle = React.useCallback(async () => {
+  const leaveHuddle = React.useCallback(async (): Promise<boolean> => {
     // Invalidate any in-flight startHuddle so it bails after its next await
     tokenRef.current += 1;
 
@@ -87,9 +83,43 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         rustActiveRef.current = false;
       } catch {
         // Leave rustActiveRef true so a subsequent leaveHuddle() retries Rust cleanup
+        return false; // Signal that backend cleanup failed
       }
     }
+    return true; // Backend cleanup succeeded (or was not needed)
   }, []);
+
+  /** Clean up a partially-established huddle. Best-effort on every step. */
+  const cleanupFailedStart = React.useCallback(
+    async (
+      conn: HuddleConnection | null,
+      worklet: { stop: () => void } | null,
+    ) => {
+      try {
+        worklet?.stop();
+      } catch {
+        /* best-effort */
+      }
+      try {
+        if (conn) await conn.disconnect();
+      } catch {
+        /* best-effort */
+      }
+      connectionRef.current = null;
+      setLocalAudioTrack(null);
+      setMicConnected(false);
+      setEphemeralChannelId(null);
+      if (rustActiveRef.current) {
+        try {
+          await invoke("leave_huddle");
+          rustActiveRef.current = false;
+        } catch {
+          /* leave rustActiveRef true so leaveHuddle retries */
+        }
+      }
+    },
+    [],
+  );
 
   const startHuddle = React.useCallback(
     async (parentChannelId: string, memberPubkeys: string[]) => {
@@ -109,7 +139,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
           memberPubkeys,
         });
         rustActiveRef.current = true;
-        setEphemeralChannelId(joinInfo.ephemeral_channel_id);
+        // Do NOT set ephemeralChannelId yet — wait until fully established (LiveKit + Worklet)
 
         // Fetch self pubkey once for TTS filtering
         if (!selfPubkeyRef.current) {
@@ -123,12 +153,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
 
         // Bail if superseded (leaveHuddle or another startHuddle was called)
         if (tokenRef.current !== myToken) {
-          try {
-            await invoke("leave_huddle");
-            rustActiveRef.current = false;
-          } catch {
-            /* leave rustActiveRef true so leaveHuddle retries */
-          }
+          await cleanupFailedStart(null, null);
           return;
         }
 
@@ -140,17 +165,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
 
         // Bail if superseded after async connect
         if (tokenRef.current !== myToken) {
-          try {
-            await connection.disconnect();
-          } catch {
-            /* best-effort */
-          }
-          try {
-            await invoke("leave_huddle");
-            rustActiveRef.current = false;
-          } catch {
-            /* leave rustActiveRef true so leaveHuddle retries */
-          }
+          await cleanupFailedStart(connection, null);
           return;
         }
 
@@ -163,46 +178,23 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
 
         // Bail if superseded after async worklet setup
         if (tokenRef.current !== myToken) {
-          try {
-            worklet.stop();
-          } catch {
-            /* best-effort */
-          }
-          try {
-            await connection.disconnect();
-          } catch {
-            /* best-effort */
-          }
-          connectionRef.current = null;
-          setLocalAudioTrack(null);
-          try {
-            await invoke("leave_huddle");
-            rustActiveRef.current = false;
-          } catch {
-            /* leave rustActiveRef true so leaveHuddle retries */
-          }
+          await cleanupFailedStart(connection, worklet);
           return;
         }
 
         workletRef.current = worklet;
+        // Step 4: Huddle fully established — now safe to set ephemeralChannelId
+        // This triggers TTS subscription and hot-start polling effects
+        setEphemeralChannelId(joinInfo.ephemeral_channel_id);
+
+        // Confirm to backend that media is established — transitions Connected → Active.
+        await invoke("confirm_huddle_active");
       } catch (e) {
-        // Clean up the LOCAL connection captured above, not whatever is in the ref
-        try {
-          if (connection) await connection.disconnect();
-        } catch {
-          /* best-effort */
-        }
-        connectionRef.current = null;
-        setLocalAudioTrack(null);
-        // Tell Rust to reset from Creating/Active back to Idle and archive orphaned channel
-        if (rustActiveRef.current) {
-          try {
-            await invoke("leave_huddle");
-            rustActiveRef.current = false;
-          } catch {
-            /* leave rustActiveRef true so leaveHuddle retries */
-          }
-        }
+        // Pass workletRef.current — it may have been assigned before the error
+        // (e.g. confirm_huddle_active rejects after worklet setup succeeded).
+        const w = workletRef.current;
+        workletRef.current = null;
+        await cleanupFailedStart(connection, w);
         console.error("Failed to start huddle:", e);
         throw e;
       } finally {
@@ -210,38 +202,96 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         busyRef.current = false;
       }
     },
-    [],
+    [cleanupFailedStart],
   );
 
-  // TTS subscription — pipe agent messages from ephemeral channel to speak_agent_message
+  // TTS subscription — pipe AGENT messages from ephemeral channel to speak_agent_message.
+  // Human STT transcripts are also kind:9 in this channel, so we must filter them out
+  // using an authoritative agent list fetched from the relay membership API.
   React.useEffect(() => {
     if (!ephemeralChannelId) return;
 
     let disposed = false;
     let cleanup: (() => void) | null = null;
-    // Track subscription start time — only speak messages that arrive AFTER we connect.
-    // subscribeToChannel replays recent history; we don't want to speak old messages.
-    const subscribeTime = Math.floor(Date.now() / 1000);
+
+    // ── Agent identity (authoritative, fail-closed) ───────────────────────
+    //
+    // Fetch the ephemeral channel's member list from the relay REST API and
+    // identify agents by their "bot" role. This is authoritative — it works
+    // for both creators and joiners, and reflects mid-huddle agent additions.
+    //
+    // FAIL-CLOSED: agentsLoaded starts false. Until the fetch succeeds and
+    // populates agentPubkeys, NO messages are spoken. An empty set after a
+    // successful fetch means "no agents in the huddle" → still mute.
+    let agentsLoaded = false;
+    const agentPubkeys = new Set<string>();
+
+    async function loadAgentPubkeys() {
+      try {
+        const pubkeys = await invoke<string[]>("get_huddle_agent_pubkeys");
+        agentPubkeys.clear();
+        for (const pk of pubkeys) agentPubkeys.add(pk);
+        agentsLoaded = true;
+      } catch (e) {
+        // Fail-closed on ALL failures, including refresh after prior success.
+        // Clear the set and mark as not loaded — TTS goes mute until the
+        // next successful refresh. Stale membership must never authorize speech.
+        agentPubkeys.clear();
+        agentsLoaded = false;
+        console.error("[huddle] Failed to load agent pubkeys:", e);
+      }
+    }
+
+    // Initial load + periodic refresh (catches mid-huddle agent additions).
+    void loadAgentPubkeys();
+    const agentRefreshId = window.setInterval(() => {
+      void loadAgentPubkeys();
+    }, 10_000);
+
+    // ── EOSE-based replay boundary with timestamp belt-and-suspenders ─────
+    let subscriptionReady = false;
+    const seenEventIds = new Set<string>();
+    const subscribeTimeSecs = Math.floor(Date.now() / 1000);
+
+    /** Speak an event if it passes all filters. */
+    function maybeSpeakEvent(pubkey: string, content: string) {
+      // Fail-closed: don't speak until agent list is loaded.
+      if (!agentsLoaded) return;
+      // Only speak agent messages — skip human STT transcripts.
+      if (!agentPubkeys.has(pubkey)) return;
+      if (pubkey === selfPubkeyRef.current) return;
+      if (!content.trim()) return;
+      if (content.startsWith("[System]")) return;
+      invoke("speak_agent_message", { text: content }).catch(() => {
+        /* best-effort */
+      });
+    }
 
     relayClient
       .subscribeToChannel(ephemeralChannelId, (event) => {
         if (disposed) return;
-        // Only kind:9 (chat messages)
         if (event.kind !== 9) return;
-        // Skip historical messages (arrived before we subscribed)
-        if (event.created_at < subscribeTime) return;
-        // Skip own messages
-        if (event.pubkey === selfPubkeyRef.current) return;
-        // Skip empty/whitespace-only content
-        if (!event.content.trim()) return;
-        // Skip [System] messages
-        if (event.content.startsWith("[System]")) return;
 
-        invoke("speak_agent_message", { text: event.content }).catch(() => {
-          /* best-effort */
-        });
+        // Dedup by event ID (covers reconnect replay).
+        if (seenEventIds.has(event.id)) return;
+        seenEventIds.add(event.id);
+
+        if (!subscriptionReady) {
+          // Before EOSE: track as history, don't speak.
+          return;
+        }
+
+        // After EOSE: belt-and-suspenders — also reject events with
+        // created_at before our subscription started. This catches late
+        // history that arrives after the 250ms fallback fires.
+        if (event.created_at < subscribeTimeSecs) return;
+
+        maybeSpeakEvent(event.pubkey, event.content);
       })
       .then((dispose) => {
+        // subscribeToChannel resolves after EOSE (or relay's 250ms fallback).
+        subscriptionReady = true;
+
         if (disposed) {
           void dispose();
           return;
@@ -255,7 +305,19 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     return () => {
       disposed = true;
       cleanup?.();
+      window.clearInterval(agentRefreshId);
     };
+  }, [ephemeralChannelId]);
+
+  // Pipeline hot-start — check if voice models finished downloading mid-huddle
+  React.useEffect(() => {
+    if (!ephemeralChannelId) return;
+    const id = window.setInterval(() => {
+      invoke("check_pipeline_hotstart").catch(() => {
+        /* best-effort */
+      });
+    }, 5_000);
+    return () => window.clearInterval(id);
   }, [ephemeralChannelId]);
 
   // Mic level analyser — drives the voice activity indicator
@@ -285,13 +347,10 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     }
     raf = requestAnimationFrame(tick);
 
-    analyserRef.current = { ctx, analyser, raf };
-
     return () => {
       cancelAnimationFrame(raf);
       source.disconnect();
       void ctx.close();
-      analyserRef.current = null;
     };
   }, [localAudioTrack]);
 

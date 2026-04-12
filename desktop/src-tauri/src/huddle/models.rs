@@ -9,8 +9,8 @@
 //! Models are downloaded once and cached. No versioning in MVP — presence of
 //! all expected files is sufficient to consider the model ready.
 
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
@@ -107,6 +107,11 @@ pub struct ModelManager {
     models_dir: PathBuf,
     moonshine_status: Arc<Mutex<ModelStatus>>,
     supertonic_status: Arc<Mutex<ModelStatus>>,
+    /// Set to `true` when Moonshine download completes during an active huddle.
+    /// Polled by the huddle system to auto-start STT.
+    moonshine_just_ready: Arc<AtomicBool>,
+    /// Set to `true` when Supertonic download completes during an active huddle.
+    supertonic_just_ready: Arc<AtomicBool>,
 }
 
 impl ModelManager {
@@ -119,6 +124,8 @@ impl ModelManager {
             models_dir,
             moonshine_status: Arc::new(Mutex::new(ModelStatus::NotDownloaded)),
             supertonic_status: Arc::new(Mutex::new(ModelStatus::NotDownloaded)),
+            moonshine_just_ready: Arc::new(AtomicBool::new(false)),
+            supertonic_just_ready: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -149,6 +156,11 @@ impl ModelManager {
             .clone()
     }
 
+    /// Returns true (once) if Moonshine just became ready. Resets the flag.
+    pub fn take_moonshine_ready(&self) -> bool {
+        self.moonshine_just_ready.swap(false, Ordering::AcqRel)
+    }
+
     // ── Supertonic ────────────────────────────────────────────────────────────
 
     /// Returns the path to the Supertonic model directory, or `None` if not ready.
@@ -174,6 +186,11 @@ impl ModelManager {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Returns true (once) if Supertonic just became ready. Resets the flag.
+    pub fn take_supertonic_ready(&self) -> bool {
+        self.supertonic_just_ready.swap(false, Ordering::AcqRel)
     }
 
     /// Trigger a background download of the Supertonic TTS model (~253 MB total).
@@ -272,7 +289,9 @@ impl ModelManager {
 
     /// Download, extract, and verify the Moonshine model archive.
     async fn download_moonshine_model(&self, http_client: reqwest::Client) -> Result<(), String> {
-        fs::create_dir_all(&self.models_dir).map_err(|e| format!("create models dir: {e}"))?;
+        tokio::fs::create_dir_all(&self.models_dir)
+            .await
+            .map_err(|e| format!("create models dir: {e}"))?;
 
         self.set_moonshine_status(ModelStatus::Downloading {
             progress_percent: 0,
@@ -336,16 +355,24 @@ impl ModelManager {
         let final_dir = self.models_dir.join(MOONSHINE_MODEL_DIR_NAME);
 
         if temp_dir.exists() {
-            fs::remove_dir_all(&temp_dir).map_err(|e| format!("remove stale temp dir: {e}"))?;
+            tokio::fs::remove_dir_all(&temp_dir)
+                .await
+                .map_err(|e| format!("remove stale temp dir: {e}"))?;
         }
-        fs::create_dir_all(&temp_dir).map_err(|e| format!("create temp dir: {e}"))?;
+        tokio::fs::create_dir_all(&temp_dir)
+            .await
+            .map_err(|e| format!("create temp dir: {e}"))?;
 
         eprintln!("sprout-desktop: extracting Moonshine archive…");
-        extract_archive(&archive_path, &temp_dir)?;
+        let archive_path_clone = archive_path.clone();
+        let temp_dir_clone = temp_dir.clone();
+        tokio::task::spawn_blocking(move || extract_archive(&archive_path_clone, &temp_dir_clone))
+            .await
+            .map_err(|e| format!("tar task panicked: {e}"))??;
 
         let extracted_subdir = temp_dir.join(MOONSHINE_ARCHIVE_SUBDIR);
         if !extracted_subdir.is_dir() {
-            let _ = fs::remove_dir_all(&temp_dir);
+            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
             return Err(format!(
                 "expected subdir '{}' not found after extraction",
                 MOONSHINE_ARCHIVE_SUBDIR,
@@ -359,7 +386,7 @@ impl ModelManager {
             .collect();
 
         if !missing.is_empty() {
-            let _ = fs::remove_dir_all(&temp_dir);
+            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
             return Err(format!(
                 "model verification failed — missing: {}",
                 missing.join(", "),
@@ -369,21 +396,23 @@ impl ModelManager {
         let backup_dir = final_dir.with_extension("old");
         if final_dir.exists() {
             if backup_dir.exists() {
-                let _ = fs::remove_dir_all(&backup_dir);
+                let _ = tokio::fs::remove_dir_all(&backup_dir).await;
             }
-            fs::rename(&final_dir, &backup_dir).map_err(|e| format!("backup old model: {e}"))?;
+            tokio::fs::rename(&final_dir, &backup_dir)
+                .await
+                .map_err(|e| format!("backup old model: {e}"))?;
         }
 
-        if let Err(e) = fs::rename(&extracted_subdir, &final_dir) {
+        if let Err(e) = tokio::fs::rename(&extracted_subdir, &final_dir).await {
             if backup_dir.exists() {
-                let _ = fs::rename(&backup_dir, &final_dir);
+                let _ = tokio::fs::rename(&backup_dir, &final_dir).await;
             }
             return Err(format!("install new model: {e}"));
         }
 
-        let _ = fs::remove_dir_all(&backup_dir);
-        let _ = fs::remove_dir_all(&temp_dir);
-        let _ = fs::remove_file(&archive_path);
+        let _ = tokio::fs::remove_dir_all(&backup_dir).await;
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+        let _ = tokio::fs::remove_file(&archive_path).await;
 
         eprintln!(
             "sprout-desktop: Moonshine model ready at {}",
@@ -391,6 +420,7 @@ impl ModelManager {
         );
 
         self.set_moonshine_status(ModelStatus::Ready);
+        self.moonshine_just_ready.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -399,7 +429,9 @@ impl ModelManager {
     /// Downloads 7 files into `~/.sprout/models/supertonic/`.
     /// Files are written to a temp directory first, then moved atomically.
     async fn download_supertonic_model(&self, http_client: reqwest::Client) -> Result<(), String> {
-        fs::create_dir_all(&self.models_dir).map_err(|e| format!("create models dir: {e}"))?;
+        tokio::fs::create_dir_all(&self.models_dir)
+            .await
+            .map_err(|e| format!("create models dir: {e}"))?;
 
         self.set_supertonic_status(ModelStatus::Downloading {
             progress_percent: 0,
@@ -409,9 +441,13 @@ impl ModelManager {
         let temp_dir = self.models_dir.join("supertonic.tmp");
 
         if temp_dir.exists() {
-            fs::remove_dir_all(&temp_dir).map_err(|e| format!("remove stale temp dir: {e}"))?;
+            tokio::fs::remove_dir_all(&temp_dir)
+                .await
+                .map_err(|e| format!("remove stale temp dir: {e}"))?;
         }
-        fs::create_dir_all(&temp_dir).map_err(|e| format!("create temp dir: {e}"))?;
+        tokio::fs::create_dir_all(&temp_dir)
+            .await
+            .map_err(|e| format!("create temp dir: {e}"))?;
 
         // (url_suffix, local_filename)
         let downloads: &[(&str, &str)] = &[
@@ -437,7 +473,7 @@ impl ModelManager {
                 .map_err(|e| format!("download {filename} request failed: {e}"))?;
 
             if !response.status().is_success() {
-                let _ = fs::remove_dir_all(&temp_dir);
+                let _ = tokio::fs::remove_dir_all(&temp_dir).await;
                 return Err(format!(
                     "download {filename} HTTP {}: {}",
                     response.status().as_u16(),
@@ -487,7 +523,7 @@ impl ModelManager {
             .collect();
 
         if !missing.is_empty() {
-            let _ = fs::remove_dir_all(&temp_dir);
+            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
             return Err(format!(
                 "supertonic model verification failed — missing: {}",
                 missing.join(", "),
@@ -498,20 +534,21 @@ impl ModelManager {
         let backup_dir = final_dir.with_extension("old");
         if final_dir.exists() {
             if backup_dir.exists() {
-                let _ = fs::remove_dir_all(&backup_dir);
+                let _ = tokio::fs::remove_dir_all(&backup_dir).await;
             }
-            fs::rename(&final_dir, &backup_dir)
+            tokio::fs::rename(&final_dir, &backup_dir)
+                .await
                 .map_err(|e| format!("backup old supertonic model: {e}"))?;
         }
 
-        if let Err(e) = fs::rename(&temp_dir, &final_dir) {
+        if let Err(e) = tokio::fs::rename(&temp_dir, &final_dir).await {
             if backup_dir.exists() {
-                let _ = fs::rename(&backup_dir, &final_dir);
+                let _ = tokio::fs::rename(&backup_dir, &final_dir).await;
             }
             return Err(format!("install new supertonic model: {e}"));
         }
 
-        let _ = fs::remove_dir_all(&backup_dir);
+        let _ = tokio::fs::remove_dir_all(&backup_dir).await;
 
         eprintln!(
             "sprout-desktop: Supertonic model ready at {}",
@@ -519,6 +556,7 @@ impl ModelManager {
         );
 
         self.set_supertonic_status(ModelStatus::Ready);
+        self.supertonic_just_ready.store(true, Ordering::Release);
         Ok(())
     }
 }

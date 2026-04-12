@@ -23,11 +23,13 @@ use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender},
-        Arc, Mutex,
+        Arc,
     },
     thread,
     time::Duration,
 };
+
+use tokio::sync::mpsc as tokio_mpsc;
 
 // ── Public pipeline handle ────────────────────────────────────────────────────
 
@@ -38,13 +40,14 @@ const AUDIO_QUEUE_DEPTH: usize = 50;
 /// Handle to the running STT pipeline.
 ///
 /// Not Clone — wrap in `Arc` to share across threads.
+///
+/// The text receiver (`tokio::sync::mpsc::Receiver<String>`) is returned
+/// separately from `new()` so the caller can move it directly into an async
+/// task without holding a Mutex across await points.
 #[derive(Debug)]
 pub struct SttPipeline {
     /// Send raw PCM bytes (f32 LE, 48 kHz mono) into the pipeline.
     audio_tx: SyncSender<Vec<u8>>,
-    /// Receive transcribed text from the pipeline.
-    /// Wrapped in Mutex so it can be polled from a tokio task.
-    pub text_rx: Mutex<Receiver<String>>,
     /// Signals the worker thread to stop.
     shutdown: Arc<AtomicBool>,
     /// Worker thread handle — taken on drop to join cleanly.
@@ -73,13 +76,18 @@ impl SttPipeline {
     /// Returns `Err` only if the thread cannot be spawned (OS error).
     /// If model files are missing, the worker logs and exits cleanly —
     /// the pipeline handle is still returned but will never produce text.
+    ///
+    /// The `tokio::sync::mpsc::Receiver<String>` is returned separately so the
+    /// caller can move it directly into an async task. This avoids holding a
+    /// `Mutex<Receiver>` across await points (which would block a Tokio worker
+    /// thread on every `recv_timeout` call).
     pub fn new(
         model_dir: PathBuf,
         tts_active: Arc<AtomicBool>,
         tts_cancel: Option<Arc<AtomicBool>>,
-    ) -> Result<Self, String> {
+    ) -> Result<(Self, tokio_mpsc::Receiver<String>), String> {
         let (audio_tx, audio_rx) = mpsc::sync_channel::<Vec<u8>>(AUDIO_QUEUE_DEPTH);
-        let (text_tx, text_rx) = mpsc::channel::<String>();
+        let (text_tx, text_rx) = tokio_mpsc::channel::<String>(64);
         let shutdown = Arc::new(AtomicBool::new(false));
 
         let shutdown_worker = Arc::clone(&shutdown);
@@ -98,13 +106,13 @@ impl SttPipeline {
             })
             .map_err(|e| format!("failed to spawn stt-worker thread: {e}"))?;
 
-        Ok(Self {
+        let pipeline = Self {
             audio_tx,
-            text_rx: Mutex::new(text_rx),
             shutdown,
             thread: Some(handle),
             tts_cancel,
-        })
+        };
+        Ok((pipeline, text_rx))
     }
 
     /// Signal the worker thread to stop.
@@ -145,8 +153,12 @@ impl Drop for SttPipeline {
 // ── Worker thread ─────────────────────────────────────────────────────────────
 
 /// How many 16 kHz samples of silence before we flush to STT.
-/// 300 ms × 16 000 Hz / 256 samples-per-frame ≈ 19 frames.
-const SILENCE_FLUSH_FRAMES: usize = 19;
+/// 450 ms × 16 000 Hz / 256 samples-per-frame ≈ 28 frames.
+const SILENCE_FLUSH_FRAMES: usize = 28;
+
+/// Consecutive VAD speech frames required before triggering barge-in during TTS.
+/// 5 frames × 256 samples / 16 kHz ≈ 80 ms — filters out coughs and transients.
+const BARGE_IN_DEBOUNCE_FRAMES: usize = 5;
 
 /// earshot requires exactly 256 samples per frame at 16 kHz.
 const VAD_FRAME_SAMPLES: usize = 256;
@@ -164,7 +176,7 @@ const TTS_COOLDOWN: Duration = Duration::from_millis(200);
 fn stt_worker(
     model_dir: PathBuf,
     audio_rx: Receiver<Vec<u8>>,
-    text_tx: mpsc::Sender<String>,
+    text_tx: tokio_mpsc::Sender<String>,
     shutdown: Arc<AtomicBool>,
     tts_active: Arc<AtomicBool>,
     tts_cancel: Option<Arc<AtomicBool>>,
@@ -233,6 +245,8 @@ fn stt_worker(
     let mut silence_frames: usize = 0;
     // Whether we're currently in a speech segment.
     let mut in_speech = false;
+    // Consecutive speech frames seen during TTS — used for barge-in debounce.
+    let mut barge_in_frames: usize = 0;
     // Timestamp when TTS last stopped — used for the 200 ms cooldown.
     let mut tts_stopped_at: Option<std::time::Instant> = None;
 
@@ -281,6 +295,7 @@ fn stt_worker(
                     &mut speech_buf,
                     &mut silence_frames,
                     &mut in_speech,
+                    &mut barge_in_frames,
                     &recognizer,
                     &text_tx,
                     &tts_active,
@@ -337,8 +352,9 @@ fn process_16k_samples(
     speech_buf: &mut Vec<f32>,
     silence_frames: &mut usize,
     in_speech: &mut bool,
+    barge_in_frames: &mut usize,
     recognizer: &sherpa_onnx::OfflineRecognizer,
-    text_tx: &mpsc::Sender<String>,
+    text_tx: &tokio_mpsc::Sender<String>,
     tts_active: &Arc<AtomicBool>,
     tts_cancel: Option<&AtomicBool>,
     tts_stopped_at: &mut Option<std::time::Instant>,
@@ -354,17 +370,26 @@ fn process_16k_samples(
 
         // Fix 2 + Fix 4: While TTS is playing, detect barge-in but skip accumulation.
         if tts_playing {
-            if is_speech && !*in_speech {
-                // Speech onset during TTS → barge-in: cancel TTS immediately.
-                *in_speech = true;
-                if let Some(cancel) = tts_cancel {
-                    cancel.store(true, Ordering::Release);
+            // Reset segment state — STT is not tracking speech during TTS.
+            // The barge-in logic below will set in_speech=true only when the
+            // debounce threshold is met, preventing stale continuation after TTS stops.
+            *in_speech = false;
+
+            if is_speech {
+                *barge_in_frames += 1;
+                if *barge_in_frames >= BARGE_IN_DEBOUNCE_FRAMES {
+                    // Sustained speech during TTS → barge-in: cancel TTS.
+                    *in_speech = true;
+                    if let Some(cancel) = tts_cancel {
+                        cancel.store(true, Ordering::Release);
+                    }
                 }
-            } else if !is_speech {
-                *in_speech = false;
+            } else {
+                *barge_in_frames = 0;
             }
-            // Don't accumulate — skip to next frame (echo prevention).
+            // Don't accumulate during TTS — clean slate for when TTS stops.
             speech_buf.clear();
+            *silence_frames = 0;
             continue;
         }
 
@@ -376,10 +401,15 @@ fn process_16k_samples(
                     *in_speech = false;
                 }
                 speech_buf.clear();
+                *silence_frames = 0;
+                *barge_in_frames = 0;
                 continue;
             } else {
-                // Cooldown expired — clear the timer.
+                // Cooldown expired — clear the timer and reset all segment state.
                 *tts_stopped_at = None;
+                *in_speech = false;
+                *silence_frames = 0;
+                *barge_in_frames = 0;
             }
         }
 
@@ -405,10 +435,13 @@ fn process_16k_samples(
 }
 
 /// Run sherpa-onnx on the accumulated speech buffer and send the text.
+///
+/// Uses `blocking_send` because this runs on a `std::thread` (not async).
+/// The tokio channel's `blocking_send` is safe to call from sync contexts.
 fn flush_to_stt(
     speech_buf: &[f32],
     recognizer: &sherpa_onnx::OfflineRecognizer,
-    text_tx: &mpsc::Sender<String>,
+    text_tx: &tokio_mpsc::Sender<String>,
 ) {
     if speech_buf.is_empty() {
         return;
@@ -424,7 +457,7 @@ fn flush_to_stt(
         .unwrap_or_default();
 
     if !text.is_empty() {
-        if let Err(e) = text_tx.send(text) {
+        if let Err(e) = text_tx.blocking_send(text) {
             eprintln!("sprout-desktop: STT text channel closed: {e}");
         }
     }

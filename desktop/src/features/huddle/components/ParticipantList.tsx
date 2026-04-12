@@ -1,12 +1,5 @@
 import { cn } from "@/shared/lib/cn";
 
-// Legacy type kept for any callers that haven't migrated yet
-export type HuddleParticipant = {
-  identity: string;
-  displayName: string;
-  isMuted: boolean;
-};
-
 type ParticipantListProps = {
   /** Pubkey hex strings from the Rust huddle state */
   participants: string[];

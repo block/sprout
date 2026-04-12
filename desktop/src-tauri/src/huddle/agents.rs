@@ -71,13 +71,13 @@ pub async fn add_agent_to_huddle(
     state: &AppState,
 ) -> Result<AgentAddResult, String> {
     // 1. Add agent to ephemeral channel (required — fail hard on rejection).
-    let add_eph = events::build_add_member(ephemeral_channel_id, agent_pubkey, None)?;
+    let add_eph = events::build_add_member(ephemeral_channel_id, agent_pubkey, Some("bot"))?;
     submit_event(add_eph, state).await?;
 
     // 2. Add agent to parent channel — so agent has full context.
     //    Best-effort: capture the error but don't propagate it.
     let (parent_added, parent_error) = {
-        let add_parent = events::build_add_member(parent_channel_id, agent_pubkey, None)?;
+        let add_parent = events::build_add_member(parent_channel_id, agent_pubkey, Some("bot"))?;
         match submit_event(add_parent, state).await {
             Ok(_) => (true, None),
             Err(e) => {

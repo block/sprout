@@ -18,13 +18,20 @@ import { ParticipantList } from "./ParticipantList";
 
 // Shape returned by the `get_huddle_state` Tauri command
 type HuddleState = {
-  phase: "idle" | "creating" | "connecting" | "active" | "leaving";
+  phase:
+    | "idle"
+    | "creating"
+    | "connecting"
+    | "connected"
+    | "active"
+    | "leaving";
   parent_channel_id: string | null;
   ephemeral_channel_id: string | null;
   livekit_token: string | null;
   livekit_url: string | null;
   livekit_room: string | null;
   participants: string[]; // pubkey hex strings
+  tts_enabled: boolean;
 };
 
 type HuddleBarProps = {
@@ -35,7 +42,9 @@ export function HuddleBar({ className }: HuddleBarProps) {
   const { localAudioTrack, leaveHuddle, micConnected, micLevel } = useHuddle();
   const [state, setState] = React.useState<HuddleState | null>(null);
   const [isMuted, setIsMuted] = React.useState(false);
-  const [ttsEnabled, setTtsEnabled] = React.useState(true);
+  // Derive TTS enabled from backend state (single source of truth).
+  // Fall back to true if state hasn't loaded yet.
+  const ttsEnabled = state?.tts_enabled ?? true;
   const [isLeaving, setIsLeaving] = React.useState(false);
   const [showAddAgent, setShowAddAgent] = React.useState(false);
   const [agentAddError, setAgentAddError] = React.useState<string | null>(null);
@@ -52,7 +61,11 @@ export function HuddleBar({ className }: HuddleBarProps) {
         // Only clear state if we never had an active huddle.
         // Transient errors shouldn't remove the control bar.
         if (!cancelled) {
-          setState((prev) => (prev?.phase === "active" ? prev : null));
+          setState((prev) =>
+            prev?.phase === "active" || prev?.phase === "connected"
+              ? prev
+              : null,
+          );
         }
       }
     }
@@ -73,14 +86,19 @@ export function HuddleBar({ className }: HuddleBarProps) {
     }
   }, [isMuted, localAudioTrack]);
 
-  if (!state || state.phase !== "active") return null;
+  if (!state || (state.phase !== "active" && state.phase !== "connected"))
+    return null;
 
   async function handleLeave() {
     if (isLeaving) return;
     setIsLeaving(true);
     try {
-      await leaveHuddle();
-      setState(null);
+      const backendClean = await leaveHuddle();
+      if (backendClean) {
+        setState(null);
+      }
+      // If backend cleanup failed, keep the bar visible so the user can retry.
+      // leaveHuddle retains rustActiveRef=true for the next attempt.
     } catch (e) {
       console.error("Failed to leave huddle:", e);
     } finally {
@@ -187,7 +205,9 @@ export function HuddleBar({ className }: HuddleBarProps) {
           const next = !ttsEnabled;
           try {
             await invoke("set_tts_enabled", { enabled: next });
-            setTtsEnabled(next);
+            // Refresh state immediately so the UI reflects the change
+            const s = await invoke<HuddleState>("get_huddle_state");
+            setState(s);
           } catch (e) {
             console.error("Failed to toggle TTS:", e);
           }

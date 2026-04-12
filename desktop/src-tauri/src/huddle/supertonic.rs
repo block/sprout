@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use std::sync::LazyLock;
 use unicode_normalization::UnicodeNormalization;
 
 use ort::{session::Session, value::Value};
@@ -85,6 +86,20 @@ pub(crate) fn load_voice_style<P: AsRef<Path>>(path: P) -> Result<Style, String>
 
     let ttl_dims = &data.style_ttl.dims;
     let dp_dims = &data.style_dp.dims;
+
+    // Validate dimensions — model JSON must have [batch, dim1, dim2] shape.
+    if ttl_dims.len() < 3 {
+        return Err(format!(
+            "voice style ttl dims too short: expected 3, got {}",
+            ttl_dims.len()
+        ));
+    }
+    if dp_dims.len() < 3 {
+        return Err(format!(
+            "voice style dp dims too short: expected 3, got {}",
+            dp_dims.len()
+        ));
+    }
 
     // dims = [1, dim1, dim2] — batch dimension is always 1 for a single voice.
     let (ttl_d1, ttl_d2) = (ttl_dims[1], ttl_dims[2]);
@@ -161,16 +176,33 @@ impl UnicodeProcessor {
     }
 }
 
+// ── Compiled regex patterns (one-time init) ───────────────────────────────
+static RE_EMOJI: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"[\x{1F600}-\x{1F64F}\x{1F300}-\x{1F5FF}\x{1F680}-\x{1F6FF}\x{1F700}-\x{1F77F}\x{1F780}-\x{1F7FF}\x{1F800}-\x{1F8FF}\x{1F900}-\x{1F9FF}\x{1FA00}-\x{1FA6F}\x{1FA70}-\x{1FAFF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}\x{1F1E6}-\x{1F1FF}]+"
+    ).unwrap()
+});
+
+static RE_SPACE_COMMA: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" ,").unwrap());
+static RE_SPACE_DOT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" \.").unwrap());
+static RE_SPACE_BANG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" !").unwrap());
+static RE_SPACE_QUESTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" \?").unwrap());
+static RE_SPACE_SEMI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" ;").unwrap());
+static RE_SPACE_COLON: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" :").unwrap());
+static RE_SPACE_APOS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" '").unwrap());
+static RE_WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
+static RE_ENDS_PUNC: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"[.!?;:,'")\]}…。」』】〉》›»]$"#).unwrap());
+static RE_PARAGRAPH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n\s*\n").unwrap());
+static RE_SENTENCE_SPLIT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"([.!?])\s+").unwrap());
+
 // ── Text preprocessing ────────────────────────────────────────────────────────
 
 fn preprocess_text(text: &str, lang: &str) -> Result<String, String> {
     let mut s: String = text.nfkd().collect();
 
     // Strip emojis.
-    let emoji_re = Regex::new(
-        r"[\x{1F600}-\x{1F64F}\x{1F300}-\x{1F5FF}\x{1F680}-\x{1F6FF}\x{1F700}-\x{1F77F}\x{1F780}-\x{1F7FF}\x{1F800}-\x{1F8FF}\x{1F900}-\x{1F9FF}\x{1FA00}-\x{1FA6F}\x{1FA70}-\x{1FAFF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}\x{1F1E6}-\x{1F1FF}]+"
-    ).unwrap();
-    s = emoji_re.replace_all(&s, "").to_string();
+    s = RE_EMOJI.replace_all(&s, "").to_string();
 
     // Character replacements.
     for (from, to) in &[
@@ -208,17 +240,13 @@ fn preprocess_text(text: &str, lang: &str) -> Result<String, String> {
     }
 
     // Fix spacing around punctuation.
-    for (pat, rep) in &[
-        (r" ,", ","),
-        (r" \.", "."),
-        (r" !", "!"),
-        (r" \?", "?"),
-        (r" ;", ";"),
-        (r" :", ":"),
-        (r" '", "'"),
-    ] {
-        s = Regex::new(pat).unwrap().replace_all(&s, *rep).to_string();
-    }
+    s = RE_SPACE_COMMA.replace_all(&s, ",").to_string();
+    s = RE_SPACE_DOT.replace_all(&s, ".").to_string();
+    s = RE_SPACE_BANG.replace_all(&s, "!").to_string();
+    s = RE_SPACE_QUESTION.replace_all(&s, "?").to_string();
+    s = RE_SPACE_SEMI.replace_all(&s, ";").to_string();
+    s = RE_SPACE_COLON.replace_all(&s, ":").to_string();
+    s = RE_SPACE_APOS.replace_all(&s, "'").to_string();
 
     // Collapse duplicate quote pairs.
     while s.contains("\"\"") {
@@ -232,15 +260,12 @@ fn preprocess_text(text: &str, lang: &str) -> Result<String, String> {
     }
 
     // Collapse whitespace.
-    s = Regex::new(r"\s+").unwrap().replace_all(&s, " ").to_string();
+    s = RE_WHITESPACE.replace_all(&s, " ").to_string();
     s = s.trim().to_string();
 
     // Ensure terminal punctuation.
-    if !s.is_empty() {
-        let ends_re = Regex::new(r#"[.!?;:,'")\]}…。」』】〉》›»]$"#).unwrap();
-        if !ends_re.is_match(&s) {
-            s.push('.');
-        }
+    if !s.is_empty() && !RE_ENDS_PUNC.is_match(&s) {
+        s.push('.');
     }
 
     if !AVAILABLE_LANGS.contains(&lang) {
@@ -337,10 +362,9 @@ pub(crate) fn chunk_text(text: &str, max_len: Option<usize>) -> Vec<String> {
         return vec![String::new()];
     }
 
-    let para_re = Regex::new(r"\n\s*\n").unwrap();
     let mut chunks: Vec<String> = Vec::new();
 
-    for para in para_re.split(text) {
+    for para in RE_PARAGRAPH.split(text) {
         let para = para.trim();
         if para.is_empty() {
             continue;
@@ -438,8 +462,7 @@ pub(crate) fn chunk_text(text: &str, max_len: Option<usize>) -> Vec<String> {
 }
 
 fn split_sentences(text: &str) -> Vec<String> {
-    let re = Regex::new(r"([.!?])\s+").unwrap();
-    let matches: Vec<_> = re.find_iter(text).collect();
+    let matches: Vec<_> = RE_SENTENCE_SPLIT.find_iter(text).collect();
     if matches.is_empty() {
         return vec![text.to_string()];
     }

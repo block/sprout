@@ -105,19 +105,28 @@ impl TtsPipeline {
     ///
     /// `tts_active` is set to `true` while audio is playing and `false` when idle.
     /// Pass the same `Arc` to the STT pipeline to gate microphone input.
-    pub fn new(model_dir: PathBuf, tts_active: Arc<AtomicBool>) -> Result<Self, String> {
-        Self::new_with_voice(model_dir, tts_active, supertonic::DEFAULT_VOICE)
+    ///
+    /// `cancel` is the shared barge-in flag from `HuddleState.tts_cancel`. Pass the
+    /// same `Arc` to the STT pipeline so both sides reference the same flag for the
+    /// entire huddle session — no stale references after pipeline restarts.
+    pub fn new(
+        model_dir: PathBuf,
+        tts_active: Arc<AtomicBool>,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<Self, String> {
+        Self::new_with_voice(model_dir, tts_active, cancel, supertonic::DEFAULT_VOICE)
     }
 
     /// Spawn the TTS pipeline thread with a specific voice name (e.g. `"F1"`, `"M3"`).
     pub fn new_with_voice(
         model_dir: PathBuf,
         tts_active: Arc<AtomicBool>,
+        cancel: Arc<AtomicBool>,
         voice: &str,
     ) -> Result<Self, String> {
         let (text_tx, text_rx) = mpsc::sync_channel::<String>(TEXT_QUEUE_DEPTH);
         let shutdown = Arc::new(AtomicBool::new(false));
-        let cancel = Arc::new(AtomicBool::new(false));
+        // cancel is passed in from HuddleState.tts_cancel — shared with STT for barge-in.
 
         let shutdown_worker = Arc::clone(&shutdown);
         let cancel_worker = Arc::clone(&cancel);
@@ -331,14 +340,14 @@ fn tts_worker(
 
 /// Synthesize a batch of sentences in a single engine call.
 ///
-/// Sentences are joined with ". " so Supertonic sees full context for better
-/// prosody. `silence_secs=INTER_SENTENCE_SILENCE` lets the engine insert
-/// natural pauses between sentences internally.
+/// Sentences are joined with a space so Supertonic sees full context for
+/// better prosody. `silence_secs=INTER_SENTENCE_SILENCE` lets the engine
+/// insert natural pauses between sentences internally.
 ///
 /// After synthesis: volume boost (×VOLUME_BOOST, clamped) + 8ms fade in/out
 /// to eliminate clicks at batch boundaries.
 fn synth_batch(engine: &mut TextToSpeech, sentences: &[String], style: &Style) -> Option<Vec<f32>> {
-    let text = sentences.join(". ");
+    let text = sentences.join(" ");
     match engine.call(
         &text,
         "en",
