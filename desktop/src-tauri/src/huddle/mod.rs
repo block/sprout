@@ -477,7 +477,17 @@ pub async fn start_huddle(
                 // Only store agents that were successfully enrolled (Fix 1).
                 *hs.agent_pubkeys.lock().unwrap_or_else(|e| e.into_inner()) =
                     successful_agents.clone();
-                hs.participants = member_pubkeys;
+                // Include the current user + any invited members as participants.
+                let own_pubkey = state
+                    .keys
+                    .lock()
+                    .map(|k| k.public_key().to_hex())
+                    .unwrap_or_default();
+                let mut participants = member_pubkeys;
+                if !own_pubkey.is_empty() && !participants.contains(&own_pubkey) {
+                    participants.insert(0, own_pubkey);
+                }
+                hs.participants = participants;
             }
 
             // 6. Auto-start STT and TTS pipelines if models are ready.
@@ -892,7 +902,15 @@ pub async fn add_agent_to_huddle(
         };
         let mut pubkeys = agent_pubkeys_arc.lock().unwrap_or_else(|e| e.into_inner());
         if !pubkeys.contains(&agent_pubkey) {
-            pubkeys.push(agent_pubkey);
+            pubkeys.push(agent_pubkey.clone());
+        }
+    }
+
+    // Also add the agent to the visible participants list.
+    {
+        let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+        if !hs.participants.contains(&agent_pubkey) {
+            hs.participants.push(agent_pubkey);
         }
     }
 
