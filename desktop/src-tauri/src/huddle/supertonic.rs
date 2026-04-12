@@ -20,7 +20,7 @@ use ort::{session::Session, value::Value};
 
 // ── Public constants ──────────────────────────────────────────────────────────
 
-pub const SAMPLE_RATE: u32 = 24_000;
+pub const SAMPLE_RATE: u32 = 44_100;
 
 pub const VOICES: &[&str] = &["F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5"];
 pub const DEFAULT_VOICE: &str = "F1";
