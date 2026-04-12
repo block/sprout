@@ -50,8 +50,12 @@ uuid = { version = "1", features = ["v4"] }
 png = "0.18"
 zip = "2"
 sherpa-onnx = "1.12"
-kokoro-tts = { version = "0.3", features = ["use-cmudict"] }
-ort = "=2.0.0-rc.11"
+ort = { version = "=2.0.0-rc.11", features = ["ndarray"] }
+ndarray = { version = "0.17", features = ["rayon"] }
+unicode-normalization = "0.1"
+regex = "1"
+rand = "0.8"
+rand_distr = "0.4"
 rodio = "0.22"
 earshot = "1.0"
 rubato = "2.0"

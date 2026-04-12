@@ -1,10 +1,10 @@
-//! Model download manager for STT (Moonshine) and TTS (Kokoro) models.
+//! Model download manager for STT (Moonshine) and TTS (Supertonic) models.
 //!
 //! Mental model:
 //!   app launch → start_moonshine_download (background) → ~/.sprout/models/moonshine-tiny/
-//!   app launch → start_kokoro_download (background)    → ~/.sprout/models/kokoro/
+//!   app launch → start_supertonic_download (background) → ~/.sprout/models/supertonic/
 //!   STT pipeline → is_moonshine_ready() → moonshine_model_dir() → run inference
-//!   TTS pipeline → is_kokoro_ready()    → kokoro_model_dir()    → run synthesis
+//!   TTS pipeline → is_supertonic_ready() → supertonic_model_dir() → run synthesis
 //!
 //! Models are downloaded once and cached. No versioning in MVP — presence of
 //! all expected files is sufficient to consider the model ready.
@@ -36,17 +36,23 @@ const MOONSHINE_EXPECTED_FILES: &[&str] = &[
     "tokens.txt",
 ];
 
-const KOKORO_MODEL_URL: &str =
-    "https://github.com/mzdk100/kokoro/releases/download/V1.0/kokoro-v1.0.int8.onnx";
-
-const KOKORO_VOICES_URL: &str =
-    "https://github.com/mzdk100/kokoro/releases/download/V1.0/voices.bin";
+/// HuggingFace base URL for Supertonic model files.
+const SUPERTONIC_HF_BASE: &str =
+    "https://huggingface.co/Supertone/supertonic-2/resolve/main";
 
 /// Final directory name under `~/.sprout/models/`.
-const KOKORO_MODEL_DIR_NAME: &str = "kokoro";
+const SUPERTONIC_MODEL_DIR_NAME: &str = "supertonic";
 
-/// All files that must be present for Kokoro to be considered ready.
-const KOKORO_EXPECTED_FILES: &[&str] = &["kokoro-v1.0.int8.onnx", "voices.bin"];
+/// All files that must be present for Supertonic to be considered ready.
+const SUPERTONIC_EXPECTED_FILES: &[&str] = &[
+    "duration_predictor.onnx",
+    "text_encoder.onnx",
+    "vector_estimator.onnx",
+    "vocoder.onnx",
+    "tts.json",
+    "unicode_indexer.json",
+    "F1.json",
+];
 
 // ── Status types ──────────────────────────────────────────────────────────────
 
@@ -64,15 +70,11 @@ pub enum ModelStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceModelStatus {
     pub moonshine: ModelStatus,
-    pub kokoro: ModelStatus,
+    pub supertonic: ModelStatus,
 }
 
 // ── Platform-gated tar extraction ─────────────────────────────────────────────
 
-/// Extract a `.tar.bz2` archive into `dest_dir` using the system `tar`.
-///
-/// Only available on Unix — on other platforms this returns an error at
-/// compile time so the caller can handle it gracefully.
 #[cfg(unix)]
 fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
     let status = std::process::Command::new("tar")
@@ -105,7 +107,7 @@ pub struct ModelManager {
     /// `~/.sprout/models/`
     models_dir: PathBuf,
     moonshine_status: Arc<Mutex<ModelStatus>>,
-    kokoro_status: Arc<Mutex<ModelStatus>>,
+    supertonic_status: Arc<Mutex<ModelStatus>>,
 }
 
 impl ModelManager {
@@ -117,9 +119,11 @@ impl ModelManager {
         Some(Self {
             models_dir,
             moonshine_status: Arc::new(Mutex::new(ModelStatus::NotDownloaded)),
-            kokoro_status: Arc::new(Mutex::new(ModelStatus::NotDownloaded)),
+            supertonic_status: Arc::new(Mutex::new(ModelStatus::NotDownloaded)),
         })
     }
+
+    // ── Moonshine ─────────────────────────────────────────────────────────────
 
     /// Returns the path to the Moonshine model directory, or `None` if not ready.
     pub fn moonshine_model_dir(&self) -> Option<PathBuf> {
@@ -146,58 +150,57 @@ impl ModelManager {
             .clone()
     }
 
-    /// Returns the path to the Kokoro model directory, or `None` if not ready.
-    pub fn kokoro_model_dir(&self) -> Option<PathBuf> {
-        if self.is_kokoro_ready() {
-            Some(self.models_dir.join(KOKORO_MODEL_DIR_NAME))
+    // ── Supertonic ────────────────────────────────────────────────────────────
+
+    /// Returns the path to the Supertonic model directory, or `None` if not ready.
+    pub fn supertonic_model_dir(&self) -> Option<PathBuf> {
+        if self.is_supertonic_ready() {
+            Some(self.models_dir.join(SUPERTONIC_MODEL_DIR_NAME))
         } else {
             None
         }
     }
 
-    /// Returns `true` if all expected Kokoro model files are present on disk.
-    pub fn is_kokoro_ready(&self) -> bool {
-        let dir = self.models_dir.join(KOKORO_MODEL_DIR_NAME);
-        KOKORO_EXPECTED_FILES.iter().all(|f| dir.join(f).is_file())
+    /// Returns `true` if all expected Supertonic model files are present on disk.
+    pub fn is_supertonic_ready(&self) -> bool {
+        let dir = self.models_dir.join(SUPERTONIC_MODEL_DIR_NAME);
+        SUPERTONIC_EXPECTED_FILES.iter().all(|f| dir.join(f).is_file())
     }
 
-    /// Current Kokoro download status.
-    pub fn kokoro_status(&self) -> ModelStatus {
-        self.kokoro_status
+    /// Current Supertonic download status.
+    pub fn supertonic_status(&self) -> ModelStatus {
+        self.supertonic_status
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
-    /// Trigger a background download of the Kokoro TTS model (~92 MB).
+    /// Trigger a background download of the Supertonic TTS model (~253 MB total).
     ///
-    /// Returns immediately. Progress is tracked via `kokoro_status()`.
+    /// Returns immediately. Progress is tracked via `supertonic_status()`.
     /// No-op if the model is already ready or a download is already running.
-    pub fn start_kokoro_download(&self, http_client: reqwest::Client) {
-        // Fast path: already on disk — sync the status and return.
-        if self.is_kokoro_ready() {
-            *self.kokoro_status.lock().unwrap_or_else(|e| e.into_inner()) = ModelStatus::Ready;
+    pub fn start_supertonic_download(&self, http_client: reqwest::Client) {
+        if self.is_supertonic_ready() {
+            *self.supertonic_status.lock().unwrap_or_else(|e| e.into_inner()) =
+                ModelStatus::Ready;
             return;
         }
 
-        // Atomically check-and-set before spawning.
         {
-            let mut status = self.kokoro_status.lock().unwrap_or_else(|e| e.into_inner());
+            let mut status = self.supertonic_status.lock().unwrap_or_else(|e| e.into_inner());
             match *status {
                 ModelStatus::Downloading { .. } | ModelStatus::Ready => return,
                 _ => {}
             }
-            *status = ModelStatus::Downloading {
-                progress_percent: 0,
-            };
+            *status = ModelStatus::Downloading { progress_percent: 0 };
         }
 
         let manager = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = manager.download_kokoro_model(http_client).await {
-                eprintln!("sprout-desktop: kokoro download failed: {e}");
+            if let Err(e) = manager.download_supertonic_model(http_client).await {
+                eprintln!("sprout-desktop: supertonic download failed: {e}");
                 *manager
-                    .kokoro_status
+                    .supertonic_status
                     .lock()
                     .unwrap_or_else(|e2| e2.into_inner()) = ModelStatus::Error(e);
             }
@@ -208,12 +211,7 @@ impl ModelManager {
     ///
     /// Returns immediately. Progress is tracked via `moonshine_status()`.
     /// No-op if the model is already ready or a download is already running.
-    ///
-    /// Fix: status is set to `Downloading` synchronously *before* the task is
-    /// spawned, eliminating the race where two concurrent callers both see
-    /// `NotDownloaded` and each spawn a download.
     pub fn start_moonshine_download(&self, http_client: reqwest::Client) {
-        // Fast path: already on disk — sync the status and return.
         if self.is_moonshine_ready() {
             *self
                 .moonshine_status
@@ -222,9 +220,6 @@ impl ModelManager {
             return;
         }
 
-        // Atomically check-and-set: if already Downloading or Ready, bail out.
-        // Setting the status here (before spawn) prevents a second caller from
-        // racing through this check while the first caller's task hasn't started.
         {
             let mut status = self
                 .moonshine_status
@@ -234,10 +229,8 @@ impl ModelManager {
                 ModelStatus::Downloading { .. } | ModelStatus::Ready => return,
                 _ => {}
             }
-            *status = ModelStatus::Downloading {
-                progress_percent: 0,
-            };
-        } // lock released before spawn
+            *status = ModelStatus::Downloading { progress_percent: 0 };
+        }
 
         let manager = self.clone();
         tokio::spawn(async move {
@@ -253,35 +246,27 @@ impl ModelManager {
 
     // ── Private ───────────────────────────────────────────────────────────────
 
-    fn set_status(&self, status: ModelStatus) {
+    fn set_moonshine_status(&self, status: ModelStatus) {
         *self
             .moonshine_status
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = status;
     }
 
-    fn set_kokoro_status(&self, status: ModelStatus) {
-        *self.kokoro_status.lock().unwrap_or_else(|e| e.into_inner()) = status;
+    fn set_supertonic_status(&self, status: ModelStatus) {
+        *self.supertonic_status.lock().unwrap_or_else(|e| e.into_inner()) = status;
     }
 
     /// Download, extract, and verify the Moonshine model archive.
-    ///
-    /// Extraction is atomic: we extract into a temp directory, verify all
-    /// expected files, then rename into place. A failed extraction leaves any
-    /// previously working model untouched.
     async fn download_moonshine_model(&self, http_client: reqwest::Client) -> Result<(), String> {
-        // 1. Ensure models directory exists.
         fs::create_dir_all(&self.models_dir).map_err(|e| format!("create models dir: {e}"))?;
 
-        self.set_status(ModelStatus::Downloading {
-            progress_percent: 0,
-        });
+        self.set_moonshine_status(ModelStatus::Downloading { progress_percent: 0 });
 
         let archive_path = self.models_dir.join("moonshine-tiny.tar.bz2");
 
         eprintln!("sprout-desktop: downloading Moonshine model from {MOONSHINE_DOWNLOAD_URL}");
 
-        // 2. Fetch the archive.
         let response = http_client
             .get(MOONSHINE_DOWNLOAD_URL)
             .send()
@@ -298,7 +283,6 @@ impl ModelManager {
 
         let content_length = response.content_length();
 
-        // 3. Stream bytes to disk with progress updates.
         {
             use tokio::io::AsyncWriteExt;
 
@@ -307,13 +291,10 @@ impl ModelManager {
                 .await
                 .map_err(|e| format!("download stream error: {e}"))?;
 
-            // Report progress based on content-length (if known).
             if let Some(total) = content_length {
                 if total > 0 {
                     let pct = ((body.len() as u64 * 100) / total).min(89) as u8;
-                    self.set_status(ModelStatus::Downloading {
-                        progress_percent: pct,
-                    });
+                    self.set_moonshine_status(ModelStatus::Downloading { progress_percent: pct });
                 }
             }
 
@@ -330,16 +311,11 @@ impl ModelManager {
                 .map_err(|e| format!("flush archive: {e}"))?;
         }
 
-        self.set_status(ModelStatus::Downloading {
-            progress_percent: 90,
-        });
+        self.set_moonshine_status(ModelStatus::Downloading { progress_percent: 90 });
 
-        // 4. Extract into a temp directory so that a failure does not destroy
-        //    any previously working model.
         let temp_dir = self.models_dir.join("moonshine-tiny.tmp");
         let final_dir = self.models_dir.join(MOONSHINE_MODEL_DIR_NAME);
 
-        // Clean up any leftover temp dir from a prior failed attempt.
         if temp_dir.exists() {
             fs::remove_dir_all(&temp_dir).map_err(|e| format!("remove stale temp dir: {e}"))?;
         }
@@ -348,10 +324,8 @@ impl ModelManager {
         eprintln!("sprout-desktop: extracting Moonshine archive…");
         extract_archive(&archive_path, &temp_dir)?;
 
-        // 5. Locate the extracted subdirectory inside the temp dir.
         let extracted_subdir = temp_dir.join(MOONSHINE_ARCHIVE_SUBDIR);
         if !extracted_subdir.is_dir() {
-            // Clean up before returning the error.
             let _ = fs::remove_dir_all(&temp_dir);
             return Err(format!(
                 "expected subdir '{}' not found after extraction",
@@ -359,7 +333,6 @@ impl ModelManager {
             ));
         }
 
-        // 6. Verify all expected files are present before touching the live dir.
         let missing: Vec<&str> = MOONSHINE_EXPECTED_FILES
             .iter()
             .filter(|&&f| !extracted_subdir.join(f).is_file())
@@ -374,18 +347,14 @@ impl ModelManager {
             ));
         }
 
-        // 7. Atomic swap: rename old out of the way first, then bring new in.
-        //    This ensures a rename failure cannot destroy the previously working model.
         let backup_dir = final_dir.with_extension("old");
         if final_dir.exists() {
-            // Remove any stale backup from a prior interrupted swap.
             if backup_dir.exists() {
                 let _ = fs::remove_dir_all(&backup_dir);
             }
             fs::rename(&final_dir, &backup_dir).map_err(|e| format!("backup old model: {e}"))?;
         }
 
-        // Bring new model into place; restore backup on failure.
         if let Err(e) = fs::rename(&extracted_subdir, &final_dir) {
             if backup_dir.exists() {
                 let _ = fs::rename(&backup_dir, &final_dir);
@@ -393,7 +362,6 @@ impl ModelManager {
             return Err(format!("install new model: {e}"));
         }
 
-        // 8. Clean up backup, temp dir (now empty after rename), and archive.
         let _ = fs::remove_dir_all(&backup_dir);
         let _ = fs::remove_dir_all(&temp_dir);
         let _ = fs::remove_file(&archive_path);
@@ -403,41 +371,46 @@ impl ModelManager {
             final_dir.display()
         );
 
-        self.set_status(ModelStatus::Ready);
+        self.set_moonshine_status(ModelStatus::Ready);
         Ok(())
     }
 
-    /// Download and verify the Kokoro TTS model files directly from HuggingFace.
+    /// Download and verify the Supertonic TTS model files from HuggingFace.
     ///
-    /// Downloads `kokoro-v1.0.int8.onnx` and `voices.bin` into `~/.sprout/models/kokoro/`.
+    /// Downloads 7 files into `~/.sprout/models/supertonic/`.
     /// Files are written to a temp directory first, then moved atomically.
-    async fn download_kokoro_model(&self, http_client: reqwest::Client) -> Result<(), String> {
+    async fn download_supertonic_model(&self, http_client: reqwest::Client) -> Result<(), String> {
         fs::create_dir_all(&self.models_dir).map_err(|e| format!("create models dir: {e}"))?;
 
-        self.set_kokoro_status(ModelStatus::Downloading {
-            progress_percent: 0,
-        });
+        self.set_supertonic_status(ModelStatus::Downloading { progress_percent: 0 });
 
-        let final_dir = self.models_dir.join(KOKORO_MODEL_DIR_NAME);
-        let temp_dir = self.models_dir.join("kokoro.tmp");
+        let final_dir = self.models_dir.join(SUPERTONIC_MODEL_DIR_NAME);
+        let temp_dir = self.models_dir.join("supertonic.tmp");
 
-        // Clean up any leftover temp dir from a prior failed attempt.
         if temp_dir.exists() {
             fs::remove_dir_all(&temp_dir).map_err(|e| format!("remove stale temp dir: {e}"))?;
         }
         fs::create_dir_all(&temp_dir).map_err(|e| format!("create temp dir: {e}"))?;
 
-        // Download each file individually.
+        // (url_suffix, local_filename)
         let downloads: &[(&str, &str)] = &[
-            (KOKORO_MODEL_URL, "kokoro-v1.0.int8.onnx"),
-            (KOKORO_VOICES_URL, "voices.bin"),
+            ("onnx/duration_predictor.onnx", "duration_predictor.onnx"),
+            ("onnx/text_encoder.onnx",       "text_encoder.onnx"),
+            ("onnx/vector_estimator.onnx",   "vector_estimator.onnx"),
+            ("onnx/vocoder.onnx",            "vocoder.onnx"),
+            ("onnx/tts.json",                "tts.json"),
+            ("onnx/unicode_indexer.json",    "unicode_indexer.json"),
+            ("voice_styles/F1.json",         "F1.json"),
         ];
 
-        for (i, (url, filename)) in downloads.iter().enumerate() {
-            eprintln!("sprout-desktop: downloading Kokoro {filename} from {url}");
+        let total_files = downloads.len() as u8;
+
+        for (i, (url_suffix, filename)) in downloads.iter().enumerate() {
+            let url = format!("{SUPERTONIC_HF_BASE}/{url_suffix}");
+            eprintln!("sprout-desktop: downloading Supertonic {filename} from {url}");
 
             let response = http_client
-                .get(*url)
+                .get(&url)
                 .send()
                 .await
                 .map_err(|e| format!("download {filename} request failed: {e}"))?;
@@ -462,11 +435,9 @@ impl ModelManager {
                 filename
             );
 
-            // Progress: split evenly across the two files (0–44 for first, 45–89 for second).
-            let pct = (((i as u8) * 45) + 10).min(89);
-            self.set_kokoro_status(ModelStatus::Downloading {
-                progress_percent: pct,
-            });
+            // Progress: spread 0–89% across all files.
+            let pct = (((i as u8 + 1) * 89) / total_files).min(89);
+            self.set_supertonic_status(ModelStatus::Downloading { progress_percent: pct });
 
             use tokio::io::AsyncWriteExt;
             let dest = temp_dir.join(filename);
@@ -481,12 +452,10 @@ impl ModelManager {
                 .map_err(|e| format!("flush {filename}: {e}"))?;
         }
 
-        self.set_kokoro_status(ModelStatus::Downloading {
-            progress_percent: 90,
-        });
+        self.set_supertonic_status(ModelStatus::Downloading { progress_percent: 90 });
 
         // Verify all expected files landed in the temp dir.
-        let missing: Vec<&str> = KOKORO_EXPECTED_FILES
+        let missing: Vec<&str> = SUPERTONIC_EXPECTED_FILES
             .iter()
             .filter(|&&f| !temp_dir.join(f).is_file())
             .copied()
@@ -495,45 +464,42 @@ impl ModelManager {
         if !missing.is_empty() {
             let _ = fs::remove_dir_all(&temp_dir);
             return Err(format!(
-                "kokoro model verification failed — missing: {}",
+                "supertonic model verification failed — missing: {}",
                 missing.join(", "),
             ));
         }
 
-        // Atomic swap: backup old dir, move new dir into place.
+        // Atomic swap.
         let backup_dir = final_dir.with_extension("old");
         if final_dir.exists() {
             if backup_dir.exists() {
                 let _ = fs::remove_dir_all(&backup_dir);
             }
             fs::rename(&final_dir, &backup_dir)
-                .map_err(|e| format!("backup old kokoro model: {e}"))?;
+                .map_err(|e| format!("backup old supertonic model: {e}"))?;
         }
 
         if let Err(e) = fs::rename(&temp_dir, &final_dir) {
             if backup_dir.exists() {
                 let _ = fs::rename(&backup_dir, &final_dir);
             }
-            return Err(format!("install new kokoro model: {e}"));
+            return Err(format!("install new supertonic model: {e}"));
         }
 
         let _ = fs::remove_dir_all(&backup_dir);
 
         eprintln!(
-            "sprout-desktop: Kokoro model ready at {}",
+            "sprout-desktop: Supertonic model ready at {}",
             final_dir.display()
         );
 
-        self.set_kokoro_status(ModelStatus::Ready);
+        self.set_supertonic_status(ModelStatus::Ready);
         Ok(())
     }
 }
 
 // ── Process-global singleton ──────────────────────────────────────────────────
 
-/// Process-global `ModelManager`. Initialized on first access.
-///
-/// `None` only if the home directory cannot be resolved (extremely rare).
 static GLOBAL_MODEL_MANAGER: OnceLock<Option<ModelManager>> = OnceLock::new();
 
 /// Return a reference to the process-global `ModelManager`.
@@ -541,7 +507,7 @@ pub fn global_model_manager() -> Option<&'static ModelManager> {
     GLOBAL_MODEL_MANAGER.get_or_init(ModelManager::new).as_ref()
 }
 
-// ── Standalone helpers (used by the STT pipeline) ────────────────────────────
+// ── Standalone helpers ────────────────────────────────────────────────────────
 
 /// Path to the Moonshine model directory, or `None` if not ready.
 pub fn moonshine_model_dir() -> Option<PathBuf> {
@@ -555,14 +521,21 @@ pub fn is_moonshine_ready() -> bool {
         .unwrap_or(false)
 }
 
-/// Path to the Kokoro model directory, or `None` if not ready.
-pub fn kokoro_model_dir() -> Option<PathBuf> {
-    global_model_manager()?.kokoro_model_dir()
+/// Path to the Supertonic model directory, or `None` if not ready.
+pub fn supertonic_model_dir() -> Option<PathBuf> {
+    global_model_manager()?.supertonic_model_dir()
 }
 
-/// `true` if all expected Kokoro model files are present on disk.
-pub fn is_kokoro_ready() -> bool {
+/// `true` if all expected Supertonic model files are present on disk.
+pub fn is_supertonic_ready() -> bool {
     global_model_manager()
-        .map(|m| m.is_kokoro_ready())
+        .map(|m| m.is_supertonic_ready())
         .unwrap_or(false)
+}
+
+/// Path to a specific voice style JSON, or `None` if not downloaded.
+pub fn voice_style_path(voice_name: &str) -> Option<PathBuf> {
+    let dir = supertonic_model_dir()?;
+    let path = dir.join(format!("{voice_name}.json"));
+    if path.is_file() { Some(path) } else { None }
 }

@@ -12,6 +12,7 @@ pub mod agents;
 pub mod models;
 pub mod preprocessing;
 pub mod stt;
+pub mod supertonic;
 pub mod tts;
 
 use reqwest::Method;
@@ -246,13 +247,13 @@ async fn maybe_start_stt_pipeline(state: &AppState, ephemeral_channel_id: &str) 
     spawn_transcription_task(pipeline, channel_uuid, agent_pubkeys_arc, state);
 }
 
-/// Attempt to start the TTS pipeline if Kokoro models are present and TTS is enabled.
+/// Attempt to start the TTS pipeline if Supertonic models are present and TTS is enabled.
 /// Silently skips if models are missing or TTS is disabled.
 async fn maybe_start_tts_pipeline(state: &AppState) {
-    if !models::is_kokoro_ready() {
-        return; // Kokoro not downloaded yet — TTS unavailable.
+    if !models::is_supertonic_ready() {
+        return; // Supertonic not downloaded yet — TTS unavailable.
     }
-    let model_dir = match models::kokoro_model_dir() {
+    let model_dir = match models::supertonic_model_dir() {
         Some(d) => d,
         None => return,
     };
@@ -494,7 +495,7 @@ pub async fn start_huddle(
             // 6. Ensure voice models are downloading (idempotent — no-ops if ready or in progress).
             if let Some(mgr) = models::global_model_manager() {
                 mgr.start_moonshine_download(state.http_client.clone());
-                mgr.start_kokoro_download(state.http_client.clone());
+                mgr.start_supertonic_download(state.http_client.clone());
             }
 
             // 7. Auto-start STT and TTS pipelines if models are already ready.
@@ -589,7 +590,7 @@ pub async fn join_huddle(
     // 4. Ensure voice models are downloading (idempotent).
     if let Some(mgr) = models::global_model_manager() {
         mgr.start_moonshine_download(state.http_client.clone());
-        mgr.start_kokoro_download(state.http_client.clone());
+        mgr.start_supertonic_download(state.http_client.clone());
     }
 
     // 5. Auto-start STT and TTS pipelines if models are already ready.
@@ -793,7 +794,7 @@ pub async fn start_stt_pipeline(state: State<'_, AppState>) -> Result<(), String
     Ok(())
 }
 
-/// Trigger a background download of voice models (Moonshine STT + Kokoro TTS).
+/// Trigger a background download of voice models (Moonshine STT + Supertonic TTS).
 ///
 /// Returns immediately — downloads run in tokio background tasks.
 /// Poll `get_model_status` to track progress.
@@ -803,7 +804,7 @@ pub async fn download_voice_models(state: State<'_, AppState>) -> Result<(), Str
     let manager = models::global_model_manager()
         .ok_or("model manager unavailable (home directory could not be resolved)")?;
     manager.start_moonshine_download(state.http_client.clone());
-    manager.start_kokoro_download(state.http_client.clone());
+    manager.start_supertonic_download(state.http_client.clone());
     Ok(())
 }
 
@@ -814,7 +815,7 @@ pub fn get_model_status(_state: State<'_, AppState>) -> Result<models::VoiceMode
         .ok_or("model manager unavailable (home directory could not be resolved)")?;
     Ok(models::VoiceModelStatus {
         moonshine: manager.moonshine_status(),
-        kokoro: manager.kokoro_status(),
+        supertonic: manager.supertonic_status(),
     })
 }
 

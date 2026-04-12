@@ -3,18 +3,22 @@
 //! Mental model:
 //!
 //! ```text
-//! caller: pipeline.speak("Hello")
-//!   → bounded sync_channel (TEXT_QUEUE_DEPTH)
-//!   → tts_worker thread
-//!       kokoro-tts: text → f32 samples (24 kHz, mono)
-//!       rodio Player: play samples (blocks until done)
-//!       tts_active = true while playing, false when idle
-//!   → caller: pipeline.cancel()  → clears queue + stops current playback
+//! caller: pipeline.speak("Hello world. How are you?")
+//!   → bounded sync_channel (TEXT_QUEUE_DEPTH = 8)
+//!   → tts_worker thread (owns 1 Supertonic engine)
+//!       1. Preprocess text
+//!       2. Split into sentences
+//!       3. Synthesize sentence 0 → f32 PCM at 24 kHz
+//!       4. Hand samples to rodio (plays on audio thread = parallel)
+//!       5. While sentence 0 plays, synthesize sentence 1 on this thread
+//!       6. When sentence 0 finishes, immediately play sentence 1 (already ready)
+//!       ... (lookahead: synthesis and playback overlap)
+//!   → tts_active = true while playing, false when idle
+//!   → cancel flag: drain queue + stop playback
 //! ```
 //!
-//! The worker runs on a dedicated `std::thread` with its own single-threaded
-//! tokio `Runtime` because kokoro-tts is async and the worker must not share
-//! the Tauri runtime (which may be multi-threaded and not available here).
+//! Supertonic synthesis is ~167× faster than real-time, so the synthesis
+//! thread keeps well ahead of the audio thread with a single engine.
 //!
 //! `tts_active` is an `Arc<AtomicBool>` shared with the STT pipeline so STT
 //! can gate microphone input while the agent is speaking.
@@ -32,6 +36,7 @@ use std::{
 };
 
 use super::preprocessing::preprocess_for_tts;
+use super::supertonic::{self, load_text_to_speech, load_voice_style, Style, TextToSpeech, SAMPLE_RATE};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -43,8 +48,12 @@ const TEXT_QUEUE_DEPTH: usize = 8;
 /// How long the worker waits on the text channel before checking the shutdown flag.
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 
-/// Kokoro output sample rate (fixed by the model).
-const KOKORO_SAMPLE_RATE: u32 = 24_000;
+/// Supertonic denoising steps. 5 = good quality/speed tradeoff.
+/// Lower (2) = fastest; higher (10) = best quality.
+const SYNTH_STEPS: usize = 5;
+
+/// Synthesis speed multiplier. Slightly faster than natural speech.
+const SYNTH_SPEED: f32 = 1.05;
 
 // ── Public pipeline handle ────────────────────────────────────────────────────
 
@@ -63,22 +72,33 @@ pub struct TtsPipeline {
     /// Cancel flag: worker drains the queue and stops current playback.
     /// Public so the STT pipeline can share it for barge-in detection.
     pub cancel: Arc<AtomicBool>,
+    /// Voice name (e.g. "F1"). Stored for future voice-switching support.
+    #[allow(dead_code)]
+    voice: String,
     /// Worker thread handle — taken on drop to join cleanly.
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl TtsPipeline {
-    /// Spawn the TTS pipeline thread.
+    /// Spawn the TTS pipeline thread using the default voice.
     ///
-    /// `model_dir` must contain the Kokoro model files:
-    ///   `kokoro-v1.0.int8.onnx`, `voices.bin`
+    /// `model_dir` must contain the Supertonic model files:
+    ///   `duration_predictor.onnx`, `text_encoder.onnx`,
+    ///   `vector_estimator.onnx`, `vocoder.onnx`,
+    ///   `unicode_indexer.json`, `tts.json`, `<voice>.json`
     ///
     /// `tts_active` is set to `true` while audio is playing and `false` when idle.
     /// Pass the same `Arc` to the STT pipeline to gate microphone input.
-    ///
-    /// Returns `Err` only if the thread cannot be spawned (OS error).
-    /// If model files are missing, the worker logs and exits cleanly.
     pub fn new(model_dir: PathBuf, tts_active: Arc<AtomicBool>) -> Result<Self, String> {
+        Self::new_with_voice(model_dir, tts_active, supertonic::DEFAULT_VOICE)
+    }
+
+    /// Spawn the TTS pipeline thread with a specific voice name (e.g. `"F1"`, `"M3"`).
+    pub fn new_with_voice(
+        model_dir: PathBuf,
+        tts_active: Arc<AtomicBool>,
+        voice: &str,
+    ) -> Result<Self, String> {
         let (text_tx, text_rx) = mpsc::sync_channel::<String>(TEXT_QUEUE_DEPTH);
         let shutdown = Arc::new(AtomicBool::new(false));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -86,12 +106,15 @@ impl TtsPipeline {
         let shutdown_worker = Arc::clone(&shutdown);
         let cancel_worker = Arc::clone(&cancel);
         let tts_active_worker = Arc::clone(&tts_active);
+        let voice_name = voice.to_string();
+        let model_dir_worker = model_dir.clone();
 
         let handle = thread::Builder::new()
             .name("tts-worker".into())
             .spawn(move || {
                 tts_worker(
-                    model_dir,
+                    model_dir_worker,
+                    voice_name,
                     text_rx,
                     tts_active_worker,
                     shutdown_worker,
@@ -105,6 +128,7 @@ impl TtsPipeline {
             tts_active,
             shutdown,
             cancel,
+            voice: voice.to_string(),
             thread: Some(handle),
         })
     }
@@ -149,36 +173,34 @@ impl Drop for TtsPipeline {
 
 fn tts_worker(
     model_dir: PathBuf,
+    voice_name: String,
     text_rx: mpsc::Receiver<String>,
     tts_active: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
 ) {
-    use kokoro_tts::{KokoroTts, Voice};
+    // ── 1. Initialise Supertonic engine ───────────────────────────────────────
+    let model_dir_str = model_dir.to_string_lossy().to_string();
 
-    // ── 1. Build a single-threaded tokio runtime for the async kokoro-tts API ─
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(r) => r,
+    let mut engine = match load_text_to_speech(&model_dir_str) {
+        Ok(e) => e,
         Err(e) => {
-            eprintln!("sprout-desktop: TTS failed to build tokio runtime: {e}. TTS disabled.");
+            eprintln!(
+                "sprout-desktop: TTS Supertonic init failed (model_dir={}): {e}. TTS disabled.",
+                model_dir.display()
+            );
             drain_text_channel(text_rx, &shutdown);
             return;
         }
     };
 
-    // ── 2. Initialise kokoro-tts ───────────────────────────────────────────────
-    let model_path = model_dir.join("kokoro-v1.0.int8.onnx");
-    let voices_path = model_dir.join("voices.bin");
-
-    let tts = match rt.block_on(KokoroTts::new(&model_path, &voices_path)) {
-        Ok(t) => t,
+    // ── 2. Load voice style ───────────────────────────────────────────────────
+    let voice_path = model_dir.join(format!("{voice_name}.json"));
+    let style = match load_voice_style(&voice_path) {
+        Ok(s) => s,
         Err(e) => {
             eprintln!(
-                "sprout-desktop: TTS Kokoro init failed (model_dir={}): {e}. TTS disabled.",
-                model_dir.display()
+                "sprout-desktop: TTS voice style load failed ({voice_name}): {e}. TTS disabled."
             );
             drain_text_channel(text_rx, &shutdown);
             return;
@@ -232,7 +254,8 @@ fn tts_worker(
         }
 
         // Split into sentences and synth with lookahead — pre-synthesize
-        // sentence N+1 while sentence N plays, eliminating inter-sentence gaps.
+        // sentence N+1 while sentence N plays on the rodio audio thread,
+        // eliminating inter-sentence gaps.
         let sentences: Vec<String> = split_sentences(&text)
             .into_iter()
             .filter(|s| !s.is_empty())
@@ -244,51 +267,36 @@ fn tts_worker(
 
         use rodio::buffer::SamplesBuffer;
         let channels = NonZero::new(1u16).expect("1 is nonzero");
-        let rate = NonZero::new(KOKORO_SAMPLE_RATE).expect("24000 is nonzero");
+        let rate = NonZero::new(SAMPLE_RATE).expect("24000 is nonzero");
 
         tts_active.store(true, Ordering::Release);
 
-        // Synthesize the first sentence eagerly.
-        let mut pending_audio: Option<Vec<f32>> = match rt
-            .block_on(tts.synth(&sentences[0], Voice::AfHeart(1.0)))
-        {
-            Ok((samples, _)) if !samples.is_empty() => Some(samples),
-            Ok(_) => None,
-            Err(e) => {
-                eprintln!("sprout-desktop: TTS synth failed for {:?}: {e}", sentences[0]);
-                None
-            }
-        };
+        // Eagerly synthesize the first sentence before entering the loop.
+        let mut pending_audio: Option<Vec<f32>> =
+            synth_sentence(&mut engine, &sentences[0], &style);
 
         for i in 0..sentences.len() {
             if cancel.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
                 break;
             }
 
-            // Play current sentence's audio (already synthesized).
+            // Take the already-synthesized audio for this sentence.
             let current_audio = pending_audio.take();
-
             let next_idx = i + 1;
 
             if let Some(samples) = current_audio {
+                // Hand samples to rodio — playback starts immediately on the
+                // audio thread while this thread continues below.
                 let buf = SamplesBuffer::new(channels, rate, samples);
                 let player = Player::connect_new(&sink_handle.mixer());
                 player.append(buf);
 
                 // While this sentence plays, synthesize the next one.
+                // Rodio plays on its own audio thread, so synthesis here is
+                // truly parallel with playback.
                 if next_idx < sentences.len() {
-                    match rt.block_on(tts.synth(&sentences[next_idx], Voice::AfHeart(1.0))) {
-                        Ok((samples, _)) if !samples.is_empty() => {
-                            pending_audio = Some(samples);
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            eprintln!(
-                                "sprout-desktop: TTS synth failed for {:?}: {e}",
-                                sentences[next_idx]
-                            );
-                        }
-                    }
+                    pending_audio =
+                        synth_sentence(&mut engine, &sentences[next_idx], &style);
                 }
 
                 // Wait for current playback to finish.
@@ -305,19 +313,8 @@ fn tts_worker(
                     thread::sleep(Duration::from_millis(50));
                 }
             } else if next_idx < sentences.len() {
-                // No audio for current sentence — still synthesize next.
-                match rt.block_on(tts.synth(&sentences[next_idx], Voice::AfHeart(1.0))) {
-                    Ok((samples, _)) if !samples.is_empty() => {
-                        pending_audio = Some(samples);
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        eprintln!(
-                            "sprout-desktop: TTS synth failed for {:?}: {e}",
-                            sentences[next_idx]
-                        );
-                    }
-                }
+                // No audio for this sentence (empty/error) — still synthesize next.
+                pending_audio = synth_sentence(&mut engine, &sentences[next_idx], &style);
             }
         }
 
@@ -331,9 +328,23 @@ fn tts_worker(
     tts_active.store(false, Ordering::Release);
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Synthesize a single sentence, returning f32 PCM samples or `None` on error/empty.
+fn synth_sentence(engine: &mut TextToSpeech, text: &str, style: &Style) -> Option<Vec<f32>> {
+    match engine.call(text, "en", style, SYNTH_STEPS, SYNTH_SPEED, 0.0) {
+        Ok(samples) if !samples.is_empty() => Some(samples),
+        Ok(_) => None,
+        Err(e) => {
+            eprintln!("sprout-desktop: TTS synth failed for {text:?}: {e}");
+            None
+        }
+    }
+}
+
 /// Split text into sentence-sized chunks for TTS.
 ///
-/// Splits on `.` `!` `?` followed by whitespace, plus `;` `—` and `\n`.
+/// Splits on `.` `!` `?` followed by whitespace, plus `\n` and `—`.
 /// Keeps chunks non-empty and trimmed.
 fn split_sentences(text: &str) -> Vec<String> {
     let mut sentences = Vec::new();
