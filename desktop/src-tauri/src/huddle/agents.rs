@@ -18,8 +18,13 @@ use crate::{app_state::AppState, events, relay::submit_event};
 /// Voice-mode guidelines posted as a kind:9 message (with [System] prefix)
 /// to the ephemeral channel at huddle start. Instructs agents on voice-mode
 /// etiquette: TTS constraints, brevity rules, self-selection.
-pub const VOICE_MODE_GUIDELINES: &str = "\
+/// Build voice-mode guidelines with the parent channel ID so agents know
+/// where "the main channel" is.
+pub fn voice_mode_guidelines(parent_channel_id: &str) -> String {
+    format!(
+        "\
 You are in a live voice huddle. Your text is read aloud via TTS.
+This huddle is attached to channel {parent_channel_id} — that's the main channel.
 You will be interrupted by new messages whenever a human speaks — this is normal.
 
 Rules:
@@ -30,7 +35,9 @@ Rules:
 - No markdown, code blocks, or bullet lists — they sound terrible as speech.
 - To share code or data, say \"I'll post that in the main channel\" and use it.
 - You have access to Sprout tools — you can join channels, search messages,
-  and take actions. Use them proactively when asked.";
+  and take actions. Use them proactively when asked."
+    )
+}
 
 // ── Agent enrollment ──────────────────────────────────────────────────────────
 

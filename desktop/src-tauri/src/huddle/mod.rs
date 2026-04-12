@@ -448,9 +448,10 @@ pub async fn start_huddle(
         // 5. Post voice-mode guidelines as a regular kind:9 message.
         //    We do NOT use kind:40099 — that is relay-signed; the client must not mint it.
         //    Best-effort: don't fail the huddle if this fails.
+        let guidelines = agents::voice_mode_guidelines(&parent_channel_id);
         if let Ok(msg_builder) = events::build_message(
             ephemeral_uuid,
-            &format!("[System] {}", agents::VOICE_MODE_GUIDELINES),
+            &format!("[System] {guidelines}"),
             None,
             &[],
             &[],
