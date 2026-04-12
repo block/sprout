@@ -278,7 +278,7 @@ fn sample_noisy_latent(
 
     let latent_lengths: Vec<usize> = wav_lengths
         .iter()
-        .map(|&len| (len + chunk_size - 1) / chunk_size)
+        .map(|&len| ((len + chunk_size - 1) / chunk_size).max(1))
         .collect();
 
     let latent_mask = length_to_mask(&latent_lengths, latent_len);

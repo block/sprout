@@ -8,17 +8,17 @@
 //!   → tts_worker thread (owns 1 Supertonic engine)
 //!       1. Preprocess text
 //!       2. Split into sentences
-//!       3. Synthesize sentence 0 → f32 PCM at 24 kHz
-//!       4. Hand samples to rodio (plays on audio thread = parallel)
-//!       5. While sentence 0 plays, synthesize sentence 1 on this thread
-//!       6. When sentence 0 finishes, immediately play sentence 1 (already ready)
-//!       ... (lookahead: synthesis and playback overlap)
+//!       3. Batch sentences in groups of BATCH_SIZE → synth_batch() → f32 PCM
+//!       4. Apply volume boost + fade in/out to each batch
+//!       5. Append all buffers to a single rodio Player (gapless playback)
+//!       6. Wait for player.empty() before accepting next text item
 //!   → tts_active = true while playing, false when idle
-//!   → cancel flag: drain queue + stop playback
+//!   → cancel flag: player.clear() + drain queue
 //! ```
 //!
-//! Supertonic synthesis is ~167× faster than real-time, so the synthesis
-//! thread keeps well ahead of the audio thread with a single engine.
+//! Supertonic synthesis is ~167× faster than real-time. Batching 3 sentences
+//! per engine.call() improves prosody (more context) and eliminates
+//! inter-sentence gaps via a single persistent rodio Player.
 //!
 //! `tts_active` is an `Arc<AtomicBool>` shared with the STT pipeline so STT
 //! can gate microphone input while the agent is speaking.
@@ -54,6 +54,20 @@ const SYNTH_STEPS: usize = 5;
 
 /// Synthesis speed multiplier. Slightly faster than natural speech.
 const SYNTH_SPEED: f32 = 1.05;
+
+/// Volume boost applied after synthesis — Supertonic output is quiet.
+const VOLUME_BOOST: f32 = 2.5;
+
+/// Fade in/out length in samples (8ms at 44.1kHz ≈ 352 samples).
+/// Eliminates clicks/pops at batch boundaries.
+const FADE_SAMPLES: usize = (SAMPLE_RATE as f64 * 0.008) as usize;
+
+/// Number of sentences batched per engine.call() invocation.
+/// More context → better prosody; synthesis is fast enough that this is free.
+const BATCH_SIZE: usize = 3;
+
+/// Silence inserted between batched sentences by the Supertonic engine (seconds).
+const INTER_SENTENCE_SILENCE: f32 = 0.15;
 
 // ── Public pipeline handle ────────────────────────────────────────────────────
 
@@ -253,9 +267,8 @@ fn tts_worker(
             continue;
         }
 
-        // Split into sentences and synth with lookahead — pre-synthesize
-        // sentence N+1 while sentence N plays on the rodio audio thread,
-        // eliminating inter-sentence gaps.
+        // Split into sentences, batch in groups of BATCH_SIZE for better
+        // prosody and gapless playback via a single persistent Player.
         let sentences: Vec<String> = split_sentences(&text)
             .into_iter()
             .filter(|s| !s.is_empty())
@@ -267,55 +280,39 @@ fn tts_worker(
 
         use rodio::buffer::SamplesBuffer;
         let channels = NonZero::new(1u16).expect("1 is nonzero");
-        let rate = NonZero::new(SAMPLE_RATE).expect("24000 is nonzero");
+        let rate = NonZero::new(SAMPLE_RATE).expect("44100 is nonzero");
 
+        // Single persistent Player — all batches append here, rodio plays
+        // them gaplessly without per-batch device setup overhead.
+        let player = Player::connect_new(&sink_handle.mixer());
         tts_active.store(true, Ordering::Release);
 
-        // Eagerly synthesize the first sentence before entering the loop.
-        let mut pending_audio: Option<Vec<f32>> =
-            synth_sentence(&mut engine, &sentences[0], &style);
-
-        for i in 0..sentences.len() {
+        for chunk in sentences.chunks(BATCH_SIZE) {
             if cancel.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
+                player.clear();
+                while text_rx.try_recv().is_ok() {}
+                cancel.store(false, Ordering::Release);
                 break;
             }
 
-            // Take the already-synthesized audio for this sentence.
-            let current_audio = pending_audio.take();
-            let next_idx = i + 1;
-
-            if let Some(samples) = current_audio {
-                // Hand samples to rodio — playback starts immediately on the
-                // audio thread while this thread continues below.
+            if let Some(samples) = synth_batch(&mut engine, chunk, &style) {
                 let buf = SamplesBuffer::new(channels, rate, samples);
-                let player = Player::connect_new(&sink_handle.mixer());
                 player.append(buf);
-
-                // While this sentence plays, synthesize the next one.
-                // Rodio plays on its own audio thread, so synthesis here is
-                // truly parallel with playback.
-                if next_idx < sentences.len() {
-                    pending_audio =
-                        synth_sentence(&mut engine, &sentences[next_idx], &style);
-                }
-
-                // Wait for current playback to finish.
-                loop {
-                    if cancel.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
-                        player.clear();
-                        while text_rx.try_recv().is_ok() {}
-                        cancel.store(false, Ordering::Release);
-                        break;
-                    }
-                    if player.empty() {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(50));
-                }
-            } else if next_idx < sentences.len() {
-                // No audio for this sentence (empty/error) — still synthesize next.
-                pending_audio = synth_sentence(&mut engine, &sentences[next_idx], &style);
             }
+        }
+
+        // Wait for all queued audio to finish playing.
+        loop {
+            if cancel.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
+                player.clear();
+                while text_rx.try_recv().is_ok() {}
+                cancel.store(false, Ordering::Release);
+                break;
+            }
+            if player.empty() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
         }
 
         tts_active.store(false, Ordering::Release);
@@ -330,15 +327,49 @@ fn tts_worker(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Synthesize a single sentence, returning f32 PCM samples or `None` on error/empty.
-fn synth_sentence(engine: &mut TextToSpeech, text: &str, style: &Style) -> Option<Vec<f32>> {
-    match engine.call(text, "en", style, SYNTH_STEPS, SYNTH_SPEED, 0.0) {
-        Ok(samples) if !samples.is_empty() => Some(samples),
+/// Synthesize a batch of sentences in a single engine call.
+///
+/// Sentences are joined with ". " so Supertonic sees full context for better
+/// prosody. `silence_secs=INTER_SENTENCE_SILENCE` lets the engine insert
+/// natural pauses between sentences internally.
+///
+/// After synthesis: volume boost (×VOLUME_BOOST, clamped) + 8ms fade in/out
+/// to eliminate clicks at batch boundaries.
+fn synth_batch(engine: &mut TextToSpeech, sentences: &[String], style: &Style) -> Option<Vec<f32>> {
+    let text = sentences.join(". ");
+    match engine.call(&text, "en", style, SYNTH_STEPS, SYNTH_SPEED, INTER_SENTENCE_SILENCE) {
+        Ok(samples) if !samples.is_empty() => {
+            // Volume boost — Supertonic output is quiet.
+            let mut boosted: Vec<f32> = samples
+                .iter()
+                .map(|&s| (s * VOLUME_BOOST).clamp(-1.0, 1.0))
+                .collect();
+            // Fade in/out to eliminate clicks at batch boundaries.
+            apply_fades(&mut boosted);
+            Some(boosted)
+        }
         Ok(_) => None,
         Err(e) => {
-            eprintln!("sprout-desktop: TTS synth failed for {text:?}: {e}");
+            eprintln!("sprout-desktop: TTS synth failed: {e}");
             None
         }
+    }
+}
+
+/// Apply a short linear fade-in at the start and fade-out at the end of `samples`.
+///
+/// Uses `FADE_SAMPLES` (8ms) or half the buffer length, whichever is smaller.
+/// Eliminates clicks/pops at batch boundaries.
+fn apply_fades(samples: &mut Vec<f32>) {
+    let len = samples.len();
+    let fade = FADE_SAMPLES.min(len / 2);
+    // Fade in: ramp from 0 → 1 over `fade` samples.
+    for i in 0..fade {
+        samples[i] *= i as f32 / fade as f32;
+    }
+    // Fade out: ramp from 1 → 0 over the last `fade` samples.
+    for i in 0..fade {
+        samples[len - 1 - i] *= i as f32 / fade as f32;
     }
 }
 
