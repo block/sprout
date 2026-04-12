@@ -231,44 +231,57 @@ fn tts_worker(
             continue;
         }
 
-        // Generate audio via kokoro-tts (async, blocked on our runtime).
-        // Voice::AfHeart(1.0) — American female, natural speed.
-        let synth_result = rt.block_on(tts.synth(&text, Voice::AfHeart(1.0)));
-        let (samples, _duration) = match synth_result {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("sprout-desktop: TTS synth failed for {text:?}: {e}");
-                continue;
-            }
-        };
+        // Split into sentences and synth each one separately.
+        // Kokoro handles short chunks better — fewer spelling artifacts,
+        // better prosody, and allows barge-in between sentences.
+        let sentences = split_sentences(&text);
 
-        if samples.is_empty() {
-            continue;
-        }
-
-        // Build rodio SamplesBuffer from f32 samples (24 kHz, mono).
         use rodio::buffer::SamplesBuffer;
         let channels = NonZero::new(1u16).expect("1 is nonzero");
         let rate = NonZero::new(KOKORO_SAMPLE_RATE).expect("24000 is nonzero");
-        let buf = SamplesBuffer::new(channels, rate, samples);
 
-        // Play via rodio Player (blocks until playback completes).
         tts_active.store(true, Ordering::Release);
-        let player = Player::connect_new(&sink_handle.mixer());
-        player.append(buf);
 
-        // Wait for playback to finish, polling cancel/shutdown every 50 ms.
-        loop {
+        for sentence in &sentences {
+            if sentence.is_empty() {
+                continue;
+            }
+
+            // Check cancel/shutdown between sentences.
             if cancel.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
-                player.clear();
-                while text_rx.try_recv().is_ok() {}
-                cancel.store(false, Ordering::Release);
                 break;
             }
-            if player.empty() {
-                break;
+
+            let synth_result = rt.block_on(tts.synth(sentence, Voice::AfHeart(1.0)));
+            let (samples, _duration) = match synth_result {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("sprout-desktop: TTS synth failed for {sentence:?}: {e}");
+                    continue;
+                }
+            };
+
+            if samples.is_empty() {
+                continue;
             }
-            thread::sleep(Duration::from_millis(50));
+
+            let buf = SamplesBuffer::new(channels, rate, samples.clone());
+            let player = Player::connect_new(&sink_handle.mixer());
+            player.append(buf);
+
+            // Wait for playback to finish, polling cancel/shutdown every 50 ms.
+            loop {
+                if cancel.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
+                    player.clear();
+                    while text_rx.try_recv().is_ok() {}
+                    cancel.store(false, Ordering::Release);
+                    break;
+                }
+                if player.empty() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
         }
 
         tts_active.store(false, Ordering::Release);
@@ -279,6 +292,51 @@ fn tts_worker(
     }
 
     tts_active.store(false, Ordering::Release);
+}
+
+/// Split text into sentence-sized chunks for TTS.
+///
+/// Splits on `.` `!` `?` followed by whitespace, plus `;` `—` and `\n`.
+/// Keeps chunks non-empty and trimmed.
+fn split_sentences(text: &str) -> Vec<String> {
+    let mut sentences = Vec::new();
+    let mut current = String::new();
+
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        let c = chars[i];
+        current.push(c);
+
+        let is_break = match c {
+            '.' | '!' | '?' => {
+                // Only break if followed by whitespace or end of text
+                i + 1 >= len || chars[i + 1].is_whitespace()
+            }
+            ';' | '\n' => true,
+            '—' => true,
+            _ => false,
+        };
+
+        if is_break {
+            let trimmed = current.trim().to_string();
+            if !trimmed.is_empty() {
+                sentences.push(trimmed);
+            }
+            current.clear();
+        }
+
+        i += 1;
+    }
+
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        sentences.push(trimmed);
+    }
+
+    sentences
 }
 
 /// Drain and discard all pending text until shutdown or disconnect.

@@ -219,16 +219,21 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
 
     let disposed = false;
     let cleanup: (() => void) | null = null;
-    const seenIds = new Set<string>();
+    // Track subscription start time — only speak messages that arrive AFTER we connect.
+    // subscribeToChannel replays recent history; we don't want to speak old messages.
+    const subscribeTime = Math.floor(Date.now() / 1000);
 
     relayClient
       .subscribeToChannel(ephemeralChannelId, (event) => {
         if (disposed) return;
-        // Only kind:9 (chat messages), skip own messages and duplicates
+        // Only kind:9 (chat messages)
         if (event.kind !== 9) return;
-        if (seenIds.has(event.id)) return;
-        seenIds.add(event.id);
+        // Skip historical messages (arrived before we subscribed)
+        if (event.created_at < subscribeTime) return;
+        // Skip own messages
         if (event.pubkey === selfPubkeyRef.current) return;
+        // Skip empty/whitespace-only content
+        if (!event.content.trim()) return;
         // Skip [System] messages
         if (event.content.startsWith("[System]")) return;
 
