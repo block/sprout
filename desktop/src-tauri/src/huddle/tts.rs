@@ -231,10 +231,16 @@ fn tts_worker(
             continue;
         }
 
-        // Split into sentences and synth each one separately.
-        // Kokoro handles short chunks better — fewer spelling artifacts,
-        // better prosody, and allows barge-in between sentences.
-        let sentences = split_sentences(&text);
+        // Split into sentences and synth with lookahead — pre-synthesize
+        // sentence N+1 while sentence N plays, eliminating inter-sentence gaps.
+        let sentences: Vec<String> = split_sentences(&text)
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        if sentences.is_empty() {
+            continue;
+        }
 
         use rodio::buffer::SamplesBuffer;
         let channels = NonZero::new(1u16).expect("1 is nonzero");
@@ -242,45 +248,76 @@ fn tts_worker(
 
         tts_active.store(true, Ordering::Release);
 
-        for sentence in &sentences {
-            if sentence.is_empty() {
-                continue;
+        // Synthesize the first sentence eagerly.
+        let mut pending_audio: Option<Vec<f32>> = match rt
+            .block_on(tts.synth(&sentences[0], Voice::AfHeart(1.0)))
+        {
+            Ok((samples, _)) if !samples.is_empty() => Some(samples),
+            Ok(_) => None,
+            Err(e) => {
+                eprintln!("sprout-desktop: TTS synth failed for {:?}: {e}", sentences[0]);
+                None
             }
+        };
 
-            // Check cancel/shutdown between sentences.
+        for i in 0..sentences.len() {
             if cancel.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
                 break;
             }
 
-            let synth_result = rt.block_on(tts.synth(sentence, Voice::AfHeart(1.0)));
-            let (samples, _duration) = match synth_result {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("sprout-desktop: TTS synth failed for {sentence:?}: {e}");
-                    continue;
-                }
-            };
+            // Play current sentence's audio (already synthesized).
+            let current_audio = pending_audio.take();
 
-            if samples.is_empty() {
-                continue;
-            }
+            let next_idx = i + 1;
 
-            let buf = SamplesBuffer::new(channels, rate, samples.clone());
-            let player = Player::connect_new(&sink_handle.mixer());
-            player.append(buf);
+            if let Some(samples) = current_audio {
+                let buf = SamplesBuffer::new(channels, rate, samples);
+                let player = Player::connect_new(&sink_handle.mixer());
+                player.append(buf);
 
-            // Wait for playback to finish, polling cancel/shutdown every 50 ms.
-            loop {
-                if cancel.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
-                    player.clear();
-                    while text_rx.try_recv().is_ok() {}
-                    cancel.store(false, Ordering::Release);
-                    break;
+                // While this sentence plays, synthesize the next one.
+                if next_idx < sentences.len() {
+                    match rt.block_on(tts.synth(&sentences[next_idx], Voice::AfHeart(1.0))) {
+                        Ok((samples, _)) if !samples.is_empty() => {
+                            pending_audio = Some(samples);
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!(
+                                "sprout-desktop: TTS synth failed for {:?}: {e}",
+                                sentences[next_idx]
+                            );
+                        }
+                    }
                 }
-                if player.empty() {
-                    break;
+
+                // Wait for current playback to finish.
+                loop {
+                    if cancel.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
+                        player.clear();
+                        while text_rx.try_recv().is_ok() {}
+                        cancel.store(false, Ordering::Release);
+                        break;
+                    }
+                    if player.empty() {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(50));
                 }
-                thread::sleep(Duration::from_millis(50));
+            } else if next_idx < sentences.len() {
+                // No audio for current sentence — still synthesize next.
+                match rt.block_on(tts.synth(&sentences[next_idx], Voice::AfHeart(1.0))) {
+                    Ok((samples, _)) if !samples.is_empty() => {
+                        pending_audio = Some(samples);
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!(
+                            "sprout-desktop: TTS synth failed for {:?}: {e}",
+                            sentences[next_idx]
+                        );
+                    }
+                }
             }
         }
 
@@ -312,10 +349,13 @@ fn split_sentences(text: &str) -> Vec<String> {
 
         let is_break = match c {
             '.' | '!' | '?' => {
-                // Only break if followed by whitespace or end of text
-                i + 1 >= len || chars[i + 1].is_whitespace()
+                // Only break if followed by whitespace or end of text,
+                // AND preceded by a letter (not a digit — avoids splitting "1." "2." etc.)
+                let prev_is_letter = i > 0 && chars[i - 1].is_alphabetic();
+                let next_is_boundary = i + 1 >= len || chars[i + 1].is_whitespace();
+                prev_is_letter && next_is_boundary
             }
-            ';' | '\n' => true,
+            '\n' => true,
             '—' => true,
             _ => false,
         };
