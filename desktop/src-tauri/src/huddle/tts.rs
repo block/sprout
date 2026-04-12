@@ -71,7 +71,7 @@ impl TtsPipeline {
     /// Spawn the TTS pipeline thread.
     ///
     /// `model_dir` must contain the Kokoro model files:
-    ///   `kokoro-v0_19.onnx`, `voices.bin`
+    ///   `kokoro-v1.0.int8.onnx`, `voices.bin`
     ///
     /// `tts_active` is set to `true` while audio is playing and `false` when idle.
     /// Pass the same `Arc` to the STT pipeline to gate microphone input.
@@ -170,7 +170,7 @@ fn tts_worker(
     };
 
     // ── 2. Initialise kokoro-tts ───────────────────────────────────────────────
-    let model_path = model_dir.join("kokoro-v0_19.onnx");
+    let model_path = model_dir.join("kokoro-v1.0.int8.onnx");
     let voices_path = model_dir.join("voices.bin");
 
     let tts = match rt.block_on(KokoroTts::new(&model_path, &voices_path)) {

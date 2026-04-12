@@ -37,16 +37,16 @@ const MOONSHINE_EXPECTED_FILES: &[&str] = &[
 ];
 
 const KOKORO_MODEL_URL: &str =
-    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/kokoro-v0_19.onnx";
+    "https://github.com/mzdk100/kokoro/releases/download/V1.0/kokoro-v1.0.int8.onnx";
 
 const KOKORO_VOICES_URL: &str =
-    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/voices.bin";
+    "https://github.com/mzdk100/kokoro/releases/download/V1.0/voices.bin";
 
 /// Final directory name under `~/.sprout/models/`.
 const KOKORO_MODEL_DIR_NAME: &str = "kokoro";
 
 /// All files that must be present for Kokoro to be considered ready.
-const KOKORO_EXPECTED_FILES: &[&str] = &["kokoro-v0_19.onnx", "voices.bin"];
+const KOKORO_EXPECTED_FILES: &[&str] = &["kokoro-v1.0.int8.onnx", "voices.bin"];
 
 // ── Status types ──────────────────────────────────────────────────────────────
 
@@ -409,7 +409,7 @@ impl ModelManager {
 
     /// Download and verify the Kokoro TTS model files directly from HuggingFace.
     ///
-    /// Downloads `kokoro-v0_19.onnx` and `voices.bin` into `~/.sprout/models/kokoro/`.
+    /// Downloads `kokoro-v1.0.int8.onnx` and `voices.bin` into `~/.sprout/models/kokoro/`.
     /// Files are written to a temp directory first, then moved atomically.
     async fn download_kokoro_model(&self, http_client: reqwest::Client) -> Result<(), String> {
         fs::create_dir_all(&self.models_dir).map_err(|e| format!("create models dir: {e}"))?;
@@ -429,7 +429,7 @@ impl ModelManager {
 
         // Download each file individually.
         let downloads: &[(&str, &str)] = &[
-            (KOKORO_MODEL_URL, "kokoro-v0_19.onnx"),
+            (KOKORO_MODEL_URL, "kokoro-v1.0.int8.onnx"),
             (KOKORO_VOICES_URL, "voices.bin"),
         ];
 
