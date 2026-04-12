@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import * as React from "react";
 
+import { relayClient } from "@/shared/api/relayClient";
 import { connectToHuddle, type HuddleConnection } from "./lib/livekit";
 import { setupAudioWorklet } from "./lib/audioWorklet";
 
@@ -43,6 +44,12 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   const [isStarting, setIsStarting] = React.useState(false);
   const [micConnected, setMicConnected] = React.useState(false);
   const [micLevel, setMicLevel] = React.useState(0);
+  /** Ephemeral channel ID — set after start_huddle, used for TTS subscription */
+  const [ephemeralChannelId, setEphemeralChannelId] = React.useState<
+    string | null
+  >(null);
+  /** Self pubkey — fetched once, used to filter out own messages from TTS */
+  const selfPubkeyRef = React.useRef<string | null>(null);
   const analyserRef = React.useRef<{
     ctx: AudioContext;
     analyser: AnalyserNode;
@@ -71,6 +78,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     }
     setLocalAudioTrack(null);
     setMicConnected(false);
+    setEphemeralChannelId(null);
 
     // Step 3: Tell Rust to clean up — only clear rustActiveRef AFTER success so retries work
     if (rustActiveRef.current) {
@@ -101,6 +109,17 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
           memberPubkeys,
         });
         rustActiveRef.current = true;
+        setEphemeralChannelId(joinInfo.ephemeral_channel_id);
+
+        // Fetch self pubkey once for TTS filtering
+        if (!selfPubkeyRef.current) {
+          try {
+            const identity = await invoke<{ pubkey: string }>("get_identity");
+            selfPubkeyRef.current = identity.pubkey;
+          } catch {
+            /* best-effort — TTS will just speak all messages */
+          }
+        }
 
         // Bail if superseded (leaveHuddle or another startHuddle was called)
         if (tokenRef.current !== myToken) {
@@ -193,6 +212,46 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     },
     [],
   );
+
+  // TTS subscription — pipe agent messages from ephemeral channel to speak_agent_message
+  React.useEffect(() => {
+    if (!ephemeralChannelId) return;
+
+    let disposed = false;
+    let cleanup: (() => void) | null = null;
+    const seenIds = new Set<string>();
+
+    relayClient
+      .subscribeToChannel(ephemeralChannelId, (event) => {
+        if (disposed) return;
+        // Only kind:9 (chat messages), skip own messages and duplicates
+        if (event.kind !== 9) return;
+        if (seenIds.has(event.id)) return;
+        seenIds.add(event.id);
+        if (event.pubkey === selfPubkeyRef.current) return;
+        // Skip [System] messages
+        if (event.content.startsWith("[System]")) return;
+
+        invoke("speak_agent_message", { text: event.content }).catch(() => {
+          /* best-effort */
+        });
+      })
+      .then((dispose) => {
+        if (disposed) {
+          void dispose();
+          return;
+        }
+        cleanup = () => void dispose();
+      })
+      .catch((err) => {
+        console.error("[huddle] TTS subscription failed:", err);
+      });
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [ephemeralChannelId]);
 
   // Mic level analyser — drives the voice activity indicator
   React.useEffect(() => {

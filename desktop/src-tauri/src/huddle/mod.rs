@@ -853,12 +853,22 @@ pub async fn set_tts_enabled(enabled: bool, state: State<'_, AppState>) -> Resul
 /// Speak an agent message via TTS.
 ///
 /// Called by the WebView when it receives an incoming agent kind:9 message.
-/// The WebView already subscribes to channel messages — it calls this command
-/// for messages from non-human pubkeys so the agent's voice is heard.
+/// Lazily starts the TTS pipeline if models are ready but the pipeline hasn't
+/// been created yet (e.g. models finished downloading after huddle started).
 ///
-/// No-op if TTS is disabled or no pipeline is active.
+/// No-op if TTS is disabled or models aren't ready.
 #[tauri::command]
-pub fn speak_agent_message(text: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn speak_agent_message(text: String, state: State<'_, AppState>) -> Result<(), String> {
+    let needs_pipeline = {
+        let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+        hs.tts_enabled && hs.tts_pipeline.is_none() && hs.phase == HuddlePhase::Active
+    };
+
+    // Lazy-start: models may have finished downloading after the huddle began.
+    if needs_pipeline {
+        maybe_start_tts_pipeline(&state).await;
+    }
+
     let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
     if hs.tts_enabled {
         if let Some(ref pipeline) = hs.tts_pipeline {
