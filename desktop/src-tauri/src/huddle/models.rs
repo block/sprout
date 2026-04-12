@@ -403,7 +403,7 @@ impl ModelManager {
             ("voice_styles/F1.json",         "F1.json"),
         ];
 
-        let total_files = downloads.len() as u8;
+        let total_files = downloads.len() as u32;
 
         for (i, (url_suffix, filename)) in downloads.iter().enumerate() {
             let url = format!("{SUPERTONIC_HF_BASE}/{url_suffix}");
@@ -436,7 +436,7 @@ impl ModelManager {
             );
 
             // Progress: spread 0–89% across all files.
-            let pct = (((i as u8 + 1) * 89) / total_files).min(89);
+            let pct = (((i as u32 + 1) * 89) / total_files).min(89) as u8;
             self.set_supertonic_status(ModelStatus::Downloading { progress_percent: pct });
 
             use tokio::io::AsyncWriteExt;
