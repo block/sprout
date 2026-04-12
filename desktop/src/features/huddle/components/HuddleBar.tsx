@@ -27,11 +27,11 @@ type HuddleState = {
     | "leaving";
   parent_channel_id: string | null;
   ephemeral_channel_id: string | null;
-  livekit_token: string | null;
-  livekit_url: string | null;
   livekit_room: string | null;
   participants: string[]; // pubkey hex strings
+  agent_pubkeys: string[];
   tts_enabled: boolean;
+  is_creator: boolean;
 };
 
 type HuddleBarProps = {
@@ -39,7 +39,8 @@ type HuddleBarProps = {
 };
 
 export function HuddleBar({ className }: HuddleBarProps) {
-  const { localAudioTrack, leaveHuddle, micConnected, micLevel } = useHuddle();
+  const { localAudioTrack, leaveHuddle, endHuddle, micConnected, micLevel } =
+    useHuddle();
   const [state, setState] = React.useState<HuddleState | null>(null);
   const [isMuted, setIsMuted] = React.useState(false);
   // Derive TTS enabled from backend state (single source of truth).
@@ -106,6 +107,19 @@ export function HuddleBar({ className }: HuddleBarProps) {
     }
   }
 
+  async function handleEnd() {
+    if (isLeaving) return;
+    setIsLeaving(true);
+    try {
+      await endHuddle();
+      setState(null);
+    } catch (e) {
+      console.error("Failed to end huddle:", e);
+    } finally {
+      setIsLeaving(false);
+    }
+  }
+
   return (
     <div
       className={cn(
@@ -116,14 +130,12 @@ export function HuddleBar({ className }: HuddleBarProps) {
       )}
     >
       {/* Room label */}
-      <span className="max-w-[120px] truncate text-xs font-medium text-foreground">
-        {state.livekit_room ?? "Huddle"}
-      </span>
+      <span className="text-xs font-medium text-foreground">Huddle</span>
 
-      {/* Participant count */}
+      {/* Huddle status */}
       <div className="flex items-center gap-1 text-xs text-muted-foreground">
         <Users className="h-3 w-3" />
-        <span>{state.participants.length}</span>
+        <span>In huddle</span>
       </div>
 
       {/* Participant avatars */}
@@ -168,6 +180,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
 
       {showAddAgent && (
         <AddAgentDialog
+          currentAgentPubkeys={state?.agent_pubkeys ?? []}
           onClose={() => setShowAddAgent(false)}
           onAdd={async (pubkey: string): Promise<AgentAddResult> => {
             setAgentAddError(null);
@@ -222,17 +235,31 @@ export function HuddleBar({ className }: HuddleBarProps) {
         )}
       </Button>
 
-      {/* Leave button */}
-      <Button
-        aria-label="Leave huddle"
-        className="h-8 w-8"
-        disabled={isLeaving}
-        onClick={() => void handleLeave()}
-        size="icon"
-        variant="destructive"
-      >
-        <PhoneOff className="h-4 w-4" />
-      </Button>
+      {/* Leave / End button */}
+      {state.is_creator ? (
+        <Button
+          aria-label="End huddle"
+          className="h-8 w-8"
+          disabled={isLeaving}
+          onClick={() => void handleEnd()}
+          size="icon"
+          variant="destructive"
+          title="End huddle for everyone"
+        >
+          <PhoneOff className="h-4 w-4" />
+        </Button>
+      ) : (
+        <Button
+          aria-label="Leave huddle"
+          className="h-8 w-8"
+          disabled={isLeaving}
+          onClick={() => void handleLeave()}
+          size="icon"
+          variant="destructive"
+        >
+          <PhoneOff className="h-4 w-4" />
+        </Button>
+      )}
     </div>
   );
 }

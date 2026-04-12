@@ -23,19 +23,17 @@ use crate::{app_state::AppState, events, relay::submit_event};
 pub fn voice_mode_guidelines(parent_channel_id: &str) -> String {
     format!(
         "\
-You are in a live voice huddle. Your text is read aloud via TTS.
-This huddle is attached to channel {parent_channel_id} — that's the main channel.
-You will be interrupted by new messages whenever a human speaks — this is normal.
+You are in a live voice huddle. Your responses are read aloud via text-to-speech.
+This huddle is attached to channel {parent_channel_id} (the main channel).
+You will be interrupted whenever a human speaks — this is normal, do not repeat yourself.
 
 Rules:
-- Only respond if the message is relevant to you or directed at you.
-  If it's not for you, respond with just \".\" or stay silent.
-- Keep responses under 2 sentences. This is a conversation, not an essay.
-- Spell out numbers: \"eleven thirty\" not \"11:30\".
-- No markdown, code blocks, or bullet lists — they sound terrible as speech.
-- To share code or data, say \"I'll post that in the main channel\" and use it.
-- You have access to Sprout tools — you can join channels, search messages,
-  and take actions. Use them proactively when asked."
+- ONLY respond if addressed directly or the topic is clearly relevant to you.
+  If not for you, stay completely silent — do not respond at all.
+- Maximum 2 sentences. This is a conversation, not a monologue.
+- Speak naturally: \"eleven thirty\" not \"11:30\", no markdown, no code blocks, no lists.
+- To share code or structured data, say \"I'll post that in the main channel\" and do so.
+- Use your Sprout tools proactively — search messages, join channels, take actions when asked."
     )
 }
 
@@ -43,9 +41,12 @@ Rules:
 
 /// Result of adding an agent to a huddle.
 ///
-/// `ephemeral_added` is always true on success (the function returns Err if
-/// the ephemeral add fails). `parent_added` reflects whether the parent-channel
-/// add succeeded; `parent_error` carries the error string when it didn't.
+/// `ephemeral_added` is always `true` when this struct is returned (the
+/// function returns `Err` if the ephemeral add fails). Retained for
+/// forward compatibility with batch-add operations.
+///
+/// `parent_added` reflects whether the parent-channel add succeeded;
+/// `parent_error` carries the error string when it didn't.
 #[derive(Debug, Serialize)]
 pub struct AgentAddResult {
     /// Whether the agent was added to the ephemeral channel (required).

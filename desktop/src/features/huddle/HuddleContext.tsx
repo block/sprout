@@ -5,6 +5,26 @@ import { relayClient } from "@/shared/api/relayClient";
 import { connectToHuddle, type HuddleConnection } from "./lib/livekit";
 import { setupAudioWorklet } from "./lib/audioWorklet";
 
+/**
+ * Huddle lifecycle (React context):
+ *
+ *   startHuddle(channelId, agents)
+ *     → invoke("start_huddle")         [Rust: ephemeral channel + LiveKit token]
+ *     → connectToHuddle(url, token)     [LiveKit: WebRTC room + mic]
+ *     → setupAudioWorklet(track)        [AudioWorklet: mic PCM → Rust STT]
+ *     → invoke("confirm_huddle_active") [Rust: Connected → Active]
+ *     → setEphemeralChannelId(...)      [triggers TTS subscription + hotstart polling]
+ *
+ *   TTS subscription (on ephemeralChannelId change):
+ *     → relayClient.subscribeToChannel(ephId, callback)
+ *     → buffer events until EOSE, then replay live ones
+ *     → filter: agent pubkeys only (fail-closed), skip self, skip [System]
+ *     → invoke("speak_agent_message", { text })
+ *
+ *   leaveHuddle()
+ *     → stop AudioWorklet → disconnect LiveKit → invoke("leave_huddle")
+ */
+
 type HuddleJoinInfo = {
   ephemeral_channel_id: string;
   livekit_token: string;
@@ -29,6 +49,8 @@ interface HuddleContextValue {
   /** Leave the current huddle — disconnects LiveKit, stops worklet, calls Rust leave_huddle.
    *  Returns true if backend cleanup succeeded, false if it failed (caller may retry). */
   leaveHuddle: () => Promise<boolean>;
+  /** End the huddle (creator only) — archives ephemeral channel, emits huddle_ended */
+  endHuddle: () => Promise<void>;
 }
 
 const HuddleContext = React.createContext<HuddleContextValue | null>(null);
@@ -89,6 +111,47 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     return true; // Backend cleanup succeeded (or was not needed)
   }, []);
 
+  const endHuddle = React.useCallback(async (): Promise<void> => {
+    // Invalidate any in-flight startHuddle
+    tokenRef.current += 1;
+
+    // Step 1: Stop AudioWorklet
+    try {
+      workletRef.current?.stop();
+    } catch {
+      /* best-effort */
+    }
+    workletRef.current = null;
+
+    // Step 2: Disconnect LiveKit
+    const conn = connectionRef.current;
+    connectionRef.current = null;
+    try {
+      if (conn) await conn.disconnect();
+    } catch {
+      /* best-effort */
+    }
+    setLocalAudioTrack(null);
+    setMicConnected(false);
+    setEphemeralChannelId(null);
+
+    // Step 3: Tell Rust to end the huddle (archives channel, emits huddle_ended)
+    if (rustActiveRef.current) {
+      try {
+        await invoke("end_huddle");
+        rustActiveRef.current = false;
+      } catch {
+        // Fall back to leave_huddle
+        try {
+          await invoke("leave_huddle");
+          rustActiveRef.current = false;
+        } catch {
+          // Leave rustActiveRef true for retry
+        }
+      }
+    }
+  }, []);
+
   /** Clean up a partially-established huddle. Best-effort on every step. */
   const cleanupFailedStart = React.useCallback(
     async (
@@ -109,12 +172,22 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       setLocalAudioTrack(null);
       setMicConnected(false);
       setEphemeralChannelId(null);
+      // Use end_huddle (not leave_huddle) for creator cleanup —
+      // this archives the ephemeral channel and emits huddle_ended,
+      // preventing orphaned huddles visible to other users.
       if (rustActiveRef.current) {
         try {
-          await invoke("leave_huddle");
+          await invoke("end_huddle");
           rustActiveRef.current = false;
         } catch {
-          /* leave rustActiveRef true so leaveHuddle retries */
+          // Fall back to leave_huddle if end_huddle fails
+          // (e.g. non-creator, or end_huddle not available)
+          try {
+            await invoke("leave_huddle");
+            rustActiveRef.current = false;
+          } catch {
+            // Leave rustActiveRef true so a subsequent call retries
+          }
         }
       }
     },
@@ -251,7 +324,14 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     // ── EOSE-based replay boundary with timestamp belt-and-suspenders ─────
     let subscriptionReady = false;
     const seenEventIds = new Set<string>();
+    const seenOrder: string[] = [];
+    const MAX_SEEN_EVENTS = 5000;
     const subscribeTimeSecs = Math.floor(Date.now() / 1000);
+    const pendingEvents: Array<{
+      pubkey: string;
+      content: string;
+      created_at: number;
+    }> = [];
 
     /** Speak an event if it passes all filters. */
     function maybeSpeakEvent(pubkey: string, content: string) {
@@ -262,8 +342,11 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       if (pubkey === selfPubkeyRef.current) return;
       if (!content.trim()) return;
       if (content.startsWith("[System]")) return;
-      invoke("speak_agent_message", { text: content }).catch(() => {
-        /* best-effort */
+      invoke("speak_agent_message", { text: content }).catch((err) => {
+        console.warn(
+          "[huddle] TTS speak failed (backpressure or pipeline unavailable):",
+          err,
+        );
       });
     }
 
@@ -275,9 +358,16 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         // Dedup by event ID (covers reconnect replay).
         if (seenEventIds.has(event.id)) return;
         seenEventIds.add(event.id);
+        seenOrder.push(event.id);
+        if (seenOrder.length > MAX_SEEN_EVENTS) {
+          const oldest = seenOrder.shift();
+          if (oldest !== undefined) seenEventIds.delete(oldest);
+        }
 
         if (!subscriptionReady) {
-          // Before EOSE: track as history, don't speak.
+          // Before EOSE: buffer the event. After EOSE resolves, we'll replay
+          // any that have created_at >= subscribeTimeSecs (i.e., truly live).
+          pendingEvents.push(event);
           return;
         }
 
@@ -291,6 +381,15 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       .then((dispose) => {
         // subscribeToChannel resolves after EOSE (or relay's 250ms fallback).
         subscriptionReady = true;
+
+        // Replay buffered events that arrived during the EOSE window.
+        // Only speak events with created_at >= subscribeTimeSecs (truly live).
+        for (const evt of pendingEvents) {
+          if (evt.created_at >= subscribeTimeSecs) {
+            maybeSpeakEvent(evt.pubkey, evt.content);
+          }
+        }
+        pendingEvents.length = 0; // Clear buffer
 
         if (disposed) {
           void dispose();
@@ -370,6 +469,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         micLevel,
         startHuddle,
         leaveHuddle,
+        endHuddle,
       }}
     >
       {children}

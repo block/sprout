@@ -24,9 +24,14 @@ type AgentAddResult = {
 type AddAgentDialogProps = {
   onClose: () => void;
   onAdd: (pubkey: string) => Promise<AgentAddResult>;
+  currentAgentPubkeys: string[];
 };
 
-export function AddAgentDialog({ onClose, onAdd }: AddAgentDialogProps) {
+export function AddAgentDialog({
+  onClose,
+  onAdd,
+  currentAgentPubkeys,
+}: AddAgentDialogProps) {
   const [agents, setAgents] = React.useState<ManagedAgentSummary[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [adding, setAdding] = React.useState<string | null>(null);
@@ -43,8 +48,10 @@ export function AddAgentDialog({ onClose, onAdd }: AddAgentDialogProps) {
       .finally(() => setLoading(false));
   }, []);
 
-  // Only show agents that are currently running.
-  const runningAgents = agents.filter((a) => a.status === "running");
+  // Only show running agents that aren't already in the huddle.
+  const runningAgents = agents.filter(
+    (a) => a.status === "running" && !currentAgentPubkeys.includes(a.pubkey),
+  );
 
   async function handleAdd(pubkey: string) {
     if (adding) return;
@@ -108,7 +115,9 @@ export function AddAgentDialog({ onClose, onAdd }: AddAgentDialogProps) {
           </p>
         ) : runningAgents.length === 0 ? (
           <p className="py-4 text-center text-sm text-muted-foreground">
-            No running agents found.
+            {agents.filter((a) => a.status === "running").length > 0
+              ? "All running agents are already in this huddle."
+              : "No running agents found."}
           </p>
         ) : (
           <ul className="flex flex-col gap-1">

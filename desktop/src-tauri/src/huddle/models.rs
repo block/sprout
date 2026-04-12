@@ -6,16 +6,86 @@
 //!   STT pipeline → is_moonshine_ready() → moonshine_model_dir() → run inference
 //!   TTS pipeline → is_supertonic_ready() → supertonic_model_dir() → run synthesis
 //!
-//! Models are downloaded once and cached. No versioning in MVP — presence of
-//! all expected files is sufficient to consider the model ready.
+//! Models are downloaded once and cached. A version manifest (`.sprout-model-manifest`)
+//! is written alongside model files — if the on-disk version doesn't match the
+//! compiled-in version, the model is re-downloaded.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+// ── Integrity verification ────────────────────────────────────────────────────
+//
+// All model artifacts are verified against pinned SHA-256 hashes before
+// installation. This is defense-in-depth: HTTPS protects the transport,
+// hashes protect the content.
+//
+// To recompute hashes: download each file, run `shasum -a 256 <file>`, and
+// update the corresponding constant.
+
+/// SHA-256 hash of the Moonshine archive (sherpa-onnx-moonshine-tiny-en-int8.tar.bz2).
+/// Computed from a known-good download. Update when upgrading model versions.
+const MOONSHINE_ARCHIVE_SHA256: &str =
+    "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2";
+
+/// SHA-256 hashes for individual Supertonic model files.
+/// Computed from known-good downloads. Update when upgrading model versions.
+const SUPERTONIC_FILE_HASHES: &[(&str, &str)] = &[
+    (
+        "duration_predictor.onnx",
+        "6d556b3691165c364be91dc0bd894656b5949f5acd2750d8ec2f954010845011",
+    ),
+    (
+        "text_encoder.onnx",
+        "dd5f535ed629f7df86071043e15f541ce1b2ab7f1bdbce4c7892b307bca79fa3",
+    ),
+    (
+        "vector_estimator.onnx",
+        "105e9d66fd8756876b210a6b4aa03fc393b1eaca3a8dadcc8d9a3bc785c86a35",
+    ),
+    (
+        "vocoder.onnx",
+        "19bd51f47a186069c752403518a40f7ea4c647455056d2511f7249691ecddf7c",
+    ),
+    (
+        "tts.json",
+        "ee531d9af9b80438a2ed703e22155ee6c83b12595ab22fd3bb6de94c7502fe96",
+    ),
+    (
+        "unicode_indexer.json",
+        "b7662a73a0703f43b97c0f2e089f8e8325e26f5d841aca393b5a54c509c92df1",
+    ),
+    (
+        "F1.json",
+        "6106950ebeb8a5da29ea22075f605db659cd07dbc288a68292543d9129aa250f",
+    ),
+];
+
+// ── Model versioning ──────────────────────────────────────────────────────────
+//
+// A version manifest is written alongside model files after successful download.
+// If the on-disk manifest doesn't match the compiled-in version, the model is
+// considered stale and re-downloaded. Increment when upgrading model files.
+
+/// Model manifest version for Moonshine. Increment when upgrading model files.
+const MOONSHINE_MODEL_VERSION: &str = "1";
+
+/// Model manifest version for Supertonic. Increment when upgrading model files.
+const SUPERTONIC_MODEL_VERSION: &str = "1";
+
+/// Filename for the version manifest written alongside model files.
+const MANIFEST_FILENAME: &str = ".sprout-model-manifest";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+
+/// Maximum expected Moonshine archive size (200 MB — actual is ~50 MB).
+const MAX_MOONSHINE_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Maximum expected Supertonic file size (150 MB per file).
+const MAX_SUPERTONIC_FILE_BYTES: u64 = 150 * 1024 * 1024;
 
 const MOONSHINE_DOWNLOAD_URL: &str =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/\
@@ -72,28 +142,72 @@ pub struct VoiceModelStatus {
     pub supertonic: ModelStatus,
 }
 
-// ── Platform-gated tar extraction ─────────────────────────────────────────────
+// ── Safe archive extraction ───────────────────────────────────────────────────
 
-#[cfg(unix)]
+/// Extract a .tar.bz2 archive safely using Rust-native crates.
+///
+/// The `tar` crate rejects path traversal (absolute paths, `..` components)
+/// by default in `unpack()`. We add an explicit pre-check as defense-in-depth.
 fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
-    let status = std::process::Command::new("tar")
-        .args([
-            "xjf",
-            &archive_path.to_string_lossy(),
-            "-C",
-            &dest_dir.to_string_lossy(),
-        ])
-        .status()
-        .map_err(|e| format!("tar execution failed: {e}"))?;
-    if !status.success() {
-        return Err(format!("tar exited with status {status}"));
+    use bzip2::read::BzDecoder;
+    use std::fs::File;
+    use tar::Archive;
+
+    let file = File::open(archive_path).map_err(|e| format!("open archive: {e}"))?;
+    let decoder = BzDecoder::new(file);
+    let mut archive = Archive::new(decoder);
+
+    // Pre-validate: check all entries for path safety before extracting anything.
+    // This is defense-in-depth — the tar crate also rejects traversal in unpack().
+    {
+        let file2 =
+            File::open(archive_path).map_err(|e| format!("open archive for validation: {e}"))?;
+        let decoder2 = BzDecoder::new(file2);
+        let mut check_archive = Archive::new(decoder2);
+        for entry in check_archive
+            .entries()
+            .map_err(|e| format!("read archive entries: {e}"))?
+        {
+            let entry = entry.map_err(|e| format!("archive entry: {e}"))?;
+            let path = entry.path().map_err(|e| format!("entry path: {e}"))?;
+            let path_str = path.to_string_lossy();
+
+            // Reject absolute paths.
+            if path.is_absolute() {
+                return Err(format!("archive contains absolute path: {path_str}"));
+            }
+            // Reject path traversal.
+            for component in path.components() {
+                if matches!(component, std::path::Component::ParentDir) {
+                    return Err(format!("archive contains path traversal: {path_str}"));
+                }
+            }
+            // Reject symlinks.
+            if entry.header().entry_type().is_symlink()
+                || entry.header().entry_type().is_hard_link()
+            {
+                return Err(format!("archive contains symlink/hardlink: {path_str}"));
+            }
+        }
     }
+
+    // Safe to extract — all entries validated.
+    archive
+        .unpack(dest_dir)
+        .map_err(|e| format!("extract archive: {e}"))?;
+
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn extract_archive(_archive_path: &Path, _dest_dir: &Path) -> Result<(), String> {
-    Err("Model download is not yet supported on this platform".to_string())
+// ── Hash verification ─────────────────────────────────────────────────────────
+
+/// Compute SHA-256 hash of a file. Returns lowercase hex string.
+async fn sha256_file(path: &Path) -> Result<String, String> {
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("read file for hash: {e}"))?;
+    let hash = Sha256::digest(&bytes);
+    Ok(hex::encode(hash))
 }
 
 // ── ModelManager ──────────────────────────────────────────────────────────────
@@ -140,12 +254,17 @@ impl ModelManager {
         }
     }
 
-    /// Returns `true` if all expected Moonshine model files are present on disk.
+    /// Returns `true` if all expected Moonshine model files are present on disk
+    /// and the version manifest matches the compiled-in version.
     pub fn is_moonshine_ready(&self) -> bool {
         let dir = self.models_dir.join(MOONSHINE_MODEL_DIR_NAME);
-        MOONSHINE_EXPECTED_FILES
-            .iter()
-            .all(|f| dir.join(f).is_file())
+        let manifest_ok = std::fs::read_to_string(dir.join(MANIFEST_FILENAME))
+            .map(|v| v.trim() == MOONSHINE_MODEL_VERSION)
+            .unwrap_or(false);
+        manifest_ok
+            && MOONSHINE_EXPECTED_FILES
+                .iter()
+                .all(|f| dir.join(f).is_file())
     }
 
     /// Current Moonshine download status.
@@ -172,12 +291,17 @@ impl ModelManager {
         }
     }
 
-    /// Returns `true` if all expected Supertonic model files are present on disk.
+    /// Returns `true` if all expected Supertonic model files are present on disk
+    /// and the version manifest matches the compiled-in version.
     pub fn is_supertonic_ready(&self) -> bool {
         let dir = self.models_dir.join(SUPERTONIC_MODEL_DIR_NAME);
-        SUPERTONIC_EXPECTED_FILES
-            .iter()
-            .all(|f| dir.join(f).is_file())
+        let manifest_ok = std::fs::read_to_string(dir.join(MANIFEST_FILENAME))
+            .map(|v| v.trim() == SUPERTONIC_MODEL_VERSION)
+            .unwrap_or(false);
+        manifest_ok
+            && SUPERTONIC_EXPECTED_FILES
+                .iter()
+                .all(|f| dir.join(f).is_file())
     }
 
     /// Current Supertonic download status.
@@ -317,34 +441,71 @@ impl ModelManager {
 
         let content_length = response.content_length();
 
+        // Reject unexpectedly large downloads before we start.
+        if let Some(total) = content_length {
+            if total > MAX_MOONSHINE_DOWNLOAD_BYTES {
+                return Err(format!(
+                    "download too large: {total} bytes (max {MAX_MOONSHINE_DOWNLOAD_BYTES})"
+                ));
+            }
+        }
+
+        // Stream to disk instead of buffering the entire archive in memory.
         {
             use tokio::io::AsyncWriteExt;
-
-            let body = response
-                .bytes()
-                .await
-                .map_err(|e| format!("download stream error: {e}"))?;
-
-            if let Some(total) = content_length {
-                if total > 0 {
-                    let pct = ((body.len() as u64 * 100) / total).min(89) as u8;
-                    self.set_moonshine_status(ModelStatus::Downloading {
-                        progress_percent: pct,
-                    });
-                }
-            }
-
-            eprintln!("sprout-desktop: downloaded {} bytes, writing…", body.len());
 
             let mut file = tokio::fs::File::create(&archive_path)
                 .await
                 .map_err(|e| format!("create archive file: {e}"))?;
-            file.write_all(&body)
+
+            let mut downloaded: u64 = 0;
+            let mut response = response;
+
+            while let Some(chunk) = response
+                .chunk()
                 .await
-                .map_err(|e| format!("write archive: {e}"))?;
+                .map_err(|e| format!("download stream error: {e}"))?
+            {
+                downloaded += chunk.len() as u64;
+
+                // Guard against servers that lie about content-length.
+                if downloaded > MAX_MOONSHINE_DOWNLOAD_BYTES {
+                    let _ = tokio::fs::remove_file(&archive_path).await;
+                    return Err(format!(
+                        "download exceeded max size during streaming: \
+                         {downloaded} bytes (max {MAX_MOONSHINE_DOWNLOAD_BYTES})"
+                    ));
+                }
+
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|e| format!("write archive: {e}"))?;
+
+                if let Some(total) = content_length {
+                    if total > 0 {
+                        let pct = ((downloaded * 89) / total).min(89) as u8;
+                        self.set_moonshine_status(ModelStatus::Downloading {
+                            progress_percent: pct,
+                        });
+                    }
+                }
+            }
+
             file.flush()
                 .await
                 .map_err(|e| format!("flush archive: {e}"))?;
+
+            eprintln!("sprout-desktop: downloaded {downloaded} bytes, wrote to disk");
+        }
+
+        // Verify archive integrity before extraction.
+        let hash = sha256_file(&archive_path).await?;
+        if hash != MOONSHINE_ARCHIVE_SHA256 {
+            let _ = tokio::fs::remove_file(&archive_path).await;
+            return Err(format!(
+                "Moonshine archive integrity check failed: expected {}, got {}",
+                MOONSHINE_ARCHIVE_SHA256, hash
+            ));
         }
 
         self.set_moonshine_status(ModelStatus::Downloading {
@@ -409,6 +570,10 @@ impl ModelManager {
             }
             return Err(format!("install new model: {e}"));
         }
+
+        // Write version manifest for cache invalidation on future upgrades.
+        std::fs::write(final_dir.join(MANIFEST_FILENAME), MOONSHINE_MODEL_VERSION)
+            .map_err(|e| format!("write model manifest: {e}"))?;
 
         let _ = tokio::fs::remove_dir_all(&backup_dir).await;
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
@@ -481,34 +646,92 @@ impl ModelManager {
                 ));
             }
 
-            let body = response
-                .bytes()
-                .await
-                .map_err(|e| format!("download {filename} stream error: {e}"))?;
+            let file_content_length = response.content_length();
 
-            eprintln!(
-                "sprout-desktop: downloaded {} bytes ({}), writing…",
-                body.len(),
-                filename
-            );
+            // Reject unexpectedly large files before we start.
+            if let Some(total) = file_content_length {
+                if total > MAX_SUPERTONIC_FILE_BYTES {
+                    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+                    return Err(format!(
+                        "download {filename} too large: {total} bytes \
+                         (max {MAX_SUPERTONIC_FILE_BYTES})"
+                    ));
+                }
+            }
 
-            // Progress: spread 0–89% across all files.
-            let pct = (((i as u32 + 1) * 89) / total_files).min(89) as u8;
-            self.set_supertonic_status(ModelStatus::Downloading {
-                progress_percent: pct,
-            });
-
+            // Stream to disk instead of buffering the entire file in memory.
             use tokio::io::AsyncWriteExt;
             let dest = temp_dir.join(filename);
             let mut file = tokio::fs::File::create(&dest)
                 .await
                 .map_err(|e| format!("create {filename}: {e}"))?;
-            file.write_all(&body)
+
+            let mut downloaded: u64 = 0;
+            let mut response = response;
+
+            while let Some(chunk) = response
+                .chunk()
                 .await
-                .map_err(|e| format!("write {filename}: {e}"))?;
+                .map_err(|e| format!("download {filename} stream error: {e}"))?
+            {
+                downloaded += chunk.len() as u64;
+
+                // Guard against servers that lie about content-length.
+                if downloaded > MAX_SUPERTONIC_FILE_BYTES {
+                    let _ = tokio::fs::remove_file(&dest).await;
+                    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+                    return Err(format!(
+                        "download {filename} exceeded max size during streaming: \
+                         {downloaded} bytes (max {MAX_SUPERTONIC_FILE_BYTES})"
+                    ));
+                }
+
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|e| format!("write {filename}: {e}"))?;
+
+                // Progress: spread 0–89% across all files, with intra-file granularity.
+                if let Some(total) = file_content_length {
+                    if total > 0 {
+                        let file_frac = downloaded as f64 / total as f64;
+                        let base = (i as f64 / total_files as f64) * 89.0;
+                        let span = 89.0 / total_files as f64;
+                        let pct = (base + span * file_frac).min(89.0) as u8;
+                        self.set_supertonic_status(ModelStatus::Downloading {
+                            progress_percent: pct,
+                        });
+                    }
+                }
+            }
+
             file.flush()
                 .await
                 .map_err(|e| format!("flush {filename}: {e}"))?;
+
+            eprintln!("sprout-desktop: downloaded {downloaded} bytes ({filename}), wrote to disk");
+
+            // Verify file integrity against pinned hash.
+            let expected_hash = SUPERTONIC_FILE_HASHES
+                .iter()
+                .find(|(name, _)| *name == *filename)
+                .map(|(_, hash)| *hash);
+
+            if let Some(expected) = expected_hash {
+                let actual = sha256_file(&dest).await?;
+                if actual != expected {
+                    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+                    return Err(format!(
+                        "Supertonic {filename} integrity check failed: \
+                         expected {expected}, got {actual}"
+                    ));
+                }
+            }
+
+            // Ensure progress reflects file completion even without content-length.
+            let pct = (((i as u32 + 1) * 89) / total_files).min(89) as u8;
+            self.set_supertonic_status(ModelStatus::Downloading {
+                progress_percent: pct,
+            });
         }
 
         self.set_supertonic_status(ModelStatus::Downloading {
@@ -547,6 +770,10 @@ impl ModelManager {
             }
             return Err(format!("install new supertonic model: {e}"));
         }
+
+        // Write version manifest for cache invalidation on future upgrades.
+        std::fs::write(final_dir.join(MANIFEST_FILENAME), SUPERTONIC_MODEL_VERSION)
+            .map_err(|e| format!("write model manifest: {e}"))?;
 
         let _ = tokio::fs::remove_dir_all(&backup_dir).await;
 

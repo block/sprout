@@ -1,11 +1,11 @@
 //! Supertonic TTS engine — wraps the 4-ONNX-session pipeline from
 //! `supertone-inc/supertonic` and exposes a clean `call()` API that returns
-//! `Vec<f32>` samples at 24 kHz.
+//! `Vec<f32>` samples at 44.1 kHz.
 //!
 //! Mental model:
 //!   load_text_to_speech(onnx_dir) → TextToSpeech
 //!   load_voice_style(path)        → Style
-//!   tts.call(text, lang, &style)  → Vec<f32> @ 24 kHz
+//!   tts.call(text, lang, &style)  → Vec<f32> @ 44.1 kHz
 
 use ndarray::{Array, Array3};
 use rand_distr::{Distribution, Normal};
@@ -18,6 +18,8 @@ use std::sync::LazyLock;
 use unicode_normalization::UnicodeNormalization;
 
 use ort::{session::Session, value::Value};
+
+use super::preprocessing::split_sentences;
 
 // ── Public constants ──────────────────────────────────────────────────────────
 
@@ -194,7 +196,6 @@ static RE_WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwr
 static RE_ENDS_PUNC: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"[.!?;:,'")\]}…。」』】〉》›»]$"#).unwrap());
 static RE_PARAGRAPH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n\s*\n").unwrap());
-static RE_SENTENCE_SPLIT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"([.!?])\s+").unwrap());
 
 // ── Text preprocessing ────────────────────────────────────────────────────────
 
@@ -350,11 +351,6 @@ fn sample_noisy_latent(
 
 const MAX_CHUNK_LEN: usize = 300;
 
-const ABBREVIATIONS: &[&str] = &[
-    "Dr.", "Mr.", "Mrs.", "Ms.", "Prof.", "Sr.", "Jr.", "St.", "Ave.", "Rd.", "Blvd.", "Dept.",
-    "Inc.", "Ltd.", "Co.", "Corp.", "etc.", "vs.", "i.e.", "e.g.", "Ph.D.",
-];
-
 pub(crate) fn chunk_text(text: &str, max_len: Option<usize>) -> Vec<String> {
     let max_len = max_len.unwrap_or(MAX_CHUNK_LEN);
     let text = text.trim();
@@ -458,37 +454,6 @@ pub(crate) fn chunk_text(text: &str, max_len: Option<usize>) -> Vec<String> {
         vec![String::new()]
     } else {
         chunks
-    }
-}
-
-fn split_sentences(text: &str) -> Vec<String> {
-    let matches: Vec<_> = RE_SENTENCE_SPLIT.find_iter(text).collect();
-    if matches.is_empty() {
-        return vec![text.to_string()];
-    }
-
-    let mut sentences = Vec::new();
-    let mut last_end = 0usize;
-
-    for m in &matches {
-        let before = &text[last_end..m.start()];
-        let punc_char = &text[m.start()..m.start() + 1];
-        let combined = format!("{}{}", before.trim(), punc_char);
-        let is_abbrev = ABBREVIATIONS.iter().any(|a| combined.ends_with(a));
-        if !is_abbrev {
-            sentences.push(text[last_end..m.end()].to_string());
-            last_end = m.end();
-        }
-    }
-
-    if last_end < text.len() {
-        sentences.push(text[last_end..].to_string());
-    }
-
-    if sentences.is_empty() {
-        vec![text.to_string()]
-    } else {
-        sentences
     }
 }
 

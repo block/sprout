@@ -1,5 +1,10 @@
 // AudioWorklet processor — runs in the AudioWorklet thread.
 // Accumulates PCM Float32 samples and sends 100ms batches to the main thread.
+//
+// Note: when the worklet is disconnected, any partial buffer (< 4800 samples)
+// is silently dropped. This means the last ~100ms of speech may be lost on
+// huddle leave. This is acceptable — the STT pipeline's silence-flush threshold
+// (450ms) means the last utterance was already transcribed before disconnect.
 class SttTapProcessor extends AudioWorkletProcessor {
   constructor() {
     super();

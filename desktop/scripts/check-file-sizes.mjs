@@ -55,8 +55,9 @@ const overrides = new Map([
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
   ["src/shared/api/types.ts", 535], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields + mcpToolsets
-  ["src-tauri/src/huddle/mod.rs", 1200], // huddle state machine + 12 Tauri commands + STT/TTS pipeline lifecycle + relay membership fetch + two-phase activation; split planned post-MVP
-  ["src-tauri/src/huddle/models.rs", 650], // model download manager for Moonshine STT + Supertonic TTS with streaming downloads + atomic swap + hot-start signaling
+  ["src-tauri/src/huddle/mod.rs", 1300], // huddle state machine + 14 Tauri commands + STT/TTS pipeline lifecycle + relay membership fetch + session generation guard + creator enforcement + input validation; split planned post-MVP
+  ["src-tauri/src/huddle/models.rs", 850], // model download manager for Moonshine STT + Supertonic TTS with streaming downloads + SHA-256 verification + Rust-native tar extraction + version manifest + atomic swap + hot-start signaling
+  ["src-tauri/src/huddle/preprocessing.rs", 620], // TTS text preprocessing pipeline + unified split_sentences (consolidated from tts.rs + supertonic.rs) + int_to_words 0-999999 + 18 unit tests
   ["src-tauri/src/huddle/supertonic.rs", 780], // Supertonic 4-ONNX-session TTS engine wrapper + Unicode text processor + LazyLock regex patterns + text chunking
 ]);
 

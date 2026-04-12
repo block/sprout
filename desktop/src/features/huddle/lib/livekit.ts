@@ -6,6 +6,21 @@ export interface HuddleConnection {
   disconnect: () => Promise<void>;
 }
 
+/**
+ * LiveKit connection lifecycle:
+ *
+ *   connectToHuddle(url, token)
+ *     → getUserMedia({ audio: true })   [mic permission]
+ *     → room.connect(url, token)        [WebRTC signaling]
+ *     → room.localParticipant.publishTrack(audioTrack)
+ *     → returns { room, localAudioTrack, disconnect }
+ *
+ *   disconnect()
+ *     → room.disconnect()
+ *     → stream.getTracks().forEach(t => t.stop())
+ *
+ *   Error handling: mic stream is always cleaned up, even on partial failure.
+ */
 export async function connectToHuddle(
   url: string,
   token: string,

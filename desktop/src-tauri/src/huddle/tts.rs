@@ -35,7 +35,7 @@ use std::{
     time::Duration,
 };
 
-use super::preprocessing::preprocess_for_tts;
+use super::preprocessing::{preprocess_for_tts, split_sentences};
 use super::supertonic::{
     self, load_text_to_speech, load_voice_style, Style, TextToSpeech, SAMPLE_RATE,
 };
@@ -163,9 +163,10 @@ impl TtsPipeline {
     /// Non-blocking. Returns `Err` if the queue is full (bounded at
     /// `TEXT_QUEUE_DEPTH`) — caller may log and discard.
     pub fn speak(&self, text: String) -> Result<(), String> {
-        self.text_tx
-            .try_send(text)
-            .map_err(|e| format!("TTS queue full, dropping: {e}"))
+        self.text_tx.try_send(text).map_err(|e| {
+            eprintln!("sprout-desktop: TTS queue saturated, dropping message: {e}");
+            format!("TTS queue full, dropping: {e}")
+        })
     }
 
     /// Barge-in: cancel current speech and discard queued items.
@@ -290,8 +291,20 @@ fn tts_worker(
         }
 
         use rodio::buffer::SamplesBuffer;
-        let channels = NonZero::new(1u16).expect("1 is nonzero");
-        let rate = NonZero::new(SAMPLE_RATE).expect("44100 is nonzero");
+        let channels = match NonZero::new(1u16) {
+            Some(c) => c,
+            None => {
+                eprintln!("sprout-desktop: TTS channel count invariant violated");
+                break;
+            }
+        };
+        let rate = match NonZero::new(SAMPLE_RATE) {
+            Some(r) => r,
+            None => {
+                eprintln!("sprout-desktop: TTS sample rate invariant violated");
+                break;
+            }
+        };
 
         // Single persistent Player — all batches append here, rodio plays
         // them gaplessly without per-batch device setup overhead.
@@ -389,54 +402,6 @@ fn apply_fades(samples: &mut Vec<f32>) {
     for i in 0..fade {
         samples[len - 1 - i] *= i as f32 / fade as f32;
     }
-}
-
-/// Split text into sentence-sized chunks for TTS.
-///
-/// Splits on `.` `!` `?` followed by whitespace, plus `\n` and `—`.
-/// Keeps chunks non-empty and trimmed.
-fn split_sentences(text: &str) -> Vec<String> {
-    let mut sentences = Vec::new();
-    let mut current = String::new();
-
-    let chars: Vec<char> = text.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
-
-    while i < len {
-        let c = chars[i];
-        current.push(c);
-
-        let is_break = match c {
-            '.' | '!' | '?' => {
-                // Only break if followed by whitespace or end of text,
-                // AND preceded by a letter (not a digit — avoids splitting "1." "2." etc.)
-                let prev_is_letter = i > 0 && chars[i - 1].is_alphabetic();
-                let next_is_boundary = i + 1 >= len || chars[i + 1].is_whitespace();
-                prev_is_letter && next_is_boundary
-            }
-            '\n' => true,
-            '—' => true,
-            _ => false,
-        };
-
-        if is_break {
-            let trimmed = current.trim().to_string();
-            if !trimmed.is_empty() {
-                sentences.push(trimmed);
-            }
-            current.clear();
-        }
-
-        i += 1;
-    }
-
-    let trimmed = current.trim().to_string();
-    if !trimmed.is_empty() {
-        sentences.push(trimmed);
-    }
-
-    sentences
 }
 
 /// Drain and discard all pending text until shutdown or disconnect.

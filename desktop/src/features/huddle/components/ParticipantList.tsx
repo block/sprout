@@ -29,9 +29,14 @@ function ParticipantAvatar({ pubkey }: ParticipantAvatarProps) {
   // Use first 6 hex chars as a short identifier
   const shortId = pubkey.slice(0, 6).toUpperCase();
 
-  // Derive a stable hue from the pubkey for a distinct avatar color
-  const hue = parseInt(pubkey.slice(0, 4), 16) % 360;
-  const style = { backgroundColor: `hsl(${hue}, 60%, 55%)`, color: "#fff" };
+  // Derive a stable hue from the pubkey. Falls back to neutral gray on invalid hex.
+  const parsed = parseInt(pubkey.slice(0, 4), 16);
+  const hue = Number.isNaN(parsed) ? 0 : parsed % 360;
+  const saturation = Number.isNaN(parsed) ? 0 : 60;
+  const style = {
+    backgroundColor: `hsl(${hue}, ${saturation}%, 55%)`,
+    color: "#fff",
+  };
 
   return (
     <div

@@ -17,7 +17,10 @@ pub mod tts;
 
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
+};
 use tauri::State;
 use uuid::Uuid;
 
@@ -47,7 +50,13 @@ pub struct HuddleState {
     pub phase: HuddlePhase,
     pub parent_channel_id: Option<String>,
     pub ephemeral_channel_id: Option<String>,
+    /// Skipped from serialization — the frontend gets the token from
+    /// start_huddle/join_huddle return values. Exposing the LiveKit JWT
+    /// on every 2-second get_huddle_state poll is unnecessary attack surface.
+    #[serde(skip)]
     pub livekit_token: Option<String>,
+    /// Skipped from serialization — same rationale as livekit_token.
+    #[serde(skip)]
     pub livekit_url: Option<String>,
     pub livekit_room: Option<String>,
     /// Participant pubkey hex strings (all members, including humans).
@@ -73,6 +82,9 @@ pub struct HuddleState {
     /// Active TTS pipeline — not serialized, not cloned.
     #[serde(skip)]
     pub tts_pipeline: Option<Arc<tts::TtsPipeline>>,
+    /// Whether this client created the huddle (vs. joined it).
+    /// Used to enforce that only the creator can end/archive the huddle.
+    pub is_creator: bool,
     /// Whether TTS output is enabled (user-toggled).
     pub tts_enabled: bool,
     /// Shared flag: true while TTS is playing audio.
@@ -84,6 +96,15 @@ pub struct HuddleState {
     /// restarts — both STT and TTS reference the same flag for the entire huddle.
     #[serde(skip)]
     pub tts_cancel: Arc<AtomicBool>,
+    /// Timestamp of the last agent pubkey refresh from the relay.
+    /// Used to throttle the refresh in check_pipeline_hotstart to every 15 s.
+    #[serde(skip)]
+    pub last_agent_refresh: Option<std::time::Instant>,
+    /// Session generation — incremented on every teardown. The transcription
+    /// task captures this at spawn time and checks before each POST. If the
+    /// generation has changed, the task silently drops the transcript.
+    #[serde(skip)]
+    pub session_generation: Arc<AtomicU64>,
 }
 
 fn serialize_agent_pubkeys<S>(v: &Arc<Mutex<Vec<String>>>, s: S) -> Result<S::Ok, S::Error>
@@ -125,9 +146,12 @@ impl Clone for HuddleState {
             agent_pubkeys: Arc::new(Mutex::new(agent_pubkeys_snapshot)),
             stt_pipeline: None, // Never clone the pipeline handle.
             tts_pipeline: None, // Never clone the pipeline handle.
+            is_creator: self.is_creator,
             tts_enabled: self.tts_enabled,
             tts_active: Arc::clone(&self.tts_active),
             tts_cancel: Arc::clone(&self.tts_cancel),
+            last_agent_refresh: self.last_agent_refresh,
+            session_generation: Arc::clone(&self.session_generation),
         }
     }
 }
@@ -145,9 +169,12 @@ impl Default for HuddleState {
             agent_pubkeys: Arc::new(Mutex::new(Vec::new())),
             stt_pipeline: None,
             tts_pipeline: None,
+            is_creator: false,
             tts_enabled: true,
             tts_active: Arc::new(AtomicBool::new(false)),
             tts_cancel: Arc::new(AtomicBool::new(false)),
+            last_agent_refresh: None,
+            session_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -172,6 +199,20 @@ struct LiveKitTokenResponse {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Maximum number of agents that can be invited to a single huddle.
+const MAX_HUDDLE_AGENTS: usize = 20;
+
+/// Validate that a string looks like a Nostr pubkey hex (64 hex chars).
+fn validate_pubkey_hex(pubkey: &str) -> Result<(), String> {
+    if pubkey.len() != 64 || !pubkey.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "invalid pubkey hex: {}",
+            &pubkey[..pubkey.len().min(16)]
+        ));
+    }
+    Ok(())
+}
 
 fn parse_channel_uuid(channel_id: &str) -> Result<Uuid, String> {
     Uuid::parse_str(channel_id).map_err(|_| format!("invalid channel UUID: {channel_id}"))
@@ -229,78 +270,74 @@ async fn fetch_agent_pubkeys_from_relay(
     }
 }
 
+/// Fetch ALL member pubkeys from the relay's channel membership API.
+///
+/// Returns every member (humans + bots) for participant hydration.
+/// Same API as `fetch_agent_pubkeys_from_relay` but without the bot filter.
+async fn fetch_all_member_pubkeys(
+    channel_id: &str,
+    state: &AppState,
+) -> Result<Vec<String>, String> {
+    #[derive(Deserialize)]
+    struct Member {
+        pubkey: String,
+    }
+    #[derive(Deserialize)]
+    struct MembersResponse {
+        members: Vec<Member>,
+    }
+
+    let path = api_path(&["channels", channel_id, "members"]);
+    let request = build_authed_request(&state.http_client, Method::GET, &path, state)?;
+    let resp: MembersResponse = send_json_request(request).await?;
+    Ok(resp.members.into_iter().map(|m| m.pubkey).collect())
+}
+
 /// Attempt to start the STT pipeline if models are present.
-/// Silently skips if models are missing — huddle continues as voice-only.
+///
+/// Returns `Ok(true)` if the pipeline was started, `Ok(false)` if models are
+/// not ready (voice-only mode), or `Err` on a real failure.
 ///
 /// Creates the shared `tts_active` flag and passes it to the STT pipeline
 /// for barge-in / echo gating. The same flag is later passed to the TTS
 /// pipeline so it can signal when audio is playing.
-async fn maybe_start_stt_pipeline(state: &AppState, ephemeral_channel_id: &str) {
+async fn maybe_start_stt_pipeline(
+    state: &AppState,
+    ephemeral_channel_id: &str,
+) -> Result<bool, String> {
     if !models::is_moonshine_ready() {
-        return; // Models not downloaded yet — voice-only mode.
+        return Ok(false); // Models not downloaded yet — voice-only mode.
     }
-    let model_dir = match models::moonshine_model_dir() {
-        Some(d) => d,
-        None => return,
+    let model_dir =
+        models::moonshine_model_dir().ok_or_else(|| "Moonshine model directory not found")?;
+
+    let channel_uuid = parse_channel_uuid(ephemeral_channel_id)?;
+
+    // Grab shared flags, agent pubkeys, and session generation from HuddleState in one lock.
+    let (tts_active, tts_cancel, agent_pubkeys_arc, session_gen) = {
+        let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+        (
+            Arc::clone(&hs.tts_active),
+            Some(Arc::clone(&hs.tts_cancel)),
+            Arc::clone(&hs.agent_pubkeys),
+            Arc::clone(&hs.session_generation),
+        )
     };
 
-    // Grab the shared tts_active flag from HuddleState.
-    let tts_active = {
-        let hs = match state.huddle_state.lock() {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-        Arc::clone(&hs.tts_active)
-    };
-
-    // Grab the shared barge-in cancel flag from HuddleState.
-    // This flag lives for the entire huddle session — no stale references
-    // if TTS is restarted (set_tts_enabled toggle or hot-start).
-    let tts_cancel = {
-        let hs = match state.huddle_state.lock() {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-        Some(Arc::clone(&hs.tts_cancel))
-    };
-
-    let (pipeline, text_rx) = match stt::SttPipeline::new(model_dir, tts_active, tts_cancel) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("sprout-desktop: STT pipeline failed to start: {e}");
-            return;
-        }
-    };
+    let (pipeline, text_rx) = stt::SttPipeline::new(model_dir, tts_active, tts_cancel)?;
     let pipeline = Arc::new(pipeline);
-
-    let channel_uuid = match parse_channel_uuid(ephemeral_channel_id) {
-        Ok(u) => u,
-        Err(_) => return,
-    };
-
-    // Clone the Arc<Mutex<Vec<String>>> BEFORE storing the pipeline, so we
-    // can pass it to the transcription task without holding the state lock.
-    let agent_pubkeys_arc = {
-        let hs = match state.huddle_state.lock() {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-        Arc::clone(&hs.agent_pubkeys)
-    };
 
     // Shut down existing STT pipeline before replacing (prevents leaked transcription tasks).
     {
-        let mut hs = match state.huddle_state.lock() {
-            Ok(h) => h,
-            Err(_) => return,
-        };
+        let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
         if let Some(ref old) = hs.stt_pipeline {
             old.shutdown();
         }
         hs.stt_pipeline = Some(Arc::clone(&pipeline));
     }
 
-    spawn_transcription_task(text_rx, channel_uuid, agent_pubkeys_arc, state);
+    spawn_transcription_task(text_rx, channel_uuid, agent_pubkeys_arc, session_gen, state);
+    Ok(true)
 }
 
 /// Attempt to start the TTS pipeline if Supertonic models are present and TTS is enabled.
@@ -376,8 +413,12 @@ fn spawn_transcription_task(
     mut text_rx: tokio::sync::mpsc::Receiver<String>,
     channel_uuid: Uuid,
     agent_pubkeys_arc: Arc<Mutex<Vec<String>>>,
+    session_generation: Arc<AtomicU64>,
     state: &AppState,
 ) {
+    // Capture the current generation at spawn time.
+    let spawned_gen = session_generation.load(Ordering::Acquire);
+
     let http_client = state.http_client.clone();
     let keys = match state.keys.lock() {
         Ok(k) => k.clone(),
@@ -391,6 +432,12 @@ fn spawn_transcription_task(
         while let Some(t) = text_rx.recv().await {
             if t.is_empty() {
                 continue;
+            }
+
+            // Session guard: if the generation has changed, this task is stale.
+            // Drop the transcript silently — the huddle has ended or been replaced.
+            if session_generation.load(Ordering::Acquire) != spawned_gen {
+                break; // Exit the loop entirely — no more posts from this task.
             }
 
             // Fix 1: read current agent pubkeys at post time.
@@ -456,6 +503,27 @@ pub async fn start_huddle(
     member_pubkeys: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<HuddleJoinInfo, String> {
+    // Validate inputs at the Tauri boundary.
+    if member_pubkeys.len() > MAX_HUDDLE_AGENTS {
+        return Err(format!(
+            "too many agents: {} (max {})",
+            member_pubkeys.len(),
+            MAX_HUDDLE_AGENTS
+        ));
+    }
+    // Dedup and validate pubkey format.
+    let member_pubkeys: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        let mut deduped = Vec::new();
+        for pk in member_pubkeys {
+            validate_pubkey_hex(&pk)?;
+            if seen.insert(pk.clone()) {
+                deduped.push(pk);
+            }
+        }
+        deduped
+    };
+
     // Transition to Creating.
     {
         let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
@@ -539,6 +607,7 @@ pub async fn start_huddle(
             {
                 let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
                 hs.phase = HuddlePhase::Connected;
+                hs.is_creator = true;
                 hs.ephemeral_channel_id = Some(ephemeral_channel_id.clone());
                 hs.livekit_token = Some(lk.token.clone());
                 hs.livekit_url = Some(lk.url.clone());
@@ -561,17 +630,28 @@ pub async fn start_huddle(
                 hs.participants = participants;
             }
 
-            // 6. Ensure voice models are downloading (idempotent — no-ops if ready or in progress).
+            // 6. Immediately hydrate participants from relay for authoritative state.
+            //    Best-effort — the local guess above is a reasonable fallback.
+            if let Ok(all_members) = fetch_all_member_pubkeys(&ephemeral_channel_id, &state).await {
+                if !all_members.is_empty() {
+                    let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+                    hs.participants = all_members;
+                }
+            }
+
+            // 7. Ensure voice models are downloading (idempotent — no-ops if ready or in progress).
             if let Some(mgr) = models::global_model_manager() {
                 mgr.start_moonshine_download(state.http_client.clone());
                 mgr.start_supertonic_download(state.http_client.clone());
             }
 
-            // 7. Auto-start TTS first, then STT. STT captures `tts_cancel` from
+            // 8. Auto-start TTS first, then STT. STT captures `tts_cancel` from
             //    `hs.tts_pipeline` at init time — TTS must exist before STT starts
             //    or barge-in never works.
             maybe_start_tts_pipeline(&state).await;
-            maybe_start_stt_pipeline(&state, &ephemeral_channel_id).await;
+            if let Err(e) = maybe_start_stt_pipeline(&state, &ephemeral_channel_id).await {
+                eprintln!("sprout-desktop: STT pipeline failed to start: {e}");
+            }
 
             Ok(HuddleJoinInfo {
                 ephemeral_channel_id,
@@ -681,6 +761,15 @@ pub async fn join_huddle(
         *hs.agent_pubkeys.lock().unwrap_or_else(|e| e.into_inner()) = agents;
     }
 
+    // 4b. Immediately hydrate participants from relay for authoritative state.
+    //     Best-effort — the self-only list above is a reasonable fallback.
+    if let Ok(all_members) = fetch_all_member_pubkeys(&ephemeral_channel_id, &state).await {
+        if !all_members.is_empty() {
+            let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+            hs.participants = all_members;
+        }
+    }
+
     // 5. Ensure voice models are downloading (idempotent).
     if let Some(mgr) = models::global_model_manager() {
         mgr.start_moonshine_download(state.http_client.clone());
@@ -689,7 +778,9 @@ pub async fn join_huddle(
 
     // 6. Auto-start TTS first, then STT (same ordering rationale as start_huddle).
     maybe_start_tts_pipeline(&state).await;
-    maybe_start_stt_pipeline(&state, &ephemeral_channel_id).await;
+    if let Err(e) = maybe_start_stt_pipeline(&state, &ephemeral_channel_id).await {
+        eprintln!("sprout-desktop: STT pipeline failed to start: {e}");
+    }
 
     Ok(HuddleJoinInfo {
         ephemeral_channel_id,
@@ -697,6 +788,34 @@ pub async fn join_huddle(
         livekit_url: lk.url,
         livekit_room: lk.room,
     })
+}
+
+/// Shut down all pipelines and reset huddle state to Idle.
+///
+/// Used by both `leave_huddle` and `end_huddle` to avoid duplicating the
+/// shutdown-then-reset sequence.
+fn teardown_huddle(state: &AppState) -> Result<(), String> {
+    {
+        let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+        // Increment generation first — this immediately invalidates any
+        // in-flight transcription task, even before pipelines shut down.
+        hs.session_generation.fetch_add(1, Ordering::Release);
+        if let Some(ref pipeline) = hs.stt_pipeline {
+            pipeline.shutdown();
+        }
+        if let Some(ref pipeline) = hs.tts_pipeline {
+            pipeline.shutdown();
+        }
+    }
+    {
+        let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+        // Preserve the generation counter across reset — it must survive
+        // for the old transcription task to see the incremented value.
+        let gen = Arc::clone(&hs.session_generation);
+        *hs = HuddleState::default();
+        hs.session_generation = gen;
+    }
+    Ok(())
 }
 
 /// Leave the current huddle.
@@ -730,23 +849,7 @@ pub async fn leave_huddle(state: State<'_, AppState>) -> Result<(), String> {
         }
     }
 
-    // Signal the STT and TTS pipelines to stop before dropping state.
-    // The pipelines' Drop impls will join worker threads for a clean exit.
-    {
-        let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
-        if let Some(ref pipeline) = hs.stt_pipeline {
-            pipeline.shutdown();
-        }
-        if let Some(ref pipeline) = hs.tts_pipeline {
-            pipeline.shutdown();
-        }
-    }
-
-    // Clear state.
-    {
-        let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
-        *hs = HuddleState::default();
-    }
+    teardown_huddle(&state)?;
 
     Ok(())
 }
@@ -764,6 +867,9 @@ pub async fn end_huddle(state: State<'_, AppState>) -> Result<(), String> {
         let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
         if hs.phase == HuddlePhase::Idle {
             return Ok(()); // Nothing to end.
+        }
+        if !hs.is_creator {
+            return Err("only the huddle creator can end the huddle".to_string());
         }
         hs.phase = HuddlePhase::Leaving;
         (
@@ -794,22 +900,7 @@ pub async fn end_huddle(state: State<'_, AppState>) -> Result<(), String> {
         }
     }
 
-    // Signal the STT and TTS pipelines to stop before dropping state.
-    {
-        let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
-        if let Some(ref pipeline) = hs.stt_pipeline {
-            pipeline.shutdown();
-        }
-        if let Some(ref pipeline) = hs.tts_pipeline {
-            pipeline.shutdown();
-        }
-    }
-
-    // Clear state.
-    {
-        let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
-        *hs = HuddleState::default();
-    }
+    teardown_huddle(&state)?;
 
     Ok(())
 }
@@ -854,6 +945,11 @@ pub async fn get_huddle_agent_pubkeys(state: State<'_, AppState>) -> Result<Vec<
     }
 }
 
+/// Maximum IPC audio batch size: 100 KB.
+/// A 100 ms batch at 48 kHz mono f32 is ~19 KB; 100 KB allows headroom
+/// without letting a malformed IPC call allocate unbounded memory.
+const MAX_AUDIO_BATCH_BYTES: usize = 100 * 1024;
+
 /// Receive raw PCM audio bytes from the AudioWorklet and feed the STT pipeline.
 ///
 /// Expects a raw binary body of f32 LE samples at 48 kHz mono.
@@ -865,6 +961,13 @@ pub fn push_audio_pcm(
 ) -> Result<(), String> {
     match request.body() {
         tauri::ipc::InvokeBody::Raw(bytes) => {
+            if bytes.len() > MAX_AUDIO_BATCH_BYTES {
+                return Err(format!(
+                    "audio batch too large: {} bytes (max {})",
+                    bytes.len(),
+                    MAX_AUDIO_BATCH_BYTES
+                ));
+            }
             if let Ok(hs) = state.huddle_state.lock() {
                 if let Some(ref pipeline) = hs.stt_pipeline {
                     pipeline.push_audio(bytes.to_vec())?;
@@ -912,19 +1015,47 @@ pub async fn check_pipeline_hotstart(state: State<'_, AppState>) -> Result<(), S
 
     if !has_stt && (moonshine_ready || models::is_moonshine_ready()) {
         if let Some(eph_id) = &ephemeral_channel_id {
-            maybe_start_stt_pipeline(&state, eph_id).await;
+            if let Err(e) = maybe_start_stt_pipeline(&state, eph_id).await {
+                eprintln!("sprout-desktop: STT hotstart failed: {e}");
+            }
         }
     }
 
     // Periodically refresh agent_pubkeys from relay membership.
     // This catches mid-huddle agent additions/removals by other participants,
     // keeping STT p-tags authoritative throughout the session.
+    // Throttled to every 15 s (not on every 5 s hotstart poll) — the frontend
+    // already refreshes its own agentPubkeys every 10 s via get_huddle_agent_pubkeys.
     // On Ok: always replace (even with empty — agents may have been removed).
     // On Err: preserve the existing list (transient failure shouldn't zero it).
     if let Some(eph_id) = &ephemeral_channel_id {
-        if let Ok(fresh_agents) = fetch_agent_pubkeys_from_relay(eph_id, &state).await {
+        let should_refresh = {
             let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
-            *hs.agent_pubkeys.lock().unwrap_or_else(|e| e.into_inner()) = fresh_agents;
+            match hs.last_agent_refresh {
+                None => true,
+                Some(t) => t.elapsed() >= std::time::Duration::from_secs(15),
+            }
+        };
+        if should_refresh {
+            // Fetch agents (for STT p-tags) and all members (for participant list).
+            // Sequential — tokio::join! requires the `macros` feature.
+            // Only update the throttle timestamp when at least one fetch succeeds,
+            // so transient failures retry immediately on the next poll cycle.
+            let mut any_success = false;
+            if let Ok(fresh_agents) = fetch_agent_pubkeys_from_relay(eph_id, &state).await {
+                let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+                *hs.agent_pubkeys.lock().unwrap_or_else(|e| e.into_inner()) = fresh_agents;
+                any_success = true;
+            }
+            if let Ok(fresh_members) = fetch_all_member_pubkeys(eph_id, &state).await {
+                let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+                hs.participants = fresh_members;
+                any_success = true;
+            }
+            if any_success {
+                let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
+                hs.last_agent_refresh = Some(std::time::Instant::now());
+            }
         }
     }
 
@@ -933,51 +1064,23 @@ pub async fn check_pipeline_hotstart(state: State<'_, AppState>) -> Result<(), S
 
 /// Start the STT pipeline for the active huddle.
 ///
-/// Creates the pipeline, stores it in HuddleState, and spawns a tokio task
-/// that reads transcribed text and posts kind:9 events to the ephemeral
-/// channel.
-///
-/// No-op if models are not present — huddle continues as voice-only.
-/// Safe to call multiple times: replaces the existing pipeline if already running.
+/// Delegates to `maybe_start_stt_pipeline` — returns `Err` if models are not
+/// ready or no huddle is active. Safe to call multiple times: replaces the
+/// existing pipeline if already running.
 #[tauri::command]
 pub async fn start_stt_pipeline(state: State<'_, AppState>) -> Result<(), String> {
-    if !models::is_moonshine_ready() {
-        return Err("Moonshine model not ready".to_string());
-    }
-    let model_dir = models::moonshine_model_dir()
-        .ok_or_else(|| "Moonshine model directory not found".to_string())?;
-
-    let (ephemeral_channel_id, agent_pubkeys_arc) = {
+    let ephemeral_channel_id = {
         let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
-        (
-            hs.ephemeral_channel_id.clone(),
-            Arc::clone(&hs.agent_pubkeys),
-        )
+        hs.ephemeral_channel_id
+            .clone()
+            .ok_or("no active huddle — start or join a huddle first")?
     };
 
-    let ephemeral_channel_id =
-        ephemeral_channel_id.ok_or("no active huddle — start or join a huddle first")?;
-    let channel_uuid = parse_channel_uuid(&ephemeral_channel_id)?;
-
-    let (tts_active, tts_cancel) = {
-        let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
-        // Read from HuddleState.tts_cancel — stable for the entire huddle session.
-        (Arc::clone(&hs.tts_active), Some(Arc::clone(&hs.tts_cancel)))
-    };
-
-    let (pipeline, text_rx) = stt::SttPipeline::new(model_dir, tts_active, tts_cancel)?;
-    let pipeline = Arc::new(pipeline);
-
-    {
-        let mut hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
-        if let Some(ref old) = hs.stt_pipeline {
-            old.shutdown();
-        }
-        hs.stt_pipeline = Some(Arc::clone(&pipeline));
+    match maybe_start_stt_pipeline(&state, &ephemeral_channel_id).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("Moonshine model not ready".to_string()),
+        Err(e) => Err(e),
     }
-
-    spawn_transcription_task(text_rx, channel_uuid, agent_pubkeys_arc, &state);
-    Ok(())
 }
 
 /// Trigger a background download of voice models (Moonshine STT + Supertonic TTS).
@@ -1039,6 +1142,10 @@ pub async fn set_tts_enabled(enabled: bool, state: State<'_, AppState>) -> Resul
 
 /// Speak an agent message via TTS.
 ///
+/// Maximum text length accepted for TTS synthesis.
+/// ~2000 chars ≈ 1–2 minutes of speech. Longer messages are truncated.
+const MAX_TTS_TEXT_LEN: usize = 2000;
+
 /// Called by the WebView when it receives an incoming agent kind:9 message.
 /// Lazily starts the TTS pipeline if models are ready but the pipeline hasn't
 /// been created yet (e.g. models finished downloading after huddle started).
@@ -1046,6 +1153,16 @@ pub async fn set_tts_enabled(enabled: bool, state: State<'_, AppState>) -> Resul
 /// No-op if TTS is disabled or models aren't ready.
 #[tauri::command]
 pub async fn speak_agent_message(text: String, state: State<'_, AppState>) -> Result<(), String> {
+    // Truncate oversized messages — agents shouldn't monologue in a voice huddle.
+    // Use char count (not byte length) to avoid panicking on multi-byte UTF-8.
+    let text = if text.chars().count() > MAX_TTS_TEXT_LEN {
+        let mut truncated: String = text.chars().take(MAX_TTS_TEXT_LEN).collect();
+        truncated.push_str("... message truncated.");
+        truncated
+    } else {
+        text
+    };
+
     let needs_pipeline = {
         let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
         hs.tts_enabled
@@ -1070,7 +1187,7 @@ pub async fn speak_agent_message(text: String, state: State<'_, AppState>) -> Re
 /// Add an agent to the active huddle.
 ///
 /// Steps:
-/// 1. Validates the huddle is in the Active phase.
+/// 1. Validates the huddle is in the Connected or Active phase.
 /// 2. Adds the agent to both the ephemeral and parent channels (kind:9000).
 /// 3. Only appends the agent pubkey to `agent_pubkeys` if the ephemeral add
 ///    succeeded — failed adds (policy rejection) are NOT p-tagged.
@@ -1085,11 +1202,27 @@ pub async fn add_agent_to_huddle(
     agent_pubkey: String,
     state: State<'_, AppState>,
 ) -> Result<agents::AgentAddResult, String> {
+    validate_pubkey_hex(&agent_pubkey)?;
+
     let (eph_id, parent_id) = {
         let hs = state.huddle_state.lock().map_err(|e| e.to_string())?;
         if !matches!(hs.phase, HuddlePhase::Connected | HuddlePhase::Active) {
             return Err("no active huddle".to_string());
         }
+
+        // Enforce agent cap on incremental adds too.
+        let current_agent_count = hs
+            .agent_pubkeys
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len();
+        if current_agent_count >= MAX_HUDDLE_AGENTS {
+            return Err(format!(
+                "agent limit reached: {} (max {})",
+                current_agent_count, MAX_HUDDLE_AGENTS
+            ));
+        }
+
         let eph = hs
             .ephemeral_channel_id
             .clone()

@@ -359,12 +359,20 @@ pub fn build_profile(
 
 // ── Huddles ──────────────────────────────────────────────────────────────────
 
+/// Validate that a string is a valid UUID (defense-in-depth for `&str` channel IDs).
+fn validate_channel_id(id: &str) -> Result<(), String> {
+    uuid::Uuid::parse_str(id).map_err(|_| format!("invalid channel UUID: {id}"))?;
+    Ok(())
+}
+
 /// Kind 48100 — huddle started advisory posted to the parent channel.
 pub fn build_huddle_started(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
     livekit_room: &str,
 ) -> Result<EventBuilder, String> {
+    validate_channel_id(parent_channel_id)?;
+    validate_channel_id(ephemeral_channel_id)?;
     let content = serde_json::json!({
         "ephemeral_channel_id": ephemeral_channel_id,
         "livekit_room": livekit_room,
@@ -379,6 +387,8 @@ pub fn build_huddle_participant_joined(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
 ) -> Result<EventBuilder, String> {
+    validate_channel_id(parent_channel_id)?;
+    validate_channel_id(ephemeral_channel_id)?;
     let content = serde_json::json!({
         "ephemeral_channel_id": ephemeral_channel_id,
     })
@@ -392,6 +402,8 @@ pub fn build_huddle_participant_left(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
 ) -> Result<EventBuilder, String> {
+    validate_channel_id(parent_channel_id)?;
+    validate_channel_id(ephemeral_channel_id)?;
     let content = serde_json::json!({
         "ephemeral_channel_id": ephemeral_channel_id,
     })
@@ -405,6 +417,8 @@ pub fn build_huddle_ended(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
 ) -> Result<EventBuilder, String> {
+    validate_channel_id(parent_channel_id)?;
+    validate_channel_id(ephemeral_channel_id)?;
     let content = serde_json::json!({
         "ephemeral_channel_id": ephemeral_channel_id,
     })

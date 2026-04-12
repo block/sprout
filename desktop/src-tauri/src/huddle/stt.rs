@@ -37,6 +37,10 @@ use tokio::sync::mpsc as tokio_mpsc;
 /// 100 ms batches at 48 kHz ≈ 19 KB each → 50 slots ≈ 5 s / ~1 MB max backlog.
 const AUDIO_QUEUE_DEPTH: usize = 50;
 
+/// Maximum speech buffer size: 30 seconds at 16 kHz.
+/// Prevents OOM if VAD stays in speech mode (noisy environment).
+const MAX_SPEECH_SAMPLES: usize = 16_000 * 30;
+
 /// Handle to the running STT pipeline.
 ///
 /// Not Clone — wrap in `Arc` to share across threads.
@@ -125,12 +129,12 @@ impl SttPipeline {
     /// Non-blocking. Drops audio silently if the pipeline can't keep up —
     /// better to lose frames than to stall the UI thread.
     pub fn push_audio(&self, pcm_bytes: Vec<u8>) -> Result<(), String> {
-        // Warn on non-4-byte-aligned input (would silently truncate in bytes_to_f32).
+        // Reject non-4-byte-aligned input — would silently truncate in bytes_to_f32.
         if pcm_bytes.len() % 4 != 0 {
-            eprintln!(
-                "sprout-desktop: push_audio_pcm received non-aligned input ({} bytes)",
+            return Err(format!(
+                "audio input not 4-byte aligned ({} bytes) — expected f32 LE samples",
                 pcm_bytes.len()
-            );
+            ));
         }
         // Drop audio if the pipeline can't keep up — better than blocking the UI.
         let _ = self.audio_tx.try_send(pcm_bytes);
@@ -306,11 +310,9 @@ fn stt_worker(
         }
     }
 
-    // ── 6. Final flush ────────────────────────────────────────────────────────
-    // Transcribe any speech buffered at shutdown so the last utterance isn't lost.
-    if !speech_buf.is_empty() {
-        flush_to_stt(&speech_buf, &recognizer, &text_tx);
-    }
+    // No final flush — leave_huddle/end_huddle emit lifecycle events before
+    // the STT worker exits, so a final flush would post a kind:9 message AFTER
+    // the user has "left." Losing the last partial utterance is acceptable.
 }
 
 /// Resample a mono 48 kHz chunk to 16 kHz using rubato.
@@ -417,6 +419,14 @@ fn process_16k_samples(
             *silence_frames = 0;
             *in_speech = true;
             speech_buf.extend_from_slice(&frame);
+
+            // OOM guard: flush and reset if the buffer exceeds 30 s of audio.
+            if speech_buf.len() >= MAX_SPEECH_SAMPLES {
+                flush_to_stt(speech_buf, recognizer, text_tx);
+                speech_buf.clear();
+                *silence_frames = 0;
+                *in_speech = false;
+            }
         } else if *in_speech {
             // Still accumulate during brief silence gaps.
             speech_buf.extend_from_slice(&frame);
