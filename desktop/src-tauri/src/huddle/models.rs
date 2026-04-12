@@ -29,17 +29,18 @@ const MOONSHINE_MODEL_DIR_NAME: &str = "moonshine-tiny";
 
 /// All files that must be present for the model to be considered ready.
 const MOONSHINE_EXPECTED_FILES: &[&str] = &[
-    "preprocessor.onnx",
-    "encoder.onnx",
-    "merged_decoder.onnx",
+    "preprocess.onnx",
+    "encode.int8.onnx",
+    "cached_decode.int8.onnx",
+    "uncached_decode.int8.onnx",
     "tokens.txt",
 ];
 
 const KOKORO_MODEL_URL: &str =
-    "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v0_19.onnx";
+    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/kokoro-v0_19.onnx";
 
 const KOKORO_VOICES_URL: &str =
-    "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices.bin";
+    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/voices.bin";
 
 /// Final directory name under `~/.sprout/models/`.
 const KOKORO_MODEL_DIR_NAME: &str = "kokoro";

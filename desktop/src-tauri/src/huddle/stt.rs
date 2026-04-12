@@ -203,11 +203,11 @@ fn stt_worker(
 
     let mut cfg = OfflineRecognizerConfig::default();
     cfg.model_config.moonshine = OfflineMoonshineModelConfig {
-        preprocessor: Some(format!("{model_dir_str}/preprocessor.onnx")),
-        encoder: Some(format!("{model_dir_str}/encoder.onnx")),
-        uncached_decoder: None, // v1 layout only — not used with tiny int8
-        cached_decoder: None,   // v1 layout only — not used with tiny int8
-        merged_decoder: Some(format!("{model_dir_str}/merged_decoder.onnx")), // v2 (tiny int8)
+        preprocessor: Some(format!("{model_dir_str}/preprocess.onnx")),
+        encoder: Some(format!("{model_dir_str}/encode.int8.onnx")),
+        uncached_decoder: Some(format!("{model_dir_str}/uncached_decode.int8.onnx")),
+        cached_decoder: Some(format!("{model_dir_str}/cached_decode.int8.onnx")),
+        merged_decoder: None,
     };
     cfg.model_config.tokens = Some(tokens_path.to_string_lossy().into_owned());
     cfg.model_config.num_threads = 1;
