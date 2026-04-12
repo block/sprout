@@ -37,8 +37,7 @@ const MOONSHINE_EXPECTED_FILES: &[&str] = &[
 ];
 
 /// HuggingFace base URL for Supertonic model files.
-const SUPERTONIC_HF_BASE: &str =
-    "https://huggingface.co/Supertone/supertonic-2/resolve/main";
+const SUPERTONIC_HF_BASE: &str = "https://huggingface.co/Supertone/supertonic-2/resolve/main";
 
 /// Final directory name under `~/.sprout/models/`.
 const SUPERTONIC_MODEL_DIR_NAME: &str = "supertonic";
@@ -164,7 +163,9 @@ impl ModelManager {
     /// Returns `true` if all expected Supertonic model files are present on disk.
     pub fn is_supertonic_ready(&self) -> bool {
         let dir = self.models_dir.join(SUPERTONIC_MODEL_DIR_NAME);
-        SUPERTONIC_EXPECTED_FILES.iter().all(|f| dir.join(f).is_file())
+        SUPERTONIC_EXPECTED_FILES
+            .iter()
+            .all(|f| dir.join(f).is_file())
     }
 
     /// Current Supertonic download status.
@@ -181,18 +182,25 @@ impl ModelManager {
     /// No-op if the model is already ready or a download is already running.
     pub fn start_supertonic_download(&self, http_client: reqwest::Client) {
         if self.is_supertonic_ready() {
-            *self.supertonic_status.lock().unwrap_or_else(|e| e.into_inner()) =
-                ModelStatus::Ready;
+            *self
+                .supertonic_status
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = ModelStatus::Ready;
             return;
         }
 
         {
-            let mut status = self.supertonic_status.lock().unwrap_or_else(|e| e.into_inner());
+            let mut status = self
+                .supertonic_status
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             match *status {
                 ModelStatus::Downloading { .. } | ModelStatus::Ready => return,
                 _ => {}
             }
-            *status = ModelStatus::Downloading { progress_percent: 0 };
+            *status = ModelStatus::Downloading {
+                progress_percent: 0,
+            };
         }
 
         let manager = self.clone();
@@ -229,7 +237,9 @@ impl ModelManager {
                 ModelStatus::Downloading { .. } | ModelStatus::Ready => return,
                 _ => {}
             }
-            *status = ModelStatus::Downloading { progress_percent: 0 };
+            *status = ModelStatus::Downloading {
+                progress_percent: 0,
+            };
         }
 
         let manager = self.clone();
@@ -254,14 +264,19 @@ impl ModelManager {
     }
 
     fn set_supertonic_status(&self, status: ModelStatus) {
-        *self.supertonic_status.lock().unwrap_or_else(|e| e.into_inner()) = status;
+        *self
+            .supertonic_status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = status;
     }
 
     /// Download, extract, and verify the Moonshine model archive.
     async fn download_moonshine_model(&self, http_client: reqwest::Client) -> Result<(), String> {
         fs::create_dir_all(&self.models_dir).map_err(|e| format!("create models dir: {e}"))?;
 
-        self.set_moonshine_status(ModelStatus::Downloading { progress_percent: 0 });
+        self.set_moonshine_status(ModelStatus::Downloading {
+            progress_percent: 0,
+        });
 
         let archive_path = self.models_dir.join("moonshine-tiny.tar.bz2");
 
@@ -294,7 +309,9 @@ impl ModelManager {
             if let Some(total) = content_length {
                 if total > 0 {
                     let pct = ((body.len() as u64 * 100) / total).min(89) as u8;
-                    self.set_moonshine_status(ModelStatus::Downloading { progress_percent: pct });
+                    self.set_moonshine_status(ModelStatus::Downloading {
+                        progress_percent: pct,
+                    });
                 }
             }
 
@@ -311,7 +328,9 @@ impl ModelManager {
                 .map_err(|e| format!("flush archive: {e}"))?;
         }
 
-        self.set_moonshine_status(ModelStatus::Downloading { progress_percent: 90 });
+        self.set_moonshine_status(ModelStatus::Downloading {
+            progress_percent: 90,
+        });
 
         let temp_dir = self.models_dir.join("moonshine-tiny.tmp");
         let final_dir = self.models_dir.join(MOONSHINE_MODEL_DIR_NAME);
@@ -382,7 +401,9 @@ impl ModelManager {
     async fn download_supertonic_model(&self, http_client: reqwest::Client) -> Result<(), String> {
         fs::create_dir_all(&self.models_dir).map_err(|e| format!("create models dir: {e}"))?;
 
-        self.set_supertonic_status(ModelStatus::Downloading { progress_percent: 0 });
+        self.set_supertonic_status(ModelStatus::Downloading {
+            progress_percent: 0,
+        });
 
         let final_dir = self.models_dir.join(SUPERTONIC_MODEL_DIR_NAME);
         let temp_dir = self.models_dir.join("supertonic.tmp");
@@ -395,12 +416,12 @@ impl ModelManager {
         // (url_suffix, local_filename)
         let downloads: &[(&str, &str)] = &[
             ("onnx/duration_predictor.onnx", "duration_predictor.onnx"),
-            ("onnx/text_encoder.onnx",       "text_encoder.onnx"),
-            ("onnx/vector_estimator.onnx",   "vector_estimator.onnx"),
-            ("onnx/vocoder.onnx",            "vocoder.onnx"),
-            ("onnx/tts.json",                "tts.json"),
-            ("onnx/unicode_indexer.json",    "unicode_indexer.json"),
-            ("voice_styles/F1.json",         "F1.json"),
+            ("onnx/text_encoder.onnx", "text_encoder.onnx"),
+            ("onnx/vector_estimator.onnx", "vector_estimator.onnx"),
+            ("onnx/vocoder.onnx", "vocoder.onnx"),
+            ("onnx/tts.json", "tts.json"),
+            ("onnx/unicode_indexer.json", "unicode_indexer.json"),
+            ("voice_styles/F1.json", "F1.json"),
         ];
 
         let total_files = downloads.len() as u32;
@@ -437,7 +458,9 @@ impl ModelManager {
 
             // Progress: spread 0–89% across all files.
             let pct = (((i as u32 + 1) * 89) / total_files).min(89) as u8;
-            self.set_supertonic_status(ModelStatus::Downloading { progress_percent: pct });
+            self.set_supertonic_status(ModelStatus::Downloading {
+                progress_percent: pct,
+            });
 
             use tokio::io::AsyncWriteExt;
             let dest = temp_dir.join(filename);
@@ -452,7 +475,9 @@ impl ModelManager {
                 .map_err(|e| format!("flush {filename}: {e}"))?;
         }
 
-        self.set_supertonic_status(ModelStatus::Downloading { progress_percent: 90 });
+        self.set_supertonic_status(ModelStatus::Downloading {
+            progress_percent: 90,
+        });
 
         // Verify all expected files landed in the temp dir.
         let missing: Vec<&str> = SUPERTONIC_EXPECTED_FILES
@@ -537,5 +562,9 @@ pub fn is_supertonic_ready() -> bool {
 pub fn voice_style_path(voice_name: &str) -> Option<PathBuf> {
     let dir = supertonic_model_dir()?;
     let path = dir.join(format!("{voice_name}.json"));
-    if path.is_file() { Some(path) } else { None }
+    if path.is_file() {
+        Some(path)
+    } else {
+        None
+    }
 }

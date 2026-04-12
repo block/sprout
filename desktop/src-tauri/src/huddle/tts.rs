@@ -36,7 +36,9 @@ use std::{
 };
 
 use super::preprocessing::preprocess_for_tts;
-use super::supertonic::{self, load_text_to_speech, load_voice_style, Style, TextToSpeech, SAMPLE_RATE};
+use super::supertonic::{
+    self, load_text_to_speech, load_voice_style, Style, TextToSpeech, SAMPLE_RATE,
+};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -337,7 +339,14 @@ fn tts_worker(
 /// to eliminate clicks at batch boundaries.
 fn synth_batch(engine: &mut TextToSpeech, sentences: &[String], style: &Style) -> Option<Vec<f32>> {
     let text = sentences.join(". ");
-    match engine.call(&text, "en", style, SYNTH_STEPS, SYNTH_SPEED, INTER_SENTENCE_SILENCE) {
+    match engine.call(
+        &text,
+        "en",
+        style,
+        SYNTH_STEPS,
+        SYNTH_SPEED,
+        INTER_SENTENCE_SILENCE,
+    ) {
         Ok(samples) if !samples.is_empty() => {
             // Volume boost — Supertonic output is quiet.
             let mut boosted: Vec<f32> = samples

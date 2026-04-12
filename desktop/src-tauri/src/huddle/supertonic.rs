@@ -120,8 +120,8 @@ pub(crate) struct UnicodeProcessor {
 
 impl UnicodeProcessor {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, String> {
-        let file = File::open(path.as_ref())
-            .map_err(|e| format!("open unicode_indexer.json: {e}"))?;
+        let file =
+            File::open(path.as_ref()).map_err(|e| format!("open unicode_indexer.json: {e}"))?;
         let reader = BufReader::new(file);
         let indexer: Vec<i64> =
             serde_json::from_reader(reader).map_err(|e| format!("parse unicode_indexer: {e}"))?;
@@ -174,12 +174,23 @@ fn preprocess_text(text: &str, lang: &str) -> Result<String, String> {
 
     // Character replacements.
     for (from, to) in &[
-        ("–", "-"), ("‑", "-"), ("—", "-"), ("_", " "),
-        ("\u{201C}", "\""), ("\u{201D}", "\""),
-        ("\u{2018}", "'"), ("\u{2019}", "'"),
-        ("´", "'"), ("`", "'"),
-        ("[", " "), ("]", " "), ("|", " "), ("/", " "), ("#", " "),
-        ("→", " "), ("←", " "),
+        ("–", "-"),
+        ("‑", "-"),
+        ("—", "-"),
+        ("_", " "),
+        ("\u{201C}", "\""),
+        ("\u{201D}", "\""),
+        ("\u{2018}", "'"),
+        ("\u{2019}", "'"),
+        ("´", "'"),
+        ("`", "'"),
+        ("[", " "),
+        ("]", " "),
+        ("|", " "),
+        ("/", " "),
+        ("#", " "),
+        ("→", " "),
+        ("←", " "),
     ] {
         s = s.replace(from, to);
     }
@@ -188,22 +199,37 @@ fn preprocess_text(text: &str, lang: &str) -> Result<String, String> {
         s = s.replace(sym, "");
     }
 
-    for (from, to) in &[("@", " at "), ("e.g.,", "for example, "), ("i.e.,", "that is, ")] {
+    for (from, to) in &[
+        ("@", " at "),
+        ("e.g.,", "for example, "),
+        ("i.e.,", "that is, "),
+    ] {
         s = s.replace(from, to);
     }
 
     // Fix spacing around punctuation.
     for (pat, rep) in &[
-        (r" ,", ","), (r" \.", "."), (r" !", "!"), (r" \?", "?"),
-        (r" ;", ";"), (r" :", ":"), (r" '", "'"),
+        (r" ,", ","),
+        (r" \.", "."),
+        (r" !", "!"),
+        (r" \?", "?"),
+        (r" ;", ";"),
+        (r" :", ":"),
+        (r" '", "'"),
     ] {
         s = Regex::new(pat).unwrap().replace_all(&s, *rep).to_string();
     }
 
     // Collapse duplicate quote pairs.
-    while s.contains("\"\"") { s = s.replace("\"\"", "\""); }
-    while s.contains("''")   { s = s.replace("''", "'"); }
-    while s.contains("``")   { s = s.replace("``", "`"); }
+    while s.contains("\"\"") {
+        s = s.replace("\"\"", "\"");
+    }
+    while s.contains("''") {
+        s = s.replace("''", "'");
+    }
+    while s.contains("``") {
+        s = s.replace("``", "`");
+    }
 
     // Collapse whitespace.
     s = Regex::new(r"\s+").unwrap().replace_all(&s, " ").to_string();
@@ -211,16 +237,16 @@ fn preprocess_text(text: &str, lang: &str) -> Result<String, String> {
 
     // Ensure terminal punctuation.
     if !s.is_empty() {
-        let ends_re = Regex::new(
-            r#"[.!?;:,'")\]}…。」』】〉》›»]$"#
-        ).unwrap();
+        let ends_re = Regex::new(r#"[.!?;:,'")\]}…。」』】〉》›»]$"#).unwrap();
         if !ends_re.is_match(&s) {
             s.push('.');
         }
     }
 
     if !AVAILABLE_LANGS.contains(&lang) {
-        return Err(format!("invalid lang '{lang}'; available: {AVAILABLE_LANGS:?}"));
+        return Err(format!(
+            "invalid lang '{lang}'; available: {AVAILABLE_LANGS:?}"
+        ));
     }
 
     Ok(format!("<{lang}>{s}</{lang}>"))
@@ -300,9 +326,8 @@ fn sample_noisy_latent(
 const MAX_CHUNK_LEN: usize = 300;
 
 const ABBREVIATIONS: &[&str] = &[
-    "Dr.", "Mr.", "Mrs.", "Ms.", "Prof.", "Sr.", "Jr.",
-    "St.", "Ave.", "Rd.", "Blvd.", "Dept.", "Inc.", "Ltd.",
-    "Co.", "Corp.", "etc.", "vs.", "i.e.", "e.g.", "Ph.D.",
+    "Dr.", "Mr.", "Mrs.", "Ms.", "Prof.", "Sr.", "Jr.", "St.", "Ave.", "Rd.", "Blvd.", "Dept.",
+    "Inc.", "Ltd.", "Co.", "Corp.", "etc.", "vs.", "i.e.", "e.g.", "Ph.D.",
 ];
 
 pub(crate) fn chunk_text(text: &str, max_len: Option<usize>) -> Vec<String> {
@@ -317,7 +342,9 @@ pub(crate) fn chunk_text(text: &str, max_len: Option<usize>) -> Vec<String> {
 
     for para in para_re.split(text) {
         let para = para.trim();
-        if para.is_empty() { continue; }
+        if para.is_empty() {
+            continue;
+        }
 
         if para.len() <= max_len {
             chunks.push(para.to_string());
@@ -330,7 +357,9 @@ pub(crate) fn chunk_text(text: &str, max_len: Option<usize>) -> Vec<String> {
 
         for sentence in sentences {
             let sentence = sentence.trim();
-            if sentence.is_empty() { continue; }
+            if sentence.is_empty() {
+                continue;
+            }
             let slen = sentence.len();
 
             if slen > max_len {
@@ -342,7 +371,9 @@ pub(crate) fn chunk_text(text: &str, max_len: Option<usize>) -> Vec<String> {
                 // Split by comma, then by space.
                 for part in sentence.split(',') {
                     let part = part.trim();
-                    if part.is_empty() { continue; }
+                    if part.is_empty() {
+                        continue;
+                    }
                     let plen = part.len();
                     if plen > max_len {
                         let mut wchunk = String::new();
@@ -354,18 +385,26 @@ pub(crate) fn chunk_text(text: &str, max_len: Option<usize>) -> Vec<String> {
                                 wchunk.clear();
                                 wlen = 0;
                             }
-                            if !wchunk.is_empty() { wchunk.push(' '); wlen += 1; }
+                            if !wchunk.is_empty() {
+                                wchunk.push(' ');
+                                wlen += 1;
+                            }
                             wchunk.push_str(word);
                             wlen += wl;
                         }
-                        if !wchunk.is_empty() { chunks.push(wchunk.trim().to_string()); }
+                        if !wchunk.is_empty() {
+                            chunks.push(wchunk.trim().to_string());
+                        }
                     } else {
                         if current_len + plen + 2 > max_len && !current.is_empty() {
                             chunks.push(current.trim().to_string());
                             current.clear();
                             current_len = 0;
                         }
-                        if !current.is_empty() { current.push_str(", "); current_len += 2; }
+                        if !current.is_empty() {
+                            current.push_str(", ");
+                            current_len += 2;
+                        }
                         current.push_str(part);
                         current_len += plen;
                     }
@@ -378,7 +417,10 @@ pub(crate) fn chunk_text(text: &str, max_len: Option<usize>) -> Vec<String> {
                 current.clear();
                 current_len = 0;
             }
-            if !current.is_empty() { current.push(' '); current_len += 1; }
+            if !current.is_empty() {
+                current.push(' ');
+                current_len += 1;
+            }
             current.push_str(sentence);
             current_len += slen;
         }
@@ -388,7 +430,11 @@ pub(crate) fn chunk_text(text: &str, max_len: Option<usize>) -> Vec<String> {
         }
     }
 
-    if chunks.is_empty() { vec![String::new()] } else { chunks }
+    if chunks.is_empty() {
+        vec![String::new()]
+    } else {
+        chunks
+    }
 }
 
 fn split_sentences(text: &str) -> Vec<String> {
@@ -416,7 +462,11 @@ fn split_sentences(text: &str) -> Vec<String> {
         sentences.push(text[last_end..].to_string());
     }
 
-    if sentences.is_empty() { vec![text.to_string()] } else { sentences }
+    if sentences.is_empty() {
+        vec![text.to_string()]
+    } else {
+        sentences
+    }
 }
 
 // ── TextToSpeech ──────────────────────────────────────────────────────────────
@@ -441,7 +491,15 @@ impl TextToSpeech {
         vocoder_ort: Session,
     ) -> Self {
         let sample_rate = cfgs.ae.sample_rate;
-        TextToSpeech { cfgs, text_processor, dp_ort, text_enc_ort, vector_est_ort, vocoder_ort, sample_rate }
+        TextToSpeech {
+            cfgs,
+            text_processor,
+            dp_ort,
+            text_enc_ort,
+            vector_est_ort,
+            vocoder_ort,
+            sample_rate,
+        }
     }
 
     fn _infer(
@@ -461,42 +519,55 @@ impl TextToSpeech {
         let text_ids_arr = Array::from_shape_vec((bsz, seq_len), flat)
             .map_err(|e| format!("reshape text_ids: {e}"))?;
 
-        let text_ids_val = Value::from_array(text_ids_arr)
-            .map_err(|e| format!("text_ids Value: {e}"))?;
-        let text_mask_val = Value::from_array(text_mask.clone())
-            .map_err(|e| format!("text_mask Value: {e}"))?;
-        let style_dp_val = Value::from_array(style.dp.clone())
-            .map_err(|e| format!("style_dp Value: {e}"))?;
+        let text_ids_val =
+            Value::from_array(text_ids_arr).map_err(|e| format!("text_ids Value: {e}"))?;
+        let text_mask_val =
+            Value::from_array(text_mask.clone()).map_err(|e| format!("text_mask Value: {e}"))?;
+        let style_dp_val =
+            Value::from_array(style.dp.clone()).map_err(|e| format!("style_dp Value: {e}"))?;
 
         // Duration prediction.
-        let dp_out = self.dp_ort.run(ort::inputs! {
-            "text_ids"  => &text_ids_val,
-            "style_dp"  => &style_dp_val,
-            "text_mask" => &text_mask_val
-        }).map_err(|e| format!("dp_ort run: {e}"))?;
+        let dp_out = self
+            .dp_ort
+            .run(ort::inputs! {
+                "text_ids"  => &text_ids_val,
+                "style_dp"  => &style_dp_val,
+                "text_mask" => &text_mask_val
+            })
+            .map_err(|e| format!("dp_ort run: {e}"))?;
 
         let (_, dur_data) = dp_out["duration"]
             .try_extract_tensor::<f32>()
             .map_err(|e| format!("extract duration: {e}"))?;
         let mut duration: Vec<f32> = dur_data.to_vec();
-        for d in &mut duration { *d /= speed; }
+        for d in &mut duration {
+            *d /= speed;
+        }
 
         // Text encoding.
-        let style_ttl_val = Value::from_array(style.ttl.clone())
-            .map_err(|e| format!("style_ttl Value: {e}"))?;
-        let text_enc_out = self.text_enc_ort.run(ort::inputs! {
-            "text_ids"   => &text_ids_val,
-            "style_ttl"  => &style_ttl_val,
-            "text_mask"  => &text_mask_val
-        }).map_err(|e| format!("text_enc_ort run: {e}"))?;
+        let style_ttl_val =
+            Value::from_array(style.ttl.clone()).map_err(|e| format!("style_ttl Value: {e}"))?;
+        let text_enc_out = self
+            .text_enc_ort
+            .run(ort::inputs! {
+                "text_ids"   => &text_ids_val,
+                "style_ttl"  => &style_ttl_val,
+                "text_mask"  => &text_mask_val
+            })
+            .map_err(|e| format!("text_enc_ort run: {e}"))?;
 
         let (emb_shape, emb_data) = text_enc_out["text_emb"]
             .try_extract_tensor::<f32>()
             .map_err(|e| format!("extract text_emb: {e}"))?;
         let text_emb = Array3::from_shape_vec(
-            (emb_shape[0] as usize, emb_shape[1] as usize, emb_shape[2] as usize),
+            (
+                emb_shape[0] as usize,
+                emb_shape[1] as usize,
+                emb_shape[2] as usize,
+            ),
             emb_data.to_vec(),
-        ).map_err(|e| format!("reshape text_emb: {e}"))?;
+        )
+        .map_err(|e| format!("reshape text_emb: {e}"))?;
 
         // Noisy latent.
         let (mut xt, latent_mask) = sample_noisy_latent(
@@ -514,22 +585,31 @@ impl TextToSpeech {
             let cur_step_arr = Array::from_elem(bsz, step as f32);
 
             let xt_val = Value::from_array(xt.clone()).map_err(|e| format!("xt Value: {e}"))?;
-            let emb_val = Value::from_array(text_emb.clone()).map_err(|e| format!("emb Value: {e}"))?;
-            let lmask_val = Value::from_array(latent_mask.clone()).map_err(|e| format!("lmask Value: {e}"))?;
-            let tmask_val = Value::from_array(text_mask.clone()).map_err(|e| format!("tmask Value: {e}"))?;
-            let cur_val = Value::from_array(cur_step_arr).map_err(|e| format!("cur_step Value: {e}"))?;
-            let tot_val = Value::from_array(total_step_arr.clone()).map_err(|e| format!("tot_step Value: {e}"))?;
-            let sttl_val = Value::from_array(style.ttl.clone()).map_err(|e| format!("sttl Value: {e}"))?;
+            let emb_val =
+                Value::from_array(text_emb.clone()).map_err(|e| format!("emb Value: {e}"))?;
+            let lmask_val =
+                Value::from_array(latent_mask.clone()).map_err(|e| format!("lmask Value: {e}"))?;
+            let tmask_val =
+                Value::from_array(text_mask.clone()).map_err(|e| format!("tmask Value: {e}"))?;
+            let cur_val =
+                Value::from_array(cur_step_arr).map_err(|e| format!("cur_step Value: {e}"))?;
+            let tot_val = Value::from_array(total_step_arr.clone())
+                .map_err(|e| format!("tot_step Value: {e}"))?;
+            let sttl_val =
+                Value::from_array(style.ttl.clone()).map_err(|e| format!("sttl Value: {e}"))?;
 
-            let ve_out = self.vector_est_ort.run(ort::inputs! {
-                "noisy_latent" => &xt_val,
-                "text_emb"     => &emb_val,
-                "style_ttl"    => &sttl_val,
-                "latent_mask"  => &lmask_val,
-                "text_mask"    => &tmask_val,
-                "current_step" => &cur_val,
-                "total_step"   => &tot_val
-            }).map_err(|e| format!("vector_est_ort run step {step}: {e}"))?;
+            let ve_out = self
+                .vector_est_ort
+                .run(ort::inputs! {
+                    "noisy_latent" => &xt_val,
+                    "text_emb"     => &emb_val,
+                    "style_ttl"    => &sttl_val,
+                    "latent_mask"  => &lmask_val,
+                    "text_mask"    => &tmask_val,
+                    "current_step" => &cur_val,
+                    "total_step"   => &tot_val
+                })
+                .map_err(|e| format!("vector_est_ort run step {step}: {e}"))?;
 
             let (ds, dd) = ve_out["denoised_latent"]
                 .try_extract_tensor::<f32>()
@@ -537,14 +617,18 @@ impl TextToSpeech {
             xt = Array3::from_shape_vec(
                 (ds[0] as usize, ds[1] as usize, ds[2] as usize),
                 dd.to_vec(),
-            ).map_err(|e| format!("reshape denoised_latent: {e}"))?;
+            )
+            .map_err(|e| format!("reshape denoised_latent: {e}"))?;
         }
 
         // Vocoder.
         let latent_val = Value::from_array(xt).map_err(|e| format!("final latent Value: {e}"))?;
-        let voc_out = self.vocoder_ort.run(ort::inputs! {
-            "latent" => &latent_val
-        }).map_err(|e| format!("vocoder_ort run: {e}"))?;
+        let voc_out = self
+            .vocoder_ort
+            .run(ort::inputs! {
+                "latent" => &latent_val
+            })
+            .map_err(|e| format!("vocoder_ort run: {e}"))?;
 
         let (_, wav_data) = voc_out["wav_tts"]
             .try_extract_tensor::<f32>()
@@ -623,8 +707,7 @@ pub(crate) fn load_text_to_speech(onnx_dir: &str) -> Result<TextToSpeech, String
         .commit_from_file(format!("{onnx_dir}/vocoder.onnx"))
         .map_err(|e| format!("load vocoder: {e}"))?;
 
-    let text_processor =
-        UnicodeProcessor::new(format!("{onnx_dir}/unicode_indexer.json"))?;
+    let text_processor = UnicodeProcessor::new(format!("{onnx_dir}/unicode_indexer.json"))?;
 
     Ok(TextToSpeech::new(
         cfgs,

@@ -34,12 +34,16 @@ export async function connectToHuddle(
       localAudioTrack: audioTrack,
       disconnect: async () => {
         room.disconnect();
-        stream?.getTracks().forEach((t) => t.stop());
+        stream?.getTracks().forEach((t) => {
+          t.stop();
+        });
       },
     };
   } catch (err) {
     // Clean up mic stream on any failure (getUserMedia, connect, or publish)
-    stream?.getTracks().forEach((t) => t.stop());
+    stream?.getTracks().forEach((t) => {
+      t.stop();
+    });
     throw err;
   }
 }
