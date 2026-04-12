@@ -32,7 +32,7 @@ type HuddleBarProps = {
 };
 
 export function HuddleBar({ className }: HuddleBarProps) {
-  const { localAudioTrack, leaveHuddle } = useHuddle();
+  const { localAudioTrack, leaveHuddle, micConnected, micLevel } = useHuddle();
   const [state, setState] = React.useState<HuddleState | null>(null);
   const [isMuted, setIsMuted] = React.useState(false);
   const [ttsEnabled, setTtsEnabled] = React.useState(true);
@@ -112,6 +112,24 @@ export function HuddleBar({ className }: HuddleBarProps) {
       {state.participants.length > 0 && (
         <ParticipantList participants={state.participants} />
       )}
+
+      {/* Voice activity indicator */}
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        {micConnected ? (
+          <div
+            className="h-2.5 w-2.5 rounded-full transition-colors"
+            style={{
+              backgroundColor:
+                micLevel > 0.05
+                  ? `rgba(34, 197, 94, ${0.4 + micLevel * 0.6})`
+                  : "rgba(100, 116, 139, 0.4)",
+            }}
+            title={`Mic level: ${Math.round(micLevel * 100)}%`}
+          />
+        ) : (
+          <span className="text-destructive/70">no mic</span>
+        )}
+      </div>
 
       {/* Add agent button */}
       <Button

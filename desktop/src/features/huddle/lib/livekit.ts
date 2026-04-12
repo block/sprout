@@ -14,15 +14,19 @@ export async function connectToHuddle(
   let stream: MediaStream | null = null;
 
   try {
+    console.log("[huddle] requesting mic access…");
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const audioTrack = stream.getAudioTracks()[0];
+    console.log("[huddle] mic acquired, connecting to LiveKit", url);
 
     await room.connect(url, token);
+    console.log("[huddle] LiveKit connected, publishing track…");
 
     try {
       // false = don't let LiveKit manage the track lifecycle
       const localTrack = new LocalAudioTrack(audioTrack, undefined, false);
       await room.localParticipant.publishTrack(localTrack);
+      console.log("[huddle] track published");
     } catch (publishErr) {
       // Publish failed after connect — disconnect room before propagating
       room.disconnect();

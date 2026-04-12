@@ -490,7 +490,13 @@ pub async fn start_huddle(
                 hs.participants = participants;
             }
 
-            // 6. Auto-start STT and TTS pipelines if models are ready.
+            // 6. Ensure voice models are downloading (idempotent — no-ops if ready or in progress).
+            if let Some(mgr) = models::global_model_manager() {
+                mgr.start_moonshine_download(state.http_client.clone());
+                mgr.start_kokoro_download(state.http_client.clone());
+            }
+
+            // 7. Auto-start STT and TTS pipelines if models are already ready.
             maybe_start_stt_pipeline(&state, &ephemeral_channel_id).await;
             maybe_start_tts_pipeline(&state).await;
 
@@ -579,7 +585,13 @@ pub async fn join_huddle(
         // Note: agent_pubkeys stays empty for joiners — agents were added by the creator.
     }
 
-    // 4. Auto-start STT and TTS pipelines if models are ready.
+    // 4. Ensure voice models are downloading (idempotent).
+    if let Some(mgr) = models::global_model_manager() {
+        mgr.start_moonshine_download(state.http_client.clone());
+        mgr.start_kokoro_download(state.http_client.clone());
+    }
+
+    // 5. Auto-start STT and TTS pipelines if models are already ready.
     maybe_start_stt_pipeline(&state, &ephemeral_channel_id).await;
     maybe_start_tts_pipeline(&state).await;
 

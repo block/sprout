@@ -16,6 +16,10 @@ interface HuddleContextValue {
   localAudioTrack: MediaStreamTrack | null;
   /** Whether a huddle is being started (for button disabled state) */
   isStarting: boolean;
+  /** Whether the LiveKit + mic connection is live */
+  micConnected: boolean;
+  /** Current mic input level 0–1 (updated via requestAnimationFrame) */
+  micLevel: number;
   /** Start a new huddle — calls Rust start_huddle, then connects LiveKit + AudioWorklet */
   startHuddle: (
     parentChannelId: string,
@@ -37,6 +41,13 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   const [localAudioTrack, setLocalAudioTrack] =
     React.useState<MediaStreamTrack | null>(null);
   const [isStarting, setIsStarting] = React.useState(false);
+  const [micConnected, setMicConnected] = React.useState(false);
+  const [micLevel, setMicLevel] = React.useState(0);
+  const analyserRef = React.useRef<{
+    ctx: AudioContext;
+    analyser: AnalyserNode;
+    raf: number;
+  } | null>(null);
 
   const leaveHuddle = React.useCallback(async () => {
     // Invalidate any in-flight startHuddle so it bails after its next await
@@ -59,6 +70,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       /* best-effort */
     }
     setLocalAudioTrack(null);
+    setMicConnected(false);
 
     // Step 3: Tell Rust to clean up — only clear rustActiveRef AFTER success so retries work
     if (rustActiveRef.current) {
@@ -125,6 +137,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
 
         connectionRef.current = connection;
         setLocalAudioTrack(connection.localAudioTrack);
+        setMicConnected(true);
 
         // Step 3: Set up AudioWorklet to pipe mic audio to Rust STT
         const worklet = await setupAudioWorklet(connection.localAudioTrack);
@@ -181,6 +194,43 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  // Mic level analyser — drives the voice activity indicator
+  React.useEffect(() => {
+    if (!localAudioTrack) {
+      setMicLevel(0);
+      return;
+    }
+
+    const ctx = new AudioContext();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    const source = ctx.createMediaStreamSource(
+      new MediaStream([localAudioTrack]),
+    );
+    source.connect(analyser);
+    const buf = new Uint8Array(analyser.frequencyBinCount);
+
+    let raf = 0;
+    function tick() {
+      analyser.getByteFrequencyData(buf);
+      // RMS-ish: average of frequency bins, normalized to 0–1
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i];
+      setMicLevel(sum / (buf.length * 255));
+      raf = requestAnimationFrame(tick);
+    }
+    raf = requestAnimationFrame(tick);
+
+    analyserRef.current = { ctx, analyser, raf };
+
+    return () => {
+      cancelAnimationFrame(raf);
+      source.disconnect();
+      void ctx.close();
+      analyserRef.current = null;
+    };
+  }, [localAudioTrack]);
+
   // Cleanup on unmount — fire and forget
   React.useEffect(() => {
     return () => {
@@ -190,7 +240,14 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <HuddleContext.Provider
-      value={{ localAudioTrack, isStarting, startHuddle, leaveHuddle }}
+      value={{
+        localAudioTrack,
+        isStarting,
+        micConnected,
+        micLevel,
+        startHuddle,
+        leaveHuddle,
+      }}
     >
       {children}
     </HuddleContext.Provider>
