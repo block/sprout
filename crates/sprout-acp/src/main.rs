@@ -8,20 +8,25 @@ mod queue;
 mod relay;
 
 use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
 use acp::{AcpClient, EnvVar, McpServer};
 use anyhow::Result;
 use clap::Parser;
-use config::{Config, DedupMode, ModelsArgs, MultipleEventHandling, RespondTo, SubscribeMode};
+use config::{
+    Config, DedupMode, ModelsArgs, MultipleEventHandling, PermissionMode, RespondTo,
+    SubscribeMode,
+};
 use filter::SubscriptionRule;
 use futures_util::FutureExt;
 use nostr::ToBech32;
 use pool::{
     AgentPool, OwnedAgent, PromptContext, PromptOutcome, PromptResult, PromptSource, SessionState,
 };
-use queue::{EventQueue, QueuedEvent};
+use queue::{EventQueue, QueuedEvent, TurnReplyScope};
 use relay::HarnessRelay;
 use sprout_core::kind::{
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
@@ -47,6 +52,52 @@ fn is_subcommand(name: &str) -> bool {
 
 /// Timeout for the `sprout-acp models` subcommand (spawn + init + session/new).
 const MODELS_TIMEOUT: Duration = Duration::from_secs(10);
+const DEBUG_LOG_PATH: &str = "/Users/thomasp/sprout/sprout/.cursor/debug-ec51df.log";
+
+fn debug_log(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
+    let payload = serde_json::json!({
+        "sessionId": "ec51df",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or_default(),
+    });
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(DEBUG_LOG_PATH)
+    {
+        let _ = writeln!(file, "{payload}");
+    }
+    eprintln!("ACP_DEBUG {payload}");
+}
+
+fn inbound_kind_label(kind: u32) -> &'static str {
+    match kind {
+        KIND_STREAM_MESSAGE => "stream_message",
+        KIND_STREAM_REMINDER => "stream_reminder",
+        KIND_WORKFLOW_APPROVAL_REQUESTED => "workflow_approval_requested",
+        KIND_MEMBER_ADDED_NOTIFICATION => "member_added_notification",
+        KIND_MEMBER_REMOVED_NOTIFICATION => "member_removed_notification",
+        _ => "other",
+    }
+}
+
+fn inbound_thread_scope_label(
+    root_event_id: Option<&str>,
+    parent_event_id: Option<&str>,
+) -> &'static str {
+    match (root_event_id, parent_event_id) {
+        (None, None) => "root_message",
+        (Some(root), Some(parent)) if root != parent => "nested_thread_reply",
+        (Some(_), Some(_)) | (Some(_), None) | (None, Some(_)) => "direct_thread_reply",
+    }
+}
 
 // ── Owner cache ───────────────────────────────────────────────────────────────
 
@@ -528,6 +579,12 @@ async fn tokio_main() -> Result<()> {
 
     let config = Config::from_cli().map_err(|e| anyhow::anyhow!("configuration error: {e}"))?;
     tracing::info!("sprout-acp starting: {}", config.summary());
+    if matches!(config.permission_mode, PermissionMode::BypassPermissions) {
+        tracing::warn!(
+            "permission_mode=bypassPermissions disables ACP permission-request guards; \
+             root-vs-thread reply enforcement will be weaker"
+        );
+    }
 
     // ── Step 1: Spawn N ACP agent subprocesses and initialize ─────────────────
     //
@@ -800,7 +857,7 @@ async fn tokio_main() -> Result<()> {
     } else {
         None
     };
-    let mut typing_channels: HashSet<Uuid> = HashSet::new();
+    let mut typing_channels: HashMap<Uuid, TurnReplyScope> = HashMap::new();
     let mut presence_task: Option<tokio::task::JoinHandle<()>> = None;
 
     // ── Step 6d: Maintenance (slot refill + queue compaction) ────────────────
@@ -1223,6 +1280,14 @@ async fn tokio_main() -> Result<()> {
                                     continue;
                                 }
                             };
+                            let thread_tags = queue::parse_thread_tags(&sprout_event.event);
+                            let event_tags = sprout_event
+                                .event
+                                .tags
+                                .iter()
+                                .map(|tag| tag.as_slice().to_vec())
+                                .collect::<Vec<_>>();
+                            let prompt_tag_for_log = prompt_tag.clone();
                             // Capture author pubkey before queue.push() moves
                             // sprout_event.event (needed for mode gate below).
                             let author_hex = sprout_event.event.pubkey.to_hex();
@@ -1233,6 +1298,27 @@ async fn tokio_main() -> Result<()> {
                                 received_at: std::time::Instant::now(),
                                 prompt_tag,
                             });
+                            debug_log(
+                                "H6",
+                                "crates/sprout-acp/src/main.rs:1265",
+                                "inbound relay event classified",
+                                serde_json::json!({
+                                    "channelId": sprout_event.channel_id.to_string(),
+                                    "eventId": event_id_hex.clone(),
+                                    "authorPubkey": author_hex.clone(),
+                                    "accepted": accepted,
+                                    "kind": kind_u32,
+                                    "kindLabel": inbound_kind_label(kind_u32),
+                                    "promptTag": prompt_tag_for_log,
+                                    "threadScope": inbound_thread_scope_label(
+                                        thread_tags.root_event_id.as_deref(),
+                                        thread_tags.parent_event_id.as_deref(),
+                                    ),
+                                    "rootEventId": thread_tags.root_event_id,
+                                    "parentEventId": thread_tags.parent_event_id,
+                                    "tags": event_tags,
+                                }),
+                            );
                             // 👀 — immediate "seen" reaction, only if the event
                             // was actually queued (not dropped by DedupMode::Drop).
                             // Fire-and-forget: on rare fast-failure paths the
@@ -1325,8 +1411,22 @@ async fn tokio_main() -> Result<()> {
                     // Use try_publish (non-blocking) for typing indicators —
                     // they're ephemeral and must not block the main loop during
                     // relay reconnection (#35).
-                    for &ch in &typing_channels {
-                        if let Ok(event) = relay.build_typing_event(ch) {
+                    for (&ch, reply_scope) in &typing_channels {
+                        // #region agent log
+                        debug_log(
+                            "H5",
+                            "crates/sprout-acp/src/main.rs:1340",
+                            "typing refresh publish scope",
+                            serde_json::json!({
+                                "channelId": ch.to_string(),
+                                "rootEventId": reply_scope.root_event_id,
+                                "parentEventId": reply_scope.parent_event_id,
+                            }),
+                        );
+                        // #endregion
+                        if let Ok(event) =
+                            relay.build_typing_event(ch, reply_scope.root_event_id.as_deref())
+                        {
                             if let Err(e) = relay.try_publish_event(event) {
                                 tracing::debug!("typing indicator dropped for {ch}: {e}");
                             }
@@ -1534,7 +1634,7 @@ fn dispatch_pending(
     pool: &mut AgentPool,
     queue: &mut EventQueue,
     ctx: &Arc<PromptContext>,
-) -> Vec<Uuid> {
+) -> Vec<(Uuid, TurnReplyScope)> {
     let mut dispatched_channels = Vec::new();
     loop {
         let batch = match queue.flush_next() {
@@ -1559,6 +1659,24 @@ fn dispatch_pending(
             DedupMode::Queue => Some(batch.clone()),
             DedupMode::Drop => None,
         };
+        let reply_scope = batch.reply_scope.clone();
+        // #region agent log
+        debug_log(
+            "H1",
+            "crates/sprout-acp/src/main.rs:1574",
+            "dispatch pending batch",
+            serde_json::json!({
+                "channelId": channel_id.to_string(),
+                "rootEventId": reply_scope.root_event_id,
+                "parentEventId": reply_scope.parent_event_id,
+                "eventIds": batch
+                    .events
+                    .iter()
+                    .map(|event| event.event.id.to_hex())
+                    .collect::<Vec<_>>(),
+            }),
+        );
+        // #endregion
 
         let result_tx = pool.result_tx();
         let ctx_clone = Arc::clone(ctx);
@@ -1589,7 +1707,7 @@ fn dispatch_pending(
                 cancel_tx: Some(cancel_tx),
             },
         );
-        dispatched_channels.push(channel_id);
+        dispatched_channels.push((channel_id, reply_scope));
     }
     tracing::debug!(
         dispatched = dispatched_channels.len(),
@@ -1773,7 +1891,7 @@ fn recover_panicked_agent(
     join_error: tokio::task::JoinError,
     heartbeat_in_flight: &mut bool,
     removed_channels: &HashSet<Uuid>,
-    typing_channels: &mut HashSet<Uuid>,
+    typing_channels: &mut HashMap<Uuid, TurnReplyScope>,
     crash_history: &mut [SlotCircuit],
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,
@@ -1856,7 +1974,7 @@ fn drain_ready_join_results(
     config: &Config,
     heartbeat_in_flight: &mut bool,
     removed_channels: &HashSet<Uuid>,
-    typing_channels: &mut HashSet<Uuid>,
+    typing_channels: &mut HashMap<Uuid, TurnReplyScope>,
     crash_history: &mut [SlotCircuit],
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,
@@ -1937,8 +2055,11 @@ fn default_heartbeat_prompt() -> String {
             high-priority requests addressed to you.\n\
          2. Call `get_feed(types='mentions')` to check for unanswered @mentions.\n\
          3. If you find actionable items, address them using the appropriate tools\n\
-            (e.g., `approve_step`, `send_message`, `send_message(parent_event_id=...)`).\n\
+            (e.g., `approve_step`, `send_current_reply`, `send_current_diff_reply`).\n\
          4. If there are no pending actions or mentions, end your turn immediately.\n\n\
+         Reply in the current bound conversation with `send_current_reply()` unless you have a\n\
+         specific reason to use a lower-level transport tool.\n\
+         \n\
          Do not call `list_channels()` or `search()` unless you have a specific reason.\n\
          Do not invent work — only act on items surfaced by the feed tools."
     )
@@ -2173,7 +2294,12 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
     vec![McpServer {
         name: "sprout-mcp".to_string(),
         command: config.mcp_command.clone(),
-        args: vec![],
+        args: vec![
+            "--current-channel-id".to_string(),
+            crate::pool::CURRENT_REPLY_CHANNEL_ID_ARG_PLACEHOLDER.to_string(),
+            "--current-thread-root-id".to_string(),
+            crate::pool::CURRENT_REPLY_THREAD_ROOT_ID_ARG_PLACEHOLDER.to_string(),
+        ],
         env: {
             let mut env = vec![
                 EnvVar {
@@ -2182,9 +2308,6 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                 },
                 EnvVar {
                     name: "SPROUT_PRIVATE_KEY".into(),
-                    // bech32 encoding of a valid secret key is infallible.
-                    // Panic here is correct: injecting a bogus secret would cause
-                    // delayed, hard-to-diagnose agent failures downstream.
                     value: config
                         .keys
                         .secret_key()
@@ -2198,8 +2321,6 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                     value: token.clone(),
                 });
             }
-            // Forward SPROUT_TOOLSETS so the MCP server enables the
-            // same toolsets the operator configured for this harness.
             if let Ok(ts) = std::env::var("SPROUT_TOOLSETS") {
                 if !ts.is_empty() {
                     env.push(EnvVar {

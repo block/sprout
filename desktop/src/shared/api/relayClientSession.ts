@@ -24,6 +24,7 @@ const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 30_000;
 const RECONNECT_REPLAY_SKEW_SECS = 5;
 const EVENT_BATCH_MS = 16;
+const TYPING_SUBSCRIPTION_WINDOW_SECS = 10;
 
 export class RelayClient {
   private wsId: number | null = null;
@@ -135,15 +136,22 @@ export class RelayClient {
     );
   }
 
-  async sendTypingIndicator(channelId: string) {
+  async sendTypingIndicator(
+    channelId: string,
+    threadRootId?: string | null,
+  ) {
     // Bail when disconnected — not worth triggering a reconnect for ephemeral typing events.
     if (this.wsId === null) {
       return;
     }
+    const tags: string[][] = [["h", channelId]];
+    if (threadRootId) {
+      tags.push(["e", threadRootId, "", "reply"]);
+    }
     const event = await signRelayEvent({
       kind: KIND_TYPING_INDICATOR,
       content: "",
-      tags: [["h", channelId]],
+      tags,
     });
 
     // Fire-and-forget: no need to wait for relay acknowledgement.
@@ -166,6 +174,7 @@ export class RelayClient {
         kinds: [KIND_TYPING_INDICATOR],
         "#h": [channelId],
         limit: 10,
+        since: Math.floor(Date.now() / 1_000) - TYPING_SUBSCRIPTION_WINDOW_SECS,
       },
       onEvent,
     );

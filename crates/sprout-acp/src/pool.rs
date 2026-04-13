@@ -75,6 +75,8 @@ pub struct AgentModelCapabilities {
 pub struct SessionState {
     /// channel_id → session_id
     pub sessions: HashMap<Uuid, String>,
+    /// channel_id → reply scope bound into the current session's MCP config.
+    pub session_reply_contexts: HashMap<Uuid, BoundReplyContext>,
     pub heartbeat_session: Option<String>,
     /// Per-channel turn counters for proactive session rotation.
     /// Incremented on each successful prompt; reset when the session is rotated.
@@ -101,16 +103,24 @@ impl SessionState {
     /// Returns `true` if the channel had an active session.
     pub fn invalidate_channel(&mut self, channel_id: &Uuid) -> bool {
         self.turn_counts.remove(channel_id);
+        self.session_reply_contexts.remove(channel_id);
         self.sessions.remove(channel_id).is_some()
     }
 
     /// Invalidate all sessions and turn counters (e.g. after agent exit).
     pub fn invalidate_all(&mut self) {
         self.sessions.clear();
+        self.session_reply_contexts.clear();
         self.turn_counts.clear();
         self.heartbeat_session = None;
         self.heartbeat_turn_count = 0;
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundReplyContext {
+    pub channel_id: Uuid,
+    pub thread_root_id: Option<String>,
 }
 
 /// An agent with its session state, owned by the pool or a running task.
@@ -189,6 +199,11 @@ pub struct PromptContext {
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
 }
+
+/// Placeholders replaced with the per-session bound reply context when a session is created.
+pub const CURRENT_REPLY_CHANNEL_ID_ARG_PLACEHOLDER: &str = "__SPROUT_CURRENT_REPLY_CHANNEL_ID__";
+pub const CURRENT_REPLY_THREAD_ROOT_ID_ARG_PLACEHOLDER: &str =
+    "__SPROUT_CURRENT_REPLY_THREAD_ROOT_ID__";
 
 // ── AgentPool impl ────────────────────────────────────────────────────────────
 
@@ -386,10 +401,63 @@ const PERMISSION_MODE_TIMEOUT: Duration = Duration::from_secs(5);
 async fn create_session_and_apply_model(
     agent: &mut OwnedAgent,
     ctx: &PromptContext,
+    bound_reply_context: Option<&BoundReplyContext>,
 ) -> Result<String, AcpError> {
+    let mcp_servers = ctx
+        .mcp_servers
+        .iter()
+        .cloned()
+        .map(|mut server| {
+            let mut resolved_args = Vec::with_capacity(server.args.len());
+            let mut index = 0;
+            while index < server.args.len() {
+                let arg = &server.args[index];
+                if arg == "--current-channel-id" {
+                    let value = server.args.get(index + 1);
+                    if value == Some(&CURRENT_REPLY_CHANNEL_ID_ARG_PLACEHOLDER.to_string()) {
+                        if let Some(context) = bound_reply_context {
+                            resolved_args.push(arg.clone());
+                            resolved_args.push(context.channel_id.to_string());
+                        }
+                        index += 2;
+                        continue;
+                    }
+                }
+                if arg == "--current-thread-root-id" {
+                    let value = server.args.get(index + 1);
+                    if value == Some(&CURRENT_REPLY_THREAD_ROOT_ID_ARG_PLACEHOLDER.to_string()) {
+                        if let Some(thread_root_id) =
+                            bound_reply_context.and_then(|context| context.thread_root_id.clone())
+                        {
+                            resolved_args.push(arg.clone());
+                            resolved_args.push(thread_root_id);
+                        }
+                        index += 2;
+                        continue;
+                    }
+                }
+                resolved_args.push(arg.clone());
+                index += 1;
+            }
+            server.args = resolved_args;
+            for env in &mut server.env {
+                if env.value == CURRENT_REPLY_CHANNEL_ID_ARG_PLACEHOLDER {
+                    env.value = bound_reply_context
+                        .map(|context| context.channel_id.to_string())
+                        .unwrap_or_default();
+                }
+                if env.value == CURRENT_REPLY_THREAD_ROOT_ID_ARG_PLACEHOLDER {
+                    env.value = bound_reply_context
+                        .and_then(|context| context.thread_root_id.clone())
+                        .unwrap_or_default();
+                }
+            }
+            server
+        })
+        .collect();
     let resp = agent
         .acp
-        .session_new_full(&ctx.cwd, ctx.mcp_servers.clone())
+        .session_new_full(&ctx.cwd, mcp_servers)
         .await?;
 
     // Populate model capabilities on first session creation.
@@ -578,6 +646,14 @@ async fn apply_permission_mode(
     Ok(())
 }
 
+fn bound_reply_context_for_batch(batch: Option<&FlushBatch>) -> Option<BoundReplyContext> {
+    let flush_batch = batch?;
+    Some(BoundReplyContext {
+        channel_id: flush_batch.channel_id,
+        thread_root_id: flush_batch.reply_scope.root_event_id.clone(),
+    })
+}
+
 /// Core async function spawned for each prompt.
 ///
 /// Lifecycle:
@@ -598,6 +674,8 @@ pub async fn run_prompt_task(
     result_tx: mpsc::UnboundedSender<PromptResult>,
     cancel_rx: Option<tokio::sync::oneshot::Receiver<()>>,
 ) {
+    let bound_reply_context = bound_reply_context_for_batch(batch.as_ref());
+
     // ── Determine source and resolve/create session ───────────────────────
 
     // Is this a channel prompt or a heartbeat?
@@ -618,17 +696,28 @@ pub async fn run_prompt_task(
 
     let (session_id, is_new_session) = match &source {
         PromptSource::Channel(cid) => {
+            if agent.state.session_reply_contexts.get(cid) != bound_reply_context.as_ref() {
+                agent.state.invalidate_channel(cid);
+            }
             if let Some(sid) = agent.state.sessions.get(cid) {
                 (sid.clone(), false)
             } else {
                 // Create new session with model application.
-                match create_session_and_apply_model(&mut agent, &ctx).await {
+                match create_session_and_apply_model(&mut agent, &ctx, bound_reply_context.as_ref())
+                    .await
+                {
                     Ok(sid) => {
                         tracing::info!(
                             target: "pool::session",
                             "created session {sid} for channel {cid}"
                         );
                         agent.state.sessions.insert(*cid, sid.clone());
+                        if let Some(context) = bound_reply_context.as_ref() {
+                            agent
+                                .state
+                                .session_reply_contexts
+                                .insert(*cid, context.clone());
+                        }
                         (sid, true)
                     }
                     Err(AcpError::AgentExited) => {
@@ -657,7 +746,7 @@ pub async fn run_prompt_task(
             if let Some(sid) = &agent.state.heartbeat_session {
                 (sid.clone(), false)
             } else {
-                match create_session_and_apply_model(&mut agent, &ctx).await {
+                match create_session_and_apply_model(&mut agent, &ctx, None).await {
                     Ok(sid) => {
                         tracing::info!(
                             target: "pool::session",
@@ -1786,6 +1875,23 @@ mod tests {
     use nostr::{EventBuilder, Keys, Kind, Tag};
     use serde_json::json;
 
+    #[test]
+    fn test_bound_reply_context_uses_frozen_batch_scope() {
+        let batch = FlushBatch {
+            channel_id: Uuid::new_v4(),
+            reply_scope: crate::queue::TurnReplyScope {
+                root_event_id: Some("a".repeat(64)),
+                parent_event_id: Some("b".repeat(64)),
+            },
+            events: vec![],
+            cancelled_events: vec![],
+        };
+
+        let context = bound_reply_context_for_batch(Some(&batch)).expect("batch should bind");
+        assert_eq!(context.channel_id, batch.channel_id);
+        assert_eq!(context.thread_root_id, batch.reply_scope.root_event_id);
+    }
+
     // ── parse_thread_response tests ──────────────────────────────────────────
 
     #[test]
@@ -2035,6 +2141,7 @@ mod tests {
         let author_hex = event.pubkey.to_hex();
         let batch = FlushBatch {
             channel_id: Uuid::new_v4(),
+            reply_scope: crate::queue::TurnReplyScope::default(),
             events: vec![crate::queue::BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),

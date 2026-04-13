@@ -401,6 +401,7 @@ declare global {
     __SPROUT_E2E_EMIT_MOCK_TYPING__?: (input: {
       channelName: string;
       pubkey?: string;
+      threadRootId?: string;
     }) => RelayEvent;
     __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
       command: string,
@@ -1611,13 +1612,22 @@ function emitMockChannelMessage(
   return event;
 }
 
-function emitMockTypingIndicator(channelId: string, pubkey: string) {
+function emitMockTypingIndicator(
+  channelId: string,
+  pubkey: string,
+  threadRootId?: string,
+) {
   const event: RelayEvent = {
     id: crypto.randomUUID().replace(/-/g, ""),
     pubkey,
     created_at: Math.floor(Date.now() / 1000),
     kind: 20002,
-    tags: [["h", channelId]],
+    tags: threadRootId
+      ? [
+          ["h", channelId],
+          ["e", threadRootId, "", "reply"],
+        ]
+      : [["h", channelId]],
     content: "",
     sig: "mocksig".repeat(20).slice(0, 128),
   };
@@ -1678,6 +1688,57 @@ async function handleGetForumPosts(args: {
     .map((event) => {
       const replies = events.filter((candidate) => {
         if (candidate.kind !== 45003) {
+          return false;
+        }
+
+        const thread = getThreadReferenceFromTags(candidate.tags);
+        return (thread.rootEventId ?? thread.parentEventId) === event.id;
+      });
+
+      return toRawForumPost(event, args.channelId, {
+        reply_count: replies.length,
+        descendant_count: replies.length,
+        last_reply_at:
+          replies.length > 0 ? replies[replies.length - 1].created_at : null,
+        participants: [...new Set(replies.map((reply) => reply.pubkey))],
+      });
+    });
+
+  return {
+    messages: posts,
+    next_cursor: null,
+  };
+}
+
+async function handleGetChannelMessages(args: {
+  channelId: string;
+  limit?: number | null;
+  before?: number | null;
+  kinds?: string | null;
+}): Promise<RawForumPostsResponse> {
+  const events = getMockMessageStore(args.channelId);
+  const allowedKinds = args.kinds
+    ? new Set(
+        args.kinds
+          .split(",")
+          .map((value) => Number.parseInt(value.trim(), 10))
+          .filter((value) => Number.isFinite(value)),
+      )
+    : null;
+  const posts = events
+    .filter((event) => {
+      const thread = getThreadReferenceFromTags(event.tags);
+      return thread.parentEventId === null;
+    })
+    .filter((event) =>
+      allowedKinds ? allowedKinds.has(event.kind) : true,
+    )
+    .filter((event) => (args.before ? event.created_at < args.before : true))
+    .sort((left, right) => right.created_at - left.created_at)
+    .slice(0, args.limit ?? 50)
+    .map((event) => {
+      const replies = events.filter((candidate) => {
+        if ([5, 7, 40003].includes(candidate.kind)) {
           return false;
         }
 
@@ -3948,7 +4009,11 @@ export function maybeInstallE2eTauriMocks() {
 
     return emitMockChannelMessage(channel.id, content, pubkey);
   };
-  window.__SPROUT_E2E_EMIT_MOCK_TYPING__ = ({ channelName, pubkey }) => {
+  window.__SPROUT_E2E_EMIT_MOCK_TYPING__ = ({
+    channelName,
+    pubkey,
+    threadRootId,
+  }) => {
     const channel = mockChannels.find(
       (candidate) => candidate.name === channelName,
     );
@@ -3956,7 +4021,11 @@ export function maybeInstallE2eTauriMocks() {
       throw new Error(`Mock channel ${channelName} not found.`);
     }
 
-    return emitMockTypingIndicator(channel.id, pubkey ?? CHARLIE_PUBKEY);
+    return emitMockTypingIndicator(
+      channel.id,
+      pubkey ?? CHARLIE_PUBKEY,
+      threadRootId,
+    );
   };
   window.__SPROUT_E2E_PUSH_MOCK_FEED_ITEM__ = (item) => {
     const category = item.category === "mention" ? "mentions" : item.category;
@@ -4225,6 +4294,10 @@ export function maybeInstallE2eTauriMocks() {
       case "get_forum_posts":
         return handleGetForumPosts(
           payload as Parameters<typeof handleGetForumPosts>[0],
+        );
+      case "get_channel_messages":
+        return handleGetChannelMessages(
+          payload as Parameters<typeof handleGetChannelMessages>[0],
         );
       case "get_forum_thread":
         return handleGetForumThread(

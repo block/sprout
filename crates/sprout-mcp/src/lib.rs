@@ -61,12 +61,14 @@
 //!
 //! ## Available Tools
 //!
-//! 42 tools total, organized into toolsets. Tools are organized into toolsets. Set
-//! `SPROUT_TOOLSETS` to control which are active (default: 25 core tools).
+//! 50 tools total, organized into toolsets. Tools are organized into toolsets. Set
+//! `SPROUT_TOOLSETS` to control which are active (default: 27 core tools).
 //!
 //! ### Messaging (default toolset)
-//! - **`send_message`** — Post a message to a channel.
-//! - **`send_diff_message`** — Post a diff-formatted message.
+//! - **`send_current_reply`** — Reply in the current bound conversation context.
+//! - **`send_message`** — Post a message to a specific channel.
+//! - **`send_current_diff_reply`** — Reply with a diff in the current bound conversation context.
+//! - **`send_diff_message`** — Post a diff-formatted message to a specific channel.
 //! - **`edit_message`** — Edit an existing message.
 //! - **`delete_message`** — Delete a message.
 //! - **`get_messages`** — Fetch recent messages from a channel (default 50, max 200).

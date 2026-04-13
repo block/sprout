@@ -60,10 +60,21 @@ pub struct BatchEvent {
     pub received_at: Instant,
 }
 
+/// Frozen reply/thread scope for a single agent turn.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TurnReplyScope {
+    /// Thread root event ID (hex). `None` means the turn is root-scoped.
+    pub root_event_id: Option<String>,
+    /// Immediate parent event ID (hex). For direct replies to root, equals root.
+    pub parent_event_id: Option<String>,
+}
+
 /// A batch of events to prompt the agent with.
 #[derive(Debug, Clone)]
 pub struct FlushBatch {
     pub channel_id: Uuid,
+    /// Canonical reply/thread scope frozen when the batch is flushed.
+    pub reply_scope: TurnReplyScope,
     pub events: Vec<BatchEvent>,
     /// Events from a cancelled batch that triggered this re-prompt.
     /// Empty for normal (non-cancel) batches. When non-empty, `format_prompt()`
@@ -238,12 +249,14 @@ impl EventQueue {
                         // Move cancelled events into the regular events slot.
                         // No new events to merge — re-dispatch the original batch.
                         let cancelled = self.cancelled_batches.remove(&id).unwrap_or_default();
+                        let reply_scope = turn_reply_scope_for_events(&cancelled);
                         self.in_flight_channels.insert(id);
                         self.in_flight_deadlines
                             .insert(id, now + Duration::from_secs(IN_FLIGHT_DEADLINE_SECS));
                         self.in_flight_batch_sizes.insert(id, cancelled.len());
                         return Some(FlushBatch {
                             channel_id: id,
+                            reply_scope,
                             events: cancelled,
                             cancelled_events: vec![],
                         });
@@ -282,9 +295,11 @@ impl EventQueue {
             .cancelled_batches
             .remove(&channel_id)
             .unwrap_or_default();
+        let reply_scope = turn_reply_scope_for_events(&events);
 
         Some(FlushBatch {
             channel_id,
+            reply_scope,
             events,
             cancelled_events,
         })
@@ -645,6 +660,26 @@ pub fn parse_thread_tags(event: &Event) -> ThreadTags {
     }
 }
 
+fn turn_reply_scope_for_events(events: &[BatchEvent]) -> TurnReplyScope {
+    let Some(event) = events.last() else {
+        return TurnReplyScope::default();
+    };
+    let thread_tags = parse_thread_tags(&event.event);
+    TurnReplyScope {
+        root_event_id: thread_tags.root_event_id,
+        parent_event_id: thread_tags.parent_event_id,
+    }
+}
+
+/// Resolve thread tags for the last event in a batch.
+///
+/// The harness treats the final queued event as the one the agent is
+/// responding to, so both prompt scope and ephemeral typing scope should use
+/// the same resolution rule.
+pub fn last_event_thread_tags(batch: &FlushBatch) -> Option<ThreadTags> {
+    batch.events.last().map(|event| parse_thread_tags(&event.event))
+}
+
 // ── Prompt formatting ─────────────────────────────────────────────────────────
 
 /// Conversation context fetched by the harness before prompting.
@@ -857,6 +892,9 @@ fn format_context_hints(
                 }
             }
         }
+        s.push_str(
+            "\nUse `send_current_reply()` for normal responses in this DM. Use `send_current_diff_reply()` if you need to send a diff.",
+        );
         s
     } else if let Some(ref root) = thread_tags.root_event_id {
         let ctx_hint = if has_conversation_context {
@@ -876,13 +914,17 @@ fn format_context_hints(
             }
         }
         s.push_str(&format!("\n{ctx_hint}"));
+        s.push_str(
+            "\nReply in this thread with `send_current_reply()`. Use `send_current_diff_reply()` if you need to send a diff. Do not choose `channel_id` or `parent_event_id` yourself for normal replies.",
+        );
         s
     } else {
         format!(
             "[Context]\n\
              Scope: channel\n\
              Channel: {channel_display}\n\
-             Hint: Use get_channel_history() for recent messages if needed."
+             Hint: Use get_channel_history() for recent messages if needed.\n\
+             Reply in the root/channel conversation with `send_current_reply()`. Use `send_current_diff_reply()` if you need to send a diff. Do not start a thread yourself for normal replies."
         )
     }
 }
@@ -940,14 +982,13 @@ pub fn format_prompt(
     // one the agent is responding to. Thread/DM context is supplementary info
     // included alongside, not a scope override. This prevents mixed batches
     // (thread reply + later plain message) from being mislabeled as "thread".
-    let last_event = match batch.events.last() {
-        Some(e) => e,
+    let thread_tags = match last_event_thread_tags(batch) {
+        Some(tags) => tags,
         None => {
             tracing::error!("format_prompt called with empty batch — returning empty prompt");
             return String::new();
         }
     };
-    let thread_tags = parse_thread_tags(&last_event.event);
     let is_dm = channel_info
         .map(|ci| ci.channel_type == "dm")
         .unwrap_or(false);
@@ -1092,6 +1133,55 @@ mod tests {
         // Queue should be empty now.
         assert_eq!(q.pending_count(), 0);
         assert_eq!(q.pending_channels(), 0);
+    }
+
+    #[test]
+    fn test_flush_next_freezes_reply_scope_from_last_event() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let thread_event = make_event_with_tags(
+            "thread reply",
+            vec![vec!["e".into(), "root123".into(), "".into(), "reply".into()]],
+        );
+        q.push(QueuedEvent {
+            channel_id: ch,
+            event: thread_event,
+            received_at: Instant::now(),
+            prompt_tag: "@mention".into(),
+        });
+
+        let batch = q.flush_next().expect("should return a batch");
+        assert_eq!(batch.reply_scope.root_event_id.as_deref(), Some("root123"));
+        assert_eq!(batch.reply_scope.parent_event_id.as_deref(), Some("root123"));
+    }
+
+    #[test]
+    fn test_flush_next_freezes_reply_scope_for_cancelled_only_batch() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        q.push(QueuedEvent {
+            channel_id: ch,
+            event: make_event_with_tags(
+                "thread reply",
+                vec![vec!["e".into(), "root456".into(), "".into(), "reply".into()]],
+            ),
+            received_at: Instant::now(),
+            prompt_tag: "@mention".into(),
+        });
+
+        let batch = q.flush_next().expect("initial flush");
+        q.requeue_as_cancelled(batch);
+        q.mark_complete(ch);
+
+        let retry_batch = q.flush_next().expect("cancelled-only flush");
+        assert_eq!(
+            retry_batch.reply_scope.root_event_id.as_deref(),
+            Some("root456")
+        );
+        assert_eq!(
+            retry_batch.reply_scope.parent_event_id.as_deref(),
+            Some("root456")
+        );
     }
 
     // ── Test 2: same channel cannot be flushed twice ─────────────────────────
@@ -1264,6 +1354,7 @@ mod tests {
 
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
@@ -1348,6 +1439,7 @@ mod tests {
 
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![
                 BatchEvent {
                     event: e1,
@@ -1389,6 +1481,7 @@ mod tests {
 
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
@@ -1857,6 +1950,57 @@ mod tests {
         assert_eq!(tags.parent_event_id.as_deref(), Some("root123"));
     }
 
+    #[test]
+    fn test_last_event_thread_tags_prefers_last_event_scope() {
+        let ch = Uuid::new_v4();
+        let batch = FlushBatch {
+            channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
+            events: vec![
+                BatchEvent {
+                    event: make_event_with_tags(
+                        "thread reply",
+                        vec![vec!["e".into(), "root123".into(), "".into(), "reply".into()]],
+                    ),
+                    prompt_tag: "@mention".into(),
+                    received_at: Instant::now(),
+                },
+                BatchEvent {
+                    event: make_event("follow-up in channel"),
+                    prompt_tag: "@mention".into(),
+                    received_at: Instant::now(),
+                },
+            ],
+            cancelled_events: vec![],
+        };
+
+        let thread_tags = last_event_thread_tags(&batch).expect("batch should have events");
+        assert!(thread_tags.root_event_id.is_none());
+        assert!(thread_tags.parent_event_id.is_none());
+    }
+
+    #[test]
+    fn test_last_event_thread_tags_returns_thread_root_for_thread_batch() {
+        let ch = Uuid::new_v4();
+        let batch = FlushBatch {
+            channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
+            events: vec![BatchEvent {
+                event: make_event_with_tags(
+                    "thread reply",
+                    vec![vec!["e".into(), "root123".into(), "".into(), "reply".into()]],
+                ),
+                prompt_tag: "@mention".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+        };
+
+        let thread_tags = last_event_thread_tags(&batch).expect("batch should have events");
+        assert_eq!(thread_tags.root_event_id.as_deref(), Some("root123"));
+        assert_eq!(thread_tags.parent_event_id.as_deref(), Some("root123"));
+    }
+
     // ── Context formatting tests ─────────────────────────────────────────────
 
     #[test]
@@ -1865,6 +2009,7 @@ mod tests {
         let event = make_event("hello");
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
@@ -1880,6 +2025,9 @@ mod tests {
         let prompt = format_prompt(&batch, None, Some(&ci), None, None);
         assert!(prompt.contains("engineering (#"));
         assert!(prompt.contains("Scope: channel"));
+        assert!(prompt.contains(
+            "Reply in the root/channel conversation with `send_current_reply()`."
+        ));
     }
 
     #[test]
@@ -1888,6 +2036,7 @@ mod tests {
         let event = make_event("hey");
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "dm".into(),
@@ -1918,6 +2067,7 @@ mod tests {
         );
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
@@ -1929,6 +2079,7 @@ mod tests {
         let prompt = format_prompt(&batch, None, None, None, None);
         assert!(prompt.contains("Scope: thread"));
         assert!(prompt.contains("Thread root: root123"));
+        assert!(prompt.contains("Reply in this thread with `send_current_reply()`."));
     }
 
     #[test]
@@ -1945,6 +2096,7 @@ mod tests {
         );
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
@@ -1981,6 +2133,7 @@ mod tests {
         let event = make_event("ok do that");
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "dm".into(),
@@ -2021,6 +2174,7 @@ mod tests {
         let author_hex = event.pubkey.to_hex();
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
@@ -2127,6 +2281,7 @@ mod tests {
         );
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "dm".into(),
@@ -2175,6 +2330,7 @@ mod tests {
         let event = make_event("hey there");
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "dm".into(),
@@ -2207,6 +2363,7 @@ mod tests {
         let event_id = event.id.to_hex();
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
@@ -2230,6 +2387,7 @@ mod tests {
         let npub = event.pubkey.to_bech32().unwrap();
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
@@ -2252,6 +2410,7 @@ mod tests {
         let event = make_event_with_tags("hello", vec![vec!["h".into(), ch.to_string()]]);
         let batch = FlushBatch {
             channel_id: ch,
+            reply_scope: TurnReplyScope::default(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),

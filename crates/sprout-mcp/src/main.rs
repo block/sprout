@@ -19,6 +19,27 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    let mut current_channel_id: Option<String> = None;
+    let mut current_thread_root_id: Option<String> = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--current-channel-id" => {
+                current_channel_id = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("missing value for --current-channel-id"))?,
+                );
+            }
+            "--current-thread-root-id" => {
+                current_thread_root_id =
+                    Some(args.next().ok_or_else(|| {
+                        anyhow::anyhow!("missing value for --current-thread-root-id")
+                    })?);
+            }
+            _ => return Err(anyhow::anyhow!("unknown argument: {arg}")),
+        }
+    }
+
     let relay_url =
         std::env::var("SPROUT_RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string());
 
@@ -44,7 +65,13 @@ async fn main() -> Result<()> {
     eprintln!("sprout-mcp: connected and authenticated.");
 
     let tools_to_remove = toolset_config.tools_to_remove();
-    let server = SproutMcpServer::new(client, Some(tools_to_remove));
+    let server = SproutMcpServer::new(
+        client,
+        Some(tools_to_remove),
+        current_channel_id,
+        current_thread_root_id,
+    )
+    .map_err(anyhow::Error::msg)?;
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
 

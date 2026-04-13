@@ -230,6 +230,37 @@ test("shows and clears typing indicators for active channel bots", async ({
   await expect(page.getByTestId("message-typing-indicator")).toHaveCount(0);
 });
 
+test("thread-scoped typing stays in the thread panel", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const rootRow = page
+    .getByTestId("message-row")
+    .filter({ hasText: "Welcome to #general" })
+    .first();
+  await rootRow.hover();
+  await page.getByTestId("reply-message-mock-general-welcome").click();
+
+  const threadPanel = page.getByTestId("channel-thread-panel");
+  await expect(threadPanel).toBeVisible();
+
+  await page.evaluate((pubkey) => {
+    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+      channelName: "general",
+      pubkey,
+      threadRootId: "mock-general-welcome",
+    });
+  }, TEST_IDENTITIES.alice.pubkey);
+
+  await expect(page.getByTestId("message-typing-indicator")).toHaveCount(1);
+  await expect(threadPanel.getByTestId("message-typing-indicator")).toBeVisible();
+  await expect(
+    threadPanel.getByTestId("message-typing-indicator-label"),
+  ).toContainText("alice is typing");
+});
+
 test("typing indicator shows avatars and maintains stable name order", async ({
   page,
 }) => {

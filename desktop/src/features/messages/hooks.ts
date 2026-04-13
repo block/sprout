@@ -15,6 +15,10 @@ import {
   normalizeMentionPubkeys,
   resolveReplyRootId,
 } from "@/features/messages/lib/threading";
+import {
+  getRelayEventTraceData,
+  traceRelayEvent,
+} from "@/shared/lib/relayEventTrace";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   addReaction,
@@ -236,6 +240,16 @@ export function useChannelSubscription(channel: Channel | null): {
     if (!channelId) {
       return;
     }
+
+    traceRelayEvent(
+      "H6",
+      "desktop/src/features/messages/hooks.ts:235",
+      "live channel event received",
+      {
+        channelId,
+        ...getRelayEventTraceData(event),
+      },
+    );
 
     if (
       event.kind === KIND_STREAM_MESSAGE ||
@@ -485,7 +499,7 @@ export function useSendMessageMutation(
         },
       );
 
-      if (_variables.parentEventId) {
+      if (_variables.parentEventId && channel) {
         void queryClient.invalidateQueries({
           queryKey: channelMessagesKey(channel.id),
         });

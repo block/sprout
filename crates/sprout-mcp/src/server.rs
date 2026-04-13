@@ -54,6 +54,97 @@ fn validate_uuid(s: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+struct CurrentReplyContext {
+    #[serde(default)]
+    channel_id: Option<String>,
+    #[serde(default)]
+    thread_root_id: Option<String>,
+}
+
+#[cfg(test)]
+fn parse_current_reply_context(raw: &str) -> Result<CurrentReplyContext, String> {
+    let context: CurrentReplyContext =
+        serde_json::from_str(raw).map_err(|error| format!("invalid current reply context: {error}"))?;
+    normalize_current_reply_context(context)
+}
+
+fn normalize_current_reply_context(context: CurrentReplyContext) -> Result<CurrentReplyContext, String> {
+    if let Some(ref channel_id) = context.channel_id {
+        validate_uuid(channel_id)?;
+    }
+    if let Some(ref thread_root_id) = context.thread_root_id {
+        validate_hex64(thread_root_id, "thread_root_id")?;
+        if context.channel_id.is_none() {
+            return Err("invalid current reply context: thread_root_id requires channel_id".into());
+        }
+    }
+    Ok(CurrentReplyContext {
+        channel_id: context.channel_id,
+        thread_root_id: context.thread_root_id.map(|id| id.to_ascii_lowercase()),
+    })
+}
+
+fn effective_stream_parent_event_id_for_context(
+    current_reply_context: Option<&CurrentReplyContext>,
+    channel_id: &str,
+    requested_parent_event_id: Option<&str>,
+) -> Option<String> {
+    let Some(current_reply_context) = current_reply_context else {
+        return requested_parent_event_id.map(ToOwned::to_owned);
+    };
+    if current_reply_context.channel_id.as_deref() != Some(channel_id) {
+        return requested_parent_event_id.map(ToOwned::to_owned);
+    }
+    match current_reply_context.thread_root_id.as_deref() {
+        Some(thread_root_id) => {
+            if requested_parent_event_id != Some(thread_root_id) {
+                tracing::info!(
+                    channel_id,
+                    parent_event_id = requested_parent_event_id,
+                    forced_parent_event_id = thread_root_id,
+                    "forcing stream send to current thread root for current channel"
+                );
+            }
+            Some(thread_root_id.to_string())
+        }
+        None => {
+            if requested_parent_event_id.is_some() {
+                tracing::warn!(
+                    channel_id,
+                    "stripping parent_event_id from stream send because current channel reply context is root-only"
+                );
+            }
+            None
+        }
+    }
+}
+
+fn bound_thread_root_for_channel<'a>(
+    current_reply_context: Option<&'a CurrentReplyContext>,
+    channel_id: &str,
+) -> Option<&'a str> {
+    let current_reply_context = current_reply_context?;
+    if current_reply_context.channel_id.as_deref() != Some(channel_id) {
+        return None;
+    }
+    current_reply_context.thread_root_id.as_deref()
+}
+
+fn should_force_thread_reply(
+    current_reply_context: Option<&CurrentReplyContext>,
+    channel_id: &str,
+    effective_parent_event_id: Option<&str>,
+) -> bool {
+    matches!(
+        (
+            bound_thread_root_for_channel(current_reply_context, channel_id),
+            effective_parent_event_id,
+        ),
+        (Some(bound_thread_root_id), Some(parent_event_id)) if bound_thread_root_id == parent_event_id
+    )
+}
+
 /// Extract the thread root event ID from a serialized Nostr tag array.
 ///
 /// Parses `"e"` tags with NIP-10 markers:
@@ -204,6 +295,16 @@ pub struct SendMessageParams {
     /// If true and parent_event_id is set, surface the reply in the main channel timeline.
     #[serde(default)]
     pub broadcast_to_channel: Option<bool>,
+    /// Pubkeys to @mention in the message.
+    #[serde(default)]
+    pub mention_pubkeys: Option<Vec<String>>,
+}
+
+/// Parameters for the `send_current_reply` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SendCurrentReplyParams {
+    /// Message body text.
+    pub content: String,
     /// Pubkeys to @mention in the message.
     #[serde(default)]
     pub mention_pubkeys: Option<Vec<String>>,
@@ -666,6 +767,39 @@ pub struct SendDiffMessageParams {
     pub parent_event_id: Option<String>,
 }
 
+/// Parameters for the `send_current_diff_reply` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SendCurrentDiffReplyParams {
+    /// Unified diff content (git diff format).
+    pub diff: String,
+    /// URL of the source repository (e.g. "https://github.com/org/repo").
+    pub repo_url: String,
+    /// Full commit SHA this diff applies to.
+    pub commit_sha: String,
+    /// Optional file path within the repo (used for language inference and display).
+    #[serde(default)]
+    pub file_path: Option<String>,
+    /// Optional parent commit SHA (the base of the diff).
+    #[serde(default)]
+    pub parent_commit_sha: Option<String>,
+    /// Optional source branch name (e.g. "feat/my-feature").
+    #[serde(default)]
+    pub source_branch: Option<String>,
+    /// Optional target branch name (e.g. "main").
+    #[serde(default)]
+    pub target_branch: Option<String>,
+    /// Optional pull request number associated with this diff.
+    #[serde(default)]
+    pub pr_number: Option<u32>,
+    /// Optional language hint for syntax highlighting (e.g. "rust", "typescript").
+    /// Inferred from file_path extension if omitted.
+    #[serde(default)]
+    pub language: Option<String>,
+    /// Optional human-readable description of the change.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
 /// Vote direction for forum posts.
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -843,6 +977,7 @@ fn infer_language(file_path: &str) -> Option<String> {
 pub struct SproutMcpServer {
     client: RelayClient,
     tool_router: ToolRouter<Self>,
+    current_reply_context: Option<CurrentReplyContext>,
 }
 
 #[tool_router]
@@ -853,7 +988,9 @@ impl SproutMcpServer {
     pub fn new(
         client: RelayClient,
         tools_to_remove: Option<std::collections::HashSet<&'static str>>,
-    ) -> Self {
+        current_channel_id: Option<String>,
+        current_thread_root_id: Option<String>,
+    ) -> Result<Self, String> {
         let mut tool_router = Self::tool_router();
         if let Some(ref remove) = tools_to_remove {
             for name in remove {
@@ -861,9 +998,289 @@ impl SproutMcpServer {
             }
         }
 
-        Self {
+        let current_reply_context = if current_channel_id.is_some() || current_thread_root_id.is_some() {
+            Some(normalize_current_reply_context(CurrentReplyContext {
+                channel_id: current_channel_id,
+                thread_root_id: current_thread_root_id,
+            })?)
+        } else {
+            None
+        };
+
+        Ok(Self {
             client,
             tool_router,
+            current_reply_context,
+        })
+    }
+
+    fn try_current_reply_context(&self) -> Result<Option<CurrentReplyContext>, String> {
+        Ok(self.current_reply_context.clone())
+    }
+
+    fn current_reply_context(&self) -> Result<CurrentReplyContext, String> {
+        self.try_current_reply_context()?
+            .ok_or_else(|| "current reply context unavailable".to_string())
+    }
+
+    fn current_reply_target(&self) -> Result<(String, Option<String>), String> {
+        let context = self.current_reply_context()?;
+        let channel_id = context
+            .channel_id
+            .ok_or_else(|| "current reply context is not bound to a channel".to_string())?;
+        Ok((channel_id, context.thread_root_id))
+    }
+
+    fn validate_mention_pubkeys(mention_pubkeys: Option<&Vec<String>>) -> Result<(), String> {
+        if let Some(mentions) = mention_pubkeys {
+            for pubkey in mentions {
+                if pubkey.len() != 64 || !pubkey.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Err(format!(
+                        "Error: mention_pubkeys entry must be a 64-character hex string (got {:?})",
+                        pubkey
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn resolve_mention_pubkeys(
+        &self,
+        channel_id: &str,
+        content: &str,
+        mention_pubkeys: Option<&Vec<String>>,
+    ) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut mentions: Vec<String> = mention_pubkeys
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .filter(|s| seen.insert(s.clone()))
+            .collect();
+
+        let auto = resolve_content_mentions(&self.client, channel_id, content).await;
+        let budget = 50usize.saturating_sub(mentions.len());
+        let mut added = 0usize;
+        for pk in &auto {
+            if added >= budget {
+                break;
+            }
+            if !mentions.contains(pk) {
+                mentions.push(pk.clone());
+                added += 1;
+            }
+        }
+
+        mentions
+    }
+
+    async fn send_stream_message_internal(
+        &self,
+        channel_id: &str,
+        content: &str,
+        mention_pubkeys: Option<&Vec<String>>,
+        requested_parent_event_id: Option<&str>,
+        broadcast_to_channel: bool,
+    ) -> String {
+        if let Err(error) = validate_uuid(channel_id) {
+            return format!("Error: {error}");
+        }
+        if content.len() > MAX_CONTENT_BYTES {
+            return format!(
+                "Error: content exceeds maximum size of {} bytes (got {})",
+                MAX_CONTENT_BYTES,
+                content.len()
+            );
+        }
+        if let Err(error) = Self::validate_mention_pubkeys(mention_pubkeys) {
+            return error;
+        }
+
+        let channel_uuid = match uuid::Uuid::parse_str(channel_id) {
+            Ok(uuid) => uuid,
+            Err(_) => return format!("Error: invalid UUID: {channel_id}"),
+        };
+        let mentions = self
+            .resolve_mention_pubkeys(channel_id, content, mention_pubkeys)
+            .await;
+        let mention_refs: Vec<&str> = mentions.iter().map(String::as_str).collect();
+        let current_reply_context = match self.try_current_reply_context() {
+            Ok(context) => context,
+            Err(error) => return format!("Error: {error}"),
+        };
+        let effective_parent_event_id = effective_stream_parent_event_id_for_context(
+            current_reply_context.as_ref(),
+            channel_id,
+            requested_parent_event_id,
+        );
+        let thread_ref = if let Some(ref parent_id) = effective_parent_event_id {
+            let parent_eid = match EventId::from_hex(parent_id) {
+                Ok(id) => id,
+                Err(e) => return format!("Error: invalid parent_event_id: {e}"),
+            };
+            let resolution = if should_force_thread_reply(
+                current_reply_context.as_ref(),
+                channel_id,
+                Some(parent_id.as_str()),
+            ) {
+                self.resolve_thread_ref_unchecked(parent_id, parent_eid)
+                    .await
+                    .map(Some)
+            } else {
+                self.resolve_thread_ref_if_thread_context(parent_id, parent_eid)
+                    .await
+            };
+            match resolution {
+                Ok(tr) => tr,
+                Err(e) => return format!("Error: {e}"),
+            }
+        } else {
+            None
+        };
+        let builder = match sprout_sdk::build_message(
+            channel_uuid,
+            content,
+            thread_ref.as_ref(),
+            &mention_refs,
+            broadcast_to_channel && thread_ref.is_some(),
+            &[],
+        ) {
+            Ok(builder) => builder,
+            Err(error) => return format!("Error: {error}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(event) => event,
+            Err(error) => return format!("Error: failed to sign message event: {error}"),
+        };
+
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
+            Err(error) => format!("Error: {error}"),
+        }
+    }
+
+    async fn send_diff_message_internal(
+        &self,
+        channel_id: &str,
+        diff: String,
+        repo_url: String,
+        commit_sha: String,
+        file_path: Option<String>,
+        parent_commit_sha: Option<String>,
+        source_branch: Option<String>,
+        target_branch: Option<String>,
+        pr_number: Option<u32>,
+        language: Option<String>,
+        description: Option<String>,
+        requested_parent_event_id: Option<&str>,
+    ) -> String {
+        if let Err(error) = validate_uuid(channel_id) {
+            return format!("Error: {error}");
+        }
+        let channel_uuid = match uuid::Uuid::parse_str(channel_id) {
+            Ok(uuid) => uuid,
+            Err(_) => return format!("Error: invalid UUID: {channel_id}"),
+        };
+
+        let (diff_content, truncated) = truncate_diff(&diff, 60 * 1024);
+        let lang = language.or_else(|| file_path.as_deref().and_then(infer_language));
+        let alt_text = match &description {
+            Some(desc) => format!(
+                "Diff: {} — {}",
+                file_path.as_deref().unwrap_or("diff"),
+                desc
+            ),
+            None => format!("Diff: {}", file_path.as_deref().unwrap_or("diff")),
+        };
+
+        match (&source_branch, &target_branch) {
+            (Some(_), None) | (None, Some(_)) => {
+                tracing::warn!(
+                    "send_diff_message: only one of source_branch/target_branch provided — both required, branch metadata omitted"
+                );
+            }
+            _ => {}
+        }
+        let branch = match (source_branch, target_branch) {
+            (Some(src), Some(tgt)) => Some((src, tgt)),
+            _ => None,
+        };
+
+        let current_reply_context = match self.try_current_reply_context() {
+            Ok(context) => context,
+            Err(error) => return format!("Error: {error}"),
+        };
+        let effective_parent_event_id = effective_stream_parent_event_id_for_context(
+            current_reply_context.as_ref(),
+            channel_id,
+            requested_parent_event_id,
+        );
+        let thread_ref = if let Some(ref parent_id) = effective_parent_event_id {
+            let parent_eid = match EventId::from_hex(parent_id) {
+                Ok(id) => id,
+                Err(e) => return format!("Error: invalid parent_event_id: {e}"),
+            };
+            let resolution = if should_force_thread_reply(
+                current_reply_context.as_ref(),
+                channel_id,
+                Some(parent_id.as_str()),
+            ) {
+                self.resolve_thread_ref_unchecked(parent_id, parent_eid)
+                    .await
+                    .map(Some)
+            } else {
+                self.resolve_thread_ref_if_thread_context(parent_id, parent_eid)
+                    .await
+            };
+            match resolution {
+                Ok(tr) => tr,
+                Err(e) => return format!("Error: {e}"),
+            }
+        } else {
+            None
+        };
+
+        let diff_meta = sprout_sdk::DiffMeta {
+            repo_url,
+            commit_sha,
+            file_path,
+            parent_commit: parent_commit_sha,
+            branch,
+            pr_number,
+            language: lang,
+            description,
+            truncated,
+            alt_text: Some(alt_text),
+        };
+        let builder = match sprout_sdk::build_diff_message(
+            channel_uuid,
+            &diff_content,
+            &diff_meta,
+            thread_ref.as_ref(),
+        ) {
+            Ok(builder) => builder,
+            Err(error) => return format!("Error: {error}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(event) => event,
+            Err(error) => return format!("Error: failed to sign diff message event: {error}"),
+        };
+
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
+            Err(error) => format!("Error: {error}"),
         }
     }
     /// Resolve a `ThreadRef` for SDK builders by fetching the parent event.
@@ -951,10 +1368,36 @@ impl SproutMcpServer {
         Self::thread_ref_from_parent_tags(parent_tags, parent_eid)
     }
 
+    /// Send a message in the current bound conversation context.
+    #[tool(
+        name = "send_current_reply",
+        description = "Reply in the current conversation context. The harness determines the channel and whether the reply belongs in the root conversation or the active thread. Use this for normal agent responses."
+    )]
+    pub async fn send_current_reply(
+        &self,
+        Parameters(p): Parameters<SendCurrentReplyParams>,
+    ) -> String {
+        let (channel_id, thread_root_id) = match self.current_reply_target() {
+            Ok(target) => target,
+            Err(error) => return format!("Error: {error}"),
+        };
+        self.send_stream_message_internal(
+            &channel_id,
+            &p.content,
+            p.mention_pubkeys.as_ref(),
+            thread_root_id.as_deref(),
+            false,
+        )
+        .await
+    }
+
     /// Send a message to a Sprout channel.
     #[tool(
         name = "send_message",
         description = "Send a message to a Sprout channel.
+
+Use `send_current_reply` for normal replies in the current conversation. Use this tool when you
+intentionally need to post to a specific channel or provide explicit transport details.
 
 Stream messages (default kind 9): if `parent_event_id` is provided, it only results in a
 threaded reply if the parent event is already in a NIP-10 thread context (has an `e` tag
@@ -969,154 +1412,160 @@ Set `broadcast_to_channel` to also surface the reply in the main channel timelin
 message is actually threaded)."
     )]
     pub async fn send_message(&self, Parameters(p): Parameters<SendMessageParams>) -> String {
-        if let Err(e) = validate_uuid(&p.channel_id) {
-            return format!("Error: {e}");
-        }
-        if p.content.len() > MAX_CONTENT_BYTES {
-            return format!(
-                "Error: content exceeds maximum size of {} bytes (got {})",
-                MAX_CONTENT_BYTES,
-                p.content.len()
-            );
-        }
-        if let Some(ref parent_id) = p.parent_event_id {
-            if parent_id.len() != 64 || !parent_id.chars().all(|c| c.is_ascii_hexdigit()) {
-                return format!(
-                    "Error: parent_event_id must be a 64-character hex string (got {:?})",
-                    parent_id
-                );
-            }
-        }
-        if let Some(ref mentions) = p.mention_pubkeys {
-            for pk in mentions {
-                if pk.len() != 64 || !pk.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return format!(
-                        "Error: mention_pubkeys entry must be a 64-character hex string (got {:?})",
-                        pk
-                    );
-                }
-            }
-        }
-
-        let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
-            Ok(u) => u,
-            Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
-        };
         let kind_num = p
             .kind
             .unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE as u16);
-        // Collect explicit pubkeys, dedup case-insensitively.
-        let mut seen = std::collections::HashSet::new();
-        let mut mentions: Vec<String> = p
-            .mention_pubkeys
-            .as_deref()
-            .unwrap_or(&[])
-            .iter()
-            .map(|s| s.to_ascii_lowercase())
-            .filter(|s| seen.insert(s.clone()))
-            .collect();
-
-        // Auto-resolve @names in content and merge, up to SDK cap of 50.
-        let auto = resolve_content_mentions(&self.client, &p.channel_id, &p.content).await;
-        let budget = 50usize.saturating_sub(mentions.len());
-        let mut added = 0usize;
-        for pk in &auto {
-            if added >= budget {
-                break;
-            }
-            if !mentions.contains(pk) {
-                mentions.push(pk.clone());
-                added += 1;
-            }
-        }
-
-        let mention_refs: Vec<&str> = mentions.iter().map(String::as_str).collect();
         let broadcast = p.broadcast_to_channel.unwrap_or(false);
 
-        // Build the event builder via SDK, routing by kind.
-        let builder = match kind_num as u32 {
+        match kind_num as u32 {
             sprout_core::kind::KIND_FORUM_POST => {
-                // kind 45001: forum post (no thread ref, no broadcast)
-                match sprout_sdk::build_forum_post(channel_uuid, &p.content, &mention_refs, &[]) {
-                    Ok(b) => b,
-                    Err(e) => return format!("Error: {e}"),
+                if let Err(error) = validate_uuid(&p.channel_id) {
+                    return format!("Error: {error}");
+                }
+                if p.content.len() > MAX_CONTENT_BYTES {
+                    return format!(
+                        "Error: content exceeds maximum size of {} bytes (got {})",
+                        MAX_CONTENT_BYTES,
+                        p.content.len()
+                    );
+                }
+                if let Err(error) = Self::validate_mention_pubkeys(p.mention_pubkeys.as_ref()) {
+                    return error;
+                }
+                let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+                    Ok(uuid) => uuid,
+                    Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+                };
+                let mentions = self
+                    .resolve_mention_pubkeys(&p.channel_id, &p.content, p.mention_pubkeys.as_ref())
+                    .await;
+                let mention_refs: Vec<&str> = mentions.iter().map(String::as_str).collect();
+                let builder =
+                    match sprout_sdk::build_forum_post(channel_uuid, &p.content, &mention_refs, &[])
+                    {
+                        Ok(builder) => builder,
+                        Err(error) => return format!("Error: {error}"),
+                    };
+                let event = match builder.sign_with_keys(self.client.keys()) {
+                    Ok(event) => event,
+                    Err(error) => {
+                        return format!("Error: failed to sign message event: {error}");
+                    }
+                };
+                match self.client.send_event(event).await {
+                    Ok(ok) => serde_json::json!({
+                        "event_id": ok.event_id,
+                        "accepted": ok.accepted,
+                        "message": ok.message,
+                    })
+                    .to_string(),
+                    Err(error) => format!("Error: {error}"),
                 }
             }
             sprout_core::kind::KIND_FORUM_COMMENT => {
-                // kind 45003: forum comment — requires parent_event_id
+                if let Err(error) = validate_uuid(&p.channel_id) {
+                    return format!("Error: {error}");
+                }
+                if p.content.len() > MAX_CONTENT_BYTES {
+                    return format!(
+                        "Error: content exceeds maximum size of {} bytes (got {})",
+                        MAX_CONTENT_BYTES,
+                        p.content.len()
+                    );
+                }
+                if let Err(error) = Self::validate_mention_pubkeys(p.mention_pubkeys.as_ref()) {
+                    return error;
+                }
+                let channel_uuid = match uuid::Uuid::parse_str(&p.channel_id) {
+                    Ok(uuid) => uuid,
+                    Err(_) => return format!("Error: invalid UUID: {}", p.channel_id),
+                };
+                let mentions = self
+                    .resolve_mention_pubkeys(&p.channel_id, &p.content, p.mention_pubkeys.as_ref())
+                    .await;
+                let mention_refs: Vec<&str> = mentions.iter().map(String::as_str).collect();
                 let parent_id = match p.parent_event_id.as_deref() {
                     Some(id) => id,
                     None => return "Error: kind 45003 requires parent_event_id".to_string(),
                 };
                 let parent_eid = match EventId::from_hex(parent_id) {
                     Ok(id) => id,
-                    Err(e) => return format!("Error: invalid parent_event_id: {e}"),
+                    Err(error) => return format!("Error: invalid parent_event_id: {error}"),
                 };
-
                 let thread_ref = match self
                     .resolve_thread_ref_unchecked(parent_id, parent_eid)
                     .await
                 {
-                    Ok(tr) => tr,
-                    Err(e) => return format!("Error: {e}"),
+                    Ok(thread_ref) => thread_ref,
+                    Err(error) => return format!("Error: {error}"),
                 };
-
-                match sprout_sdk::build_forum_comment(
+                let builder = match sprout_sdk::build_forum_comment(
                     channel_uuid,
                     &p.content,
                     &thread_ref,
                     &mention_refs,
                     &[],
                 ) {
-                    Ok(b) => b,
-                    Err(e) => return format!("Error: {e}"),
+                    Ok(builder) => builder,
+                    Err(error) => return format!("Error: {error}"),
+                };
+                let event = match builder.sign_with_keys(self.client.keys()) {
+                    Ok(event) => event,
+                    Err(error) => {
+                        return format!("Error: failed to sign message event: {error}");
+                    }
+                };
+                match self.client.send_event(event).await {
+                    Ok(ok) => serde_json::json!({
+                        "event_id": ok.event_id,
+                        "accepted": ok.accepted,
+                        "message": ok.message,
+                    })
+                    .to_string(),
+                    Err(error) => format!("Error: {error}"),
                 }
             }
             _ => {
-                // kind 9 (default) and any other stream message kinds.
-                let thread_ref = if let Some(ref parent_id) = p.parent_event_id {
-                    let parent_eid = match EventId::from_hex(parent_id) {
-                        Ok(id) => id,
-                        Err(e) => return format!("Error: invalid parent_event_id: {e}"),
-                    };
-                    match self
-                        .resolve_thread_ref_if_thread_context(parent_id, parent_eid)
-                        .await
-                    {
-                        Ok(tr) => tr,
-                        Err(e) => return format!("Error: {e}"),
-                    }
-                } else {
-                    None
-                };
-                match sprout_sdk::build_message(
-                    channel_uuid,
+                self.send_stream_message_internal(
+                    &p.channel_id,
                     &p.content,
-                    thread_ref.as_ref(),
-                    &mention_refs,
-                    broadcast && thread_ref.is_some(),
-                    &[],
-                ) {
-                    Ok(b) => b,
-                    Err(e) => return format!("Error: {e}"),
-                }
+                    p.mention_pubkeys.as_ref(),
+                    p.parent_event_id.as_deref(),
+                    broadcast,
+                )
+                .await
             }
-        };
-
-        let event = match builder.sign_with_keys(self.client.keys()) {
-            Ok(e) => e,
-            Err(e) => return format!("Error: failed to sign message event: {e}"),
-        };
-
-        match self.client.send_event(event).await {
-            Ok(ok) => serde_json::json!({
-                "event_id": ok.event_id,
-                "accepted": ok.accepted,
-                "message": ok.message,
-            })
-            .to_string(),
-            Err(e) => format!("Error: {e}"),
         }
+    }
+
+    /// Send a code diff in the current bound conversation context.
+    #[tool(
+        name = "send_current_diff_reply",
+        description = "Reply with a diff in the current conversation context. The harness determines the channel and whether the diff belongs in the root conversation or the active thread."
+    )]
+    pub async fn send_current_diff_reply(
+        &self,
+        Parameters(p): Parameters<SendCurrentDiffReplyParams>,
+    ) -> String {
+        let (channel_id, thread_root_id) = match self.current_reply_target() {
+            Ok(target) => target,
+            Err(error) => return format!("Error: {error}"),
+        };
+        self.send_diff_message_internal(
+            &channel_id,
+            p.diff,
+            p.repo_url,
+            p.commit_sha,
+            p.file_path,
+            p.parent_commit_sha,
+            p.source_branch,
+            p.target_branch,
+            p.pr_number,
+            p.language,
+            p.description,
+            thread_root_id.as_deref(),
+        )
+        .await
     }
 
     /// Send a code diff to a Sprout channel as kind:40008.
@@ -1124,6 +1573,9 @@ message is actually threaded)."
         name = "send_diff_message",
         description = "Send a code diff to a Sprout channel with syntax highlighting and structured metadata. The
 diff is rendered with GitHub-quality visualization in the desktop client.
+
+Use `send_current_diff_reply` for normal replies in the current conversation. Use this tool when
+you intentionally need to post to a specific channel or provide explicit transport details.
 
 If `parent_event_id` is provided, it only results in a threaded reply if the parent event is
 already in a NIP-10 thread context (has an `e` tag marker `root` or `reply`). Otherwise
@@ -1133,112 +1585,21 @@ already in a NIP-10 thread context (has an `e` tag marker `root` or `reply`). Ot
         &self,
         Parameters(p): Parameters<SendDiffMessageParams>,
     ) -> String {
-        let SendDiffMessageParams {
-            channel_id,
-            diff,
-            repo_url,
-            commit_sha,
-            file_path,
-            parent_commit_sha,
-            source_branch,
-            target_branch,
-            pr_number,
-            language,
-            description,
-            parent_event_id,
-        } = p;
-
-        if let Err(e) = validate_uuid(&channel_id) {
-            return format!("Error: {e}");
-        }
-        let channel_uuid = match uuid::Uuid::parse_str(&channel_id) {
-            Ok(u) => u,
-            Err(_) => return format!("Error: invalid UUID: {channel_id}"),
-        };
-
-        // 1. Truncate diff at 60KB (UTF-8 safe)
-        let (diff_content, truncated) = truncate_diff(&diff, 60 * 1024);
-
-        // 2. Infer language from file extension if not provided
-        let lang = language.or_else(|| file_path.as_deref().and_then(infer_language));
-
-        // 3. Build NIP-31 alt text
-        let alt_text = match &description {
-            Some(desc) => format!(
-                "Diff: {} — {}",
-                file_path.as_deref().unwrap_or("diff"),
-                desc
-            ),
-            None => format!("Diff: {}", file_path.as_deref().unwrap_or("diff")),
-        };
-
-        // 4. Warn on partial branch metadata (both or neither required)
-        match (&source_branch, &target_branch) {
-            (Some(_), None) | (None, Some(_)) => {
-                tracing::warn!(
-                    "send_diff_message: only one of source_branch/target_branch provided — both required, branch metadata omitted"
-                );
-            }
-            _ => {}
-        }
-        let branch = match (source_branch, target_branch) {
-            (Some(src), Some(tgt)) => Some((src, tgt)),
-            _ => None,
-        };
-        // 5. Resolve optional thread ref
-        let thread_ref = if let Some(ref parent_id) = parent_event_id {
-            let parent_eid = match EventId::from_hex(parent_id) {
-                Ok(id) => id,
-                Err(e) => return format!("Error: invalid parent_event_id: {e}"),
-            };
-
-            match self
-                .resolve_thread_ref_if_thread_context(parent_id, parent_eid)
-                .await
-            {
-                Ok(tr) => tr,
-                Err(e) => return format!("Error: {e}"),
-            }
-        } else {
-            None
-        };
-
-        // 6. Build signed event via SDK
-
-        let diff_meta = sprout_sdk::DiffMeta {
-            repo_url,
-            commit_sha,
-            file_path,
-            parent_commit: parent_commit_sha,
-            branch,
-            pr_number,
-            language: lang,
-            description,
-            truncated,
-            alt_text: Some(alt_text),
-        };
-        let builder = match sprout_sdk::build_diff_message(
-            channel_uuid,
-            &diff_content,
-            &diff_meta,
-            thread_ref.as_ref(),
-        ) {
-            Ok(b) => b,
-            Err(e) => return format!("Error: {e}"),
-        };
-        let event = match builder.sign_with_keys(self.client.keys()) {
-            Ok(e) => e,
-            Err(e) => return format!("Error: failed to sign diff event: {e}"),
-        };
-        match self.client.send_event(event).await {
-            Ok(ok) => serde_json::json!({
-                "event_id": ok.event_id,
-                "accepted": ok.accepted,
-                "message": ok.message,
-            })
-            .to_string(),
-            Err(e) => format!("Error: {e}"),
-        }
+        self.send_diff_message_internal(
+            &p.channel_id,
+            p.diff,
+            p.repo_url,
+            p.commit_sha,
+            p.file_path,
+            p.parent_commit_sha,
+            p.source_branch,
+            p.target_branch,
+            p.pr_number,
+            p.language,
+            p.description,
+            p.parent_event_id.as_deref(),
+        )
+        .await
     }
 
     /// Edit a message you previously sent.
@@ -2873,6 +3234,108 @@ mod tests {
             ["e", "a".repeat(64)],
             ["e", "a".repeat(64), "wss://relay.example.com"]
         ])));
+    }
+
+    #[test]
+    fn parse_current_reply_context_root_scope() {
+        assert_eq!(
+            parse_current_reply_context(
+                r#"{"channel_id":"550e8400-e29b-41d4-a716-446655440000","thread_root_id":null}"#
+            )
+            .unwrap(),
+            CurrentReplyContext {
+                channel_id: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
+                thread_root_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_current_reply_context_thread_scope() {
+        let root = "a".repeat(64);
+        assert_eq!(
+            parse_current_reply_context(&format!(
+                r#"{{"channel_id":"550e8400-e29b-41d4-a716-446655440000","thread_root_id":"{root}"}}"#
+            ))
+            .unwrap(),
+            CurrentReplyContext {
+                channel_id: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
+                thread_root_id: Some(root),
+            }
+        );
+    }
+
+    #[test]
+    fn effective_stream_parent_event_id_for_root_scope_strips_parent() {
+        let root = "a".repeat(64);
+        assert_eq!(
+            effective_stream_parent_event_id_for_context(
+                Some(&CurrentReplyContext {
+                    channel_id: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
+                    thread_root_id: None,
+                }),
+                "550e8400-e29b-41d4-a716-446655440000",
+                Some(root.as_str())
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn effective_stream_parent_event_id_for_thread_scope_forces_configured_root() {
+        let configured_root = "a".repeat(64);
+        let wrong_parent = "b".repeat(64);
+        assert_eq!(
+            effective_stream_parent_event_id_for_context(
+                Some(&CurrentReplyContext {
+                    channel_id: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
+                    thread_root_id: Some(configured_root.clone()),
+                }),
+                "550e8400-e29b-41d4-a716-446655440000",
+                Some(wrong_parent.as_str())
+            ),
+            Some(configured_root)
+        );
+    }
+
+    #[test]
+    fn effective_stream_parent_event_id_ignores_bound_context_for_other_channel() {
+        let requested_parent = "b".repeat(64);
+        assert_eq!(
+            effective_stream_parent_event_id_for_context(
+                Some(&CurrentReplyContext {
+                    channel_id: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
+                    thread_root_id: Some("a".repeat(64)),
+                }),
+                "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+                Some(requested_parent.as_str())
+            ),
+            Some(requested_parent)
+        );
+    }
+
+    #[test]
+    fn should_force_thread_reply_when_bound_thread_matches_channel_and_parent() {
+        assert!(should_force_thread_reply(
+            Some(&CurrentReplyContext {
+                channel_id: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
+                thread_root_id: Some("a".repeat(64)),
+            }),
+            "550e8400-e29b-41d4-a716-446655440000",
+            Some(&"a".repeat(64)),
+        ));
+    }
+
+    #[test]
+    fn should_not_force_thread_reply_for_root_scope() {
+        assert!(!should_force_thread_reply(
+            Some(&CurrentReplyContext {
+                channel_id: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
+                thread_root_id: None,
+            }),
+            "550e8400-e29b-41d4-a716-446655440000",
+            Some(&"a".repeat(64)),
+        ));
     }
     // ── MAX_CONTENT_BYTES ─────────────────────────────────────────────────────
 

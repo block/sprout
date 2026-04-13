@@ -19,7 +19,7 @@
 //!
 //! | Name            | Tools |
 //! |-----------------|-------|
-//! | `default`       | 25    |
+//! | `default`       | 27    |
 //! | `channel_admin` | 6     |
 //! | `dms`           | 3     |
 //! | `canvas`        | 2     |
@@ -44,7 +44,9 @@ use std::sync::LazyLock;
 /// See [`DEFERRED_TOOLS`] for tools planned but not yet implemented.
 pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     // ── default ─────────────────────────────────────────────────────────────
+    ("send_current_reply", "default", false),
     ("send_message", "default", false),
+    ("send_current_diff_reply", "default", false),
     ("send_diff_message", "default", false),
     ("edit_message", "default", false),
     ("delete_message", "default", false),
@@ -319,7 +321,8 @@ mod tests {
     #[test]
     fn default_includes_25_tools() {
         let tools = enabled_tools("default");
-        assert_eq!(tools.len(), 25);
+        assert_eq!(tools.len(), 27);
+        assert!(tools.contains("send_current_reply"));
         assert!(tools.contains("send_message"));
         assert!(tools.contains("approve_step"));
         assert!(!tools.contains("create_channel"));
@@ -344,6 +347,7 @@ mod tests {
             assert!(is_read, "{t} should not be present in :ro mode");
         }
         assert!(tools.contains("get_messages"));
+        assert!(!tools.contains("send_current_reply"));
         assert!(!tools.contains("send_message"));
     }
 
@@ -364,7 +368,7 @@ mod tests {
     fn unknown_toolset_is_skipped_gracefully() {
         // Should not panic; unknown toolset is silently ignored
         let tools = enabled_tools("default,nonexistent_toolset");
-        assert_eq!(tools.len(), 25); // only default
+        assert_eq!(tools.len(), 27); // only default
     }
 
     #[test]
@@ -383,8 +387,8 @@ mod tests {
     }
 
     #[test]
-    fn all_tools_count_is_48() {
-        assert_eq!(ALL_TOOLS.len(), 48);
+    fn all_tools_count_is_50() {
+        assert_eq!(ALL_TOOLS.len(), 50);
     }
 
     #[test]

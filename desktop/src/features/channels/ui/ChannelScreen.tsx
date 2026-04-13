@@ -138,41 +138,12 @@ export function ChannelScreen({
     () => resolvedMessages[resolvedMessages.length - 1] ?? null,
     [resolvedMessages],
   );
-  const typingLists = (
-    useChannelTyping as unknown as (
-      channel: Channel | null,
-      currentPubkey?: string,
-      latestMessageEvent?: RelayEvent | null,
-      activeThreadRootId?: string | null,
-    ) => unknown
-  )(activeChannel, currentPubkey, latestMessageEvent, threadRootId);
-  // Defensive normalization: if Vite hot reload leaves an older flat-array
-  // shape in memory, fall back to treating it as root-scope typing rather than
-  // crashing ChannelScreen while opening a channel.
-  const channelTypingPubkeys = React.useMemo(() => {
-    if (
-      typingLists &&
-      typeof typingLists === "object" &&
-      "channelTypingPubkeys" in typingLists
-    ) {
-      const value = (typingLists as { channelTypingPubkeys?: unknown })
-        .channelTypingPubkeys;
-      return Array.isArray(value) ? value : [];
-    }
-    return Array.isArray(typingLists) ? typingLists : [];
-  }, [typingLists]);
-  const threadTypingPubkeys = React.useMemo(() => {
-    if (
-      typingLists &&
-      typeof typingLists === "object" &&
-      "threadTypingPubkeys" in typingLists
-    ) {
-      const value = (typingLists as { threadTypingPubkeys?: unknown })
-        .threadTypingPubkeys;
-      return Array.isArray(value) ? value : [];
-    }
-    return [];
-  }, [typingLists]);
+  const { channelTypingPubkeys, threadTypingPubkeys } = useChannelTyping(
+    activeChannel,
+    currentPubkey,
+    latestMessageEvent,
+    threadRootId,
+  );
   const messageProfilePubkeys = React.useMemo(
     () =>
       [
@@ -342,6 +313,32 @@ export function ChannelScreen({
         await handleSendMain(content, mentionPubkeys, mediaTags);
         return;
       }
+
+      // #region agent log
+      try {
+        fetch("http://127.0.0.1:7876/ingest/91194c04-63f1-418a-b2a7-6e113337121c", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Debug-Session-Id": "ec51df",
+          },
+          body: JSON.stringify({
+            sessionId: "ec51df",
+            runId: "pre-fix",
+            hypothesisId: "H4",
+            location: "desktop/src/features/channels/ui/ChannelScreen.tsx:317",
+            message: "thread composer send requested",
+            data: {
+              activeChannelId,
+              threadRootId,
+              mentionCount: mentionPubkeys.length,
+              mediaTagCount: mediaTags?.length ?? 0,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+      } catch {}
+      // #endregion
 
       await sendMessageMutation.mutateAsync({
         content,

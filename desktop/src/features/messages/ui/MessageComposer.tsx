@@ -80,12 +80,7 @@ export function MessageComposer({
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
-  const notifyTyping = (
-    useTypingBroadcast as unknown as (
-      channelId: string | null | undefined,
-      threadRootId?: string | null,
-    ) => () => void
-  )(channelId, typingThreadRootId);
+  const notifyTyping = useTypingBroadcast(channelId, typingThreadRootId);
 
   const media = useMediaUpload(setContent);
 
