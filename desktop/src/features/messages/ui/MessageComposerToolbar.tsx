@@ -59,7 +59,7 @@ export const MessageComposerToolbar = React.memo(
     return (
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <LayoutGroup>
-          <motion.div layout transition={layoutSpring} className="flex items-center gap-1">
+          <motion.div layout transition={layoutSpring} className="overflow-hidden py-1 flex items-center gap-1 min-h-9">
             {/*
              * Aa toggle — always rendered, uses layoutId to animate
              * smoothly between its passive (right) and expanded (left)
