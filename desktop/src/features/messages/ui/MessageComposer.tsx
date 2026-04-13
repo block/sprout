@@ -1,16 +1,27 @@
 import * as React from "react";
 
+import { EditorContent } from "@tiptap/react";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
 import { useDrafts } from "@/features/messages/lib/useDrafts";
-import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
+import {
+  useImageRefSuggestions,
+  type ImageRefSuggestion,
+} from "@/features/messages/lib/useImageRefSuggestions";
+import {
+  ALLOWED_MEDIA_TYPES,
+  useMediaUpload,
+} from "@/features/messages/lib/useMediaUpload";
 import { useMentions } from "@/features/messages/lib/useMentions";
+import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
 import { cn } from "@/shared/lib/cn";
+import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Button } from "@/shared/ui/button";
-import { Textarea } from "@/shared/ui/textarea";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
-import { ComposerMentionOverlay } from "./ComposerMentionOverlay";
+import { ComposerAttachments } from "./ComposerAttachments";
+import { FormattingToolbar } from "./FormattingToolbar";
+import { ImageRefAutocomplete } from "./ImageRefAutocomplete";
 import {
   MentionAutocomplete,
   type MentionSuggestion,
@@ -46,8 +57,6 @@ type MessageComposerProps = {
   typingRootEventId?: string | null;
 };
 
-const MAX_TEXTAREA_ROWS = 4;
-
 export function MessageComposer({
   channelId = null,
   channelName,
@@ -64,17 +73,13 @@ export function MessageComposer({
   typingParentEventId = null,
   typingRootEventId = null,
 }: MessageComposerProps) {
+  // ── Markdown content state (synced from Tiptap on every update) ──────
   const [content, setContent] = React.useState("");
   const contentRef = React.useRef(content);
-  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
-  const pendingSelectionRef = React.useRef<number | null>(null);
-  const draftSelectionRef = React.useRef({ end: 0, start: 0 });
-  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
-  const [composerScrollTop, setComposerScrollTop] = React.useState(0);
-  const lineHeightRef = React.useRef<number | null>(null);
-
-  // Keep contentRef in sync — no extra re-render, just a ref assignment.
   contentRef.current = content;
+
+  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
+  const [isFormattingOpen, setIsFormattingOpen] = React.useState(false);
 
   const drafts = useDrafts();
   const previousChannelIdRef = React.useRef<string | null>(null);
@@ -87,10 +92,13 @@ export function MessageComposer({
     typingRootEventId,
   );
 
-  const media = useMediaUpload(setContent);
+  // ── Media upload ─────────────────────────────────────────────────────
+  // We pass a custom setter that both updates React state AND inserts
+  // markdown into the Tiptap editor when media upload completes.
+  const media = useMediaUpload();
+  const imageRefs = useImageRefSuggestions(media.pendingImeta);
 
-  // Stable refs for values read inside callbacks that should not cause
-  // callback identity changes when they update.
+  // ── Stable refs for callbacks ────────────────────────────────────────
   const disabledRef = React.useRef(disabled);
   const isSendingRef = React.useRef(isSending);
   const onSendRef = React.useRef(onSend);
@@ -104,18 +112,45 @@ export function MessageComposer({
   editTargetRef.current = editTarget;
   channelIdRef.current = channelId;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger — save draft for previous channel, restore draft for new channel, reset transient state
+  // ── Computed placeholder ─────────────────────────────────────────────
+  const computedPlaceholder = editTarget
+    ? "Edit your message"
+    : (placeholder ??
+      (replyTarget
+        ? `Reply to ${replyTarget.author} in #${channelName}`
+        : `Message #${channelName}`));
+
+  // ── Tiptap editor ───────────────────────────────────────────────────
+  const richText = useRichTextEditor({
+    placeholder: computedPlaceholder,
+    editable: !disabled,
+    onUpdate: ({ markdown, text }) => {
+      setContent(markdown);
+      contentRef.current = markdown;
+
+      // Bridge to existing mention/channel/imageRef detection hooks.
+      const { cursor } = richText.getTextAndCursor();
+      mentions.updateMentionQuery(text, cursor);
+      channelLinks.updateChannelQuery(text, cursor);
+      imageRefs.updateQuery(text, cursor);
+
+      if (text.trim().length > 0) {
+        notifyTyping();
+      }
+    },
+  });
+
+  // ── Channel switching: save/restore drafts ──────────────────────────
+  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger
   React.useEffect(() => {
-    // Save draft for the channel we're leaving
     const prevId = previousChannelIdRef.current;
     if (prevId) {
       const currentContent = contentRef.current;
-      const sel = draftSelectionRef.current;
       if (currentContent.trim().length > 0) {
         drafts.saveDraft(prevId, {
           content: currentContent,
-          selectionEnd: sel.end,
-          selectionStart: sel.start,
+          selectionEnd: currentContent.length,
+          selectionStart: currentContent.length,
         });
       } else {
         drafts.clearDraft(prevId);
@@ -123,162 +158,193 @@ export function MessageComposer({
     }
     previousChannelIdRef.current = channelId;
 
-    // Restore draft for the channel we're entering
     const saved = channelId ? drafts.loadDraft(channelId) : undefined;
     if (saved) {
       setContent(saved.content);
       contentRef.current = saved.content;
-      draftSelectionRef.current = {
-        end: saved.selectionEnd,
-        start: saved.selectionStart,
-      };
-      pendingSelectionRef.current = saved.selectionStart;
+      richText.setContent(saved.content);
     } else {
       setContent("");
       contentRef.current = "";
-      draftSelectionRef.current = { end: 0, start: 0 };
+      richText.clearContent();
     }
 
-    // Always reset transient state
     media.setPendingImeta([]);
     media.setUploadState({ status: "idle" });
     setIsEmojiPickerOpen(false);
-    setComposerScrollTop(0);
     mentions.clearMentions();
     channelLinks.clearChannels();
-    lineHeightRef.current = null;
+    imageRefs.clear();
   }, [channelId]);
 
+  // ── Edit mode: pre-fill content ─────────────────────────────────────
+  // biome-ignore lint/correctness/useExhaustiveDependencies: editTarget?.id is the trigger
+  React.useEffect(() => {
+    if (!editTarget) return;
+    setContent(editTarget.body);
+    contentRef.current = editTarget.body;
+    richText.setContent(editTarget.body);
+    richText.focus();
+  }, [editTarget?.id]);
+
+  // ── Focus on reply ──────────────────────────────────────────────────
+  React.useEffect(() => {
+    if (!replyTarget || disabled) return;
+    richText.focus();
+  }, [disabled, replyTarget, richText.focus]);
+
+  // ── Mention / channel autocomplete insertion ────────────────────────
   const applyMentionInsert = React.useCallback(
     (suggestion: MentionSuggestion) => {
-      const textarea = textareaRef.current;
-      const currentContent = contentRef.current;
-      const result = mentions.insertMention(
-        suggestion,
-        currentContent,
-        textarea?.selectionEnd ?? currentContent.length,
-      );
-      draftSelectionRef.current = {
-        end: result.nextCursor,
-        start: result.nextCursor,
-      };
-      pendingSelectionRef.current = result.nextCursor;
+      const { text, cursor } = richText.getTextAndCursor();
+      const result = mentions.insertMention(suggestion, text, cursor);
+      // Replace the editor content with the updated text.
+      richText.setContent(result.nextContent);
       setContent(result.nextContent);
+      contentRef.current = result.nextContent;
+      // Move cursor to end — Tiptap will focus there.
+      richText.focus();
     },
-    [mentions.insertMention],
+    [
+      mentions.insertMention,
+      richText.getTextAndCursor,
+      richText.setContent,
+      richText.focus,
+    ],
   );
 
   const applyChannelInsert = React.useCallback(
     (suggestion: ChannelSuggestion) => {
-      const textarea = textareaRef.current;
-      const currentContent = contentRef.current;
-      const result = channelLinks.insertChannel(
-        suggestion,
-        currentContent,
-        textarea?.selectionEnd ?? currentContent.length,
-      );
-      draftSelectionRef.current = {
-        end: result.nextCursor,
-        start: result.nextCursor,
-      };
-      pendingSelectionRef.current = result.nextCursor;
+      const { text, cursor } = richText.getTextAndCursor();
+      const result = channelLinks.insertChannel(suggestion, text, cursor);
+      richText.setContent(result.nextContent);
       setContent(result.nextContent);
+      contentRef.current = result.nextContent;
+      richText.focus();
     },
-    [channelLinks.insertChannel],
+    [
+      channelLinks.insertChannel,
+      richText.getTextAndCursor,
+      richText.setContent,
+      richText.focus,
+    ],
   );
 
-  const updateDraftSelection = React.useCallback(
-    (target: HTMLTextAreaElement | null) => {
-      if (!target) {
-        return;
+  // ── Image ref insertion ───────────────────────────────────────────
+  const applyImageRefInsert = React.useCallback(
+    (suggestion: ImageRefSuggestion) => {
+      if (!richText.editor) return;
+
+      // Delete the `![query` trigger text before inserting the node.
+      const { text, cursor } = richText.getTextAndCursor();
+      const before = text.slice(0, cursor);
+      const match = /!\[([^\]]*)$/.exec(before);
+      if (match) {
+        const triggerStart = cursor - match[0].length;
+        // Delete from triggerStart to cursor in the editor
+        const { state } = richText.editor;
+        // Map text offset to ProseMirror position
+        let pmPos = 0;
+        let textOffset = 0;
+        state.doc.descendants((node, pos) => {
+          if (
+            node.isText &&
+            textOffset + (node.text?.length ?? 0) >= triggerStart &&
+            pmPos === 0
+          ) {
+            pmPos = pos + (triggerStart - textOffset);
+          }
+          if (node.isText) {
+            textOffset += node.text?.length ?? 0;
+          }
+        });
+        if (pmPos > 0) {
+          const cursorPm = pmPos + match[0].length;
+          richText.editor
+            .chain()
+            .focus()
+            .deleteRange({ from: pmPos, to: cursorPm })
+            .run();
+        }
       }
 
-      draftSelectionRef.current = {
-        end: target.selectionEnd ?? target.value.length,
-        start: target.selectionStart ?? target.value.length,
-      };
+      // Insert the image ref node
+      const mediaType = suggestion.type.startsWith("video/")
+        ? "video"
+        : "image";
+      const thumbUrl = suggestion.thumb
+        ? rewriteRelayUrl(suggestion.thumb)
+        : rewriteRelayUrl(suggestion.url);
+      richText.insertImageRef(
+        suggestion.url,
+        suggestion.hash,
+        mediaType,
+        thumbUrl,
+      );
+      imageRefs.clear();
     },
-    [],
+    [
+      richText.editor,
+      richText.getTextAndCursor,
+      richText.insertImageRef,
+      imageRefs.clear,
+    ],
   );
 
+  // ── Emoji insertion ─────────────────────────────────────────────────
   const insertEmoji = React.useCallback(
     (emoji: string) => {
-      const currentContent = contentRef.current;
-      const { end, start } = draftSelectionRef.current;
-      const nextStart = Math.min(start, currentContent.length);
-      const nextEnd = Math.min(end, currentContent.length);
-      const nextCursor = nextStart + emoji.length;
-      const nextContent = `${currentContent.slice(0, nextStart)}${emoji}${currentContent.slice(nextEnd)}`;
-
-      draftSelectionRef.current = {
-        end: nextCursor,
-        start: nextCursor,
-      };
-      pendingSelectionRef.current = nextCursor;
-      setContent(nextContent);
+      if (!richText.editor) return;
+      richText.editor.chain().focus().insertContent(emoji).run();
       setIsEmojiPickerOpen(false);
       mentions.clearMentions();
     },
-    [mentions.clearMentions],
+    [richText.editor, mentions.clearMentions],
   );
 
+  // ── @ mention picker (toolbar button) ───────────────────────────────
   const openMentionPicker = React.useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      return;
-    }
+    if (!richText.editor) return;
+    const { text, cursor } = richText.getTextAndCursor();
 
-    const currentContent = contentRef.current;
-    const cursorPosition = textarea.selectionStart ?? currentContent.length;
-    // Quick check: is there already an @-query in progress?
-    const beforeCursor = currentContent.slice(0, cursorPosition);
+    // Check if there's already an @-query in progress
+    const beforeCursor = text.slice(0, cursor);
     if (/(?:^|[\s])@[^\s]*$/.test(beforeCursor)) {
-      mentions.updateMentionQuery(currentContent, cursorPosition);
-      textarea.focus();
+      mentions.updateMentionQuery(text, cursor);
+      richText.focus();
       return;
     }
 
-    const { end, start } = draftSelectionRef.current;
-    const nextStart = Math.min(start, currentContent.length);
-    const nextEnd = Math.min(end, currentContent.length);
-    const previousCharacter = currentContent.slice(0, nextStart).slice(-1);
+    // Insert @ at cursor
+    const previousChar = text.slice(0, cursor).slice(-1);
     const prefix =
-      nextStart > 0 && previousCharacter && !/\s/.test(previousCharacter)
-        ? " @"
-        : "@";
-    const nextContent = `${currentContent.slice(0, nextStart)}${prefix}${currentContent.slice(nextEnd)}`;
-    const mentionIndex = nextStart + (prefix.startsWith(" ") ? 1 : 0);
-    const nextCursor = mentionIndex + 1;
-
-    draftSelectionRef.current = {
-      end: nextCursor,
-      start: nextCursor,
-    };
-    pendingSelectionRef.current = nextCursor;
-    setContent(nextContent);
+      cursor > 0 && previousChar && !/\s/.test(previousChar) ? " @" : "@";
+    richText.editor.chain().focus().insertContent(prefix).run();
     setIsEmojiPickerOpen(false);
-    mentions.updateMentionQuery(nextContent, nextCursor);
-  }, [mentions.updateMentionQuery]);
 
-  const handleScroll = React.useCallback(
-    (event: React.UIEvent<HTMLTextAreaElement>) => {
-      setComposerScrollTop(event.currentTarget.scrollTop);
-    },
-    [],
-  );
+    // Trigger mention detection after inserting @
+    const updatedText = richText.editor.state.doc.textContent;
+    const { cursor: updatedCursor } = richText.getTextAndCursor();
+    mentions.updateMentionQuery(updatedText, updatedCursor);
+  }, [
+    richText.editor,
+    richText.getTextAndCursor,
+    richText.focus,
+    mentions.updateMentionQuery,
+  ]);
 
+  // ── Submit message ──────────────────────────────────────────────────
   const submitMessage = React.useCallback(async () => {
     const trimmed = contentRef.current.trim();
 
-    // Edit mode: save the edit and return.
+    // Edit mode
     if (editTargetRef.current && onEditSaveRef.current) {
-      if (!trimmed || isSendingRef.current) {
-        return;
-      }
+      if (!trimmed || isSendingRef.current) return;
 
       const savedContent = trimmed;
       setContent("");
-      draftSelectionRef.current = { end: 0, start: 0 };
+      contentRef.current = "";
+      richText.clearContent();
       mentions.clearMentions();
       channelLinks.clearChannels();
       setIsEmojiPickerOpen(false);
@@ -287,10 +353,13 @@ export function MessageComposer({
         await onEditSaveRef.current(trimmed);
       } catch {
         setContent(savedContent);
+        contentRef.current = savedContent;
+        richText.setContent(savedContent);
       }
       return;
     }
 
+    // Normal send
     const currentPendingImeta = media.pendingImetaRef.current;
     const hasMedia = currentPendingImeta.length > 0;
     if (
@@ -319,33 +388,69 @@ export function MessageComposer({
           ])
         : undefined;
 
+    // Resolve imageRef nodes to markdown and collect referenced URLs.
+    // Then append any remaining unreferenced attachments.
+    const referencedUrls = new Set<string>();
+    let finalContent = trimmed;
+
+    // Scan editor doc for imageRef nodes and replace their serialized
+    // output with proper markdown.
+    if (richText.editor) {
+      richText.editor.state.doc.descendants((node) => {
+        if (node.type.name === "imageRef" && node.attrs.url) {
+          referencedUrls.add(node.attrs.url as string);
+          const url = node.attrs.url as string;
+          const label = node.attrs.mediaType === "video" ? "video" : "image";
+          // Replace the chip placeholder text with real markdown
+          // Use split+join for global replace (avoids ES2021 replaceAll)
+          const chip = `![${node.attrs.hash as string}]`;
+          finalContent = finalContent.split(chip).join(`![${label}](${url})`);
+        }
+      });
+    }
+
+    // Append unreferenced attachments at the end
+    for (const d of currentPendingImeta) {
+      if (referencedUrls.has(d.url)) continue;
+      const isVideo = d.type.startsWith("video/");
+      finalContent += isVideo ? `\n![video](${d.url})` : `\n![image](${d.url})`;
+    }
+
     const savedContent = trimmed;
     const savedImeta = [...currentPendingImeta];
 
     setContent("");
-    draftSelectionRef.current = { end: 0, start: 0 };
+    contentRef.current = "";
+    richText.clearContent();
     media.setPendingImeta([]);
     mentions.clearMentions();
     channelLinks.clearChannels();
+    imageRefs.clear();
     setIsEmojiPickerOpen(false);
 
     const sendChannelId = channelIdRef.current;
     try {
-      await onSendRef.current(trimmed, pubkeys, mediaTags);
+      await onSendRef.current(finalContent, pubkeys, mediaTags);
       if (sendChannelId) {
         drafts.clearDraft(sendChannelId);
       }
     } catch {
       setContent(savedContent);
+      contentRef.current = savedContent;
+      richText.setContent(savedContent);
       media.setPendingImeta(savedImeta);
     }
   }, [
     drafts.clearDraft,
+    imageRefs.clear,
     media.pendingImetaRef,
     media.setPendingImeta,
     mentions.extractMentionPubkeys,
     mentions.clearMentions,
     channelLinks.clearChannels,
+    richText.clearContent,
+    richText.editor,
+    richText.setContent,
   ]);
 
   const handleSubmit = React.useCallback(
@@ -356,28 +461,13 @@ export function MessageComposer({
     [submitMessage],
   );
 
-  const handleChange = React.useCallback(
-    (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-      const nextContent = event.target.value;
-      const cursorPos = event.target.selectionStart;
-      setContent(nextContent);
-      updateDraftSelection(event.target);
-      mentions.updateMentionQuery(nextContent, cursorPos);
-      channelLinks.updateChannelQuery(nextContent, cursorPos);
-      if (nextContent.trim().length > 0) {
-        notifyTyping();
-      }
-    },
-    [
-      updateDraftSelection,
-      mentions.updateMentionQuery,
-      channelLinks.updateChannelQuery,
-      notifyTyping,
-    ],
-  );
-
-  const handleKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  // ── Keyboard handling ───────────────────────────────────────────────
+  // Tiptap handles formatting shortcuts (⌘B, ⌘I, etc.) natively.
+  // We intercept Enter (submit) and arrow keys (autocomplete) via a
+  // keydown listener on the editor wrapper.
+  const handleEditorKeyDown = React.useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      // Let autocomplete handle keys first
       const channelResult = channelLinks.handleChannelKeyDown(event);
       if (channelResult.handled) {
         if (channelResult.suggestion) {
@@ -394,6 +484,15 @@ export function MessageComposer({
         return;
       }
 
+      const imageRefResult = imageRefs.handleKeyDown(event);
+      if (imageRefResult.handled) {
+        if (imageRefResult.suggestion) {
+          applyImageRefInsert(imageRefResult.suggestion);
+        }
+        return;
+      }
+
+      // Escape in edit mode
       if (event.key === "Escape" && editTargetRef.current && onCancelEdit) {
         event.preventDefault();
         onCancelEdit();
@@ -404,25 +503,18 @@ export function MessageComposer({
         return;
       }
 
-      if (event.ctrlKey) {
-        const textarea = event.currentTarget;
-        const { selectionEnd, selectionStart, value } = textarea;
-        const nextContent = `${value.slice(0, selectionStart)}\n${value.slice(selectionEnd)}`;
-
-        event.preventDefault();
-        pendingSelectionRef.current = selectionStart + 1;
-        draftSelectionRef.current = {
-          end: selectionStart + 1,
-          start: selectionStart + 1,
-        };
-        setContent(nextContent);
+      // Shift+Enter or Ctrl+Enter → newline (Tiptap handles this natively
+      // via hard break, so let it through)
+      if (event.shiftKey || event.ctrlKey) {
         return;
       }
 
-      if (event.metaKey || event.altKey || event.shiftKey) {
+      // Meta/Alt+Enter → let through (system shortcuts)
+      if (event.metaKey || event.altKey) {
         return;
       }
 
+      // Plain Enter → submit
       event.preventDefault();
       void submitMessage();
     },
@@ -431,65 +523,41 @@ export function MessageComposer({
       applyChannelInsert,
       mentions.handleMentionKeyDown,
       applyMentionInsert,
+      imageRefs.handleKeyDown,
+      applyImageRefInsert,
       submitMessage,
       onCancelEdit,
     ],
   );
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: content triggers height recalc and pending selection restore
-  React.useLayoutEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      return;
-    }
-
-    if (lineHeightRef.current === null) {
-      lineHeightRef.current =
-        Number.parseFloat(window.getComputedStyle(textarea).lineHeight) || 24;
-    }
-    const lineHeight = lineHeightRef.current;
-    const maxHeight = lineHeight * MAX_TEXTAREA_ROWS;
-
-    textarea.style.height = "auto";
-    const nextHeight = Math.max(
-      lineHeight,
-      Math.min(textarea.scrollHeight, maxHeight),
-    );
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY =
-      textarea.scrollHeight > maxHeight ? "auto" : "hidden";
-
-    const pendingSelection = pendingSelectionRef.current;
-    if (pendingSelection !== null) {
-      textarea.focus();
-      textarea.setSelectionRange(pendingSelection, pendingSelection);
-      pendingSelectionRef.current = null;
-    }
-  }, [content]);
+  // ── Media paste + ⌘K link shortcut via Tiptap editorProps ──────────
+  const uploadFileRef = React.useRef(media.uploadFile);
+  uploadFileRef.current = media.uploadFile;
 
   React.useEffect(() => {
-    if (!replyTarget || disabled) {
-      return;
-    }
+    if (!richText.editor) return;
 
-    textareaRef.current?.focus();
-  }, [disabled, replyTarget]);
+    richText.editor.setOptions({
+      editorProps: {
+        ...richText.editor.options.editorProps,
+        handlePaste: (_view, event) => {
+          const items = Array.from(event.clipboardData?.items ?? []);
+          const mediaItem = items.find((item) =>
+            ALLOWED_MEDIA_TYPES.includes(item.type),
+          );
+          if (!mediaItem) return false;
 
-  // Pre-fill content when entering edit mode.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: editTarget?.id is the trigger — only reset when the edited message changes
-  React.useEffect(() => {
-    if (!editTarget) {
-      return;
-    }
+          const file = mediaItem.getAsFile();
+          if (file) {
+            void uploadFileRef.current(file);
+          }
+          return true;
+        },
+      },
+    });
+  }, [richText.editor]);
 
-    setContent(editTarget.body);
-    contentRef.current = editTarget.body;
-    const cursorPos = editTarget.body.length;
-    draftSelectionRef.current = { end: cursorPos, start: cursorPos };
-    pendingSelectionRef.current = cursorPos;
-    textareaRef.current?.focus();
-  }, [editTarget?.id]);
-
+  // ── Send button state ───────────────────────────────────────────────
   const sendDisabled = React.useMemo(
     () =>
       disabled ||
@@ -498,13 +566,14 @@ export function MessageComposer({
   );
 
   const handleCaptureSelection = React.useCallback(() => {
-    updateDraftSelection(textareaRef.current);
-  }, [updateDraftSelection]);
+    // No-op for Tiptap — selection is managed by ProseMirror.
+  }, []);
 
   const handlePaperclipClick = React.useCallback(() => {
     void media.handlePaperclip();
   }, [media.handlePaperclip]);
 
+  // ── Render ──────────────────────────────────────────────────────────
   return (
     <footer
       className={cn(
@@ -535,6 +604,11 @@ export function MessageComposer({
             onSelect={applyMentionInsert}
             selectedIndex={mentions.mentionSelectedIndex}
             suggestions={mentions.isMentionOpen ? mentions.suggestions : []}
+          />
+          <ImageRefAutocomplete
+            onSelect={applyImageRefInsert}
+            selectedIndex={imageRefs.selectedIndex}
+            suggestions={imageRefs.isOpen ? imageRefs.suggestions : []}
           />
 
           {editTarget ? (
@@ -598,54 +672,39 @@ export function MessageComposer({
             </div>
           ) : null}
 
-          <div className="relative">
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-0 overflow-hidden"
-            >
-              <ComposerMentionOverlay
-                channelNames={channelLinks.knownChannelNames}
-                content={content}
-                mentionNames={mentions.knownNames}
-                scrollTop={composerScrollTop}
+          {(isFormattingOpen || media.pendingImeta.length > 0) && (
+            <div className="mb-1 flex items-center gap-2">
+              {isFormattingOpen && (
+                <FormattingToolbar
+                  editor={richText.editor}
+                  disabled={disabled}
+                />
+              )}
+              <ComposerAttachments
+                attachments={media.pendingImeta}
+                onRemove={media.removeAttachment}
               />
             </div>
-            <Textarea
-              aria-label="Message channel"
-              className="min-h-0 resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 text-sm leading-6 md:leading-6 shadow-none focus-visible:ring-0 caret-foreground text-transparent selection:bg-primary/20 selection:text-transparent"
-              data-testid="message-input"
-              disabled={disabled}
-              onChange={handleChange}
-              onKeyDown={handleKeyDown}
-              onPaste={(e) => {
-                void media.handlePaste(e);
-              }}
-              onScroll={handleScroll}
-              onSelect={(event) => {
-                updateDraftSelection(event.currentTarget);
-              }}
-              placeholder={
-                editTarget
-                  ? "Edit your message"
-                  : (placeholder ??
-                    (replyTarget
-                      ? `Reply to ${replyTarget.author} in #${channelName}`
-                      : `Message #${channelName}`))
-              }
-              ref={textareaRef}
-              rows={1}
-              value={content}
-            />
+          )}
+
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: keydown handler bridges Tiptap editor to autocomplete and submit */}
+          <div
+            className="rich-text-composer max-h-32 overflow-y-auto"
+            onKeyDown={handleEditorKeyDown}
+          >
+            <EditorContent editor={richText.editor} />
           </div>
 
           <MessageComposerToolbar
             composerDisabled={disabled}
             isEmojiPickerOpen={isEmojiPickerOpen}
+            isFormattingOpen={isFormattingOpen}
             isSending={isSending}
             isUploading={media.isUploading}
             onCaptureSelection={handleCaptureSelection}
             onEmojiPickerOpenChange={setIsEmojiPickerOpen}
             onEmojiSelect={insertEmoji}
+            onFormattingToggle={setIsFormattingOpen}
             onOpenMentionPicker={openMentionPicker}
             onPaperclip={handlePaperclipClick}
             sendDisabled={sendDisabled}

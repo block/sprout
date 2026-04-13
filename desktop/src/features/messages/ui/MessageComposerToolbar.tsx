@@ -1,36 +1,54 @@
 import * as React from "react";
-import { AtSign, Paperclip, SendHorizontal } from "lucide-react";
+import { ALargeSmall, AtSign, Paperclip, SendHorizontal } from "lucide-react";
 
 import { Button } from "@/shared/ui/button";
+import { Toggle } from "@/shared/ui/toggle";
 import { ComposerEmojiPicker } from "./ComposerEmojiPicker";
 
 export const MessageComposerToolbar = React.memo(
   function MessageComposerToolbar({
     composerDisabled,
     isEmojiPickerOpen,
+    isFormattingOpen,
     isSending,
     isUploading,
     onCaptureSelection,
     onEmojiPickerOpenChange,
     onEmojiSelect,
+    onFormattingToggle,
     onOpenMentionPicker,
     onPaperclip,
     sendDisabled,
   }: {
     composerDisabled: boolean;
     isEmojiPickerOpen: boolean;
+    isFormattingOpen: boolean;
     isSending: boolean;
     isUploading: boolean;
     onCaptureSelection: () => void;
     onEmojiPickerOpenChange: (open: boolean) => void;
     onEmojiSelect: (emoji: string) => void;
+    onFormattingToggle: (pressed: boolean) => void;
     onOpenMentionPicker: () => void;
     onPaperclip: () => void;
     sendDisabled: boolean;
   }) {
     return (
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          <Toggle
+            aria-label="Toggle formatting"
+            disabled={composerDisabled}
+            pressed={isFormattingOpen}
+            onPressedChange={onFormattingToggle}
+            size="sm"
+            title="Formatting"
+          >
+            <ALargeSmall className="h-4 w-4" />
+          </Toggle>
+
+          <div className="mx-1 h-5 w-px bg-border/60" />
+
           <Button
             data-testid="message-insert-mention"
             disabled={composerDisabled}

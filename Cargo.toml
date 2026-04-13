@@ -19,7 +19,7 @@ members = [
     "crates/sprout-sdk",
     "crates/sprout-persona",
 ]
-exclude = ["desktop/src-tauri"]
+exclude = ["desktop/src-tauri", ".worktree/chat-style/desktop/src-tauri"]
 resolver = "2"
 
 [workspace.package]
