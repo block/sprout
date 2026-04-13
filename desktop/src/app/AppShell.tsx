@@ -32,7 +32,7 @@ import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import { joinChannel } from "@/shared/api/tauri";
+import { addChannelMembers, joinChannel } from "@/shared/api/tauri";
 import type { SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
 import { Button } from "@/shared/ui/button";
@@ -432,6 +432,7 @@ export function AppShell() {
               name,
               visibility,
               ttlSeconds,
+              agentPubkeys,
             }) => {
               const createdChannel = await createChannelMutation.mutateAsync({
                 name,
@@ -441,6 +442,14 @@ export function AppShell() {
                 ttlSeconds,
               });
 
+              if (agentPubkeys && agentPubkeys.length > 0) {
+                await addChannelMembers({
+                  channelId: createdChannel.id,
+                  pubkeys: agentPubkeys,
+                  role: "bot",
+                });
+              }
+
               await goChannel(createdChannel.id);
             }}
             onCreateForum={async ({
@@ -448,6 +457,7 @@ export function AppShell() {
               name,
               visibility,
               ttlSeconds,
+              agentPubkeys,
             }) => {
               const createdForum = await createForumMutation.mutateAsync({
                 name,
@@ -456,6 +466,14 @@ export function AppShell() {
                 visibility,
                 ttlSeconds,
               });
+
+              if (agentPubkeys && agentPubkeys.length > 0) {
+                await addChannelMembers({
+                  channelId: createdForum.id,
+                  pubkeys: agentPubkeys,
+                  role: "bot",
+                });
+              }
 
               await goChannel(createdForum.id);
             }}
