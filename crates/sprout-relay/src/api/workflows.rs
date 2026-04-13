@@ -68,6 +68,19 @@ pub struct CreateWorkflowBody {
     pub yaml_definition: String,
 }
 
+fn require_workflow_owner(
+    workflow: &sprout_db::workflow::WorkflowRecord,
+    caller_pubkey: &[u8],
+    action: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if workflow.owner_pubkey != caller_pubkey {
+        return Err(forbidden(&format!(
+            "not authorized to {action} this workflow"
+        )));
+    }
+    Ok(())
+}
+
 /// Create a new workflow in a channel.
 ///
 /// Parses and validates the YAML definition, generates a webhook secret if needed,
@@ -210,9 +223,8 @@ pub async fn update_workflow(
     if let Some(channel_id) = existing.channel_id {
         check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
-    } else if existing.owner_pubkey != pubkey_bytes {
-        return Err(forbidden("not authorized to access this workflow"));
     }
+    require_workflow_owner(&existing, &pubkey_bytes, "update")?;
 
     let (def, definition_json_str) =
         sprout_workflow::WorkflowEngine::parse_yaml(&body.yaml_definition).map_err(|e| {
@@ -271,7 +283,7 @@ pub async fn update_workflow(
 
 // ── DELETE /api/workflows/:id ─────────────────────────────────────────────────
 
-/// Delete a workflow. Only the owner or a channel member may delete.
+/// Delete a workflow. Only the workflow owner may delete it.
 pub async fn delete_workflow(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -291,16 +303,13 @@ pub async fn delete_workflow(
         .await
         .map_err(|_| not_found("workflow not found"))?;
 
-    if workflow.owner_pubkey != pubkey_bytes {
-        if let Some(channel_id) = workflow.channel_id {
-            check_token_channel_access(&ctx, &channel_id)?;
-            check_channel_access(&state, channel_id, &pubkey_bytes)
-                .await
-                .map_err(|_| forbidden("not authorized to delete this workflow"))?;
-        } else {
-            return Err(forbidden("not authorized to delete this workflow"));
-        }
+    if let Some(channel_id) = workflow.channel_id {
+        check_token_channel_access(&ctx, &channel_id)?;
+        check_channel_access(&state, channel_id, &pubkey_bytes)
+            .await
+            .map_err(|_| forbidden("not authorized to delete this workflow"))?;
     }
+    require_workflow_owner(&workflow, &pubkey_bytes, "delete")?;
 
     state
         .db
@@ -345,9 +354,8 @@ pub async fn list_workflow_runs(
     if let Some(channel_id) = workflow.channel_id {
         check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
-    } else if workflow.owner_pubkey != pubkey_bytes {
-        return Err(forbidden("not authorized to access this workflow"));
     }
+    require_workflow_owner(&workflow, &pubkey_bytes, "trigger")?;
 
     let limit = params.limit.unwrap_or(20).min(100) as i64;
     let runs = state
