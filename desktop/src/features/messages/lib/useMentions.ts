@@ -261,13 +261,6 @@ export function useMentions(channelId: string | null) {
     setMentionSelectedIndex(0);
   }, []);
 
-  const registerMention = React.useCallback(
-    (displayName: string, pubkey: string) => {
-      mentionMapRef.current.set(displayName, pubkey);
-    },
-    [],
-  );
-
   const handleMentionKeyDown = React.useCallback(
     (
       event: React.KeyboardEvent,
@@ -323,7 +316,6 @@ export function useMentions(channelId: string | null) {
     isMentionOpen,
     knownNames,
     mentionSelectedIndex,
-    registerMention,
     suggestions,
     updateMentionQuery,
   };

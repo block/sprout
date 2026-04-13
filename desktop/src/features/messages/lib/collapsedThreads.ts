@@ -12,12 +12,26 @@ export type CollapsedThreadPreview = {
 export function buildCollapsedThreadTimeline(
   messages: TimelineMessage[],
   collapseDepthAt = 2,
+  currentBranchHeadId: string | null = null,
 ) {
   const messageById = new Map(messages.map((message) => [message.id, message]));
   const visibleMessages: TimelineMessage[] = [];
   const hiddenRepliesByAnchor = new Map<string, TimelineMessage[]>();
 
   for (const message of messages) {
+    const branchHeadId = message.branchHeadId ?? null;
+    if (branchHeadId && branchHeadId !== currentBranchHeadId) {
+      if (!messageById.has(branchHeadId)) {
+        visibleMessages.push(message);
+        continue;
+      }
+
+      const group = hiddenRepliesByAnchor.get(branchHeadId) ?? [];
+      group.push(message);
+      hiddenRepliesByAnchor.set(branchHeadId, group);
+      continue;
+    }
+
     if (message.depth < collapseDepthAt) {
       visibleMessages.push(message);
       continue;

@@ -46,6 +46,11 @@ export function collectThreadBranch(
   }
 
   const branchIds = new Set<string>([branchHeadId]);
+  for (const message of messages) {
+    if (message.branchHeadId === branchHeadId) {
+      branchIds.add(message.id);
+    }
+  }
   const stack = [branchHeadId];
   while (stack.length > 0) {
     const parentId = stack.pop();

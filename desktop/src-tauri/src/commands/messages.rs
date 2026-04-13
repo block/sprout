@@ -162,6 +162,7 @@ pub async fn send_channel_message(
     content: String,
     parent_event_id: Option<String>,
     agent_reply_parent_id: Option<String>,
+    thread_branch_head_id: Option<String>,
     media_tags: Option<Vec<Vec<String>>>,
     mention_pubkeys: Option<Vec<String>>,
     kind: Option<u32>,
@@ -176,6 +177,10 @@ pub async fn send_channel_message(
     if let Some(ref agent_parent) = agent_reply_parent_id {
         EventId::from_hex(agent_parent)
             .map_err(|e| format!("invalid agent reply parent event ID: {e}"))?;
+    }
+    if let Some(ref branch_head) = thread_branch_head_id {
+        EventId::from_hex(branch_head)
+            .map_err(|e| format!("invalid thread branch head event ID: {e}"))?;
     }
 
     // Track the resolved thread ref so we can return accurate metadata.
@@ -214,6 +219,7 @@ pub async fn send_channel_message(
                 content.trim(),
                 thread_ref.as_ref(),
                 agent_reply_parent_id.as_deref(),
+                thread_branch_head_id.as_deref(),
                 &mention_refs,
                 &media,
             )?

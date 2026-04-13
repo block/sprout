@@ -11,25 +11,20 @@ import { TimelineMessageList } from "./TimelineMessageList";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
 
 type MessageThreadSidebarProps = {
-  channel: Channel | null;
   canGoBack?: boolean;
+  channel: Channel | null;
   collapsedThreadSummaryByMessageId?: Map<string, CollapsedThreadPreview>;
   currentPubkey?: string;
   headMessage: TimelineMessage;
   isSending: boolean;
   messages: TimelineMessage[];
-  prefillMentionTarget?: {
-    displayName: string;
-    id: string;
-    pubkey: string;
-  } | null;
-  replyCount?: number;
   onBack?: () => void;
   onCancelReply: () => void;
   onClose: () => void;
   onDelete?: (message: TimelineMessage) => void;
   onOpenThread?: (message: TimelineMessage) => void;
   onReply: (message: TimelineMessage) => void;
+  replyCount?: number;
   onSend: (
     content: string,
     mentionPubkeys: string[],
@@ -47,21 +42,20 @@ type MessageThreadSidebarProps = {
 };
 
 export function MessageThreadSidebar({
-  channel,
   canGoBack = false,
+  channel,
   collapsedThreadSummaryByMessageId,
   currentPubkey,
   headMessage,
   isSending,
   messages,
-  prefillMentionTarget = null,
-  replyCount = messages.length,
   onBack,
   onCancelReply,
   onClose,
   onDelete,
   onOpenThread,
   onReply,
+  replyCount = messages.length,
   onSend,
   onToggleReaction,
   personaLookup,
@@ -174,7 +168,6 @@ export function MessageThreadSidebar({
         onCancelReply={threadReplyTarget ? onCancelReply : undefined}
         onSend={onSend}
         placeholder="Reply in thread..."
-        prefillMentionTarget={prefillMentionTarget}
         replyTarget={threadReplyTarget}
         typingReplyParentId={replyTargetMessage?.id ?? headMessage.id}
       />

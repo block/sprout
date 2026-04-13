@@ -9,8 +9,8 @@ import {
   sortMessages,
 } from "@/features/messages/lib/messageQueryKeys";
 import {
-  buildAgentReplyParentTag,
   buildReplyTags,
+  buildThreadBranchHeadTag,
   normalizeMentionPubkeys,
   resolveReplyRootId,
 } from "@/features/messages/lib/threading";
@@ -73,7 +73,7 @@ function createOptimisticMessage(
   currentMessages: RelayEvent[],
   mentionPubkeys: string[] = [],
   parentEventId: string | null = null,
-  agentReplyParentId: string | null = null,
+  branchHeadId: string | null = null,
   mediaTags: string[][] = [],
 ): RelayEvent {
   const tags: string[][] = [];
@@ -99,11 +99,15 @@ function createOptimisticMessage(
     }
   }
 
+  const branchHeadTag = branchHeadId
+    ? buildThreadBranchHeadTag(branchHeadId)
+    : null;
+  if (branchHeadTag) {
+    tags.push(branchHeadTag);
+  }
+
   for (const tag of mediaTags) {
     tags.push(tag);
-  }
-  if (agentReplyParentId) {
-    tags.push(buildAgentReplyParentTag(agentReplyParentId));
   }
 
   return {
@@ -263,6 +267,7 @@ export function useSendMessageMutation(
       mentionPubkeys?: string[];
       parentEventId?: string | null;
       agentReplyParentId?: string | null;
+      branchHeadId?: string | null;
       mediaTags?: string[][];
     },
     MessageQueryContext | undefined
@@ -272,6 +277,7 @@ export function useSendMessageMutation(
       mentionPubkeys,
       parentEventId,
       agentReplyParentId,
+      branchHeadId,
       mediaTags,
     }) => {
       if (!channel || channel.channelType === "forum") {
@@ -297,6 +303,7 @@ export function useSendMessageMutation(
           mentionPubkeys,
           undefined,
           agentReplyParentId ?? null,
+          branchHeadId ?? null,
         );
 
         // Build tags matching relay-emitted shape: h, author p, mention ps, reply es, imeta.
@@ -325,6 +332,11 @@ export function useSendMessageMutation(
           kind: KIND_STREAM_MESSAGE,
           tags: [
             ...baseTags,
+            ...(branchHeadId
+              ? [buildThreadBranchHeadTag(branchHeadId)].filter(
+                  (tag): tag is string[] => tag !== null,
+                )
+              : []),
             // For non-replies, add mention p-tags here (replies get them via buildReplyTags)
             ...(!parentEventId
               ? normalizeMentionPubkeys(
@@ -333,9 +345,6 @@ export function useSendMessageMutation(
                 ).map((pk) => ["p", pk])
               : []),
             ...(mediaTags ?? []),
-            ...(agentReplyParentId
-              ? [buildAgentReplyParentTag(agentReplyParentId)]
-              : []),
           ],
           content: content.trim(),
           sig: "",
@@ -353,7 +362,7 @@ export function useSendMessageMutation(
       content,
       mentionPubkeys,
       parentEventId,
-      agentReplyParentId,
+      branchHeadId,
       mediaTags,
     }) => {
       if (!channel || !identity || channel.channelType === "forum") {
@@ -372,7 +381,7 @@ export function useSendMessageMutation(
         previousMessages,
         mentionPubkeys ?? [],
         parentEventId ?? null,
-        agentReplyParentId ?? null,
+        branchHeadId ?? null,
         mediaTags ?? [],
       );
 

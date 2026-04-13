@@ -61,11 +61,6 @@ type ChannelPaneProps = {
   threadCanGoBack?: boolean;
   threadCollapsedSummaryByMessageId?: Map<string, CollapsedThreadPreview>;
   threadHeadMessage: TimelineMessage | null;
-  threadPrefillMentionTarget?: {
-    displayName: string;
-    id: string;
-    pubkey: string;
-  } | null;
   threadReplyCount?: number;
   threadMessages: TimelineMessage[];
   threadReplyTargetMessage: TimelineMessage | null;
@@ -108,7 +103,6 @@ export const ChannelPane = React.memo(function ChannelPane({
   threadCanGoBack = false,
   threadCollapsedSummaryByMessageId,
   threadHeadMessage,
-  threadPrefillMentionTarget = null,
   threadReplyCount,
   threadMessages,
   threadReplyTargetMessage,
@@ -205,14 +199,13 @@ export const ChannelPane = React.memo(function ChannelPane({
           headMessage={threadHeadMessage}
           isSending={isSending}
           messages={threadMessages}
-          prefillMentionTarget={threadPrefillMentionTarget}
-          replyCount={threadReplyCount}
           onBack={onBackThread}
           onCancelReply={onCancelThreadReply}
           onClose={onCloseThread}
           onDelete={onDelete}
           onOpenThread={onThreadOpen}
           onReply={onThreadReply}
+          replyCount={threadReplyCount}
           onSend={onThreadSend}
           onToggleReaction={onToggleReaction}
           personaLookup={personaLookup}

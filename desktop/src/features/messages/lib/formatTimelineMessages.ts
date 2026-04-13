@@ -4,7 +4,10 @@ import type {
   TimelineMessage,
   TimelineReaction,
 } from "@/features/messages/types";
-import { getThreadReference } from "@/features/messages/lib/threading";
+import {
+  getThreadBranchHeadFromTags,
+  getThreadReference,
+} from "@/features/messages/lib/threading";
 import {
   resolveUserLabel,
   type UserProfileLookup,
@@ -314,6 +317,7 @@ export function formatTimelineMessages(
       body: edit ? edit.content : event.content,
       parentId: thread.parentId,
       rootId: thread.rootId,
+      branchHeadId: getThreadBranchHeadFromTags(event.tags),
       depth: getDepth(event),
       accent: currentPubkey === authorPubkey,
       pending: event.pending,

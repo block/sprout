@@ -694,6 +694,7 @@ export async function sendChannelMessage(
   mentionPubkeys?: string[],
   kind?: number,
   agentReplyParentId?: string | null,
+  branchHeadId?: string | null,
 ): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
     "send_channel_message",
@@ -705,6 +706,7 @@ export async function sendChannelMessage(
       mediaTags: mediaTags ?? null,
       mentionPubkeys: mentionPubkeys ?? null,
       kind: kind ?? null,
+      threadBranchHeadId: branchHeadId ?? null,
     },
   );
 

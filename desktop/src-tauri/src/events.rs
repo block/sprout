@@ -59,12 +59,19 @@ fn thread_tags(tr: &ThreadRef) -> Result<Vec<Tag>, String> {
     }
 }
 
-fn agent_reply_parent_tag(thread_ref: &ThreadRef, agent_reply_parent_id: &str) -> Result<Tag, String> {
+fn agent_reply_parent_tag(
+    thread_ref: &ThreadRef,
+    agent_reply_parent_id: &str,
+) -> Result<Tag, String> {
     let expected_parent = thread_ref.parent_event_id.to_hex();
     if agent_reply_parent_id != expected_parent {
         return Err("agent_reply_parent_id must match thread parent_event_id".into());
     }
     tag(vec!["sprout", "agent_reply_parent", agent_reply_parent_id])
+}
+
+fn thread_branch_head_tag(thread_branch_head_id: &str) -> Result<Tag, String> {
+    tag(vec!["sprout", "thread_branch_head", thread_branch_head_id])
 }
 
 fn mention_tags(mentions: &[&str]) -> Result<Vec<Tag>, String> {
@@ -245,6 +252,7 @@ pub fn build_message(
     content: &str,
     thread_ref: Option<&ThreadRef>,
     agent_reply_parent_id: Option<&str>,
+    thread_branch_head_id: Option<&str>,
     mentions: &[&str],
     media_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
@@ -255,8 +263,13 @@ pub fn build_message(
         if let Some(agent_parent) = agent_reply_parent_id {
             tags.push(agent_reply_parent_tag(tr, agent_parent)?);
         }
+        if let Some(branch_head) = thread_branch_head_id {
+            tags.push(thread_branch_head_tag(branch_head)?);
+        }
     } else if agent_reply_parent_id.is_some() {
         return Err("agent_reply_parent_id requires thread_ref".into());
+    } else if thread_branch_head_id.is_some() {
+        return Err("thread_branch_head_id requires thread_ref".into());
     }
     tags.extend(mention_tags(mentions)?);
     imeta_tags(media_tags, &mut tags)?;

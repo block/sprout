@@ -18,6 +18,7 @@ export type TimelineMessage = {
   body: string;
   parentId?: string | null;
   rootId?: string | null;
+  branchHeadId?: string | null;
   depth: number;
   accent?: boolean;
   pending?: boolean;

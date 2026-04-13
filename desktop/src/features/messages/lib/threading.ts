@@ -5,6 +5,8 @@ export type ThreadReference = {
   rootId: string | null;
 };
 
+const HEX_64_RE = /^[0-9a-f]{64}$/i;
+
 function getEventTags(tags: string[][]) {
   return tags.filter((tag) => tag[0] === "e" && typeof tag[1] === "string");
 }
@@ -57,6 +59,34 @@ export function getThreadReference(tags: string[][]): ThreadReference {
   };
 }
 
+export function getThreadBranchHeadFromTags(
+  tags: string[][] | undefined,
+): string | null {
+  if (!tags) {
+    return null;
+  }
+
+  const branchHeadId = tags.find(
+    (tag) => tag[0] === "sprout" && tag[1] === "thread_branch_head",
+  )?.[2];
+
+  if (!branchHeadId || !HEX_64_RE.test(branchHeadId)) {
+    return null;
+  }
+
+  return branchHeadId.toLowerCase();
+}
+
+export function buildThreadBranchHeadTag(
+  branchHeadId: string,
+): string[] | null {
+  if (!HEX_64_RE.test(branchHeadId)) {
+    return null;
+  }
+
+  return ["sprout", "thread_branch_head", branchHeadId.toLowerCase()];
+}
+
 /**
  * Best-effort client-side normalization of mention pubkeys: lowercase, deduplicate, skip self.
  * The relay performs authoritative validation (hex format, 64-char length, cap of 50)
@@ -107,10 +137,6 @@ export function buildReplyTags(
   tags.push(["e", rootEventId, "", "root"]);
   tags.push(["e", parentEventId, "", "reply"]);
   return tags;
-}
-
-export function buildAgentReplyParentTag(agentReplyParentId: string) {
-  return ["sprout", "agent_reply_parent", agentReplyParentId];
 }
 
 export function resolveReplyRootId(
