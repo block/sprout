@@ -57,6 +57,41 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
     if let Some(ref token) = auth_token {
         if token.starts_with("sprout_") {
             // ── API token path ──────────────────────────────────────────────
+            let event_clone = event.clone();
+            let challenge_owned = challenge.clone();
+            let relay_owned = relay_url.clone();
+            match tokio::task::spawn_blocking(move || {
+                sprout_auth::verify_nip42_event(&event_clone, &challenge_owned, &relay_owned)
+            })
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    warn!(conn_id = %conn_id, error = %e, "API token auth failed NIP-42 verification");
+                    metrics::counter!("sprout_auth_failures_total", "reason" => "nip42_invalid")
+                        .increment(1);
+                    *conn.auth_state.write().await = AuthState::Failed;
+                    conn.send(RelayMessage::ok(
+                        &event_id_hex,
+                        false,
+                        "auth-required: verification failed",
+                    ));
+                    return;
+                }
+                Err(e) => {
+                    warn!(conn_id = %conn_id, error = %e, "API token NIP-42 verification task failed");
+                    metrics::counter!("sprout_auth_failures_total", "reason" => "nip42_internal")
+                        .increment(1);
+                    *conn.auth_state.write().await = AuthState::Failed;
+                    conn.send(RelayMessage::ok(
+                        &event_id_hex,
+                        false,
+                        "auth-required: verification failed",
+                    ));
+                    return;
+                }
+            }
+
             // Hash the raw token and look it up in the DB. The relay owns this
             // path; sprout-auth has no DB access.
             let hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
@@ -122,6 +157,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     let auth_ctx = sprout_auth::AuthContext {
                         pubkey,
                         scopes,
+                        channel_ids: record.channel_ids,
                         auth_method: sprout_auth::AuthMethod::Nip42ApiToken,
                     };
                     // API token users have already proven authorization via their token —

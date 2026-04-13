@@ -29,7 +29,7 @@ pub async fn handle_req(
     conn: Arc<ConnectionState>,
     state: Arc<AppState>,
 ) {
-    let (conn_id, pubkey_bytes) = {
+    let (conn_id, pubkey_bytes, token_channel_ids) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
             AuthState::Authenticated(ctx) => {
@@ -53,7 +53,7 @@ pub async fn handle_req(
                     return;
                 }
 
-                (conn.conn_id, pk_bytes)
+                (conn.conn_id, pk_bytes, ctx.channel_ids.clone())
             }
             _ => {
                 conn.send(RelayMessage::notice(
@@ -68,7 +68,7 @@ pub async fn handle_req(
         }
     };
 
-    let accessible_channels = match state.db.get_accessible_channel_ids(&pubkey_bytes).await {
+    let mut accessible_channels = match state.db.get_accessible_channel_ids(&pubkey_bytes).await {
         Ok(ids) => ids,
         Err(e) => {
             warn!(conn_id = %conn_id, "Failed to get accessible channels: {e}");
@@ -76,6 +76,9 @@ pub async fn handle_req(
             return;
         }
     };
+    if let Some(allowed) = token_channel_ids.as_deref() {
+        accessible_channels.retain(|channel_id| allowed.contains(channel_id));
+    }
 
     let channel_id = extract_channel_id_from_filters(&filters);
 
@@ -93,7 +96,15 @@ pub async fn handle_req(
             ));
             return;
         }
-        handle_search_req(&sub_id, &filters, &accessible_channels, &conn, &state).await;
+        handle_search_req(
+            &sub_id,
+            &filters,
+            &accessible_channels,
+            token_channel_ids.is_none(),
+            &conn,
+            &state,
+        )
+        .await;
         return;
     }
 
@@ -239,13 +250,18 @@ async fn handle_search_req(
     sub_id: &str,
     filters: &[Filter],
     accessible_channels: &[uuid::Uuid],
+    include_global: bool,
     conn: &ConnectionState,
     state: &AppState,
 ) {
     let all_channels_filter = {
         if accessible_channels.is_empty() {
+            if !include_global {
+                conn.send(RelayMessage::eose(sub_id));
+                return;
+            }
             "channel_id:=__global__".to_string()
-        } else {
+        } else if include_global {
             let ids: Vec<String> = accessible_channels
                 .iter()
                 .map(|id| id.to_string())
@@ -254,6 +270,12 @@ async fn handle_search_req(
                 "(channel_id:=[{}] || channel_id:=__global__)",
                 ids.join(",")
             )
+        } else {
+            let ids: Vec<String> = accessible_channels
+                .iter()
+                .map(|id| id.to_string())
+                .collect();
+            format!("channel_id:=[{}]", ids.join(","))
         }
     };
 
