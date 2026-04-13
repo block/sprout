@@ -103,7 +103,7 @@ export const MessageRow = React.memo(
           return (
             <Markdown
               channelNames={channelNames}
-              className="max-w-3xl"
+              className="max-w-full"
               content={message.body}
               imetaByUrl={imetaByUrl}
               mentionNames={mentionNames}
@@ -167,7 +167,7 @@ export const MessageRow = React.memo(
 
         <article
           className={cn(
-            "group/message flex items-start gap-2.5 rounded-2xl px-2 py-1 transition-colors",
+            "group/message flex items-start gap-2.5 rounded-2xl px-2 py-1.5 transition-colors",
             highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
             activeReplyTargetId === message.id
               ? "bg-muted/60 ring-1 ring-border"
@@ -176,16 +176,13 @@ export const MessageRow = React.memo(
           data-message-id={message.id}
           data-testid="message-row"
         >
-          <div className="flex shrink-0 items-center gap-1">
-            {isBotInstance(message.role) ? (
-              <BotIdenticon
-                value={message.author}
-                size={20}
-                className="rounded"
-              />
-            ) : null}
+          <div className="flex shrink-0 items-start">
             {message.pubkey ? (
-              <UserProfilePopover pubkey={message.pubkey}>
+              <UserProfilePopover
+                pubkey={message.pubkey}
+                role={message.role}
+                botIdenticonValue={message.author}
+              >
                 <button
                   className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   type="button"
@@ -193,6 +190,7 @@ export const MessageRow = React.memo(
                   <UserAvatar
                     accent={message.accent}
                     avatarUrl={message.avatarUrl ?? null}
+                    className="!h-[42px] !w-[42px]"
                     displayName={message.author}
                     testId="message-avatar"
                   />
@@ -202,17 +200,21 @@ export const MessageRow = React.memo(
               <UserAvatar
                 accent={message.accent}
                 avatarUrl={message.avatarUrl ?? null}
-                className="shrink-0"
+                className="shrink-0 !h-[42px] !w-[42px]"
                 displayName={message.author}
                 testId="message-avatar"
               />
             )}
           </div>
 
-          <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="min-w-0 flex-1 space-y-1">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               {message.pubkey ? (
-                <UserProfilePopover pubkey={message.pubkey}>
+                <UserProfilePopover
+                  pubkey={message.pubkey}
+                  role={message.role}
+                  botIdenticonValue={message.author}
+                >
                   <button
                     className="truncate rounded text-sm font-semibold tracking-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     type="button"
@@ -225,29 +227,41 @@ export const MessageRow = React.memo(
                   {message.author}
                 </h3>
               )}
-              {message.personaDisplayName ? (
+              {isBotInstance(message.role) ? (
+                <BotIdenticon
+                  value={message.author}
+                  size={14}
+                  className="shrink-0 rounded-sm"
+                />
+              ) : null}
+              {message.personaDisplayName &&
+              message.personaDisplayName !== message.author ? (
                 <span className="text-xs text-muted-foreground">
                   {message.personaDisplayName}
                 </span>
-              ) : message.role ? (
+              ) : message.role && !isBotInstance(message.role) ? (
                 <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                   {message.role}
                 </p>
               ) : null}
               <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-                <MessageActionBar
-                  activeReplyTargetId={activeReplyTargetId}
-                  message={message}
-                  onDelete={onDelete}
-                  onEdit={onEdit}
-                  onReactionSelect={
-                    canToggleReactions ? handleReactionSelect : undefined
-                  }
-                  onReply={onReply}
-                  reactionErrorMessage={reactionErrorMessage}
-                  reactionPending={reactionPending}
-                  reactions={reactions}
-                />
+                <div className="relative">
+                  <div className="absolute right-0 top-1/2 -translate-y-1/2">
+                    <MessageActionBar
+                      activeReplyTargetId={activeReplyTargetId}
+                      message={message}
+                      onDelete={onDelete}
+                      onEdit={onEdit}
+                      onReactionSelect={
+                        canToggleReactions ? handleReactionSelect : undefined
+                      }
+                      onReply={onReply}
+                      reactionErrorMessage={reactionErrorMessage}
+                      reactionPending={reactionPending}
+                      reactions={reactions}
+                    />
+                  </div>
+                </div>
                 {message.pending ? (
                   <p className="font-medium uppercase tracking-[0.14em] text-primary/80">
                     Sending

@@ -76,7 +76,7 @@ export function TypingIndicatorRow({
       className="bg-background/95 px-4 py-2 sm:px-6"
       data-testid="message-typing-indicator"
     >
-      <div className="mx-auto flex w-full max-w-4xl items-center gap-2">
+      <div className="flex w-full items-center gap-2">
         <div className="flex flex-shrink-0 items-center">
           {typingPubkeys.map((pubkey, index) => {
             const profile = profiles?.[pubkey];
