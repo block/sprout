@@ -225,6 +225,17 @@ impl Default for HuddleState {
     }
 }
 
+impl HuddleState {
+    /// Reset to default state while preserving the session generation counter.
+    /// Used by start_huddle rollback, join_huddle rollback, and teardown_huddle
+    /// to invalidate in-flight transcription tasks without losing the generation.
+    fn reset_preserving_generation(&mut self) {
+        let gen = Arc::clone(&self.session_generation);
+        *self = Self::default();
+        self.session_generation = gen;
+    }
+}
+
 // ── Response types ────────────────────────────────────────────────────────────
 
 /// Returned by start_huddle and join_huddle.
@@ -302,6 +313,29 @@ async fn fetch_channel_members(
         .filter(|m| role_filter.map_or(true, |r| m.role.as_deref() == Some(r)))
         .map(|m| m.pubkey)
         .collect())
+}
+
+/// Count human (non-bot) members remaining in a channel.
+/// Used by leave_huddle to detect "last human left" and auto-end.
+async fn count_human_members(channel_id: &str, state: &AppState) -> Result<usize, String> {
+    #[derive(Deserialize)]
+    struct Member {
+        role: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct MembersResponse {
+        members: Vec<Member>,
+    }
+
+    let path = api_path(&["channels", channel_id, "members"]);
+    let request = build_authed_request(&state.http_client, Method::GET, &path, state)?;
+    let resp: MembersResponse = send_json_request(request).await?;
+
+    Ok(resp
+        .members
+        .iter()
+        .filter(|m| m.role.as_deref() != Some("bot"))
+        .count())
 }
 
 /// Common setup after a huddle connection is established (both start and join).
@@ -736,9 +770,7 @@ pub async fn start_huddle(
             // Preserve session_generation so in-flight transcription tasks
             // from a prior session still see a stale generation and exit.
             if let Ok(mut hs) = state.huddle_state.lock() {
-                let gen = Arc::clone(&hs.session_generation);
-                *hs = HuddleState::default();
-                hs.session_generation = gen;
+                hs.reset_preserving_generation();
             }
             Err(e)
         }
@@ -748,6 +780,7 @@ pub async fn start_huddle(
 /// Join an existing huddle in the given parent channel.
 ///
 /// Steps:
+/// 0. Add the joining human to the ephemeral channel (required for STT transcript posting).
 /// 1. Fetch a LiveKit token from the relay for the ephemeral channel.
 /// 2. Emit KIND_HUDDLE_PARTICIPANT_JOINED to the parent channel (best-effort).
 /// 3. Store state and return join info.
@@ -773,60 +806,78 @@ pub async fn join_huddle(
         hs.livekit_room = Some(livekit_room.clone());
     }
 
-    // 1. Fetch LiveKit token. On failure, reset state to Idle so user can retry.
-    // Preserve session_generation (same rationale as start_huddle rollback).
-    let lk = match fetch_livekit_token(&ephemeral_channel_id, &state).await {
-        Ok(lk) => lk,
-        Err(e) => {
-            if let Ok(mut hs) = state.huddle_state.lock() {
-                let gen = Arc::clone(&hs.session_generation);
-                *hs = HuddleState::default();
-                hs.session_generation = gen;
-            }
-            return Err(e);
-        }
-    };
-
-    // 2. Emit PARTICIPANT_JOINED to parent channel (best-effort — don't fail the join).
-    if let Ok(joined_builder) =
-        events::build_huddle_participant_joined(&parent_channel_id, &ephemeral_channel_id)
-    {
-        if let Err(e) = submit_event(joined_builder, &state).await {
-            eprintln!("sprout-desktop: huddle_participant_joined event failed: {e}");
-        }
-    }
-
-    // 3. Store active state.
-    {
-        let mut hs = state.huddle()?;
-        hs.phase = HuddlePhase::Connected;
-        hs.livekit_token = Some(lk.token.clone());
-        hs.livekit_url = Some(lk.url.clone());
-        hs.livekit_room = Some(lk.room.clone());
-        // agent_pubkeys + participants hydrated by post_connect_setup below.
-        // Seed with current user as a fallback until relay responds.
+    // All steps wrapped so we can roll back on ANY failure after phase transition.
+    let result: Result<(LiveKitTokenResponse, String), String> = async {
+        // 0. Add the joining human to the ephemeral channel.
         let own_pubkey = state
             .keys
             .lock()
             .map(|k| k.public_key().to_hex())
-            .unwrap_or_default();
-        if !own_pubkey.is_empty() {
-            hs.participants = vec![own_pubkey];
+            .map_err(|_| "keys unavailable".to_string())?;
+        let eph_uuid = parse_channel_uuid(&ephemeral_channel_id)?;
+        let add_self = events::build_add_member(eph_uuid, &own_pubkey, None)?;
+        if let Err(e) = submit_event(add_self, &state).await {
+            // Idempotent: "already a member" is fine (rejoining after disconnect).
+            // Any other error means we can't post STT transcripts — fail the join.
+            let is_already_member = e.to_lowercase().contains("already");
+            if !is_already_member {
+                eprintln!("sprout-desktop: join_huddle add self to ephemeral channel failed: {e}");
+                return Err(format!("failed to join ephemeral channel: {e}"));
+            }
+            // Already a member — continue normally.
+        }
+
+        // 1. Fetch LiveKit token.
+        let lk = fetch_livekit_token(&ephemeral_channel_id, &state).await?;
+
+        // 2. Emit PARTICIPANT_JOINED (best-effort).
+        if let Ok(joined_builder) =
+            events::build_huddle_participant_joined(&parent_channel_id, &ephemeral_channel_id)
+        {
+            if let Err(e) = submit_event(joined_builder, &state).await {
+                eprintln!("sprout-desktop: huddle_participant_joined event failed: {e}");
+            }
+        }
+
+        Ok((lk, own_pubkey))
+    }
+    .await;
+
+    match result {
+        Ok((lk, own_pubkey)) => {
+            // 3. Store active state.
+            {
+                let mut hs = state.huddle()?;
+                hs.phase = HuddlePhase::Connected;
+                hs.livekit_token = Some(lk.token.clone());
+                hs.livekit_url = Some(lk.url.clone());
+                hs.livekit_room = Some(lk.room.clone());
+                // Seed with current user as a fallback until relay responds.
+                if !own_pubkey.is_empty() {
+                    hs.participants = vec![own_pubkey];
+                }
+            }
+
+            // 4. Hydrate members, download models, start pipelines.
+            if let Err(e) = post_connect_setup(&state, &ephemeral_channel_id).await {
+                eprintln!("sprout-desktop: post_connect_setup failed (degraded mode): {e}");
+            }
+
+            Ok(HuddleJoinInfo {
+                ephemeral_channel_id,
+                livekit_token: lk.token,
+                livekit_url: lk.url,
+                livekit_room: lk.room,
+            })
+        }
+        Err(e) => {
+            // Rollback: reset state to Idle so the user can retry.
+            if let Ok(mut hs) = state.huddle_state.lock() {
+                hs.reset_preserving_generation();
+            }
+            Err(e)
         }
     }
-
-    // 4. Hydrate members, download models, start pipelines.
-    if let Err(e) = post_connect_setup(&state, &ephemeral_channel_id).await {
-        eprintln!("sprout-desktop: post_connect_setup failed (degraded mode): {e}");
-        // Non-fatal: huddle works without STT/TTS pipelines.
-    }
-
-    Ok(HuddleJoinInfo {
-        ephemeral_channel_id,
-        livekit_token: lk.token,
-        livekit_url: lk.url,
-        livekit_room: lk.room,
-    })
 }
 
 /// Shut down all pipelines and reset huddle state to Idle.
@@ -844,9 +895,7 @@ fn teardown_huddle(state: &AppState) -> Result<(), String> {
         hs.session_generation.fetch_add(1, Ordering::Release);
         let stt = hs.stt_pipeline.take();
         let tts = hs.tts_pipeline.take();
-        let gen = Arc::clone(&hs.session_generation);
-        *hs = HuddleState::default();
-        hs.session_generation = gen;
+        hs.reset_preserving_generation();
         (stt, tts)
     };
     // Shut down outside the lock — thread joins happen here.
@@ -893,6 +942,49 @@ pub async fn leave_huddle(state: State<'_, AppState>) -> Result<(), String> {
         }
     }
 
+    // Auto-end: check if any human participants remain. If not, end the huddle
+    // (emit HUDDLE_ENDED + archive). If others remain, just remove self from
+    // membership so the participant roster stays accurate.
+    //
+    // We check BEFORE removing self — the relay counts us as a member until
+    // we leave. So "1 human remaining" means WE are the last one.
+    if !parent_channel_id.is_empty() && !ephemeral_channel_id.is_empty() {
+        let humans_remaining = count_human_members(&ephemeral_channel_id, &state)
+            .await
+            .unwrap_or(1); // On fetch failure, assume someone is still there (safe default).
+
+        if humans_remaining <= 1 {
+            // We're the last human — end the huddle entirely.
+            // Archive subsumes leave (the channel is gone, membership is moot).
+            // This avoids the "cannot remove the last owner" relay error that
+            // build_leave hits when the creator is the sole remaining member.
+            eprintln!("sprout-desktop: last human left huddle — auto-ending");
+            if let Ok(ended_builder) =
+                events::build_huddle_ended(&parent_channel_id, &ephemeral_channel_id)
+            {
+                if let Err(e) = submit_event(ended_builder, &state).await {
+                    eprintln!("sprout-desktop: auto-end huddle_ended event failed: {e}");
+                }
+            }
+            if let Ok(eph_uuid) = parse_channel_uuid(&ephemeral_channel_id) {
+                if let Ok(archive_builder) = events::build_archive(eph_uuid) {
+                    if let Err(e) = submit_event(archive_builder, &state).await {
+                        eprintln!("sprout-desktop: auto-end archive ephemeral channel failed: {e}");
+                    }
+                }
+            }
+        } else {
+            // Other humans still in the huddle — just remove self from membership.
+            if let Ok(eph_uuid) = parse_channel_uuid(&ephemeral_channel_id) {
+                if let Ok(leave_builder) = events::build_leave(eph_uuid) {
+                    if let Err(e) = submit_event(leave_builder, &state).await {
+                        eprintln!("sprout-desktop: huddle leave ephemeral channel failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
     teardown_huddle(&state)?;
 
     Ok(())
@@ -912,9 +1004,9 @@ pub async fn end_huddle(state: State<'_, AppState>) -> Result<(), String> {
         if hs.phase == HuddlePhase::Idle {
             return Ok(()); // Nothing to end.
         }
-        if !hs.is_creator {
-            return Err("only the huddle creator can end the huddle".to_string());
-        }
+        // Any participant can end the huddle — if the creator disconnects
+        // ungracefully (crash, network loss), other participants need a way
+        // to archive the ephemeral channel and emit huddle_ended.
         hs.phase = HuddlePhase::Leaving;
         (
             hs.parent_channel_id.clone().unwrap_or_default(),

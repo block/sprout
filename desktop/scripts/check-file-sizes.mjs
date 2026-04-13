@@ -40,14 +40,14 @@ const overrides = new Map([
   ["src/features/settings/ui/SettingsView.tsx", 600],
   ["src/features/sidebar/ui/AppSidebar.tsx", 860], // channels + forums creation forms + Pulse nav
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
-  ["src/shared/api/relayClientSession.ts", 810], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore + subscribeToChannelLive (huddle TTS)
+  ["src/shared/api/relayClientSession.ts", 830], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore + subscribeToChannelLive (huddle TTS) + subscribeToHuddleEvents (huddle indicator)
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
   ["src-tauri/src/lib.rs", 700], // sprout-media:// proxy + Range headers + Sprout nest init (ensure_nest) in setup() + huddle command registration + PTT global shortcut handler with generation counter and release delay
   ["src-tauri/src/commands/media.rs", 720], // ffmpeg video transcode + poster frame extraction + run_ffmpeg_with_timeout (find_ffmpeg, is_video_file, transcode_to_mp4, extract_poster_frame, transcode_and_extract_poster) + spawn_blocking wrappers + tests
   ["src-tauri/src/commands/agents.rs", 860], // remote agent lifecycle routing (local + provider branches) + scope enforcement + mcp_toolsets field; rustfmt adds line breaks around long tuple/closure blocks
   ["src-tauri/src/managed_agents/runtime.rs", 650], // KNOWN_AGENT_BINARIES const + process_belongs_to_us FFI (macOS proc_name + Linux /proc/comm) + terminate_process + start/stop/sync lifecycle
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests
-  ["src/features/huddle/HuddleContext.tsx", 530], // huddle lifecycle context + PTT state (pttActive, voiceInputMode, setVoiceInputMode) + TTS subscription + mic level analyser + agent pubkey refresh
+  ["src/features/huddle/HuddleContext.tsx", 630], // huddle lifecycle context + joinHuddle + connectAndSetupMedia shared helper + activeSpeakers/isReconnecting state + PTT + TTS subscription + mic level analyser + agent pubkey refresh
   ["src/features/agents/hooks.ts", 520], // agent query/mutation surface now includes built-in persona library activation
   ["src/features/agents/ui/AgentsView.tsx", 880], // remote agent lifecycle controls + persona/team management + persona import-update dialog wiring + built-in catalog/library state orchestration
   ["src/features/agents/ui/TeamDialog.tsx", 530], // team create/edit dialog with persona multi-select, import button, window drag detection, removal confirmation
@@ -57,7 +57,7 @@ const overrides = new Map([
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
   ["src/shared/api/types.ts", 535], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields + mcpToolsets
   ["src-tauri/src/events.rs", 530], // event builders + build_huddle_guidelines (kind:48106) + post_event_raw transport helper
-  ["src-tauri/src/huddle/mod.rs", 1400], // huddle state machine + 16 Tauri commands + STT/TTS pipeline lifecycle + VoiceInputMode (PTT/VAD) + relay membership fetch + session generation guard + creator enforcement + input validation; split planned post-MVP
+  ["src-tauri/src/huddle/mod.rs", 1450], // huddle state machine + 16 Tauri commands + STT/TTS pipeline lifecycle + VoiceInputMode (PTT/VAD) + relay membership fetch + session generation guard + multi-human join/leave/auto-end + count_human_members + input validation; split planned post-MVP
   ["src-tauri/src/huddle/models.rs", 850], // model download manager for Moonshine STT + Supertonic TTS with streaming downloads + SHA-256 verification + Rust-native tar extraction + version manifest + atomic swap + hot-start signaling
   ["src-tauri/src/huddle/stt.rs", 580], // STT pipeline + PTT edge-detection flush + PTT gating (is_speech AND ptt_active) + barge-in for VAD mode + rubato resampler + earshot VAD + sherpa-onnx transcription
   ["src-tauri/src/huddle/preprocessing.rs", 620], // TTS text preprocessing pipeline + unified split_sentences (consolidated from tts.rs + supertonic.rs) + int_to_words 0-999999 + 18 unit tests

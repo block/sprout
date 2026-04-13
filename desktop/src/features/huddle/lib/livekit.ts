@@ -1,4 +1,9 @@
-import { LocalAudioTrack, Room } from "livekit-client";
+import {
+  LocalAudioTrack,
+  Room,
+  RoomEvent,
+  type Participant,
+} from "livekit-client";
 
 export interface HuddleConnection {
   room: Room;
@@ -6,16 +11,25 @@ export interface HuddleConnection {
   disconnect: () => Promise<void>;
 }
 
+export type HuddleRoomCallbacks = {
+  onActiveSpeakersChanged?: (speakers: Participant[]) => void;
+  onDisconnected?: () => void;
+  onReconnecting?: () => void;
+  onReconnected?: () => void;
+};
+
 /**
  * LiveKit connection lifecycle:
  *
- *   connectToHuddle(url, token)
+ *   connectToHuddle(url, token, callbacks?)
  *     → getUserMedia({ audio: true })   [mic permission]
  *     → room.connect(url, token)        [WebRTC signaling]
+ *     → register room event listeners  [active speakers, disconnect, reconnect]
  *     → room.localParticipant.publishTrack(audioTrack)
  *     → returns { room, localAudioTrack, disconnect }
  *
  *   disconnect()
+ *     → room.removeAllListeners()
  *     → room.disconnect()
  *     → stream.getTracks().forEach(t => t.stop())
  *
@@ -24,15 +38,35 @@ export interface HuddleConnection {
 export async function connectToHuddle(
   url: string,
   token: string,
+  callbacks?: HuddleRoomCallbacks,
 ): Promise<HuddleConnection> {
   const room = new Room();
   let stream: MediaStream | null = null;
 
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+    });
     const audioTrack = stream.getAudioTracks()[0];
 
     await room.connect(url, token);
+
+    // Register room event listeners before publishing track
+    if (callbacks?.onActiveSpeakersChanged) {
+      room.on(
+        RoomEvent.ActiveSpeakersChanged,
+        callbacks.onActiveSpeakersChanged,
+      );
+    }
+    if (callbacks?.onDisconnected) {
+      room.on(RoomEvent.Disconnected, callbacks.onDisconnected);
+    }
+    if (callbacks?.onReconnecting) {
+      room.on(RoomEvent.Reconnecting, callbacks.onReconnecting);
+    }
+    if (callbacks?.onReconnected) {
+      room.on(RoomEvent.Reconnected, callbacks.onReconnected);
+    }
 
     try {
       // false = don't let LiveKit manage the track lifecycle
@@ -40,6 +74,7 @@ export async function connectToHuddle(
       await room.localParticipant.publishTrack(localTrack);
     } catch (publishErr) {
       // Publish failed after connect — disconnect room before propagating
+      room.removeAllListeners();
       room.disconnect();
       throw publishErr;
     }
@@ -49,6 +84,7 @@ export async function connectToHuddle(
       localAudioTrack: audioTrack,
       disconnect: async () => {
         try {
+          room.removeAllListeners();
           room.disconnect();
         } finally {
           stream?.getTracks().forEach((t) => {

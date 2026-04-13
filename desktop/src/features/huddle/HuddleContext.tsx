@@ -16,6 +16,13 @@ import { setupAudioWorklet, type AudioWorkletHandle } from "./lib/audioWorklet";
  *     → invoke("confirm_huddle_active") [Rust: Connected → Active]
  *     → setEphemeralChannelId(...)      [triggers TTS subscription + hotstart polling]
  *
+ *   joinHuddle(parentChannelId, ephemeralChannelId, livekitRoom)
+ *     → invoke("join_huddle")           [Rust: get LiveKit token for existing room]
+ *     → connectToHuddle(url, token)     [LiveKit: WebRTC room + mic]
+ *     → setupAudioWorklet(track, init)   [AudioWorklet: mic PCM → Rust STT, PTT gating]
+ *     → invoke("confirm_huddle_active") [Rust: Connected → Active]
+ *     → setEphemeralChannelId(...)      [triggers TTS subscription + hotstart polling]
+ *
  *   TTS subscription (on ephemeralChannelId change):
  *     → relayClient.subscribeToChannelLive(ephId, callback)
  *     → live-only (since: now) — no historical backlog
@@ -50,10 +57,20 @@ interface HuddleContextValue {
   voiceInputMode: VoiceInputMode;
   /** Toggle voice input mode (persisted to Rust backend) */
   setVoiceInputMode: (mode: VoiceInputMode) => Promise<void>;
+  /** Pubkeys of currently speaking participants (from LiveKit) */
+  activeSpeakers: string[];
+  /** Whether LiveKit is reconnecting */
+  isReconnecting: boolean;
   /** Start a new huddle — calls Rust start_huddle, then connects LiveKit + AudioWorklet */
   startHuddle: (
     parentChannelId: string,
     memberPubkeys: string[],
+  ) => Promise<void>;
+  /** Join an existing huddle — calls Rust join_huddle, then connects LiveKit + AudioWorklet */
+  joinHuddle: (
+    parentChannelId: string,
+    ephemeralChannelId: string,
+    livekitRoom: string,
   ) => Promise<void>;
   /** Leave the current huddle — disconnects LiveKit, stops worklet, calls Rust leave_huddle.
    *  Returns true if backend cleanup succeeded, false if it failed (caller may retry). */
@@ -69,7 +86,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   const workletRef = React.useRef<AudioWorkletHandle | null>(null);
   const tokenRef = React.useRef(0);
   const busyRef = React.useRef(false);
-  /** True once Rust `start_huddle` has been invoked (even if JS-side refs aren't populated yet). */
+  /** True once Rust `start_huddle` or `join_huddle` has been invoked (even if JS-side refs aren't populated yet). */
   const rustActiveRef = React.useRef(false);
   const [localAudioTrack, setLocalAudioTrack] =
     React.useState<MediaStreamTrack | null>(null);
@@ -81,12 +98,16 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   /** Current voice input mode */
   const [voiceInputMode, setVoiceInputModeState] =
     React.useState<VoiceInputMode>("push_to_talk");
-  /** Ephemeral channel ID — set after start_huddle, used for TTS subscription */
+  /** Ephemeral channel ID — set after start_huddle/join_huddle, used for TTS subscription */
   const [ephemeralChannelId, setEphemeralChannelId] = React.useState<
     string | null
   >(null);
   /** Self pubkey — fetched once, used to filter out own messages from TTS */
   const selfPubkeyRef = React.useRef<string | null>(null);
+  /** Pubkeys of participants currently speaking (from LiveKit active speakers) */
+  const [activeSpeakers, setActiveSpeakers] = React.useState<string[]>([]);
+  /** Whether LiveKit is reconnecting (for UI feedback) */
+  const [isReconnecting, setIsReconnecting] = React.useState(false);
 
   // Bootstrap voice input mode from Rust backend on mount.
   // Ensures frontend stays in sync after remount/recovery.
@@ -133,7 +154,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
 
   /** Stop AudioWorklet and disconnect LiveKit. Best-effort on both steps. */
   const disconnectMedia = React.useCallback(async () => {
-    // Invalidate any in-flight startHuddle
+    // Invalidate any in-flight startHuddle/joinHuddle
     tokenRef.current += 1;
 
     // Step 1: Stop AudioWorklet
@@ -155,6 +176,8 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     setLocalAudioTrack(null);
     setMicConnected(false);
     setEphemeralChannelId(null);
+    setActiveSpeakers([]);
+    setIsReconnecting(false);
   }, []);
 
   const leaveHuddle = React.useCallback(async (): Promise<boolean> => {
@@ -197,7 +220,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   /**
    * Clean up a partially-established huddle. Best-effort on every step.
    *
-   * Note: takes explicit conn/worklet args (not from refs) because startHuddle
+   * Note: takes explicit conn/worklet args (not from refs) because startHuddle/joinHuddle
    * may have local variables that differ from the refs mid-flight. Can't use
    * disconnectMedia() here for the same reason.
    */
@@ -205,6 +228,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     async (
       conn: HuddleConnection | null,
       worklet: AudioWorkletHandle | null,
+      isCreator: boolean,
     ) => {
       try {
         worklet?.stop();
@@ -220,16 +244,25 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       setLocalAudioTrack(null);
       setMicConnected(false);
       setEphemeralChannelId(null);
-      // Use end_huddle (not leave_huddle) for creator cleanup —
-      // this archives the ephemeral channel and emits huddle_ended,
-      // preventing orphaned huddles visible to other users.
+      setActiveSpeakers([]);
+      setIsReconnecting(false);
+      // Only creators should end the huddle on cleanup failure —
+      // a joiner's failed start must not archive the ephemeral channel
+      // or emit huddle_ended, which would kill the huddle for everyone.
       if (rustActiveRef.current) {
-        try {
-          await invoke("end_huddle");
-          rustActiveRef.current = false;
-        } catch {
-          // Fall back to leave_huddle if end_huddle fails
-          // (e.g. non-creator, or end_huddle not available)
+        if (isCreator) {
+          try {
+            await invoke("end_huddle");
+            rustActiveRef.current = false;
+          } catch {
+            try {
+              await invoke("leave_huddle");
+              rustActiveRef.current = false;
+            } catch {
+              // Leave rustActiveRef true so a subsequent call retries
+            }
+          }
+        } else {
           try {
             await invoke("leave_huddle");
             rustActiveRef.current = false;
@@ -242,6 +275,75 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  /** Shared media setup: connect LiveKit, setup AudioWorklet, confirm active.
+   *  Used by both startHuddle and joinHuddle after the Rust backend call succeeds. */
+  const connectAndSetupMedia = React.useCallback(
+    async (
+      joinInfo: HuddleJoinInfo,
+      myToken: number,
+    ): Promise<{
+      connection: HuddleConnection;
+      worklet: AudioWorkletHandle;
+    }> => {
+      // Fetch self pubkey once for TTS filtering
+      if (!selfPubkeyRef.current) {
+        try {
+          const identity = await invoke<{ pubkey: string }>("get_identity");
+          selfPubkeyRef.current = identity.pubkey;
+        } catch {
+          /* best-effort */
+        }
+      }
+
+      if (tokenRef.current !== myToken) {
+        throw new Error("superseded");
+      }
+
+      // Connect to LiveKit room with event callbacks
+      const connection = await connectToHuddle(
+        joinInfo.livekit_url,
+        joinInfo.livekit_token,
+        {
+          onActiveSpeakersChanged: (speakers) => {
+            setActiveSpeakers(speakers.map((s) => s.identity));
+          },
+          onDisconnected: () => {
+            // Auto-cleanup on unexpected disconnect
+            void leaveHuddle();
+          },
+          onReconnecting: () => setIsReconnecting(true),
+          onReconnected: () => setIsReconnecting(false),
+        },
+      );
+
+      if (tokenRef.current !== myToken) {
+        throw new Error("superseded");
+      }
+
+      connectionRef.current = connection;
+      setLocalAudioTrack(connection.localAudioTrack);
+      setMicConnected(true);
+
+      // Setup AudioWorklet
+      const initialTransmitting = voiceInputMode !== "push_to_talk";
+      const worklet = await setupAudioWorklet(
+        connection.localAudioTrack,
+        initialTransmitting,
+      );
+
+      if (tokenRef.current !== myToken) {
+        throw new Error("superseded");
+      }
+
+      workletRef.current = worklet;
+      setEphemeralChannelId(joinInfo.ephemeral_channel_id);
+      await invoke("confirm_huddle_active");
+
+      return { connection, worklet };
+    },
+    [leaveHuddle, voiceInputMode],
+  );
+
   const startHuddle = React.useCallback(
     async (parentChannelId: string, memberPubkeys: string[]) => {
       // Synchronous concurrency guard — belt-and-suspenders alongside isStarting state
@@ -252,7 +354,6 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       const myToken = tokenRef.current;
 
       setIsStarting(true);
-      let connection: HuddleConnection | null = null;
       try {
         // Step 1: Call Rust to create ephemeral channel + get LiveKit token
         const joinInfo = await invoke<HuddleJoinInfo>("start_huddle", {
@@ -262,66 +363,26 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         rustActiveRef.current = true;
         // Do NOT set ephemeralChannelId yet — wait until fully established (LiveKit + Worklet)
 
-        // Fetch self pubkey once for TTS filtering
-        if (!selfPubkeyRef.current) {
-          try {
-            const identity = await invoke<{ pubkey: string }>("get_identity");
-            selfPubkeyRef.current = identity.pubkey;
-          } catch {
-            /* best-effort — TTS will just speak all messages */
+        // Step 2-4: Connect LiveKit, setup AudioWorklet, confirm active
+        try {
+          await connectAndSetupMedia(joinInfo, myToken);
+        } catch (e) {
+          if (e instanceof Error && e.message === "superseded") {
+            await cleanupFailedStart(
+              connectionRef.current,
+              workletRef.current,
+              true,
+            );
+            return;
           }
+          throw e;
         }
-
-        // Bail if superseded (leaveHuddle or another startHuddle was called)
-        if (tokenRef.current !== myToken) {
-          await cleanupFailedStart(null, null);
-          return;
-        }
-
-        // Step 2: Connect to LiveKit room
-        connection = await connectToHuddle(
-          joinInfo.livekit_url,
-          joinInfo.livekit_token,
-        );
-
-        // Bail if superseded after async connect
-        if (tokenRef.current !== myToken) {
-          await cleanupFailedStart(connection, null);
-          return;
-        }
-
-        connectionRef.current = connection;
-        setLocalAudioTrack(connection.localAudioTrack);
-        setMicConnected(true);
-
-        // Step 3: Set up AudioWorklet to pipe mic audio to Rust STT
-        // In PTT mode, start with transmitting=false (user must hold key).
-        // In VAD mode, start with transmitting=true (always open mic).
-        const initialTransmitting = voiceInputMode !== "push_to_talk";
-        const worklet = await setupAudioWorklet(
-          connection.localAudioTrack,
-          initialTransmitting,
-        );
-
-        // Bail if superseded after async worklet setup
-        if (tokenRef.current !== myToken) {
-          await cleanupFailedStart(connection, worklet);
-          return;
-        }
-
-        workletRef.current = worklet;
-        // Step 4: Huddle fully established — now safe to set ephemeralChannelId
-        // This triggers TTS subscription and hot-start polling effects
-        setEphemeralChannelId(joinInfo.ephemeral_channel_id);
-
-        // Confirm to backend that media is established — transitions Connected → Active.
-        await invoke("confirm_huddle_active");
       } catch (e) {
         // Pass workletRef.current — it may have been assigned before the error
         // (e.g. confirm_huddle_active rejects after worklet setup succeeded).
         const w = workletRef.current;
         workletRef.current = null;
-        await cleanupFailedStart(connection, w);
+        await cleanupFailedStart(connectionRef.current, w, true);
         console.error("Failed to start huddle:", e);
         throw e;
       } finally {
@@ -329,7 +390,56 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         busyRef.current = false;
       }
     },
-    [cleanupFailedStart, voiceInputMode],
+    [cleanupFailedStart, connectAndSetupMedia],
+  );
+
+  const joinHuddle = React.useCallback(
+    async (
+      parentChannelId: string,
+      ephemeralChannelId: string,
+      livekitRoom: string,
+    ) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      tokenRef.current += 1;
+      const myToken = tokenRef.current;
+      setIsStarting(true);
+
+      try {
+        // Step 1: Call Rust join_huddle
+        const joinInfo = await invoke<HuddleJoinInfo>("join_huddle", {
+          parentChannelId,
+          ephemeralChannelId,
+          livekitRoom,
+        });
+        rustActiveRef.current = true;
+
+        // Step 2-4: Connect LiveKit, setup AudioWorklet, confirm active
+        try {
+          await connectAndSetupMedia(joinInfo, myToken);
+        } catch (e) {
+          if (e instanceof Error && e.message === "superseded") {
+            await cleanupFailedStart(
+              connectionRef.current,
+              workletRef.current,
+              false,
+            );
+            return;
+          }
+          throw e;
+        }
+      } catch (e) {
+        const w = workletRef.current;
+        workletRef.current = null;
+        await cleanupFailedStart(connectionRef.current, w, false);
+        console.error("Failed to join huddle:", e);
+        throw e;
+      } finally {
+        setIsStarting(false);
+        busyRef.current = false;
+      }
+    },
+    [cleanupFailedStart, connectAndSetupMedia],
   );
 
   // TTS subscription — pipe AGENT messages from ephemeral channel to speak_agent_message.
@@ -494,7 +604,10 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         pttActive,
         voiceInputMode,
         setVoiceInputMode,
+        activeSpeakers,
+        isReconnecting,
         startHuddle,
+        joinHuddle,
         leaveHuddle,
         endHuddle,
       }}

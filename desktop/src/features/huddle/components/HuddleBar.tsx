@@ -51,7 +51,10 @@ export function HuddleBar({ className }: HuddleBarProps) {
     pttActive,
     voiceInputMode,
     setVoiceInputMode,
+    activeSpeakers,
+    isReconnecting,
   } = useHuddle();
+
   const isPttMode = voiceInputMode === "push_to_talk";
   const [state, setState] = React.useState<HuddleState | null>(null);
   const [isMuted, setIsMuted] = React.useState(false);
@@ -206,11 +209,18 @@ export function HuddleBar({ className }: HuddleBarProps) {
         <span>In huddle</span>
       </div>
 
+      {/* Reconnecting indicator */}
+      {isReconnecting && (
+        <div className="flex items-center gap-1 text-xs text-amber-500">
+          <span className="animate-pulse">Reconnecting…</span>
+        </div>
+      )}
+
       {/* Model download progress */}
       {modelStatus &&
         (modelStatus.moonshine !== "ready" ||
           modelStatus.supertonic !== "ready") && (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <output className="flex items-center gap-1 text-xs text-muted-foreground">
             <span className="animate-pulse">
               {modelStatus.moonshine !== "ready" &&
               modelStatus.supertonic !== "ready"
@@ -219,12 +229,15 @@ export function HuddleBar({ className }: HuddleBarProps) {
                   ? `STT model: ${modelStatus.moonshine}`
                   : `TTS model: ${modelStatus.supertonic}`}
             </span>
-          </div>
+          </output>
         )}
 
       {/* Participant avatars */}
       {state.participants.length > 0 && (
-        <ParticipantList participants={state.participants} />
+        <ParticipantList
+          participants={state.participants}
+          activeSpeakers={activeSpeakers}
+        />
       )}
 
       {/* Voice input mode indicator */}
@@ -235,7 +248,9 @@ export function HuddleBar({ className }: HuddleBarProps) {
               <div
                 className={cn(
                   "h-2.5 w-2.5 rounded-full transition-colors",
-                  pttActive && !isMuted ? "bg-green-500" : "bg-zinc-500",
+                  pttActive && !isMuted
+                    ? "bg-green-500 animate-pulse"
+                    : "bg-zinc-500",
                 )}
                 title={
                   isMuted
@@ -374,31 +389,45 @@ export function HuddleBar({ className }: HuddleBarProps) {
         )}
       </Button>
 
-      {/* Leave / End button */}
-      {state.is_creator ? (
-        <Button
-          aria-label="End huddle"
-          className="h-8 w-8"
-          disabled={isLeaving}
-          onClick={() => void handleEnd()}
-          size="icon"
-          variant="destructive"
-          title="End huddle for everyone"
-        >
-          <PhoneOff className="h-4 w-4" />
-        </Button>
-      ) : (
-        <Button
-          aria-label="Leave huddle"
-          className="h-8 w-8"
-          disabled={isLeaving}
-          onClick={() => void handleLeave()}
-          size="icon"
-          variant="destructive"
-        >
-          <PhoneOff className="h-4 w-4" />
-        </Button>
-      )}
+      {/* Leave / End buttons — available to all participants */}
+      <Button
+        aria-label="Leave huddle"
+        className="h-8 w-8"
+        disabled={isLeaving}
+        onClick={() => void handleLeave()}
+        size="icon"
+        variant="destructive"
+        title="Leave huddle"
+      >
+        <PhoneOff className="h-4 w-4" />
+      </Button>
+
+      <Button
+        aria-label="End huddle for everyone"
+        className="h-6 px-1.5 text-[10px]"
+        disabled={isLeaving}
+        onClick={() => void handleEnd()}
+        size="sm"
+        variant="ghost"
+        title="End huddle for everyone (archives channel)"
+      >
+        End all
+      </Button>
+
+      {/* Screen reader announcements for huddle state changes */}
+      <output aria-live="polite" className="sr-only">
+        {isReconnecting
+          ? "Huddle reconnecting"
+          : micConnected
+            ? "In huddle, microphone connected"
+            : "In huddle, no microphone"}
+        {modelStatus &&
+          modelStatus.moonshine !== "ready" &&
+          `, STT model ${modelStatus.moonshine}`}
+        {modelStatus &&
+          modelStatus.supertonic !== "ready" &&
+          `, TTS model ${modelStatus.supertonic}`}
+      </output>
     </div>
   );
 }

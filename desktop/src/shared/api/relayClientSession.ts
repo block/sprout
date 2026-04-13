@@ -178,6 +178,26 @@ export class RelayClient {
     );
   }
 
+  /**
+   * Subscribe to huddle lifecycle events (kinds 48100–48103) for a channel.
+   * Used by HuddleIndicator to detect active huddles without being drowned
+   * out by regular channel messages in the generic subscription window.
+   * Includes both historical (last 10) and live events.
+   */
+  async subscribeToHuddleEvents(
+    channelId: string,
+    onEvent: (event: RelayEvent) => void,
+  ) {
+    return this.subscribe(
+      {
+        kinds: [48100, 48101, 48102, 48103],
+        "#h": [channelId],
+        limit: 100,
+      },
+      onEvent,
+    );
+  }
+
   async subscribeToTypingIndicators(
     channelId: string,
     onEvent: (event: RelayEvent) => void,
