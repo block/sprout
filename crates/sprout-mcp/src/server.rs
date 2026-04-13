@@ -103,29 +103,6 @@ fn find_agent_reply_parent_from_tags(tags: &serde_json::Value) -> Option<String>
     None
 }
 
-/// Extract a Sprout-specific UI branch head from serialized tags.
-///
-/// Tag format:
-/// - `["sprout", "thread_branch_head", "<event-id>"]`
-fn find_thread_branch_head_from_tags(tags: &serde_json::Value) -> Option<String> {
-    let arr = tags.as_array()?;
-    for tag in arr {
-        let Some(parts) = tag.as_array() else {
-            continue;
-        };
-        if parts.len() >= 3
-            && parts[0].as_str() == Some("sprout")
-            && parts[1].as_str() == Some("thread_branch_head")
-        {
-            let branch_head = parts[2].as_str()?;
-            if branch_head.len() == 64 && branch_head.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Some(branch_head.to_ascii_lowercase());
-            }
-        }
-    }
-    None
-}
-
 /// Maximum allowed content size for a single message (64 KiB).
 const MAX_CONTENT_BYTES: usize = 65_536;
 
@@ -858,11 +835,6 @@ pub struct SproutMcpServer {
     tool_router: ToolRouter<Self>,
 }
 
-struct ResolvedThreadRef {
-    thread_ref: sprout_sdk::ThreadRef,
-    thread_branch_head_id: Option<String>,
-}
-
 #[tool_router]
 impl SproutMcpServer {
     /// Create a new [`SproutMcpServer`] backed by the given relay client.
@@ -893,7 +865,7 @@ impl SproutMcpServer {
     async fn resolve_thread_ref(
         &self,
         parent_event_id: &str,
-    ) -> Result<ResolvedThreadRef, String> {
+    ) -> Result<sprout_sdk::ThreadRef, String> {
         let resp = self
             .client
             .get(&format!("/api/events/{}", parent_event_id))
@@ -903,7 +875,6 @@ impl SproutMcpServer {
         let event_json: serde_json::Value = serde_json::from_str(&resp)
             .map_err(|e| format!("failed to parse parent event: {e}"))?;
 
-        let thread_branch_head_id = find_thread_branch_head_from_tags(&event_json["tags"]);
         let effective_parent_id = find_agent_reply_parent_from_tags(&event_json["tags"])
             .unwrap_or_else(|| parent_event_id.to_ascii_lowercase());
         let parent_eid = EventId::from_hex(&effective_parent_id)
@@ -915,12 +886,9 @@ impl SproutMcpServer {
             _ => parent_eid,
         };
 
-        Ok(ResolvedThreadRef {
-            thread_ref: sprout_sdk::ThreadRef {
-                root_event_id: root_eid,
-                parent_event_id: parent_eid,
-            },
-            thread_branch_head_id,
+        Ok(sprout_sdk::ThreadRef {
+            root_event_id: root_eid,
+            parent_event_id: parent_eid,
         })
     }
 
@@ -1013,14 +981,14 @@ Default kind is 9 (stream message)."
                     None => return "Error: kind 45003 requires parent_event_id".to_string(),
                 };
                 // Fetch parent to resolve thread root for NIP-10 markers.
-                let resolved_thread_ref = match self.resolve_thread_ref(parent_id).await {
+                let thread_ref = match self.resolve_thread_ref(parent_id).await {
                     Ok(tr) => tr,
                     Err(e) => return format!("Error: {e}"),
                 };
                 match sprout_sdk::build_forum_comment(
                     channel_uuid,
                     &p.content,
-                    &resolved_thread_ref.thread_ref,
+                    &thread_ref,
                     &mention_refs,
                     &[],
                 ) {
@@ -1030,7 +998,7 @@ Default kind is 9 (stream message)."
             }
             _ => {
                 // kind 9 (default) and any other stream message kinds.
-                let resolved_thread_ref = if let Some(ref parent_id) = p.parent_event_id {
+                let thread_ref = if let Some(ref parent_id) = p.parent_event_id {
                     match self.resolve_thread_ref(parent_id).await {
                         Ok(tr) => Some(tr),
                         Err(e) => return format!("Error: {e}"),
@@ -1038,23 +1006,12 @@ Default kind is 9 (stream message)."
                 } else {
                     None
                 };
-                let effective_broadcast = broadcast
-                    && p.parent_event_id.is_some()
-                    && resolved_thread_ref
-                        .as_ref()
-                        .and_then(|resolved| resolved.thread_branch_head_id.as_deref())
-                        .is_none();
                 match sprout_sdk::build_message(
                     channel_uuid,
                     &p.content,
-                    resolved_thread_ref
-                        .as_ref()
-                        .map(|resolved| &resolved.thread_ref),
-                    resolved_thread_ref
-                        .as_ref()
-                        .and_then(|resolved| resolved.thread_branch_head_id.as_deref()),
+                    thread_ref.as_ref(),
                     &mention_refs,
-                    effective_broadcast,
+                    broadcast && p.parent_event_id.is_some(),
                     &[],
                 ) {
                     Ok(b) => b,
@@ -1140,7 +1097,7 @@ Default kind is 9 (stream message)."
         };
 
         // 5. Resolve optional thread ref
-        let resolved_thread_ref = if let Some(ref parent_id) = parent_event_id {
+        let thread_ref = if let Some(ref parent_id) = parent_event_id {
             match self.resolve_thread_ref(parent_id).await {
                 Ok(tr) => Some(tr),
                 Err(e) => return format!("Error: {e}"),
@@ -1166,9 +1123,7 @@ Default kind is 9 (stream message)."
             channel_uuid,
             &diff_content,
             &diff_meta,
-            resolved_thread_ref
-                .as_ref()
-                .map(|resolved| &resolved.thread_ref),
+            thread_ref.as_ref(),
         ) {
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
@@ -2793,29 +2748,6 @@ mod tests {
         ]);
 
         assert!(find_agent_reply_parent_from_tags(&tags).is_none());
-    }
-
-    #[test]
-    fn find_thread_branch_head_from_tags_matches_valid_tag() {
-        let tags = serde_json::json!([
-            ["h", "channel-id"],
-            ["sprout", "thread_branch_head", "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"]
-        ]);
-
-        assert_eq!(
-            find_thread_branch_head_from_tags(&tags).as_deref(),
-            Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
-        );
-    }
-
-    #[test]
-    fn find_thread_branch_head_from_tags_ignores_invalid_values() {
-        let tags = serde_json::json!([
-            ["sprout", "thread_branch_head", "short"],
-            ["sprout", "agent_reply_parent", "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"]
-        ]);
-
-        assert!(find_thread_branch_head_from_tags(&tags).is_none());
     }
 
     // ── MAX_CONTENT_BYTES ─────────────────────────────────────────────────────

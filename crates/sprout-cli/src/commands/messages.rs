@@ -201,7 +201,6 @@ pub async fn cmd_send_message(
         channel_uuid,
         content,
         thread_ref.as_ref(),
-        None,
         &mention_refs,
         broadcast,
         &[],

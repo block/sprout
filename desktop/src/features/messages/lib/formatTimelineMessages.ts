@@ -231,8 +231,10 @@ export function formatTimelineMessages(
 
   const authorPubkeyByEventId = new Map<string, string>();
   const authorLabelByEventId = new Map<string, string>();
+  const branchHeadByEventId = new Map<string, string | null>();
   const depthByEventId = new Map<string, number>();
   const resolvingEventIds = new Set<string>();
+  const resolvingBranchHeadEventIds = new Set<string>();
 
   function getAuthorLabel(event: RelayEvent) {
     const cached = authorLabelByEventId.get(event.id);
@@ -284,6 +286,41 @@ export function formatTimelineMessages(
     return depth;
   }
 
+  function getBranchHeadId(event: RelayEvent): string | null {
+    const cached = branchHeadByEventId.get(event.id);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    if (resolvingBranchHeadEventIds.has(event.id)) {
+      return null;
+    }
+
+    const explicitBranchHeadId = getThreadBranchHeadFromTags(event.tags);
+    if (explicitBranchHeadId) {
+      branchHeadByEventId.set(event.id, explicitBranchHeadId);
+      return explicitBranchHeadId;
+    }
+
+    const thread = getThreadReference(event.tags);
+    if (!thread.parentId) {
+      branchHeadByEventId.set(event.id, null);
+      return null;
+    }
+
+    const parent = eventsById.get(thread.parentId);
+    if (!parent) {
+      branchHeadByEventId.set(event.id, null);
+      return null;
+    }
+
+    resolvingBranchHeadEventIds.add(event.id);
+    const inheritedBranchHeadId = getBranchHeadId(parent);
+    resolvingBranchHeadEventIds.delete(event.id);
+    branchHeadByEventId.set(event.id, inheritedBranchHeadId);
+    return inheritedBranchHeadId;
+  }
+
   return visibleEvents.map((event) => {
     const author = getAuthorLabel(event);
     const authorPubkey =
@@ -317,7 +354,7 @@ export function formatTimelineMessages(
       body: edit ? edit.content : event.content,
       parentId: thread.parentId,
       rootId: thread.rootId,
-      branchHeadId: getThreadBranchHeadFromTags(event.tags),
+      branchHeadId: getBranchHeadId(event),
       depth: getDepth(event),
       accent: currentPubkey === authorPubkey,
       pending: event.pending,

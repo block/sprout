@@ -50,17 +50,6 @@ fn thread_tags(thread_ref: &ThreadRef, tags: &mut Vec<Tag>) -> Result<(), SdkErr
     Ok(())
 }
 
-fn thread_branch_head_tag(thread_branch_head_id: &str) -> Result<Tag, SdkError> {
-    if thread_branch_head_id.len() != 64
-        || !thread_branch_head_id.chars().all(|c| c.is_ascii_hexdigit())
-    {
-        return Err(SdkError::InvalidInput(
-            "thread_branch_head_id must be exactly 64 hex characters".into(),
-        ));
-    }
-    tag(&["sprout", "thread_branch_head", thread_branch_head_id])
-}
-
 /// Deduplicate and cap mentions, emitting p-tags.
 fn mention_tags(mentions: &[&str], tags: &mut Vec<Tag>) -> Result<(), SdkError> {
     if mentions.len() > 50 {
@@ -92,7 +81,6 @@ fn imeta_tags(media_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), Sdk
 /// - `channel_id`: target channel UUID
 /// - `content`: message text (max 64 KiB)
 /// - `thread_ref`: optional NIP-10 reply context
-/// - `thread_branch_head_id`: optional UI branch head for deterministic thread rendering
 /// - `mentions`: pubkey hex strings to p-tag (deduped, max 50)
 /// - `broadcast`: if true, adds `["broadcast", "1"]` tag
 /// - `media_tags`: raw imeta tag vectors
@@ -100,7 +88,6 @@ pub fn build_message(
     channel_id: Uuid,
     content: &str,
     thread_ref: Option<&ThreadRef>,
-    thread_branch_head_id: Option<&str>,
     mentions: &[&str],
     broadcast: bool,
     media_tags: &[Vec<String>],
@@ -109,13 +96,6 @@ pub fn build_message(
     let mut tags = vec![tag(&["h", &channel_id.to_string()])?];
     if let Some(tr) = thread_ref {
         thread_tags(tr, &mut tags)?;
-        if let Some(branch_head_id) = thread_branch_head_id {
-            tags.push(thread_branch_head_tag(branch_head_id)?);
-        }
-    } else if thread_branch_head_id.is_some() {
-        return Err(SdkError::InvalidInput(
-            "thread_branch_head_id requires thread_ref".into(),
-        ));
     }
     mention_tags(mentions, &mut tags)?;
     if broadcast {
@@ -653,7 +633,7 @@ mod tests {
     #[test]
     fn message_happy_path() {
         let cid = uuid();
-        let ev = sign(build_message(cid, "hello", None, None, &[], false, &[]).unwrap());
+        let ev = sign(build_message(cid, "hello", None, &[], false, &[]).unwrap());
         assert_eq!(ev.kind.as_u16(), 9);
         assert_eq!(ev.content, "hello");
         assert!(has_tag(&ev, "h", &cid.to_string()));
@@ -667,7 +647,7 @@ mod tests {
             root_event_id: eid,
             parent_event_id: eid,
         };
-        let ev = sign(build_message(cid, "reply", Some(&tr), None, &[], false, &[]).unwrap());
+        let ev = sign(build_message(cid, "reply", Some(&tr), &[], false, &[]).unwrap());
         // Direct reply: only one e-tag with "reply" marker
         let e_tags: Vec<_> = ev
             .tags
@@ -690,7 +670,7 @@ mod tests {
             root_event_id: root,
             parent_event_id: parent,
         };
-        let ev = sign(build_message(cid, "nested", Some(&tr), None, &[], false, &[]).unwrap());
+        let ev = sign(build_message(cid, "nested", Some(&tr), &[], false, &[]).unwrap());
         let e_tags: Vec<_> = ev
             .tags
             .iter()
@@ -705,25 +685,9 @@ mod tests {
         assert!(markers.contains(&"reply"));
     }
 
-    #[test]
-    fn message_thread_branch_head_tag() {
-        let cid = uuid();
-        let root = event_id();
-        let tr = ThreadRef {
-            root_event_id: root,
-            parent_event_id: root,
-        };
-        let branch_head = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
-        let ev = sign(
-            build_message(cid, "hi", Some(&tr), Some(branch_head), &[], false, &[]).unwrap(),
-        );
-        assert!(has_tag(&ev, "sprout", "thread_branch_head"));
-    }
-
-    #[test]
     fn message_broadcast_flag() {
         let cid = uuid();
-        let ev = sign(build_message(cid, "hi", None, None, &[], true, &[]).unwrap());
+        let ev = sign(build_message(cid, "hi", None, &[], true, &[]).unwrap());
         assert!(has_tag(&ev, "broadcast", "1"));
     }
 
@@ -731,7 +695,7 @@ mod tests {
     fn message_mentions_deduped() {
         let cid = uuid();
         let hex = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
-        let ev = sign(build_message(cid, "hi", None, None, &[hex, hex], false, &[]).unwrap());
+        let ev = sign(build_message(cid, "hi", None, &[hex, hex], false, &[]).unwrap());
         let p_tags = tag_values(&ev, "p");
         assert_eq!(p_tags.len(), 1);
     }
@@ -752,7 +716,7 @@ mod tests {
             })
             .collect();
         let refs: Vec<&str> = hexes.iter().map(|s| s.as_str()).collect();
-        let result = build_message(cid, "hi", None, None, &refs, false, &[]);
+        let result = build_message(cid, "hi", None, &refs, false, &[]);
         assert!(matches!(result, Err(SdkError::TooManyMentions)));
     }
 
@@ -760,7 +724,7 @@ mod tests {
     fn message_content_too_large() {
         let cid = uuid();
         let big = "x".repeat(64 * 1024 + 1);
-        let result = build_message(cid, &big, None, None, &[], false, &[]);
+        let result = build_message(cid, &big, None, &[], false, &[]);
         assert!(matches!(result, Err(SdkError::ContentTooLarge { .. })));
     }
 
@@ -768,7 +732,7 @@ mod tests {
     fn message_max_content_ok() {
         let cid = uuid();
         let max = "x".repeat(64 * 1024);
-        assert!(build_message(cid, &max, None, None, &[], false, &[]).is_ok());
+        assert!(build_message(cid, &max, None, &[], false, &[]).is_ok());
     }
 
     // ── build_forum_post ─────────────────────────────────────────────────────

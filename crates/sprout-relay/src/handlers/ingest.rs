@@ -324,6 +324,22 @@ fn check_token_channel_access(auth: &IngestAuth, channel_id: Uuid) -> Result<(),
     Ok(())
 }
 
+fn find_thread_branch_head_in_event(event: &Event) -> Option<String> {
+    event.tags.iter().find_map(|tag| {
+        let parts = tag.as_slice();
+        if parts.len() >= 3
+            && parts[0] == "sprout"
+            && parts[1] == "thread_branch_head"
+            && parts[2].len() == 64
+            && parts[2].chars().all(|c| c.is_ascii_hexdigit())
+        {
+            Some(parts[2].to_ascii_lowercase())
+        } else {
+            None
+        }
+    })
+}
+
 // ── NIP-10 thread resolution ─────────────────────────────────────────────────
 
 /// Owned thread metadata for the DB insert.
@@ -412,6 +428,9 @@ pub(crate) async fn resolve_nip10_thread_meta(
     let parent_created =
         chrono::DateTime::from_timestamp(parent_event.event.created_at.as_u64() as i64, 0)
             .unwrap_or_else(Utc::now);
+    let explicit_branch_head_hex = find_thread_branch_head_in_event(event);
+    let parent_branch_head_hex = find_thread_branch_head_in_event(&parent_event.event);
+    let effective_branch_head_hex = explicit_branch_head_hex.or(parent_branch_head_hex);
 
     let client_root_bytes =
         hex::decode(&root_hex).map_err(|_| "invalid root event ID hex".to_string())?;
@@ -484,7 +503,7 @@ pub(crate) async fn resolve_nip10_thread_meta(
     let broadcast = event.tags.iter().any(|t| {
         let parts = t.as_slice();
         parts.len() >= 2 && parts[0] == "broadcast" && parts[1] == "1"
-    });
+    }) && effective_branch_head_hex.is_none();
 
     let event_created_at = chrono::DateTime::from_timestamp(event.created_at.as_u64() as i64, 0)
         .unwrap_or_else(Utc::now);
@@ -1601,6 +1620,33 @@ mod tests {
         nostr::EventBuilder::new(nostr::Kind::Custom(kind as u16), content, nostr_tags)
             .sign_with_keys(&keys)
             .unwrap()
+    }
+
+    #[test]
+    fn find_thread_branch_head_in_event_matches_valid_tag() {
+        let event = make_event_with_tags(
+            KIND_STREAM_MESSAGE,
+            "hello",
+            &[&[
+                "sprout",
+                "thread_branch_head",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ]],
+        );
+        assert_eq!(
+            find_thread_branch_head_in_event(&event).as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+    }
+
+    #[test]
+    fn find_thread_branch_head_in_event_ignores_invalid_tag() {
+        let event = make_event_with_tags(
+            KIND_STREAM_MESSAGE,
+            "hello",
+            &[&["sprout", "thread_branch_head", "short"]],
+        );
+        assert!(find_thread_branch_head_in_event(&event).is_none());
     }
 
     #[test]
