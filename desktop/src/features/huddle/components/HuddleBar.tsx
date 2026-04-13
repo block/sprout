@@ -17,7 +17,7 @@ import { AddAgentDialog, type AgentAddResult } from "./AddAgentDialog";
 import { ParticipantList } from "./ParticipantList";
 
 // Shape returned by the `get_huddle_state` Tauri command.
-// NOTE: This mirrors the HuddleState struct in the Rust backend (src-tauri/src/huddle/state.rs).
+// NOTE: This mirrors the HuddleState struct in the Rust backend (src-tauri/src/huddle/mod.rs).
 // If you add/remove fields here, update the Rust struct (and vice versa).
 type HuddleState = {
   phase:
@@ -113,8 +113,11 @@ export function HuddleBar({ className }: HuddleBarProps) {
     if (isLeaving) return;
     setIsLeaving(true);
     try {
-      await endHuddle();
-      setState(null);
+      const backendClean = await endHuddle();
+      if (backendClean) {
+        setState(null);
+      }
+      // If backend cleanup failed, keep the bar visible so the user can retry.
     } catch (e) {
       console.error("Failed to end huddle:", e);
     } finally {

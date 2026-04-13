@@ -50,7 +50,7 @@ interface HuddleContextValue {
    *  Returns true if backend cleanup succeeded, false if it failed (caller may retry). */
   leaveHuddle: () => Promise<boolean>;
   /** End the huddle (creator only) — archives ephemeral channel, emits huddle_ended */
-  endHuddle: () => Promise<void>;
+  endHuddle: () => Promise<boolean>;
 }
 
 const HuddleContext = React.createContext<HuddleContextValue | null>(null);
@@ -114,22 +114,27 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     return true; // Backend cleanup succeeded (or was not needed)
   }, [disconnectMedia]);
 
-  const endHuddle = React.useCallback(async (): Promise<void> => {
+  const endHuddle = React.useCallback(async (): Promise<boolean> => {
     await disconnectMedia();
     if (rustActiveRef.current) {
       try {
         await invoke("end_huddle");
         rustActiveRef.current = false;
+        return true;
       } catch {
-        // Fall back to leave_huddle
+        // end_huddle failed — fall back to local leave so we at least
+        // disconnect, but report false so the UI knows the huddle was
+        // NOT ended for everyone (no archive, no huddle_ended event).
         try {
           await invoke("leave_huddle");
           rustActiveRef.current = false;
         } catch {
-          // Leave rustActiveRef true for retry
+          // Leave rustActiveRef true so a subsequent call retries
         }
+        return false;
       }
     }
+    return true;
   }, [disconnectMedia]);
 
   /**
@@ -335,7 +340,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         // Only speak agent messages — skip human STT transcripts.
         if (!agentPubkeys.has(event.pubkey)) return;
         if (event.pubkey === selfPubkeyRef.current) return;
-        if (!event.content.trim()) return;
+        if (event.content.trim().length <= 1) return;
         // Legacy: skip [System]-prefixed messages from before kind:48106.
         if (event.content.startsWith("[System]")) return;
 

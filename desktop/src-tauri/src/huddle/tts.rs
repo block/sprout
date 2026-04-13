@@ -86,8 +86,9 @@ pub struct TtsPipeline {
     /// Signals the worker thread to stop.
     shutdown: Arc<AtomicBool>,
     /// Cancel flag: worker drains the queue and stops current playback.
-    /// Public so the STT pipeline can share it for barge-in detection.
-    pub cancel: Arc<AtomicBool>,
+    /// Kept alive here so the Arc isn't dropped — the worker holds a clone.
+    #[allow(dead_code)]
+    cancel: Arc<AtomicBool>,
     /// Voice name (e.g. "F1"). Stored for future voice-switching support.
     #[allow(dead_code)]
     voice: String,
@@ -169,22 +170,15 @@ impl TtsPipeline {
         })
     }
 
-    /// Barge-in: cancel current speech and discard queued items.
-    ///
-    /// Sets the cancel flag. The worker will drain the queue and stop the
-    /// current rodio Player on its next iteration.
-    ///
-    /// Currently unused — barge-in is triggered by the STT pipeline setting
-    /// `tts_cancel` directly via the shared `Arc<AtomicBool>`. Retained as
-    /// public API for future callers (e.g., explicit "stop speaking" button).
-    #[allow(dead_code)]
-    pub fn cancel(&self) {
-        self.cancel.store(true, Ordering::Release);
-    }
-
     /// Signal the worker thread to stop.
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Release);
+    }
+
+    /// Returns `true` if the worker thread has exited (init failure, crash, or normal exit).
+    /// Used by hot-start to detect dead pipelines and clear them for retry.
+    pub fn is_finished(&self) -> bool {
+        self.thread.as_ref().map_or(true, |h| h.is_finished())
     }
 }
 
@@ -251,15 +245,11 @@ fn tts_worker(
 
     // ── 4. Main loop ──────────────────────────────────────────────────────────
     loop {
-        if shutdown.load(Ordering::Acquire) {
-            break;
-        }
-
-        // Handle cancel: drain queue and clear the flag.
-        if cancel.load(Ordering::Acquire) {
-            while text_rx.try_recv().is_ok() {}
-            cancel.store(false, Ordering::Release);
-            tts_active.store(false, Ordering::Release);
+        // Check shutdown/cancel before blocking (no player yet).
+        if handle_cancel_or_shutdown(&cancel, &shutdown, &tts_active, &text_rx, None) {
+            if shutdown.load(Ordering::Acquire) {
+                break;
+            }
             continue;
         }
 
@@ -271,9 +261,10 @@ fn tts_worker(
 
         // Check cancel again after unblocking — a cancel may have arrived
         // while we were waiting.
-        if cancel.load(Ordering::Acquire) {
-            while text_rx.try_recv().is_ok() {}
-            cancel.store(false, Ordering::Release);
+        if handle_cancel_or_shutdown(&cancel, &shutdown, &tts_active, &text_rx, None) {
+            if shutdown.load(Ordering::Acquire) {
+                break;
+            }
             continue;
         }
 
@@ -316,10 +307,8 @@ fn tts_worker(
         tts_active.store(true, Ordering::Release);
 
         for chunk in sentences.chunks(BATCH_SIZE) {
-            if cancel.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
-                player.clear();
-                while text_rx.try_recv().is_ok() {}
-                cancel.store(false, Ordering::Release);
+            // Fix 2: tts_active cleared immediately on cancel (inside helper).
+            if handle_cancel_or_shutdown(&cancel, &shutdown, &tts_active, &text_rx, Some(&player)) {
                 break;
             }
 
@@ -331,10 +320,8 @@ fn tts_worker(
 
         // Wait for all queued audio to finish playing.
         loop {
-            if cancel.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
-                player.clear();
-                while text_rx.try_recv().is_ok() {}
-                cancel.store(false, Ordering::Release);
+            // Fix 2: tts_active cleared immediately on cancel (inside helper).
+            if handle_cancel_or_shutdown(&cancel, &shutdown, &tts_active, &text_rx, Some(&player)) {
                 break;
             }
             if player.empty() {
@@ -354,6 +341,34 @@ fn tts_worker(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Check for cancel or shutdown. Returns `true` if the caller should break/continue.
+/// On cancel: drains the text queue and clears the cancel flag.
+fn handle_cancel_or_shutdown(
+    cancel: &AtomicBool,
+    shutdown: &AtomicBool,
+    tts_active: &AtomicBool,
+    text_rx: &mpsc::Receiver<String>,
+    player: Option<&rodio::Player>,
+) -> bool {
+    if shutdown.load(Ordering::Acquire) {
+        if let Some(p) = player {
+            p.clear();
+        }
+        tts_active.store(false, Ordering::Release);
+        return true;
+    }
+    if cancel.load(Ordering::Acquire) {
+        if let Some(p) = player {
+            p.clear();
+        }
+        while text_rx.try_recv().is_ok() {}
+        cancel.store(false, Ordering::Release);
+        tts_active.store(false, Ordering::Release);
+        return true;
+    }
+    false
+}
 
 /// Synthesize a batch of sentences in a single engine call.
 ///

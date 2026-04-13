@@ -365,21 +365,39 @@ fn validate_channel_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Shared builder for huddle lifecycle events (kinds 48100–48103).
+/// All huddle events share: validate two channel IDs, JSON content with
+/// `ephemeral_channel_id`, and an `["h", parent_channel_id]` tag.
+fn build_huddle_event(
+    kind: u16,
+    parent_channel_id: &str,
+    ephemeral_channel_id: &str,
+    extra_fields: &[(&str, &str)],
+) -> Result<EventBuilder, String> {
+    validate_channel_id(parent_channel_id)?;
+    validate_channel_id(ephemeral_channel_id)?;
+    let mut content = serde_json::json!({
+        "ephemeral_channel_id": ephemeral_channel_id,
+    });
+    for (k, v) in extra_fields {
+        content[*k] = serde_json::Value::String(v.to_string());
+    }
+    let tags = vec![tag(vec!["h", parent_channel_id])?];
+    Ok(EventBuilder::new(Kind::Custom(kind), content.to_string()).tags(tags))
+}
+
 /// Kind 48100 — huddle started advisory posted to the parent channel.
 pub fn build_huddle_started(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
     livekit_room: &str,
 ) -> Result<EventBuilder, String> {
-    validate_channel_id(parent_channel_id)?;
-    validate_channel_id(ephemeral_channel_id)?;
-    let content = serde_json::json!({
-        "ephemeral_channel_id": ephemeral_channel_id,
-        "livekit_room": livekit_room,
-    })
-    .to_string();
-    let tags = vec![tag(vec!["h", parent_channel_id])?];
-    Ok(EventBuilder::new(Kind::Custom(48100), content).tags(tags))
+    build_huddle_event(
+        48100,
+        parent_channel_id,
+        ephemeral_channel_id,
+        &[("livekit_room", livekit_room)],
+    )
 }
 
 /// Kind 48101 — participant joined a huddle, posted to the parent channel.
@@ -387,14 +405,7 @@ pub fn build_huddle_participant_joined(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
 ) -> Result<EventBuilder, String> {
-    validate_channel_id(parent_channel_id)?;
-    validate_channel_id(ephemeral_channel_id)?;
-    let content = serde_json::json!({
-        "ephemeral_channel_id": ephemeral_channel_id,
-    })
-    .to_string();
-    let tags = vec![tag(vec!["h", parent_channel_id])?];
-    Ok(EventBuilder::new(Kind::Custom(48101), content).tags(tags))
+    build_huddle_event(48101, parent_channel_id, ephemeral_channel_id, &[])
 }
 
 /// Kind 48102 — participant left a huddle, posted to the parent channel.
@@ -402,14 +413,7 @@ pub fn build_huddle_participant_left(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
 ) -> Result<EventBuilder, String> {
-    validate_channel_id(parent_channel_id)?;
-    validate_channel_id(ephemeral_channel_id)?;
-    let content = serde_json::json!({
-        "ephemeral_channel_id": ephemeral_channel_id,
-    })
-    .to_string();
-    let tags = vec![tag(vec!["h", parent_channel_id])?];
-    Ok(EventBuilder::new(Kind::Custom(48102), content).tags(tags))
+    build_huddle_event(48102, parent_channel_id, ephemeral_channel_id, &[])
 }
 
 /// Kind 48103 — huddle ended, posted to the parent channel.
@@ -417,14 +421,7 @@ pub fn build_huddle_ended(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
 ) -> Result<EventBuilder, String> {
-    validate_channel_id(parent_channel_id)?;
-    validate_channel_id(ephemeral_channel_id)?;
-    let content = serde_json::json!({
-        "ephemeral_channel_id": ephemeral_channel_id,
-    })
-    .to_string();
-    let tags = vec![tag(vec!["h", parent_channel_id])?];
-    Ok(EventBuilder::new(Kind::Custom(48103), content).tags(tags))
+    build_huddle_event(48103, parent_channel_id, ephemeral_channel_id, &[])
 }
 
 /// Kind 48106 — voice-mode guidelines for agents in a huddle.

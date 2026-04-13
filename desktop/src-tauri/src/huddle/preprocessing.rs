@@ -113,7 +113,14 @@ pub fn preprocess_for_tts(text: &str) -> String {
     let s = strip_markdown_markers(&s);
     let s = strip_emoji(&s);
     let s = expand_numbers(&s);
-    collapse_whitespace(&s)
+    let s = collapse_whitespace(&s);
+    // Filter trivially short results — ".", ",", etc. would be spoken as
+    // "period", "comma" by TTS. Agents that have nothing relevant to say
+    // should not respond at all, but defense-in-depth catches edge cases.
+    if s.len() <= 1 {
+        return String::new();
+    }
+    s
 }
 
 // ── Step implementations ──────────────────────────────────────────────────────
@@ -585,6 +592,15 @@ mod tests {
     fn split_sentences_empty() {
         let result = split_sentences("");
         assert_eq!(result, vec![""]);
+    }
+
+    #[test]
+    fn filters_trivial_responses() {
+        assert_eq!(preprocess_for_tts("."), "");
+        assert_eq!(preprocess_for_tts(","), "");
+        assert_eq!(preprocess_for_tts("!"), "");
+        assert_eq!(preprocess_for_tts(" "), "");
+        assert_eq!(preprocess_for_tts("ok"), "ok");
     }
 
     #[test]

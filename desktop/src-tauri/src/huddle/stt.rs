@@ -124,6 +124,12 @@ impl SttPipeline {
         self.shutdown.store(true, Ordering::Release);
     }
 
+    /// Returns `true` if the worker thread has exited (init failure, crash, or normal exit).
+    /// Used by hot-start to detect dead pipelines and clear them for retry.
+    pub fn is_finished(&self) -> bool {
+        self.thread.as_ref().map_or(true, |h| h.is_finished())
+    }
+
     /// Feed raw PCM bytes into the pipeline.
     ///
     /// Non-blocking. Drops audio silently if the pipeline can't keep up —
@@ -475,6 +481,10 @@ fn flush_to_stt(
 
 /// Convert raw bytes (f32 LE) to f32 samples.
 /// Caller should ensure `bytes.len() % 4 == 0`; extra bytes are silently truncated.
+///
+/// Assumes little-endian — matches all current Tauri targets (macOS ARM64,
+/// Windows/Linux x86). The JS AudioWorklet's Float32Array uses platform-native
+/// byte order, which is LE on all supported platforms.
 fn bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
     bytes
         .chunks_exact(4)

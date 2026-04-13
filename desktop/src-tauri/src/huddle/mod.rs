@@ -226,10 +226,8 @@ const MAX_HUDDLE_AGENTS: usize = 20;
 /// Validate that a string looks like a Nostr pubkey hex (64 hex chars).
 fn validate_pubkey_hex(pubkey: &str) -> Result<(), String> {
     if pubkey.len() != 64 || !pubkey.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(format!(
-            "invalid pubkey hex: {}",
-            &pubkey[..pubkey.len().min(16)]
-        ));
+        let preview: String = pubkey.chars().take(16).collect();
+        return Err(format!("invalid pubkey hex: {preview}"));
     }
     Ok(())
 }
@@ -565,7 +563,20 @@ pub async fn start_huddle(
         submit_event(create_builder, &state).await?;
         channel_was_created = true;
 
-        // 2. Add members to the ephemeral channel; only keep successfully enrolled ones.
+        // 2. Post voice-mode guidelines as kind:48106 BEFORE adding agents.
+        //    Agents auto-subscribe on membership notification (kind:9000) and may
+        //    complete EOSE before guidelines are stored if we post them after.
+        //    Best-effort: don't fail the huddle if this fails.
+        let guidelines = agents::voice_mode_guidelines(&parent_channel_id);
+        if let Ok(guidelines_builder) =
+            events::build_huddle_guidelines(&ephemeral_channel_id, &guidelines)
+        {
+            if let Err(e) = submit_event(guidelines_builder, &state).await {
+                eprintln!("sprout-desktop: huddle guidelines (kind:48106) failed: {e}");
+            }
+        }
+
+        // 3. Add members to the ephemeral channel; only keep successfully enrolled ones.
         let mut successful_agents: Vec<String> = Vec::new();
         for pubkey in &member_pubkeys {
             let add_builder = events::build_add_member(ephemeral_uuid, pubkey, Some("bot"))?;
@@ -578,25 +589,14 @@ pub async fn start_huddle(
             }
         }
 
-        // 3. Fetch LiveKit token BEFORE emitting HUDDLE_STARTED.
+        // 4. Fetch LiveKit token BEFORE emitting HUDDLE_STARTED.
         //    This prevents a phantom announcement if the token fetch fails.
         let lk = fetch_livekit_token(&ephemeral_channel_id, &state).await?;
 
-        // 4. Emit HUDDLE_STARTED to parent channel — only now that token is confirmed.
+        // 5. Emit HUDDLE_STARTED to parent channel — only now that token is confirmed.
         let started_builder =
             events::build_huddle_started(&parent_channel_id, &ephemeral_channel_id, &lk.room)?;
         submit_event(started_builder, &state).await?;
-
-        // 5. Post voice-mode guidelines as kind:48106.
-        //    Best-effort: don't fail the huddle if this fails.
-        let guidelines = agents::voice_mode_guidelines(&parent_channel_id);
-        if let Ok(guidelines_builder) =
-            events::build_huddle_guidelines(&ephemeral_channel_id, &guidelines)
-        {
-            if let Err(e) = submit_event(guidelines_builder, &state).await {
-                eprintln!("sprout-desktop: huddle guidelines (kind:48106) failed: {e}");
-            }
-        }
 
         Ok((lk, successful_agents))
     }
@@ -744,26 +744,31 @@ pub async fn join_huddle(
 /// Used by both `leave_huddle` and `end_huddle` to avoid duplicating the
 /// shutdown-then-reset sequence.
 fn teardown_huddle(state: &AppState) -> Result<(), String> {
-    {
-        let hs = state.huddle()?;
+    // Take pipeline handles out of state and drop the lock before shutdown.
+    // Pipeline Drop impls join worker threads — this avoids blocking while
+    // the mutex is held (ONNX inference can take ~200ms).
+    let (old_stt, old_tts) = {
+        let mut hs = state.huddle()?;
         // Increment generation first — this immediately invalidates any
         // in-flight transcription task, even before pipelines shut down.
         hs.session_generation.fetch_add(1, Ordering::Release);
-        if let Some(ref pipeline) = hs.stt_pipeline {
-            pipeline.shutdown();
-        }
-        if let Some(ref pipeline) = hs.tts_pipeline {
-            pipeline.shutdown();
-        }
-    }
-    {
-        let mut hs = state.huddle()?;
-        // Preserve the generation counter across reset — it must survive
-        // for the old transcription task to see the incremented value.
+        let stt = hs.stt_pipeline.take();
+        let tts = hs.tts_pipeline.take();
         let gen = Arc::clone(&hs.session_generation);
         *hs = HuddleState::default();
         hs.session_generation = gen;
+        (stt, tts)
+    };
+    // Shut down outside the lock — thread joins happen here.
+    if let Some(ref p) = old_stt {
+        p.shutdown();
     }
+    if let Some(ref p) = old_tts {
+        p.shutdown();
+    }
+    // Drop the Arcs here (implicit) — triggers thread join via Drop.
+    drop(old_stt);
+    drop(old_tts);
     Ok(())
 }
 
@@ -935,12 +940,10 @@ pub fn push_audio_pcm(
 /// the huddle is not active or pipelines are already running.
 #[tauri::command]
 pub async fn check_pipeline_hotstart(state: State<'_, AppState>) -> Result<(), String> {
-    let (is_active, has_stt, has_tts, ephemeral_channel_id) = {
+    let (is_active, ephemeral_channel_id) = {
         let hs = state.huddle()?;
         (
             matches!(hs.phase, HuddlePhase::Connected | HuddlePhase::Active),
-            hs.stt_pipeline.is_some(),
-            hs.tts_pipeline.is_some(),
             hs.ephemeral_channel_id.clone(),
         )
     };
@@ -948,6 +951,27 @@ pub async fn check_pipeline_hotstart(state: State<'_, AppState>) -> Result<(), S
     if !is_active {
         return Ok(());
     }
+
+    // Detect dead pipelines: if the worker thread has exited (init failure or crash),
+    // clear the pipeline handle so hot-start can retry on the next cycle.
+    {
+        let mut hs = state.huddle()?;
+        if let Some(ref p) = hs.stt_pipeline {
+            if p.is_finished() {
+                hs.stt_pipeline = None;
+            }
+        }
+        if let Some(ref p) = hs.tts_pipeline {
+            if p.is_finished() {
+                hs.tts_pipeline = None;
+            }
+        }
+    }
+    // Re-read after potential cleanup.
+    let (has_stt, has_tts) = {
+        let hs = state.huddle()?;
+        (hs.stt_pipeline.is_some(), hs.tts_pipeline.is_some())
+    };
 
     // Check if models just became ready (one-shot flags).
     let moonshine_ready = models::global_model_manager()

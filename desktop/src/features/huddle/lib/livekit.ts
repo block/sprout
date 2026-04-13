@@ -48,10 +48,13 @@ export async function connectToHuddle(
       room,
       localAudioTrack: audioTrack,
       disconnect: async () => {
-        room.disconnect();
-        stream?.getTracks().forEach((t) => {
-          t.stop();
-        });
+        try {
+          room.disconnect();
+        } finally {
+          stream?.getTracks().forEach((t) => {
+            t.stop();
+          });
+        }
       },
     };
   } catch (err) {
