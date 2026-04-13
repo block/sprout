@@ -46,7 +46,7 @@ importers:
         version: 5.90.21(react@19.2.4)
       '@tanstack/react-router':
         specifier: ^1.168.10
-        version: 1.168.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 1.168.13(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@tauri-apps/api':
         specifier: ^2
         version: 2.10.1
@@ -116,7 +116,7 @@ importers:
         version: 1.58.2
       '@tanstack/router-plugin':
         specifier: ^1.167.12
-        version: 1.167.12(@tanstack/react-router@1.168.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(vite@7.3.1(@types/node@25.5.2)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.3))
+        version: 1.167.12(@tanstack/react-router@1.168.13(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(vite@7.3.1(@types/node@25.5.2)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.3))
       '@tanstack/virtual-file-routes':
         specifier: ^1.161.7
         version: 1.161.7
@@ -1131,8 +1131,8 @@ packages:
     peerDependencies:
       react: ^18 || ^19
 
-  '@tanstack/react-router@1.168.10':
-    resolution: {integrity: sha512-/RmDlOwDkCug609KdPB3U+U1zmrtadJpvsmRg2zEn8TRCKRNri7dYZIjQZbNg8PgUiRL4T6njrZBV1ChzblNaA==}
+  '@tanstack/react-router@1.168.13':
+    resolution: {integrity: sha512-rvrL1bK/bOjjfDyAKKFvkVXeo8IZZmwfy9DwJaMlj7lCmpWl4Qban2/d+EirlHPcwHDNq5OkS5jhcBiZ+24RJw==}
     engines: {node: '>=20.19'}
     peerDependencies:
       react: '>=18.0.0 || >=19.0.0'
@@ -3141,7 +3141,7 @@ snapshots:
       '@tanstack/query-core': 5.90.20
       react: 19.2.4
 
-  '@tanstack/react-router@1.168.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@tanstack/react-router@1.168.13(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@tanstack/history': 1.161.6
       '@tanstack/react-store': 0.9.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -3177,7 +3177,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@tanstack/router-plugin@1.167.12(@tanstack/react-router@1.168.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(vite@7.3.1(@types/node@25.5.2)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.3))':
+  '@tanstack/router-plugin@1.167.12(@tanstack/react-router@1.168.13(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(vite@7.3.1(@types/node@25.5.2)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.3))':
     dependencies:
       '@babel/core': 7.29.0
       '@babel/plugin-syntax-jsx': 7.28.6(@babel/core@7.29.0)
@@ -3193,7 +3193,7 @@ snapshots:
       unplugin: 2.3.11
       zod: 3.25.76
     optionalDependencies:
-      '@tanstack/react-router': 1.168.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@tanstack/react-router': 1.168.13(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       vite: 7.3.1(@types/node@25.5.2)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.3)
     transitivePeerDependencies:
       - supports-color
