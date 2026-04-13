@@ -57,11 +57,11 @@ const overrides = new Map([
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
   ["src/shared/api/types.ts", 535], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields + mcpToolsets
   ["src-tauri/src/events.rs", 530], // event builders + build_huddle_guidelines (kind:48106) + post_event_raw transport helper
-  ["src-tauri/src/huddle/mod.rs", 1450], // huddle state machine + 16 Tauri commands + STT/TTS pipeline lifecycle + VoiceInputMode (PTT/VAD) + relay membership fetch + session generation guard + multi-human join/leave/auto-end + count_human_members + input validation; split planned post-MVP
-  ["src-tauri/src/huddle/models.rs", 850], // model download manager for Moonshine STT + Supertonic TTS with streaming downloads + SHA-256 verification + Rust-native tar extraction + version manifest + atomic swap + hot-start signaling
+  ["src-tauri/src/huddle/kokoro.rs", 890], // Kokoro ONNX TTS engine + three-tier G2P + ARPAbet→IPA + CoreML + 20 G2P unit tests
+  ["src-tauri/src/huddle/mod.rs", 1000], // huddle state machine + Tauri commands + sync protocol doc; state/relay/pipeline extracted
+  ["src-tauri/src/huddle/models.rs", 850], // model download manager for Moonshine STT + Kokoro TTS with streaming downloads + SHA-256 verification + Rust-native tar extraction + version manifest + atomic swap + hot-start signaling
   ["src-tauri/src/huddle/stt.rs", 580], // STT pipeline + PTT edge-detection flush + PTT gating (is_speech AND ptt_active) + barge-in for VAD mode + rubato resampler + earshot VAD + sherpa-onnx transcription
   ["src-tauri/src/huddle/preprocessing.rs", 620], // TTS text preprocessing pipeline + unified split_sentences (consolidated from tts.rs + supertonic.rs) + int_to_words 0-999999 + 18 unit tests
-  ["src-tauri/src/huddle/supertonic.rs", 780], // Supertonic 4-ONNX-session TTS engine wrapper + Unicode text processor + LazyLock regex patterns + text chunking
 ]);
 
 async function walkFiles(directory) {

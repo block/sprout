@@ -483,10 +483,10 @@ pub fn run() {
 
             // Pre-download voice models in the background so they're ready
             // when the user starts their first huddle. Idempotent — no-op if
-            // already downloaded. ~303 MB total (50 MB Moonshine + 253 MB Supertonic).
+            // already downloaded. ~87 MB total (50 MB Moonshine + 87 MB Kokoro).
             if let Some(mgr) = huddle::models::global_model_manager() {
                 mgr.start_moonshine_download(state.http_client.clone());
-                mgr.start_supertonic_download(state.http_client.clone());
+                mgr.start_kokoro_download(state.http_client.clone());
             }
 
             // Register PTT global shortcut (Ctrl+Space).

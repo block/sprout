@@ -7,12 +7,30 @@
 //!   creator        → end_huddle   → archive ephemeral channel, clear state
 //!
 //! HuddleState is stored in AppState and serialized for get_huddle_state.
+//!
+//! ## Synchronization Protocol
+//!
+//! `HuddleState` lives behind a single `Mutex` in `AppState`. Rules:
+//!
+//! 1. **Never hold the outer lock across `.await`** — acquire, read/write, release.
+//! 2. **Pipeline construction happens outside the lock** — the `stt_starting` /
+//!    `tts_starting` sentinels prevent TOCTOU races during the ~200ms window.
+//! 3. **`agent_pubkeys` has its own inner `Arc<Mutex>`** — the transcription task
+//!    clones the `Arc` and reads at post time without the outer lock.
+//! 4. **Atomics for cross-thread signaling** — `tts_active`, `tts_cancel`,
+//!    `ptt_active`, `session_generation` are shared with pipeline worker threads.
+//! 5. **Pipeline teardown extracts handles before dropping** — `teardown_huddle`
+//!    takes `stt_pipeline`/`tts_pipeline` out of the lock, then calls `shutdown()`
+//!    and drops them outside the lock (thread joins can block ~200ms).
 
 pub mod agents;
+pub mod kokoro;
 pub mod models;
+pub mod pipeline;
 pub mod preprocessing;
+pub mod relay_api;
+pub mod state;
 pub mod stt;
-pub mod supertonic;
 pub mod tts;
 
 // ── Shared utilities ──────────────────────────────────────────────────────────
@@ -35,524 +53,24 @@ pub(super) fn drain_until_shutdown<T>(
     }
 }
 
-use reqwest::Method;
-use serde::{Deserialize, Serialize};
-use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc, Mutex,
-};
+// ── Re-exports ────────────────────────────────────────────────────────────────
+
+pub use state::{HuddleJoinInfo, HuddlePhase, HuddleState, VoiceInputMode};
+
+// ── Imports ───────────────────────────────────────────────────────────────────
+
+use std::sync::{atomic::Ordering, Arc};
 use tauri::State;
 use uuid::Uuid;
 
-use nostr::JsonUtil;
+use crate::{app_state::AppState, events, relay::submit_event};
 
-use crate::{
-    app_state::AppState,
-    events,
-    relay::{api_path, build_authed_request, send_json_request, submit_event},
+use pipeline::{maybe_start_stt_pipeline, maybe_start_tts_pipeline, post_connect_setup};
+use relay_api::{
+    count_human_members, fetch_channel_members, fetch_livekit_token, parse_channel_uuid,
+    validate_pubkey_hex, MAX_HUDDLE_AGENTS,
 };
-
-// ── State types ───────────────────────────────────────────────────────────────
-
-/// Voice input mode: push-to-talk (PTT) or voice-activity detection (VAD).
-///
-/// PTT (default): mic is gated by a global shortcut (Ctrl+Space). Pressing the
-/// key sets `ptt_active` and immediately cancels any playing TTS. Releasing
-/// the key (after a 200 ms delay) stops mic capture and flushes the utterance.
-///
-/// VAD: the earshot VAD runs continuously and speech is accumulated whenever
-/// the probability exceeds the threshold. Barge-in is enabled in this mode.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum VoiceInputMode {
-    #[default]
-    PushToTalk,
-    VoiceActivity,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum HuddlePhase {
-    Idle,
-    Creating,
-    Connecting,
-    Connected, // Backend ready, waiting for frontend media confirmation.
-    Active,
-    Leaving,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HuddleState {
-    pub phase: HuddlePhase,
-    pub parent_channel_id: Option<String>,
-    pub ephemeral_channel_id: Option<String>,
-    /// Skipped from serialization — the frontend gets the token from
-    /// start_huddle/join_huddle return values. Exposing the LiveKit JWT
-    /// on every 2-second get_huddle_state poll is unnecessary attack surface.
-    #[serde(skip)]
-    pub livekit_token: Option<String>,
-    /// Skipped from serialization — same rationale as livekit_token.
-    #[serde(skip)]
-    pub livekit_url: Option<String>,
-    pub livekit_room: Option<String>,
-    /// Participant pubkey hex strings (all members, including humans).
-    pub participants: Vec<String>,
-    /// Agent pubkeys only — used as p-tags on transcribed messages.
-    ///
-    /// Stored as `Arc<Mutex<Vec<String>>>` so the transcription task can clone
-    /// the `Arc` and read the current list at post time without holding the
-    /// outer `HuddleState` lock across an await point.
-    ///
-    /// Populated from `member_pubkeys` in `start_huddle` (the UI sends agent
-    /// pubkeys specifically). Joiners don't add agents — they were already
-    /// added by the creator. Serialized as a plain `Vec<String>` for the
-    /// frontend via the custom `Serialize`/`Deserialize` impls below.
-    #[serde(
-        serialize_with = "serialize_agent_pubkeys",
-        deserialize_with = "deserialize_agent_pubkeys"
-    )]
-    pub agent_pubkeys: Arc<Mutex<Vec<String>>>,
-    /// Active STT pipeline — not serialized, not cloned.
-    #[serde(skip)]
-    pub stt_pipeline: Option<Arc<stt::SttPipeline>>,
-    /// Active TTS pipeline — not serialized, not cloned.
-    #[serde(skip)]
-    pub tts_pipeline: Option<Arc<tts::TtsPipeline>>,
-    /// Whether this client created the huddle (vs. joined it).
-    /// Used to enforce that only the creator can end/archive the huddle.
-    pub is_creator: bool,
-    /// Whether TTS output is enabled (user-toggled).
-    pub tts_enabled: bool,
-    /// Shared flag: true while TTS is playing audio.
-    /// Shared with the STT pipeline for barge-in / echo gating.
-    #[serde(skip)]
-    pub tts_active: Arc<AtomicBool>,
-    /// Shared barge-in cancel flag. Set by STT when it detects speech during TTS.
-    /// Read by TTS to stop playback. Lives in HuddleState so it survives pipeline
-    /// restarts — both STT and TTS reference the same flag for the entire huddle.
-    #[serde(skip)]
-    pub tts_cancel: Arc<AtomicBool>,
-    /// Timestamp of the last agent pubkey refresh from the relay.
-    /// Used to throttle the refresh in check_pipeline_hotstart to every 15 s.
-    #[serde(skip)]
-    pub last_agent_refresh: Option<std::time::Instant>,
-    /// Session generation — incremented on every teardown. The transcription
-    /// task captures this at spawn time and checks before each POST. If the
-    /// generation has changed, the task silently drops the transcript.
-    #[serde(skip)]
-    pub session_generation: Arc<AtomicU64>,
-    /// Voice input mode: push-to-talk or voice-activity detection.
-    pub voice_input_mode: VoiceInputMode,
-    /// True while the PTT key is held (+ 200 ms release delay).
-    /// Shared with the STT pipeline for mic gating.
-    #[serde(skip)]
-    pub ptt_active: Arc<AtomicBool>,
-}
-
-fn serialize_agent_pubkeys<S>(v: &Arc<Mutex<Vec<String>>>, s: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    use serde::ser::SerializeSeq;
-    let guard = v.lock().unwrap_or_else(|e| e.into_inner());
-    let mut seq = s.serialize_seq(Some(guard.len()))?;
-    for item in guard.iter() {
-        seq.serialize_element(item)?;
-    }
-    seq.end()
-}
-
-fn deserialize_agent_pubkeys<'de, D>(d: D) -> Result<Arc<Mutex<Vec<String>>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let v: Vec<String> = serde::Deserialize::deserialize(d)?;
-    Ok(Arc::new(Mutex::new(v)))
-}
-
-impl Clone for HuddleState {
-    fn clone(&self) -> Self {
-        let agent_pubkeys_snapshot = self
-            .agent_pubkeys
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        Self {
-            phase: self.phase.clone(),
-            parent_channel_id: self.parent_channel_id.clone(),
-            ephemeral_channel_id: self.ephemeral_channel_id.clone(),
-            livekit_token: self.livekit_token.clone(),
-            livekit_url: self.livekit_url.clone(),
-            livekit_room: self.livekit_room.clone(),
-            participants: self.participants.clone(),
-            agent_pubkeys: Arc::new(Mutex::new(agent_pubkeys_snapshot)),
-            stt_pipeline: None, // Never clone the pipeline handle.
-            tts_pipeline: None, // Never clone the pipeline handle.
-            is_creator: self.is_creator,
-            tts_enabled: self.tts_enabled,
-            tts_active: Arc::clone(&self.tts_active),
-            tts_cancel: Arc::clone(&self.tts_cancel),
-            last_agent_refresh: self.last_agent_refresh,
-            session_generation: Arc::clone(&self.session_generation),
-            voice_input_mode: self.voice_input_mode.clone(),
-            ptt_active: Arc::clone(&self.ptt_active),
-        }
-    }
-}
-
-impl Default for HuddleState {
-    fn default() -> Self {
-        Self {
-            phase: HuddlePhase::Idle,
-            parent_channel_id: None,
-            ephemeral_channel_id: None,
-            livekit_token: None,
-            livekit_url: None,
-            livekit_room: None,
-            participants: Vec::new(),
-            agent_pubkeys: Arc::new(Mutex::new(Vec::new())),
-            stt_pipeline: None,
-            tts_pipeline: None,
-            is_creator: false,
-            tts_enabled: true,
-            tts_active: Arc::new(AtomicBool::new(false)),
-            tts_cancel: Arc::new(AtomicBool::new(false)),
-            last_agent_refresh: None,
-            session_generation: Arc::new(AtomicU64::new(0)),
-            voice_input_mode: VoiceInputMode::default(),
-            ptt_active: Arc::new(AtomicBool::new(false)),
-        }
-    }
-}
-
-impl HuddleState {
-    /// Reset to default state while preserving the session generation counter.
-    /// Used by start_huddle rollback, join_huddle rollback, and teardown_huddle
-    /// to invalidate in-flight transcription tasks without losing the generation.
-    fn reset_preserving_generation(&mut self) {
-        let gen = Arc::clone(&self.session_generation);
-        *self = Self::default();
-        self.session_generation = gen;
-    }
-}
-
-// ── Response types ────────────────────────────────────────────────────────────
-
-/// Returned by start_huddle and join_huddle.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HuddleJoinInfo {
-    pub ephemeral_channel_id: String,
-    pub livekit_token: String,
-    pub livekit_url: String,
-    pub livekit_room: String,
-}
-
-/// Raw response from `POST /api/huddles/{channel_id}/token`.
-#[derive(Debug, Deserialize)]
-struct LiveKitTokenResponse {
-    pub token: String,
-    pub url: String,
-    pub room: String,
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Maximum number of agents that can be invited to a single huddle.
-const MAX_HUDDLE_AGENTS: usize = 20;
-
-/// Validate that a string looks like a Nostr pubkey hex (64 hex chars).
-fn validate_pubkey_hex(pubkey: &str) -> Result<(), String> {
-    if pubkey.len() != 64 || !pubkey.chars().all(|c| c.is_ascii_hexdigit()) {
-        let preview: String = pubkey.chars().take(16).collect();
-        return Err(format!("invalid pubkey hex: {preview}"));
-    }
-    Ok(())
-}
-
-fn parse_channel_uuid(channel_id: &str) -> Result<Uuid, String> {
-    Uuid::parse_str(channel_id).map_err(|_| format!("invalid channel UUID: {channel_id}"))
-}
-
-/// Fetch a LiveKit token from the relay for the given channel.
-async fn fetch_livekit_token(
-    channel_id: &str,
-    state: &AppState,
-) -> Result<LiveKitTokenResponse, String> {
-    let path = api_path(&["huddles", channel_id, "token"]);
-    let request = build_authed_request(&state.http_client, Method::POST, &path, state)?;
-    send_json_request(request).await
-}
-
-/// Fetch channel members from the relay. If `role_filter` is Some, only return
-/// members with that role (e.g., "bot" for agents). Returns all members if None.
-async fn fetch_channel_members(
-    channel_id: &str,
-    role_filter: Option<&str>,
-    state: &AppState,
-) -> Result<Vec<String>, String> {
-    #[derive(Deserialize)]
-    struct Member {
-        pubkey: String,
-        role: Option<String>,
-    }
-    #[derive(Deserialize)]
-    struct MembersResponse {
-        members: Vec<Member>,
-    }
-
-    let path = api_path(&["channels", channel_id, "members"]);
-    let request = build_authed_request(&state.http_client, Method::GET, &path, state)?;
-    let resp: MembersResponse = send_json_request(request).await.map_err(|e| {
-        eprintln!("sprout-desktop: fetch channel members failed: {e}");
-        e
-    })?;
-
-    Ok(resp
-        .members
-        .into_iter()
-        .filter(|m| role_filter.map_or(true, |r| m.role.as_deref() == Some(r)))
-        .map(|m| m.pubkey)
-        .collect())
-}
-
-/// Count human (non-bot) members remaining in a channel.
-/// Used by leave_huddle to detect "last human left" and auto-end.
-async fn count_human_members(channel_id: &str, state: &AppState) -> Result<usize, String> {
-    #[derive(Deserialize)]
-    struct Member {
-        role: Option<String>,
-    }
-    #[derive(Deserialize)]
-    struct MembersResponse {
-        members: Vec<Member>,
-    }
-
-    let path = api_path(&["channels", channel_id, "members"]);
-    let request = build_authed_request(&state.http_client, Method::GET, &path, state)?;
-    let resp: MembersResponse = send_json_request(request).await?;
-
-    Ok(resp
-        .members
-        .iter()
-        .filter(|m| m.role.as_deref() != Some("bot"))
-        .count())
-}
-
-/// Common setup after a huddle connection is established (both start and join).
-/// Hydrates participants from relay, ensures model downloads, starts pipelines.
-async fn post_connect_setup(state: &AppState, ephemeral_channel_id: &str) -> Result<(), String> {
-    // Hydrate agent pubkeys from relay (authoritative — overrides local guess).
-    if let Ok(agents) = fetch_channel_members(ephemeral_channel_id, Some("bot"), state).await {
-        let hs = state.huddle()?;
-        *hs.agent_pubkeys.lock().unwrap_or_else(|e| e.into_inner()) = agents;
-    }
-
-    // Hydrate participants from relay (authoritative state).
-    if let Ok(all_members) = fetch_channel_members(ephemeral_channel_id, None, state).await {
-        if !all_members.is_empty() {
-            let mut hs = state.huddle()?;
-            hs.participants = all_members;
-        }
-    }
-
-    // Ensure voice models are downloading (idempotent).
-    if let Some(mgr) = models::global_model_manager() {
-        mgr.start_moonshine_download(state.http_client.clone());
-        mgr.start_supertonic_download(state.http_client.clone());
-    }
-
-    // Start pipelines: TTS first (so STT can capture tts_cancel for barge-in).
-    if let Err(e) = maybe_start_tts_pipeline(state).await {
-        eprintln!("sprout-desktop: TTS pipeline failed to start: {e}");
-    }
-    if let Err(e) = maybe_start_stt_pipeline(state, ephemeral_channel_id).await {
-        eprintln!("sprout-desktop: STT pipeline failed to start: {e}");
-    }
-
-    Ok(())
-}
-
-/// Attempt to start the STT pipeline if models are present.
-///
-/// Returns `Ok(true)` if the pipeline was started, `Ok(false)` if models are
-/// not ready (voice-only mode), or `Err` on a real failure.
-///
-/// Creates the shared `tts_active` flag and passes it to the STT pipeline
-/// for barge-in / echo gating. The same flag is later passed to the TTS
-/// pipeline so it can signal when audio is playing.
-async fn maybe_start_stt_pipeline(
-    state: &AppState,
-    ephemeral_channel_id: &str,
-) -> Result<bool, String> {
-    if !models::is_moonshine_ready() {
-        return Ok(false); // Models not downloaded yet — voice-only mode.
-    }
-    let model_dir =
-        models::moonshine_model_dir().ok_or_else(|| "Moonshine model directory not found")?;
-
-    let channel_uuid = parse_channel_uuid(ephemeral_channel_id)?;
-
-    // Grab shared flags, agent pubkeys, and session generation from HuddleState.
-    // If replacing an existing pipeline, bump generation first so the old
-    // transcription task's next POST sees a stale generation and exits.
-    let (tts_active, tts_cancel, agent_pubkeys_arc, session_gen, ptt_active_for_stt) = {
-        let hs = state.huddle()?;
-        // Invalidate any existing transcription task before replacing the pipeline.
-        if hs.stt_pipeline.is_some() {
-            hs.session_generation.fetch_add(1, Ordering::Release);
-        }
-        if let Some(ref old) = hs.stt_pipeline {
-            old.shutdown();
-        }
-        let ptt = if hs.voice_input_mode == VoiceInputMode::PushToTalk {
-            Some(Arc::clone(&hs.ptt_active))
-        } else {
-            None
-        };
-        (
-            Arc::clone(&hs.tts_active),
-            Some(Arc::clone(&hs.tts_cancel)),
-            Arc::clone(&hs.agent_pubkeys),
-            Arc::clone(&hs.session_generation),
-            ptt,
-        )
-    };
-
-    let (pipeline, text_rx) =
-        stt::SttPipeline::new(model_dir, tts_active, tts_cancel, ptt_active_for_stt)?;
-    let pipeline = Arc::new(pipeline);
-
-    {
-        let mut hs = state.huddle()?;
-        hs.stt_pipeline = Some(Arc::clone(&pipeline));
-    }
-
-    spawn_transcription_task(text_rx, channel_uuid, agent_pubkeys_arc, session_gen, state);
-    Ok(true)
-}
-
-/// Attempt to start the TTS pipeline if Supertonic models are present and TTS is enabled.
-///
-/// Returns `Ok(true)` if the pipeline was started, `Ok(false)` if preconditions
-/// aren't met (model not ready, pipeline exists, TTS disabled), or `Err` on failure.
-async fn maybe_start_tts_pipeline(state: &AppState) -> Result<bool, String> {
-    if !models::is_supertonic_ready() {
-        return Ok(false); // Supertonic not downloaded yet — TTS unavailable.
-    }
-
-    // Don't create a duplicate pipeline if one is already running.
-    {
-        let hs = state.huddle()?;
-        if hs.tts_pipeline.is_some() {
-            return Ok(false);
-        }
-    }
-
-    let model_dir = match models::supertonic_model_dir() {
-        Some(d) => d,
-        None => return Ok(false),
-    };
-
-    let (tts_active, tts_enabled, tts_cancel) = {
-        let hs = state.huddle()?;
-        (
-            Arc::clone(&hs.tts_active),
-            hs.tts_enabled,
-            Arc::clone(&hs.tts_cancel),
-        )
-    };
-
-    if !tts_enabled {
-        return Ok(false);
-    }
-
-    let pipeline = Arc::new(tts::TtsPipeline::new(model_dir, tts_active, tts_cancel)?);
-
-    {
-        let mut hs = state.huddle()?;
-        // Re-check: another call may have created a pipeline while we were building ours.
-        if hs.tts_pipeline.is_some() {
-            return Ok(false); // The existing one wins.
-        }
-        hs.tts_pipeline = Some(pipeline);
-    }
-
-    Ok(true)
-}
-
-/// Spawn a tokio task that reads text_rx and posts kind:9 events.
-///
-/// Fix 1: `agent_pubkeys_arc` is an `Arc<Mutex<Vec<String>>>` cloned from
-///        `HuddleState` — the task reads it at post time so p-tags are always
-///        current, not a stale snapshot.
-/// Fix 3: no `.unwrap()` on mutex — poisoned locks are recovered gracefully.
-/// Fix 4: `text_rx` is a `tokio::sync::mpsc::Receiver` — fully async `.recv().await`
-///        never blocks a Tokio worker thread (unlike std `recv_timeout`).
-fn spawn_transcription_task(
-    mut text_rx: tokio::sync::mpsc::Receiver<String>,
-    channel_uuid: Uuid,
-    agent_pubkeys_arc: Arc<Mutex<Vec<String>>>,
-    session_generation: Arc<AtomicU64>,
-    state: &AppState,
-) {
-    // Capture the current generation at spawn time.
-    let spawned_gen = session_generation.load(Ordering::Acquire);
-
-    let http_client = state.http_client.clone();
-    let keys = match state.keys.lock() {
-        Ok(k) => k.clone(),
-        Err(_) => return,
-    };
-    let configured_api_token = state.configured_api_token.clone();
-
-    tauri::async_runtime::spawn(async move {
-        // recv().await yields (not blocks) until text arrives or sender is dropped.
-        // When the STT worker exits and drops its Sender, recv() returns None → loop ends.
-        while let Some(t) = text_rx.recv().await {
-            if t.is_empty() {
-                continue;
-            }
-
-            // Session guard: if the generation has changed, this task is stale.
-            // Drop the transcript silently — the huddle has ended or been replaced.
-            if session_generation.load(Ordering::Acquire) != spawned_gen {
-                break; // Exit the loop entirely — no more posts from this task.
-            }
-
-            // Fix 1: read current agent pubkeys at post time.
-            let agent_pubkeys: Vec<String> = agent_pubkeys_arc
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
-
-            let p_tags: Vec<&str> = agent_pubkeys.iter().map(|s| s.as_str()).collect();
-            let builder = match events::build_message(channel_uuid, &t, None, &p_tags, &[]) {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("sprout-desktop: STT build_message: {e}");
-                    continue;
-                }
-            };
-            let event = match builder.sign_with_keys(&keys) {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!("sprout-desktop: STT sign event: {e}");
-                    continue;
-                }
-            };
-            let event_json = event.as_json();
-            let api_token_ref = configured_api_token.as_deref();
-            let pubkey_hex = keys.public_key().to_hex();
-
-            if let Err(e) =
-                crate::events::post_event_raw(&http_client, api_token_ref, &pubkey_hex, event_json)
-                    .await
-            {
-                eprintln!("sprout-desktop: STT kind:9 post failed: {e}");
-            }
-        }
-    });
-}
+use state::LiveKitTokenResponse;
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
@@ -807,6 +325,9 @@ pub async fn join_huddle(
     }
 
     // All steps wrapped so we can roll back on ANY failure after phase transition.
+    // Tracks whether THIS attempt added membership (vs "already a member").
+    // On rollback, only leave the channel if we actually added ourselves.
+    let mut membership_added = false;
     let result: Result<(LiveKitTokenResponse, String), String> = async {
         // 0. Add the joining human to the ephemeral channel.
         let own_pubkey = state
@@ -816,16 +337,25 @@ pub async fn join_huddle(
             .map_err(|_| "keys unavailable".to_string())?;
         let eph_uuid = parse_channel_uuid(&ephemeral_channel_id)?;
         let add_self = events::build_add_member(eph_uuid, &own_pubkey, None)?;
-        if let Err(e) = submit_event(add_self, &state).await {
-            // Idempotent: "already a member" is fine (rejoining after disconnect).
-            // Any other error means we can't post STT transcripts — fail the join.
-            let is_already_member = e.to_lowercase().contains("already");
-            if !is_already_member {
-                eprintln!("sprout-desktop: join_huddle add self to ephemeral channel failed: {e}");
-                return Err(format!("failed to join ephemeral channel: {e}"));
+        match submit_event(add_self, &state).await {
+            Ok(_) => {
+                membership_added = true;
+            } // Newly added.
+            Err(e) => {
+                // Idempotent: "already a member" is expected on rejoin.
+                let is_idempotent = {
+                    let lower = e.to_lowercase();
+                    lower.contains("already a member") || lower.contains("already_member")
+                };
+                if !is_idempotent {
+                    eprintln!(
+                        "sprout-desktop: join_huddle add self to ephemeral channel failed: {e}"
+                    );
+                    return Err(format!("failed to join ephemeral channel: {e}"));
+                }
+                // Already a member — don't leave on rollback.
             }
-            // Already a member — continue normally.
-        }
+        };
 
         // 1. Fetch LiveKit token.
         let lk = fetch_livekit_token(&ephemeral_channel_id, &state).await?;
@@ -871,7 +401,19 @@ pub async fn join_huddle(
             })
         }
         Err(e) => {
-            // Rollback: reset state to Idle so the user can retry.
+            // Rollback: remove self from ephemeral channel to avoid orphaned
+            // membership (e.g. token fetch failed after membership succeeded).
+            // Only leave if THIS attempt added us — don't kick a pre-existing member.
+            if membership_added {
+                if let Ok(eph_uuid) = parse_channel_uuid(&ephemeral_channel_id) {
+                    if let Ok(leave_builder) = events::build_leave(eph_uuid) {
+                        if let Err(le) = submit_event(leave_builder, &state).await {
+                            eprintln!("sprout-desktop: join_huddle rollback leave failed: {le}");
+                        }
+                    }
+                }
+            }
+            // Reset state to Idle so the user can retry.
             if let Ok(mut hs) = state.huddle_state.lock() {
                 hs.reset_preserving_generation();
             }
@@ -998,15 +540,19 @@ pub async fn leave_huddle(state: State<'_, AppState>) -> Result<(), String> {
 /// 3. Shut down the STT pipeline (Fix 5).
 /// 4. Clear local huddle state.
 #[tauri::command]
-pub async fn end_huddle(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn end_huddle(force: Option<bool>, state: State<'_, AppState>) -> Result<(), String> {
     let (parent_channel_id, ephemeral_channel_id) = {
         let mut hs = state.huddle()?;
         if hs.phase == HuddlePhase::Idle {
             return Ok(()); // Nothing to end.
         }
-        // Any participant can end the huddle — if the creator disconnects
-        // ungracefully (crash, network loss), other participants need a way
-        // to archive the ephemeral channel and emit huddle_ended.
+        // Only the creator can end the huddle for everyone. Non-creators
+        // should use leave_huddle (which auto-ends if they're the last human).
+        // The `force` flag allows recovery when the creator has disconnected
+        // ungracefully — the UI should gate this behind a confirmation dialog.
+        if !hs.is_creator && !force.unwrap_or(false) {
+            return Err("only the huddle creator can end it — use leave_huddle instead".into());
+        }
         hs.phase = HuddlePhase::Leaving;
         (
             hs.parent_channel_id.clone().unwrap_or_default(),
@@ -1159,12 +705,12 @@ pub async fn check_pipeline_hotstart(state: State<'_, AppState>) -> Result<(), S
     let moonshine_ready = models::global_model_manager()
         .map(|m| m.take_moonshine_ready())
         .unwrap_or(false);
-    let supertonic_ready = models::global_model_manager()
-        .map(|m| m.take_supertonic_ready())
+    let kokoro_ready = models::global_model_manager()
+        .map(|m| m.take_kokoro_ready())
         .unwrap_or(false);
 
     // Start TTS first (so STT can capture tts_cancel).
-    if !has_tts && (supertonic_ready || models::is_supertonic_ready()) {
+    if !has_tts && (kokoro_ready || models::is_kokoro_ready()) {
         if let Err(e) = maybe_start_tts_pipeline(&state).await {
             eprintln!("sprout-desktop: TTS hotstart failed: {e}");
         }
@@ -1249,7 +795,7 @@ pub async fn start_stt_pipeline(state: State<'_, AppState>) -> Result<(), String
     }
 }
 
-/// Trigger a background download of voice models (Moonshine STT + Supertonic TTS).
+/// Trigger a background download of voice models (Moonshine STT + Kokoro TTS).
 ///
 /// Returns immediately — downloads run in tokio background tasks.
 /// Poll `get_model_status` to track progress.
@@ -1259,7 +805,7 @@ pub async fn download_voice_models(state: State<'_, AppState>) -> Result<(), Str
     let manager = models::global_model_manager()
         .ok_or("model manager unavailable (home directory could not be resolved)")?;
     manager.start_moonshine_download(state.http_client.clone());
-    manager.start_supertonic_download(state.http_client.clone());
+    manager.start_kokoro_download(state.http_client.clone());
     Ok(())
 }
 
@@ -1270,14 +816,15 @@ pub fn get_model_status(_state: State<'_, AppState>) -> Result<models::VoiceMode
         .ok_or("model manager unavailable (home directory could not be resolved)")?;
     Ok(models::VoiceModelStatus {
         moonshine: manager.moonshine_status(),
-        supertonic: manager.supertonic_status(),
+
+        kokoro: manager.kokoro_status(),
     })
 }
 
 /// Enable or disable TTS output.
 ///
 /// When disabled, the TTS pipeline is shut down and audio output stops.
-/// When re-enabled, the pipeline is restarted if Supertonic models are available.
+/// When re-enabled, the pipeline is restarted if Kokoro models are available.
 ///
 /// Takes the pipeline handle out of the lock before calling shutdown() — the
 /// thread join in Drop can block for ~200 ms (ONNX inference) and we don't

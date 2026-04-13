@@ -231,7 +231,6 @@ fn stt_worker(
             "sprout-desktop: STT models not found at {} — STT disabled",
             model_dir.display()
         );
-        // Drain the channel so push_audio doesn't block the sender.
         drain_until_shutdown(audio_rx, &shutdown);
         return;
     }
@@ -412,7 +411,8 @@ fn process_16k_samples(
 
     while leftover.len() >= VAD_FRAME_SAMPLES {
         let frame: Vec<f32> = leftover.drain(..VAD_FRAME_SAMPLES).collect();
-        let prob = vad.predict_f32(&frame);
+        let clamped: Vec<f32> = frame.iter().map(|&s| s.clamp(-1.0, 1.0)).collect();
+        let prob = vad.predict_f32(&clamped);
         let is_speech = prob > VAD_THRESHOLD;
 
         // PTT gating: when PTT key is not held, treat as silence.

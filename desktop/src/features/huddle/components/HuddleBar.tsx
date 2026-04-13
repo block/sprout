@@ -66,7 +66,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
   const [agentAddError, setAgentAddError] = React.useState<string | null>(null);
   const [modelStatus, setModelStatus] = React.useState<{
     moonshine: string;
-    supertonic: string;
+    kokoro: string;
   } | null>(null);
 
   // Poll huddle state — replace with event listener once Rust emits events
@@ -125,13 +125,13 @@ export function HuddleBar({ className }: HuddleBarProps) {
       try {
         const status = await invoke<{
           moonshine: unknown;
-          supertonic: unknown;
+          kokoro: unknown;
         }>("get_model_status");
         if (cancelled) return;
 
         setModelStatus({
           moonshine: fmt(status.moonshine),
-          supertonic: fmt(status.supertonic),
+          kokoro: fmt(status.kokoro),
         });
       } catch {
         // best-effort
@@ -219,15 +219,15 @@ export function HuddleBar({ className }: HuddleBarProps) {
       {/* Model download progress */}
       {modelStatus &&
         (modelStatus.moonshine !== "ready" ||
-          modelStatus.supertonic !== "ready") && (
+          modelStatus.kokoro !== "ready") && (
           <output className="flex items-center gap-1 text-xs text-muted-foreground">
             <span className="animate-pulse">
               {modelStatus.moonshine !== "ready" &&
-              modelStatus.supertonic !== "ready"
-                ? `Voice models: STT ${modelStatus.moonshine}, TTS ${modelStatus.supertonic}`
+              modelStatus.kokoro !== "ready"
+                ? `Voice models: STT ${modelStatus.moonshine}, TTS ${modelStatus.kokoro}`
                 : modelStatus.moonshine !== "ready"
                   ? `STT model: ${modelStatus.moonshine}`
-                  : `TTS model: ${modelStatus.supertonic}`}
+                  : `TTS model: ${modelStatus.kokoro}`}
             </span>
           </output>
         )}
@@ -402,17 +402,19 @@ export function HuddleBar({ className }: HuddleBarProps) {
         <PhoneOff className="h-4 w-4" />
       </Button>
 
-      <Button
-        aria-label="End huddle for everyone"
-        className="h-6 px-1.5 text-[10px]"
-        disabled={isLeaving}
-        onClick={() => void handleEnd()}
-        size="sm"
-        variant="ghost"
-        title="End huddle for everyone (archives channel)"
-      >
-        End all
-      </Button>
+      {state?.is_creator && (
+        <Button
+          aria-label="End huddle for everyone"
+          className="h-6 px-1.5 text-[10px]"
+          disabled={isLeaving}
+          onClick={() => void handleEnd()}
+          size="sm"
+          variant="ghost"
+          title="End huddle for everyone (archives channel)"
+        >
+          End all
+        </Button>
+      )}
 
       {/* Screen reader announcements for huddle state changes */}
       <output aria-live="polite" className="sr-only">
@@ -425,8 +427,8 @@ export function HuddleBar({ className }: HuddleBarProps) {
           modelStatus.moonshine !== "ready" &&
           `, STT model ${modelStatus.moonshine}`}
         {modelStatus &&
-          modelStatus.supertonic !== "ready" &&
-          `, TTS model ${modelStatus.supertonic}`}
+          modelStatus.kokoro !== "ready" &&
+          `, TTS model ${modelStatus.kokoro}`}
       </output>
     </div>
   );

@@ -16,11 +16,14 @@ function invokeRawBinary(cmd: string, payload: Uint8Array): Promise<unknown> {
   return internals.invoke(cmd, payload);
 }
 
-/** Return type for setupAudioWorklet — stop + PTT control. */
+/** Return type for setupAudioWorklet — stop + mode control. */
 export type AudioWorkletHandle = {
   stop: () => void;
   /** Send PTT state to the worklet processor. */
   setTransmitting: (active: boolean) => void;
+  /** Switch voice input mode. In VAD mode, always transmitting (PTT events ignored).
+   *  In PTT mode, gated by Ctrl+Space. */
+  setMode: (mode: "push_to_talk" | "voice_activity") => void;
 };
 
 /**
@@ -90,12 +93,23 @@ export async function setupAudioWorklet(
     });
   };
 
+  // Track the current mode so PTT events are only forwarded in PTT mode.
+  // In VAD mode, the worklet stays in transmitting=true regardless of
+  // Ctrl+Space presses — prevents accidental muting. (Crossfire fix I1.)
+  let currentMode: "push_to_talk" | "voice_activity" = initialTransmitting
+    ? "voice_activity"
+    : "push_to_talk";
+
   // Listen for PTT state from Rust global shortcut (Ctrl+Space press/release).
   // Direction: Rust→main→worklet. The Tauri event carries a boolean payload.
   let pttUnlisten: UnlistenFn | null = null;
   try {
     pttUnlisten = await listen<boolean>("ptt-state", (event) => {
-      workletNode.port.postMessage({ type: "ptt", active: event.payload });
+      // Only forward PTT events to the worklet when in PTT mode.
+      // In VAD mode, Ctrl+Space is ignored — the worklet stays open.
+      if (currentMode === "push_to_talk") {
+        workletNode.port.postMessage({ type: "ptt", active: event.payload });
+      }
     });
   } catch {
     // PTT events not available — worklet stays in current transmit mode.
@@ -113,6 +127,15 @@ export async function setupAudioWorklet(
     },
     setTransmitting: (active: boolean) => {
       workletNode.port.postMessage({ type: "ptt", active });
+    },
+    setMode: (mode: "push_to_talk" | "voice_activity") => {
+      currentMode = mode;
+      // When switching to VAD, immediately open the mic.
+      // When switching to PTT, immediately gate until key press.
+      workletNode.port.postMessage({
+        type: "ptt",
+        active: mode === "voice_activity",
+      });
     },
   };
 }

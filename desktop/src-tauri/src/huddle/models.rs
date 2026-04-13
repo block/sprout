@@ -1,10 +1,10 @@
-//! Model download manager for STT (Moonshine) and TTS (Supertonic) models.
+//! Model download manager for STT (Moonshine) and TTS (Kokoro) models.
 //!
 //! Mental model:
 //!   app launch → start_moonshine_download (background) → ~/.sprout/models/moonshine-tiny/
-//!   app launch → start_supertonic_download (background) → ~/.sprout/models/supertonic/
+//!   app launch → start_kokoro_download (background) → ~/.sprout/models/kokoro/
 //!   STT pipeline → is_moonshine_ready() → moonshine_model_dir() → run inference
-//!   TTS pipeline → is_supertonic_ready() → supertonic_model_dir() → run synthesis
+//!   TTS pipeline → is_kokoro_ready() → kokoro_model_dir() → run synthesis
 //!
 //! Models are downloaded once and cached. A version manifest (`.sprout-model-manifest`)
 //! is written alongside model files — if the on-disk version doesn't match the
@@ -31,17 +31,17 @@ use sha2::{Digest, Sha256};
 const MOONSHINE_ARCHIVE_SHA256: &str =
     "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2";
 
-/// SHA-256 hashes for individual Supertonic model files.
+/// SHA-256 hashes for individual Kokoro model files.
 /// Computed from known-good downloads. Update when upgrading model versions.
+///
+/// model.onnx (model_q8f16.onnx, 86 MB):
+///   curl -sL "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_q8f16.onnx" | shasum -a 256
 #[rustfmt::skip]
-const SUPERTONIC_FILE_HASHES: &[(&str, &str)] = &[
-    ("duration_predictor.onnx", "6d556b3691165c364be91dc0bd894656b5949f5acd2750d8ec2f954010845011"),
-    ("text_encoder.onnx",        "dd5f535ed629f7df86071043e15f541ce1b2ab7f1bdbce4c7892b307bca79fa3"),
-    ("vector_estimator.onnx",    "105e9d66fd8756876b210a6b4aa03fc393b1eaca3a8dadcc8d9a3bc785c86a35"),
-    ("vocoder.onnx",             "19bd51f47a186069c752403518a40f7ea4c647455056d2511f7249691ecddf7c"),
-    ("tts.json",                 "ee531d9af9b80438a2ed703e22155ee6c83b12595ab22fd3bb6de94c7502fe96"),
-    ("unicode_indexer.json",     "b7662a73a0703f43b97c0f2e089f8e8325e26f5d841aca393b5a54c509c92df1"),
-    ("F1.json",                  "6106950ebeb8a5da29ea22075f605db659cd07dbc288a68292543d9129aa250f"),
+const KOKORO_FILE_HASHES: &[(&str, &str)] = &[
+    ("model.onnx",    "04c658aec1b6008857c2ad10f8c589d4180d0ec427e7e6118ceb487e215c3cd0"),
+    ("af_heart.bin",  "d583ccff3cdca2f7fae535cb998ac07e9fcb90f09737b9a41fa2734ec44a8f0b"),
+    ("us_gold.json",   "dc414872a49a28ae6c141463d502fd945f3b2fde040484fdc47d00cc4612686f"),
+    ("us_silver.json", "de8f67be911bb6c659187b4a65fd966b6a30e56350e0f790d763210b053ac475"),
 ];
 
 // ── Model versioning ──────────────────────────────────────────────────────────
@@ -53,8 +53,8 @@ const SUPERTONIC_FILE_HASHES: &[(&str, &str)] = &[
 /// Model manifest version for Moonshine. Increment when upgrading model files.
 const MOONSHINE_MODEL_VERSION: &str = "1";
 
-/// Model manifest version for Supertonic. Increment when upgrading model files.
-const SUPERTONIC_MODEL_VERSION: &str = "1";
+/// Model manifest version for Kokoro. Increment when upgrading model files.
+const KOKORO_MODEL_VERSION: &str = "1";
 
 /// Filename for the version manifest written alongside model files.
 const MANIFEST_FILENAME: &str = ".sprout-model-manifest";
@@ -64,8 +64,8 @@ const MANIFEST_FILENAME: &str = ".sprout-model-manifest";
 /// Maximum expected Moonshine archive size (200 MB — actual is ~50 MB).
 const MAX_MOONSHINE_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
 
-/// Maximum expected Supertonic file size (150 MB per file).
-const MAX_SUPERTONIC_FILE_BYTES: u64 = 150 * 1024 * 1024;
+/// Maximum expected Kokoro file size (200 MB per file — model is 86 MB).
+const MAX_KOKORO_FILE_BYTES: u64 = 200 * 1024 * 1024;
 
 const MOONSHINE_DOWNLOAD_URL: &str =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/\
@@ -86,21 +86,35 @@ const MOONSHINE_EXPECTED_FILES: &[&str] = &[
     "tokens.txt",
 ];
 
-/// HuggingFace base URL for Supertonic model files.
-const SUPERTONIC_HF_BASE: &str = "https://huggingface.co/Supertone/supertonic-2/resolve/main";
+// ── Kokoro TTS model ─────────────────────────────────────────────────────────
+
+/// HuggingFace base URL for Kokoro ONNX model files.
+const KOKORO_HF_BASE: &str =
+    "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main";
+
+/// Misaki G2P lexicons — pinned to commit fba1236 for reproducibility.
+/// Gold = curated pronunciations. Silver = broader coverage (93K words).
+/// Both are needed: gold is checked first, silver catches common words gold misses.
+const KOKORO_LEXICON_GOLD_URL: &str =
+    "https://raw.githubusercontent.com/hexgrad/misaki/fba1236/misaki/data/us_gold.json";
+const KOKORO_LEXICON_SILVER_URL: &str =
+    "https://raw.githubusercontent.com/hexgrad/misaki/fba1236/misaki/data/us_silver.json";
+
+/// CMU Pronouncing Dictionary — 135K entries including inflected forms.
+/// BSD 2-Clause license (Carnegie Mellon University). Compatible with Apache-2.0.
+const KOKORO_CMUDICT_URL: &str =
+    "https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict";
 
 /// Final directory name under `~/.sprout/models/`.
-const SUPERTONIC_MODEL_DIR_NAME: &str = "supertonic";
+const KOKORO_MODEL_DIR_NAME: &str = "kokoro";
 
-/// All files that must be present for Supertonic to be considered ready.
-const SUPERTONIC_EXPECTED_FILES: &[&str] = &[
-    "duration_predictor.onnx",
-    "text_encoder.onnx",
-    "vector_estimator.onnx",
-    "vocoder.onnx",
-    "tts.json",
-    "unicode_indexer.json",
-    "F1.json",
+/// All files that must be present for Kokoro to be considered ready.
+const KOKORO_EXPECTED_FILES: &[&str] = &[
+    "model.onnx",
+    "af_heart.bin",
+    "us_gold.json",
+    "us_silver.json",
+    "cmudict.dict",
 ];
 
 // ── Status types ──────────────────────────────────────────────────────────────
@@ -119,7 +133,7 @@ pub enum ModelStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceModelStatus {
     pub moonshine: ModelStatus,
-    pub supertonic: ModelStatus,
+    pub kokoro: ModelStatus,
 }
 
 // ── Safe archive extraction ───────────────────────────────────────────────────
@@ -282,7 +296,7 @@ where
 
 // ── ModelSlot ─────────────────────────────────────────────────────────────────
 
-/// Per-model state + config. `ModelManager` owns two of these (moonshine, supertonic).
+/// Per-model state + config. `ModelManager` owns two of these (moonshine, kokoro).
 #[derive(Clone)]
 struct ModelSlot {
     dir_name: &'static str,                  // subdir under ~/.sprout/models/
@@ -363,7 +377,10 @@ impl ModelSlot {
             };
         }
         let slot = self.clone();
-        tokio::spawn(async move {
+        // Use tauri::async_runtime::spawn (not tokio::spawn) because this may
+        // be called from the Tauri setup callback before the main Tokio runtime
+        // is accessible on the current thread. Tauri's runtime is always available.
+        tauri::async_runtime::spawn(async move {
             if let Err(e) = download_fn(http_client).await {
                 eprintln!("sprout-desktop: {name} download failed: {e}");
                 slot.set_status(ModelStatus::Error(e));
@@ -433,7 +450,7 @@ pub struct ModelManager {
     /// `~/.sprout/models/`
     models_dir: PathBuf,
     moonshine: ModelSlot,
-    supertonic: ModelSlot,
+    kokoro: ModelSlot,
 }
 
 impl ModelManager {
@@ -449,10 +466,10 @@ impl ModelManager {
                 MOONSHINE_EXPECTED_FILES,
                 MOONSHINE_MODEL_VERSION,
             ),
-            supertonic: ModelSlot::new(
-                SUPERTONIC_MODEL_DIR_NAME,
-                SUPERTONIC_EXPECTED_FILES,
-                SUPERTONIC_MODEL_VERSION,
+            kokoro: ModelSlot::new(
+                KOKORO_MODEL_DIR_NAME,
+                KOKORO_EXPECTED_FILES,
+                KOKORO_MODEL_VERSION,
             ),
         })
     }
@@ -476,23 +493,23 @@ impl ModelManager {
         self.moonshine.take_ready()
     }
 
-    // ── Supertonic accessors ──────────────────────────────────────────────────
+    // ── Kokoro accessors ──────────────────────────────────────────────────────
 
-    /// Path to the Supertonic model directory, or `None` if not ready.
-    pub fn supertonic_model_dir(&self) -> Option<PathBuf> {
-        self.supertonic.dir_if_ready(&self.models_dir)
+    /// Path to the Kokoro model directory, or `None` if not ready.
+    pub fn kokoro_model_dir(&self) -> Option<PathBuf> {
+        self.kokoro.dir_if_ready(&self.models_dir)
     }
-    /// `true` if all Supertonic files are present and the manifest version matches.
-    pub fn is_supertonic_ready(&self) -> bool {
-        self.supertonic.is_ready(&self.models_dir)
+    /// `true` if all Kokoro files are present and the manifest version matches.
+    pub fn is_kokoro_ready(&self) -> bool {
+        self.kokoro.is_ready(&self.models_dir)
     }
-    /// Current Supertonic download status.
-    pub fn supertonic_status(&self) -> ModelStatus {
-        self.supertonic.status()
+    /// Current Kokoro download status.
+    pub fn kokoro_status(&self) -> ModelStatus {
+        self.kokoro.status()
     }
-    /// Returns `true` once when Supertonic just became ready. Resets the flag.
-    pub fn take_supertonic_ready(&self) -> bool {
-        self.supertonic.take_ready()
+    /// Returns `true` once when Kokoro just became ready. Resets the flag.
+    pub fn take_kokoro_ready(&self) -> bool {
+        self.kokoro.take_ready()
     }
 
     // ── Download triggers ─────────────────────────────────────────────────────
@@ -508,14 +525,14 @@ impl ModelManager {
         );
     }
 
-    /// Start a background Supertonic download (~253 MB). No-op if already ready or downloading.
-    pub fn start_supertonic_download(&self, http_client: reqwest::Client) {
+    /// Start a background Kokoro download (~87 MB). No-op if already ready or downloading.
+    pub fn start_kokoro_download(&self, http_client: reqwest::Client) {
         let manager = self.clone();
-        self.supertonic.start_download(
+        self.kokoro.start_download(
             &self.models_dir,
             http_client,
-            "supertonic",
-            move |client| async move { manager.download_supertonic_model(client).await },
+            "kokoro",
+            move |client| async move { manager.download_kokoro_model(client).await },
         );
     }
 
@@ -600,46 +617,53 @@ impl ModelManager {
         Ok(())
     }
 
-    /// Download and verify the Supertonic TTS model files from HuggingFace.
+    /// Download and verify the Kokoro TTS model files from HuggingFace and GitHub.
     ///
-    /// Downloads 7 files into `~/.sprout/models/supertonic/`.
+    /// Downloads files into `~/.sprout/models/kokoro/`:
+    ///   - `model.onnx`   — Kokoro-82M mixed-precision ONNX (86 MB)
+    ///   - `af_heart.bin` — best-quality American English voice embedding (510 KB)
+    ///   - `us_gold.json` — Misaki G2P lexicon, pinned to commit fba1236 (3 MB)
+    ///
     /// Files are written to a temp directory first, then moved atomically.
-    async fn download_supertonic_model(&self, http_client: reqwest::Client) -> Result<(), String> {
+    async fn download_kokoro_model(&self, http_client: reqwest::Client) -> Result<(), String> {
         tokio::fs::create_dir_all(&self.models_dir)
             .await
             .map_err(|e| format!("create models dir: {e}"))?;
 
-        let temp_dir = self.models_dir.join("supertonic.tmp");
+        let temp_dir = self.models_dir.join("kokoro.tmp");
         fresh_temp_dir(&temp_dir).await?;
 
-        // (url_suffix, local_filename)
+        // (url, local_filename)
         let downloads: &[(&str, &str)] = &[
-            ("onnx/duration_predictor.onnx", "duration_predictor.onnx"),
-            ("onnx/text_encoder.onnx", "text_encoder.onnx"),
-            ("onnx/vector_estimator.onnx", "vector_estimator.onnx"),
-            ("onnx/vocoder.onnx", "vocoder.onnx"),
-            ("onnx/tts.json", "tts.json"),
-            ("onnx/unicode_indexer.json", "unicode_indexer.json"),
-            ("voice_styles/F1.json", "F1.json"),
+            (
+                &format!("{KOKORO_HF_BASE}/onnx/model_q8f16.onnx"),
+                "model.onnx",
+            ),
+            (
+                &format!("{KOKORO_HF_BASE}/voices/af_heart.bin"),
+                "af_heart.bin",
+            ),
+            (KOKORO_LEXICON_GOLD_URL, "us_gold.json"),
+            (KOKORO_LEXICON_SILVER_URL, "us_silver.json"),
+            (KOKORO_CMUDICT_URL, "cmudict.dict"),
         ];
         let total_files = downloads.len() as u32;
 
-        for (i, (url_suffix, filename)) in downloads.iter().enumerate() {
-            let url = format!("{SUPERTONIC_HF_BASE}/{url_suffix}");
-            eprintln!("sprout-desktop: downloading Supertonic {filename} from {url}");
+        for (i, (url, filename)) in downloads.iter().enumerate() {
+            eprintln!("sprout-desktop: downloading Kokoro {filename} from {url}");
 
-            let response = fetch_url(&http_client, &url, filename).await.map_err(|e| {
+            let response = fetch_url(&http_client, url, filename).await.map_err(|e| {
                 let _ = std::fs::remove_dir_all(&temp_dir);
                 e
             })?;
 
             let dest = temp_dir.join(filename);
-            let slot = self.supertonic.clone();
+            let slot = self.kokoro.clone();
             let file_index = i as u32;
             let bytes = download_file(
                 response,
                 &dest,
-                MAX_SUPERTONIC_FILE_BYTES,
+                MAX_KOKORO_FILE_BYTES,
                 filename,
                 |downloaded, content_length| {
                     if let Some(total) = content_length {
@@ -663,31 +687,29 @@ impl ModelManager {
             eprintln!("sprout-desktop: downloaded {bytes} bytes ({filename}), wrote to disk");
 
             // Verify file integrity against pinned hash.
-            if let Some(&(_, expected)) =
-                SUPERTONIC_FILE_HASHES.iter().find(|(n, _)| *n == *filename)
-            {
+            if let Some(&(_, expected)) = KOKORO_FILE_HASHES.iter().find(|(n, _)| *n == *filename) {
                 let actual = sha256_file(&dest).await?;
                 if actual != expected {
                     let _ = tokio::fs::remove_dir_all(&temp_dir).await;
                     return Err(format!(
-                        "Supertonic {filename} integrity check failed: expected {expected}, got {actual}"
+                        "Kokoro {filename} integrity check failed: expected {expected}, got {actual}"
                     ));
                 }
             }
 
             // Ensure progress reflects file completion even without content-length.
             let pct = (((i as u32 + 1) * 89) / total_files).min(89) as u8;
-            self.supertonic.set_status(ModelStatus::Downloading {
+            self.kokoro.set_status(ModelStatus::Downloading {
                 progress_percent: pct,
             });
         }
 
-        self.supertonic.set_status(ModelStatus::Downloading {
+        self.kokoro.set_status(ModelStatus::Downloading {
             progress_percent: 90,
         });
 
         if let Err(e) = self
-            .supertonic
+            .kokoro
             .verify_and_install(&self.models_dir, &temp_dir, None)
             .await
         {
@@ -696,8 +718,8 @@ impl ModelManager {
         }
 
         eprintln!(
-            "sprout-desktop: Supertonic model ready at {}",
-            self.supertonic.model_dir(&self.models_dir).display()
+            "sprout-desktop: Kokoro model ready at {}",
+            self.kokoro.model_dir(&self.models_dir).display()
         );
         Ok(())
     }
@@ -726,14 +748,14 @@ pub fn is_moonshine_ready() -> bool {
         .unwrap_or(false)
 }
 
-/// Path to the Supertonic model directory, or `None` if not ready.
-pub fn supertonic_model_dir() -> Option<PathBuf> {
-    global_model_manager()?.supertonic_model_dir()
+/// Path to the Kokoro model directory, or `None` if not ready.
+pub fn kokoro_model_dir() -> Option<PathBuf> {
+    global_model_manager()?.kokoro_model_dir()
 }
 
-/// `true` if all expected Supertonic model files are present on disk.
-pub fn is_supertonic_ready() -> bool {
+/// `true` if all expected Kokoro model files are present on disk.
+pub fn is_kokoro_ready() -> bool {
     global_model_manager()
-        .map(|m| m.is_supertonic_ready())
+        .map(|m| m.is_kokoro_ready())
         .unwrap_or(false)
 }

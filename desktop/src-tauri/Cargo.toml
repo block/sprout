@@ -53,12 +53,9 @@ uuid = { version = "1", features = ["v4"] }
 png = "0.18"
 zip = "2"
 sherpa-onnx = "1.12"
-ort = { version = "=2.0.0-rc.11", features = ["ndarray"] }
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "download-binaries", "tls-native", "copy-dylibs", "api-23", "coreml"] }
 ndarray = { version = "0.17", features = ["rayon"] }
-unicode-normalization = "0.1"
 regex = "1"
-rand = "0.8"
-rand_distr = "0.4"
 rodio = "0.22"
 earshot = "1.0"
 rubato = "2.0"

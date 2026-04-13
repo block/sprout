@@ -51,6 +51,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     // ── All other routes: 1 MB body limit ────────────────────────────────────
     let api_router = Router::new()
+        // ── Internal routes (not exposed through the public API gateway) ─────
+        // LiveKit fires this on participant_joined/left (including crashes),
+        // providing authoritative presence tracking for crash-orphan recovery.
+        .route(
+            "/internal/livekit/webhook",
+            post(api::handle_livekit_webhook),
+        )
         .route("/", get(nip11_or_ws_handler))
         .route("/info", get(relay_info_handler))
         .route("/.well-known/nostr.json", get(api::nip05::nostr_nip05))

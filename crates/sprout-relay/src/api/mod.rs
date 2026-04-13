@@ -46,6 +46,8 @@ pub mod search;
 pub mod tokens;
 /// User profile endpoints.
 pub mod users;
+/// LiveKit webhook handler for server-side presence tracking.
+pub mod webhooks;
 /// Shared helpers for workflow API handlers.
 pub mod workflow_helpers;
 /// Workflow CRUD, trigger, and webhook endpoints.
@@ -70,6 +72,7 @@ pub use users::{
     get_contact_list, get_profile, get_user_notes, get_user_profile, get_users_batch,
     put_channel_add_policy, search_users,
 };
+pub use webhooks::handle_livekit_webhook;
 pub use workflows::{
     create_workflow, delete_workflow, get_workflow, list_channel_workflows, list_run_approvals,
     list_workflow_runs, trigger_workflow, update_workflow, workflow_webhook,

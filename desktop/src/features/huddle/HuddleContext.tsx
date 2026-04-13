@@ -98,6 +98,10 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   /** Current voice input mode */
   const [voiceInputMode, setVoiceInputModeState] =
     React.useState<VoiceInputMode>("push_to_talk");
+  /** Ref tracking latest voiceInputMode — read inside connectAndSetupMedia to
+   *  avoid stale closure capture when the user toggles mode mid-start. (Fix I4.) */
+  const voiceInputModeRef = React.useRef<VoiceInputMode>("push_to_talk");
+  voiceInputModeRef.current = voiceInputMode;
   /** Ephemeral channel ID — set after start_huddle/join_huddle, used for TTS subscription */
   const [ephemeralChannelId, setEphemeralChannelId] = React.useState<
     string | null
@@ -140,17 +144,13 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Toggle voice input mode — persists to Rust backend and updates worklet gating.
-  const setVoiceInputMode = React.useCallback(
-    async (mode: VoiceInputMode) => {
-      await invoke("set_voice_input_mode", { mode });
-      setVoiceInputModeState(mode);
-      // Update the worklet's transmit state to match the new mode:
-      // VAD = always transmitting, PTT = transmit only when key is held.
-      const transmitting = mode === "voice_activity" || pttActive;
-      workletRef.current?.setTransmitting(transmitting);
-    },
-    [pttActive],
-  );
+  const setVoiceInputMode = React.useCallback(async (mode: VoiceInputMode) => {
+    await invoke("set_voice_input_mode", { mode });
+    setVoiceInputModeState(mode);
+    // Use setMode (not setTransmitting) so the worklet tracks the current
+    // mode and ignores PTT events when in VAD mode. (Crossfire fix I1.)
+    workletRef.current?.setMode(mode);
+  }, []);
 
   /** Stop AudioWorklet and disconnect LiveKit. Best-effort on both steps. */
   const disconnectMedia = React.useCallback(async () => {
@@ -324,8 +324,8 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       setLocalAudioTrack(connection.localAudioTrack);
       setMicConnected(true);
 
-      // Setup AudioWorklet
-      const initialTransmitting = voiceInputMode !== "push_to_talk";
+      // Setup AudioWorklet — read mode from ref to avoid stale closure (fix I4).
+      const initialTransmitting = voiceInputModeRef.current !== "push_to_talk";
       const worklet = await setupAudioWorklet(
         connection.localAudioTrack,
         initialTransmitting,
@@ -341,7 +341,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
 
       return { connection, worklet };
     },
-    [leaveHuddle, voiceInputMode],
+    [leaveHuddle],
   );
 
   const startHuddle = React.useCallback(
