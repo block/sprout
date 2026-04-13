@@ -1,8 +1,7 @@
-import { Bot, Lock, Search, Zap } from "lucide-react";
+import { Lock, Zap } from "lucide-react";
 import * as React from "react";
 
-import { useManagedAgentsQuery } from "@/features/agents/hooks";
-import type { ChannelVisibility, ManagedAgent } from "@/shared/api/types";
+import type { ChannelVisibility } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
 import {
@@ -30,113 +29,8 @@ type CreateChannelDialogProps = {
     description?: string;
     visibility: ChannelVisibility;
     ttlSeconds?: number;
-    agentPubkeys?: string[];
   }) => Promise<void>;
 };
-
-// ---------------------------------------------------------------------------
-// Agent picker — collapsible section for selecting agents to invite
-// ---------------------------------------------------------------------------
-
-function AgentPicker({
-  disabled,
-  selectedAgents,
-  onToggleAgent,
-}: {
-  disabled: boolean;
-  selectedAgents: Set<string>;
-  onToggleAgent: (agent: ManagedAgent) => void;
-}) {
-  const [searchQuery, setSearchQuery] = React.useState("");
-  const managedAgentsQuery = useManagedAgentsQuery();
-  const agents = managedAgentsQuery.data ?? [];
-  const deferredQuery = React.useDeferredValue(
-    searchQuery.trim().toLowerCase(),
-  );
-
-  const filteredAgents = React.useMemo(() => {
-    if (deferredQuery.length === 0) return agents;
-    return agents.filter((agent) =>
-      agent.name.toLowerCase().includes(deferredQuery),
-    );
-  }, [agents, deferredQuery]);
-
-  if (agents.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="space-y-2">
-      <p className="text-sm font-medium text-foreground">
-        Invite agents
-        {selectedAgents.size > 0 ? (
-          <span className="ml-1.5 text-muted-foreground">
-            ({selectedAgents.size} selected)
-          </span>
-        ) : null}
-      </p>
-      <div className="overflow-hidden rounded-xl border border-border/80 bg-muted/20">
-        {agents.length > 4 ? (
-          <div className="flex items-center gap-2 px-3 py-2">
-            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <Input
-              className="h-auto border-0 bg-transparent px-0 py-0 shadow-none focus-visible:ring-0"
-              disabled={disabled}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search agents..."
-              value={searchQuery}
-            />
-          </div>
-        ) : null}
-        <div
-          className={`max-h-40 overflow-y-auto ${agents.length > 4 ? "border-t border-border/70" : ""} px-1 py-1`}
-        >
-          {filteredAgents.length === 0 ? (
-            <p className="px-2 py-1.5 text-sm text-muted-foreground">
-              No matching agents.
-            </p>
-          ) : (
-            filteredAgents.map((agent) => {
-              const isSelected = selectedAgents.has(agent.pubkey);
-              return (
-                <button
-                  className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-                  disabled={disabled}
-                  key={agent.pubkey}
-                  onClick={() => onToggleAgent(agent)}
-                  type="button"
-                >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-                    <Bot className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{agent.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {agent.status === "running"
-                        ? "Running"
-                        : agent.status === "deployed"
-                          ? "Deployed"
-                          : "Stopped"}
-                    </p>
-                  </div>
-                  <div
-                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border text-xs transition-colors ${
-                      isSelected
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border"
-                    }`}
-                  >
-                    {isSelected ? "✓" : null}
-                  </div>
-                </button>
-              );
-            })
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // CreateChannelDialog
@@ -153,9 +47,6 @@ export function CreateChannelDialog({
   const [description, setDescription] = React.useState("");
   const [visibility, setVisibility] = React.useState<ChannelVisibility>("open");
   const [ephemeral, setEphemeral] = React.useState(false);
-  const [selectedAgentPubkeys, setSelectedAgentPubkeys] = React.useState<
-    Set<string>
-  >(new Set());
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const nameInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -169,7 +60,6 @@ export function CreateChannelDialog({
     setDescription("");
     setVisibility("open");
     setEphemeral(false);
-    setSelectedAgentPubkeys(new Set());
     setErrorMessage(null);
 
     // Small delay to let dialog animation start before focusing
@@ -178,18 +68,6 @@ export function CreateChannelDialog({
     }, 50);
     return () => globalThis.clearTimeout(timerId);
   }, [open]);
-
-  function handleToggleAgent(agent: ManagedAgent) {
-    setSelectedAgentPubkeys((current) => {
-      const next = new Set(current);
-      if (next.has(agent.pubkey)) {
-        next.delete(agent.pubkey);
-      } else {
-        next.add(agent.pubkey);
-      }
-      return next;
-    });
-  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -205,10 +83,6 @@ export function CreateChannelDialog({
         description: description.trim() || undefined,
         visibility,
         ttlSeconds: ephemeral ? EPHEMERAL_TTL_SECONDS : undefined,
-        agentPubkeys:
-          selectedAgentPubkeys.size > 0
-            ? Array.from(selectedAgentPubkeys)
-            : undefined,
       });
 
       onOpenChange(false);
@@ -314,13 +188,6 @@ export function CreateChannelDialog({
               onChange={setEphemeral}
             />
           </div>
-
-          {/* Agent picker */}
-          <AgentPicker
-            disabled={isCreating}
-            selectedAgents={selectedAgentPubkeys}
-            onToggleAgent={handleToggleAgent}
-          />
 
           {/* Error */}
           {errorMessage ? (

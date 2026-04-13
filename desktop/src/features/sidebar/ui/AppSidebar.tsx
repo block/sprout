@@ -71,14 +71,12 @@ type AppSidebarProps = {
     description?: string;
     visibility: ChannelVisibility;
     ttlSeconds?: number;
-    agentPubkeys?: string[];
   }) => Promise<void>;
   onCreateForum: (input: {
     name: string;
     description?: string;
     visibility: ChannelVisibility;
     ttlSeconds?: number;
-    agentPubkeys?: string[];
   }) => Promise<void>;
   onOpenBrowseChannels: () => void;
   onOpenBrowseForums: () => void;
@@ -333,7 +331,6 @@ export function AppSidebar({
       description?: string;
       visibility: ChannelVisibility;
       ttlSeconds?: number;
-      agentPubkeys?: string[];
     }) => {
       if (createDialogKind === "stream") {
         await onCreateChannel(input);
