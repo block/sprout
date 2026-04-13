@@ -176,8 +176,8 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         }
         KIND_NIP29_CREATE_GROUP | KIND_CANVAS => Ok(Scope::ChannelsWrite),
         KIND_NIP29_JOIN_REQUEST | KIND_NIP29_LEAVE_REQUEST => Ok(Scope::ChannelsRead),
-        // Huddle lifecycle events (kind 48100–48103)
-        48100..=48103 => Ok(Scope::ChannelsWrite),
+        // Huddle lifecycle events (kind 48100–48103) + guidelines (48106)
+        48100..=48106 => Ok(Scope::ChannelsWrite),
         _ => Err("restricted: unknown event kind"),
     }
 }

@@ -402,6 +402,14 @@ pub fn run() {
                 eprintln!("sprout-desktop: failed to create nest: {error}");
             }
 
+            // Pre-download voice models in the background so they're ready
+            // when the user starts their first huddle. Idempotent — no-op if
+            // already downloaded. ~303 MB total (50 MB Moonshine + 253 MB Supertonic).
+            if let Some(mgr) = huddle::models::global_model_manager() {
+                mgr.start_moonshine_download(state.http_client.clone());
+                mgr.start_supertonic_download(state.http_client.clone());
+            }
+
             // Keep launch-time agent restoration off the synchronous setup path
             // so the frontend can mount and reveal the window promptly.
             tauri::async_runtime::spawn_blocking(move || {
