@@ -1,5 +1,3 @@
-import { MessageSquareText } from "lucide-react";
-
 import type {
   TimelineThreadSummary,
   TimelineThreadSummaryParticipant,
@@ -40,7 +38,7 @@ export function MessageThreadSummaryRow({
 }) {
   return (
     <button
-      className="ml-8 flex w-fit max-w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+      className="ml-8 flex w-fit max-w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
       data-thread-head-id={message.id}
       data-testid="message-thread-summary"
       onClick={() => onOpenThread(message)}
@@ -56,8 +54,7 @@ export function MessageThreadSummaryRow({
         ))}
       </div>
       <div className="min-w-0">
-        <div className="flex items-center gap-1.5 font-medium">
-          <MessageSquareText className="h-3.5 w-3.5" />
+        <div className="font-medium">
           <span>
             {summary.replyCount}{" "}
             {summary.replyCount === 1 ? "reply" : "replies"}

@@ -1,4 +1,4 @@
-import { ArrowLeft, MessageSquareText, X } from "lucide-react";
+import { ArrowLeft, X } from "lucide-react";
 
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
@@ -94,7 +94,7 @@ export function MessageThreadPanel({
       className="hidden h-full w-[380px] shrink-0 flex-col border-l border-border/80 bg-background lg:flex"
       data-testid="message-thread-panel"
     >
-      <div className="flex items-center gap-3 border-b border-border/80 px-4 py-3">
+      <div className="flex items-center gap-3 px-4 py-3">
         {canGoBack ? (
           <Button
             aria-label="Back"
@@ -108,13 +108,7 @@ export function MessageThreadPanel({
           </Button>
         ) : null}
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <MessageSquareText className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold tracking-tight">Thread</h2>
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {totalReplyCount} {totalReplyCount === 1 ? "reply" : "replies"}
-          </p>
+          <h2 className="text-sm font-semibold tracking-tight">Thread</h2>
         </div>
         <Button
           aria-label="Close thread"
@@ -128,15 +122,8 @@ export function MessageThreadPanel({
         </Button>
       </div>
 
-      <TypingIndicatorRow
-        channel={channel}
-        currentPubkey={currentPubkey}
-        profiles={profiles}
-        typingPubkeys={threadTypingPubkeys}
-      />
-
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="message-thread-body">
-        <div className="border-b border-border/60 px-3 py-3" data-testid="message-thread-head">
+        <div className="px-3 py-3" data-testid="message-thread-head">
           <MessageRow
             activeReplyTargetId={replyTargetId}
             message={threadHead}
@@ -190,7 +177,13 @@ export function MessageThreadPanel({
         </div>
       </div>
 
-      <div className="border-t border-border/80 p-4">
+      <div className="p-4">
+        <TypingIndicatorRow
+          channel={channel}
+          currentPubkey={currentPubkey}
+          profiles={profiles}
+          typingPubkeys={threadTypingPubkeys}
+        />
         <MessageComposer
           channelId={channelId}
           channelName={channelName}
@@ -200,6 +193,7 @@ export function MessageThreadPanel({
           onSend={onSend}
           placeholder={`Reply in thread to ${threadHead.author}`}
           replyTarget={composerReplyTarget}
+          showTopBorder={false}
           typingParentEventId={threadHead.id}
           typingRootEventId={threadHead.rootId}
         />

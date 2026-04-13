@@ -163,9 +163,6 @@ export const MessageRow = React.memo(
           className={cn(
             "group/message flex items-start gap-2.5 rounded-2xl px-2 py-1 transition-colors",
             highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
-            activeReplyTargetId === message.id
-              ? "bg-muted/60 ring-1 ring-border"
-              : "",
           )}
           data-message-id={message.id}
           data-testid="message-row"
