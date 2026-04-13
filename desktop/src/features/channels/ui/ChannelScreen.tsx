@@ -86,14 +86,19 @@ export function ChannelScreen({
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
   const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
-  const [focusedThreadHeadId, setFocusedThreadHeadId] = React.useState<
-    string | null
-  >(null);
+  const [threadHeadPath, setThreadHeadPath] = React.useState<string[]>([]);
   const [threadReplyTargetId, setThreadReplyTargetId] = React.useState<
     string | null
   >(null);
+  const [threadPrefillMentionTarget, setThreadPrefillMentionTarget] =
+    React.useState<{
+      displayName: string;
+      id: string;
+      pubkey: string;
+    } | null>(null);
   const currentPubkey = currentIdentity?.pubkey;
   const activeChannelId = activeChannel?.id ?? null;
+  const currentThreadHeadId = threadHeadPath[threadHeadPath.length - 1] ?? null;
 
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
@@ -144,7 +149,7 @@ export function ChannelScreen({
     [resolvedMessages],
   );
   const openThreadMessageIds = React.useMemo(() => {
-    if (!focusedThreadHeadId) {
+    if (!currentThreadHeadId) {
       return null;
     }
 
@@ -159,8 +164,8 @@ export function ChannelScreen({
       childrenByParent.set(thread.parentId, children);
     }
 
-    const ids = new Set<string>([focusedThreadHeadId]);
-    const stack = [focusedThreadHeadId];
+    const ids = new Set<string>([currentThreadHeadId]);
+    const stack = [currentThreadHeadId];
     while (stack.length > 0) {
       const parentId = stack.pop();
       if (!parentId) {
@@ -177,7 +182,7 @@ export function ChannelScreen({
     }
 
     return ids;
-  }, [focusedThreadHeadId, resolvedMessages]);
+  }, [currentThreadHeadId, resolvedMessages]);
   const { mainComposerTypingPubkeys, threadComposerTypingPubkeys } =
     useChannelThreadTyping(
       activeChannel,
@@ -282,15 +287,22 @@ export function ChannelScreen({
     [editTargetId, messageById],
   );
   const threadBranch = React.useMemo(
-    () => collectThreadBranch(timelineMessages, focusedThreadHeadId),
-    [focusedThreadHeadId, timelineMessages],
+    () => collectThreadBranch(timelineMessages, currentThreadHeadId),
+    [currentThreadHeadId, timelineMessages],
   );
   const {
     summaryByMessageId: collapsedThreadSummaryByMessageId,
     visibleMessages,
   } = React.useMemo(
-    () => buildCollapsedThreadTimeline(timelineMessages),
+    () => buildCollapsedThreadTimeline(timelineMessages, 2),
     [timelineMessages],
+  );
+  const {
+    summaryByMessageId: threadCollapsedSummaryByMessageId,
+    visibleMessages: visibleThreadMessages,
+  } = React.useMemo(
+    () => buildCollapsedThreadTimeline(threadBranch.messages, 1),
+    [threadBranch.messages],
   );
   const { headMessage: threadHeadMessage, messageIds: threadMessageIds } =
     threadBranch;
@@ -326,61 +338,110 @@ export function ChannelScreen({
     setReplyTargetId,
     toggleReactionMutation,
   });
+  const toAgentMentionTarget = React.useCallback(
+    (message: TimelineMessage) =>
+      message.role === "bot" && message.pubkey
+        ? {
+            displayName: message.author,
+            id: message.id,
+            pubkey: message.pubkey,
+          }
+        : null,
+    [],
+  );
   const handleCloseThread = React.useCallback(() => {
-    setFocusedThreadHeadId(null);
+    setThreadHeadPath([]);
     setThreadReplyTargetId(null);
+    setThreadPrefillMentionTarget(null);
   }, []);
-  const handleReply = React.useCallback((message: TimelineMessage) => {
-    if (message.depth < 1) {
-      setFocusedThreadHeadId(null);
-      setThreadReplyTargetId(null);
-      setReplyTargetId((current) =>
-        current === message.id ? null : message.id,
-      );
+  const handleReply = React.useCallback(
+    (message: TimelineMessage) => {
+      setReplyTargetId(null);
       setEditTargetId(null);
-      return;
-    }
-
-    setReplyTargetId(null);
-    setEditTargetId(null);
-    setFocusedThreadHeadId(message.id);
-    setThreadReplyTargetId(message.id);
-  }, []);
+      setThreadHeadPath([message.id]);
+      setThreadReplyTargetId(message.id);
+      setThreadPrefillMentionTarget(toAgentMentionTarget(message));
+    },
+    [toAgentMentionTarget],
+  );
   const handleOpenThread = React.useCallback((message: TimelineMessage) => {
     setReplyTargetId(null);
     setEditTargetId(null);
-    setFocusedThreadHeadId(message.id);
+    setThreadHeadPath([message.id]);
     setThreadReplyTargetId(message.id);
+    setThreadPrefillMentionTarget(null);
   }, []);
-  const handleThreadReply = React.useCallback((message: TimelineMessage) => {
-    setThreadReplyTargetId(message.id);
+  const handleOpenNestedThread = React.useCallback(
+    (message: TimelineMessage) => {
+      setReplyTargetId(null);
+      setEditTargetId(null);
+      setThreadHeadPath((current) =>
+        current[current.length - 1] === message.id
+          ? current
+          : [...current, message.id],
+      );
+      setThreadReplyTargetId(message.id);
+      setThreadPrefillMentionTarget(null);
+    },
+    [],
+  );
+  const handleBackThread = React.useCallback(() => {
+    setThreadHeadPath((current) => current.slice(0, -1));
+    setThreadPrefillMentionTarget(null);
   }, []);
+  const handleThreadReply = React.useCallback(
+    (message: TimelineMessage) => {
+      if (message.id === currentThreadHeadId) {
+        setThreadReplyTargetId(message.id);
+        setThreadPrefillMentionTarget(toAgentMentionTarget(message));
+        return;
+      }
+
+      setReplyTargetId(null);
+      setEditTargetId(null);
+      setThreadHeadPath((current) =>
+        current[current.length - 1] === message.id
+          ? current
+          : [...current, message.id],
+      );
+      setThreadReplyTargetId(message.id);
+      setThreadPrefillMentionTarget(toAgentMentionTarget(message));
+    },
+    [currentThreadHeadId, toAgentMentionTarget],
+  );
   const handleCancelThreadReply = React.useCallback(() => {
-    setThreadReplyTargetId((current) => focusedThreadHeadId ?? current);
-  }, [focusedThreadHeadId]);
+    setThreadReplyTargetId((current) => currentThreadHeadId ?? current);
+    setThreadPrefillMentionTarget(null);
+  }, [currentThreadHeadId]);
   const handleThreadSend = React.useCallback(
     async (
       content: string,
       mentionPubkeys: string[],
       mediaTags?: string[][],
     ) => {
-      const parentEventId = threadReplyTargetId ?? focusedThreadHeadId;
+      const parentEventId = threadReplyTargetId ?? currentThreadHeadId;
       if (!parentEventId) {
         return;
       }
+      const agentReplyParentId =
+        currentThreadHeadId && threadReplyTargetId === currentThreadHeadId
+          ? currentThreadHeadId
+          : null;
 
       await sendMessageMutation.mutateAsync({
+        agentReplyParentId,
         content,
         mentionPubkeys,
         mediaTags,
         parentEventId,
       });
-      setThreadReplyTargetId(focusedThreadHeadId ?? parentEventId);
+      setThreadReplyTargetId(currentThreadHeadId ?? parentEventId);
+      setThreadPrefillMentionTarget(null);
     },
-    [focusedThreadHeadId, sendMessageMutation, threadReplyTargetId],
+    [currentThreadHeadId, sendMessageMutation, threadReplyTargetId],
   );
   const activeReplyTargetId =
-    focusedThreadHeadId && threadReplyTargetId !== focusedThreadHeadId
+    currentThreadHeadId && threadReplyTargetId !== currentThreadHeadId
       ? threadReplyTargetId
       : replyTargetId;
 
@@ -415,8 +476,9 @@ export function ChannelScreen({
     (_channelId: string | null) => {
       setReplyTargetId(null);
       setEditTargetId(null);
-      setFocusedThreadHeadId(null);
+      setThreadHeadPath([]);
       setThreadReplyTargetId(null);
+      setThreadPrefillMentionTarget(null);
     },
     [],
   );
@@ -438,21 +500,23 @@ export function ChannelScreen({
     if (editTargetId && !editTargetMessage) {
       setEditTargetId(null);
     }
-    if (focusedThreadHeadId && !threadHeadMessage) {
-      setFocusedThreadHeadId(null);
+    if (currentThreadHeadId && !threadHeadMessage) {
+      setThreadHeadPath([]);
       setThreadReplyTargetId(null);
+      setThreadPrefillMentionTarget(null);
     } else if (
       threadReplyTargetId &&
-      focusedThreadHeadId &&
-      threadReplyTargetId !== focusedThreadHeadId &&
+      currentThreadHeadId &&
+      threadReplyTargetId !== currentThreadHeadId &&
       !threadReplyTargetMessage
     ) {
-      setThreadReplyTargetId(focusedThreadHeadId);
+      setThreadReplyTargetId(currentThreadHeadId);
+      setThreadPrefillMentionTarget(null);
     }
   }, [
     editTargetId,
     editTargetMessage,
-    focusedThreadHeadId,
+    currentThreadHeadId,
     replyTargetId,
     replyTargetMessage,
     threadHeadMessage,
@@ -626,12 +690,14 @@ export function ChannelScreen({
                 onCancelEdit={handleCancelEdit}
                 onCancelReply={handleCancelReply}
                 onCancelThreadReply={handleCancelThreadReply}
+                onBackThread={handleBackThread}
                 onCloseThread={handleCloseThread}
                 onDelete={handleDelete}
                 onEdit={handleEdit}
                 onEditSave={handleEditSave}
                 onReply={handleReply}
                 onSend={handleSend}
+                onThreadOpen={handleOpenNestedThread}
                 onThreadReply={handleThreadReply}
                 onThreadSend={handleThreadSend}
                 onToggleReaction={effectiveToggleReaction}
@@ -642,8 +708,14 @@ export function ChannelScreen({
                 }
                 replyTargetMessage={replyTargetMessage}
                 targetMessageId={targetMessageId}
+                threadCanGoBack={threadHeadPath.length > 1}
+                threadCollapsedSummaryByMessageId={
+                  threadCollapsedSummaryByMessageId
+                }
                 threadHeadMessage={threadHeadMessage}
-                threadMessages={threadMessages}
+                threadPrefillMentionTarget={threadPrefillMentionTarget}
+                threadReplyCount={threadMessages.length}
+                threadMessages={visibleThreadMessages}
                 threadReplyTargetMessage={threadReplyTargetMessage}
                 threadTypingPubkeys={threadComposerTypingPubkeys}
                 typingPubkeys={mainComposerTypingPubkeys}

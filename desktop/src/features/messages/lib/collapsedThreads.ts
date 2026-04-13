@@ -9,13 +9,16 @@ export type CollapsedThreadPreview = {
   replyCount: number;
 };
 
-export function buildCollapsedThreadTimeline(messages: TimelineMessage[]) {
+export function buildCollapsedThreadTimeline(
+  messages: TimelineMessage[],
+  collapseDepthAt = 2,
+) {
   const messageById = new Map(messages.map((message) => [message.id, message]));
   const visibleMessages: TimelineMessage[] = [];
   const hiddenRepliesByAnchor = new Map<string, TimelineMessage[]>();
 
   for (const message of messages) {
-    if (message.depth < 2) {
+    if (message.depth < collapseDepthAt) {
       visibleMessages.push(message);
       continue;
     }
@@ -27,7 +30,7 @@ export function buildCollapsedThreadTimeline(messages: TimelineMessage[]) {
         anchorId = null;
         break;
       }
-      if (ancestor.depth < 2) {
+      if (ancestor.depth < collapseDepthAt) {
         const group = hiddenRepliesByAnchor.get(ancestor.id) ?? [];
         group.push(message);
         hiddenRepliesByAnchor.set(ancestor.id, group);

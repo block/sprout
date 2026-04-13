@@ -59,6 +59,14 @@ fn thread_tags(tr: &ThreadRef) -> Result<Vec<Tag>, String> {
     }
 }
 
+fn agent_reply_parent_tag(thread_ref: &ThreadRef, agent_reply_parent_id: &str) -> Result<Tag, String> {
+    let expected_parent = thread_ref.parent_event_id.to_hex();
+    if agent_reply_parent_id != expected_parent {
+        return Err("agent_reply_parent_id must match thread parent_event_id".into());
+    }
+    tag(vec!["sprout", "agent_reply_parent", agent_reply_parent_id])
+}
+
 fn mention_tags(mentions: &[&str]) -> Result<Vec<Tag>, String> {
     if mentions.len() > MAX_MENTIONS {
         return Err(format!("too many mentions (max {MAX_MENTIONS})"));
@@ -236,6 +244,7 @@ pub fn build_message(
     channel_id: Uuid,
     content: &str,
     thread_ref: Option<&ThreadRef>,
+    agent_reply_parent_id: Option<&str>,
     mentions: &[&str],
     media_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
@@ -243,6 +252,11 @@ pub fn build_message(
     let mut tags = vec![tag(vec!["h", &channel_id.to_string()])?];
     if let Some(tr) = thread_ref {
         tags.extend(thread_tags(tr)?);
+        if let Some(agent_parent) = agent_reply_parent_id {
+            tags.push(agent_reply_parent_tag(tr, agent_parent)?);
+        }
+    } else if agent_reply_parent_id.is_some() {
+        return Err("agent_reply_parent_id requires thread_ref".into());
     }
     tags.extend(mention_tags(mentions)?);
     imeta_tags(media_tags, &mut tags)?;

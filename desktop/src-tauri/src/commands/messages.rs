@@ -161,6 +161,7 @@ pub async fn send_channel_message(
     channel_id: String,
     content: String,
     parent_event_id: Option<String>,
+    agent_reply_parent_id: Option<String>,
     media_tags: Option<Vec<Vec<String>>>,
     mention_pubkeys: Option<Vec<String>>,
     kind: Option<u32>,
@@ -172,6 +173,10 @@ pub async fn send_channel_message(
     let mention_refs: Vec<&str> = mentions.iter().map(|s| s.as_str()).collect();
     let media = media_tags.unwrap_or_default();
     let kind_num = kind.unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE);
+    if let Some(ref agent_parent) = agent_reply_parent_id {
+        EventId::from_hex(agent_parent)
+            .map_err(|e| format!("invalid agent reply parent event ID: {e}"))?;
+    }
 
     // Track the resolved thread ref so we can return accurate metadata.
     let mut resolved_root: Option<String> = None;
@@ -208,6 +213,7 @@ pub async fn send_channel_message(
                 channel_uuid,
                 content.trim(),
                 thread_ref.as_ref(),
+                agent_reply_parent_id.as_deref(),
                 &mention_refs,
                 &media,
             )?

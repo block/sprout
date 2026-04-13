@@ -1,5 +1,6 @@
-import { X } from "lucide-react";
+import { ArrowLeft, X } from "lucide-react";
 
+import type { CollapsedThreadPreview } from "@/features/messages/lib/collapsedThreads";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
@@ -11,13 +12,23 @@ import { TypingIndicatorRow } from "./TypingIndicatorRow";
 
 type MessageThreadSidebarProps = {
   channel: Channel | null;
+  canGoBack?: boolean;
+  collapsedThreadSummaryByMessageId?: Map<string, CollapsedThreadPreview>;
   currentPubkey?: string;
   headMessage: TimelineMessage;
   isSending: boolean;
   messages: TimelineMessage[];
+  prefillMentionTarget?: {
+    displayName: string;
+    id: string;
+    pubkey: string;
+  } | null;
+  replyCount?: number;
+  onBack?: () => void;
   onCancelReply: () => void;
   onClose: () => void;
   onDelete?: (message: TimelineMessage) => void;
+  onOpenThread?: (message: TimelineMessage) => void;
   onReply: (message: TimelineMessage) => void;
   onSend: (
     content: string,
@@ -37,13 +48,19 @@ type MessageThreadSidebarProps = {
 
 export function MessageThreadSidebar({
   channel,
+  canGoBack = false,
+  collapsedThreadSummaryByMessageId,
   currentPubkey,
   headMessage,
   isSending,
   messages,
+  prefillMentionTarget = null,
+  replyCount = messages.length,
+  onBack,
   onCancelReply,
   onClose,
   onDelete,
+  onOpenThread,
   onReply,
   onSend,
   onToggleReaction,
@@ -69,10 +86,22 @@ export function MessageThreadSidebar({
   return (
     <aside className="flex w-[min(100%,24rem)] shrink-0 flex-col border-l border-border/60 bg-muted/20">
       <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+        {canGoBack && onBack ? (
+          <Button
+            className="h-8 gap-1 px-2"
+            onClick={onBack}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </Button>
+        ) : null}
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-foreground">Thread</p>
           <p className="truncate text-xs text-muted-foreground">
-            {messages.length} {messages.length === 1 ? "reply" : "replies"}
+            {replyCount} {replyCount === 1 ? "reply" : "replies"}
           </p>
         </div>
         <Button
@@ -111,9 +140,13 @@ export function MessageThreadSidebar({
           ) : (
             <TimelineMessageList
               activeReplyTargetId={threadReplyTarget?.id ?? null}
+              collapsedThreadSummaryByMessageId={
+                collapsedThreadSummaryByMessageId
+              }
               currentPubkey={currentPubkey}
               messages={messages}
               onDelete={onDelete}
+              onOpenThread={onOpenThread}
               onReply={onReply}
               onToggleReaction={onToggleReaction}
               personaLookup={personaLookup}
@@ -141,6 +174,7 @@ export function MessageThreadSidebar({
         onCancelReply={threadReplyTarget ? onCancelReply : undefined}
         onSend={onSend}
         placeholder="Reply in thread..."
+        prefillMentionTarget={prefillMentionTarget}
         replyTarget={threadReplyTarget}
         typingReplyParentId={replyTargetMessage?.id ?? headMessage.id}
       />

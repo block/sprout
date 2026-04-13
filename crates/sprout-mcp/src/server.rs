@@ -80,6 +80,29 @@ fn find_root_from_tags(tags: &serde_json::Value) -> Option<String> {
     root.or(reply)
 }
 
+/// Extract a Sprout-specific agent reply-parent override from serialized tags.
+///
+/// Tag format:
+/// - `["sprout", "agent_reply_parent", "<event-id>"]`
+fn find_agent_reply_parent_from_tags(tags: &serde_json::Value) -> Option<String> {
+    let arr = tags.as_array()?;
+    for tag in arr {
+        let Some(parts) = tag.as_array() else {
+            continue;
+        };
+        if parts.len() >= 3
+            && parts[0].as_str() == Some("sprout")
+            && parts[1].as_str() == Some("agent_reply_parent")
+        {
+            let parent = parts[2].as_str()?;
+            if parent.len() == 64 && parent.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Some(parent.to_ascii_lowercase());
+            }
+        }
+    }
+    None
+}
+
 /// Maximum allowed content size for a single message (64 KiB).
 const MAX_CONTENT_BYTES: usize = 65_536;
 
@@ -842,7 +865,6 @@ impl SproutMcpServer {
     async fn resolve_thread_ref(
         &self,
         parent_event_id: &str,
-        parent_eid: EventId,
     ) -> Result<sprout_sdk::ThreadRef, String> {
         let resp = self
             .client
@@ -853,8 +875,15 @@ impl SproutMcpServer {
         let event_json: serde_json::Value = serde_json::from_str(&resp)
             .map_err(|e| format!("failed to parse parent event: {e}"))?;
 
+        let effective_parent_id =
+            find_agent_reply_parent_from_tags(&event_json["tags"]).unwrap_or_else(|| {
+                parent_event_id.to_ascii_lowercase()
+            });
+        let parent_eid = EventId::from_hex(&effective_parent_id)
+            .map_err(|e| format!("failed to parse effective parent event id: {e}"))?;
+
         let root_eid = match find_root_from_tags(&event_json["tags"]) {
-            Some(root_hex) if root_hex != parent_event_id => EventId::from_hex(&root_hex)
+            Some(root_hex) if root_hex != effective_parent_id => EventId::from_hex(&root_hex)
                 .map_err(|e| format!("failed to parse root event id: {e}"))?,
             _ => parent_eid,
         };
@@ -953,12 +982,8 @@ Default kind is 9 (stream message)."
                     Some(id) => id,
                     None => return "Error: kind 45003 requires parent_event_id".to_string(),
                 };
-                let parent_eid = match EventId::from_hex(parent_id) {
-                    Ok(id) => id,
-                    Err(e) => return format!("Error: invalid parent_event_id: {e}"),
-                };
                 // Fetch parent to resolve thread root for NIP-10 markers.
-                let thread_ref = match self.resolve_thread_ref(parent_id, parent_eid).await {
+                let thread_ref = match self.resolve_thread_ref(parent_id).await {
                     Ok(tr) => tr,
                     Err(e) => return format!("Error: {e}"),
                 };
@@ -976,11 +1001,7 @@ Default kind is 9 (stream message)."
             _ => {
                 // kind 9 (default) and any other stream message kinds.
                 let thread_ref = if let Some(ref parent_id) = p.parent_event_id {
-                    let parent_eid = match EventId::from_hex(parent_id) {
-                        Ok(id) => id,
-                        Err(e) => return format!("Error: invalid parent_event_id: {e}"),
-                    };
-                    match self.resolve_thread_ref(parent_id, parent_eid).await {
+                    match self.resolve_thread_ref(parent_id).await {
                         Ok(tr) => Some(tr),
                         Err(e) => return format!("Error: {e}"),
                     }
@@ -1079,11 +1100,7 @@ Default kind is 9 (stream message)."
 
         // 5. Resolve optional thread ref
         let thread_ref = if let Some(ref parent_id) = parent_event_id {
-            let parent_eid = match EventId::from_hex(parent_id) {
-                Ok(id) => id,
-                Err(e) => return format!("Error: invalid parent_event_id: {e}"),
-            };
-            match self.resolve_thread_ref(parent_id, parent_eid).await {
+            match self.resolve_thread_ref(parent_id).await {
                 Ok(tr) => Some(tr),
                 Err(e) => return format!("Error: {e}"),
             }
@@ -2710,6 +2727,28 @@ mod tests {
         // Missing one character in the last group.
         let result = validate_uuid("550e8400-e29b-41d4-a716-44665544000");
         assert!(result.is_err());
+    }
+
+    // ── thread tag helpers ────────────────────────────────────────────────────
+
+    #[test]
+    fn find_agent_reply_parent_from_tags_matches_valid_sprout_tag() {
+        let tags = serde_json::json!([
+            ["h", "550e8400-e29b-41d4-a716-446655440000"],
+            ["sprout", "agent_reply_parent", "ABCDEFabcdefABCDEFabcdefABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD"]
+        ]);
+        assert_eq!(
+            find_agent_reply_parent_from_tags(&tags).as_deref(),
+            Some("abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd")
+        );
+    }
+
+    #[test]
+    fn find_agent_reply_parent_from_tags_ignores_invalid_values() {
+        let wrong_name = serde_json::json!([["sprout", "other", "a".repeat(64)]]);
+        let invalid_hex = serde_json::json!([["sprout", "agent_reply_parent", "not-hex"]]);
+        assert!(find_agent_reply_parent_from_tags(&wrong_name).is_none());
+        assert!(find_agent_reply_parent_from_tags(&invalid_hex).is_none());
     }
 
     // ── MAX_CONTENT_BYTES ─────────────────────────────────────────────────────

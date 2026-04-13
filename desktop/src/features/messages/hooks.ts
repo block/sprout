@@ -9,6 +9,7 @@ import {
   sortMessages,
 } from "@/features/messages/lib/messageQueryKeys";
 import {
+  buildAgentReplyParentTag,
   buildReplyTags,
   normalizeMentionPubkeys,
   resolveReplyRootId,
@@ -72,6 +73,7 @@ function createOptimisticMessage(
   currentMessages: RelayEvent[],
   mentionPubkeys: string[] = [],
   parentEventId: string | null = null,
+  agentReplyParentId: string | null = null,
   mediaTags: string[][] = [],
 ): RelayEvent {
   const tags: string[][] = [];
@@ -99,6 +101,9 @@ function createOptimisticMessage(
 
   for (const tag of mediaTags) {
     tags.push(tag);
+  }
+  if (agentReplyParentId) {
+    tags.push(buildAgentReplyParentTag(agentReplyParentId));
   }
 
   return {
@@ -257,6 +262,7 @@ export function useSendMessageMutation(
       content: string;
       mentionPubkeys?: string[];
       parentEventId?: string | null;
+      agentReplyParentId?: string | null;
       mediaTags?: string[][];
     },
     MessageQueryContext | undefined
@@ -265,6 +271,7 @@ export function useSendMessageMutation(
       content,
       mentionPubkeys,
       parentEventId,
+      agentReplyParentId,
       mediaTags,
     }) => {
       if (!channel || channel.channelType === "forum") {
@@ -288,6 +295,8 @@ export function useSendMessageMutation(
           parentEventId ?? null,
           mediaTags,
           mentionPubkeys,
+          undefined,
+          agentReplyParentId ?? null,
         );
 
         // Build tags matching relay-emitted shape: h, author p, mention ps, reply es, imeta.
@@ -324,6 +333,9 @@ export function useSendMessageMutation(
                 ).map((pk) => ["p", pk])
               : []),
             ...(mediaTags ?? []),
+            ...(agentReplyParentId
+              ? [buildAgentReplyParentTag(agentReplyParentId)]
+              : []),
           ],
           content: content.trim(),
           sig: "",
@@ -337,7 +349,13 @@ export function useSendMessageMutation(
         [],
       );
     },
-    onMutate: async ({ content, mentionPubkeys, parentEventId, mediaTags }) => {
+    onMutate: async ({
+      content,
+      mentionPubkeys,
+      parentEventId,
+      agentReplyParentId,
+      mediaTags,
+    }) => {
       if (!channel || !identity || channel.channelType === "forum") {
         return undefined;
       }
@@ -354,6 +372,7 @@ export function useSendMessageMutation(
         previousMessages,
         mentionPubkeys ?? [],
         parentEventId ?? null,
+        agentReplyParentId ?? null,
         mediaTags ?? [],
       );
 

@@ -693,10 +693,12 @@ export async function sendChannelMessage(
   mediaTags?: string[][],
   mentionPubkeys?: string[],
   kind?: number,
+  agentReplyParentId?: string | null,
 ): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
     "send_channel_message",
     {
+      agentReplyParentId: agentReplyParentId ?? null,
       channelId,
       content,
       parentEventId,

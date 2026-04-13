@@ -36,6 +36,11 @@ type MessageComposerProps = {
     mediaTags?: string[][],
   ) => Promise<void>;
   placeholder?: string;
+  prefillMentionTarget?: {
+    displayName: string;
+    id: string;
+    pubkey: string;
+  } | null;
   replyTarget?: {
     author: string;
     body: string;
@@ -58,6 +63,7 @@ export function MessageComposer({
   onEditSave,
   onSend,
   placeholder,
+  prefillMentionTarget = null,
   replyTarget = null,
   typingReplyParentId = null,
 }: MessageComposerProps) {
@@ -76,6 +82,7 @@ export function MessageComposer({
   const drafts = useDrafts();
   const draftStorageKey = draftKey ?? channelId;
   const previousDraftKeyRef = React.useRef<string | null>(null);
+  const lastAppliedPrefillIdRef = React.useRef<string | null>(null);
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
@@ -143,6 +150,7 @@ export function MessageComposer({
     mentions.clearMentions();
     channelLinks.clearChannels();
     lineHeightRef.current = null;
+    lastAppliedPrefillIdRef.current = null;
   }, [draftStorageKey]);
 
   const applyMentionInsert = React.useCallback(
@@ -470,6 +478,32 @@ export function MessageComposer({
 
     textareaRef.current?.focus();
   }, [disabled, replyTarget]);
+
+  React.useEffect(() => {
+    if (
+      !prefillMentionTarget ||
+      disabled ||
+      editTarget ||
+      lastAppliedPrefillIdRef.current === prefillMentionTarget.id ||
+      contentRef.current.trim().length > 0
+    ) {
+      return;
+    }
+
+    const nextContent = `@${prefillMentionTarget.displayName} `;
+    mentions.registerMention(
+      prefillMentionTarget.displayName,
+      prefillMentionTarget.pubkey,
+    );
+    setContent(nextContent);
+    contentRef.current = nextContent;
+    draftSelectionRef.current = {
+      end: nextContent.length,
+      start: nextContent.length,
+    };
+    pendingSelectionRef.current = nextContent.length;
+    lastAppliedPrefillIdRef.current = prefillMentionTarget.id;
+  }, [disabled, editTarget, mentions.registerMention, prefillMentionTarget]);
 
   // Pre-fill content when entering edit mode.
   // biome-ignore lint/correctness/useExhaustiveDependencies: editTarget?.id is the trigger — only reset when the edited message changes

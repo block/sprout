@@ -109,6 +109,10 @@ export function buildReplyTags(
   return tags;
 }
 
+export function buildAgentReplyParentTag(agentReplyParentId: string) {
+  return ["sprout", "agent_reply_parent", agentReplyParentId];
+}
+
 export function resolveReplyRootId(
   parentEventId: string,
   events: RelayEvent[],

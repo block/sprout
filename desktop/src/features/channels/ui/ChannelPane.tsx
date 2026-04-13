@@ -28,6 +28,7 @@ type ChannelPaneProps = {
   onCancelEdit?: () => void;
   onCancelReply: () => void;
   onCancelThreadReply: () => void;
+  onBackThread?: () => void;
   onCloseThread: () => void;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
@@ -40,6 +41,7 @@ type ChannelPaneProps = {
     mediaTags?: string[][],
   ) => Promise<void>;
   onTargetReached?: (messageId: string) => void;
+  onThreadOpen?: (message: TimelineMessage) => void;
   onThreadReply: (message: TimelineMessage) => void;
   onThreadSend: (
     content: string,
@@ -56,7 +58,15 @@ type ChannelPaneProps = {
   profiles?: UserProfileLookup;
   replyTargetMessage: TimelineMessage | null;
   targetMessageId: string | null;
+  threadCanGoBack?: boolean;
+  threadCollapsedSummaryByMessageId?: Map<string, CollapsedThreadPreview>;
   threadHeadMessage: TimelineMessage | null;
+  threadPrefillMentionTarget?: {
+    displayName: string;
+    id: string;
+    pubkey: string;
+  } | null;
+  threadReplyCount?: number;
   threadMessages: TimelineMessage[];
   threadReplyTargetMessage: TimelineMessage | null;
   threadTypingPubkeys: string[];
@@ -78,6 +88,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onCancelEdit,
   onCancelReply,
   onCancelThreadReply,
+  onBackThread,
   onCloseThread,
   onDelete,
   onEdit,
@@ -86,6 +97,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onReply,
   onSend,
   onTargetReached,
+  onThreadOpen,
   onThreadReply,
   onThreadSend,
   onToggleReaction,
@@ -93,7 +105,11 @@ export const ChannelPane = React.memo(function ChannelPane({
   profiles,
   replyTargetMessage,
   targetMessageId,
+  threadCanGoBack = false,
+  threadCollapsedSummaryByMessageId,
   threadHeadMessage,
+  threadPrefillMentionTarget = null,
+  threadReplyCount,
   threadMessages,
   threadReplyTargetMessage,
   threadTypingPubkeys,
@@ -182,14 +198,20 @@ export const ChannelPane = React.memo(function ChannelPane({
 
       {threadHeadMessage ? (
         <MessageThreadSidebar
+          canGoBack={threadCanGoBack}
           channel={activeChannel}
+          collapsedThreadSummaryByMessageId={threadCollapsedSummaryByMessageId}
           currentPubkey={currentPubkey}
           headMessage={threadHeadMessage}
           isSending={isSending}
           messages={threadMessages}
+          prefillMentionTarget={threadPrefillMentionTarget}
+          replyCount={threadReplyCount}
+          onBack={onBackThread}
           onCancelReply={onCancelThreadReply}
           onClose={onCloseThread}
           onDelete={onDelete}
+          onOpenThread={onThreadOpen}
           onReply={onThreadReply}
           onSend={onThreadSend}
           onToggleReaction={onToggleReaction}
