@@ -313,7 +313,6 @@ pub struct UpdateManagedAgentRequest {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct UpdateManagedAgentResponse {
     pub agent: ManagedAgentSummary,
     pub profile_sync_error: Option<String>,

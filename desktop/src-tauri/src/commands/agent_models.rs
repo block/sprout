@@ -12,7 +12,7 @@ use crate::{
         AgentModelInfo, AgentModelsResponse, ManagedAgentSummary, UpdateManagedAgentRequest,
         UpdateManagedAgentResponse,
     },
-    relay::sync_managed_agent_profile,
+    relay::{relay_ws_url, sync_managed_agent_profile},
     util::now_iso,
 };
 
@@ -151,7 +151,12 @@ pub async fn update_managed_agent(
             record.turn_timeout_seconds = turn_timeout_seconds;
         }
         if let Some(relay_url) = input.relay_url {
-            record.relay_url = relay_url;
+            let trimmed = relay_url.trim();
+            record.relay_url = if trimmed.is_empty() {
+                relay_ws_url()
+            } else {
+                trimmed.to_string()
+            };
         }
         if let Some(acp_command) = input.acp_command {
             record.acp_command = acp_command;
