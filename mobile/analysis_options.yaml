@@ -1,0 +1,9 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    prefer_single_quotes: true
+
+analyzer:
+  errors:
+    invalid_use_of_visible_for_overriding_member: ignore
