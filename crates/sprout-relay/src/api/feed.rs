@@ -21,7 +21,7 @@ use sprout_core::kind::{self, event_kind_u32};
 
 use crate::state::AppState;
 
-use super::{extract_auth_context, internal_error};
+use super::{constrain_channel_ids, extract_auth_context, internal_error};
 
 /// Agent activity kind set — used to partition activity into agent vs channel activity.
 const AGENT_KINDS: &[u32] = &[
@@ -71,11 +71,14 @@ pub async fn feed_handler(
         .map(|t| t.split(',').map(|s| s.trim()).collect());
     let wants = |cat: &str| -> bool { type_filter.as_ref().is_none_or(|f| f.contains(cat)) };
 
-    let accessible_ids = state
-        .db
-        .get_accessible_channel_ids(&pubkey_bytes)
-        .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+    let accessible_ids = constrain_channel_ids(
+        state
+            .db
+            .get_accessible_channel_ids(&pubkey_bytes)
+            .await
+            .map_err(|e| internal_error(&format!("db error: {e}")))?,
+        ctx.channel_ids.as_deref(),
+    );
 
     if accessible_ids.is_empty() {
         let generated_at = Utc::now().timestamp();

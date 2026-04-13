@@ -429,6 +429,28 @@ pub fn check_token_channel_access(
     Ok(())
 }
 
+/// Intersect an owner-accessible channel list with a token's `channel_ids`, when present.
+pub(crate) fn constrain_channel_ids(
+    mut channel_ids: Vec<Uuid>,
+    allowed: Option<&[Uuid]>,
+) -> Vec<Uuid> {
+    if let Some(allowed) = allowed {
+        channel_ids.retain(|channel_id| allowed.contains(channel_id));
+    }
+    channel_ids
+}
+
+/// Filter accessible channel records against a token's `channel_ids`, when present.
+pub(crate) fn constrain_accessible_channels(
+    mut channels: Vec<sprout_db::channel::AccessibleChannel>,
+    allowed: Option<&[Uuid]>,
+) -> Vec<sprout_db::channel::AccessibleChannel> {
+    if let Some(allowed) = allowed {
+        channels.retain(|channel| allowed.contains(&channel.channel.id));
+    }
+    channels
+}
+
 /// Convert a scope-check failure into a 403 Forbidden response.
 ///
 /// Used by handlers to propagate `require_scope` errors via `?`.
@@ -762,5 +784,25 @@ mod tests {
         let (status, body) = not_found("approval not found");
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body.0["error"], "approval not found");
+    }
+
+    #[test]
+    fn constrain_channel_ids_intersects_with_token_allowlist() {
+        let allowed = uuid::Uuid::new_v4();
+        let denied = uuid::Uuid::new_v4();
+
+        let constrained = constrain_channel_ids(vec![allowed, denied], Some(&[allowed]));
+
+        assert_eq!(constrained, vec![allowed]);
+    }
+
+    #[test]
+    fn constrain_channel_ids_leaves_unrestricted_lists_unchanged() {
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+
+        let constrained = constrain_channel_ids(vec![a, b], None);
+
+        assert_eq!(constrained, vec![a, b]);
     }
 }
