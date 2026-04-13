@@ -196,6 +196,23 @@ pub async fn remove_channel_member(
 }
 
 #[tauri::command]
+pub async fn change_channel_member_role(
+    channel_id: String,
+    pubkey: String,
+    role: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let uuid = parse_channel_uuid(&channel_id)?;
+    let role_str = match role.as_str() {
+        "admin" | "member" | "guest" | "bot" => role.as_str(),
+        other => return Err(format!("invalid role: {other}")),
+    };
+    let builder = events::build_add_member(uuid, &pubkey, Some(role_str))?;
+    submit_event(builder, &state).await?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn join_channel(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let uuid = parse_channel_uuid(&channel_id)?;
     let builder = events::build_join(uuid)?;

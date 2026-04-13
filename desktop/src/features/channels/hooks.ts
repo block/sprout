@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addChannelMembers,
   archiveChannel,
+  changeChannelMemberRole,
   createChannel,
   deleteChannel,
   getCanvas,
@@ -419,6 +420,25 @@ export function useRemoveChannelMemberMutation(channelId: string | null) {
         queryClient.invalidateQueries({ queryKey: ["managed-agents"] }),
         queryClient.invalidateQueries({ queryKey: ["relay-agents"] }),
       ]);
+    },
+  });
+}
+
+export function useChangeChannelMemberRoleMutation(
+  channelId: string | null,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ pubkey, role }: { pubkey: string; role: string }) => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      await changeChannelMemberRole(channelId, pubkey, role);
+    },
+    onSettled: async () => {
+      await invalidateChannelState(queryClient, channelId);
     },
   });
 }

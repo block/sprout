@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   useAddChannelMembersMutation,
+  useChangeChannelMemberRoleMutation,
   useChannelMembersQuery,
 } from "@/features/channels/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
@@ -37,6 +38,7 @@ export function MembersSidebar({
   const channelId = channel?.id ?? null;
   const membersQuery = useChannelMembersQuery(channelId, open);
   const addMembersMutation = useAddChannelMembersMutation(channelId);
+  const changeRoleMutation = useChangeChannelMemberRoleMutation(channelId);
 
   const rawMembers = membersQuery.data ?? [];
   const { people, bots, isBot, isMyBot, managedAgentsQuery } =
@@ -127,6 +129,7 @@ export function MembersSidebar({
   function renderMemberCard(member: ChannelMember, memberIsBot: boolean) {
     return (
       <MembersSidebarMemberCard
+        canChangeRole={canManageMembers && member.pubkey !== currentPubkey}
         canRemoveMember={canRemoveMember(member)}
         isActionPending={isActionPending}
         isArchived={isArchived}
@@ -139,6 +142,9 @@ export function MembersSidebar({
         member={member}
         memberIsBot={memberIsBot}
         memberLabel={formatMemberName(member, currentPubkey)}
+        onChangeRole={(m, role) => {
+          void changeRoleMutation.mutateAsync({ pubkey: m.pubkey, role });
+        }}
         onManagedAgentAction={(agent) => {
           void handleAgentLifecycleAction(agent);
         }}
