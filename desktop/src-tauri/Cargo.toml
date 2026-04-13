@@ -38,7 +38,7 @@ hex = "0.4"
 tokio = { version = "1", features = ["fs", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-nostr = "0.37"
+nostr = "0.44"
 reqwest = { version = "0.13", features = ["json", "query"] }
 url = "2"
 sprout-core = { path = "../../crates/sprout-core" }
