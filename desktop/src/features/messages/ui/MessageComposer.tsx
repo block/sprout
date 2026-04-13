@@ -19,6 +19,7 @@ import { MessageComposerToolbar } from "./MessageComposerToolbar";
 type MessageComposerProps = {
   channelId?: string | null;
   channelName: string;
+  draftKey?: string | null;
   disabled?: boolean;
   editTarget?: {
     author: string;
@@ -40,6 +41,7 @@ type MessageComposerProps = {
     body: string;
     id: string;
   } | null;
+  typingReplyParentId?: string | null;
 };
 
 const MAX_TEXTAREA_ROWS = 4;
@@ -47,6 +49,7 @@ const MAX_TEXTAREA_ROWS = 4;
 export function MessageComposer({
   channelId = null,
   channelName,
+  draftKey = null,
   disabled = false,
   editTarget = null,
   isSending = false,
@@ -56,6 +59,7 @@ export function MessageComposer({
   onSend,
   placeholder,
   replyTarget = null,
+  typingReplyParentId = null,
 }: MessageComposerProps) {
   const [content, setContent] = React.useState("");
   const contentRef = React.useRef(content);
@@ -70,11 +74,12 @@ export function MessageComposer({
   contentRef.current = content;
 
   const drafts = useDrafts();
-  const previousChannelIdRef = React.useRef<string | null>(null);
+  const draftStorageKey = draftKey ?? channelId;
+  const previousDraftKeyRef = React.useRef<string | null>(null);
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
-  const notifyTyping = useTypingBroadcast(channelId);
+  const notifyTyping = useTypingBroadcast(channelId, typingReplyParentId);
 
   const media = useMediaUpload(setContent);
 
@@ -93,27 +98,29 @@ export function MessageComposer({
   editTargetRef.current = editTarget;
   channelIdRef.current = channelId;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger — save draft for previous channel, restore draft for new channel, reset transient state
+  // biome-ignore lint/correctness/useExhaustiveDependencies: draftStorageKey is the sole trigger — save draft for previous scope, restore draft for new scope, reset transient state
   React.useEffect(() => {
-    // Save draft for the channel we're leaving
-    const prevId = previousChannelIdRef.current;
-    if (prevId) {
+    // Save draft for the composer scope we're leaving.
+    const previousDraftKey = previousDraftKeyRef.current;
+    if (previousDraftKey) {
       const currentContent = contentRef.current;
       const sel = draftSelectionRef.current;
       if (currentContent.trim().length > 0) {
-        drafts.saveDraft(prevId, {
+        drafts.saveDraft(previousDraftKey, {
           content: currentContent,
           selectionEnd: sel.end,
           selectionStart: sel.start,
         });
       } else {
-        drafts.clearDraft(prevId);
+        drafts.clearDraft(previousDraftKey);
       }
     }
-    previousChannelIdRef.current = channelId;
+    previousDraftKeyRef.current = draftStorageKey;
 
-    // Restore draft for the channel we're entering
-    const saved = channelId ? drafts.loadDraft(channelId) : undefined;
+    // Restore draft for the composer scope we're entering.
+    const saved = draftStorageKey
+      ? drafts.loadDraft(draftStorageKey)
+      : undefined;
     if (saved) {
       setContent(saved.content);
       contentRef.current = saved.content;
@@ -136,7 +143,7 @@ export function MessageComposer({
     mentions.clearMentions();
     channelLinks.clearChannels();
     lineHeightRef.current = null;
-  }, [channelId]);
+  }, [draftStorageKey]);
 
   const applyMentionInsert = React.useCallback(
     (suggestion: MentionSuggestion) => {

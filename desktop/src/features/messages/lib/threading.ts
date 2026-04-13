@@ -13,6 +13,21 @@ export function getChannelIdFromTags(tags: string[][]) {
   return tags.find((tag) => tag[0] === "h")?.[1] ?? null;
 }
 
+/** NIP-10 `e` reply marker on kind 20002 — which composer surface the typer is using. */
+export function getTypingReplyParentFromTags(
+  tags: string[][] | undefined,
+): string | null {
+  if (!tags) {
+    return null;
+  }
+  for (const tag of tags) {
+    if (tag[0] === "e" && tag[3] === "reply" && tag[1]) {
+      return tag[1];
+    }
+  }
+  return null;
+}
+
 export function getThreadReference(tags: string[][]): ThreadReference {
   const eventTags = getEventTags(tags);
 

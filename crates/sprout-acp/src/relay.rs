@@ -564,11 +564,30 @@ impl HarnessRelay {
     }
 
     /// Build a typing indicator event (kind:20002) for a channel.
-    pub fn build_typing_event(&self, channel_id: Uuid) -> Result<Event, RelayError> {
+    ///
+    /// When `reply_parent_event_id_hex` is set, adds `["e", id, "", "reply"]` so
+    /// clients can align typing with the composer's NIP-10 parent (matches desktop).
+    pub fn build_typing_event(
+        &self,
+        channel_id: Uuid,
+        reply_parent_event_id_hex: Option<&str>,
+    ) -> Result<Event, RelayError> {
         let h_tag = Tag::parse(&["h", &channel_id.to_string()])
             .map_err(|e| RelayError::AuthFailed(e.to_string()))?;
-        let event = EventBuilder::new(Kind::Custom(KIND_TYPING_INDICATOR as u16), "", [h_tag])
-            .sign_with_keys(&self.keys)?;
+        let event = match reply_parent_event_id_hex {
+            Some(pid) => {
+                let e_tag = Tag::parse(&["e", pid, "", "reply"])
+                    .map_err(|e| RelayError::AuthFailed(e.to_string()))?;
+                EventBuilder::new(
+                    Kind::Custom(KIND_TYPING_INDICATOR as u16),
+                    "",
+                    [h_tag, e_tag],
+                )
+                .sign_with_keys(&self.keys)?
+            }
+            None => EventBuilder::new(Kind::Custom(KIND_TYPING_INDICATOR as u16), "", [h_tag])
+                .sign_with_keys(&self.keys)?,
+        };
         Ok(event)
     }
 

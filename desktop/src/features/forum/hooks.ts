@@ -129,6 +129,7 @@ export function useCreateForumReplyMutation(channel: Channel | null) {
     }: {
       content: string;
       parentEventId: string;
+      rootEventId: string;
       mentionPubkeys?: string[];
     }) => {
       if (!channel) {
@@ -147,7 +148,7 @@ export function useCreateForumReplyMutation(channel: Channel | null) {
     onSuccess: (_data, variables) => {
       if (channel) {
         void queryClient.invalidateQueries({
-          queryKey: forumThreadQueryKey(channel.id, variables.parentEventId),
+          queryKey: forumThreadQueryKey(channel.id, variables.rootEventId),
         });
         void queryClient.invalidateQueries({
           queryKey: forumPostsQueryKey(channel.id),

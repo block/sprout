@@ -1,8 +1,11 @@
+import { MessageSquareReply } from "lucide-react";
 import * as React from "react";
 
+import type { CollapsedThreadPreview } from "@/features/messages/lib/collapsedThreads";
 import type { TimelineMessage } from "@/features/messages/types";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
@@ -11,14 +14,8 @@ import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext"
 import { parseImetaTags } from "@/features/messages/lib/parseImeta";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
-import { BotIdenticon } from "./BotIdenticon";
 import { MessageActionBar } from "./MessageActionBar";
 import { MessageTimestamp } from "./MessageTimestamp";
-
-/** Returns true if this message is from a bot instance. */
-function isBotInstance(role?: string): boolean {
-  return role === "bot";
-}
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
@@ -30,15 +27,18 @@ export const MessageRow = React.memo(
     message,
     onDelete,
     onEdit,
+    onOpenThread,
     onToggleReaction,
     onReply,
     profiles,
+    threadSummary = null,
   }: {
     activeReplyTargetId?: string | null;
     highlighted?: boolean;
     message: TimelineMessage;
     onDelete?: (message: TimelineMessage) => void;
     onEdit?: (message: TimelineMessage) => void;
+    onOpenThread?: (message: TimelineMessage) => void;
     onToggleReaction?: (
       message: TimelineMessage,
       emoji: string,
@@ -46,6 +46,7 @@ export const MessageRow = React.memo(
     ) => Promise<void>;
     onReply?: (message: TimelineMessage) => void;
     profiles?: UserProfileLookup;
+    threadSummary?: CollapsedThreadPreview | null;
   }) {
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
@@ -70,8 +71,6 @@ export const MessageRow = React.memo(
       [channels],
     );
 
-    const visibleDepth = Math.min(message.depth, 6);
-    const indentPx = visibleDepth * 28;
     const getTag = (name: string) =>
       message.tags?.find((tag) => tag[0] === name)?.[1];
 
@@ -153,18 +152,7 @@ export const MessageRow = React.memo(
     );
 
     return (
-      <div
-        className="relative"
-        style={indentPx > 0 ? { paddingLeft: `${indentPx}px` } : undefined}
-      >
-        {message.depth > 0 ? (
-          <div
-            aria-hidden
-            className="absolute bottom-1.5 left-3 top-1.5 rounded-full border-l border-border/70"
-            style={{ left: `${Math.max(indentPx - 14, 12)}px` }}
-          />
-        ) : null}
-
+      <div className="relative">
         <article
           className={cn(
             "group/message flex items-start gap-2.5 rounded-2xl px-2 py-1 transition-colors",
@@ -177,13 +165,6 @@ export const MessageRow = React.memo(
           data-testid="message-row"
         >
           <div className="flex shrink-0 items-center gap-1">
-            {isBotInstance(message.role) ? (
-              <BotIdenticon
-                value={message.author}
-                size={20}
-                className="rounded"
-              />
-            ) : null}
             {message.pubkey ? (
               <UserProfilePopover pubkey={message.pubkey}>
                 <button
@@ -279,6 +260,38 @@ export const MessageRow = React.memo(
                 });
               }}
             />
+            {threadSummary ? (
+              <button
+                className="mt-2 inline-flex items-center gap-2 rounded-full px-1 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                onClick={() => {
+                  onOpenThread?.(message);
+                }}
+                type="button"
+              >
+                <div className="flex items-center">
+                  {threadSummary.participants.map((participant, index) => (
+                    <div
+                      key={participant.id}
+                      className={`relative h-5 w-5 rounded-full ring-1 ring-background ${
+                        index > 0 ? "-ml-1.5" : ""
+                      }`}
+                    >
+                      <ProfileAvatar
+                        avatarUrl={participant.avatarUrl ?? null}
+                        className="h-5 w-5 rounded-full text-[8px]"
+                        iconClassName="h-3 w-3"
+                        label={participant.label}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <span className="font-medium">
+                  {threadSummary.replyCount}{" "}
+                  {threadSummary.replyCount === 1 ? "reply" : "replies"}
+                </span>
+                <MessageSquareReply className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
             {reactionErrorMessage ? (
               <p className="mt-1.5 text-xs text-destructive">
                 {reactionErrorMessage}
@@ -326,7 +339,8 @@ export const MessageRow = React.memo(
     prev.message.personaDisplayName === next.message.personaDisplayName &&
     prev.highlighted === next.highlighted &&
     prev.activeReplyTargetId === next.activeReplyTargetId &&
-    prev.profiles === next.profiles,
+    prev.profiles === next.profiles &&
+    prev.threadSummary === next.threadSummary,
 );
 
 MessageRow.displayName = "MessageRow";

@@ -21,7 +21,7 @@ use nostr::ToBech32;
 use pool::{
     AgentPool, OwnedAgent, PromptContext, PromptOutcome, PromptResult, PromptSource, SessionState,
 };
-use queue::{EventQueue, QueuedEvent};
+use queue::{parse_thread_tags, EventQueue, QueuedEvent};
 use relay::HarnessRelay;
 use sprout_core::kind::{
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
@@ -805,7 +805,9 @@ async fn tokio_main() -> Result<()> {
     } else {
         None
     };
-    let mut typing_channels: HashSet<Uuid> = HashSet::new();
+    // Channels where an agent turn is in flight, mapped to the NIP-10 parent of
+    // the prompt's first event (for scoped kind:20002), or `None` if unknown.
+    let mut typing_channels: HashMap<Uuid, Option<String>> = HashMap::new();
     let mut presence_task: Option<tokio::task::JoinHandle<()>> = None;
 
     // ── Step 6d: Maintenance (slot refill + queue compaction) ────────────────
@@ -931,7 +933,9 @@ async fn tokio_main() -> Result<()> {
             // called on relay events or pool results, neither of which
             // arrive when the channel is silent.
             if queue.has_flushable_work() {
-                typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+                for (ch, parent) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                    typing_channels.insert(ch, parent);
+                }
             }
         }
 
@@ -962,7 +966,9 @@ async fn tokio_main() -> Result<()> {
         // this, batches requeued during crash recovery sit idle until the
         // next relay event arrives — which can be minutes on quiet channels.
         if respawn_collected {
-            typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+            for (ch, parent) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                typing_channels.insert(ch, parent);
+            }
         }
 
         // Borrow result_rx and join_set simultaneously via split-borrow helper.
@@ -1272,7 +1278,9 @@ async fn tokio_main() -> Result<()> {
                                 }
                             }
                             // ── End mode gate ────────────────────────────────
-                            typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+                            for (ch, parent) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                                typing_channels.insert(ch, parent);
+                            }
                         }
                         None => {
                             tracing::warn!("relay event stream ended — requesting reconnect");
@@ -1294,7 +1302,9 @@ async fn tokio_main() -> Result<()> {
                     let _ = result_rx;
                     if queue.has_flushable_work() {
                         tracing::debug!("heartbeat_skipped_events");
-                        typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+                        for (ch, parent) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                            typing_channels.insert(ch, parent);
+                        }
                     } else if pool.any_idle() {
                         dispatch_heartbeat(&mut pool, &ctx, &mut heartbeat_in_flight);
                     } else {
@@ -1331,8 +1341,8 @@ async fn tokio_main() -> Result<()> {
                     // Use try_publish (non-blocking) for typing indicators —
                     // they're ephemeral and must not block the main loop during
                     // relay reconnection (#35).
-                    for &ch in &typing_channels {
-                        if let Ok(event) = relay.build_typing_event(ch) {
+                    for (ch, reply_parent) in &typing_channels {
+                        if let Ok(event) = relay.build_typing_event(*ch, reply_parent.as_deref()) {
                             if let Err(e) = relay.try_publish_event(event) {
                                 tracing::debug!("typing indicator dropped for {ch}: {e}");
                             }
@@ -1381,7 +1391,9 @@ async fn tokio_main() -> Result<()> {
                 {
                     break;
                 }
-                typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+                for (ch, parent) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                    typing_channels.insert(ch, parent);
+                }
             }
             Some(PoolEvent::Panic(join_error)) => {
                 tracing::error!("agent task panicked: {join_error}");
@@ -1401,7 +1413,9 @@ async fn tokio_main() -> Result<()> {
                     tracing::error!("all agents dead — exiting");
                     break;
                 }
-                typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+                for (ch, parent) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                    typing_channels.insert(ch, parent);
+                }
             }
             None => {} // relay/heartbeat/shutdown branches handled inline above
         }
@@ -1540,7 +1554,7 @@ fn dispatch_pending(
     pool: &mut AgentPool,
     queue: &mut EventQueue,
     ctx: &Arc<PromptContext>,
-) -> Vec<Uuid> {
+) -> Vec<(Uuid, Option<String>)> {
     let mut dispatched_channels = Vec::new();
     loop {
         let batch = match queue.flush_next() {
@@ -1548,6 +1562,10 @@ fn dispatch_pending(
             None => break,
         };
         let channel_id = batch.channel_id;
+        let reply_parent = batch
+            .events
+            .first()
+            .and_then(|be| parse_thread_tags(&be.event).parent_event_id);
         let affinity_hit = pool.has_session_for(channel_id);
         let agent = match pool.try_claim(Some(channel_id)) {
             Some(a) => a,
@@ -1595,7 +1613,7 @@ fn dispatch_pending(
                 cancel_tx: Some(cancel_tx),
             },
         );
-        dispatched_channels.push(channel_id);
+        dispatched_channels.push((channel_id, reply_parent));
     }
     tracing::debug!(
         dispatched = dispatched_channels.len(),
@@ -1779,7 +1797,7 @@ fn recover_panicked_agent(
     join_error: tokio::task::JoinError,
     heartbeat_in_flight: &mut bool,
     removed_channels: &HashSet<Uuid>,
-    typing_channels: &mut HashSet<Uuid>,
+    typing_channels: &mut HashMap<Uuid, Option<String>>,
     crash_history: &mut [SlotCircuit],
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,
@@ -1863,7 +1881,7 @@ fn drain_ready_join_results(
     config: &Config,
     heartbeat_in_flight: &mut bool,
     removed_channels: &HashSet<Uuid>,
-    typing_channels: &mut HashSet<Uuid>,
+    typing_channels: &mut HashMap<Uuid, Option<String>>,
     crash_history: &mut [SlotCircuit],
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,

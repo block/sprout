@@ -114,6 +114,7 @@ export function ForumView({
     return (
       <ForumThreadPanel
         canDeletePost={canDeleteExpandedPost}
+        channelId={channel.id}
         currentPubkey={effectiveCurrentPubkey}
         isDeletingPost={deletePostMutation.isPending}
         isLoading={threadQuery.isLoading}
@@ -125,18 +126,19 @@ export function ForumView({
         onDeleteReply={(eventId) => {
           deleteReplyMutation.mutate({ eventId });
         }}
-        channelId={channel.id}
-        onReply={(content, mentionPubkeys) => {
+        onReply={(content, mentionPubkeys, parentEventId) => {
           createReplyMutation.mutate({
             content,
-            parentEventId: selectedPostId,
             mentionPubkeys,
+            parentEventId,
+            rootEventId: selectedPostId,
           });
         }}
         onTargetReached={onTargetReached}
         profiles={profiles}
         targetEventId={targetReplyId}
         thread={threadQuery.data}
+        threadRootEventId={selectedPostId}
       />
     );
   }

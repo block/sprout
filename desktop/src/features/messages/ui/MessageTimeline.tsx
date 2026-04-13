@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ArrowDown, Loader2 } from "lucide-react";
 
+import type { CollapsedThreadPreview } from "@/features/messages/lib/collapsedThreads";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { Button } from "@/shared/ui/button";
@@ -19,6 +20,7 @@ type MessageTimelineProps = {
   emptyTitle?: string;
   emptyDescription?: string;
   activeReplyTargetId?: string | null;
+  collapsedThreadSummaryByMessageId?: Map<string, CollapsedThreadPreview>;
   currentPubkey?: string;
   fetchOlder?: () => Promise<void>;
   hasOlderMessages?: boolean;
@@ -28,6 +30,7 @@ type MessageTimelineProps = {
   profiles?: UserProfileLookup;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
+  onOpenThread?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
   onToggleReaction?: (
     message: TimelineMessage,
@@ -45,6 +48,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   emptyTitle = "No messages yet",
   emptyDescription = "Send the first message to start the thread.",
   activeReplyTargetId = null,
+  collapsedThreadSummaryByMessageId,
   currentPubkey,
   fetchOlder,
   hasOlderMessages = true,
@@ -53,6 +57,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   profiles,
   onDelete,
   onEdit,
+  onOpenThread,
   onReply,
   onToggleReaction,
   targetMessageId = null,
@@ -154,11 +159,15 @@ export const MessageTimeline = React.memo(function MessageTimeline({
             {!isLoading && messages.length > 0 ? (
               <TimelineMessageList
                 activeReplyTargetId={activeReplyTargetId}
+                collapsedThreadSummaryByMessageId={
+                  collapsedThreadSummaryByMessageId
+                }
                 currentPubkey={currentPubkey}
                 highlightedMessageId={highlightedMessageId}
                 messages={messages}
                 onDelete={onDelete}
                 onEdit={onEdit}
+                onOpenThread={onOpenThread}
                 onReply={onReply}
                 onToggleReaction={onToggleReaction}
                 personaLookup={personaLookup}

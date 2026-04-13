@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import type { CollapsedThreadPreview } from "@/features/messages/lib/collapsedThreads";
 import {
   formatDayHeading,
   isSameDay,
@@ -13,11 +14,13 @@ import { SystemMessageRow } from "./SystemMessageRow";
 
 type TimelineMessageListProps = {
   activeReplyTargetId?: string | null;
+  collapsedThreadSummaryByMessageId?: Map<string, CollapsedThreadPreview>;
   currentPubkey?: string;
   highlightedMessageId?: string | null;
   messages: TimelineMessage[];
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
+  onOpenThread?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
   onToggleReaction?: (
     message: TimelineMessage,
@@ -31,11 +34,13 @@ type TimelineMessageListProps = {
 
 export const TimelineMessageList = React.memo(function TimelineMessageList({
   activeReplyTargetId = null,
+  collapsedThreadSummaryByMessageId,
   currentPubkey,
   highlightedMessageId = null,
   messages,
   onDelete,
   onEdit,
+  onOpenThread,
   onReply,
   onToggleReaction,
   personaLookup,
@@ -86,8 +91,12 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               : undefined
           }
           onToggleReaction={onToggleReaction}
+          onOpenThread={onOpenThread}
           onReply={onReply}
           profiles={profiles}
+          threadSummary={
+            collapsedThreadSummaryByMessageId?.get(message.id) ?? null
+          }
         />,
       );
     }

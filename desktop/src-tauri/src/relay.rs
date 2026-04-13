@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
-use reqwest::Method;
+use reqwest::{header::CONTENT_TYPE, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -245,6 +245,77 @@ pub async fn relay_error_message(response: reqwest::Response) -> String {
     format!("relay returned {status}: {body}")
 }
 
+fn summarize_response_body(body: &str) -> String {
+    let trimmed = body.trim();
+    let preview: String = trimmed.chars().take(160).collect();
+    if trimmed.chars().count() > 160 {
+        format!("{preview}...")
+    } else {
+        preview
+    }
+}
+
+fn cloudflare_access_error(final_url: &str, body: &str) -> Option<String> {
+    let lower_body = body.to_ascii_lowercase();
+    if final_url.contains("cloudflareaccess.com")
+        || lower_body.contains("warp client")
+        || lower_body.contains("cdn-cgi/access/login")
+    {
+        return Some(
+            "Relay returned a Cloudflare Access login page instead of JSON. Connect via the Warp client or use a local relay (`just relay` + `just dev`).".to_string(),
+        );
+    }
+    None
+}
+
+fn decode_json_body<T>(
+    status: StatusCode,
+    content_type: Option<&str>,
+    final_url: &str,
+    body: &str,
+    operation: &str,
+) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    if let Some(message) = cloudflare_access_error(final_url, body) {
+        return Err(message);
+    }
+
+    serde_json::from_str::<T>(body).map_err(|error| {
+        let content_type = content_type.unwrap_or("unknown");
+        let preview = summarize_response_body(body);
+        format!(
+            "{operation} failed to decode JSON (status {status}, content-type {content_type}). Response preview: {preview}. Error: {error}"
+        )
+    })
+}
+
+async fn parse_json_response<T>(response: reqwest::Response, operation: &str) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let status = response.status();
+    let final_url = response.url().to_string();
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("{operation} failed to read response body: {error}"))?;
+
+    decode_json_body(
+        status,
+        content_type.as_deref(),
+        &final_url,
+        &body,
+        operation,
+    )
+}
+
 pub async fn send_json_request<T>(request: reqwest::RequestBuilder) -> Result<T, String>
 where
     T: DeserializeOwned,
@@ -258,10 +329,7 @@ where
         return Err(relay_error_message(response).await);
     }
 
-    response
-        .json::<T>()
-        .await
-        .map_err(|error| format!("parse failed: {error}"))
+    parse_json_response(response, "Relay response").await
 }
 
 pub async fn send_empty_request(request: reqwest::RequestBuilder) -> Result<(), String> {
@@ -279,7 +347,14 @@ pub async fn send_empty_request(request: reqwest::RequestBuilder) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
-    use super::{api_path, validate_api_path};
+    use super::{api_path, cloudflare_access_error, decode_json_body, validate_api_path};
+    use reqwest::StatusCode;
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct TestPayload {
+        ok: bool,
+    }
 
     #[test]
     fn api_path_encodes_path_segments() {
@@ -296,6 +371,60 @@ mod tests {
     #[test]
     fn validate_api_path_allows_encoded_segments() {
         assert!(validate_api_path("/api/tokens/..%2Fadmin").is_ok());
+    }
+
+    #[test]
+    fn cloudflare_access_error_detects_login_redirect() {
+        let message = cloudflare_access_error(
+            "https://sqprod.cloudflareaccess.com/cdn-cgi/access/login/example",
+            "Please authenticate via the warp client",
+        );
+        assert!(message.is_some());
+    }
+
+    #[test]
+    fn decode_json_body_parses_valid_json() {
+        let parsed: TestPayload = decode_json_body(
+            StatusCode::OK,
+            Some("application/json"),
+            "https://sprout.example/api/channels",
+            r#"{"ok":true}"#,
+            "Relay response",
+        )
+        .expect("valid JSON should parse");
+
+        assert_eq!(parsed, TestPayload { ok: true });
+    }
+
+    #[test]
+    fn decode_json_body_surfaces_cloudflare_hint() {
+        let error = decode_json_body::<TestPayload>(
+            StatusCode::OK,
+            Some("text/html"),
+            "https://sqprod.cloudflareaccess.com/cdn-cgi/access/login/example",
+            "<html>Please authenticate via the warp client</html>",
+            "Relay response",
+        )
+        .expect_err("Cloudflare Access HTML should not parse");
+
+        assert!(error.contains("Cloudflare Access"));
+        assert!(error.contains("Warp client"));
+    }
+
+    #[test]
+    fn decode_json_body_includes_preview_for_non_json() {
+        let error = decode_json_body::<TestPayload>(
+            StatusCode::OK,
+            Some("text/plain"),
+            "https://sprout.example/api/channels",
+            "not json",
+            "Relay response",
+        )
+        .expect_err("plain text should fail");
+
+        assert!(error.contains("failed to decode JSON"));
+        assert!(error.contains("content-type text/plain"));
+        assert!(error.contains("Response preview: not json"));
     }
 }
 
@@ -352,10 +481,8 @@ pub async fn submit_event(
         return Err(relay_error_message(response).await);
     }
 
-    let result: SubmitEventResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("failed to parse response: {e}"))?;
+    let result: SubmitEventResponse =
+        parse_json_response(response, "Relay submit response").await?;
 
     if !result.accepted {
         return Err(format!("relay rejected event: {}", result.message));

@@ -135,15 +135,26 @@ export class RelayClient {
     );
   }
 
-  async sendTypingIndicator(channelId: string) {
+  /**
+   * @param replyParentEventId Optional NIP-10 reply target — same id you pass as `parentEventId`
+   *   when sending a message. Enables scoped “is typing” in thread UIs.
+   */
+  async sendTypingIndicator(
+    channelId: string,
+    replyParentEventId?: string | null,
+  ) {
     // Bail when disconnected — not worth triggering a reconnect for ephemeral typing events.
     if (this.wsId === null) {
       return;
     }
+    const tags: string[][] = [["h", channelId]];
+    if (replyParentEventId) {
+      tags.push(["e", replyParentEventId, "", "reply"]);
+    }
     const event = await signRelayEvent({
       kind: KIND_TYPING_INDICATOR,
       content: "",
-      tags: [["h", channelId]],
+      tags,
     });
 
     // Fire-and-forget: no need to wait for relay acknowledgement.

@@ -3,6 +3,7 @@ import * as React from "react";
 
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import { useMentions } from "@/features/messages/lib/useMentions";
+import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
 import { ChannelAutocomplete } from "@/features/messages/ui/ChannelAutocomplete";
 import { MentionAutocomplete } from "@/features/messages/ui/MentionAutocomplete";
 import { Button } from "@/shared/ui/button";
@@ -15,6 +16,11 @@ type ForumComposerProps = {
   disabled?: boolean;
   isSending?: boolean;
   onCancel?: () => void;
+  /** When set, shows a compact “replying to …” strip with cancel. */
+  replyToAuthorLabel?: string | null;
+  onCancelReplyTo?: () => void;
+  /** Passed to kind 20002 as the `e` reply target — same as the next message parent. */
+  typingReplyParentId?: string | null;
   onSubmit: (content: string, mentionPubkeys: string[]) => void;
 };
 
@@ -25,6 +31,9 @@ export function ForumComposer({
   disabled,
   isSending,
   onCancel,
+  replyToAuthorLabel = null,
+  onCancelReplyTo,
+  typingReplyParentId = null,
   onSubmit,
 }: ForumComposerProps) {
   const [value, setValue] = React.useState("");
@@ -32,6 +41,7 @@ export function ForumComposer({
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
+  const notifyTyping = useTypingBroadcast(channelId, typingReplyParentId);
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -49,6 +59,9 @@ export function ForumComposer({
     setValue(next);
     mentions.updateMentionQuery(next, event.target.selectionStart);
     channelLinks.updateChannelQuery(next, event.target.selectionStart);
+    if (next.trim().length > 0) {
+      notifyTyping();
+    }
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -105,6 +118,27 @@ export function ForumComposer({
 
   return (
     <form className="relative flex flex-col gap-2" onSubmit={handleSubmit}>
+      {replyToAuthorLabel ? (
+        <div className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
+          <span className="min-w-0 truncate">
+            Replying to{" "}
+            <span className="font-medium text-foreground">
+              {replyToAuthorLabel}
+            </span>
+          </span>
+          {onCancelReplyTo ? (
+            <Button
+              className="h-6 shrink-0 px-2"
+              onClick={onCancelReplyTo}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              Cancel
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       <ChannelAutocomplete
         onSelect={(suggestion) => {
           const textarea = textareaRef.current;
