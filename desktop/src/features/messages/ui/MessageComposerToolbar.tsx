@@ -56,6 +56,22 @@ export const MessageComposerToolbar = React.memo(
     onPaperclip: () => void;
     sendDisabled: boolean;
   }) {
+    /* ── Aa toggle (shared across both states via layoutId) ── */
+    const aaToggle = (
+      <motion.div layoutId="aa-toggle" transition={layoutSpring}>
+        <Toggle
+          aria-label="Toggle formatting"
+          disabled={composerDisabled}
+          pressed={isFormattingOpen}
+          onPressedChange={onFormattingToggle}
+          size="sm"
+          title="Formatting"
+        >
+          <ALargeSmall className="h-4 w-4" />
+        </Toggle>
+      </motion.div>
+    );
+
     return (
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <LayoutGroup>
@@ -64,19 +80,7 @@ export const MessageComposerToolbar = React.memo(
               {isFormattingOpen ? (
                 /* ── Expanded: [Aa] [✕] | [formatting buttons] ── */
                 <React.Fragment key="expanded">
-                  {/* Aa toggle — layoutId animates it from right → left */}
-                  <motion.div layoutId="aa-toggle" transition={layoutSpring}>
-                    <Toggle
-                      aria-label="Toggle formatting"
-                      disabled={composerDisabled}
-                      pressed={isFormattingOpen}
-                      onPressedChange={onFormattingToggle}
-                      size="sm"
-                      title="Formatting"
-                    >
-                      <ALargeSmall className="h-4 w-4" />
-                    </Toggle>
-                  </motion.div>
+                  {aaToggle}
 
                   {/* ✕ close button */}
                   <motion.div
@@ -129,6 +133,7 @@ export const MessageComposerToolbar = React.memo(
                     transition={presenceSpring}
                   >
                     <Button
+                      aria-label="Mention someone"
                       data-testid="message-insert-mention"
                       disabled={composerDisabled}
                       onClick={onOpenMentionPicker}
@@ -141,6 +146,7 @@ export const MessageComposerToolbar = React.memo(
                       <AtSign className="h-4 w-4" />
                     </Button>
                     <Button
+                      aria-label="Attach image"
                       disabled={composerDisabled || isUploading}
                       onClick={onPaperclip}
                       size="icon"
@@ -149,7 +155,11 @@ export const MessageComposerToolbar = React.memo(
                       variant="ghost"
                     >
                       {isUploading ? (
-                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                        <span
+                          className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+                          role="status"
+                          aria-label="Uploading"
+                        />
                       ) : (
                         <Paperclip className="h-4 w-4" />
                       )}
@@ -163,19 +173,7 @@ export const MessageComposerToolbar = React.memo(
                     />
                   </motion.div>
 
-                  {/* Aa toggle — layoutId animates it from left → right */}
-                  <motion.div layoutId="aa-toggle" transition={layoutSpring}>
-                    <Toggle
-                      aria-label="Toggle formatting"
-                      disabled={composerDisabled}
-                      pressed={isFormattingOpen}
-                      onPressedChange={onFormattingToggle}
-                      size="sm"
-                      title="Formatting"
-                    >
-                      <ALargeSmall className="h-4 w-4" />
-                    </Toggle>
-                  </motion.div>
+                  {aaToggle}
                 </React.Fragment>
               )}
             </AnimatePresence>

@@ -80,6 +80,11 @@ export function MessageComposer({
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
   const [isFormattingOpen, setIsFormattingOpen] = React.useState(false);
 
+  const handleFormattingToggle = React.useCallback((pressed: boolean) => {
+    if (pressed) setIsEmojiPickerOpen(false);
+    setIsFormattingOpen(pressed);
+  }, []);
+
   const drafts = useDrafts();
   const previousChannelIdRef = React.useRef<string | null>(null);
 
@@ -699,7 +704,7 @@ export function MessageComposer({
             onCaptureSelection={handleCaptureSelection}
             onEmojiPickerOpenChange={setIsEmojiPickerOpen}
             onEmojiSelect={insertEmoji}
-            onFormattingToggle={setIsFormattingOpen}
+            onFormattingToggle={handleFormattingToggle}
             onOpenMentionPicker={openMentionPicker}
             onPaperclip={handlePaperclipClick}
             sendDisabled={sendDisabled}
