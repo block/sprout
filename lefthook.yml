@@ -6,6 +6,8 @@ pre-commit:
       run: just desktop-tauri-fmt-check
     desktop-check:
       run: just desktop-check
+    mobile-check:
+      run: just mobile-check
 
 pre-push:
   parallel: true
@@ -24,3 +26,7 @@ pre-push:
       run: just desktop-build
     desktop-tauri-check:
       run: just desktop-tauri-check
+    mobile-check:
+      run: just mobile-check
+    mobile-test:
+      run: just mobile-test

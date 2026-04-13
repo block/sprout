@@ -114,3 +114,11 @@ sprout-huddle = { path = "crates/sprout-huddle" }
 sprout-workflow = { path = "crates/sprout-workflow" }
 sprout-media = { path = "crates/sprout-media" }
 sprout-sdk = { path = "crates/sprout-sdk" }
+
+# CI profile — release-grade codegen for the relay so e2e tests hit a
+# realistic binary, not an unoptimised debug build.  Inherits `release`
+# defaults (opt-level 3, no debug-assertions) but keeps incremental
+# compilation enabled and avoids LTO so the build stays fast.
+[profile.ci]
+inherits = "release"
+lto = false

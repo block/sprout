@@ -1,15 +1,18 @@
 use std::collections::HashSet;
 
+use nostr::Keys;
 use tauri::{AppHandle, State};
 
 use crate::{
     app_state::AppState,
     managed_agents::{
         build_managed_agent_summary, default_agent_workdir, find_managed_agent_mut,
-        load_managed_agents, missing_command_message, normalize_agent_args, resolve_command,
-        save_managed_agents, sync_managed_agent_processes, AgentModelInfo, AgentModelsResponse,
-        ManagedAgentSummary, UpdateManagedAgentRequest,
+        load_managed_agents, managed_agent_avatar_url, missing_command_message,
+        normalize_agent_args, resolve_command, save_managed_agents, sync_managed_agent_processes,
+        AgentModelInfo, AgentModelsResponse, ManagedAgentSummary, UpdateManagedAgentRequest,
+        UpdateManagedAgentResponse,
     },
+    relay::{relay_ws_url, sync_managed_agent_profile},
     util::now_iso,
 };
 
@@ -96,56 +99,130 @@ pub async fn get_agent_models(
 
 /// Update mutable fields on an existing managed agent record.
 ///
-/// Does NOT auto-restart the agent. The frontend should prompt the user
-/// to restart for model changes to take effect.
+/// Does NOT auto-restart the agent. Runtime config changes (system prompt,
+/// parallelism, commands, toolsets) take effect on the next agent spawn.
+/// Name changes are synced to the relay immediately via a kind:0 re-publish.
 #[tauri::command]
-pub fn update_managed_agent(
+pub async fn update_managed_agent(
     input: UpdateManagedAgentRequest,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<ManagedAgentSummary, String> {
-    let _store_guard = state
-        .managed_agents_store_lock
-        .lock()
-        .map_err(|e| e.to_string())?;
-    let mut records = load_managed_agents(&app)?;
-    let mut runtimes = state
-        .managed_agent_processes
-        .lock()
-        .map_err(|e| e.to_string())?;
-    sync_managed_agent_processes(&mut records, &mut runtimes);
+) -> Result<UpdateManagedAgentResponse, String> {
+    // Phase 1: local save (synchronous, under lock)
+    let (summary, sync_params) = {
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let mut records = load_managed_agents(&app)?;
+        let mut runtimes = state
+            .managed_agent_processes
+            .lock()
+            .map_err(|e| e.to_string())?;
+        sync_managed_agent_processes(&mut records, &mut runtimes);
 
-    let record = find_managed_agent_mut(&mut records, &input.pubkey)?;
+        let record = find_managed_agent_mut(&mut records, &input.pubkey)?;
 
-    if let Some(name_update) = input.name {
-        let trimmed = name_update.trim().to_string();
-        if !trimmed.is_empty() {
-            record.name = trimmed;
+        let mut name_changed = false;
+        if let Some(name_update) = input.name {
+            let trimmed = name_update.trim().to_string();
+            if !trimmed.is_empty() && trimmed != record.name {
+                record.name = trimmed;
+                name_changed = true;
+            }
         }
-    }
-    // Tri-state: None = don't touch, Some(None) = clear, Some(Some(v)) = set
-    if let Some(model_update) = input.model {
-        record.model = model_update;
-    }
-    if let Some(prompt_update) = input.system_prompt {
-        record.system_prompt = prompt_update;
-    }
-    if let Some(toolsets_update) = input.mcp_toolsets {
-        record.mcp_toolsets = toolsets_update
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(str::to_string);
-    }
-    record.updated_at = now_iso();
+        if let Some(model_update) = input.model {
+            record.model = model_update;
+        }
+        if let Some(prompt_update) = input.system_prompt {
+            record.system_prompt = prompt_update;
+        }
+        if let Some(toolsets_update) = input.mcp_toolsets {
+            record.mcp_toolsets = toolsets_update
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string);
+        }
+        if let Some(parallelism) = input.parallelism {
+            record.parallelism = parallelism;
+        }
+        if let Some(turn_timeout_seconds) = input.turn_timeout_seconds {
+            record.turn_timeout_seconds = turn_timeout_seconds;
+        }
+        if let Some(relay_url) = input.relay_url {
+            let trimmed = relay_url.trim();
+            record.relay_url = if trimmed.is_empty() {
+                relay_ws_url()
+            } else {
+                trimmed.to_string()
+            };
+        }
+        if let Some(acp_command) = input.acp_command {
+            record.acp_command = acp_command;
+        }
+        if let Some(agent_command) = input.agent_command {
+            record.agent_command = agent_command;
+        }
+        if let Some(agent_args) = input.agent_args {
+            record.agent_args = agent_args;
+        }
+        if let Some(mcp_command) = input.mcp_command {
+            record.mcp_command = mcp_command;
+        }
+        record.updated_at = now_iso();
 
-    save_managed_agents(&app, &records)?;
+        save_managed_agents(&app, &records)?;
 
-    let record = records
-        .iter()
-        .find(|r| r.pubkey == input.pubkey)
-        .ok_or_else(|| format!("agent {} not found", input.pubkey))?;
-    build_managed_agent_summary(&app, record, &runtimes)
+        let record = records
+            .iter()
+            .find(|r| r.pubkey == input.pubkey)
+            .ok_or_else(|| format!("agent {} not found", input.pubkey))?;
+
+        let sync_params = if name_changed {
+            let agent_keys = Keys::parse(&record.private_key_nsec)
+                .map_err(|e| format!("failed to parse agent keys: {e}"))?;
+            let relay_url = record.relay_url.clone();
+            let api_token = record.api_token.clone();
+            let display_name = record.name.clone();
+            let avatar_url = managed_agent_avatar_url(&record.agent_command);
+            Some((agent_keys, relay_url, api_token, display_name, avatar_url))
+        } else {
+            None
+        };
+
+        let summary = build_managed_agent_summary(&app, record, &runtimes)?;
+        (summary, sync_params)
+    }; // lock dropped here
+
+    // Phase 2: relay profile sync (async, best-effort, outside lock)
+    let profile_sync_error =
+        if let Some((agent_keys, relay_url, api_token, display_name, avatar_url)) = sync_params {
+            match sync_managed_agent_profile(
+                &state,
+                &relay_url,
+                &agent_keys,
+                api_token.as_deref(),
+                &[],
+                &display_name,
+                avatar_url.as_deref(),
+            )
+            .await
+            {
+                Ok(()) => None,
+                Err(e) => {
+                    eprintln!("sprout-desktop: relay profile sync failed after rename: {e}");
+                    Some(e)
+                }
+            }
+        } else {
+            None
+        };
+
+    Ok(UpdateManagedAgentResponse {
+        agent: summary,
+        profile_sync_error,
+    })
 }
 
 // ── Model normalization ───────────────────────────────────────────────────────

@@ -10,10 +10,15 @@ import { formatRelativeTime } from "@/features/forum/lib/time";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Markdown } from "@/shared/ui/markdown";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
+import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
 
 type UserProfilePopoverProps = {
   children: React.ReactNode;
   pubkey: string;
+  /** When set to "bot", a BotIdenticon badge renders next to the display name. */
+  role?: string;
+  /** Value used to generate the BotIdenticon glyph (typically the author name). */
+  botIdenticonValue?: string;
 };
 
 function truncatePubkey(pubkey: string) {
@@ -27,6 +32,8 @@ function truncatePubkey(pubkey: string) {
 export function UserProfilePopover({
   children,
   pubkey,
+  role,
+  botIdenticonValue,
 }: UserProfilePopoverProps) {
   const [open, setOpen] = React.useState(false);
   const [showAllNotes, setShowAllNotes] = React.useState(false);
@@ -64,9 +71,18 @@ export function UserProfilePopover({
             )}
 
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold">
-                {profile?.displayName ?? truncatePubkey(pubkey)}
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="truncate text-sm font-semibold">
+                  {profile?.displayName ?? truncatePubkey(pubkey)}
+                </p>
+                {role === "bot" && botIdenticonValue ? (
+                  <BotIdenticon
+                    value={botIdenticonValue}
+                    size={20}
+                    className="shrink-0 rounded"
+                  />
+                ) : null}
+              </div>
               {profile?.nip05Handle ? (
                 <p className="truncate text-xs text-muted-foreground">
                   {profile.nip05Handle}

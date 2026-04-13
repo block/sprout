@@ -3506,11 +3506,15 @@ async function handleGetManagedAgentLog(args: {
 async function handleUpdateManagedAgent(args: {
   input: {
     pubkey: string;
+    name?: string;
     model?: string | null;
     systemPrompt?: string | null;
   };
-}): Promise<RawManagedAgent> {
+}): Promise<{ agent: RawManagedAgent; profile_sync_error: string | null }> {
   const agent = getMockManagedAgent(args.input.pubkey);
+  if (args.input.name !== undefined) {
+    agent.name = args.input.name;
+  }
   if (args.input.model !== undefined) {
     agent.model = args.input.model;
   }
@@ -3518,7 +3522,7 @@ async function handleUpdateManagedAgent(args: {
     agent.system_prompt = args.input.systemPrompt;
   }
   agent.updated_at = new Date().toISOString();
-  return cloneManagedAgent(agent);
+  return { agent: cloneManagedAgent(agent), profile_sync_error: null };
 }
 
 async function handleSearchMessages(
