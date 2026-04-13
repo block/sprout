@@ -54,6 +54,22 @@ use crate::{
 
 // ── State types ───────────────────────────────────────────────────────────────
 
+/// Voice input mode: push-to-talk (PTT) or voice-activity detection (VAD).
+///
+/// PTT (default): mic is gated by a global shortcut (Ctrl+Space). Pressing the
+/// key sets `ptt_active` and immediately cancels any playing TTS. Releasing
+/// the key (after a 200 ms delay) stops mic capture and flushes the utterance.
+///
+/// VAD: the earshot VAD runs continuously and speech is accumulated whenever
+/// the probability exceeds the threshold. Barge-in is enabled in this mode.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceInputMode {
+    #[default]
+    PushToTalk,
+    VoiceActivity,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum HuddlePhase {
@@ -125,6 +141,12 @@ pub struct HuddleState {
     /// generation has changed, the task silently drops the transcript.
     #[serde(skip)]
     pub session_generation: Arc<AtomicU64>,
+    /// Voice input mode: push-to-talk or voice-activity detection.
+    pub voice_input_mode: VoiceInputMode,
+    /// True while the PTT key is held (+ 200 ms release delay).
+    /// Shared with the STT pipeline for mic gating.
+    #[serde(skip)]
+    pub ptt_active: Arc<AtomicBool>,
 }
 
 fn serialize_agent_pubkeys<S>(v: &Arc<Mutex<Vec<String>>>, s: S) -> Result<S::Ok, S::Error>
@@ -172,6 +194,8 @@ impl Clone for HuddleState {
             tts_cancel: Arc::clone(&self.tts_cancel),
             last_agent_refresh: self.last_agent_refresh,
             session_generation: Arc::clone(&self.session_generation),
+            voice_input_mode: self.voice_input_mode.clone(),
+            ptt_active: Arc::clone(&self.ptt_active),
         }
     }
 }
@@ -195,6 +219,8 @@ impl Default for HuddleState {
             tts_cancel: Arc::new(AtomicBool::new(false)),
             last_agent_refresh: None,
             session_generation: Arc::new(AtomicU64::new(0)),
+            voice_input_mode: VoiceInputMode::default(),
+            ptt_active: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -335,8 +361,8 @@ async fn maybe_start_stt_pipeline(
     // Grab shared flags, agent pubkeys, and session generation from HuddleState.
     // If replacing an existing pipeline, bump generation first so the old
     // transcription task's next POST sees a stale generation and exits.
-    let (tts_active, tts_cancel, agent_pubkeys_arc, session_gen) = {
-        let mut hs = state.huddle()?;
+    let (tts_active, tts_cancel, agent_pubkeys_arc, session_gen, ptt_active_for_stt) = {
+        let hs = state.huddle()?;
         // Invalidate any existing transcription task before replacing the pipeline.
         if hs.stt_pipeline.is_some() {
             hs.session_generation.fetch_add(1, Ordering::Release);
@@ -344,15 +370,22 @@ async fn maybe_start_stt_pipeline(
         if let Some(ref old) = hs.stt_pipeline {
             old.shutdown();
         }
+        let ptt = if hs.voice_input_mode == VoiceInputMode::PushToTalk {
+            Some(Arc::clone(&hs.ptt_active))
+        } else {
+            None
+        };
         (
             Arc::clone(&hs.tts_active),
             Some(Arc::clone(&hs.tts_cancel)),
             Arc::clone(&hs.agent_pubkeys),
             Arc::clone(&hs.session_generation),
+            ptt,
         )
     };
 
-    let (pipeline, text_rx) = stt::SttPipeline::new(model_dir, tts_active, tts_cancel)?;
+    let (pipeline, text_rx) =
+        stt::SttPipeline::new(model_dir, tts_active, tts_cancel, ptt_active_for_stt)?;
     let pipeline = Arc::new(pipeline);
 
     {
@@ -488,6 +521,50 @@ fn spawn_transcription_task(
 }
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
+
+/// Set the voice input mode (push-to-talk or voice-activity detection).
+///
+/// When switching mid-huddle, restarts the STT pipeline so it picks up the
+/// new mode (PTT gating vs continuous VAD with barge-in). The pipeline
+/// captures the mode at construction time, so a restart is required.
+#[tauri::command]
+pub async fn set_voice_input_mode(
+    mode: VoiceInputMode,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let needs_restart = {
+        let mut hs = state.huddle()?;
+        let old_mode = hs.voice_input_mode.clone();
+        hs.voice_input_mode = mode.clone();
+        // Restart STT if mode changed and a huddle is active with a pipeline running.
+        old_mode != mode
+            && matches!(hs.phase, HuddlePhase::Connected | HuddlePhase::Active)
+            && hs.stt_pipeline.is_some()
+    };
+
+    if needs_restart {
+        let eph_id = {
+            let hs = state.huddle()?;
+            hs.ephemeral_channel_id.clone()
+        };
+        if let Some(eph_id) = eph_id {
+            // Best-effort restart — if models aren't ready, the pipeline
+            // stays down until the next hotstart cycle picks it up.
+            if let Err(e) = maybe_start_stt_pipeline(&state, &eph_id).await {
+                eprintln!("sprout-desktop: STT pipeline restart on mode switch failed: {e}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Return the current voice input mode.
+#[tauri::command]
+pub fn get_voice_input_mode(state: State<'_, AppState>) -> Result<VoiceInputMode, String> {
+    let hs = state.huddle()?;
+    Ok(hs.voice_input_mode.clone())
+}
 
 /// Start a new huddle in the given parent channel.
 ///
@@ -656,8 +733,12 @@ pub async fn start_huddle(
                 }
             }
             // Reset state to Idle so the user can retry.
+            // Preserve session_generation so in-flight transcription tasks
+            // from a prior session still see a stale generation and exit.
             if let Ok(mut hs) = state.huddle_state.lock() {
+                let gen = Arc::clone(&hs.session_generation);
                 *hs = HuddleState::default();
+                hs.session_generation = gen;
             }
             Err(e)
         }
@@ -693,11 +774,14 @@ pub async fn join_huddle(
     }
 
     // 1. Fetch LiveKit token. On failure, reset state to Idle so user can retry.
+    // Preserve session_generation (same rationale as start_huddle rollback).
     let lk = match fetch_livekit_token(&ephemeral_channel_id, &state).await {
         Ok(lk) => lk,
         Err(e) => {
             if let Ok(mut hs) = state.huddle_state.lock() {
+                let gen = Arc::clone(&hs.session_generation);
                 *hs = HuddleState::default();
+                hs.session_generation = gen;
             }
             return Err(e);
         }
@@ -1102,19 +1186,26 @@ pub fn get_model_status(_state: State<'_, AppState>) -> Result<models::VoiceMode
 ///
 /// When disabled, the TTS pipeline is shut down and audio output stops.
 /// When re-enabled, the pipeline is restarted if Supertonic models are available.
+///
+/// Takes the pipeline handle out of the lock before calling shutdown() — the
+/// thread join in Drop can block for ~200 ms (ONNX inference) and we don't
+/// want to hold the HuddleState mutex during that time.
 #[tauri::command]
 pub async fn set_tts_enabled(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
-    {
+    let old_pipeline = {
         let mut hs = state.huddle()?;
         hs.tts_enabled = enabled;
         if !enabled {
-            // Shut down the TTS pipeline immediately.
-            if let Some(ref pipeline) = hs.tts_pipeline {
-                pipeline.shutdown();
-            }
-            hs.tts_pipeline = None;
+            hs.tts_pipeline.take() // Take out of lock.
+        } else {
+            None
         }
+    };
+    // Shut down outside the lock — thread join happens here.
+    if let Some(ref pipeline) = old_pipeline {
+        pipeline.shutdown();
     }
+    drop(old_pipeline);
 
     if enabled {
         // Re-start TTS pipeline if models are available and huddle is active.

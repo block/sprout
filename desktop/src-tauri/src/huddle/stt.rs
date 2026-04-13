@@ -77,6 +77,10 @@ impl SttPipeline {
     /// worker detects speech onset while TTS is active, it sets this flag to
     /// stop playback immediately (barge-in). Pass `None` if TTS is unavailable.
     ///
+    /// `ptt_active` (optional) is the push-to-talk flag. When `Some`, the STT
+    /// pipeline only accumulates speech while the flag is true (key held).
+    /// When `None`, the pipeline runs in continuous VAD mode.
+    ///
     /// Returns `Err` only if the thread cannot be spawned (OS error).
     /// If model files are missing, the worker logs and exits cleanly —
     /// the pipeline handle is still returned but will never produce text.
@@ -89,6 +93,7 @@ impl SttPipeline {
         model_dir: PathBuf,
         tts_active: Arc<AtomicBool>,
         tts_cancel: Option<Arc<AtomicBool>>,
+        ptt_active: Option<Arc<AtomicBool>>,
     ) -> Result<(Self, tokio_mpsc::Receiver<String>), String> {
         let (audio_tx, audio_rx) = mpsc::sync_channel::<Vec<u8>>(AUDIO_QUEUE_DEPTH);
         let (text_tx, text_rx) = tokio_mpsc::channel::<String>(64);
@@ -96,6 +101,7 @@ impl SttPipeline {
 
         let shutdown_worker = Arc::clone(&shutdown);
         let tts_cancel_worker = tts_cancel.as_ref().map(Arc::clone);
+        let ptt_active_worker = ptt_active.as_ref().map(Arc::clone);
         let handle = thread::Builder::new()
             .name("stt-worker".into())
             .spawn(move || {
@@ -106,6 +112,7 @@ impl SttPipeline {
                     shutdown_worker,
                     tts_active,
                     tts_cancel_worker,
+                    ptt_active_worker,
                 )
             })
             .map_err(|e| format!("failed to spawn stt-worker thread: {e}"))?;
@@ -197,6 +204,7 @@ fn stt_worker(
     shutdown: Arc<AtomicBool>,
     tts_active: Arc<AtomicBool>,
     tts_cancel: Option<Arc<AtomicBool>>,
+    ptt_active: Option<Arc<AtomicBool>>,
 ) {
     // ── 1. Initialise rubato resampler (48 kHz → 16 kHz, mono) ───────────────
     use rubato::{Fft, FixedSync, Resampler};
@@ -269,6 +277,9 @@ fn stt_worker(
 
     // ── 5. Main loop ──────────────────────────────────────────────────────────
     let mut tts_was_active = false;
+    let mut ptt_was_active = ptt_active
+        .as_ref()
+        .map_or(false, |p| p.load(Ordering::Acquire));
     loop {
         // Check shutdown flag before blocking.
         if shutdown.load(Ordering::Acquire) {
@@ -282,6 +293,21 @@ fn stt_worker(
             tts_stopped_at = Some(std::time::Instant::now());
         }
         tts_was_active = tts_now;
+
+        // Track PTT transitions — flush accumulated speech when key is released.
+        // The worklet stops sending frames when PTT is inactive, so the normal
+        // silence-accumulation flush path never runs. We must flush here on the
+        // active→inactive edge to avoid buffering speech across PTT presses.
+        if let Some(ref ptt) = ptt_active {
+            let ptt_now = ptt.load(Ordering::Acquire);
+            if ptt_was_active && !ptt_now && in_speech && !speech_buf.is_empty() {
+                flush_to_stt(&speech_buf, &recognizer, &text_tx);
+                speech_buf.clear();
+                silence_frames = 0;
+                in_speech = false;
+            }
+            ptt_was_active = ptt_now;
+        }
 
         // Use recv_timeout so we can periodically check the shutdown flag.
         let bytes = match audio_rx.recv_timeout(RECV_TIMEOUT) {
@@ -318,6 +344,7 @@ fn stt_worker(
                     &tts_active,
                     tts_cancel.as_deref(),
                     &mut tts_stopped_at,
+                    ptt_active.as_ref(),
                 );
             }
         }
@@ -356,9 +383,15 @@ fn resample_chunk(resampler: &mut rubato::Fft<f32>, chunk_48k: &[f32]) -> Vec<f3
 /// Flushes to STT when silence exceeds threshold.
 ///
 /// When `tts_active` is set:
-///   - Speech onset triggers barge-in: `tts_cancel` is set to stop TTS immediately.
-///   - Frames are NOT accumulated in `speech_buf` (echo prevention, Fix 4).
-///   - After TTS stops, a 200 ms cooldown prevents tail audio from being transcribed.
+///   - In PTT mode: skip accumulation (PTT press handles TTS cancellation).
+///   - In VAD mode: speech onset triggers barge-in via `tts_cancel`.
+///   - After TTS stops, a cooldown prevents tail audio from being transcribed.
+///
+/// When `ptt_active` is `Some`:
+///   - VAD `is_speech` is ANDed with the PTT flag — when the key is released,
+///     `is_speech` becomes false, silence_frames accumulates, and the existing
+///     flush logic kicks in naturally. The 200 ms release delay + ~300 ms
+///     silence flush gives a natural utterance tail.
 #[allow(clippy::too_many_arguments)]
 fn process_16k_samples(
     samples: &[f32],
@@ -373,6 +406,7 @@ fn process_16k_samples(
     tts_active: &Arc<AtomicBool>,
     tts_cancel: Option<&AtomicBool>,
     tts_stopped_at: &mut Option<std::time::Instant>,
+    ptt_active: Option<&Arc<AtomicBool>>,
 ) {
     leftover.extend_from_slice(samples);
 
@@ -381,15 +415,49 @@ fn process_16k_samples(
         let prob = vad.predict_f32(&frame);
         let is_speech = prob > VAD_THRESHOLD;
 
+        // PTT gating: when PTT key is not held, treat as silence.
+        // This causes natural flush when the key is released — silence_frames
+        // accumulates and the existing flush logic kicks in after
+        // SILENCE_FLUSH_FRAMES. The 200 ms release delay + ~300 ms silence
+        // flush gives a natural utterance tail.
+        let is_speech = if let Some(ptt) = ptt_active {
+            is_speech && ptt.load(Ordering::Acquire)
+        } else {
+            is_speech
+        };
+
         let tts_playing = tts_active.load(Ordering::Acquire);
 
         // While TTS is playing: skip accumulation (echo prevention).
-        // Barge-in is disabled — push-to-talk will replace VAD-based interruption.
-        // Without acoustic echo cancellation, any ambient noise triggers false
-        // barge-in and kills TTS playback mid-sentence.
         if tts_playing {
+            if ptt_active.is_some() {
+                // PTT mode — PTT press handles TTS cancellation directly
+                // (via the global shortcut handler). Just skip accumulation.
+                *in_speech = false;
+                *barge_in_frames = 0;
+                speech_buf.clear();
+                *silence_frames = 0;
+                continue;
+            }
+
+            // VAD mode — barge-in detection.
+            // Without acoustic echo cancellation, this requires a longer
+            // debounce (BARGE_IN_DEBOUNCE_FRAMES ≈ 320 ms) to filter
+            // speaker-to-mic feedback.
+            if is_speech {
+                *barge_in_frames += 1;
+                if *barge_in_frames >= BARGE_IN_DEBOUNCE_FRAMES {
+                    // Real speech detected during TTS — trigger barge-in.
+                    if let Some(cancel) = tts_cancel {
+                        cancel.store(true, Ordering::Release);
+                    }
+                    *barge_in_frames = 0;
+                }
+            } else {
+                *barge_in_frames = 0;
+            }
+            // Don't accumulate speech during TTS (echo prevention).
             *in_speech = false;
-            *barge_in_frames = 0;
             speech_buf.clear();
             *silence_frames = 0;
             continue;
@@ -432,7 +500,11 @@ fn process_16k_samples(
             speech_buf.extend_from_slice(&frame);
             *silence_frames += 1;
 
-            if *silence_frames >= SILENCE_FLUSH_FRAMES {
+            // In PTT mode, don't flush on silence — accumulate the entire
+            // key-hold as one utterance. The PTT release edge in the main
+            // loop handles the flush. In VAD mode, flush after the silence
+            // threshold so each natural pause becomes a separate message.
+            if ptt_active.is_none() && *silence_frames >= SILENCE_FLUSH_FRAMES {
                 // End of utterance — transcribe.
                 flush_to_stt(speech_buf, recognizer, text_tx);
                 speech_buf.clear();

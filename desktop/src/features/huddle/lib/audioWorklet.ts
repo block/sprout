@@ -1,3 +1,5 @@
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
 /**
  * Raw binary invoke — uses Tauri's internal IPC for zero-copy ArrayBuffer transfer.
  *
@@ -14,6 +16,13 @@ function invokeRawBinary(cmd: string, payload: Uint8Array): Promise<unknown> {
   return internals.invoke(cmd, payload);
 }
 
+/** Return type for setupAudioWorklet — stop + PTT control. */
+export type AudioWorkletHandle = {
+  stop: () => void;
+  /** Send PTT state to the worklet processor. */
+  setTransmitting: (active: boolean) => void;
+};
+
 /**
  * AudioWorklet → Rust STT pipeline:
  *
@@ -25,11 +34,19 @@ function invokeRawBinary(cmd: string, payload: Uint8Array): Promise<unknown> {
  *     → onmessage: convert to Uint8Array view (zero-copy)
  *     → invokeRawBinary("push_audio_pcm", bytes)
  *         Rust: SttPipeline::push_audio → bounded sync_channel
+ *
+ * PTT gating:
+ *   Main thread listens for Tauri "ptt-state" events (from Rust global shortcut)
+ *   and forwards them to the worklet via port.postMessage({ type: 'ptt', active }).
+ *   The worklet discards audio frames when transmitting=false.
+ *
+ * @param audioTrack - Mic track from LiveKit
+ * @param initialTransmitting - Initial PTT state. true=open mic (VAD), false=muted until PTT press.
  */
-
 export async function setupAudioWorklet(
   audioTrack: MediaStreamTrack,
-): Promise<{ stop: () => void }> {
+  initialTransmitting = true,
+): Promise<AudioWorkletHandle> {
   const audioContext = new AudioContext({ sampleRate: 48000 });
 
   // Resume after user gesture (required by autoplay policy)
@@ -51,7 +68,14 @@ export async function setupAudioWorklet(
   // Connect: mic → worklet (tap only — no playback)
   source.connect(workletNode);
 
-  // Forward PCM batches to Rust via raw binary invoke
+  // Set initial PTT state (worklet defaults to transmitting=true).
+  // In PTT mode, immediately gate audio until the user presses the key.
+  if (!initialTransmitting) {
+    workletNode.port.postMessage({ type: "ptt", active: false });
+  }
+
+  // Forward PCM batches to Rust via raw binary invoke.
+  // Direction: worklet→main (receives PCM data from worklet processor).
   workletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
     const float32 = event.data;
     // Fire-and-forget — Rust side uses try_send which drops on backpressure.
@@ -66,12 +90,29 @@ export async function setupAudioWorklet(
     });
   };
 
+  // Listen for PTT state from Rust global shortcut (Ctrl+Space press/release).
+  // Direction: Rust→main→worklet. The Tauri event carries a boolean payload.
+  let pttUnlisten: UnlistenFn | null = null;
+  try {
+    pttUnlisten = await listen<boolean>("ptt-state", (event) => {
+      workletNode.port.postMessage({ type: "ptt", active: event.payload });
+    });
+  } catch {
+    // PTT events not available — worklet stays in current transmit mode.
+    // This is fine for VAD mode (always transmitting) and degrades gracefully
+    // for PTT mode (user won't be able to transmit, but audio won't leak).
+  }
+
   return {
     stop: () => {
       workletNode.port.onmessage = null;
+      pttUnlisten?.();
       source.disconnect();
       workletNode.disconnect();
       void audioContext.close();
+    },
+    setTransmitting: (active: boolean) => {
+      workletNode.port.postMessage({ type: "ptt", active });
     },
   };
 }

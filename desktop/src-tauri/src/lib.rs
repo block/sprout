@@ -12,9 +12,9 @@ use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use commands::*;
 use huddle::{
     add_agent_to_huddle, check_pipeline_hotstart, confirm_huddle_active, download_voice_models,
-    end_huddle, get_huddle_agent_pubkeys, get_huddle_state, get_model_status, join_huddle,
-    leave_huddle, push_audio_pcm, set_tts_enabled, speak_agent_message, start_huddle,
-    start_stt_pipeline,
+    end_huddle, get_huddle_agent_pubkeys, get_huddle_state, get_model_status, get_voice_input_mode,
+    join_huddle, leave_huddle, push_audio_pcm, set_tts_enabled, set_voice_input_mode,
+    speak_agent_message, start_huddle, start_stt_pipeline,
 };
 use managed_agents::{
     ensure_nest, find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents,
@@ -25,7 +25,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tauri::{http, Manager, RunEvent};
+use tauri::{http, Emitter, Manager, RunEvent};
 use tauri_plugin_window_state::StateFlags;
 
 fn restore_managed_agents_on_launch(
@@ -352,7 +352,86 @@ pub fn run() {
         )
         .plugin(tauri_plugin_websocket::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin({
+            use tauri_plugin_global_shortcut::ShortcutState;
+
+            // Generation counter for the release delay task. Incremented on
+            // every press — a delayed release only fires if the generation
+            // hasn't changed (i.e. no new press happened during the delay).
+            // This prevents press→release→press within 200 ms from having
+            // the first release clobber the second press.
+            let ptt_press_gen = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, _shortcut, event| {
+                    let state = match app.try_state::<AppState>() {
+                        Some(s) => s,
+                        None => return,
+                    };
+
+                    // Only act if a huddle is active and mode is PTT.
+                    let (is_ptt_mode, is_active) = match state.huddle_state.lock() {
+                        Ok(hs) => (
+                            hs.voice_input_mode == huddle::VoiceInputMode::PushToTalk,
+                            matches!(
+                                hs.phase,
+                                huddle::HuddlePhase::Connected | huddle::HuddlePhase::Active
+                            ),
+                        ),
+                        Err(_) => return,
+                    };
+
+                    if !is_ptt_mode || !is_active {
+                        return;
+                    }
+
+                    match event.state {
+                        ShortcutState::Pressed => {
+                            // Bump generation — invalidates any pending release delay.
+                            ptt_press_gen.fetch_add(1, std::sync::atomic::Ordering::Release);
+
+                            if let Ok(hs) = state.huddle_state.lock() {
+                                hs.ptt_active
+                                    .store(true, std::sync::atomic::Ordering::Release);
+                                // Only cancel TTS if it's actually playing — avoids
+                                // a stale cancel flag that drops the next queued message.
+                                if hs.tts_active.load(std::sync::atomic::Ordering::Acquire) {
+                                    hs.tts_cancel
+                                        .store(true, std::sync::atomic::Ordering::Release);
+                                }
+                            }
+                            let _ = app.emit("ptt-state", true);
+                        }
+                        ShortcutState::Released => {
+                            // Capture generation at release time.
+                            let gen_at_release =
+                                ptt_press_gen.load(std::sync::atomic::Ordering::Acquire);
+                            let gen_arc = Arc::clone(&ptt_press_gen);
+                            let app_handle = app.clone();
+                            // 200 ms release delay — captures the tail of the utterance.
+                            // Only applies if no new press happened during the delay.
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                                // Check generation — if it changed, a new press arrived.
+                                if gen_arc.load(std::sync::atomic::Ordering::Acquire)
+                                    != gen_at_release
+                                {
+                                    return; // Superseded by a new press.
+                                }
+                                if let Some(state) = app_handle.try_state::<AppState>() {
+                                    if let Ok(hs) = state.huddle_state.lock() {
+                                        hs.ptt_active
+                                            .store(false, std::sync::atomic::Ordering::Release);
+                                    }
+                                }
+                                let _ = app_handle.emit("ptt-state", false);
+                            });
+                        }
+                    }
+                })
+                .build()
+        });
 
     // Only register the updater in release builds that were compiled with a
     // real updater configuration. Local unsigned builds omit that config and
@@ -408,6 +487,17 @@ pub fn run() {
             if let Some(mgr) = huddle::models::global_model_manager() {
                 mgr.start_moonshine_download(state.http_client.clone());
                 mgr.start_supertonic_download(state.http_client.clone());
+            }
+
+            // Register PTT global shortcut (Ctrl+Space).
+            // Non-fatal: huddle works without the shortcut (user can switch to VAD mode).
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+                let shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
+                if let Err(e) = app.handle().global_shortcut().register(shortcut) {
+                    eprintln!("sprout-desktop: failed to register PTT shortcut: {e}");
+                }
             }
 
             // Keep launch-time agent restoration off the synchronous setup path
@@ -528,6 +618,8 @@ pub fn run() {
             check_pipeline_hotstart,
             confirm_huddle_active,
             get_huddle_agent_pubkeys,
+            set_voice_input_mode,
+            get_voice_input_mode,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

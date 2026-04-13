@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import * as React from "react";
 
 import { relayClient } from "@/shared/api/relayClient";
 import { connectToHuddle, type HuddleConnection } from "./lib/livekit";
-import { setupAudioWorklet } from "./lib/audioWorklet";
+import { setupAudioWorklet, type AudioWorkletHandle } from "./lib/audioWorklet";
 
 /**
  * Huddle lifecycle (React context):
@@ -11,7 +12,7 @@ import { setupAudioWorklet } from "./lib/audioWorklet";
  *   startHuddle(channelId, agents)
  *     → invoke("start_huddle")         [Rust: ephemeral channel + LiveKit token]
  *     → connectToHuddle(url, token)     [LiveKit: WebRTC room + mic]
- *     → setupAudioWorklet(track)        [AudioWorklet: mic PCM → Rust STT]
+ *     → setupAudioWorklet(track, init)   [AudioWorklet: mic PCM → Rust STT, PTT gating]
  *     → invoke("confirm_huddle_active") [Rust: Connected → Active]
  *     → setEphemeralChannelId(...)      [triggers TTS subscription + hotstart polling]
  *
@@ -32,6 +33,8 @@ type HuddleJoinInfo = {
   livekit_room: string;
 };
 
+type VoiceInputMode = "push_to_talk" | "voice_activity";
+
 interface HuddleContextValue {
   /** Current local audio track (for mute toggle in HuddleBar) */
   localAudioTrack: MediaStreamTrack | null;
@@ -41,6 +44,12 @@ interface HuddleContextValue {
   micConnected: boolean;
   /** Current mic input level 0–1 (updated via requestAnimationFrame) */
   micLevel: number;
+  /** Whether the PTT key is currently held (for UI feedback) */
+  pttActive: boolean;
+  /** Current voice input mode — push_to_talk or voice_activity */
+  voiceInputMode: VoiceInputMode;
+  /** Toggle voice input mode (persisted to Rust backend) */
+  setVoiceInputMode: (mode: VoiceInputMode) => Promise<void>;
   /** Start a new huddle — calls Rust start_huddle, then connects LiveKit + AudioWorklet */
   startHuddle: (
     parentChannelId: string,
@@ -57,7 +66,7 @@ const HuddleContext = React.createContext<HuddleContextValue | null>(null);
 
 export function HuddleProvider({ children }: { children: React.ReactNode }) {
   const connectionRef = React.useRef<HuddleConnection | null>(null);
-  const workletRef = React.useRef<{ stop: () => void } | null>(null);
+  const workletRef = React.useRef<AudioWorkletHandle | null>(null);
   const tokenRef = React.useRef(0);
   const busyRef = React.useRef(false);
   /** True once Rust `start_huddle` has been invoked (even if JS-side refs aren't populated yet). */
@@ -67,12 +76,60 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   const [isStarting, setIsStarting] = React.useState(false);
   const [micConnected, setMicConnected] = React.useState(false);
   const [micLevel, setMicLevel] = React.useState(0);
+  /** Whether the PTT key is currently held */
+  const [pttActive, setPttActive] = React.useState(false);
+  /** Current voice input mode */
+  const [voiceInputMode, setVoiceInputModeState] =
+    React.useState<VoiceInputMode>("push_to_talk");
   /** Ephemeral channel ID — set after start_huddle, used for TTS subscription */
   const [ephemeralChannelId, setEphemeralChannelId] = React.useState<
     string | null
   >(null);
   /** Self pubkey — fetched once, used to filter out own messages from TTS */
   const selfPubkeyRef = React.useRef<string | null>(null);
+
+  // Bootstrap voice input mode from Rust backend on mount.
+  // Ensures frontend stays in sync after remount/recovery.
+  React.useEffect(() => {
+    invoke<VoiceInputMode>("get_voice_input_mode")
+      .then((mode) => setVoiceInputModeState(mode))
+      .catch(() => {
+        /* best-effort — default is push_to_talk */
+      });
+  }, []);
+
+  // Listen for PTT state from Rust global shortcut (Ctrl+Space).
+  // Updates pttActive for UI feedback (green indicator in HuddleBar).
+  // The actual audio gating happens in audioWorklet.ts → worklet.js.
+  React.useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+
+    listen<boolean>("ptt-state", (event) => {
+      if (!cancelled) setPttActive(event.payload);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Toggle voice input mode — persists to Rust backend and updates worklet gating.
+  const setVoiceInputMode = React.useCallback(
+    async (mode: VoiceInputMode) => {
+      await invoke("set_voice_input_mode", { mode });
+      setVoiceInputModeState(mode);
+      // Update the worklet's transmit state to match the new mode:
+      // VAD = always transmitting, PTT = transmit only when key is held.
+      const transmitting = mode === "voice_activity" || pttActive;
+      workletRef.current?.setTransmitting(transmitting);
+    },
+    [pttActive],
+  );
 
   /** Stop AudioWorklet and disconnect LiveKit. Best-effort on both steps. */
   const disconnectMedia = React.useCallback(async () => {
@@ -147,7 +204,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   const cleanupFailedStart = React.useCallback(
     async (
       conn: HuddleConnection | null,
-      worklet: { stop: () => void } | null,
+      worklet: AudioWorkletHandle | null,
     ) => {
       try {
         worklet?.stop();
@@ -238,7 +295,13 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         setMicConnected(true);
 
         // Step 3: Set up AudioWorklet to pipe mic audio to Rust STT
-        const worklet = await setupAudioWorklet(connection.localAudioTrack);
+        // In PTT mode, start with transmitting=false (user must hold key).
+        // In VAD mode, start with transmitting=true (always open mic).
+        const initialTransmitting = voiceInputMode !== "push_to_talk";
+        const worklet = await setupAudioWorklet(
+          connection.localAudioTrack,
+          initialTransmitting,
+        );
 
         // Bail if superseded after async worklet setup
         if (tokenRef.current !== myToken) {
@@ -266,7 +329,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         busyRef.current = false;
       }
     },
-    [cleanupFailedStart],
+    [cleanupFailedStart, voiceInputMode],
   );
 
   // TTS subscription — pipe AGENT messages from ephemeral channel to speak_agent_message.
@@ -428,6 +491,9 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         isStarting,
         micConnected,
         micLevel,
+        pttActive,
+        voiceInputMode,
+        setVoiceInputMode,
         startHuddle,
         leaveHuddle,
         endHuddle,

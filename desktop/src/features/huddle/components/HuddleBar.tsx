@@ -34,6 +34,7 @@ type HuddleState = {
   agent_pubkeys: string[];
   tts_enabled: boolean;
   is_creator: boolean;
+  voice_input_mode: "push_to_talk" | "voice_activity";
 };
 
 type HuddleBarProps = {
@@ -41,8 +42,17 @@ type HuddleBarProps = {
 };
 
 export function HuddleBar({ className }: HuddleBarProps) {
-  const { localAudioTrack, leaveHuddle, endHuddle, micConnected, micLevel } =
-    useHuddle();
+  const {
+    localAudioTrack,
+    leaveHuddle,
+    endHuddle,
+    micConnected,
+    micLevel,
+    pttActive,
+    voiceInputMode,
+    setVoiceInputMode,
+  } = useHuddle();
+  const isPttMode = voiceInputMode === "push_to_talk";
   const [state, setState] = React.useState<HuddleState | null>(null);
   const [isMuted, setIsMuted] = React.useState(false);
   // Derive TTS enabled from backend state (single source of truth).
@@ -217,23 +227,66 @@ export function HuddleBar({ className }: HuddleBarProps) {
         <ParticipantList participants={state.participants} />
       )}
 
-      {/* Voice activity indicator */}
+      {/* Voice input mode indicator */}
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         {micConnected ? (
-          <div
-            className="h-2.5 w-2.5 rounded-full transition-colors"
-            style={{
-              backgroundColor:
-                micLevel > 0.05
-                  ? `rgba(34, 197, 94, ${0.4 + micLevel * 0.6})`
-                  : "rgba(100, 116, 139, 0.4)",
-            }}
-            title={`Mic level: ${Math.round(micLevel * 100)}%`}
-          />
+          isPttMode ? (
+            <>
+              <div
+                className={cn(
+                  "h-2.5 w-2.5 rounded-full transition-colors",
+                  pttActive && !isMuted ? "bg-green-500" : "bg-zinc-500",
+                )}
+                title={
+                  isMuted
+                    ? "Muted (PTT overridden)"
+                    : pttActive
+                      ? "Transmitting"
+                      : "Push Ctrl+Space to talk"
+                }
+              />
+              <span>PTT</span>
+              <span className="text-[10px] opacity-60">Ctrl+Space</span>
+            </>
+          ) : (
+            <>
+              <div
+                className="h-2.5 w-2.5 rounded-full transition-colors"
+                style={{
+                  backgroundColor:
+                    micLevel > 0.05
+                      ? `rgba(34, 197, 94, ${0.4 + micLevel * 0.6})`
+                      : "rgba(100, 116, 139, 0.4)",
+                }}
+                title={`Mic level: ${Math.round(micLevel * 100)}%`}
+              />
+              <span>VAD</span>
+            </>
+          )
         ) : (
           <span className="text-destructive/70">no mic</span>
         )}
       </div>
+
+      {/* Voice input mode toggle */}
+      <Button
+        aria-label={
+          isPttMode
+            ? "Switch to voice activity mode"
+            : "Switch to push-to-talk mode"
+        }
+        className="h-6 px-1.5 text-[10px]"
+        onClick={() =>
+          void setVoiceInputMode(isPttMode ? "voice_activity" : "push_to_talk")
+        }
+        size="sm"
+        variant="ghost"
+        title={
+          isPttMode ? "Switch to Voice Activity" : "Switch to Push-to-Talk"
+        }
+      >
+        {isPttMode ? "→ VAD" : "→ PTT"}
+      </Button>
 
       {/* Add agent button */}
       <Button
@@ -271,11 +324,23 @@ export function HuddleBar({ className }: HuddleBarProps) {
         />
       )}
 
-      {/* Mute toggle */}
+      {/* Mute toggle — in PTT mode acts as hard mute override (even PTT won't transmit) */}
       <Button
-        aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+        aria-label={
+          isMuted
+            ? "Unmute microphone"
+            : isPttMode
+              ? "Force mute (overrides PTT)"
+              : "Mute microphone"
+        }
         aria-pressed={isMuted}
-        className="h-8 w-8"
+        className={cn(
+          "h-8 w-8",
+          isPttMode &&
+            pttActive &&
+            !isMuted &&
+            "ring-2 ring-green-500 ring-offset-1 ring-offset-background",
+        )}
         onClick={() => setIsMuted((m) => !m)}
         size="icon"
         variant={isMuted ? "destructive" : "secondary"}
