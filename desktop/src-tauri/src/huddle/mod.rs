@@ -632,7 +632,10 @@ pub async fn start_huddle(
             }
 
             // 6. Hydrate members, download models, start pipelines.
-            post_connect_setup(&state, &ephemeral_channel_id).await?;
+            if let Err(e) = post_connect_setup(&state, &ephemeral_channel_id).await {
+                eprintln!("sprout-desktop: post_connect_setup failed (degraded mode): {e}");
+                // Non-fatal: huddle works without STT/TTS pipelines.
+            }
 
             Ok(HuddleJoinInfo {
                 ephemeral_channel_id,
@@ -729,7 +732,10 @@ pub async fn join_huddle(
     }
 
     // 4. Hydrate members, download models, start pipelines.
-    post_connect_setup(&state, &ephemeral_channel_id).await?;
+    if let Err(e) = post_connect_setup(&state, &ephemeral_channel_id).await {
+        eprintln!("sprout-desktop: post_connect_setup failed (degraded mode): {e}");
+        // Non-fatal: huddle works without STT/TTS pipelines.
+    }
 
     Ok(HuddleJoinInfo {
         ephemeral_channel_id,
@@ -999,8 +1005,16 @@ pub async fn check_pipeline_hotstart(state: State<'_, AppState>) -> Result<(), S
     // Periodically refresh agent_pubkeys from relay membership.
     // This catches mid-huddle agent additions/removals by other participants,
     // keeping STT p-tags authoritative throughout the session.
-    // Throttled to every 15 s (not on every 5 s hotstart poll) — the frontend
-    // already refreshes its own agentPubkeys every 10 s via get_huddle_agent_pubkeys.
+    // Throttled to every 15 s (not on every 5 s hotstart poll).
+    //
+    // NOTE: The frontend ALSO polls agent membership independently (every 10 s
+    // via get_huddle_agent_pubkeys). This is intentional — the two polls have
+    // different failure semantics:
+    //   - Rust (here): preserves stale list on failure (STT p-tags should not
+    //     disappear on a transient network blip).
+    //   - React (HuddleContext.tsx): clears list on failure (TTS authorization
+    //     must fail-closed — never speak from a stale agent list).
+    //
     // On Ok: always replace (even with empty — agents may have been removed).
     // On Err: preserve the existing list (transient failure shouldn't zero it).
     if let Some(eph_id) = &ephemeral_channel_id {

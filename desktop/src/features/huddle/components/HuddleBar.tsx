@@ -51,6 +51,10 @@ export function HuddleBar({ className }: HuddleBarProps) {
   const [isLeaving, setIsLeaving] = React.useState(false);
   const [showAddAgent, setShowAddAgent] = React.useState(false);
   const [agentAddError, setAgentAddError] = React.useState<string | null>(null);
+  const [modelStatus, setModelStatus] = React.useState<{
+    moonshine: string;
+    supertonic: string;
+  } | null>(null);
 
   // Poll huddle state — replace with event listener once Rust emits events
   React.useEffect(() => {
@@ -81,6 +85,55 @@ export function HuddleBar({ className }: HuddleBarProps) {
       window.clearInterval(id);
     };
   }, []);
+
+  // Poll model download status while huddle is active
+  const huddlePhase = state?.phase;
+  React.useEffect(() => {
+    if (huddlePhase !== "active" && huddlePhase !== "connected") return;
+
+    let cancelled = false;
+
+    // ModelStatus serializes as: "ready" | "not_downloaded" (strings)
+    // or { downloading: { progress_percent: N } } | { error: "msg" } (objects).
+    const fmt = (s: unknown): string => {
+      if (typeof s === "string") return s === "ready" ? "ready" : "pending";
+      if (typeof s === "object" && s !== null) {
+        if ("downloading" in s) {
+          const d = (s as { downloading: { progress_percent: number } })
+            .downloading;
+          return `${d.progress_percent}%`;
+        }
+        if ("error" in s) return "error";
+      }
+      return "pending";
+    };
+
+    async function pollModels() {
+      try {
+        const status = await invoke<{
+          moonshine: unknown;
+          supertonic: unknown;
+        }>("get_model_status");
+        if (cancelled) return;
+
+        setModelStatus({
+          moonshine: fmt(status.moonshine),
+          supertonic: fmt(status.supertonic),
+        });
+      } catch {
+        // best-effort
+      }
+    }
+
+    void pollModels();
+    const id = window.setInterval(() => void pollModels(), 3_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      setModelStatus(null); // Clear stale status on huddle end/phase change.
+    };
+  }, [huddlePhase]);
 
   // Sync mute state to the audio track
   React.useEffect(() => {
@@ -142,6 +195,22 @@ export function HuddleBar({ className }: HuddleBarProps) {
         <Users className="h-3 w-3" />
         <span>In huddle</span>
       </div>
+
+      {/* Model download progress */}
+      {modelStatus &&
+        (modelStatus.moonshine !== "ready" ||
+          modelStatus.supertonic !== "ready") && (
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <span className="animate-pulse">
+              {modelStatus.moonshine !== "ready" &&
+              modelStatus.supertonic !== "ready"
+                ? `Voice models: STT ${modelStatus.moonshine}, TTS ${modelStatus.supertonic}`
+                : modelStatus.moonshine !== "ready"
+                  ? `STT model: ${modelStatus.moonshine}`
+                  : `TTS model: ${modelStatus.supertonic}`}
+            </span>
+          </div>
+        )}
 
       {/* Participant avatars */}
       {state.participants.length > 0 && (
