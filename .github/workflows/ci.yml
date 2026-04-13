@@ -193,7 +193,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: subosito/flutter-action@e938bc6e2e22bcb26092f3e86457b09fd8e0e1e0 # v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
       - name: Install dependencies
