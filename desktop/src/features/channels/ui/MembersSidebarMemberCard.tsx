@@ -148,11 +148,6 @@ export function MembersSidebarMemberCard({
 }
 
 const PEOPLE_ROLES = ["admin", "member", "guest"] as const;
-const BOT_ROLES = ["bot", "guest"] as const;
-
-function getAssignableRoles(memberIsBot: boolean) {
-  return memberIsBot ? BOT_ROLES : PEOPLE_ROLES;
-}
 
 function MemberActionsMenu({
   canChangeRole,
@@ -175,9 +170,8 @@ function MemberActionsMenu({
   onManagedAgentAction: (agent: ManagedAgent) => void;
   onRemoveMember: (member: ChannelMember) => void;
 }) {
-  const assignableRoles = getAssignableRoles(memberIsBot);
   const showChangeRole =
-    canChangeRole && member.role !== "owner" && assignableRoles.length > 1;
+    canChangeRole && !memberIsBot && member.role !== "owner";
 
   return (
     <DropdownMenu modal={false}>
@@ -219,7 +213,7 @@ function MemberActionsMenu({
               Change role
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent>
-              {assignableRoles.map((role) => (
+              {PEOPLE_ROLES.map((role) => (
                 <DropdownMenuItem
                   data-testid={`sidebar-role-${role}-${member.pubkey}`}
                   disabled={disabled || member.role === role}
