@@ -163,7 +163,7 @@ export function useLiveChannelUpdates(
 
     let isDisposed = false;
     let cleanup: Array<() => Promise<void>> = [];
-    let retryTimeout: ReturnType<typeof setTimeout> | undefined;
+    let retryTimeout: number | undefined;
 
     const subscribeToMentionChannels = async () => {
       const settled = await Promise.allSettled(
