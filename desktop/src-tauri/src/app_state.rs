@@ -61,6 +61,17 @@ pub fn build_app_state() -> AppState {
     }
 }
 
+impl AppState {
+    /// Lock the huddle state mutex, converting a poisoned-lock error to a String.
+    ///
+    /// Convenience wrapper — replaces 15+ instances of
+    /// `state.huddle_state.lock().map_err(|e| e.to_string())?` throughout the
+    /// huddle module.
+    pub fn huddle(&self) -> Result<std::sync::MutexGuard<'_, crate::huddle::HuddleState>, String> {
+        self.huddle_state.lock().map_err(|e| e.to_string())
+    }
+}
+
 /// Resolve the user's identity key from the app data directory.
 ///
 /// Priority: `SPROUT_PRIVATE_KEY` env var (already handled in `build_app_state`)

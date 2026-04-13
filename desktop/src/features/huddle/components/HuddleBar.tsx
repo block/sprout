@@ -16,7 +16,9 @@ import { useHuddle } from "../HuddleContext";
 import { AddAgentDialog, type AgentAddResult } from "./AddAgentDialog";
 import { ParticipantList } from "./ParticipantList";
 
-// Shape returned by the `get_huddle_state` Tauri command
+// Shape returned by the `get_huddle_state` Tauri command.
+// NOTE: This mirrors the HuddleState struct in the Rust backend (src-tauri/src/huddle/state.rs).
+// If you add/remove fields here, update the Rust struct (and vice versa).
 type HuddleState = {
   phase:
     | "idle"

@@ -211,7 +211,7 @@ fn stt_worker(
             model_dir.display()
         );
         // Drain the channel so push_audio doesn't block the sender.
-        drain_channel(audio_rx, &shutdown);
+        drain_until_shutdown(audio_rx, &shutdown);
         return;
     }
 
@@ -233,7 +233,7 @@ fn stt_worker(
         Some(r) => r,
         None => {
             eprintln!("sprout-desktop: OfflineRecognizer::create returned None — STT disabled");
-            drain_channel(audio_rx, &shutdown);
+            drain_until_shutdown(audio_rx, &shutdown);
             return;
         }
     };
@@ -482,15 +482,5 @@ fn bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// Drain and discard all pending messages on the channel until shutdown or disconnect.
-fn drain_channel(rx: Receiver<Vec<u8>>, shutdown: &AtomicBool) {
-    loop {
-        if shutdown.load(Ordering::Acquire) {
-            break;
-        }
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(_) => continue,
-            Err(_) => break,
-        }
-    }
-}
+// drain_until_shutdown lives in super (huddle/mod.rs) — shared with tts.rs.
+use super::drain_until_shutdown;

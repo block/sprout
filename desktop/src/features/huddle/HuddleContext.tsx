@@ -16,9 +16,9 @@ import { setupAudioWorklet } from "./lib/audioWorklet";
  *     → setEphemeralChannelId(...)      [triggers TTS subscription + hotstart polling]
  *
  *   TTS subscription (on ephemeralChannelId change):
- *     → relayClient.subscribeToChannel(ephId, callback)
- *     → buffer events until EOSE, then replay live ones
- *     → filter: agent pubkeys only (fail-closed), skip self, skip [System]
+ *     → relayClient.subscribeToChannelLive(ephId, callback)
+ *     → live-only (since: now) — no historical backlog
+ *     → filter: agent pubkeys only (fail-closed), skip self
  *     → invoke("speak_agent_message", { text })
  *
  *   leaveHuddle()
@@ -74,44 +74,8 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   /** Self pubkey — fetched once, used to filter out own messages from TTS */
   const selfPubkeyRef = React.useRef<string | null>(null);
 
-  const leaveHuddle = React.useCallback(async (): Promise<boolean> => {
-    // Invalidate any in-flight startHuddle so it bails after its next await
-    tokenRef.current += 1;
-
-    // Step 1: Stop AudioWorklet (best-effort — don't let a throw skip remaining cleanup)
-    try {
-      workletRef.current?.stop();
-    } catch {
-      /* best-effort */
-    }
-    workletRef.current = null;
-
-    // Step 2: Disconnect LiveKit (best-effort, null ref first to prevent double-disconnect)
-    const conn = connectionRef.current;
-    connectionRef.current = null;
-    try {
-      if (conn) await conn.disconnect();
-    } catch {
-      /* best-effort */
-    }
-    setLocalAudioTrack(null);
-    setMicConnected(false);
-    setEphemeralChannelId(null);
-
-    // Step 3: Tell Rust to clean up — only clear rustActiveRef AFTER success so retries work
-    if (rustActiveRef.current) {
-      try {
-        await invoke("leave_huddle");
-        rustActiveRef.current = false;
-      } catch {
-        // Leave rustActiveRef true so a subsequent leaveHuddle() retries Rust cleanup
-        return false; // Signal that backend cleanup failed
-      }
-    }
-    return true; // Backend cleanup succeeded (or was not needed)
-  }, []);
-
-  const endHuddle = React.useCallback(async (): Promise<void> => {
+  /** Stop AudioWorklet and disconnect LiveKit. Best-effort on both steps. */
+  const disconnectMedia = React.useCallback(async () => {
     // Invalidate any in-flight startHuddle
     tokenRef.current += 1;
 
@@ -123,7 +87,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     }
     workletRef.current = null;
 
-    // Step 2: Disconnect LiveKit
+    // Step 2: Disconnect LiveKit (null ref first to prevent double-disconnect)
     const conn = connectionRef.current;
     connectionRef.current = null;
     try {
@@ -134,8 +98,24 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     setLocalAudioTrack(null);
     setMicConnected(false);
     setEphemeralChannelId(null);
+  }, []);
 
-    // Step 3: Tell Rust to end the huddle (archives channel, emits huddle_ended)
+  const leaveHuddle = React.useCallback(async (): Promise<boolean> => {
+    await disconnectMedia();
+    if (rustActiveRef.current) {
+      try {
+        await invoke("leave_huddle");
+        rustActiveRef.current = false;
+      } catch {
+        // Leave rustActiveRef true so a subsequent leaveHuddle() retries Rust cleanup
+        return false; // Signal that backend cleanup failed
+      }
+    }
+    return true; // Backend cleanup succeeded (or was not needed)
+  }, [disconnectMedia]);
+
+  const endHuddle = React.useCallback(async (): Promise<void> => {
+    await disconnectMedia();
     if (rustActiveRef.current) {
       try {
         await invoke("end_huddle");
@@ -150,9 +130,15 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         }
       }
     }
-  }, []);
+  }, [disconnectMedia]);
 
-  /** Clean up a partially-established huddle. Best-effort on every step. */
+  /**
+   * Clean up a partially-established huddle. Best-effort on every step.
+   *
+   * Note: takes explicit conn/worklet args (not from refs) because startHuddle
+   * may have local variables that differ from the refs mid-flight. Can't use
+   * disconnectMedia() here for the same reason.
+   */
   const cleanupFailedStart = React.useCallback(
     async (
       conn: HuddleConnection | null,
@@ -321,38 +307,18 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       void loadAgentPubkeys();
     }, 10_000);
 
-    // ── EOSE-based replay boundary with timestamp belt-and-suspenders ─────
-    let subscriptionReady = false;
+    // ── Live-only subscription ───────────────────────────────────────────
+    // subscribeToChannelLive uses `since: now` — the relay never sends
+    // historical backlog. Every event delivered is a live message.
+    // Event-ID dedup handles reconnect replay (same event arriving twice).
     const seenEventIds = new Set<string>();
     const seenOrder: string[] = [];
     const MAX_SEEN_EVENTS = 5000;
-    const subscribeTimeSecs = Math.floor(Date.now() / 1000);
-    const pendingEvents: Array<{
-      pubkey: string;
-      content: string;
-      created_at: number;
-    }> = [];
-
-    /** Speak an event if it passes all filters. */
-    function maybeSpeakEvent(pubkey: string, content: string) {
-      // Fail-closed: don't speak until agent list is loaded.
-      if (!agentsLoaded) return;
-      // Only speak agent messages — skip human STT transcripts.
-      if (!agentPubkeys.has(pubkey)) return;
-      if (pubkey === selfPubkeyRef.current) return;
-      if (!content.trim()) return;
-      if (content.startsWith("[System]")) return;
-      invoke("speak_agent_message", { text: content }).catch((err) => {
-        console.warn(
-          "[huddle] TTS speak failed (backpressure or pipeline unavailable):",
-          err,
-        );
-      });
-    }
 
     relayClient
-      .subscribeToChannel(ephemeralChannelId, (event) => {
+      .subscribeToChannelLive(ephemeralChannelId, (event) => {
         if (disposed) return;
+        // Defense-in-depth: subscription already filters to kind:9 only.
         if (event.kind !== 9) return;
 
         // Dedup by event ID (covers reconnect replay).
@@ -364,33 +330,23 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
           if (oldest !== undefined) seenEventIds.delete(oldest);
         }
 
-        if (!subscriptionReady) {
-          // Before EOSE: buffer the event. After EOSE resolves, we'll replay
-          // any that have created_at >= subscribeTimeSecs (i.e., truly live).
-          pendingEvents.push(event);
-          return;
-        }
+        // Fail-closed: don't speak until agent list is loaded.
+        if (!agentsLoaded) return;
+        // Only speak agent messages — skip human STT transcripts.
+        if (!agentPubkeys.has(event.pubkey)) return;
+        if (event.pubkey === selfPubkeyRef.current) return;
+        if (!event.content.trim()) return;
+        // Legacy: skip [System]-prefixed messages from before kind:48106.
+        if (event.content.startsWith("[System]")) return;
 
-        // After EOSE: belt-and-suspenders — also reject events with
-        // created_at before our subscription started. This catches late
-        // history that arrives after the 250ms fallback fires.
-        if (event.created_at < subscribeTimeSecs) return;
-
-        maybeSpeakEvent(event.pubkey, event.content);
+        invoke("speak_agent_message", { text: event.content }).catch((err) => {
+          console.warn(
+            "[huddle] TTS speak failed (backpressure or pipeline unavailable):",
+            err,
+          );
+        });
       })
       .then((dispose) => {
-        // subscribeToChannel resolves after EOSE (or relay's 250ms fallback).
-        subscriptionReady = true;
-
-        // Replay buffered events that arrived during the EOSE window.
-        // Only speak events with created_at >= subscribeTimeSecs (truly live).
-        for (const evt of pendingEvents) {
-          if (evt.created_at >= subscribeTimeSecs) {
-            maybeSpeakEvent(evt.pubkey, evt.content);
-          }
-        }
-        pendingEvents.length = 0; // Clear buffer
-
         if (disposed) {
           void dispose();
           return;

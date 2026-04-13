@@ -173,6 +173,10 @@ impl TtsPipeline {
     ///
     /// Sets the cancel flag. The worker will drain the queue and stop the
     /// current rodio Player on its next iteration.
+    ///
+    /// Currently unused — barge-in is triggered by the STT pipeline setting
+    /// `tts_cancel` directly via the shared `Arc<AtomicBool>`. Retained as
+    /// public API for future callers (e.g., explicit "stop speaking" button).
     #[allow(dead_code)]
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Release);
@@ -215,7 +219,7 @@ fn tts_worker(
                 "sprout-desktop: TTS Supertonic init failed (model_dir={}): {e}. TTS disabled.",
                 model_dir.display()
             );
-            drain_text_channel(text_rx, &shutdown);
+            drain_until_shutdown(text_rx, &shutdown);
             return;
         }
     };
@@ -228,7 +232,7 @@ fn tts_worker(
             eprintln!(
                 "sprout-desktop: TTS voice style load failed ({voice_name}): {e}. TTS disabled."
             );
-            drain_text_channel(text_rx, &shutdown);
+            drain_until_shutdown(text_rx, &shutdown);
             return;
         }
     };
@@ -240,7 +244,7 @@ fn tts_worker(
         Ok(h) => h,
         Err(e) => {
             eprintln!("sprout-desktop: TTS audio output failed: {e}. TTS disabled.");
-            drain_text_channel(text_rx, &shutdown);
+            drain_until_shutdown(text_rx, &shutdown);
             return;
         }
     };
@@ -404,15 +408,5 @@ fn apply_fades(samples: &mut Vec<f32>) {
     }
 }
 
-/// Drain and discard all pending text until shutdown or disconnect.
-fn drain_text_channel(rx: mpsc::Receiver<String>, shutdown: &AtomicBool) {
-    loop {
-        if shutdown.load(Ordering::Acquire) {
-            break;
-        }
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(_) => continue,
-            Err(_) => break,
-        }
-    }
-}
+// drain_until_shutdown lives in super (huddle/mod.rs) — shared with stt.rs.
+use super::drain_until_shutdown;

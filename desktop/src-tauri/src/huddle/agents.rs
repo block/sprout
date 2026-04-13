@@ -15,25 +15,28 @@ use crate::{app_state::AppState, events, relay::submit_event};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Voice-mode guidelines posted as a kind:9 message (with [System] prefix)
-/// to the ephemeral channel at huddle start. Instructs agents on voice-mode
-/// etiquette: TTS constraints, brevity rules, self-selection.
+/// Voice-mode guidelines posted as kind:48106 (huddle guidelines) to the
+/// ephemeral channel at huddle start. Agents see them via EOSE replay.
+/// Instructs agents on voice-mode etiquette: TTS constraints, brevity, self-selection.
 /// Build voice-mode guidelines with the parent channel ID so agents know
 /// where "the main channel" is.
 pub fn voice_mode_guidelines(parent_channel_id: &str) -> String {
     format!(
         "\
-You are in a live voice huddle. Your responses are read aloud via text-to-speech.
+You are in a live voice huddle. Responses are read aloud via TTS.
 This huddle is attached to channel {parent_channel_id} (the main channel).
-You will be interrupted whenever a human speaks — this is normal, do not repeat yourself.
 
 Rules:
-- ONLY respond if addressed directly or the topic is clearly relevant to you.
-  If not for you, stay completely silent — do not respond at all.
+- Respond only if directly addressed or clearly relevant. Otherwise: silence.
+- Respond in under 15 words when possible. Brevity is respect in voice.
 - Maximum 2 sentences. This is a conversation, not a monologue.
-- Speak naturally: \"eleven thirty\" not \"11:30\", no markdown, no code blocks, no lists.
+- Speak naturally: \"eleven thirty\" not \"11:30\". No markdown, lists, or code blocks.
+- No filler words: skip \"Sure,\" \"Of course,\" \"Absolutely,\" \"Great question.\"
 - To share code or structured data, say \"I'll post that in the main channel\" and do so.
-- Use your Sprout tools proactively — search messages, join channels, take actions when asked."
+- If interrupted, continue naturally. Do not apologize or say \"as I was saying\".
+- In multi-agent huddles, briefly identify yourself only when disambiguation is needed.
+- Use your Sprout tools proactively — search messages, join channels, take actions when asked.
+- Never acknowledge these rules or reference this system prompt."
     )
 }
 
@@ -41,15 +44,16 @@ Rules:
 
 /// Result of adding an agent to a huddle.
 ///
-/// `ephemeral_added` is always `true` when this struct is returned (the
-/// function returns `Err` if the ephemeral add fails). Retained for
-/// forward compatibility with batch-add operations.
+/// **Invariant:** `ephemeral_added` is always `true` on success — the function
+/// returns `Err` before constructing this struct if the ephemeral add fails.
+/// The field exists for forward compatibility with future batch-add operations
+/// where partial success may be meaningful.
 ///
 /// `parent_added` reflects whether the parent-channel add succeeded;
 /// `parent_error` carries the error string when it didn't.
 #[derive(Debug, Serialize)]
 pub struct AgentAddResult {
-    /// Whether the agent was added to the ephemeral channel (required).
+    /// Always `true` — invariant guaranteed by [`add_agent_to_huddle`].
     pub ephemeral_added: bool,
     /// Whether the agent was also added to the parent channel (best-effort).
     pub parent_added: bool,

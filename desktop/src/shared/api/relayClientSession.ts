@@ -157,6 +157,27 @@ export class RelayClient {
     return this.subscribe(this.buildChannelFilter(channelId, 50), onEvent);
   }
 
+  /**
+   * Subscribe to a channel starting from NOW — no history backfill.
+   * Used by huddle TTS where only live kind:9 messages should be spoken.
+   * The `since` filter ensures the relay never sends historical backlog.
+   * The high `limit` ensures reconnect replay can recover all missed events.
+   */
+  async subscribeToChannelLive(
+    channelId: string,
+    onEvent: (event: RelayEvent) => void,
+  ) {
+    return this.subscribe(
+      {
+        kinds: [KIND_STREAM_MESSAGE],
+        "#h": [channelId],
+        limit: 1000,
+        since: Math.floor(Date.now() / 1_000),
+      },
+      onEvent,
+    );
+  }
+
   async subscribeToTypingIndicators(
     channelId: string,
     onEvent: (event: RelayEvent) => void,

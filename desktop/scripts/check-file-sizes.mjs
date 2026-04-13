@@ -40,7 +40,7 @@ const overrides = new Map([
   ["src/features/settings/ui/SettingsView.tsx", 600],
   ["src/features/sidebar/ui/AppSidebar.tsx", 860], // channels + forums creation forms + Pulse nav
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
-  ["src/shared/api/relayClientSession.ts", 790], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore
+  ["src/shared/api/relayClientSession.ts", 810], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore + subscribeToChannelLive (huddle TTS)
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
   ["src-tauri/src/lib.rs", 590], // sprout-media:// proxy + Range headers + Sprout nest init (ensure_nest) in setup() + huddle command registration
   ["src-tauri/src/commands/media.rs", 720], // ffmpeg video transcode + poster frame extraction + run_ffmpeg_with_timeout (find_ffmpeg, is_video_file, transcode_to_mp4, extract_poster_frame, transcode_and_extract_poster) + spawn_blocking wrappers + tests
@@ -55,6 +55,7 @@ const overrides = new Map([
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
   ["src/shared/api/types.ts", 535], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields + mcpToolsets
+  ["src-tauri/src/events.rs", 530], // event builders + build_huddle_guidelines (kind:48106) + post_event_raw transport helper
   ["src-tauri/src/huddle/mod.rs", 1300], // huddle state machine + 14 Tauri commands + STT/TTS pipeline lifecycle + relay membership fetch + session generation guard + creator enforcement + input validation; split planned post-MVP
   ["src-tauri/src/huddle/models.rs", 850], // model download manager for Moonshine STT + Supertonic TTS with streaming downloads + SHA-256 verification + Rust-native tar extraction + version manifest + atomic swap + hot-start signaling
   ["src-tauri/src/huddle/preprocessing.rs", 620], // TTS text preprocessing pipeline + unified split_sentences (consolidated from tts.rs + supertonic.rs) + int_to_words 0-999999 + 18 unit tests
