@@ -397,11 +397,9 @@ export function ChannelScreen({
       if (!parentEventId) {
         return;
       }
-      const agentReplyParentId = currentThreadHeadId ?? null;
       const branchHeadId = currentThreadHeadId ?? null;
 
       await sendMessageMutation.mutateAsync({
-        agentReplyParentId,
         branchHeadId,
         content,
         mentionPubkeys,

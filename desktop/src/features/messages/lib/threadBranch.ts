@@ -74,7 +74,12 @@ export function collectThreadBranch(
     )
     .map((message) => ({
       ...message,
-      depth: Math.max(0, message.depth - depthOffset),
+      // Keep normal replies in the drilled branch visually flat.
+      // Only explicitly drilled nested branches get their own branchHeadId and collapse link.
+      depth:
+        message.branchHeadId === branchHeadId
+          ? 0
+          : Math.max(0, message.depth - depthOffset),
     }));
 
   return {
