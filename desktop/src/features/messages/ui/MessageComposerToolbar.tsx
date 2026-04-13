@@ -1,13 +1,17 @@
 import * as React from "react";
+import type { Editor } from "@tiptap/react";
 import { ALargeSmall, AtSign, Paperclip, SendHorizontal } from "lucide-react";
 
 import { Button } from "@/shared/ui/button";
 import { Toggle } from "@/shared/ui/toggle";
 import { ComposerEmojiPicker } from "./ComposerEmojiPicker";
+import { FormattingToolbar } from "./FormattingToolbar";
 
 export const MessageComposerToolbar = React.memo(
   function MessageComposerToolbar({
     composerDisabled,
+    editor,
+    formattingDisabled,
     isEmojiPickerOpen,
     isFormattingOpen,
     isSending,
@@ -21,6 +25,8 @@ export const MessageComposerToolbar = React.memo(
     sendDisabled,
   }: {
     composerDisabled: boolean;
+    editor: Editor | null;
+    formattingDisabled: boolean;
     isEmojiPickerOpen: boolean;
     isFormattingOpen: boolean;
     isSending: boolean;
@@ -46,6 +52,10 @@ export const MessageComposerToolbar = React.memo(
           >
             <ALargeSmall className="h-4 w-4" />
           </Toggle>
+
+          {isFormattingOpen && (
+            <FormattingToolbar editor={editor} disabled={formattingDisabled} />
+          )}
 
           <div className="mx-1 h-5 w-px bg-border/60" />
 

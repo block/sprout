@@ -20,7 +20,6 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Button } from "@/shared/ui/button";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import { ComposerAttachments } from "./ComposerAttachments";
-import { FormattingToolbar } from "./FormattingToolbar";
 import { ImageRefAutocomplete } from "./ImageRefAutocomplete";
 import {
   MentionAutocomplete,
@@ -672,14 +671,8 @@ export function MessageComposer({
             </div>
           ) : null}
 
-          {(isFormattingOpen || media.pendingImeta.length > 0) && (
+          {media.pendingImeta.length > 0 && (
             <div className="mb-1 flex items-center gap-2">
-              {isFormattingOpen && (
-                <FormattingToolbar
-                  editor={richText.editor}
-                  disabled={disabled}
-                />
-              )}
               <ComposerAttachments
                 attachments={media.pendingImeta}
                 onRemove={media.removeAttachment}
@@ -697,6 +690,8 @@ export function MessageComposer({
 
           <MessageComposerToolbar
             composerDisabled={disabled}
+            editor={richText.editor}
+            formattingDisabled={disabled}
             isEmojiPickerOpen={isEmojiPickerOpen}
             isFormattingOpen={isFormattingOpen}
             isSending={isSending}
