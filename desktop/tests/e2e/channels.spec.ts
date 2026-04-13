@@ -240,15 +240,12 @@ test("create stream with name and description", async ({ page }) => {
   const channelName = `my-new-stream-${Date.now()}`;
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelName);
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(channelName);
   await page
-    .getByTestId("create-stream-description")
+    .getByTestId("create-channel-description")
     .fill("A stream for testing channel creation");
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByTestId("create-channel-submit").click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -260,19 +257,15 @@ test("create ephemeral stream shows sidebar and header affordances", async ({
   const channelName = `ephemeral-stream-${Date.now()}`;
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelName);
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(channelName);
   await page
-    .getByTestId("create-stream-description")
+    .getByTestId("create-channel-description")
     .fill("Auto-cleaned test stream");
   await page
-    .getByTestId("create-stream-form")
     .getByLabel("Ephemeral — auto-archives after 1 day of inactivity")
     .click();
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByTestId("create-channel-submit").click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -301,19 +294,15 @@ test("ephemeral countdown refreshes when switching channels after a clock jump",
   await page.goto("/");
 
   for (const channelName of [firstChannelName, secondChannelName]) {
-    await page.getByRole("button", { name: "Create a stream" }).click();
-    await page.getByTestId("create-stream-name").fill(channelName);
+    await page.getByRole("button", { name: "Create a channel" }).click();
+    await page.getByTestId("create-channel-name").fill(channelName);
     await page
-      .getByTestId("create-stream-description")
+      .getByTestId("create-channel-description")
       .fill("Auto-cleaned test stream");
     await page
-      .getByTestId("create-stream-form")
       .getByLabel("Ephemeral — auto-archives after 1 day of inactivity")
       .click();
-    await page
-      .getByTestId("create-stream-form")
-      .getByRole("button", { name: "Create" })
-      .click();
+    await page.getByTestId("create-channel-submit").click();
     await expect(page.getByTestId("chat-title")).toHaveText(channelName);
   }
 
@@ -407,15 +396,12 @@ test("create stream with special characters", async ({ page }) => {
   const channelName = `dev ops-${Date.now()}`;
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelName);
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(channelName);
   await page
-    .getByTestId("create-stream-description")
+    .getByTestId("create-channel-description")
     .fill("Stream with spaces and hyphens");
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByTestId("create-channel-submit").click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -959,15 +945,12 @@ test("removing a multi-channel managed bot keeps its record until it is orphaned
   await addGenericAgent(page, "general", agentName);
   const agentPubkey = await getManagedAgentPubkey(page, agentName);
 
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(secondChannelName);
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(secondChannelName);
   await page
-    .getByTestId("create-stream-description")
+    .getByTestId("create-channel-description")
     .fill("Second home for managed bot cleanup coverage");
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByTestId("create-channel-submit").click();
   await expect(page.getByTestId("chat-title")).toHaveText(secondChannelName);
 
   const secondChannelId = await page
@@ -1152,12 +1135,9 @@ test("manage channel can delete an owned stream", async ({ page }) => {
   const channelName = `delete-me-${Date.now()}`;
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelName);
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(channelName);
+  await page.getByTestId("create-channel-submit").click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 
   await page.getByTestId("channel-management-trigger").click();
@@ -1176,12 +1156,9 @@ test("canceling channel deletion keeps the owned stream", async ({ page }) => {
   const channelName = `keep-me-${Date.now()}`;
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelName);
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(channelName);
+  await page.getByTestId("create-channel-submit").click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 
   await page.getByTestId("channel-management-trigger").click();
