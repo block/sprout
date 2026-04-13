@@ -343,12 +343,12 @@ pub async fn post_tokens(
     let mut seen = std::collections::HashSet::new();
     parsed_scopes.retain(|s| seen.insert(s.clone()));
 
-    // ── Scope escalation prevention (Bearer-authenticated callers) ───────────
-    // If the caller authenticated via an API token, the requested scopes must be
-    // a subset of the caller's own scopes, and channel_ids must be a subset too.
-    // NIP-98 and Okta JWT callers are unrestricted (they authenticate the identity
-    // directly, not via a scoped token).
-    if matches!(ctx.auth_method, RestAuthMethod::ApiToken) {
+    // ── Scope escalation prevention (all non-bootstrap callers) ──────────────
+    // Any caller that arrived with an already-authorized identity must stay within
+    // the scopes granted to that identity. NIP-98 bootstrap mints are the only
+    // exception because they deliberately authenticate ownership, not preexisting
+    // relay scopes.
+    if !matches!(ctx.auth_method, RestAuthMethod::Nip98) {
         for scope in &parsed_scopes {
             if !ctx.scopes.contains(scope) {
                 return Err((
@@ -423,7 +423,7 @@ pub async fn post_tokens(
             // token is channel-restricted, this would be an escalation. The subset
             // check above already rejects `None` for restricted callers, so we
             // must also reject empty arrays here.
-            if matches!(ctx.auth_method, RestAuthMethod::ApiToken) && ctx.channel_ids.is_some() {
+            if ctx.channel_ids.is_some() {
                 return Err((
                     StatusCode::FORBIDDEN,
                     Json(serde_json::json!({
