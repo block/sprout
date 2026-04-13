@@ -61,18 +61,11 @@ const textTheme = TextTheme(
     fontWeight: FontWeight.w500,
     height: 1.15,
   ),
-  bodyLarge: TextStyle(
-    fontSize: 16,
-    fontWeight: FontWeight.w400,
-    height: 1.25,
-  ),
+  bodyLarge: TextStyle(fontSize: 16, fontWeight: FontWeight.w400, height: 1.25),
   bodyMedium: TextStyle(
     fontSize: 14,
     fontWeight: FontWeight.w400,
     height: 1.43,
   ),
-  bodySmall: TextStyle(
-    fontSize: 12,
-    fontWeight: FontWeight.w400,
-  ),
+  bodySmall: TextStyle(fontSize: 12, fontWeight: FontWeight.w400),
 );

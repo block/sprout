@@ -185,6 +185,26 @@ jobs:
             /tmp/sprout-relay.log
           if-no-files-found: ignore
 
+  mobile:
+    name: Mobile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: subosito/flutter-action@e938bc6e2e22bcb26092f3e86457b09fd8e0e1e0 # v2
+        with:
+          channel: stable
+      - name: Install dependencies
+        run: cd mobile && flutter pub get
+      - name: Format check
+        run: cd mobile && dart format --output=none --set-exit-if-changed .
+      - name: Analyze
+        run: cd mobile && flutter analyze
+      - name: Test
+        run: cd mobile && flutter test
+
   security:
     name: Security
     runs-on: ubuntu-latest
