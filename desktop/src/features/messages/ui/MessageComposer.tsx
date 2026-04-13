@@ -40,6 +40,8 @@ type MessageComposerProps = {
     body: string;
     id: string;
   } | null;
+  typingParentEventId?: string | null;
+  typingRootEventId?: string | null;
 };
 
 const MAX_TEXTAREA_ROWS = 4;
@@ -56,6 +58,8 @@ export function MessageComposer({
   onSend,
   placeholder,
   replyTarget = null,
+  typingParentEventId = null,
+  typingRootEventId = null,
 }: MessageComposerProps) {
   const [content, setContent] = React.useState("");
   const contentRef = React.useRef(content);
@@ -74,7 +78,11 @@ export function MessageComposer({
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
-  const notifyTyping = useTypingBroadcast(channelId);
+  const notifyTyping = useTypingBroadcast(
+    channelId,
+    typingParentEventId,
+    typingRootEventId,
+  );
 
   const media = useMediaUpload(setContent);
 

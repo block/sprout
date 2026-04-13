@@ -1,0 +1,209 @@
+import { ArrowLeft, MessageSquareText, X } from "lucide-react";
+
+import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
+import type { TimelineMessage } from "@/features/messages/types";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import type { Channel } from "@/shared/api/types";
+import { Button } from "@/shared/ui/button";
+import { MessageComposer } from "./MessageComposer";
+import { MessageRow } from "./MessageRow";
+import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
+import { TypingIndicatorRow } from "./TypingIndicatorRow";
+
+type MessageThreadPanelProps = {
+  canGoBack: boolean;
+  channel: Channel | null;
+  channelId: string | null;
+  channelName: string;
+  currentPubkey?: string;
+  disabled?: boolean;
+  isSending: boolean;
+  onBack: () => void;
+  onCancelReply: () => void;
+  onClose: () => void;
+  onDelete?: (message: TimelineMessage) => void;
+  onOpenNestedThread: (message: TimelineMessage) => void;
+  onSend: (
+    content: string,
+    mentionPubkeys: string[],
+    mediaTags?: string[][],
+  ) => Promise<void>;
+  onToggleReaction?: (
+    message: TimelineMessage,
+    emoji: string,
+    remove: boolean,
+  ) => Promise<void>;
+  profiles?: UserProfileLookup;
+  replyTargetId: string | null;
+  replyTargetMessage: TimelineMessage | null;
+  threadHead: TimelineMessage | null;
+  threadReplies: MainTimelineEntry[];
+  threadTypingPubkeys: string[];
+  totalReplyCount: number;
+};
+
+function canManageMessage(
+  message: TimelineMessage,
+  currentPubkey: string | undefined,
+): boolean {
+  return Boolean(
+    currentPubkey &&
+      message.pubkey &&
+      currentPubkey.toLowerCase() === message.pubkey.toLowerCase(),
+  );
+}
+
+export function MessageThreadPanel({
+  canGoBack,
+  channel,
+  channelId,
+  channelName,
+  currentPubkey,
+  disabled = false,
+  isSending,
+  onBack,
+  onCancelReply,
+  onClose,
+  onDelete,
+  onOpenNestedThread,
+  onSend,
+  onToggleReaction,
+  profiles,
+  replyTargetId,
+  replyTargetMessage,
+  threadHead,
+  threadReplies,
+  threadTypingPubkeys,
+  totalReplyCount,
+}: MessageThreadPanelProps) {
+  if (!threadHead) {
+    return null;
+  }
+
+  const composerReplyTarget =
+    replyTargetMessage && replyTargetMessage.id !== threadHead.id
+      ? {
+          author: replyTargetMessage.author,
+          body: replyTargetMessage.body,
+          id: replyTargetMessage.id,
+        }
+      : null;
+
+  return (
+    <aside
+      className="hidden h-full w-[380px] shrink-0 flex-col border-l border-border/80 bg-background lg:flex"
+      data-testid="message-thread-panel"
+    >
+      <div className="flex items-center gap-3 border-b border-border/80 px-4 py-3">
+        {canGoBack ? (
+          <Button
+            aria-label="Back"
+            data-testid="message-thread-back"
+            onClick={onBack}
+            size="icon"
+            type="button"
+            variant="ghost"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <MessageSquareText className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold tracking-tight">Thread</h2>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {totalReplyCount} {totalReplyCount === 1 ? "reply" : "replies"}
+          </p>
+        </div>
+        <Button
+          aria-label="Close thread"
+          data-testid="message-thread-close"
+          onClick={onClose}
+          size="icon"
+          type="button"
+          variant="ghost"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+
+      <TypingIndicatorRow
+        channel={channel}
+        currentPubkey={currentPubkey}
+        profiles={profiles}
+        typingPubkeys={threadTypingPubkeys}
+      />
+
+      <div className="min-h-0 flex-1 overflow-y-auto" data-testid="message-thread-body">
+        <div className="border-b border-border/60 px-3 py-3" data-testid="message-thread-head">
+          <MessageRow
+            activeReplyTargetId={replyTargetId}
+            message={threadHead}
+            onDelete={
+              onDelete && canManageMessage(threadHead, currentPubkey)
+                ? onDelete
+                : undefined
+            }
+            onToggleReaction={onToggleReaction}
+            profiles={profiles}
+          />
+        </div>
+
+        <div className="px-3 py-3" data-testid="message-thread-replies">
+          {threadReplies.length > 0 ? (
+            <div className="space-y-2">
+              {threadReplies.map((entry) => (
+                <div key={entry.message.id}>
+                  <MessageRow
+                    activeReplyTargetId={replyTargetId}
+                    message={entry.message}
+                    onDelete={
+                      onDelete && canManageMessage(entry.message, currentPubkey)
+                        ? onDelete
+                        : undefined
+                    }
+                    onReply={onOpenNestedThread}
+                    onToggleReaction={onToggleReaction}
+                    profiles={profiles}
+                  />
+                  {entry.summary ? (
+                    <MessageThreadSummaryRow
+                      message={entry.message}
+                      onOpenThread={onOpenNestedThread}
+                      summary={entry.summary}
+                    />
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-border/70 bg-card/40 px-4 py-6 text-center">
+              <p className="text-sm font-medium text-foreground/80">
+                No replies in this branch yet
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Reply in the thread to continue this branch.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="border-t border-border/80 p-4">
+        <MessageComposer
+          channelId={channelId}
+          channelName={channelName}
+          disabled={disabled || isSending || !channelId}
+          isSending={isSending}
+          onCancelReply={composerReplyTarget ? onCancelReply : undefined}
+          onSend={onSend}
+          placeholder={`Reply in thread to ${threadHead.author}`}
+          replyTarget={composerReplyTarget}
+          typingParentEventId={threadHead.id}
+          typingRootEventId={threadHead.rootId}
+        />
+      </div>
+    </aside>
+  );
+}

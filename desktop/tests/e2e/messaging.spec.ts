@@ -264,8 +264,11 @@ test("shows your avatar on your own message when profile avatar is set", async (
   );
 });
 
-test("supports nested replies with visible indentation", async ({ page }) => {
+test("opens a branch-only thread panel from the reply action", async ({
+  page,
+}) => {
   const firstReply = `First threaded reply ${Date.now()}`;
+  const siblingReply = `Sibling threaded reply ${Date.now()}`;
   const nestedReply = `Nested threaded reply ${Date.now()}`;
 
   await page.goto("/");
@@ -275,33 +278,87 @@ test("supports nested replies with visible indentation", async ({ page }) => {
     "Welcome to #general",
   );
 
-  const rows = page.getByTestId("message-row");
-  const replyButtons = page.locator('[data-testid^="reply-message-"]');
+  const timeline = page.getByTestId("message-timeline");
+  const timelineRows = timeline.getByTestId("message-row");
+  const threadPanel = page.getByTestId("message-thread-panel");
+  const threadComposer = threadPanel.locator('[data-testid="message-input"]');
+  const threadSendButton = threadPanel.getByTestId("send-message");
+  const threadReplies = threadPanel.getByTestId("message-thread-replies");
+  const rootMessage = timelineRows.first();
 
-  await rows.first().hover();
-  await replyButtons.first().click();
-  await expect(page.getByTestId("reply-target")).toContainText("Replying to");
-  await page.getByTestId("message-input").fill(firstReply);
-  await page.getByTestId("send-message").click();
-  await expect(rows.last()).toContainText(firstReply);
-  await expect(rows.last()).not.toContainText("Welcome to #general");
+  await rootMessage.hover();
+  await rootMessage.getByRole("button", { name: "Reply" }).click();
+  await expect(threadPanel).toBeVisible();
+  await expect(threadPanel.getByTestId("message-thread-head")).toContainText(
+    "Welcome to #general",
+  );
 
-  await rows.last().hover();
-  await replyButtons.last().click();
-  await expect(page.getByTestId("reply-target")).toContainText(firstReply);
-  await page.getByTestId("message-input").fill(nestedReply);
-  await page.getByTestId("send-message").click();
-  await expect(rows.last()).toContainText(nestedReply);
-  await expect(rows.last()).not.toContainText(firstReply);
+  await threadComposer.fill(firstReply);
+  await threadSendButton.click();
+  await expect(threadReplies).toContainText(firstReply);
 
-  const rootBox = await rows.nth(0).boundingBox();
-  const firstReplyBox = await rows.nth(1).boundingBox();
-  const nestedReplyBox = await rows.nth(2).boundingBox();
+  await threadComposer.fill(siblingReply);
+  await threadSendButton.click();
+  await expect(threadReplies).toContainText(siblingReply);
 
-  if (!rootBox || !firstReplyBox || !nestedReplyBox) {
-    throw new Error("Expected reply rows to be rendered.");
-  }
+  await expect(
+    timeline.getByTestId("message-row").filter({ hasText: firstReply }),
+  ).toHaveCount(0);
+  await expect(
+    timeline.getByTestId("message-row").filter({ hasText: siblingReply }),
+  ).toHaveCount(0);
 
-  expect(firstReplyBox.x).toBeGreaterThan(rootBox.x + 8);
-  expect(nestedReplyBox.x).toBeGreaterThan(firstReplyBox.x + 8);
+  const rootSummaryRow = timeline.getByTestId("message-thread-summary").first();
+  await expect(rootSummaryRow).toContainText("2 replies");
+
+  await threadPanel.getByTestId("message-thread-close").click();
+  await expect(threadPanel).toBeHidden();
+
+  await rootSummaryRow.click();
+  await expect(threadPanel).toBeVisible();
+  await expect(threadPanel.getByTestId("message-thread-head")).toContainText(
+    "Welcome to #general",
+  );
+
+  const firstReplyRow = threadReplies
+    .getByTestId("message-row")
+    .filter({ hasText: firstReply })
+    .first();
+  await firstReplyRow.hover();
+  await firstReplyRow.getByRole("button", { name: "Reply" }).click();
+
+  await expect(threadPanel.getByTestId("message-thread-back")).toBeVisible();
+  await expect(threadPanel.getByTestId("message-thread-head")).toContainText(
+    firstReply,
+  );
+  await expect(threadPanel.getByTestId("message-thread-head")).not.toContainText(
+    "Welcome to #general",
+  );
+  await expect(threadReplies).not.toContainText(siblingReply);
+
+  await threadComposer.fill(nestedReply);
+  await threadSendButton.click();
+
+  await expect(threadReplies).toContainText(nestedReply);
+  await expect(threadReplies).not.toContainText(siblingReply);
+  await expect(
+    timeline.getByTestId("message-row").filter({ hasText: nestedReply }),
+  ).toHaveCount(0);
+
+  await threadPanel.getByTestId("message-thread-back").click();
+  await expect(threadPanel.getByTestId("message-thread-head")).toContainText(
+    "Welcome to #general",
+  );
+  await expect(
+    threadReplies.getByTestId("message-row").filter({ hasText: nestedReply }),
+  ).toHaveCount(0);
+
+  const nestedSummaryRow = threadReplies.getByTestId("message-thread-summary");
+  await expect(nestedSummaryRow).toContainText("1 reply");
+  await nestedSummaryRow.click();
+
+  await expect(threadPanel.getByTestId("message-thread-head")).toContainText(
+    firstReply,
+  );
+  await expect(threadReplies).toContainText(nestedReply);
 });

@@ -19,6 +19,7 @@ import {
   type RelaySubscription,
   type RelaySubscriptionFilter,
 } from "@/shared/api/relayClientShared";
+import { buildThreadReferenceTags } from "@/features/messages/lib/threading";
 
 const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 30_000;
@@ -135,7 +136,11 @@ export class RelayClient {
     );
   }
 
-  async sendTypingIndicator(channelId: string) {
+  async sendTypingIndicator(
+    channelId: string,
+    parentEventId?: string | null,
+    rootEventId?: string | null,
+  ) {
     // Bail when disconnected — not worth triggering a reconnect for ephemeral typing events.
     if (this.wsId === null) {
       return;
@@ -143,7 +148,11 @@ export class RelayClient {
     const event = await signRelayEvent({
       kind: KIND_TYPING_INDICATOR,
       content: "",
-      tags: [["h", channelId]],
+      tags: buildThreadReferenceTags(
+        channelId,
+        parentEventId ?? null,
+        rootEventId ?? null,
+      ),
     });
 
     // Fire-and-forget: no need to wait for relay acknowledgement.
