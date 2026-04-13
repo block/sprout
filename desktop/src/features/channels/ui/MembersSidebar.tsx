@@ -39,6 +39,9 @@ export function MembersSidebar({
   const membersQuery = useChannelMembersQuery(channelId, open);
   const addMembersMutation = useAddChannelMembersMutation(channelId);
   const changeRoleMutation = useChangeChannelMemberRoleMutation(channelId);
+  const changeRoleError = changeRoleMutation.error instanceof Error
+    ? changeRoleMutation.error.message
+    : null;
 
   const rawMembers = membersQuery.data ?? [];
   const { people, bots, isBot, isMyBot, managedAgentsQuery } =
@@ -131,7 +134,7 @@ export function MembersSidebar({
       <MembersSidebarMemberCard
         canChangeRole={canManageMembers && member.pubkey !== currentPubkey}
         canRemoveMember={canRemoveMember(member)}
-        isActionPending={isActionPending}
+        isActionPending={isActionPending || changeRoleMutation.isPending}
         isArchived={isArchived}
         key={member.pubkey}
         managedAgent={
@@ -256,12 +259,12 @@ export function MembersSidebar({
             </p>
           ) : null}
 
-          {actionErrorMessage ? (
+          {actionErrorMessage || changeRoleError ? (
             <p
               className="text-sm text-destructive"
               data-testid="members-sidebar-action-error"
             >
-              {actionErrorMessage}
+              {actionErrorMessage ?? changeRoleError}
             </p>
           ) : null}
         </div>

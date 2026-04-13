@@ -147,7 +147,12 @@ export function MembersSidebarMemberCard({
   );
 }
 
-const ASSIGNABLE_ROLES = ["admin", "member", "guest", "bot"] as const;
+const PEOPLE_ROLES = ["admin", "member", "guest"] as const;
+const BOT_ROLES = ["bot", "guest"] as const;
+
+function getAssignableRoles(memberIsBot: boolean) {
+  return memberIsBot ? BOT_ROLES : PEOPLE_ROLES;
+}
 
 function MemberActionsMenu({
   canChangeRole,
@@ -170,6 +175,10 @@ function MemberActionsMenu({
   onManagedAgentAction: (agent: ManagedAgent) => void;
   onRemoveMember: (member: ChannelMember) => void;
 }) {
+  const assignableRoles = getAssignableRoles(memberIsBot);
+  const showChangeRole =
+    canChangeRole && member.role !== "owner" && assignableRoles.length > 1;
+
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
@@ -195,12 +204,12 @@ function MemberActionsMenu({
               {getManagedAgentActionIcon(managedAgent)}
               {getManagedAgentPrimaryActionLabel(managedAgent)}
             </DropdownMenuItem>
-            {canRemoveMember || canChangeRole ? (
+            {canRemoveMember || showChangeRole ? (
               <DropdownMenuSeparator />
             ) : null}
           </>
         ) : null}
-        {canChangeRole && member.role !== "owner" ? (
+        {showChangeRole ? (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger
               data-testid={`sidebar-change-role-${member.pubkey}`}
@@ -210,7 +219,7 @@ function MemberActionsMenu({
               Change role
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent>
-              {ASSIGNABLE_ROLES.map((role) => (
+              {assignableRoles.map((role) => (
                 <DropdownMenuItem
                   data-testid={`sidebar-role-${role}-${member.pubkey}`}
                   disabled={disabled || member.role === role}
@@ -227,9 +236,7 @@ function MemberActionsMenu({
         ) : null}
         {canRemoveMember ? (
           <>
-            {canChangeRole && member.role !== "owner" ? (
-              <DropdownMenuSeparator />
-            ) : null}
+            {showChangeRole ? <DropdownMenuSeparator /> : null}
             <DropdownMenuItem
               className="text-destructive focus:text-destructive"
               data-testid={`sidebar-remove-member-${member.pubkey}`}

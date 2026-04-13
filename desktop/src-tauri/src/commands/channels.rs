@@ -203,8 +203,11 @@ pub async fn change_channel_member_role(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let uuid = parse_channel_uuid(&channel_id)?;
+    // Only allow permission-tier roles for humans and bot/guest for bots.
+    // Owner changes require a dedicated transfer-ownership flow.
     let role_str = match role.as_str() {
         "admin" | "member" | "guest" | "bot" => role.as_str(),
+        "owner" => return Err("cannot assign owner role — use transfer ownership".into()),
         other => return Err(format!("invalid role: {other}")),
     };
     let builder = events::build_add_member(uuid, &pubkey, Some(role_str))?;
