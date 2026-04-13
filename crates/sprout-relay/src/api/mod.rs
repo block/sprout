@@ -579,7 +579,40 @@ where
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+
     use super::*;
+
+    fn accessible_channel(id: Uuid) -> sprout_db::channel::AccessibleChannel {
+        let now = Utc::now();
+        sprout_db::channel::AccessibleChannel {
+            channel: sprout_db::channel::ChannelRecord {
+                id,
+                name: "restricted".to_string(),
+                channel_type: "stream".to_string(),
+                visibility: "private".to_string(),
+                description: None,
+                canvas: None,
+                created_by: vec![0; 32],
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+                deleted_at: None,
+                nip29_group_id: None,
+                topic_required: false,
+                max_members: None,
+                topic: None,
+                topic_set_by: None,
+                topic_set_at: None,
+                purpose: None,
+                purpose_set_by: None,
+                purpose_set_at: None,
+                ttl_seconds: None,
+                ttl_deadline: None,
+            },
+            is_member: true,
+        }
+    }
 
     // ── decode_jwt_payload_unverified ─────────────────────────────────────────
     //
@@ -804,5 +837,19 @@ mod tests {
         let constrained = constrain_channel_ids(vec![a, b], None);
 
         assert_eq!(constrained, vec![a, b]);
+    }
+
+    #[test]
+    fn constrain_accessible_channels_respects_token_allowlist() {
+        let allowed = uuid::Uuid::new_v4();
+        let denied = uuid::Uuid::new_v4();
+
+        let constrained = constrain_accessible_channels(
+            vec![accessible_channel(allowed), accessible_channel(denied)],
+            Some(&[allowed]),
+        );
+
+        assert_eq!(constrained.len(), 1);
+        assert_eq!(constrained[0].channel.id, allowed);
     }
 }

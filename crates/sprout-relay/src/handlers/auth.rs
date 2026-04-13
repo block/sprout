@@ -9,6 +9,14 @@ use crate::connection::{AuthState, ConnectionState};
 use crate::protocol::RelayMessage;
 use crate::state::AppState;
 
+fn verify_api_token_nip42_binding(
+    event: &nostr::Event,
+    challenge: &str,
+    relay_url: &str,
+) -> Result<(), sprout_auth::AuthError> {
+    sprout_auth::verify_nip42_event(event, challenge, relay_url)
+}
+
 /// Handle a NIP-42 AUTH message: verify the challenge response and transition the connection to authenticated state.
 pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state: Arc<AppState>) {
     let event_id_hex_early = event.id.to_hex();
@@ -61,7 +69,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             let challenge_owned = challenge.clone();
             let relay_owned = relay_url.clone();
             match tokio::task::spawn_blocking(move || {
-                sprout_auth::verify_nip42_event(&event_clone, &challenge_owned, &relay_owned)
+                verify_api_token_nip42_binding(&event_clone, &challenge_owned, &relay_owned)
             })
             .await
             {
@@ -235,5 +243,52 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 "auth-required: verification failed",
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nostr::{Event, EventBuilder, Keys, Tag, Url};
+    use sprout_auth::AuthError;
+
+    use super::*;
+
+    const TEST_RELAY: &str = "wss://relay.example.com";
+
+    fn make_api_token_auth_event(
+        keys: &Keys,
+        challenge: &str,
+        relay_url: &str,
+        token: &str,
+    ) -> Event {
+        let url: Url = relay_url.parse().expect("valid relay url");
+        let auth_token = Tag::parse(&["auth_token", token]).expect("valid auth_token tag");
+        EventBuilder::auth(challenge, url)
+            .add_tags(vec![auth_token])
+            .sign_with_keys(keys)
+            .expect("signing failed")
+    }
+
+    #[test]
+    fn api_token_auth_still_requires_a_valid_nip42_challenge() {
+        let keys = Keys::generate();
+        let challenge = sprout_auth::generate_challenge();
+        let event =
+            make_api_token_auth_event(&keys, &challenge, TEST_RELAY, "sprout_test_api_token");
+
+        assert!(matches!(
+            verify_api_token_nip42_binding(&event, "wrong-challenge", TEST_RELAY),
+            Err(AuthError::ChallengeMismatch)
+        ));
+    }
+
+    #[test]
+    fn api_token_auth_accepts_a_valid_nip42_proof() {
+        let keys = Keys::generate();
+        let challenge = sprout_auth::generate_challenge();
+        let event =
+            make_api_token_auth_event(&keys, &challenge, TEST_RELAY, "sprout_test_api_token");
+
+        assert!(verify_api_token_nip42_binding(&event, &challenge, TEST_RELAY).is_ok());
     }
 }

@@ -189,6 +189,29 @@ pub struct RevokeAllResponse {
     pub revoked_count: u64,
 }
 
+fn ensure_requested_scopes_within_caller(
+    ctx: &super::RestAuthContext,
+    requested_scopes: &[Scope],
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if matches!(ctx.auth_method, RestAuthMethod::Nip98) {
+        return Ok(());
+    }
+
+    for scope in requested_scopes {
+        if !ctx.scopes.contains(scope) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "scope_escalation",
+                    "message": format!("Cannot mint scope '{}' — not in your token's scopes", scope)
+                })),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `POST /api/tokens` — mint a new API token.
@@ -348,19 +371,9 @@ pub async fn post_tokens(
     // the scopes granted to that identity. NIP-98 bootstrap mints are the only
     // exception because they deliberately authenticate ownership, not preexisting
     // relay scopes.
-    if !matches!(ctx.auth_method, RestAuthMethod::Nip98) {
-        for scope in &parsed_scopes {
-            if !ctx.scopes.contains(scope) {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({
-                        "error": "scope_escalation",
-                        "message": format!("Cannot mint scope '{}' — not in your token's scopes", scope)
-                    })),
-                ));
-            }
-        }
+    ensure_requested_scopes_within_caller(&ctx, &parsed_scopes)?;
 
+    if !matches!(ctx.auth_method, RestAuthMethod::Nip98) {
         // If caller has channel_ids restriction, child must also be restricted
         // to a subset of those channels.
         if let Some(ref caller_channels) = ctx.channel_ids {
@@ -816,6 +829,24 @@ fn reconstruct_canonical_url_for_tokens(relay_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nostr::Keys;
+
+    fn auth_context(
+        auth_method: RestAuthMethod,
+        scopes: Vec<Scope>,
+        channel_ids: Option<Vec<Uuid>>,
+    ) -> super::super::RestAuthContext {
+        let keys = Keys::generate();
+        let pubkey = keys.public_key();
+        super::super::RestAuthContext {
+            pubkey,
+            pubkey_bytes: pubkey.to_bytes().to_vec(),
+            scopes,
+            auth_method,
+            token_id: None,
+            channel_ids,
+        }
+    }
 
     #[test]
     fn rate_limiter_allows_up_to_limit() {
@@ -882,5 +913,23 @@ mod tests {
     fn canonical_token_url_uses_configured_relay_identity() {
         let url = reconstruct_canonical_url_for_tokens("wss://relay.example.test/");
         assert_eq!(url, "https://relay.example.test/api/tokens");
+    }
+
+    #[test]
+    fn bearer_callers_cannot_self_mint_new_scopes() {
+        let ctx = auth_context(RestAuthMethod::OktaJwt, vec![Scope::MessagesRead], None);
+
+        let err = ensure_requested_scopes_within_caller(&ctx, &[Scope::MessagesWrite])
+            .expect_err("bearer-auth callers must stay within their granted scopes");
+
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(err.1 .0["error"].as_str(), Some("scope_escalation"));
+    }
+
+    #[test]
+    fn nip98_bootstrap_mints_are_not_limited_by_existing_scope_list() {
+        let ctx = auth_context(RestAuthMethod::Nip98, Vec::new(), None);
+
+        assert!(ensure_requested_scopes_within_caller(&ctx, &[Scope::MessagesWrite]).is_ok());
     }
 }

@@ -632,3 +632,80 @@ pub async fn workflow_webhook(
         })),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use nostr::Keys;
+    use sprout_db::workflow::{WorkflowRecord, WorkflowStatus};
+    use sprout_workflow::{ActionDef, Step, TriggerDef, WorkflowDef};
+
+    use super::*;
+
+    fn workflow_record(owner_pubkey: Vec<u8>) -> WorkflowRecord {
+        WorkflowRecord {
+            id: uuid::Uuid::new_v4(),
+            name: "regression".to_string(),
+            owner_pubkey,
+            channel_id: Some(uuid::Uuid::new_v4()),
+            definition: serde_json::json!({}),
+            definition_hash: vec![0; 32],
+            status: WorkflowStatus::Active,
+            enabled: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn workflow_with_send_message_target(channel_id: uuid::Uuid) -> WorkflowDef {
+        WorkflowDef {
+            name: "cross-channel".to_string(),
+            description: None,
+            trigger: TriggerDef::MessagePosted { filter: None },
+            steps: vec![Step {
+                id: "notify".to_string(),
+                name: None,
+                if_expr: None,
+                timeout_secs: None,
+                action: ActionDef::SendMessage {
+                    text: "hello".to_string(),
+                    channel: Some(channel_id.to_string()),
+                },
+            }],
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn workflow_mutations_require_the_owner_pubkey() {
+        let owner = Keys::generate().public_key().serialize().to_vec();
+        let caller = Keys::generate().public_key().serialize().to_vec();
+        let workflow = workflow_record(owner);
+
+        let err = require_workflow_owner(&workflow, &caller, "update")
+            .expect_err("non-owners must not be able to update workflows");
+
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(
+            err.1 .0["error"].as_str(),
+            Some("not authorized to update this workflow")
+        );
+    }
+
+    #[test]
+    fn channel_workflows_cannot_override_send_message_destination() {
+        let workflow_channel_id = uuid::Uuid::new_v4();
+        let other_channel_id = uuid::Uuid::new_v4();
+        let def = workflow_with_send_message_target(other_channel_id);
+
+        let err = validate_send_message_targets(&def, Some(workflow_channel_id))
+            .expect_err("channel workflows must not be able to send outside their channel");
+        let expected = format!(
+            "invalid workflow YAML: step 'notify' cannot override send_message.channel outside workflow channel {}",
+            workflow_channel_id
+        );
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert_eq!(err.1 .0["error"].as_str(), Some(expected.as_str()));
+    }
+}

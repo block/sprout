@@ -246,6 +246,32 @@ pub async fn handle_req(
 /// Maximum Typesense pages to fetch per filter (prevents unbounded loops).
 const MAX_SEARCH_PAGES: u32 = 10;
 
+fn build_search_channel_scope_filter(
+    accessible_channels: &[uuid::Uuid],
+    include_global: bool,
+) -> Option<String> {
+    if accessible_channels.is_empty() {
+        return if include_global {
+            Some("channel_id:=__global__".to_string())
+        } else {
+            None
+        };
+    }
+
+    let ids: Vec<String> = accessible_channels
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+    Some(if include_global {
+        format!(
+            "(channel_id:=[{}] || channel_id:=__global__)",
+            ids.join(",")
+        )
+    } else {
+        format!("channel_id:=[{}]", ids.join(","))
+    })
+}
+
 async fn handle_search_req(
     sub_id: &str,
     filters: &[Filter],
@@ -254,30 +280,14 @@ async fn handle_search_req(
     conn: &ConnectionState,
     state: &AppState,
 ) {
-    let all_channels_filter = {
-        if accessible_channels.is_empty() {
-            if !include_global {
+    let all_channels_filter =
+        match build_search_channel_scope_filter(accessible_channels, include_global) {
+            Some(filter) => filter,
+            None => {
                 conn.send(RelayMessage::eose(sub_id));
                 return;
             }
-            "channel_id:=__global__".to_string()
-        } else if include_global {
-            let ids: Vec<String> = accessible_channels
-                .iter()
-                .map(|id| id.to_string())
-                .collect();
-            format!(
-                "(channel_id:=[{}] || channel_id:=__global__)",
-                ids.join(",")
-            )
-        } else {
-            let ids: Vec<String> = accessible_channels
-                .iter()
-                .map(|id| id.to_string())
-                .collect();
-            format!("channel_id:=[{}]", ids.join(","))
-        }
-    };
+        };
 
     let mut seen_ids: HashSet<nostr::EventId> = HashSet::new();
 
@@ -688,5 +698,23 @@ mod tests {
             .custom_tag(d_tag, ["slug-a", "slug-b"]);
         let q5 = filter_to_query_params(&multi_d_filter, None);
         assert_eq!(q5.d_tag, None);
+    }
+
+    #[test]
+    fn restricted_search_scope_excludes_global_results() {
+        let channel_id = uuid::Uuid::new_v4();
+
+        let scope = build_search_channel_scope_filter(&[channel_id], false)
+            .expect("restricted tokens with channel access should still search that channel");
+
+        assert_eq!(scope, format!("channel_id:=[{channel_id}]"));
+    }
+
+    #[test]
+    fn restricted_search_scope_without_accessible_channels_matches_nothing() {
+        assert!(
+            build_search_channel_scope_filter(&[], false).is_none(),
+            "restricted tokens must not fall back to global search results"
+        );
     }
 }
