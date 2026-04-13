@@ -285,11 +285,12 @@ pub(crate) fn requires_h_channel_scope(kind: u32) -> bool {
             | KIND_NIP29_DELETE_EVENT
             | KIND_NIP29_DELETE_GROUP
             | KIND_NIP29_LEAVE_REQUEST
-            // Huddle lifecycle events (kind 48100–48103)
+            // Huddle lifecycle events (kind 48100–48103) + guidelines (48106)
             | 48100
             | 48101
             | 48102
             | 48103
+            | 48106
     )
 }
 

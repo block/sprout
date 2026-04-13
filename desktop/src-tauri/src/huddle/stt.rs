@@ -163,12 +163,17 @@ impl Drop for SttPipeline {
 // ── Worker thread ─────────────────────────────────────────────────────────────
 
 /// How many 16 kHz samples of silence before we flush to STT.
-/// 450 ms × 16 000 Hz / 256 samples-per-frame ≈ 28 frames.
-const SILENCE_FLUSH_FRAMES: usize = 28;
+/// 300 ms × 16 000 Hz / 256 samples-per-frame ≈ 19 frames.
+/// Previous value (28 frames / 450 ms) felt sluggish in conversation.
+const SILENCE_FLUSH_FRAMES: usize = 19;
 
 /// Consecutive VAD speech frames required before triggering barge-in during TTS.
-/// 5 frames × 256 samples / 16 kHz ≈ 80 ms — filters out coughs and transients.
-const BARGE_IN_DEBOUNCE_FRAMES: usize = 5;
+/// 20 frames × 256 samples / 16 kHz ≈ 320 ms — must be long enough to filter
+/// speaker-to-mic feedback (TTS audio bleeding through the mic) while still
+/// catching real human interruptions. 80 ms (previous: 5 frames) was too
+/// aggressive — laptop speakers without headphones triggered false barge-in
+/// within the first word of TTS playback.
+const BARGE_IN_DEBOUNCE_FRAMES: usize = 20;
 
 /// earshot requires exactly 256 samples per frame at 16 kHz.
 const VAD_FRAME_SAMPLES: usize = 256;
@@ -179,9 +184,11 @@ const VAD_THRESHOLD: f32 = 0.5;
 /// How long the worker waits on the audio channel before checking the shutdown flag.
 const RECV_TIMEOUT: Duration = Duration::from_millis(50);
 
-/// 200 ms cooldown after TTS stops before STT re-enables.
+/// 50 ms cooldown after TTS stops before STT re-enables.
 /// Prevents the tail of TTS audio from being transcribed as speech.
-const TTS_COOLDOWN: Duration = Duration::from_millis(200);
+/// Previous value (200 ms) was eating the first word when the user spoke
+/// immediately after the agent finished.
+const TTS_COOLDOWN: Duration = Duration::from_millis(50);
 
 fn stt_worker(
     model_dir: PathBuf,
@@ -376,26 +383,13 @@ fn process_16k_samples(
 
         let tts_playing = tts_active.load(Ordering::Acquire);
 
-        // Fix 2 + Fix 4: While TTS is playing, detect barge-in but skip accumulation.
+        // While TTS is playing: skip accumulation (echo prevention).
+        // Barge-in is disabled — push-to-talk will replace VAD-based interruption.
+        // Without acoustic echo cancellation, any ambient noise triggers false
+        // barge-in and kills TTS playback mid-sentence.
         if tts_playing {
-            // Reset segment state — STT is not tracking speech during TTS.
-            // The barge-in logic below will set in_speech=true only when the
-            // debounce threshold is met, preventing stale continuation after TTS stops.
             *in_speech = false;
-
-            if is_speech {
-                *barge_in_frames += 1;
-                if *barge_in_frames >= BARGE_IN_DEBOUNCE_FRAMES {
-                    // Sustained speech during TTS → barge-in: cancel TTS.
-                    *in_speech = true;
-                    if let Some(cancel) = tts_cancel {
-                        cancel.store(true, Ordering::Release);
-                    }
-                }
-            } else {
-                *barge_in_frames = 0;
-            }
-            // Don't accumulate during TTS — clean slate for when TTS stops.
+            *barge_in_frames = 0;
             speech_buf.clear();
             *silence_frames = 0;
             continue;

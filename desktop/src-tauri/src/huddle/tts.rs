@@ -243,6 +243,25 @@ fn tts_worker(
         }
     };
 
+    // Prime the audio output stream with a short silent buffer.
+    // On macOS, CoreAudio initializes the output device lazily on first use.
+    // Without this, the first real Player races against device startup and
+    // player.empty() returns true before audio has started draining — causing
+    // the first TTS message to be truncated after a few words.
+    {
+        use rodio::buffer::SamplesBuffer;
+        let channels = NonZero::new(1u16).unwrap();
+        let rate = NonZero::new(SAMPLE_RATE).unwrap();
+        let silence = vec![0.0f32; SAMPLE_RATE as usize / 10]; // 100ms of silence
+        let player = Player::connect_new(&sink_handle.mixer());
+        player.append(SamplesBuffer::new(channels, rate, silence));
+        // Wait for the silent buffer to drain — this ensures the output stream
+        // is fully initialized before the main loop creates its first Player.
+        while !player.empty() {
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     // ── 4. Main loop ──────────────────────────────────────────────────────────
     loop {
         // Check shutdown/cancel before blocking (no player yet).
@@ -307,7 +326,6 @@ fn tts_worker(
         tts_active.store(true, Ordering::Release);
 
         for chunk in sentences.chunks(BATCH_SIZE) {
-            // Fix 2: tts_active cleared immediately on cancel (inside helper).
             if handle_cancel_or_shutdown(&cancel, &shutdown, &tts_active, &text_rx, Some(&player)) {
                 break;
             }
@@ -320,7 +338,6 @@ fn tts_worker(
 
         // Wait for all queued audio to finish playing.
         loop {
-            // Fix 2: tts_active cleared immediately on cancel (inside helper).
             if handle_cancel_or_shutdown(&cancel, &shutdown, &tts_active, &text_rx, Some(&player)) {
                 break;
             }
