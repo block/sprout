@@ -81,6 +81,48 @@ fn require_workflow_owner(
     Ok(())
 }
 
+fn validate_send_message_targets(
+    def: &sprout_workflow::WorkflowDef,
+    workflow_channel_id: Option<uuid::Uuid>,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    for step in &def.steps {
+        if let sprout_workflow::ActionDef::SendMessage {
+            channel: Some(channel),
+            ..
+        } = &step.action
+        {
+            let trimmed = channel.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let target_channel = uuid::Uuid::parse_str(trimmed).map_err(|_| {
+                api_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!(
+                        "invalid workflow YAML: step '{}' has an invalid send_message.channel UUID",
+                        step.id
+                    ),
+                )
+            })?;
+
+            if let Some(workflow_channel_id) = workflow_channel_id {
+                if target_channel != workflow_channel_id {
+                    return Err(api_error(
+                        StatusCode::BAD_REQUEST,
+                        &format!(
+                            "invalid workflow YAML: step '{}' cannot override send_message.channel outside workflow channel {}",
+                            step.id, workflow_channel_id
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Create a new workflow in a channel.
 ///
 /// Parses and validates the YAML definition, generates a webhook secret if needed,
@@ -109,6 +151,7 @@ pub async fn create_workflow(
                 &format!("invalid workflow YAML: {e}"),
             )
         })?;
+    validate_send_message_targets(&def, Some(channel_id))?;
 
     validate_webhook_urls(&def)
         .await
@@ -233,6 +276,7 @@ pub async fn update_workflow(
                 &format!("invalid workflow YAML: {e}"),
             )
         })?;
+    validate_send_message_targets(&def, existing.channel_id)?;
 
     validate_webhook_urls(&def)
         .await
@@ -438,7 +482,13 @@ pub async fn trigger_workflow(
         return Err(forbidden("not authorized to access this workflow"));
     }
 
-    let trigger_ctx = sprout_workflow::executor::TriggerContext::default();
+    let trigger_ctx = sprout_workflow::executor::TriggerContext {
+        channel_id: workflow
+            .channel_id
+            .map(|channel_id| channel_id.to_string())
+            .unwrap_or_default(),
+        ..Default::default()
+    };
     let trigger_ctx_json = serde_json::to_value(&trigger_ctx).ok();
 
     let run_id = state
@@ -541,7 +591,13 @@ pub async fn workflow_webhook(
 
     // Build trigger context from webhook body fields before creating the run so
     // we can persist it immediately (needed for post-approval resume).
-    let mut trigger_ctx = sprout_workflow::executor::TriggerContext::default();
+    let mut trigger_ctx = sprout_workflow::executor::TriggerContext {
+        channel_id: workflow
+            .channel_id
+            .map(|channel_id| channel_id.to_string())
+            .unwrap_or_default(),
+        ..Default::default()
+    };
     if let Some(serde_json::Value::Object(ref map)) = body_json {
         for (k, v) in map {
             let val_str = match v {
