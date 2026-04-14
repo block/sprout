@@ -80,10 +80,15 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
                           Attachment {hash} preview
                         </DialogPrimitive.Title>
                         <DialogPrimitive.Description className="sr-only">
-                          Full-size attachment preview. Press Escape or click outside to close.
+                          Full-size attachment preview. Press Escape or click
+                          outside to close.
                         </DialogPrimitive.Description>
-                        <DialogPrimitive.Close className="absolute inset-0 cursor-default" aria-label="Close lightbox" />
+                        <DialogPrimitive.Close
+                          className="absolute inset-0 cursor-default"
+                          aria-label="Close lightbox"
+                        />
                         {isVideo ? (
+                          // biome-ignore lint/a11y/useMediaCaption: user-uploaded video, no captions available
                           <video
                             src={rewriteRelayUrl(attachment.url)}
                             controls
@@ -118,6 +123,7 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
           {isUploading &&
             Array.from({ length: uploadingCount || 1 }).map((_, i) => (
               <motion.div
+                // biome-ignore lint/suspicious/noArrayIndexKey: placeholders have no stable identity
                 key={`upload-placeholder-${i}`}
                 layout
                 initial={{ opacity: 0, scale: 0.8 }}

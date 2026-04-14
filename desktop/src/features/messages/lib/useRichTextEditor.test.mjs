@@ -65,10 +65,10 @@ test("cursor mid-word in single paragraph", () => {
 
 test("cursor in second paragraph accounts for block boundary newline", () => {
   const nodes = [
-    { isText: false, isBlock: true, pos: 0, nodeSize: 7 },   // p1
-    { isText: true, isBlock: false, pos: 1, nodeSize: 5 },    // "hello"
-    { isText: false, isBlock: true, pos: 7, nodeSize: 7 },    // p2 (pos > 0 → newline)
-    { isText: true, isBlock: false, pos: 8, nodeSize: 5 },    // "world"
+    { isText: false, isBlock: true, pos: 0, nodeSize: 7 }, // p1
+    { isText: true, isBlock: false, pos: 1, nodeSize: 5 }, // "hello"
+    { isText: false, isBlock: true, pos: 7, nodeSize: 7 }, // p2 (pos > 0 → newline)
+    { isText: true, isBlock: false, pos: 8, nodeSize: 5 }, // "world"
   ];
   // Anchor at pos=8 → start of "world" → plain-text offset 6 ("hello\n" = 6 chars)
   assert.equal(mapAnchorToPlainText(nodes, 8), 6);
@@ -90,12 +90,12 @@ test("cursor mid-word in second paragraph", () => {
 
 test("cursor in third paragraph accounts for two block boundaries", () => {
   const nodes = [
-    { isText: false, isBlock: true, pos: 0, nodeSize: 5 },    // p1
-    { isText: true, isBlock: false, pos: 1, nodeSize: 3 },    // "aaa"
-    { isText: false, isBlock: true, pos: 5, nodeSize: 5 },    // p2
-    { isText: true, isBlock: false, pos: 6, nodeSize: 3 },    // "bbb"
-    { isText: false, isBlock: true, pos: 10, nodeSize: 5 },   // p3
-    { isText: true, isBlock: false, pos: 11, nodeSize: 3 },   // "ccc"
+    { isText: false, isBlock: true, pos: 0, nodeSize: 5 }, // p1
+    { isText: true, isBlock: false, pos: 1, nodeSize: 3 }, // "aaa"
+    { isText: false, isBlock: true, pos: 5, nodeSize: 5 }, // p2
+    { isText: true, isBlock: false, pos: 6, nodeSize: 3 }, // "bbb"
+    { isText: false, isBlock: true, pos: 10, nodeSize: 5 }, // p3
+    { isText: true, isBlock: false, pos: 11, nodeSize: 3 }, // "ccc"
   ];
   // Anchor at pos=11 → start of "ccc" → plain-text offset 8 ("aaa\nbbb\n" = 8 chars)
   assert.equal(mapAnchorToPlainText(nodes, 11), 8);

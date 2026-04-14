@@ -44,9 +44,9 @@ export function useMediaUpload() {
    * Consumers see the filtered `pendingImeta` (nulls stripped) so the public
    * type stays `BlobDescriptor[]`.
    */
-  const [imetaSlots, setImetaSlots] = React.useState<
-    (BlobDescriptor | null)[]
-  >([]);
+  const [imetaSlots, setImetaSlots] = React.useState<(BlobDescriptor | null)[]>(
+    [],
+  );
 
   const pendingImeta = React.useMemo(
     () => imetaSlots.filter((d): d is BlobDescriptor => d !== null),
@@ -216,9 +216,7 @@ export function useMediaUpload() {
   );
 
   const removeAttachment = React.useCallback((url: string) => {
-    setImetaSlots((prev) =>
-      prev.map((d) => (d?.url === url ? null : d)),
-    );
+    setImetaSlots((prev) => prev.map((d) => (d?.url === url ? null : d)));
   }, []);
 
   /** Public setter — replaces all slots (used by MessageComposer to clear/restore). */

@@ -29,7 +29,11 @@ export const MentionHighlightExtension = Extension.create({
         key: mentionHighlightKey,
         state: {
           init(_, state) {
-            return buildDecorations(state.doc, extension.storage.names, extension.storage.channelNames);
+            return buildDecorations(
+              state.doc,
+              extension.storage.names,
+              extension.storage.channelNames,
+            );
           },
           apply(tr, oldDecorations) {
             if (tr.docChanged || tr.getMeta(mentionHighlightKey)) {
@@ -73,7 +77,9 @@ export function buildHighlightPatterns(
   }
 
   if (channelNames.length > 0) {
-    const sortedChannels = [...channelNames].sort((a, b) => b.length - a.length);
+    const sortedChannels = [...channelNames].sort(
+      (a, b) => b.length - a.length,
+    );
     const escapedChannels = sortedChannels.map((n) =>
       n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
     );
@@ -97,9 +103,10 @@ export function findHighlightMatches(
   const results: { from: number; to: number; match: string }[] = [];
   for (const pattern of patterns) {
     pattern.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = pattern.exec(text)) !== null) {
+    let m: RegExpExecArray | null = pattern.exec(text);
+    while (m !== null) {
       results.push({ from: m.index, to: m.index + m[0].length, match: m[0] });
+      m = pattern.exec(text);
     }
   }
   return results;
@@ -110,7 +117,8 @@ function buildDecorations(
   names: string[],
   channelNames: string[],
 ): DecorationSet {
-  if (names.length === 0 && channelNames.length === 0) return DecorationSet.empty;
+  if (names.length === 0 && channelNames.length === 0)
+    return DecorationSet.empty;
 
   const decorations: Decoration[] = [];
   const patterns = buildHighlightPatterns(names, channelNames);
@@ -120,13 +128,14 @@ function buildDecorations(
 
     for (const pattern of patterns) {
       pattern.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = pattern.exec(node.text)) !== null) {
+      let match: RegExpExecArray | null = pattern.exec(node.text);
+      while (match !== null) {
         const from = pos + match.index;
         const to = from + match[0].length;
         decorations.push(
           Decoration.inline(from, to, { class: "mention-highlight" }),
         );
+        match = pattern.exec(node.text);
       }
     }
   });

@@ -9,7 +9,10 @@ import { Extension } from "@tiptap/core";
 import { TextSelection } from "@tiptap/pm/state";
 
 import { ImageRefNode } from "./imageRefExtension";
-import { MentionHighlightExtension, mentionHighlightKey } from "./mentionHighlightExtension";
+import {
+  MentionHighlightExtension,
+  mentionHighlightKey,
+} from "./mentionHighlightExtension";
 
 export type RichTextEditorOptions = {
   placeholder?: string;
