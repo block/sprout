@@ -52,17 +52,14 @@ export const MentionHighlightExtension = Extension.create({
   },
 });
 
-function buildDecorations(
-  doc: Parameters<typeof DecorationSet.create>[0],
+/**
+ * Build highlight patterns for @Name and #channel-name matching.
+ * Exported for testing — the patterns are the core logic of this extension.
+ */
+export function buildHighlightPatterns(
   names: string[],
   channelNames: string[],
-): DecorationSet {
-  if (names.length === 0 && channelNames.length === 0) return DecorationSet.empty;
-
-  const decorations: Decoration[] = [];
-
-  // Build patterns for @Name and #channel-name.
-  // Escape special regex chars and sort longest-first for greedy matching.
+): RegExp[] {
   const patterns: RegExp[] = [];
 
   if (names.length > 0) {
@@ -85,18 +82,47 @@ function buildDecorations(
     );
   }
 
+  return patterns;
+}
+
+/**
+ * Find all highlight matches in a text string given a set of patterns.
+ * Returns an array of { from, to } offsets relative to the text start.
+ * Exported for testing.
+ */
+export function findHighlightMatches(
+  text: string,
+  patterns: RegExp[],
+): { from: number; to: number; match: string }[] {
+  const results: { from: number; to: number; match: string }[] = [];
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = pattern.exec(text)) !== null) {
+      results.push({ from: m.index, to: m.index + m[0].length, match: m[0] });
+    }
+  }
+  return results;
+}
+
+function buildDecorations(
+  doc: Parameters<typeof DecorationSet.create>[0],
+  names: string[],
+  channelNames: string[],
+): DecorationSet {
+  if (names.length === 0 && channelNames.length === 0) return DecorationSet.empty;
+
+  const decorations: Decoration[] = [];
+  const patterns = buildHighlightPatterns(names, channelNames);
+
   doc.descendants((node, pos) => {
     if (!node.isText || !node.text) return;
 
     for (const pattern of patterns) {
-      // We need to match against text that may span from start-of-node.
-      // ProseMirror pos points to the start of the text node content.
       pattern.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = pattern.exec(node.text)) !== null) {
         const from = pos + match.index;
-        // The match may include a leading whitespace char from the lookbehind —
-        // but lookbehind doesn't consume, so match[0] starts at @ or #.
         const to = from + match[0].length;
         decorations.push(
           Decoration.inline(from, to, { class: "mention-highlight" }),
