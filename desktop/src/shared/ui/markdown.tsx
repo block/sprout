@@ -289,8 +289,8 @@ function ImageGalleryGrouper({ children }: { children: React.ReactNode }) {
     // ReactMarkdown renders into a single wrapper — get its children
     const elements = React.Children.toArray(
       // Unwrap the ReactMarkdown output (it's a single React element)
-      React.isValidElement(children) && children.props.children
-        ? React.Children.toArray(children.props.children)
+      React.isValidElement(children) && (children.props as Record<string, unknown>).children
+        ? React.Children.toArray((children.props as Record<string, unknown>).children as React.ReactNode)
         : [children],
     );
 
@@ -321,7 +321,7 @@ function ImageGalleryGrouper({ children }: { children: React.ReactNode }) {
       // Check if this element is an image-only paragraph
       // (a <p> containing only a DialogPrimitive.Root or a single <div> with an <img>)
       if (React.isValidElement(el) && el.type === "p") {
-        const pChildren = React.Children.toArray(el.props.children);
+        const pChildren = React.Children.toArray((el.props as Record<string, unknown>).children as React.ReactNode);
         const hasOnlyImages = pChildren.length >= 1 && pChildren.every(
           (child) =>
             React.isValidElement(child) &&

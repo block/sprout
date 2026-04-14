@@ -55,7 +55,7 @@ export const MessageComposerToolbar = React.memo(
   }) {
     return (
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-1 py-1 min-h-11">
+        <div className="flex min-w-0 flex-1 items-center gap-1 py-1 min-h-11">
           {/*
            * AnimatePresence with mode="popLayout" — exiting elements
            * are popped out of flow immediately so entering elements
@@ -72,39 +72,54 @@ export const MessageComposerToolbar = React.memo(
                */
               <motion.div
                 key="formatting-controls"
-                className="flex items-center gap-1"
-                initial={{ opacity: 0, x: -12 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -12 }}
+                className="flex min-w-0 flex-1 items-center gap-1"
+                initial={false}
+                animate={{}}
+                exit={{ opacity: 0 }}
                 transition={presenceSpring}
               >
-                <Toggle
-                  aria-label="Toggle formatting"
-                  disabled={composerDisabled}
-                  pressed={isFormattingOpen}
-                  onPressedChange={onFormattingToggle}
-                  size="sm"
-                  title="Formatting"
+                <motion.div
+                  initial={{ x: 8, opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  exit={{ x: 8, opacity: 0 }}
+                  transition={presenceSpring}
                 >
-                  <ALargeSmall className="h-4 w-4" />
-                </Toggle>
-                <Button
-                  aria-label="Close formatting"
-                  disabled={composerDisabled}
-                  onClick={() => onFormattingToggle(false)}
-                  size="icon"
-                  title="Close formatting"
-                  type="button"
-                  variant="ghost"
-                  className="h-7 w-7"
+                  <Toggle
+                    aria-label="Toggle formatting"
+                    disabled={composerDisabled}
+                    pressed={isFormattingOpen}
+                    onPressedChange={onFormattingToggle}
+                    size="sm"
+                    title="Formatting"
+                  >
+                    <ALargeSmall className="h-4 w-4" />
+                  </Toggle>
+                </motion.div>
+                <motion.div
+                  className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ ...presenceSpring, delay: 0.08 }}
                 >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-                <div className="mx-1 h-5 w-px bg-border/60" />
-                <FormattingToolbar
-                  editor={editor}
-                  disabled={formattingDisabled}
-                />
+                  <Button
+                    aria-label="Close formatting"
+                    disabled={composerDisabled}
+                    onClick={() => onFormattingToggle(false)}
+                    size="icon"
+                    title="Close formatting"
+                    type="button"
+                    variant="ghost"
+                    className="h-7 w-7"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                  <div className="mx-1 h-5 w-px bg-border/60" />
+                  <FormattingToolbar
+                    editor={editor}
+                    disabled={formattingDisabled}
+                  />
+                </motion.div>
               </motion.div>
             ) : (
               /*
@@ -113,9 +128,9 @@ export const MessageComposerToolbar = React.memo(
               <motion.div
                 key="ingress-controls"
                 className="flex items-center gap-1"
-                initial={{ opacity: 0, scale: 0.85 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.85 }}
+                initial={{ opacity: 0, x: -12 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -12 }}
                 transition={presenceSpring}
               >
                 <Button
@@ -157,16 +172,23 @@ export const MessageComposerToolbar = React.memo(
                   onTriggerMouseDown={onCaptureSelection}
                   open={isEmojiPickerOpen}
                 />
-                <Toggle
-                  aria-label="Toggle formatting"
-                  disabled={composerDisabled}
-                  pressed={isFormattingOpen}
-                  onPressedChange={onFormattingToggle}
-                  size="sm"
-                  title="Formatting"
+                <motion.div
+                  initial={{ x: -8, opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  exit={{ x: -8, opacity: 0 }}
+                  transition={presenceSpring}
                 >
-                  <ALargeSmall className="h-4 w-4" />
-                </Toggle>
+                  <Toggle
+                    aria-label="Toggle formatting"
+                    disabled={composerDisabled}
+                    pressed={isFormattingOpen}
+                    onPressedChange={onFormattingToggle}
+                    size="sm"
+                    title="Formatting"
+                  >
+                    <ALargeSmall className="h-4 w-4" />
+                  </Toggle>
+                </motion.div>
               </motion.div>
             )}
           </AnimatePresence>
