@@ -40,6 +40,9 @@ export function useRichTextEditor({
   const onUpdateRef = React.useRef(onUpdate);
   onUpdateRef.current = onUpdate;
 
+  const placeholderRef = React.useRef(placeholder);
+  placeholderRef.current = placeholder;
+
   const editor = useEditor(
     {
       extensions: [
@@ -147,7 +150,7 @@ export function useRichTextEditor({
         }),
         MentionHighlightExtension,
         Placeholder.configure({
-          placeholder: placeholder ?? "Write a message…",
+          placeholder: () => placeholderRef.current ?? "Write a message…",
         }),
         Link.configure({
           openOnClick: false,
@@ -177,7 +180,7 @@ export function useRichTextEditor({
         onUpdateRef.current?.({ markdown, text });
       },
     },
-    [placeholder],
+    [],
   );
 
   // Toggle editable without destroying the editor instance.
@@ -186,6 +189,15 @@ export function useRichTextEditor({
       editor.setEditable(editable);
     }
   }, [editor, editable]);
+
+  // Update placeholder text without recreating the editor.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: placeholder triggers the ref update
+  React.useEffect(() => {
+    if (!editor) return;
+    // Force ProseMirror to re-run decoration plugins so the Placeholder
+    // extension picks up the new text from placeholderRef.
+    editor.view.dispatch(editor.state.tr);
+  }, [editor, placeholder]);
 
   // Keep mention/channel-highlight decorations in sync with known names.
   // NOTE: We use `editor.storage.mentionHighlight` (the mutable storage object

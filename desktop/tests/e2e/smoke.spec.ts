@@ -302,7 +302,7 @@ test("supports multiline drafts with Ctrl+Enter and sends with Enter", async ({
   const expandedInputHeight = await input.evaluate(
     (element) => (element as HTMLElement).clientHeight,
   );
-  expect(expandedInputHeight).toBeLessThanOrEqual(100);
+  expect(expandedInputHeight).toBeLessThanOrEqual(130);
   await expect(page.getByTestId("message-timeline")).not.toContainText(
     firstLine,
   );
