@@ -12,6 +12,7 @@ class SettingsPage extends HookConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final config = ref.watch(relayConfigProvider);
+    final selectedAccent = ref.watch(accentProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -31,7 +32,7 @@ class SettingsPage extends HookConsumerWidget {
               ),
             ),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(Radii.md),
               side: BorderSide(color: context.colors.outlineVariant),
             ),
           ),
@@ -73,6 +74,39 @@ class SettingsPage extends HookConsumerWidget {
               ref.read(themeProvider.notifier).setThemeMode(modes.first);
             },
           ),
+
+          const SizedBox(height: Grid.xs),
+
+          // Accent color picker
+          Text('Accent Color', style: context.textTheme.titleSmall),
+          const SizedBox(height: Grid.xxs),
+          Wrap(
+            spacing: Grid.xxs,
+            runSpacing: Grid.xxs,
+            children: [
+              // Default (Mauve) swatch
+              _AccentSwatch(
+                color: context.colors.brightness == Brightness.light
+                    ? const Color(0xFF8839EF)
+                    : const Color(0xFFC6A0F6),
+                label: 'Mauve',
+                selected: selectedAccent == defaultAccentIndex,
+                onTap: () => ref
+                    .read(accentProvider.notifier)
+                    .setAccent(defaultAccentIndex),
+              ),
+              // 8 accent colors from desktop
+              for (var i = 0; i < accentColors.length; i++)
+                _AccentSwatch(
+                  color: context.colors.brightness == Brightness.light
+                      ? accentColors[i].light
+                      : accentColors[i].dark,
+                  label: accentColors[i].name,
+                  selected: selectedAccent == i,
+                  onTap: () => ref.read(accentProvider.notifier).setAccent(i),
+                ),
+            ],
+          ),
         ],
       ),
     );
@@ -105,5 +139,53 @@ class SettingsPage extends HookConsumerWidget {
         ],
       ),
     );
+  }
+}
+
+class _AccentSwatch extends StatelessWidget {
+  const _AccentSwatch({
+    required this.color,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final Color color;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: label,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(Radii.md),
+            border: selected
+                ? Border.all(color: context.colors.onSurface, width: 2.5)
+                : Border.all(color: color.withValues(alpha: 0.4), width: 1),
+          ),
+          child: selected
+              ? Icon(LucideIcons.check, size: 16, color: _contrastColor(color))
+              : null,
+        ),
+      ),
+    );
+  }
+
+  static Color _contrastColor(Color bg) {
+    final lum = bg.computeLuminance();
+    final contrastWithBlack = (lum + 0.05) / 0.05;
+    final contrastWithWhite = 1.05 / (lum + 0.05);
+    return contrastWithBlack >= contrastWithWhite
+        ? const Color(0xFF000000)
+        : const Color(0xFFFFFFFF);
   }
 }

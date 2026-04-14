@@ -30,7 +30,7 @@ class ChannelsPage extends HookConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Channels'),
+        title: const Text('Sprout'),
         actions: const [ProfileAvatar()],
       ),
       body: channelsAsync.when(
@@ -81,18 +81,61 @@ class _ChannelsList extends ConsumerWidget {
                 ),
               ],
             )
-          : ListView.separated(
-              padding: const EdgeInsets.symmetric(vertical: Grid.xxs),
-              itemCount: channels.length,
-              separatorBuilder: (_, _) =>
-                  const Divider(height: 1, indent: Grid.xl),
-              itemBuilder: (context, index) =>
-                  _ChannelTile(channel: channels[index]),
+          : ListView.builder(
+              padding: const EdgeInsets.only(top: Grid.xxs),
+              itemCount: channels.length + 1, // +1 for section header
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return _SectionHeader(
+                    label: 'Channels',
+                    count: channels.length,
+                  );
+                }
+                return _ChannelTile(channel: channels[index - 1]);
+              },
             ),
     );
   }
 }
 
+/// Slack-style section header: "Channels  12"
+class _SectionHeader extends StatelessWidget {
+  final String label;
+  final int count;
+
+  const _SectionHeader({required this.label, required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: Grid.xs,
+        vertical: Grid.xxs,
+      ),
+      child: Row(
+        children: [
+          Text(
+            label,
+            style: context.textTheme.labelMedium?.copyWith(
+              color: context.colors.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: Grid.xxs),
+          Text(
+            '$count',
+            style: context.textTheme.labelSmall?.copyWith(
+              color: context.colors.outline,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact Slack-style channel row:
+///   # channel-name                      3m
 class _ChannelTile extends StatelessWidget {
   final Channel channel;
 
@@ -100,53 +143,62 @@ class _ChannelTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(
-        _iconFor(channel),
-        color: channel.isMember
-            ? context.colors.primary
-            : context.colors.outline,
-      ),
-      title: Text(channel.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: channel.description.isNotEmpty
-          ? Text(
-              channel.description,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: context.colors.onSurfaceVariant),
-            )
-          : null,
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (channel.isMember) ...[
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: Grid.xxs,
-                vertical: Grid.quarter,
-              ),
-              decoration: BoxDecoration(
-                color: context.colors.primaryContainer,
-                borderRadius: BorderRadius.circular(Grid.half),
-              ),
+    final hasActivity = channel.lastMessageAt != null;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(Radii.md),
+      onTap: () {
+        // TODO: navigate to channel
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: Grid.xs,
+          vertical: Grid.xxs + Grid.quarter,
+        ),
+        child: Row(
+          children: [
+            // Channel type icon
+            Icon(
+              _iconFor(channel),
+              size: 18,
+              color: hasActivity
+                  ? context.colors.onSurface
+                  : context.colors.outline,
+            ),
+            const SizedBox(width: Grid.xxs),
+
+            // Channel name
+            Expanded(
               child: Text(
-                'Joined',
-                style: context.textTheme.labelSmall?.copyWith(
-                  color: context.colors.onPrimaryContainer,
+                channel.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.textTheme.bodyMedium?.copyWith(
+                  color: hasActivity
+                      ? context.colors.onSurface
+                      : context.colors.onSurfaceVariant,
                 ),
               ),
             ),
-            const SizedBox(width: Grid.xxs),
+
+            // Ephemeral badge
+            if (channel.isEphemeral) ...[
+              const SizedBox(width: Grid.xxs),
+              _EphemeralBadge(channel: channel),
+            ],
+
+            // Relative timestamp
+            if (channel.lastMessageAt != null) ...[
+              const SizedBox(width: Grid.xxs),
+              Text(
+                _relativeTime(channel.lastMessageAt!),
+                style: context.textTheme.labelSmall?.copyWith(
+                  color: context.colors.outline,
+                ),
+              ),
+            ],
           ],
-          Text(
-            '${channel.memberCount}',
-            style: context.textTheme.bodySmall?.copyWith(
-              color: context.colors.outline,
-            ),
-          ),
-          const SizedBox(width: Grid.quarter),
-          Icon(LucideIcons.users, size: 14, color: context.colors.outline),
-        ],
+        ),
       ),
     );
   }
@@ -155,6 +207,79 @@ class _ChannelTile extends StatelessWidget {
     if (channel.isPrivate) return LucideIcons.lock;
     if (channel.isForum) return LucideIcons.messageSquare;
     return LucideIcons.hash;
+  }
+
+  static String _relativeTime(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
+    if (diff.inHours < 24) return '${diff.inHours}h';
+    if (diff.inDays < 7) return '${diff.inDays}d';
+    if (diff.inDays < 365) return '${(diff.inDays / 7).floor()}w';
+    return '${(diff.inDays / 365).floor()}y';
+  }
+}
+
+/// Small amber clock badge matching the desktop's EphemeralChannelBadge.
+class _EphemeralBadge extends StatelessWidget {
+  final Channel channel;
+
+  const _EphemeralBadge({required this.channel});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = _label();
+
+    return Tooltip(
+      message: 'Ephemeral channel — cleans up after inactivity',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF59E0B).withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(Radii.sm),
+          border: Border.all(
+            color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              LucideIcons.clock,
+              size: 10,
+              color: _amberColor(context),
+            ),
+            if (label != null) ...[
+              const SizedBox(width: 3),
+              Text(
+                label,
+                style: context.textTheme.labelSmall?.copyWith(
+                  fontSize: 10,
+                  color: _amberColor(context),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _amberColor(BuildContext context) {
+    return context.colors.brightness == Brightness.light
+        ? const Color(0xFFB45309) // amber-700
+        : const Color(0xFFFCD34D); // amber-300
+  }
+
+  String? _label() {
+    final deadline = channel.ttlDeadline;
+    if (deadline == null) return null;
+    final diff = deadline.difference(DateTime.now());
+    if (diff.isNegative) return 'due';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
+    if (diff.inHours < 24) return '${diff.inHours}h';
+    return '${diff.inDays}d';
   }
 }
 

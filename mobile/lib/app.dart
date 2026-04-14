@@ -13,12 +13,16 @@ class App extends HookConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeProvider);
+    final accentIndex = ref.watch(accentProvider);
     final authState = ref.watch(authProvider);
+
+    final lightScheme = applyAccent(lightColorScheme, accentIndex);
+    final darkScheme = applyAccent(darkColorScheme, accentIndex);
 
     return MaterialApp(
       title: 'Sprout',
-      theme: AppTheme.lightTheme,
-      darkTheme: AppTheme.darkTheme,
+      theme: AppTheme.light(colorScheme: lightScheme),
+      darkTheme: AppTheme.dark(colorScheme: darkScheme),
       themeMode: themeMode,
       home: authState.when(
         loading: () => const _SplashScreen(),

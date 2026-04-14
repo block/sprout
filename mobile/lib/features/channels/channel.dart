@@ -14,6 +14,8 @@ class Channel {
   final int memberCount;
   final DateTime? lastMessageAt;
   final bool isMember;
+  final int? ttlSeconds;
+  final DateTime? ttlDeadline;
 
   const Channel({
     required this.id,
@@ -28,6 +30,8 @@ class Channel {
     this.purpose,
     this.lastMessageAt,
     this.isMember = false,
+    this.ttlSeconds,
+    this.ttlDeadline,
   });
 
   factory Channel.fromJson(Map<String, dynamic> json) => Channel(
@@ -45,7 +49,13 @@ class Channel {
         ? DateTime.parse(json['last_message_at'] as String)
         : null,
     isMember: json['is_member'] as bool? ?? false,
+    ttlSeconds: json['ttl_seconds'] as int?,
+    ttlDeadline: json['ttl_deadline'] != null
+        ? DateTime.parse(json['ttl_deadline'] as String)
+        : null,
   );
+
+  bool get isEphemeral => ttlSeconds != null;
 
   bool get isStream => channelType == 'stream';
   bool get isForum => channelType == 'forum';

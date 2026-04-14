@@ -62,9 +62,8 @@ void main() {
 
     expect(find.text('general'), findsOneWidget);
     expect(find.text('secret'), findsOneWidget);
-    expect(find.text('Joined'), findsOneWidget);
-    expect(find.text('10'), findsOneWidget);
-    expect(find.text('3'), findsOneWidget);
+    // Section header shows channel count
+    expect(find.text('2'), findsOneWidget);
   });
 
   testWidgets('shows empty state when no channels', (tester) async {
