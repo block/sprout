@@ -77,7 +77,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
     } else {
       if (summary && onReply) {
         elements.push(
-          <div className="flex flex-col gap-0.5" key={message.id}>
+          <div className="flex flex-col gap-0" key={message.id}>
             <MessageRow
               activeReplyTargetId={activeReplyTargetId}
               highlighted={message.id === highlightedMessageId}

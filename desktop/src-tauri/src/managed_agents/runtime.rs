@@ -495,6 +495,9 @@ pub fn start_managed_agent_process(
     command.env("SPROUT_ACP_AGENT_COMMAND", &record.agent_command);
     command.env("SPROUT_ACP_AGENT_ARGS", agent_args.join(","));
     command.env("SPROUT_ACP_MCP_COMMAND", &resolved_mcp_command);
+    // Desktop-managed agents should favor the latest owner mention in a
+    // channel over stale in-flight work so follow-up pings don't appear to hang.
+    command.env("SPROUT_ACP_MULTIPLE_EVENT_HANDLING", "owner-interrupt");
     // Timeout configuration: always set both IDLE_TIMEOUT and the deprecated TURN_TIMEOUT
     // so older harness binaries (which only read TURN_TIMEOUT) still get a value.
     if let Some(idle) = record.idle_timeout_seconds {
