@@ -1,4 +1,11 @@
-import { Ellipsis, Play, RotateCcw, Square, Trash2 } from "lucide-react";
+import {
+  Ellipsis,
+  Play,
+  RotateCcw,
+  Shield,
+  Square,
+  Trash2,
+} from "lucide-react";
 
 import {
   getManagedAgentPrimaryActionLabel,
@@ -17,10 +24,14 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 
 type MembersSidebarMemberCardProps = {
+  canChangeRole: boolean;
   canRemoveMember: boolean;
   isActionPending: boolean;
   isArchived: boolean;
@@ -28,6 +39,7 @@ type MembersSidebarMemberCardProps = {
   member: ChannelMember;
   memberIsBot: boolean;
   memberLabel: string;
+  onChangeRole: (member: ChannelMember, role: string) => void;
   onManagedAgentAction: (agent: ManagedAgent) => void;
   onRemoveMember: (member: ChannelMember) => void;
   presenceStatus?: PresenceStatus | null;
@@ -56,6 +68,7 @@ function formatManagedAgentStatus(agent: ManagedAgent) {
 }
 
 export function MembersSidebarMemberCard({
+  canChangeRole,
   canRemoveMember,
   isActionPending,
   isArchived,
@@ -63,6 +76,7 @@ export function MembersSidebarMemberCard({
   member,
   memberIsBot,
   memberLabel,
+  onChangeRole,
   onManagedAgentAction,
   onRemoveMember,
   presenceStatus,
@@ -72,7 +86,7 @@ export function MembersSidebarMemberCard({
   const disabled = isActionPending || isArchived;
   const hasActions = memberIsBot
     ? Boolean(managedAgent) || canRemoveMember
-    : canRemoveMember;
+    : canRemoveMember || canChangeRole;
 
   return (
     <div
@@ -118,11 +132,13 @@ export function MembersSidebarMemberCard({
       </div>
       {hasActions ? (
         <MemberActionsMenu
+          canChangeRole={canChangeRole}
           canRemoveMember={canRemoveMember}
           disabled={disabled}
           managedAgent={managedAgent}
           member={member}
           memberIsBot={memberIsBot}
+          onChangeRole={onChangeRole}
           onManagedAgentAction={onManagedAgentAction}
           onRemoveMember={onRemoveMember}
         />
@@ -131,23 +147,32 @@ export function MembersSidebarMemberCard({
   );
 }
 
+const PEOPLE_ROLES = ["admin", "member", "guest"] as const;
+
 function MemberActionsMenu({
+  canChangeRole,
   canRemoveMember,
   disabled,
   managedAgent,
   member,
   memberIsBot,
+  onChangeRole,
   onManagedAgentAction,
   onRemoveMember,
 }: {
+  canChangeRole: boolean;
   canRemoveMember: boolean;
   disabled: boolean;
   managedAgent?: ManagedAgent;
   member: ChannelMember;
   memberIsBot: boolean;
+  onChangeRole: (member: ChannelMember, role: string) => void;
   onManagedAgentAction: (agent: ManagedAgent) => void;
   onRemoveMember: (member: ChannelMember) => void;
 }) {
+  const showChangeRole =
+    canChangeRole && !memberIsBot && member.role !== "owner";
+
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
@@ -173,19 +198,49 @@ function MemberActionsMenu({
               {getManagedAgentActionIcon(managedAgent)}
               {getManagedAgentPrimaryActionLabel(managedAgent)}
             </DropdownMenuItem>
-            {canRemoveMember ? <DropdownMenuSeparator /> : null}
+            {canRemoveMember || showChangeRole ? (
+              <DropdownMenuSeparator />
+            ) : null}
           </>
         ) : null}
+        {showChangeRole ? (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger
+              data-testid={`sidebar-change-role-${member.pubkey}`}
+              disabled={disabled}
+            >
+              <Shield className="h-4 w-4" />
+              Change role
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              {PEOPLE_ROLES.map((role) => (
+                <DropdownMenuItem
+                  data-testid={`sidebar-role-${role}-${member.pubkey}`}
+                  disabled={disabled || member.role === role}
+                  key={role}
+                  onClick={() => onChangeRole(member, role)}
+                >
+                  {role[0]?.toUpperCase()}
+                  {role.slice(1)}
+                  {member.role === role ? " (current)" : ""}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : null}
         {canRemoveMember ? (
-          <DropdownMenuItem
-            className="text-destructive focus:text-destructive"
-            data-testid={`sidebar-remove-member-${member.pubkey}`}
-            disabled={disabled}
-            onClick={() => onRemoveMember(member)}
-          >
-            <Trash2 className="h-4 w-4" />
-            Remove from channel
-          </DropdownMenuItem>
+          <>
+            {showChangeRole ? <DropdownMenuSeparator /> : null}
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              data-testid={`sidebar-remove-member-${member.pubkey}`}
+              disabled={disabled}
+              onClick={() => onRemoveMember(member)}
+            >
+              <Trash2 className="h-4 w-4" />
+              Remove from channel
+            </DropdownMenuItem>
+          </>
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
