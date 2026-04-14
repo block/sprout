@@ -195,18 +195,16 @@ export function MessageComposer({
     (suggestion: MentionSuggestion) => {
       const { text, cursor } = richText.getTextAndCursor();
       const result = mentions.insertMention(suggestion, text, cursor);
-      // Replace the editor content with the updated text.
-      richText.setContent(result.nextContent);
+      // setContentWithTrailingSpace re-injects a space after the markdown
+      // roundtrip so the cursor lands ready for the next word.
+      richText.setContentWithTrailingSpace(result.nextContent);
       setContent(result.nextContent);
       contentRef.current = result.nextContent;
-      // Move cursor to end — Tiptap will focus there.
-      richText.focus();
     },
     [
       mentions.insertMention,
       richText.getTextAndCursor,
-      richText.setContent,
-      richText.focus,
+      richText.setContentWithTrailingSpace,
     ],
   );
 
@@ -214,16 +212,14 @@ export function MessageComposer({
     (suggestion: ChannelSuggestion) => {
       const { text, cursor } = richText.getTextAndCursor();
       const result = channelLinks.insertChannel(suggestion, text, cursor);
-      richText.setContent(result.nextContent);
+      richText.setContentWithTrailingSpace(result.nextContent);
       setContent(result.nextContent);
       contentRef.current = result.nextContent;
-      richText.focus();
     },
     [
       channelLinks.insertChannel,
       richText.getTextAndCursor,
-      richText.setContent,
-      richText.focus,
+      richText.setContentWithTrailingSpace,
     ],
   );
 

@@ -226,6 +226,36 @@ export function useRichTextEditor({
   }, [editor]);
 
   /**
+   * Replace editor content and append a trailing space that survives parsing.
+   *
+   * `setContent(markdown)` roundtrips through TipTap's markdown parser which
+   * strips trailing whitespace from text nodes. TipTap's `insertContent(" ")`
+   * also normalises it away. This method bypasses both by creating a raw
+   * ProseMirror text node and inserting it via a direct transaction — the
+   * only path that reliably preserves a literal trailing space.
+   *
+   * Used by mention and channel-link autocomplete insertion.
+   */
+  const setContentWithTrailingSpace = React.useCallback(
+    (markdown: string) => {
+      if (!editor) return;
+      editor.commands.setContent(markdown);
+      // Insert a literal space via a raw ProseMirror transaction so it
+      // bypasses TipTap's content parser which strips trailing whitespace.
+      const { tr, schema, doc } = editor.state;
+      const endPos = doc.content.size - 1; // before the closing node token
+      const spaceNode = schema.text(" ");
+      tr.insert(endPos, spaceNode);
+      // Place cursor after the inserted space.
+      const cursorPos = endPos + spaceNode.nodeSize;
+      tr.setSelection(TextSelection.create(tr.doc, cursorPos));
+      editor.view.dispatch(tr);
+      editor.view.focus();
+    },
+    [editor],
+  );
+
+  /**
    * Returns the plain-text content and an approximate cursor offset.
    * Used to bridge the existing useMentions / useChannelLinks hooks which
    * were designed for a plain <textarea>.
@@ -295,6 +325,7 @@ export function useRichTextEditor({
     isEmpty,
     clearContent,
     setContent,
+    setContentWithTrailingSpace,
     focus,
     getTextAndCursor,
   };
