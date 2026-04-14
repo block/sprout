@@ -94,6 +94,27 @@ export function buildReplyTags(
   return tags;
 }
 
+export function buildThreadReferenceTags(
+  channelId: string,
+  parentEventId: string | null,
+  rootEventId: string | null,
+) {
+  const tags: string[][] = [["h", channelId]];
+
+  if (!parentEventId) {
+    return tags;
+  }
+
+  if (!rootEventId || parentEventId === rootEventId) {
+    tags.push(["e", parentEventId, "", "reply"]);
+    return tags;
+  }
+
+  tags.push(["e", rootEventId, "", "root"]);
+  tags.push(["e", parentEventId, "", "reply"]);
+  return tags;
+}
+
 export function resolveReplyRootId(
   parentEventId: string,
   events: RelayEvent[],

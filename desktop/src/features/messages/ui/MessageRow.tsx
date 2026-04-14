@@ -11,14 +11,8 @@ import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext"
 import { parseImetaTags } from "@/features/messages/lib/parseImeta";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
-import { BotIdenticon } from "./BotIdenticon";
 import { MessageActionBar } from "./MessageActionBar";
 import { MessageTimestamp } from "./MessageTimestamp";
-
-/** Returns true if this message is from a bot instance. */
-function isBotInstance(role?: string): boolean {
-  return role === "bot";
-}
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
@@ -169,9 +163,6 @@ export const MessageRow = React.memo(
           className={cn(
             "group/message flex items-start gap-2.5 rounded-2xl px-2 py-1.5 transition-colors",
             highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
-            activeReplyTargetId === message.id
-              ? "bg-muted/60 ring-1 ring-border"
-              : "",
           )}
           data-message-id={message.id}
           data-testid="message-row"
@@ -227,19 +218,12 @@ export const MessageRow = React.memo(
                   {message.author}
                 </h3>
               )}
-              {isBotInstance(message.role) ? (
-                <BotIdenticon
-                  value={message.author}
-                  size={14}
-                  className="shrink-0 rounded-sm"
-                />
-              ) : null}
               {message.personaDisplayName &&
               message.personaDisplayName !== message.author ? (
                 <span className="text-xs text-muted-foreground">
                   {message.personaDisplayName}
                 </span>
-              ) : message.role && !isBotInstance(message.role) ? (
+              ) : message.role ? (
                 <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                   {message.role}
                 </p>
