@@ -10,7 +10,7 @@ import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext"
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
-import remarkImageGallery from "@/shared/lib/remarkImageGallery";
+
 import remarkMentions from "@/shared/lib/remarkMentions";
 
 type ImetaLookup = Map<string, { image?: string; thumb?: string }>;
@@ -122,24 +122,28 @@ function createMarkdownComponents(
           ? rewriteRelayUrl(posterUrl)
           : undefined;
         return (
-          // biome-ignore lint/a11y/useMediaCaption: user-uploaded video, no captions available
-          <video
-            controls
-            preload="metadata"
-            poster={resolvedPoster}
-            className="max-h-96 rounded-2xl border border-border/70"
-            src={resolvedSrc}
-          />
+          <div className="mt-3 flex max-w-sm items-center justify-center overflow-hidden rounded-2xl border border-border/70 bg-muted/40">
+            {/* biome-ignore lint/a11y/useMediaCaption: user-uploaded video, no captions available */}
+            <video
+              controls
+              preload="metadata"
+              poster={resolvedPoster}
+              className="max-h-64 max-w-full object-contain"
+              src={resolvedSrc}
+            />
+          </div>
         );
       }
       return (
         <DialogPrimitive.Root>
           <DialogPrimitive.Trigger asChild>
-            <img
-              alt={alt}
-              className="mt-1 max-h-64 w-full max-w-xl cursor-pointer rounded-2xl border border-border/70 object-cover transition-opacity hover:opacity-90"
-              src={resolvedSrc}
-            />
+            <div className="mt-3 flex max-w-sm cursor-pointer items-center justify-center overflow-hidden rounded-2xl border border-border/70 bg-muted/40 transition-opacity hover:opacity-90">
+              <img
+                alt={alt}
+                className="max-h-64 max-w-full object-contain"
+                src={resolvedSrc}
+              />
+            </div>
           </DialogPrimitive.Trigger>
           <DialogPrimitive.Portal>
             <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
@@ -171,11 +175,6 @@ function createMarkdownComponents(
         </DialogPrimitive.Root>
       );
     },
-    "image-gallery": ({ children }: { children?: React.ReactNode }) => (
-      <div className="grid grid-cols-2 gap-1.5 [&_p]:my-0 [&_img]:mt-0">
-        {children}
-      </div>
-    ),
     li: ({ children }) => <li className={listItemClassName}>{children}</li>,
     ol: ({ children }) => (
       <ol className={cn("list-decimal", listClassName)}>{children}</ol>
@@ -257,6 +256,75 @@ function shallowArrayEqual(a?: string[], b?: string[]): boolean {
   return true;
 }
 
+/**
+ * Post-processes ReactMarkdown output to group consecutive image-only
+ * paragraphs into a 2-column grid. Works at the React element level
+ * since custom remark node types don't map to ReactMarkdown components.
+ */
+function ImageGalleryGrouper({ children }: { children: React.ReactNode }) {
+  const processed = React.useMemo(() => {
+    // ReactMarkdown renders into a single wrapper — get its children
+    const elements = React.Children.toArray(
+      // Unwrap the ReactMarkdown output (it's a single React element)
+      React.isValidElement(children) && children.props.children
+        ? React.Children.toArray(children.props.children)
+        : [children],
+    );
+
+    const result: React.ReactNode[] = [];
+    let imageRun: React.ReactElement[] = [];
+
+    function flushRun() {
+      if (imageRun.length <= 1) {
+        result.push(...imageRun);
+      } else {
+        result.push(
+          <div
+            key={`gallery-${result.length}`}
+            className="mt-3 grid max-w-lg grid-cols-2 gap-1.5"
+          >
+            {imageRun.map((img, i) => (
+              <div key={i} className="[&>*]:mt-0 [&>*]:max-w-none [&_div]:mt-0 [&_div]:max-w-none">
+                {img}
+              </div>
+            ))}
+          </div>,
+        );
+      }
+      imageRun = [];
+    }
+
+    for (const el of elements) {
+      // Check if this element is an image-only paragraph
+      // (a <p> containing only a DialogPrimitive.Root or a single <div> with an <img>)
+      if (React.isValidElement(el) && el.type === "p") {
+        const pChildren = React.Children.toArray(el.props.children);
+        const hasOnlyImages = pChildren.length >= 1 && pChildren.every(
+          (child) =>
+            React.isValidElement(child) &&
+            (child.type === "img" || // plain img
+              (typeof child.type !== "string")), // React component (DialogPrimitive.Root wrapping img)
+        );
+        if (hasOnlyImages) {
+          imageRun.push(el as React.ReactElement);
+          continue;
+        }
+      }
+      flushRun();
+      result.push(el);
+    }
+    flushRun();
+
+    return result;
+  }, [children]);
+
+  // Clone the ReactMarkdown wrapper but replace its children
+  if (React.isValidElement(children)) {
+    return React.cloneElement(children, {}, ...processed);
+  }
+  return <>{processed}</>;
+}
+
 function MarkdownInner({
   channelNames,
   className,
@@ -294,7 +362,6 @@ function MarkdownInner({
       remarkBreaks,
       [remarkMentions, { mentionNames }],
       [remarkChannelLinks, { channelNames }],
-      remarkImageGallery,
     ],
     [mentionNames, channelNames],
   );
@@ -320,9 +387,11 @@ function MarkdownInner({
         className,
       )}
     >
-      <ReactMarkdown components={components} remarkPlugins={remarkPlugins}>
-        {processedContent}
-      </ReactMarkdown>
+      <ImageGalleryGrouper>
+        <ReactMarkdown components={components} remarkPlugins={remarkPlugins}>
+          {processedContent}
+        </ReactMarkdown>
+      </ImageGalleryGrouper>
     </div>
   );
 }
