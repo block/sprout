@@ -293,6 +293,7 @@ export function useRichTextEditor({
       } else if (node.isBlock && pos > 0) {
         // Block boundaries add a newline in textContent
         // (but only between blocks, not at the very start)
+        offset += 1;
       }
       return undefined;
     });
