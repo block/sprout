@@ -10,9 +10,9 @@ struct ReplyContextEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// The ACP-provided reply context currently active for a channel turn.
+/// The ACP-provided reply context for the channel's current reply scope.
 pub struct ActiveReplyContext {
-    /// The forced parent event ID for this turn. `None` means send top-level.
+    /// The forced parent event ID for this scope. `None` means send top-level.
     pub parent_event_id: Option<String>,
 }
 

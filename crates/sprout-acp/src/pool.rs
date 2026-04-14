@@ -189,7 +189,7 @@ pub struct PromptContext {
     pub max_turns_per_session: u32,
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
-    /// Deterministic per-channel reply context for MCP sends during an active turn.
+    /// Deterministic per-channel reply context for MCP sends in the current channel scope.
     pub reply_context: ReplyContextStore,
 }
 
@@ -431,52 +431,25 @@ async fn create_session_and_apply_model(
     Ok(resp.session_id)
 }
 
-struct ReplyContextGuard {
-    store: ReplyContextStore,
-    channel_id: Uuid,
-    armed: bool,
-}
+fn install_reply_context(ctx: &PromptContext, batch: Option<&FlushBatch>) {
+    let Some(batch) = batch else {
+        return;
+    };
 
-impl ReplyContextGuard {
-    fn install(ctx: &PromptContext, batch: Option<&FlushBatch>) -> Option<Self> {
-        let batch = batch?;
-        let parent_event_id = batch
-            .events
-            .last()
-            .map(|event| crate::queue::parse_thread_tags(&event.event))
-            .and_then(|thread_tags| thread_tags.parent_event_id);
+    let parent_event_id = batch
+        .events
+        .last()
+        .map(|event| crate::queue::parse_thread_tags(&event.event))
+        .and_then(|thread_tags| thread_tags.parent_event_id);
 
-        if let Err(err) = ctx
-            .reply_context
-            .set_channel_parent(batch.channel_id, parent_event_id.as_deref())
-        {
-            tracing::warn!(
-                channel = %batch.channel_id,
-                "failed to persist reply context for active turn: {err}"
-            );
-            return None;
-        }
-
-        Some(Self {
-            store: ctx.reply_context.clone(),
-            channel_id: batch.channel_id,
-            armed: true,
-        })
-    }
-}
-
-impl Drop for ReplyContextGuard {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-
-        if let Err(err) = self.store.clear_channel(self.channel_id) {
-            tracing::warn!(
-                channel = %self.channel_id,
-                "failed to clear reply context for completed turn: {err}"
-            );
-        }
+    if let Err(err) = ctx
+        .reply_context
+        .set_channel_parent(batch.channel_id, parent_event_id.as_deref())
+    {
+        tracing::warn!(
+            channel = %batch.channel_id,
+            "failed to persist reply context for channel scope: {err}"
+        );
     }
 }
 
@@ -897,9 +870,9 @@ pub async fn run_prompt_task(
         return;
     };
 
-    // Publish the current thread level for this channel turn so MCP sends can
-    // deterministically inherit the trigger's parent without asking the model.
-    let _reply_context_guard = ReplyContextGuard::install(&ctx, batch.as_ref());
+    // Publish the current thread level for this channel so later MCP sends
+    // keep the same branch until a newer batch overwrites the scope.
+    install_reply_context(&ctx, batch.as_ref());
 
     // 💬 — fire-and-forget so the prompt fires immediately.
     // The guard's cleanup (spawned on drop) removes 💬 after the turn completes.
@@ -1841,6 +1814,10 @@ mod tests {
     use super::*;
     use nostr::{EventBuilder, Keys, Kind, Tag};
     use serde_json::json;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     // ── parse_thread_response tests ──────────────────────────────────────────
 
@@ -2118,6 +2095,99 @@ mod tests {
         expected.sort();
 
         assert_eq!(pubkeys, expected);
+    }
+
+    fn temp_reply_context_path(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be monotonic enough for tests")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "sprout-acp-pool-{name}-{}-{nanos}.json",
+            std::process::id()
+        ))
+    }
+
+    fn make_prompt_context(reply_context: ReplyContextStore) -> PromptContext {
+        PromptContext {
+            mcp_servers: vec![],
+            initial_message: None,
+            idle_timeout: Duration::from_secs(1),
+            max_turn_duration: Duration::from_secs(1),
+            dedup_mode: DedupMode::Queue,
+            system_prompt: None,
+            heartbeat_prompt: None,
+            cwd: ".".into(),
+            rest_client: RestClient {
+                http: reqwest::Client::new(),
+                base_url: "http://localhost".into(),
+                api_token: None,
+                keys: Keys::generate(),
+            },
+            channel_info: HashMap::new(),
+            context_message_limit: 0,
+            max_turns_per_session: 0,
+            permission_mode: PermissionMode::Default,
+            reply_context,
+        }
+    }
+
+    fn make_batch_with_tags(channel_id: Uuid, tags: Vec<Tag>) -> FlushBatch {
+        let event = EventBuilder::new(Kind::Custom(9), "hello", tags)
+            .sign_with_keys(&Keys::generate())
+            .expect("event should sign");
+        FlushBatch {
+            channel_id,
+            events: vec![crate::queue::BatchEvent {
+                event,
+                prompt_tag: "@Solo".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+        }
+    }
+
+    #[test]
+    fn test_install_reply_context_persists_until_next_batch_overwrites_it() {
+        let path = temp_reply_context_path("reply-context-persist");
+        let store = ReplyContextStore::new(path.clone());
+        let ctx = make_prompt_context(store);
+        let channel_id = Uuid::new_v4();
+        let channel_key = channel_id.to_string();
+        let channel_tag = Tag::parse(&["h", &channel_key]).expect("channel tag");
+        let root_id = "a".repeat(64);
+        let parent_id = "b".repeat(64);
+
+        let threaded_batch = make_batch_with_tags(
+            channel_id,
+            vec![
+                channel_tag.clone(),
+                Tag::parse(&["e", &root_id, "", "root"]).expect("root tag"),
+                Tag::parse(&["e", &parent_id, "", "reply"]).expect("reply tag"),
+            ],
+        );
+        install_reply_context(&ctx, Some(&threaded_batch));
+
+        let raw = fs::read_to_string(&path).expect("reply context file should exist");
+        let persisted: serde_json::Value =
+            serde_json::from_str(&raw).expect("reply context json should parse");
+        assert_eq!(
+            persisted[&channel_key]["parent_event_id"].as_str(),
+            Some(parent_id.as_str())
+        );
+
+        let root_batch = make_batch_with_tags(channel_id, vec![channel_tag]);
+        install_reply_context(&ctx, Some(&root_batch));
+
+        let raw = fs::read_to_string(&path).expect("reply context file should still exist");
+        let persisted: serde_json::Value =
+            serde_json::from_str(&raw).expect("reply context json should parse");
+        assert!(
+            persisted[&channel_key]["parent_event_id"].is_null(),
+            "next batch should overwrite the channel scope with explicit top-level context"
+        );
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]

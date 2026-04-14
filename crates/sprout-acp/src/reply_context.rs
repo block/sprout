@@ -53,6 +53,7 @@ impl ReplyContextStore {
         self.write_all(&contexts)
     }
 
+    #[cfg(test)]
     pub fn clear_channel(&self, channel_id: Uuid) -> io::Result<()> {
         let _guard = self
             .write_lock
