@@ -1,5 +1,6 @@
 import * as React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
@@ -131,11 +132,42 @@ function createMarkdownComponents(
         );
       }
       return (
-        <img
-          alt={alt}
-          className="max-h-96 rounded-2xl border border-border/70 object-cover"
-          src={resolvedSrc}
-        />
+        <DialogPrimitive.Root>
+          <DialogPrimitive.Trigger asChild>
+            <img
+              alt={alt}
+              className="mt-4 max-h-96 max-w-lg cursor-pointer rounded-2xl border border-border/70 object-cover transition-opacity hover:opacity-90"
+              src={resolvedSrc}
+            />
+          </DialogPrimitive.Trigger>
+          <DialogPrimitive.Portal>
+            <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+            <DialogPrimitive.Content
+              className="fixed inset-0 z-50 flex items-center justify-center p-8"
+              // Let clicks on the backdrop (the content container itself) close the lightbox
+              onPointerDownOutside={(e) => e.preventDefault()}
+              onInteractOutside={(e) => e.preventDefault()}
+            >
+              <DialogPrimitive.Title className="sr-only">
+                {alt || "Image preview"}
+              </DialogPrimitive.Title>
+              <DialogPrimitive.Description className="sr-only">
+                Full-size image preview. Press Escape or click outside the image to close.
+              </DialogPrimitive.Description>
+              {/* Close region: clicking anywhere except the image closes the dialog */}
+              <DialogPrimitive.Close className="absolute inset-0 cursor-default" aria-label="Close lightbox" />
+              <img
+                alt={alt}
+                className="relative max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+                src={resolvedSrc}
+              />
+              <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                <span className="sr-only">Close</span>
+              </DialogPrimitive.Close>
+            </DialogPrimitive.Content>
+          </DialogPrimitive.Portal>
+        </DialogPrimitive.Root>
       );
     },
     li: ({ children }) => <li className={listItemClassName}>{children}</li>,
