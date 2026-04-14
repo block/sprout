@@ -73,5 +73,5 @@ class RelayException implements Exception {
   RelayException(this.statusCode, this.body);
 
   @override
-  String toString() => 'RelayException($statusCode): $body';
+  String toString() => 'RelayException($statusCode)';
 }
