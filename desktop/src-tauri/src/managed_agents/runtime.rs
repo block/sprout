@@ -513,6 +513,8 @@ pub fn start_managed_agent_process(
         .unwrap_or(super::types::DEFAULT_AGENT_MAX_TURN_DURATION_SECONDS);
     command.env("SPROUT_ACP_MAX_TURN_DURATION", max_dur.to_string());
     command.env("SPROUT_ACP_AGENTS", record.parallelism.to_string());
+    command.env("SPROUT_ACP_MULTIPLE_EVENT_HANDLING", "owner-interrupt");
+    command.env("SPROUT_ACP_DEDUP", "queue");
     command.env(
         "GOOSE_MODE",
         std::env::var("GOOSE_MODE").unwrap_or_else(|_| "auto".to_string()),
