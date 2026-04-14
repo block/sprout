@@ -39,9 +39,10 @@ export function MembersSidebar({
   const membersQuery = useChannelMembersQuery(channelId, open);
   const addMembersMutation = useAddChannelMembersMutation(channelId);
   const changeRoleMutation = useChangeChannelMemberRoleMutation(channelId);
-  const changeRoleError = changeRoleMutation.error instanceof Error
-    ? changeRoleMutation.error.message
-    : null;
+  const changeRoleError =
+    changeRoleMutation.error instanceof Error
+      ? changeRoleMutation.error.message
+      : null;
 
   const rawMembers = membersQuery.data ?? [];
   const { people, bots, isBot, isMyBot, managedAgentsQuery } =

@@ -424,9 +424,7 @@ export function useRemoveChannelMemberMutation(channelId: string | null) {
   });
 }
 
-export function useChangeChannelMemberRoleMutation(
-  channelId: string | null,
-) {
+export function useChangeChannelMemberRoleMutation(channelId: string | null) {
   const queryClient = useQueryClient();
 
   return useMutation({
