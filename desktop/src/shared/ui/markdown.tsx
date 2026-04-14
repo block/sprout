@@ -1,6 +1,5 @@
 import * as React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import * as DialogPrimitive from "@radix-ui/react-dialog";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
@@ -10,7 +9,6 @@ import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext"
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
-
 import remarkMentions from "@/shared/lib/remarkMentions";
 
 type ImetaLookup = Map<string, { image?: string; thumb?: string }>;
@@ -122,87 +120,29 @@ function createMarkdownComponents(
           ? rewriteRelayUrl(posterUrl)
           : undefined;
         return (
-          <div className="mt-3 flex max-w-sm items-center justify-center overflow-hidden rounded-2xl border border-border/70 bg-muted/40">
-            {/* biome-ignore lint/a11y/useMediaCaption: user-uploaded video, no captions available */}
-            <video
-              controls
-              preload="metadata"
-              poster={resolvedPoster}
-              className="max-h-64 max-w-full object-contain"
-              src={resolvedSrc}
-            />
-          </div>
+          // biome-ignore lint/a11y/useMediaCaption: user-uploaded video, no captions available
+          <video
+            controls
+            preload="metadata"
+            poster={resolvedPoster}
+            className="max-h-96 rounded-2xl border border-border/70"
+            src={resolvedSrc}
+          />
         );
       }
       return (
-        <DialogPrimitive.Root>
-          <DialogPrimitive.Trigger asChild>
-            <div className="mt-3 flex max-w-sm cursor-pointer items-center justify-center overflow-hidden rounded-2xl border border-border/70 bg-muted/40 transition-opacity hover:opacity-90">
-              <img
-                alt={alt}
-                className="max-h-64 max-w-full object-contain"
-                src={resolvedSrc}
-              />
-            </div>
-          </DialogPrimitive.Trigger>
-          <DialogPrimitive.Portal>
-            <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-            <DialogPrimitive.Content
-              className="fixed inset-0 z-50 flex items-center justify-center p-8"
-              // Let clicks on the backdrop (the content container itself) close the lightbox
-              onPointerDownOutside={(e) => e.preventDefault()}
-              onInteractOutside={(e) => e.preventDefault()}
-            >
-              <DialogPrimitive.Title className="sr-only">
-                {alt || "Image preview"}
-              </DialogPrimitive.Title>
-              <DialogPrimitive.Description className="sr-only">
-                Full-size image preview. Press Escape or click outside the image to close.
-              </DialogPrimitive.Description>
-              {/* Close region: clicking anywhere except the image closes the dialog */}
-              <DialogPrimitive.Close className="absolute inset-0 cursor-default" aria-label="Close lightbox" />
-              <img
-                alt={alt}
-                className="relative max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
-                src={resolvedSrc}
-              />
-              <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-                <span className="sr-only">Close</span>
-              </DialogPrimitive.Close>
-            </DialogPrimitive.Content>
-          </DialogPrimitive.Portal>
-        </DialogPrimitive.Root>
+        <img
+          alt={alt}
+          className="max-h-96 rounded-2xl border border-border/70 object-cover"
+          src={resolvedSrc}
+        />
       );
     },
     li: ({ children }) => <li className={listItemClassName}>{children}</li>,
     ol: ({ children }) => (
       <ol className={cn("list-decimal", listClassName)}>{children}</ol>
     ),
-    p: ({ children }) => {
-      // Detect image-only paragraphs (images + <br> from remarkBreaks).
-      // Render them as a grid gallery instead of a <p>.
-      const childArray = React.Children.toArray(children);
-      const imageChildren = childArray.filter(
-        (child) => React.isValidElement(child) && typeof child.type !== "string",
-      );
-      const nonImageChildren = childArray.filter(
-        (child) =>
-          !(React.isValidElement(child) && typeof child.type !== "string") &&
-          !(typeof child === "string" && child.trim() === "") &&
-          !(React.isValidElement(child) && child.type === "br"),
-      );
-
-      if (imageChildren.length >= 2 && nonImageChildren.length === 0) {
-        return (
-          <div className="mt-3 grid max-w-lg grid-cols-2 gap-1.5 [&_br]:hidden [&_div]:mt-0 [&_div]:max-w-none">
-            {imageChildren}
-          </div>
-        );
-      }
-
-      return <p className={paragraphClassName}>{children}</p>;
-    },
+    p: ({ children }) => <p className={paragraphClassName}>{children}</p>,
     pre: ({ children }) => (
       <pre className="overflow-x-auto rounded-2xl border border-border/70 bg-muted/60 px-4 py-3 shadow-sm">
         {children}
@@ -232,7 +172,7 @@ function createMarkdownComponents(
       <ul className={cn("list-disc", listClassName)}>{children}</ul>
     ),
     mention: ({ children }: { children?: React.ReactNode }) => (
-      <span className="rounded-md bg-primary/15 px-1 py-0.5 text-sm text-primary">
+      <span className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary">
         {children}
       </span>
     ),
@@ -261,7 +201,7 @@ function createMarkdownComponents(
       }
 
       return (
-        <span className="rounded-md bg-primary/15 px-1 py-0.5 text-sm text-primary">
+        <span className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary">
           {children}
         </span>
       );
@@ -277,75 +217,6 @@ function shallowArrayEqual(a?: string[], b?: string[]): boolean {
     if (a[i] !== b[i]) return false;
   }
   return true;
-}
-
-/**
- * Post-processes ReactMarkdown output to group consecutive image-only
- * paragraphs into a 2-column grid. Works at the React element level
- * since custom remark node types don't map to ReactMarkdown components.
- */
-function ImageGalleryGrouper({ children }: { children: React.ReactNode }) {
-  const processed = React.useMemo(() => {
-    // ReactMarkdown renders into a single wrapper — get its children
-    const elements = React.Children.toArray(
-      // Unwrap the ReactMarkdown output (it's a single React element)
-      React.isValidElement(children) && (children.props as Record<string, unknown>).children
-        ? React.Children.toArray((children.props as Record<string, unknown>).children as React.ReactNode)
-        : [children],
-    );
-
-    const result: React.ReactNode[] = [];
-    let imageRun: React.ReactElement[] = [];
-
-    function flushRun() {
-      if (imageRun.length <= 1) {
-        result.push(...imageRun);
-      } else {
-        result.push(
-          <div
-            key={`gallery-${result.length}`}
-            className="mt-3 grid max-w-lg grid-cols-2 gap-1.5"
-          >
-            {imageRun.map((img, i) => (
-              <div key={i} className="[&>*]:mt-0 [&>*]:max-w-none [&_div]:mt-0 [&_div]:max-w-none">
-                {img}
-              </div>
-            ))}
-          </div>,
-        );
-      }
-      imageRun = [];
-    }
-
-    for (const el of elements) {
-      // Check if this element is an image-only paragraph
-      // (a <p> containing only a DialogPrimitive.Root or a single <div> with an <img>)
-      if (React.isValidElement(el) && el.type === "p") {
-        const pChildren = React.Children.toArray((el.props as Record<string, unknown>).children as React.ReactNode);
-        const hasOnlyImages = pChildren.length >= 1 && pChildren.every(
-          (child) =>
-            React.isValidElement(child) &&
-            (child.type === "img" || // plain img
-              (typeof child.type !== "string")), // React component (DialogPrimitive.Root wrapping img)
-        );
-        if (hasOnlyImages) {
-          imageRun.push(el as React.ReactElement);
-          continue;
-        }
-      }
-      flushRun();
-      result.push(el);
-    }
-    flushRun();
-
-    return result;
-  }, [children]);
-
-  // Clone the ReactMarkdown wrapper but replace its children
-  if (React.isValidElement(children)) {
-    return React.cloneElement(children, {}, ...processed);
-  }
-  return <>{processed}</>;
 }
 
 function MarkdownInner({
@@ -410,11 +281,9 @@ function MarkdownInner({
         className,
       )}
     >
-      <ImageGalleryGrouper>
-        <ReactMarkdown components={components} remarkPlugins={remarkPlugins}>
-          {processedContent}
-        </ReactMarkdown>
-      </ImageGalleryGrouper>
+      <ReactMarkdown components={components} remarkPlugins={remarkPlugins}>
+        {processedContent}
+      </ReactMarkdown>
     </div>
   );
 }
