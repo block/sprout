@@ -21,6 +21,9 @@
     "updater:default",
     "updater:allow-check",
     "updater:allow-download-and-install",
-    "process:allow-restart"
+    "process:allow-restart",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-is-registered"
   ]
 }

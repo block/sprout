@@ -1,4 +1,3 @@
-import * as React from "react";
 import { ArrowLeft, X } from "lucide-react";
 
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
@@ -76,46 +75,9 @@ export function MessageThreadPanel({
   threadReplies,
   threadTypingPubkeys,
 }: MessageThreadPanelProps) {
-  const threadBodyRef = React.useRef<HTMLDivElement>(null);
-  const previousThreadHeadIdRef = React.useRef<string | null>(null);
-  const previousLastReplyIdRef = React.useRef<string | null>(null);
-
   if (!threadHead) {
     return null;
   }
-
-  const latestReply = threadReplies.at(-1)?.message ?? null;
-
-  React.useEffect(() => {
-    if (previousThreadHeadIdRef.current !== threadHead.id) {
-      previousThreadHeadIdRef.current = threadHead.id;
-      previousLastReplyIdRef.current = latestReply?.id ?? null;
-      return;
-    }
-
-    if (!latestReply || previousLastReplyIdRef.current === latestReply.id) {
-      previousLastReplyIdRef.current = latestReply?.id ?? null;
-      return;
-    }
-
-    previousLastReplyIdRef.current = latestReply.id;
-
-    if (latestReply.role !== "bot") {
-      return;
-    }
-
-    const threadBody = threadBodyRef.current;
-    if (!threadBody) {
-      return;
-    }
-
-    requestAnimationFrame(() => {
-      threadBody.scrollTo({
-        top: threadBody.scrollHeight,
-        behavior: "smooth",
-      });
-    });
-  }, [latestReply, threadHead.id]);
 
   const composerReplyTarget =
     replyTargetMessage && replyTargetMessage.id !== threadHead.id
@@ -162,7 +124,6 @@ export function MessageThreadPanel({
       <div
         className="min-h-0 flex-1 overflow-y-auto"
         data-testid="message-thread-body"
-        ref={threadBodyRef}
       >
         <div className="px-3 py-3" data-testid="message-thread-head">
           <MessageRow

@@ -75,54 +75,35 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
         />,
       );
     } else {
+      elements.push(
+        <MessageRow
+          key={message.id}
+          activeReplyTargetId={activeReplyTargetId}
+          highlighted={message.id === highlightedMessageId}
+          message={message}
+          onDelete={
+            onDelete && currentPubkey && message.pubkey === currentPubkey
+              ? onDelete
+              : undefined
+          }
+          onEdit={
+            onEdit && currentPubkey && message.pubkey === currentPubkey
+              ? onEdit
+              : undefined
+          }
+          onToggleReaction={onToggleReaction}
+          onReply={onReply}
+          profiles={profiles}
+        />,
+      );
+
       if (summary && onReply) {
         elements.push(
-          <div className="flex flex-col gap-0" key={message.id}>
-            <MessageRow
-              activeReplyTargetId={activeReplyTargetId}
-              highlighted={message.id === highlightedMessageId}
-              message={message}
-              onDelete={
-                onDelete && currentPubkey && message.pubkey === currentPubkey
-                  ? onDelete
-                  : undefined
-              }
-              onEdit={
-                onEdit && currentPubkey && message.pubkey === currentPubkey
-                  ? onEdit
-                  : undefined
-              }
-              onToggleReaction={onToggleReaction}
-              onReply={onReply}
-              profiles={profiles}
-            />
-            <MessageThreadSummaryRow
-              message={message}
-              onOpenThread={onReply}
-              summary={summary}
-            />
-          </div>,
-        );
-      } else {
-        elements.push(
-          <MessageRow
-            key={message.id}
-            activeReplyTargetId={activeReplyTargetId}
-            highlighted={message.id === highlightedMessageId}
+          <MessageThreadSummaryRow
+            key={`thread-summary-${message.id}`}
             message={message}
-            onDelete={
-              onDelete && currentPubkey && message.pubkey === currentPubkey
-                ? onDelete
-                : undefined
-            }
-            onEdit={
-              onEdit && currentPubkey && message.pubkey === currentPubkey
-                ? onEdit
-                : undefined
-            }
-            onToggleReaction={onToggleReaction}
-            onReply={onReply}
-            profiles={profiles}
+            onOpenThread={onReply}
+            summary={summary}
           />,
         );
       }

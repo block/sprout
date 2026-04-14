@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useAddChannelMembersMutation,
   useChannelMembersQuery,
@@ -7,6 +8,7 @@ import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembe
 import { formatMemberName } from "@/features/channels/lib/memberUtils";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
+import { changeChannelMemberRole } from "@/shared/api/tauri";
 import type { Channel, ChannelMember } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
@@ -35,8 +37,24 @@ export function MembersSidebar({
   onOpenChange,
 }: MembersSidebarProps) {
   const channelId = channel?.id ?? null;
+  const queryClient = useQueryClient();
   const membersQuery = useChannelMembersQuery(channelId, open);
   const addMembersMutation = useAddChannelMembersMutation(channelId);
+  const changeRoleMutation = useMutation({
+    mutationFn: async ({ pubkey, role }: { pubkey: string; role: string }) => {
+      if (!channelId) throw new Error("No channel selected.");
+      await changeChannelMemberRole(channelId, pubkey, role);
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["channels", channelId],
+      });
+    },
+  });
+  const changeRoleError =
+    changeRoleMutation.error instanceof Error
+      ? changeRoleMutation.error.message
+      : null;
 
   const rawMembers = membersQuery.data ?? [];
   const { people, bots, isBot, isMyBot, managedAgentsQuery } =
@@ -127,8 +145,9 @@ export function MembersSidebar({
   function renderMemberCard(member: ChannelMember, memberIsBot: boolean) {
     return (
       <MembersSidebarMemberCard
+        canChangeRole={canManageMembers && member.pubkey !== currentPubkey}
         canRemoveMember={canRemoveMember(member)}
-        isActionPending={isActionPending}
+        isActionPending={isActionPending || changeRoleMutation.isPending}
         isArchived={isArchived}
         key={member.pubkey}
         managedAgent={
@@ -139,6 +158,9 @@ export function MembersSidebar({
         member={member}
         memberIsBot={memberIsBot}
         memberLabel={formatMemberName(member, currentPubkey)}
+        onChangeRole={(m, role) => {
+          void changeRoleMutation.mutateAsync({ pubkey: m.pubkey, role });
+        }}
         onManagedAgentAction={(agent) => {
           void handleAgentLifecycleAction(agent);
         }}
@@ -250,12 +272,12 @@ export function MembersSidebar({
             </p>
           ) : null}
 
-          {actionErrorMessage ? (
+          {actionErrorMessage || changeRoleError ? (
             <p
               className="text-sm text-destructive"
               data-testid="members-sidebar-action-error"
             >
-              {actionErrorMessage}
+              {actionErrorMessage ?? changeRoleError}
             </p>
           ) : null}
         </div>

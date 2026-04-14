@@ -35,7 +35,7 @@ export function MessageThreadSummaryRow({
 }) {
   return (
     <button
-      className="ml-[3.75rem] flex w-fit max-w-full items-center gap-2 rounded-xl pl-0 pr-2 pt-0 pb-0.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+      className="ml-8 flex w-fit max-w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
       data-thread-head-id={message.id}
       data-testid="message-thread-summary"
       onClick={() => onOpenThread(message)}
