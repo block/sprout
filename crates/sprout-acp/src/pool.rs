@@ -1216,13 +1216,8 @@ async fn fetch_conversation_context(
     let last_event = batch.events.last()?;
     let tags = crate::queue::parse_thread_tags(&last_event.event);
     if let Some(context_event_id) = conversation_context_anchor_event_id(&tags) {
-        return fetch_thread_context(
-            batch.channel_id,
-            context_event_id,
-            limit,
-            &ctx.rest_client,
-        )
-        .await;
+        return fetch_thread_context(batch.channel_id, context_event_id, limit, &ctx.rest_client)
+            .await;
     }
 
     // DM non-reply: fetch recent conversation history.
@@ -1233,9 +1228,7 @@ async fn fetch_conversation_context(
     None
 }
 
-fn conversation_context_anchor_event_id(
-    thread_tags: &crate::queue::ThreadTags,
-) -> Option<&str> {
+fn conversation_context_anchor_event_id(thread_tags: &crate::queue::ThreadTags) -> Option<&str> {
     thread_tags
         .parent_event_id
         .as_deref()
