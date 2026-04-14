@@ -99,6 +99,13 @@
   margin: 0.5rem 0;
 }
 
+.rich-text-composer .tiptap .mention-highlight {
+  border-radius: 0.375rem;
+  background: hsl(var(--primary) / 0.15);
+  padding: 0.125rem 0.375rem;
+  color: hsl(var(--primary));
+}
+
 @layer base {
   :root {
     /* Catppuccin Latte (mauve accent) */

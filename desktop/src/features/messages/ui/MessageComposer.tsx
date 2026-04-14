@@ -4,10 +4,7 @@ import { EditorContent } from "@tiptap/react";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
 import { useDrafts } from "@/features/messages/lib/useDrafts";
-import {
-  useImageRefSuggestions,
-  type ImageRefSuggestion,
-} from "@/features/messages/lib/useImageRefSuggestions";
+
 import {
   ALLOWED_MEDIA_TYPES,
   useMediaUpload,
@@ -16,11 +13,9 @@ import { useMentions } from "@/features/messages/lib/useMentions";
 import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
 import { cn } from "@/shared/lib/cn";
-import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Button } from "@/shared/ui/button";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import { ComposerAttachments } from "./ComposerAttachments";
-import { ImageRefAutocomplete } from "./ImageRefAutocomplete";
 import {
   MentionAutocomplete,
   type MentionSuggestion,
@@ -100,7 +95,6 @@ export function MessageComposer({
   // We pass a custom setter that both updates React state AND inserts
   // markdown into the Tiptap editor when media upload completes.
   const media = useMediaUpload();
-  const imageRefs = useImageRefSuggestions(media.pendingImeta);
 
   // ── Stable refs for callbacks ────────────────────────────────────────
   const disabledRef = React.useRef(disabled);
@@ -128,15 +122,15 @@ export function MessageComposer({
   const richText = useRichTextEditor({
     placeholder: computedPlaceholder,
     editable: !disabled,
+    mentionNames: mentions.knownNames,
     onUpdate: ({ markdown, text }) => {
       setContent(markdown);
       contentRef.current = markdown;
 
-      // Bridge to existing mention/channel/imageRef detection hooks.
+      // Bridge to existing mention/channel detection hooks.
       const { cursor } = richText.getTextAndCursor();
       mentions.updateMentionQuery(text, cursor);
       channelLinks.updateChannelQuery(text, cursor);
-      imageRefs.updateQuery(text, cursor);
 
       if (text.trim().length > 0) {
         notifyTyping();
@@ -178,7 +172,6 @@ export function MessageComposer({
     setIsEmojiPickerOpen(false);
     mentions.clearMentions();
     channelLinks.clearChannels();
-    imageRefs.clear();
   }, [channelId]);
 
   // ── Edit mode: pre-fill content ─────────────────────────────────────
@@ -231,67 +224,6 @@ export function MessageComposer({
       richText.getTextAndCursor,
       richText.setContent,
       richText.focus,
-    ],
-  );
-
-  // ── Image ref insertion ───────────────────────────────────────────
-  const applyImageRefInsert = React.useCallback(
-    (suggestion: ImageRefSuggestion) => {
-      if (!richText.editor) return;
-
-      // Delete the `![query` trigger text before inserting the node.
-      const { text, cursor } = richText.getTextAndCursor();
-      const before = text.slice(0, cursor);
-      const match = /!\[([^\]]*)$/.exec(before);
-      if (match) {
-        const triggerStart = cursor - match[0].length;
-        // Delete from triggerStart to cursor in the editor
-        const { state } = richText.editor;
-        // Map text offset to ProseMirror position
-        let pmPos = 0;
-        let textOffset = 0;
-        state.doc.descendants((node, pos) => {
-          if (
-            node.isText &&
-            textOffset + (node.text?.length ?? 0) >= triggerStart &&
-            pmPos === 0
-          ) {
-            pmPos = pos + (triggerStart - textOffset);
-          }
-          if (node.isText) {
-            textOffset += node.text?.length ?? 0;
-          }
-        });
-        if (pmPos > 0) {
-          const cursorPm = pmPos + match[0].length;
-          richText.editor
-            .chain()
-            .focus()
-            .deleteRange({ from: pmPos, to: cursorPm })
-            .run();
-        }
-      }
-
-      // Insert the image ref node
-      const mediaType = suggestion.type.startsWith("video/")
-        ? "video"
-        : "image";
-      const thumbUrl = suggestion.thumb
-        ? rewriteRelayUrl(suggestion.thumb)
-        : rewriteRelayUrl(suggestion.url);
-      richText.insertImageRef(
-        suggestion.url,
-        suggestion.hash,
-        mediaType,
-        thumbUrl,
-      );
-      imageRefs.clear();
-    },
-    [
-      richText.editor,
-      richText.getTextAndCursor,
-      richText.insertImageRef,
-      imageRefs.clear,
     ],
   );
 
@@ -429,7 +361,6 @@ export function MessageComposer({
     media.setPendingImeta([]);
     mentions.clearMentions();
     channelLinks.clearChannels();
-    imageRefs.clear();
     setIsEmojiPickerOpen(false);
 
     const sendChannelId = channelIdRef.current;
@@ -446,7 +377,6 @@ export function MessageComposer({
     }
   }, [
     drafts.clearDraft,
-    imageRefs.clear,
     media.pendingImetaRef,
     media.setPendingImeta,
     mentions.extractMentionPubkeys,
@@ -488,14 +418,6 @@ export function MessageComposer({
         return;
       }
 
-      const imageRefResult = imageRefs.handleKeyDown(event);
-      if (imageRefResult.handled) {
-        if (imageRefResult.suggestion) {
-          applyImageRefInsert(imageRefResult.suggestion);
-        }
-        return;
-      }
-
       // Escape in edit mode
       if (event.key === "Escape" && editTargetRef.current && onCancelEdit) {
         event.preventDefault();
@@ -527,8 +449,6 @@ export function MessageComposer({
       applyChannelInsert,
       mentions.handleMentionKeyDown,
       applyMentionInsert,
-      imageRefs.handleKeyDown,
-      applyImageRefInsert,
       submitMessage,
       onCancelEdit,
     ],
@@ -609,12 +529,6 @@ export function MessageComposer({
             selectedIndex={mentions.mentionSelectedIndex}
             suggestions={mentions.isMentionOpen ? mentions.suggestions : []}
           />
-          <ImageRefAutocomplete
-            onSelect={applyImageRefInsert}
-            selectedIndex={imageRefs.selectedIndex}
-            suggestions={imageRefs.isOpen ? imageRefs.suggestions : []}
-          />
-
           {editTarget ? (
             <div
               className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-primary/30 bg-primary/5 px-3 py-2"

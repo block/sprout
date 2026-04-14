@@ -172,7 +172,7 @@ function createMarkdownComponents(
       <ul className={cn("list-disc", listClassName)}>{children}</ul>
     ),
     mention: ({ children }: { children?: React.ReactNode }) => (
-      <span className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary">
+      <span className="rounded-md bg-primary/15 px-1 py-0.5 text-sm text-primary">
         {children}
       </span>
     ),
@@ -201,7 +201,7 @@ function createMarkdownComponents(
       }
 
       return (
-        <span className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary">
+        <span className="rounded-md bg-primary/15 px-1 py-0.5 text-sm text-primary">
           {children}
         </span>
       );
