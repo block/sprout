@@ -66,7 +66,7 @@ export const MessageComposerToolbar = React.memo(
              * positions. Sits outside AnimatePresence so it never
              * unmounts — only repositions via layout animation.
              */}
-            <motion.div layoutId="aa-toggle" transition={layoutSpring}>
+            <motion.div layoutId="aa-toggle" transition={layoutSpring} style={{ willChange: "auto" }}>
               <Toggle
                 aria-label="Toggle formatting"
                 disabled={composerDisabled}
