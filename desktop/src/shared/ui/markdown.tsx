@@ -10,6 +10,7 @@ import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext"
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
+import remarkImageGallery from "@/shared/lib/remarkImageGallery";
 import remarkMentions from "@/shared/lib/remarkMentions";
 
 type ImetaLookup = Map<string, { image?: string; thumb?: string }>;
@@ -136,7 +137,7 @@ function createMarkdownComponents(
           <DialogPrimitive.Trigger asChild>
             <img
               alt={alt}
-              className="mt-4 max-h-96 max-w-lg cursor-pointer rounded-2xl border border-border/70 object-cover transition-opacity hover:opacity-90"
+              className="mt-1 max-h-64 w-full max-w-xl cursor-pointer rounded-2xl border border-border/70 object-cover transition-opacity hover:opacity-90"
               src={resolvedSrc}
             />
           </DialogPrimitive.Trigger>
@@ -170,6 +171,11 @@ function createMarkdownComponents(
         </DialogPrimitive.Root>
       );
     },
+    "image-gallery": ({ children }: { children?: React.ReactNode }) => (
+      <div className="grid grid-cols-2 gap-1.5 [&_p]:my-0 [&_img]:mt-0">
+        {children}
+      </div>
+    ),
     li: ({ children }) => <li className={listItemClassName}>{children}</li>,
     ol: ({ children }) => (
       <ol className={cn("list-decimal", listClassName)}>{children}</ol>
@@ -288,6 +294,7 @@ function MarkdownInner({
       remarkBreaks,
       [remarkMentions, { mentionNames }],
       [remarkChannelLinks, { channelNames }],
+      remarkImageGallery,
     ],
     [mentionNames, channelNames],
   );
