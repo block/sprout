@@ -220,7 +220,8 @@ pub async fn start_huddle(
 
         // 4. Fetch LiveKit token BEFORE emitting HUDDLE_STARTED.
         //    This prevents a phantom announcement if the token fetch fails.
-        let lk = fetch_livekit_token(&ephemeral_channel_id, &state).await?;
+        //    Creator is already the channel owner — no auto-add needed (None).
+        let lk = fetch_livekit_token(&ephemeral_channel_id, None, &state).await?;
 
         // 5. Emit HUDDLE_STARTED to parent channel — only now that token is confirmed.
         let started_builder =
@@ -301,10 +302,12 @@ pub async fn start_huddle(
 /// Join an existing huddle in the given parent channel.
 ///
 /// Steps:
-/// 0. Add the joining human to the ephemeral channel (required for STT transcript posting).
-/// 1. Fetch a LiveKit token from the relay for the ephemeral channel.
-/// 2. Emit KIND_HUDDLE_PARTICIPANT_JOINED to the parent channel (best-effort).
-/// 3. Store state and return join info.
+/// 1. Transition to Connecting.
+/// 2. Fetch a LiveKit token from the relay (relay auto-adds caller as member
+///    of the ephemeral channel via `parent_channel_id` query param).
+/// 3. Emit KIND_HUDDLE_PARTICIPANT_JOINED to the parent channel (best-effort).
+/// 4. Store state and return join info.
+/// 5. Post-connect setup (pipelines, model hydration).
 #[tauri::command]
 pub async fn join_huddle(
     parent_channel_id: String,
@@ -327,47 +330,28 @@ pub async fn join_huddle(
         hs.livekit_room = Some(livekit_room.clone());
     }
 
-    // All steps wrapped so we can roll back on ANY failure after phase transition.
-    // Tracks whether THIS attempt added membership (vs "already a member").
-    // On rollback, only leave the channel if we actually added ourselves.
-    let mut membership_added = false;
     let result: Result<(LiveKitTokenResponse, String), String> = async {
-        // 0. Add the joining human to the ephemeral channel.
+        // 1. Fetch LiveKit token — relay auto-adds caller to the ephemeral channel
+        //    when parent_channel_id is provided (caller must be a parent member).
+        let lk =
+            fetch_livekit_token(&ephemeral_channel_id, Some(&parent_channel_id), &state).await?;
+
+        // 2. Emit PARTICIPANT_JOINED (best-effort) — include own pubkey as p-tag.
+        //    Fetch own_pubkey AFTER the token call so a key-lock failure doesn't
+        //    block the join; the event is best-effort anyway.
         let own_pubkey = state
             .keys
             .lock()
             .map(|k| k.public_key().to_hex())
-            .map_err(|_| "keys unavailable".to_string())?;
-        let eph_uuid = parse_channel_uuid(&ephemeral_channel_id)?;
-        let add_self = events::build_add_member(eph_uuid, &own_pubkey, None)?;
-        match submit_event(add_self, &state).await {
-            Ok(_) => {
-                membership_added = true;
-            } // Newly added.
-            Err(e) => {
-                // Idempotent: "already a member" is expected on rejoin.
-                let is_idempotent = {
-                    let lower = e.to_lowercase();
-                    lower.contains("already a member") || lower.contains("already_member")
-                };
-                if !is_idempotent {
-                    eprintln!(
-                        "sprout-desktop: join_huddle add self to ephemeral channel failed: {e}"
-                    );
-                    return Err(format!("failed to join ephemeral channel: {e}"));
-                }
-                // Already a member — don't leave on rollback.
-            }
-        };
-
-        // 1. Fetch LiveKit token.
-        let lk = fetch_livekit_token(&ephemeral_channel_id, &state).await?;
-
-        // 2. Emit PARTICIPANT_JOINED (best-effort) — include own pubkey as p-tag.
+            .unwrap_or_default();
         if let Ok(joined_builder) = events::build_huddle_participant_joined(
             &parent_channel_id,
             &ephemeral_channel_id,
-            Some(&own_pubkey),
+            if own_pubkey.is_empty() {
+                None
+            } else {
+                Some(own_pubkey.as_str())
+            },
         ) {
             if let Err(e) = submit_event(joined_builder, &state).await {
                 eprintln!("sprout-desktop: huddle_participant_joined event failed: {e}");
@@ -409,19 +393,8 @@ pub async fn join_huddle(
             })
         }
         Err(e) => {
-            // Rollback: remove self from ephemeral channel to avoid orphaned
-            // membership (e.g. token fetch failed after membership succeeded).
-            // Only leave if THIS attempt added us — don't kick a pre-existing member.
-            if membership_added {
-                if let Ok(eph_uuid) = parse_channel_uuid(&ephemeral_channel_id) {
-                    if let Ok(leave_builder) = events::build_leave(eph_uuid) {
-                        if let Err(le) = submit_event(leave_builder, &state).await {
-                            eprintln!("sprout-desktop: join_huddle rollback leave failed: {le}");
-                        }
-                    }
-                }
-            }
-            // Reset state to Idle so the user can retry.
+            // Rollback: just reset state to Idle — the relay auto-added us and
+            // the ephemeral channel has a TTL, so no manual leave is needed.
             if let Ok(mut hs) = state.huddle_state.lock() {
                 hs.reset_preserving_generation();
             }
@@ -513,11 +486,7 @@ pub async fn leave_huddle(state: State<'_, AppState>) -> Result<(), String> {
     };
 
     // Emit PARTICIPANT_LEFT (best-effort) — include own pubkey as p-tag.
-    let own_pubkey = state
-        .keys
-        .lock()
-        .ok()
-        .map(|k| k.public_key().to_hex());
+    let own_pubkey = state.keys.lock().ok().map(|k| k.public_key().to_hex());
     if !parent_channel_id.is_empty() && !ephemeral_channel_id.is_empty() {
         if let Ok(left_builder) = events::build_huddle_participant_left(
             &parent_channel_id,

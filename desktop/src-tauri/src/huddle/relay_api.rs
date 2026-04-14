@@ -29,11 +29,20 @@ pub(crate) fn parse_channel_uuid(channel_id: &str) -> Result<Uuid, String> {
 }
 
 /// Fetch a LiveKit token from the relay for the given channel.
+///
+/// When `parent_channel_id` is `Some`, appends `?parent_channel_id={id}` to
+/// the URL so the relay can auto-add the caller as a member of the ephemeral
+/// channel (used by joiners — creators are already owners and pass `None`).
 pub(crate) async fn fetch_livekit_token(
     channel_id: &str,
+    parent_channel_id: Option<&str>,
     state: &AppState,
 ) -> Result<LiveKitTokenResponse, String> {
-    let path = api_path(&["huddles", channel_id, "token"]);
+    let base = api_path(&["huddles", channel_id, "token"]);
+    let path = match parent_channel_id {
+        Some(pid) => format!("{base}?parent_channel_id={pid}"),
+        None => base,
+    };
     let request = build_authed_request(&state.http_client, Method::POST, &path, state)?;
     send_json_request(request).await
 }
