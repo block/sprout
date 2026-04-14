@@ -39,13 +39,59 @@ export function useMediaUpload() {
   });
   /** Number of files currently in-flight. */
   const [uploadingCount, setUploadingCount] = React.useState(0);
-  const [pendingImeta, setPendingImeta] = React.useState<BlobDescriptor[]>([]);
+  /**
+   * Internal slots array — may contain `null` for reserved-but-pending uploads.
+   * Consumers see the filtered `pendingImeta` (nulls stripped) so the public
+   * type stays `BlobDescriptor[]`.
+   */
+  const [imetaSlots, setImetaSlots] = React.useState<
+    (BlobDescriptor | null)[]
+  >([]);
+
+  const pendingImeta = React.useMemo(
+    () => imetaSlots.filter((d): d is BlobDescriptor => d !== null),
+    [imetaSlots],
+  );
 
   const pendingImetaRef = React.useRef(pendingImeta);
   pendingImetaRef.current = pendingImeta;
 
+  /** Monotonic slot counter — ensures each batch gets unique indices even
+   *  before React flushes the state update. */
+  const nextSlotRef = React.useRef(0);
+
+  /** Reserve `count` null slots at the end; returns the starting index. */
+  const reserveSlots = React.useCallback((count: number): number => {
+    const startIndex = nextSlotRef.current;
+    nextSlotRef.current += count;
+    setImetaSlots((prev) => {
+      // Pad prev if needed (should already be the right length, but be safe)
+      const padded =
+        prev.length < startIndex
+          ? [...prev, ...new Array<null>(startIndex - prev.length).fill(null)]
+          : prev;
+      return [...padded, ...new Array<null>(count).fill(null)];
+    });
+    return startIndex;
+  }, []);
+
+  /** Fill a previously-reserved slot by index. */
+  const fillSlot = React.useCallback(
+    (index: number, descriptor: BlobDescriptor) => {
+      setImetaSlots((prev) => {
+        const next = [...prev];
+        next[index] = descriptor;
+        return next;
+      });
+      setUploadingCount((c) => Math.max(0, c - 1));
+    },
+    [],
+  );
+
+  /** Append a single descriptor (no pre-reserved slot). */
   const onUploaded = React.useCallback((descriptor: BlobDescriptor) => {
-    setPendingImeta((prev) => [...prev, descriptor]);
+    nextSlotRef.current += 1;
+    setImetaSlots((prev) => [...prev, descriptor]);
     setUploadingCount((c) => Math.max(0, c - 1));
   }, []);
 
@@ -88,23 +134,26 @@ export function useMediaUpload() {
       }
 
       setUploadingCount((c) => c + validFiles.length);
+      const baseIndex = reserveSlots(validFiles.length);
 
-      for (const file of validFiles) {
-        // Fire-and-forget each upload concurrently
+      for (let i = 0; i < validFiles.length; i++) {
+        const file = validFiles[i];
+        const slotIndex = baseIndex + i;
+        // Fire-and-forget each upload concurrently — slot preserves order
         (async () => {
           try {
             const buffer = await file.arrayBuffer();
             const descriptor = await uploadMediaBytes([
               ...new Uint8Array(buffer),
             ]);
-            onUploaded(descriptor);
+            fillSlot(slotIndex, descriptor);
           } catch (err) {
             onUploadError(err);
           }
         })();
       }
     },
-    [onUploaded, onUploadError],
+    [reserveSlots, fillSlot, onUploadError],
   );
 
   const handleDragOver = React.useCallback(
@@ -120,25 +169,34 @@ export function useMediaUpload() {
       preventDefault: () => void;
     }) => {
       const items = Array.from(event.clipboardData.items);
-      const mediaItem = items.find((item) =>
-        ALLOWED_MEDIA_TYPES.includes(item.type),
-      );
-      if (!mediaItem) return;
+      const mediaFiles = items
+        .filter((item) => ALLOWED_MEDIA_TYPES.includes(item.type))
+        .map((item) => item.getAsFile())
+        .filter((f): f is File => f !== null);
+      if (mediaFiles.length === 0) return;
 
       event.preventDefault();
-      const file = mediaItem.getAsFile();
-      if (!file) return;
 
-      setUploadingCount((c) => c + 1);
-      try {
-        const buffer = await file.arrayBuffer();
-        const descriptor = await uploadMediaBytes([...new Uint8Array(buffer)]);
-        onUploaded(descriptor);
-      } catch (err) {
-        onUploadError(err);
+      setUploadingCount((c) => c + mediaFiles.length);
+      const baseIndex = reserveSlots(mediaFiles.length);
+
+      for (let i = 0; i < mediaFiles.length; i++) {
+        const file = mediaFiles[i];
+        const slotIndex = baseIndex + i;
+        (async () => {
+          try {
+            const buffer = await file.arrayBuffer();
+            const descriptor = await uploadMediaBytes([
+              ...new Uint8Array(buffer),
+            ]);
+            fillSlot(slotIndex, descriptor);
+          } catch (err) {
+            onUploadError(err);
+          }
+        })();
       }
     },
-    [onUploaded, onUploadError],
+    [reserveSlots, fillSlot, onUploadError],
   );
 
   /** Upload a File directly — used by Tiptap's editorProps.handlePaste. */
@@ -158,8 +216,25 @@ export function useMediaUpload() {
   );
 
   const removeAttachment = React.useCallback((url: string) => {
-    setPendingImeta((prev) => prev.filter((d) => d.url !== url));
+    setImetaSlots((prev) => {
+      const next = prev.filter((d) => d?.url !== url);
+      nextSlotRef.current = next.length;
+      return next;
+    });
   }, []);
+
+  /** Public setter — replaces all slots (used by MessageComposer to clear/restore). */
+  const setPendingImeta = React.useCallback(
+    (action: React.SetStateAction<BlobDescriptor[]>) => {
+      setImetaSlots((prev) => {
+        const current = prev.filter((d): d is BlobDescriptor => d !== null);
+        const next = typeof action === "function" ? action(current) : action;
+        nextSlotRef.current = next.length;
+        return next;
+      });
+    },
+    [],
+  );
 
   const isUploading = uploadingCount > 0;
 

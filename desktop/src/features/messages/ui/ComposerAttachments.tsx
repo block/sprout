@@ -46,7 +46,7 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
               <motion.div
                 key={attachment.url}
                 layout
-                initial={{ opacity: 0, scale: 0.8 }}
+                initial={false}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.8 }}
                 transition={{ type: "spring", stiffness: 500, damping: 30 }}
