@@ -205,6 +205,12 @@ fn strip_inline_code(text: &str) -> String {
 }
 
 /// Replace http/https URLs with "link omitted".
+///
+/// Trailing sentence-ending punctuation (`.`, `!`, `?`) that immediately follows
+/// a URL and is at end-of-string or followed by whitespace is preserved so that
+/// sentence splitting and TTS prosody are not degraded.
+///
+/// Example: `"See https://x.y/z."` → `"See link omitted."`
 fn strip_urls(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -223,12 +229,31 @@ fn strip_urls(text: &str) -> String {
         };
         out.push_str(&rest[..url_start]);
         rest = &rest[url_start..];
-        // Consume until whitespace or end.
+        // Consume until whitespace or structural delimiter.
         let url_end = rest
             .find(|c: char| c.is_whitespace() || c == ')' || c == ']' || c == '"' || c == '\'')
             .unwrap_or(rest.len());
+        let url_token = &rest[..url_end];
         rest = &rest[url_end..];
+
+        // Check if the URL token ends with sentence-ending punctuation that
+        // belongs to the surrounding sentence rather than the URL itself.
+        // A trailing `.`, `!`, or `?` is preserved when it is at end-of-string
+        // or followed by whitespace (i.e. it is a sentence boundary).
+        let trailing_punct = if url_token.ends_with(|c: char| matches!(c, '.' | '!' | '?')) {
+            let after = rest; // rest is already past url_end
+            if after.is_empty() || after.starts_with(|c: char| c.is_whitespace()) {
+                // Preserve the trailing punctuation.
+                &url_token[url_token.len() - 1..]
+            } else {
+                ""
+            }
+        } else {
+            ""
+        };
+
         out.push_str("link omitted");
+        out.push_str(trailing_punct);
     }
     out
 }
@@ -490,6 +515,32 @@ mod tests {
         let out = preprocess_for_tts("See https://example.com for details.");
         assert!(out.contains("link omitted"), "got: {out}");
         assert!(!out.contains("example.com"), "got: {out}");
+    }
+
+    #[test]
+    fn strips_url_preserves_trailing_period() {
+        // Trailing `.` at end of sentence must be preserved for sentence splitting.
+        let out = strip_urls("See https://x.y/z.");
+        assert_eq!(out, "See link omitted.", "got: {out}");
+    }
+
+    #[test]
+    fn strips_url_preserves_trailing_exclamation() {
+        let out = strip_urls("Visit https://example.com!");
+        assert_eq!(out, "Visit link omitted!", "got: {out}");
+    }
+
+    #[test]
+    fn strips_url_preserves_trailing_question() {
+        let out = strip_urls("Did you see https://example.com?");
+        assert_eq!(out, "Did you see link omitted?", "got: {out}");
+    }
+
+    #[test]
+    fn strips_url_mid_sentence_no_punct_preserved() {
+        // URL in the middle of a sentence — no trailing punct to preserve.
+        let out = strip_urls("Check https://example.com for more info.");
+        assert_eq!(out, "Check link omitted for more info.", "got: {out}");
     }
 
     #[test]

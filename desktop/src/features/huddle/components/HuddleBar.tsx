@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   Mic,
   MicOff,
@@ -53,6 +54,8 @@ export function HuddleBar({ className }: HuddleBarProps) {
     setVoiceInputMode,
     activeSpeakers,
     isReconnecting,
+    huddleError,
+    clearHuddleError,
   } = useHuddle();
 
   const isPttMode = voiceInputMode === "push_to_talk";
@@ -69,17 +72,17 @@ export function HuddleBar({ className }: HuddleBarProps) {
     kokoro: string;
   } | null>(null);
 
-  // Poll huddle state — replace with event listener once Rust emits events
+  // Huddle state: event-driven primary path + 10s fallback poll.
   React.useEffect(() => {
     let cancelled = false;
+    let unlisten: (() => void) | null = null;
 
-    async function poll() {
+    async function fetchState() {
       try {
         const s = await invoke<HuddleState>("get_huddle_state");
         if (!cancelled) setState(s);
       } catch {
         // Only clear state if we never had an active huddle.
-        // Transient errors shouldn't remove the control bar.
         if (!cancelled) {
           setState((prev) =>
             prev?.phase === "active" || prev?.phase === "connected"
@@ -90,11 +93,23 @@ export function HuddleBar({ className }: HuddleBarProps) {
       }
     }
 
-    void poll();
-    const id = window.setInterval(() => void poll(), 2_000);
+    // Initial fetch
+    void fetchState();
+
+    // Primary: listen for Rust-emitted state change events
+    listen<HuddleState>("huddle-state-changed", (event) => {
+      if (!cancelled) setState(event.payload);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+
+    // Fallback: 10s poll in case events are missed
+    const id = window.setInterval(() => void fetchState(), 10_000);
 
     return () => {
       cancelled = true;
+      unlisten?.();
       window.clearInterval(id);
     };
   }, []);
@@ -177,6 +192,10 @@ export function HuddleBar({ className }: HuddleBarProps) {
 
   async function handleEnd() {
     if (isLeaving) return;
+    const confirmed = window.confirm(
+      "End the huddle for everyone? This will disconnect all participants.",
+    );
+    if (!confirmed) return;
     setIsLeaving(true);
     try {
       const backendClean = await endHuddle();
@@ -200,6 +219,24 @@ export function HuddleBar({ className }: HuddleBarProps) {
         className,
       )}
     >
+      {/* Error banner — dismissible, shown when start/join fails */}
+      {huddleError && (
+        <div
+          role="alert"
+          className="flex items-center gap-1.5 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive"
+        >
+          <span className="max-w-[220px] truncate">{huddleError}</span>
+          <button
+            aria-label="Dismiss error"
+            className="ml-1 opacity-60 hover:opacity-100"
+            onClick={clearHuddleError}
+            type="button"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Room label */}
       <span className="text-xs font-medium text-foreground">Huddle</span>
 
@@ -237,6 +274,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
         <ParticipantList
           participants={state.participants}
           activeSpeakers={activeSpeakers}
+          agentPubkeys={state.agent_pubkeys}
         />
       )}
 
@@ -290,6 +328,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
             ? "Switch to voice activity mode"
             : "Switch to push-to-talk mode"
         }
+        aria-pressed={isPttMode}
         className="h-6 px-1.5 text-[10px]"
         onClick={() =>
           void setVoiceInputMode(isPttMode ? "voice_activity" : "push_to_talk")
@@ -394,10 +433,11 @@ export function HuddleBar({ className }: HuddleBarProps) {
         aria-label="Leave huddle"
         className="h-8 w-8"
         disabled={isLeaving}
+        aria-busy={isLeaving}
         onClick={() => void handleLeave()}
         size="icon"
         variant="destructive"
-        title="Leave huddle"
+        title="Leave huddle (press Escape to dismiss dialogs first)"
       >
         <PhoneOff className="h-4 w-4" />
       </Button>
@@ -423,6 +463,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
           : micConnected
             ? "In huddle, microphone connected"
             : "In huddle, no microphone"}
+        {`, voice input: ${isPttMode ? "push to talk, press Ctrl+Space to transmit" : "voice activity detection"}`}
         {modelStatus &&
           modelStatus.moonshine !== "ready" &&
           `, STT model ${modelStatus.moonshine}`}

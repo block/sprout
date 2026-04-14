@@ -1,3 +1,5 @@
+import * as React from "react";
+
 import { cn } from "@/shared/lib/cn";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -6,54 +8,73 @@ type ParticipantListProps = {
   /** Pubkey hex strings from the Rust huddle state */
   participants: string[];
   activeSpeakers?: string[];
+  /** Pubkeys of agent participants — rendered with a bot badge */
+  agentPubkeys?: string[];
   className?: string;
 };
 
 export function ParticipantList({
   participants,
   activeSpeakers,
+  agentPubkeys,
   className,
 }: ParticipantListProps) {
   const { data } = useUsersBatchQuery(participants);
   const profiles = data?.profiles ?? {};
+  const agentSet = React.useMemo(
+    () => new Set(agentPubkeys ?? []),
+    [agentPubkeys],
+  );
 
   if (participants.length === 0) return null;
 
   return (
-    <div className={cn("flex items-center gap-1", className)}>
+    <ul className={cn("flex list-none items-center gap-1", className)}>
       {participants.map((pubkey) => {
         const profile = profiles[pubkey.toLowerCase()];
         const hasProfile = profile?.displayName || profile?.avatarUrl;
         const isActive = activeSpeakers?.includes(pubkey);
-        const ariaLabel =
-          profile?.displayName || `Participant ${pubkey.slice(0, 8)}`;
+        const isAgent = agentSet.has(pubkey);
+        const ariaLabel = `${profile?.displayName || `Participant ${pubkey.slice(0, 8)}`}${isAgent ? " (agent)" : ""}`;
 
-        return hasProfile ? (
-          <div
-            key={pubkey}
-            aria-label={ariaLabel}
-            role="img"
-            title={profile.displayName || pubkey}
-          >
-            <ProfileAvatar
-              avatarUrl={profile.avatarUrl ?? null}
-              label={profile.displayName || pubkey.slice(0, 6)}
-              className={cn(
-                "h-7 w-7 rounded-lg text-[9px]",
-                isActive &&
-                  "ring-2 ring-green-500 ring-offset-1 ring-offset-background",
-              )}
-            />
-          </div>
-        ) : (
-          <HexAvatar
-            key={pubkey}
-            pubkey={pubkey}
-            activeSpeakers={activeSpeakers}
-          />
+        return (
+          <li key={pubkey} className="relative">
+            {hasProfile ? (
+              <div
+                aria-label={ariaLabel}
+                role="img"
+                title={profile.displayName || pubkey}
+              >
+                <ProfileAvatar
+                  avatarUrl={profile.avatarUrl ?? null}
+                  label={profile.displayName || pubkey.slice(0, 6)}
+                  className={cn(
+                    "h-7 w-7 rounded-lg text-[9px]",
+                    isActive &&
+                      "ring-2 ring-green-500 ring-offset-1 ring-offset-background",
+                  )}
+                />
+              </div>
+            ) : (
+              <HexAvatar
+                pubkey={pubkey}
+                activeSpeakers={activeSpeakers}
+                ariaLabel={ariaLabel}
+              />
+            )}
+            {isAgent && (
+              <span
+                aria-hidden="true"
+                className="absolute -bottom-1 -right-1 text-[9px] leading-none"
+                title="Agent"
+              >
+                🤖
+              </span>
+            )}
+          </li>
         );
       })}
-    </div>
+    </ul>
   );
 }
 
@@ -61,9 +82,11 @@ export function ParticipantList({
 function HexAvatar({
   pubkey,
   activeSpeakers,
+  ariaLabel,
 }: {
   pubkey: string;
   activeSpeakers?: string[];
+  ariaLabel?: string;
 }) {
   const shortId = pubkey.slice(0, 6).toUpperCase();
   const parsed = parseInt(pubkey.slice(0, 4), 16);
@@ -73,7 +96,7 @@ function HexAvatar({
 
   return (
     <div
-      aria-label={`Participant ${pubkey.slice(0, 8)}`}
+      aria-label={ariaLabel ?? `Participant ${pubkey.slice(0, 8)}`}
       role="img"
       className={cn(
         "flex h-7 w-7 items-center justify-center rounded-lg text-[9px] font-semibold shadow-sm",

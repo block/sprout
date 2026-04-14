@@ -367,12 +367,14 @@ fn validate_channel_id(id: &str) -> Result<(), String> {
 
 /// Shared builder for huddle lifecycle events (kinds 48100–48103).
 /// All huddle events share: validate two channel IDs, JSON content with
-/// `ephemeral_channel_id`, and an `["h", parent_channel_id]` tag.
+/// `ephemeral_channel_id`, an `["h", parent_channel_id]` tag, and an
+/// optional `["p", participant_pubkey]` tag for join/leave identity.
 fn build_huddle_event(
     kind: u16,
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
     extra_fields: &[(&str, &str)],
+    participant_pubkey: Option<&str>,
 ) -> Result<EventBuilder, String> {
     validate_channel_id(parent_channel_id)?;
     validate_channel_id(ephemeral_channel_id)?;
@@ -382,7 +384,10 @@ fn build_huddle_event(
     for (k, v) in extra_fields {
         content[*k] = serde_json::Value::String(v.to_string());
     }
-    let tags = vec![tag(vec!["h", parent_channel_id])?];
+    let mut tags = vec![tag(vec!["h", parent_channel_id])?];
+    if let Some(pk) = participant_pubkey {
+        tags.push(tag(vec!["p", pk])?);
+    }
     Ok(EventBuilder::new(Kind::Custom(kind), content.to_string()).tags(tags))
 }
 
@@ -397,23 +402,44 @@ pub fn build_huddle_started(
         parent_channel_id,
         ephemeral_channel_id,
         &[("livekit_room", livekit_room)],
+        None,
     )
 }
 
 /// Kind 48101 — participant joined a huddle, posted to the parent channel.
+///
+/// `participant_pubkey`: when provided, adds a `["p", pubkey]` tag so
+/// consumers can identify who joined without parsing the event's author.
 pub fn build_huddle_participant_joined(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
+    participant_pubkey: Option<&str>,
 ) -> Result<EventBuilder, String> {
-    build_huddle_event(48101, parent_channel_id, ephemeral_channel_id, &[])
+    build_huddle_event(
+        48101,
+        parent_channel_id,
+        ephemeral_channel_id,
+        &[],
+        participant_pubkey,
+    )
 }
 
 /// Kind 48102 — participant left a huddle, posted to the parent channel.
+///
+/// `participant_pubkey`: when provided, adds a `["p", pubkey]` tag so
+/// consumers can identify who left without parsing the event's author.
 pub fn build_huddle_participant_left(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
+    participant_pubkey: Option<&str>,
 ) -> Result<EventBuilder, String> {
-    build_huddle_event(48102, parent_channel_id, ephemeral_channel_id, &[])
+    build_huddle_event(
+        48102,
+        parent_channel_id,
+        ephemeral_channel_id,
+        &[],
+        participant_pubkey,
+    )
 }
 
 /// Kind 48103 — huddle ended, posted to the parent channel.
@@ -421,7 +447,7 @@ pub fn build_huddle_ended(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
 ) -> Result<EventBuilder, String> {
-    build_huddle_event(48103, parent_channel_id, ephemeral_channel_id, &[])
+    build_huddle_event(48103, parent_channel_id, ephemeral_channel_id, &[], None)
 }
 
 /// Kind 48106 — voice-mode guidelines for agents in a huddle.

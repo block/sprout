@@ -42,7 +42,7 @@ const overrides = new Map([
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
   ["src/shared/api/relayClientSession.ts", 835], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore + subscribeToChannelLive (huddle TTS) + subscribeToHuddleEvents (huddle indicator)
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
-  ["src-tauri/src/lib.rs", 700], // sprout-media:// proxy + Range headers + Sprout nest init (ensure_nest) in setup() + huddle command registration + PTT global shortcut handler with generation counter and release delay + persona pack commands
+  ["src-tauri/src/lib.rs", 710], // sprout-media:// proxy + Range headers + Sprout nest init (ensure_nest) in setup() + huddle command registration + PTT global shortcut handler + persona pack commands + app_handle storage for event emission
   ["src-tauri/src/commands/media.rs", 720], // ffmpeg video transcode + poster frame extraction + run_ffmpeg_with_timeout (find_ffmpeg, is_video_file, transcode_to_mp4, extract_poster_frame, transcode_and_extract_poster) + spawn_blocking wrappers + tests
   ["src-tauri/src/commands/agents.rs", 880], // remote agent lifecycle routing (local + provider branches) + scope enforcement + persona pack metadata wiring + mcp_toolsets field
   ["src-tauri/src/managed_agents/runtime.rs", 690], // KNOWN_AGENT_BINARIES const + process_belongs_to_us FFI (macOS proc_name + Linux /proc/comm) + terminate_process + start/stop/sync lifecycle + pack persona live-read
@@ -57,12 +57,12 @@ const overrides = new Map([
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
   ["src/shared/api/types.ts", 550], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields + mcpToolsets + sourcePack + UpdateManagedAgentInput edit fields
-  ["src-tauri/src/events.rs", 530], // event builders + build_huddle_guidelines (kind:48106) + post_event_raw transport helper
-  ["src-tauri/src/huddle/kokoro.rs", 890], // Kokoro ONNX TTS engine + three-tier G2P + ARPAbet→IPA + CoreML + 20 G2P unit tests
-  ["src-tauri/src/huddle/mod.rs", 1000], // huddle state machine + Tauri commands + sync protocol doc; state/relay/pipeline extracted
+  ["src-tauri/src/events.rs", 555], // event builders + build_huddle_guidelines (kind:48106) + post_event_raw transport helper + participant p-tag on join/leave
+  ["src-tauri/src/huddle/kokoro.rs", 980], // Kokoro ONNX TTS engine + three-tier G2P + ARPAbet→IPA + CoreML + synth_chunk() public API + style validation + hyphenated compound splitting + 23 unit tests
+  ["src-tauri/src/huddle/mod.rs", 1020], // huddle state machine + Tauri commands + sync protocol doc; state/relay/pipeline extracted + emit_huddle_state_changed wiring
   ["src-tauri/src/huddle/models.rs", 850], // model download manager for Moonshine STT + Kokoro TTS with streaming downloads + SHA-256 verification + Rust-native tar extraction + version manifest + atomic swap + hot-start signaling
   ["src-tauri/src/huddle/stt.rs", 580], // STT pipeline + PTT edge-detection flush + PTT gating (is_speech AND ptt_active) + barge-in for VAD mode + rubato resampler + earshot VAD + sherpa-onnx transcription
-  ["src-tauri/src/huddle/preprocessing.rs", 620], // TTS text preprocessing pipeline + unified split_sentences (consolidated from tts.rs + supertonic.rs) + int_to_words 0-999999 + 18 unit tests
+  ["src-tauri/src/huddle/preprocessing.rs", 670], // TTS text preprocessing pipeline + unified split_sentences + int_to_words 0-999999 + URL trailing punctuation preservation + 23 unit tests
 ]);
 
 async function walkFiles(directory) {

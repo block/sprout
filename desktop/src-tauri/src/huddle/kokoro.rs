@@ -79,6 +79,13 @@ pub fn load_voice_style(path: &Path) -> Result<VoiceStyle, String> {
             data.len()
         ));
     }
+    if data.len() % 256 != 0 {
+        return Err(format!(
+            "voice style has {} floats — expected a multiple of 256 (got {} remainder)",
+            data.len(),
+            data.len() % 256,
+        ));
+    }
     Ok(VoiceStyle { data })
 }
 
@@ -471,6 +478,19 @@ impl Lexicon {
 
     /// Convert a single word to IPA using the full fallback chain.
     fn word_to_ipa(&self, word: &str) -> String {
+        // Compound words: split on hyphens and underscores, process each part
+        // independently. "short-and-natural" → "short" + "and" + "natural",
+        // "parent_event_id" → "parent" + "event" + "id".
+        // Each part gets full dict lookup. Joined with a space (brief TTS pause).
+        if word.contains('-') || word.contains('_') {
+            let parts: Vec<String> = word
+                .split(|c: char| c == '-' || c == '_')
+                .filter(|p| !p.is_empty())
+                .map(|p| self.word_to_ipa(p))
+                .collect();
+            return parts.join(" ");
+        }
+
         // Normalize curly quotes to straight apostrophes.
         let normalized = word.replace('\u{2019}', "'").replace('\u{2018}', "'");
         let stripped: String = normalized
@@ -642,7 +662,7 @@ impl KokoroTTS {
         let mut output: Vec<f32> = Vec::new();
 
         for (i, sentence) in sentences.iter().enumerate() {
-            let chunk_audio = self.synth_chunk(sentence, style, speed)?;
+            let chunk_audio = self.synth_chunk(sentence, _lang, style, _total_step, speed)?;
 
             if i > 0 && !output.is_empty() {
                 output.extend_from_slice(&silence);
@@ -653,11 +673,19 @@ impl KokoroTTS {
         Ok(output)
     }
 
-    /// Synthesize a single text chunk: G2P → tokenize → ONNX → PCM.
-    fn synth_chunk(
+    /// Synthesize a single pre-split text chunk. Caller is responsible for sentence splitting.
+    /// This avoids double-splitting when the TTS pipeline has already split the text.
+    ///
+    /// - `_lang` is accepted for API compatibility but currently unused
+    ///   (Kokoro v1.0 language is selected by voice name prefix, e.g. `af_*`).
+    /// - `_steps` is accepted for API compatibility but currently unused
+    ///   (Kokoro is not diffusion-based).
+    pub fn synth_chunk(
         &mut self,
         text: &str,
+        _lang: &str,
         style: &VoiceStyle,
+        _steps: usize,
         speed: f32,
     ) -> Result<Vec<f32>, String> {
         // G2P: text → IPA phoneme string
@@ -841,6 +869,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn load_voice_style_rejects_non_multiple_of_256() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join("kokoro_test_nonaligned");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("nonaligned.bin");
+        let mut f = std::fs::File::create(&path).unwrap();
+        // Write 257 floats — not a multiple of 256 (remainder = 1)
+        for i in 0..257u32 {
+            f.write_all(&(i as f32).to_le_bytes()).unwrap();
+        }
+        drop(f);
+        let result = load_voice_style(&path);
+        assert!(
+            result.is_err(),
+            "should reject file with non-multiple-of-256 floats"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("257"),
+            "error should mention float count: {err}"
+        );
+        assert!(
+            err.contains("remainder"),
+            "error should mention remainder: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── Suffix rules ──────────────────────────────────────────────────────
 
     #[test]
@@ -876,5 +933,54 @@ mod tests {
     #[test]
     fn apply_ing_basic() {
         assert!(Lexicon::apply_ing("rʌn").ends_with("ɪŋ"));
+    }
+
+    #[test]
+    fn hyphenated_word_splits_into_parts() {
+        let lex = Lexicon {
+            misaki: HashMap::new(),
+            cmudict: HashMap::new(),
+        };
+        let result = lex.word_to_ipa("short-and-natural");
+        let space_count = result.matches(' ').count();
+        assert_eq!(
+            space_count, 2,
+            "expected 2 spaces for 3 hyphenated parts, got {space_count}: {result}"
+        );
+    }
+
+    #[test]
+    fn underscored_word_splits_into_parts() {
+        let lex = Lexicon {
+            misaki: HashMap::new(),
+            cmudict: HashMap::new(),
+        };
+        let result = lex.word_to_ipa("parent_event_id");
+        let space_count = result.matches(' ').count();
+        assert_eq!(
+            space_count, 2,
+            "expected 2 spaces for 3 underscored parts, got {space_count}: {result}"
+        );
+    }
+
+    #[test]
+    fn compound_word_with_dict_lookup() {
+        let mut dict = HashMap::new();
+        dict.insert("parent".to_string(), "pɛɹənt".to_string());
+        dict.insert("event".to_string(), "ɪvɛnt".to_string());
+        dict.insert("id".to_string(), "aɪdiː".to_string());
+        let lex = Lexicon {
+            misaki: dict,
+            cmudict: HashMap::new(),
+        };
+        // Underscore compound
+        let result = lex.word_to_ipa("parent_event_id");
+        assert!(result.contains("pɛɹənt"), "parent not resolved: {result}");
+        assert!(result.contains("ɪvɛnt"), "event not resolved: {result}");
+        assert!(result.contains("aɪdiː"), "id not resolved: {result}");
+
+        // Hyphen compound
+        let result = lex.word_to_ipa("short-and-sweet");
+        assert_eq!(result.matches(' ').count(), 2, "hyphen split: {result}");
     }
 }

@@ -65,8 +65,8 @@ const FADE_SAMPLES: usize = (SAMPLE_RATE as f64 * 0.008) as usize;
 /// Sentence-by-sentence synthesis for lower TTFA (≈200ms vs ≈600ms for 3-sentence batches).
 const BATCH_SIZE: usize = 1;
 
-/// Silence inserted between sentences by the Kokoro engine (seconds).
-/// Kokoro handles its own inter-sentence silence.
+/// Silence inserted between sentences by the TTS pipeline (seconds).
+/// Injected as a silent buffer between each synthesized sentence chunk.
 const INTER_SENTENCE_SILENCE: f32 = 0.1;
 
 // ── Public pipeline handle ────────────────────────────────────────────────────
@@ -330,6 +330,8 @@ fn tts_worker(
         // Lookahead pipeline: synthesize each sentence and append immediately.
         // Rodio queues buffers sequentially — synthesis of the next sentence
         // overlaps with playback of the current one.
+        let silence_samples = (INTER_SENTENCE_SILENCE * SAMPLE_RATE as f32) as usize;
+        let silence_buf = vec![0.0f32; silence_samples];
         for sentence in &sentences {
             if handle_cancel_or_shutdown(&cancel, &shutdown, &tts_active, &text_rx, Some(&player)) {
                 break;
@@ -340,22 +342,16 @@ fn tts_worker(
                 continue;
             }
 
-            match engine.call(
-                text,
-                "en",
-                &style,
-                SYNTH_STEPS,
-                SYNTH_SPEED,
-                INTER_SENTENCE_SILENCE,
-            ) {
+            match engine.synth_chunk(text, "en", &style, SYNTH_STEPS, SYNTH_SPEED) {
                 Ok(samples) if !samples.is_empty() => {
                     let mut boosted: Vec<f32> = samples
                         .iter()
                         .map(|&s| (s * VOLUME_BOOST).clamp(-1.0, 1.0))
                         .collect();
                     apply_fades(&mut boosted);
-                    let buf = SamplesBuffer::new(channels, rate, boosted);
-                    player.append(buf);
+                    player.append(SamplesBuffer::new(channels, rate, boosted));
+                    // Insert inter-sentence silence after each synthesized chunk.
+                    player.append(SamplesBuffer::new(channels, rate, silence_buf.clone()));
                     if first_append {
                         tts_active.store(true, Ordering::Release);
                         first_append = false;

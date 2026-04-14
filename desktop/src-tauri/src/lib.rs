@@ -401,6 +401,13 @@ pub fn run() {
                                         .store(true, std::sync::atomic::Ordering::Release);
                                 }
                             }
+                            // Emit ptt-state=true to the frontend.
+                            // The React side plays the press audio cue on this event
+                            // (Web Audio API via HuddleContext). Rust-side rodio audio
+                            // was considered but rejected: the rodio OutputStream must
+                            // outlive the handler and sharing it across the shortcut
+                            // closure adds lifecycle complexity for marginal gain.
+                            // The React implementation is sufficient and simpler.
                             let _ = app.emit("ptt-state", true);
                         }
                         ShortcutState::Released => {
@@ -425,6 +432,7 @@ pub fn run() {
                                             .store(false, std::sync::atomic::Ordering::Release);
                                     }
                                 }
+                                // Emit ptt-state=false — React plays the release audio cue.
                                 let _ = app_handle.emit("ptt-state", false);
                             });
                         }
@@ -471,6 +479,14 @@ pub fn run() {
             // that will be lost on restart, as that silently breaks channel
             // memberships, DMs, and relay identity.
             let state = app_handle.state::<AppState>();
+
+            // Store the AppHandle so huddle commands can emit `huddle-state-changed`
+            // events via `huddle::emit_huddle_state` without threading the handle
+            // through every call site.
+            if let Ok(mut guard) = state.app_handle.lock() {
+                *guard = Some(app_handle.clone());
+            }
+
             resolve_persisted_identity(&app_handle, &state)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
