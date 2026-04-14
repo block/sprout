@@ -587,7 +587,7 @@ export function MessageComposer({
           ) : null}
 
           {(media.pendingImeta.length > 0 || media.isUploading) && (
-            <div className="mb-1 flex items-center gap-2">
+            <div className="mb-2 flex items-center gap-2">
               <ComposerAttachments
                 attachments={media.pendingImeta}
                 isUploading={media.isUploading}

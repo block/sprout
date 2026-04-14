@@ -1,5 +1,6 @@
 import * as React from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 
 import type { BlobDescriptor } from "@/shared/api/tauri";
@@ -50,19 +51,56 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
                 className="group relative"
               >
                 <div className="relative h-5 w-10">
-                  <div className="h-full w-full overflow-hidden rounded border border-border/70">
-                    {isVideo ? (
-                      <div className="flex h-full w-full items-center justify-center bg-muted text-[10px] text-muted-foreground">
-                        ▶
+                  <DialogPrimitive.Root>
+                    <DialogPrimitive.Trigger asChild>
+                      <div className="h-full w-full cursor-pointer overflow-hidden rounded border border-border/70">
+                        {isVideo ? (
+                          <div className="flex h-full w-full items-center justify-center bg-muted text-[10px] text-muted-foreground">
+                            ▶
+                          </div>
+                        ) : (
+                          <img
+                            src={thumbUrl}
+                            alt={`Attachment ${hash}`}
+                            className="h-full w-full object-contain"
+                          />
+                        )}
                       </div>
-                    ) : (
-                      <img
-                        src={thumbUrl}
-                        alt={`Attachment ${hash}`}
-                        className="h-full w-full object-contain"
-                      />
-                    )}
-                  </div>
+                    </DialogPrimitive.Trigger>
+                    <DialogPrimitive.Portal>
+                      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+                      <DialogPrimitive.Content
+                        className="fixed inset-0 z-50 flex items-center justify-center p-8"
+                        onPointerDownOutside={(e) => e.preventDefault()}
+                        onInteractOutside={(e) => e.preventDefault()}
+                      >
+                        <DialogPrimitive.Title className="sr-only">
+                          Attachment {hash} preview
+                        </DialogPrimitive.Title>
+                        <DialogPrimitive.Description className="sr-only">
+                          Full-size attachment preview. Press Escape or click outside to close.
+                        </DialogPrimitive.Description>
+                        <DialogPrimitive.Close className="absolute inset-0 cursor-default" aria-label="Close lightbox" />
+                        {isVideo ? (
+                          <video
+                            src={rewriteRelayUrl(attachment.url)}
+                            controls
+                            className="relative max-h-[90vh] max-w-[90vw] rounded-lg"
+                          />
+                        ) : (
+                          <img
+                            alt={`Attachment ${hash}`}
+                            className="relative max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+                            src={rewriteRelayUrl(attachment.url)}
+                          />
+                        )}
+                        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30">
+                          <X className="h-5 w-5" />
+                          <span className="sr-only">Close</span>
+                        </DialogPrimitive.Close>
+                      </DialogPrimitive.Content>
+                    </DialogPrimitive.Portal>
+                  </DialogPrimitive.Root>
                   <button
                     type="button"
                     onClick={() => onRemove(attachment.url)}
