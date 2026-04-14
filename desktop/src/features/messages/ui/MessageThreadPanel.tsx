@@ -90,24 +90,26 @@ export function MessageThreadPanel({
 
   return (
     <aside
-      className="hidden h-full w-[380px] shrink-0 flex-col border-l border-border/80 bg-background lg:flex"
+      className="relative z-10 hidden h-full min-h-0 w-[min(100%,420px)] shrink-0 flex-col border-l border-border/60 bg-muted/20 pt-0 lg:flex"
       data-testid="message-thread-panel"
     >
-      <div className="flex items-center gap-3 px-4 py-3">
-        {canGoBack ? (
-          <Button
-            aria-label="Back"
-            data-testid="message-thread-back"
-            onClick={onBack}
-            size="icon"
-            type="button"
-            variant="ghost"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        ) : null}
-        <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold tracking-tight">Thread</h2>
+      <div className="relative z-20 flex shrink-0 items-center justify-between bg-background/25 px-2 py-1 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)]">
+        <div className="flex min-w-0 items-center gap-2">
+          {canGoBack ? (
+            <Button
+              aria-label="Back"
+              data-testid="message-thread-back"
+              onClick={onBack}
+              size="icon"
+              type="button"
+              variant="ghost"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          ) : null}
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold tracking-tight">Thread</h2>
+          </div>
         </div>
         <Button
           aria-label="Close thread"
@@ -122,26 +124,28 @@ export function MessageThreadPanel({
       </div>
 
       <div
-        className="min-h-0 flex-1 overflow-y-auto"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
         data-testid="message-thread-body"
       >
-        <div className="px-3 py-3" data-testid="message-thread-head">
-          <MessageRow
-            activeReplyTargetId={replyTargetId}
-            message={threadHead}
-            onDelete={
-              onDelete && canManageMessage(threadHead, currentPubkey)
-                ? onDelete
-                : undefined
-            }
-            onToggleReaction={onToggleReaction}
-            profiles={profiles}
-          />
+        <div className="px-4 py-3" data-testid="message-thread-head">
+          <div className="mx-auto w-full max-w-[23rem]">
+            <MessageRow
+              activeReplyTargetId={replyTargetId}
+              message={threadHead}
+              onDelete={
+                onDelete && canManageMessage(threadHead, currentPubkey)
+                  ? onDelete
+                  : undefined
+              }
+              onToggleReaction={onToggleReaction}
+              profiles={profiles}
+            />
+          </div>
         </div>
 
-        <div className="px-3 py-3" data-testid="message-thread-replies">
+        <div className="px-4 pb-2 pt-3" data-testid="message-thread-replies">
           {threadReplies.length > 0 ? (
-            <div className="space-y-2">
+            <div className="mx-auto w-full max-w-[23rem] space-y-2">
               {threadReplies.map((entry) => (
                 <div key={entry.message.id}>
                   <MessageRow
@@ -166,20 +170,11 @@ export function MessageThreadPanel({
                 </div>
               ))}
             </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-border/70 bg-card/40 px-4 py-6 text-center">
-              <p className="text-sm font-medium text-foreground/80">
-                No replies in this branch yet
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Reply in the thread to continue this branch.
-              </p>
-            </div>
-          )}
+          ) : null}
         </div>
       </div>
 
-      <div className="p-4">
+      <div className="relative z-10 -mt-10 shrink-0">
         <TypingIndicatorRow
           channel={channel}
           currentPubkey={currentPubkey}

@@ -161,7 +161,7 @@ export const MessageRow = React.memo(
 
         <article
           className={cn(
-            "group/message flex items-start gap-2.5 rounded-2xl px-2 py-1.5 transition-colors",
+            "group/message flex items-start gap-2.5 rounded-2xl px-2 py-1 transition-colors",
             highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
           )}
           data-message-id={message.id}
@@ -181,7 +181,7 @@ export const MessageRow = React.memo(
                   <UserAvatar
                     accent={message.accent}
                     avatarUrl={message.avatarUrl ?? null}
-                    className="!h-[42px] !w-[42px]"
+                    className="!h-8 !w-8"
                     displayName={message.author}
                     testId="message-avatar"
                   />
@@ -191,81 +191,79 @@ export const MessageRow = React.memo(
               <UserAvatar
                 accent={message.accent}
                 avatarUrl={message.avatarUrl ?? null}
-                className="shrink-0 !h-[42px] !w-[42px]"
+                className="shrink-0 !h-8 !w-8"
                 displayName={message.author}
                 testId="message-avatar"
               />
             )}
           </div>
 
-          <div className="min-w-0 flex-1 space-y-1">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-              {message.pubkey ? (
-                <UserProfilePopover
-                  pubkey={message.pubkey}
-                  role={message.role}
-                  botIdenticonValue={message.author}
-                >
-                  <button
-                    className="truncate rounded text-sm font-semibold tracking-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    type="button"
+          <div className="relative min-w-0 flex-1 space-y-0">
+            <div className="flex min-w-0 flex-nowrap items-start gap-x-2 pr-[9.5rem] sm:pr-40">
+              <div className="flex min-w-0 flex-1 items-center gap-x-2">
+                {message.pubkey ? (
+                  <UserProfilePopover
+                    pubkey={message.pubkey}
+                    role={message.role}
+                    botIdenticonValue={message.author}
                   >
+                    <button
+                      className="min-w-0 truncate rounded pt-px text-left text-sm font-semibold leading-tight tracking-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      type="button"
+                    >
+                      {message.author}
+                    </button>
+                  </UserProfilePopover>
+                ) : (
+                  <h3 className="min-w-0 truncate pt-px text-sm font-semibold leading-tight tracking-tight">
                     {message.author}
-                  </button>
-                </UserProfilePopover>
-              ) : (
-                <h3 className="truncate text-sm font-semibold tracking-tight">
-                  {message.author}
-                </h3>
-              )}
-              {message.personaDisplayName &&
-              message.personaDisplayName !== message.author ? (
-                <span className="text-xs text-muted-foreground">
-                  {message.personaDisplayName}
-                </span>
-              ) : message.role ? (
-                <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                  {message.role}
-                </p>
-              ) : null}
-              <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-                <div className="relative">
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2">
-                    <MessageActionBar
-                      activeReplyTargetId={activeReplyTargetId}
-                      message={message}
-                      onDelete={onDelete}
-                      onEdit={onEdit}
-                      onReactionSelect={
-                        canToggleReactions ? handleReactionSelect : undefined
-                      }
-                      onReply={onReply}
-                      reactionErrorMessage={reactionErrorMessage}
-                      reactionPending={reactionPending}
-                      reactions={reactions}
-                    />
-                  </div>
-                </div>
-                {message.pending ? (
-                  <p className="font-medium uppercase tracking-[0.14em] text-primary/80">
-                    Sending
+                  </h3>
+                )}
+                {message.personaDisplayName &&
+                message.personaDisplayName !== message.author ? (
+                  <span className="truncate text-xs text-muted-foreground">
+                    {message.personaDisplayName}
+                  </span>
+                ) : message.role ? (
+                  <p className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                    {message.role}
                   </p>
                 ) : null}
-                {message.edited ? (
-                  <p
-                    className="text-muted-foreground/70"
-                    title="This message has been edited"
-                  >
-                    (edited)
-                  </p>
-                ) : null}
-                <MessageTimestamp
-                  createdAt={message.createdAt}
-                  time={message.time}
-                />
               </div>
             </div>
-            {renderBody()}
+            <div className="absolute right-0 top-0 z-10 flex items-start justify-end gap-2 pt-px text-xs text-muted-foreground">
+              <MessageActionBar
+                activeReplyTargetId={activeReplyTargetId}
+                message={message}
+                onDelete={onDelete}
+                onEdit={onEdit}
+                onReactionSelect={
+                  canToggleReactions ? handleReactionSelect : undefined
+                }
+                onReply={onReply}
+                reactionErrorMessage={reactionErrorMessage}
+                reactionPending={reactionPending}
+                reactions={reactions}
+              />
+              {message.pending ? (
+                <p className="shrink-0 font-medium uppercase tracking-[0.14em] text-primary/80">
+                  Sending
+                </p>
+              ) : null}
+              {message.edited ? (
+                <p
+                  className="shrink-0 text-muted-foreground/70"
+                  title="This message has been edited"
+                >
+                  (edited)
+                </p>
+              ) : null}
+              <MessageTimestamp
+                createdAt={message.createdAt}
+                time={message.time}
+              />
+            </div>
+            <div className="pt-1">{renderBody()}</div>
             <MessageReactions
               messageId={message.id}
               reactions={reactions}

@@ -73,18 +73,18 @@ export function TypingIndicatorRow({
   return (
     <div
       aria-live="polite"
-      className="bg-background/95 px-4 py-2 sm:px-6"
+      className="shrink-0 bg-transparent px-4 py-2 sm:px-6"
       data-testid="message-typing-indicator"
     >
-      <div className="flex w-full items-center gap-2">
-        <div className="flex flex-shrink-0 items-center">
+      <div className="mx-auto flex w-full max-w-4xl items-center gap-2">
+        <div className="flex shrink-0 items-center">
           {typingPubkeys.map((pubkey, index) => {
-            const profile = profiles?.[pubkey];
+            const profile = profiles?.[pubkey.toLowerCase()];
             const label = labels[index] ?? pubkey.slice(0, 8);
             return (
               <div
                 key={pubkey}
-                className={`relative h-5 w-5 flex-shrink-0 rounded-full ring-1 ring-background${index > 0 ? " -ml-1.5" : ""}`}
+                className={`relative h-5 w-5 shrink-0 rounded-full ring-1 ring-background${index > 0 ? " -ml-1.5" : ""}`}
                 data-testid="message-typing-avatar"
               >
                 <ProfileAvatar

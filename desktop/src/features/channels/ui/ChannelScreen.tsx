@@ -364,91 +364,97 @@ export function ChannelScreen({
 
   return (
     <>
-      <ChatHeader
-        actions={
-          activeChannel ? (
-            <ChannelMembersBar
-              channel={activeChannel}
-              currentPubkey={currentPubkey}
-              onManageChannel={openChannelManagement}
-              onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
-            />
-          ) : null
-        }
-        channelType={activeChannel?.channelType}
-        visibility={activeChannel?.visibility}
-        description={channelDescription}
-        statusBadge={headerStatusBadge}
-        title={activeChannelTitle}
-      />
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="absolute inset-x-0 top-0 z-20">
+          <ChatHeader
+            actions={
+              activeChannel ? (
+                <ChannelMembersBar
+                  channel={activeChannel}
+                  currentPubkey={currentPubkey}
+                  onManageChannel={openChannelManagement}
+                  onToggleMembers={() =>
+                    setIsMembersSidebarOpen((prev) => !prev)
+                  }
+                />
+              ) : null
+            }
+            channelType={activeChannel?.channelType}
+            visibility={activeChannel?.visibility}
+            description={channelDescription}
+            statusBadge={headerStatusBadge}
+            title={activeChannelTitle}
+          />
+        </div>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {activeChannel ? (
-          activeChannel.channelType === "forum" ? (
-            <React.Suspense fallback={<ViewLoadingFallback kind="forum" />}>
-              <ForumView
-                channel={activeChannel}
-                currentPubkey={currentPubkey}
-                onClosePost={onCloseForumPost}
-                onSelectPost={onSelectForumPost}
-                selectedPostId={selectedForumPostId}
-                targetReplyId={targetForumReplyId}
-              />
-            </React.Suspense>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {activeChannel ? (
+            activeChannel.channelType === "forum" ? (
+              <React.Suspense fallback={<ViewLoadingFallback kind="forum" />}>
+                <ForumView
+                  channel={activeChannel}
+                  currentPubkey={currentPubkey}
+                  onClosePost={onCloseForumPost}
+                  onSelectPost={onSelectForumPost}
+                  selectedPostId={selectedForumPostId}
+                  targetReplyId={targetForumReplyId}
+                />
+              </React.Suspense>
+            ) : (
+              <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
+                <ChannelPane
+                  activeChannel={activeChannel}
+                  currentPubkey={currentPubkey}
+                  fetchOlder={fetchOlder}
+                  hasOlderMessages={hasOlderMessages}
+                  isFetchingOlder={isFetchingOlder}
+                  editTarget={
+                    editTargetMessage
+                      ? {
+                          author: editTargetMessage.author,
+                          body: editTargetMessage.body,
+                          id: editTargetMessage.id,
+                        }
+                      : null
+                  }
+                  isSending={sendMessageMutation.isPending}
+                  isTimelineLoading={isTimelineLoading}
+                  messages={timelineMessages}
+                  onCancelEdit={handleCancelEdit}
+                  onCancelThreadReply={handleCancelThreadReply}
+                  onBackThread={handleBackThread}
+                  onCloseThread={handleCloseThread}
+                  onDelete={handleDelete}
+                  onEdit={handleEdit}
+                  onEditSave={handleEditSave}
+                  onOpenNestedThread={handleOpenNestedThread}
+                  onOpenThread={handleOpenThread}
+                  onSendMessage={handleSendMessage}
+                  onSendThreadReply={handleSendThreadReply}
+                  onToggleReaction={effectiveToggleReaction}
+                  canGoBackThread={threadHeadPath.length > 1}
+                  openThreadHeadId={openThreadHeadId}
+                  personaLookup={personaLookup}
+                  profiles={messageProfiles}
+                  targetMessageId={targetMessageId}
+                  threadHeadMessage={openThreadHeadMessage}
+                  threadMessages={threadMessages}
+                  threadTypingPubkeys={threadTypingPubkeys}
+                  threadTotalReplyCount={threadTotalReplyCount}
+                  threadReplyTargetId={threadReplyTargetId}
+                  threadReplyTargetMessage={threadReplyTargetMessage}
+                  typingPubkeys={mainTypingPubkeys}
+                />
+              </React.Suspense>
+            )
           ) : (
-            <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
-              <ChannelPane
-                activeChannel={activeChannel}
-                currentPubkey={currentPubkey}
-                fetchOlder={fetchOlder}
-                hasOlderMessages={hasOlderMessages}
-                isFetchingOlder={isFetchingOlder}
-                editTarget={
-                  editTargetMessage
-                    ? {
-                        author: editTargetMessage.author,
-                        body: editTargetMessage.body,
-                        id: editTargetMessage.id,
-                      }
-                    : null
-                }
-                isSending={sendMessageMutation.isPending}
-                isTimelineLoading={isTimelineLoading}
-                messages={timelineMessages}
-                onCancelEdit={handleCancelEdit}
-                onCancelThreadReply={handleCancelThreadReply}
-                onBackThread={handleBackThread}
-                onCloseThread={handleCloseThread}
-                onDelete={handleDelete}
-                onEdit={handleEdit}
-                onEditSave={handleEditSave}
-                onOpenNestedThread={handleOpenNestedThread}
-                onOpenThread={handleOpenThread}
-                onSendMessage={handleSendMessage}
-                onSendThreadReply={handleSendThreadReply}
-                onToggleReaction={effectiveToggleReaction}
-                canGoBackThread={threadHeadPath.length > 1}
-                openThreadHeadId={openThreadHeadId}
-                personaLookup={personaLookup}
-                profiles={messageProfiles}
-                targetMessageId={targetMessageId}
-                threadHeadMessage={openThreadHeadMessage}
-                threadMessages={threadMessages}
-                threadTypingPubkeys={threadTypingPubkeys}
-                threadTotalReplyCount={threadTotalReplyCount}
-                threadReplyTargetId={threadReplyTargetId}
-                threadReplyTargetMessage={threadReplyTargetMessage}
-                typingPubkeys={mainTypingPubkeys}
-              />
-            </React.Suspense>
-          )
-        ) : (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8">
-            <p className="text-sm text-muted-foreground">
-              Select a channel to view messages.
-            </p>
-          </div>
-        )}
+            <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8">
+              <p className="text-sm text-muted-foreground">
+                Select a channel to view messages.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       <MembersSidebar
