@@ -3632,6 +3632,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sprout-core",
+ "sprout-persona",
  "sprout-sdk",
  "thiserror 2.0.18",
  "tokio",
@@ -3709,6 +3710,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "sprout-persona",
  "sprout-sdk",
  "thiserror 2.0.18",
  "tokio",
@@ -3816,6 +3818,17 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "sprout-persona"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

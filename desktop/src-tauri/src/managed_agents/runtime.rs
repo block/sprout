@@ -517,15 +517,60 @@ pub fn start_managed_agent_process(
         "GOOSE_MODE",
         std::env::var("GOOSE_MODE").unwrap_or_else(|_| "auto".to_string()),
     );
-    if let Some(system_prompt) = &record.system_prompt {
-        command.env("SPROUT_ACP_SYSTEM_PROMPT", system_prompt);
+    // Pack-backed agents: pass the pack path AND the user's current edits.
+    // ACP's precedence model (CLI/env > persona > default) means env vars
+    // win over pack values. We read from PersonaRecord (which the user edits
+    // in the GUI) rather than ManagedAgentRecord (stale creation-time snapshot).
+    if let (Some(pack_path), Some(persona_name)) =
+        (&record.persona_pack_path, &record.persona_name_in_pack)
+    {
+        command.env("SPROUT_ACP_PERSONA_PACK", pack_path);
+        command.env("SPROUT_ACP_PERSONA_NAME", persona_name);
+
+        // Look up the current PersonaRecord for the user's latest edits.
+        let persona_prompt_and_model: Option<(String, Option<String>)> = record
+            .persona_id
+            .as_deref()
+            .and_then(|pid| {
+                super::load_personas(app)
+                    .ok()?
+                    .into_iter()
+                    .find(|p| p.id == pid)
+            })
+            .map(|p| (p.system_prompt, p.model));
+
+        if let Some((prompt, model)) = persona_prompt_and_model {
+            command.env("SPROUT_ACP_SYSTEM_PROMPT", &prompt);
+            if let Some(m) = &model {
+                command.env("SPROUT_ACP_MODEL", m);
+            } else {
+                command.env_remove("SPROUT_ACP_MODEL");
+            }
+        } else {
+            // Fallback: persona not found (deleted?), use agent record values.
+            if let Some(system_prompt) = &record.system_prompt {
+                command.env("SPROUT_ACP_SYSTEM_PROMPT", system_prompt);
+            } else {
+                command.env_remove("SPROUT_ACP_SYSTEM_PROMPT");
+            }
+            if let Some(model) = &record.model {
+                command.env("SPROUT_ACP_MODEL", model);
+            } else {
+                command.env_remove("SPROUT_ACP_MODEL");
+            }
+        }
     } else {
-        command.env_remove("SPROUT_ACP_SYSTEM_PROMPT");
-    }
-    if let Some(model) = &record.model {
-        command.env("SPROUT_ACP_MODEL", model);
-    } else {
-        command.env_remove("SPROUT_ACP_MODEL");
+        // Non-pack agents: use ManagedAgentRecord values directly.
+        if let Some(system_prompt) = &record.system_prompt {
+            command.env("SPROUT_ACP_SYSTEM_PROMPT", system_prompt);
+        } else {
+            command.env_remove("SPROUT_ACP_SYSTEM_PROMPT");
+        }
+        if let Some(model) = &record.model {
+            command.env("SPROUT_ACP_MODEL", model);
+        } else {
+            command.env_remove("SPROUT_ACP_MODEL");
+        }
     }
     if let Some(toolsets) = &record.mcp_toolsets {
         command.env("SPROUT_TOOLSETS", toolsets);

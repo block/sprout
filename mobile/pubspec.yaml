@@ -1,0 +1,25 @@
+name: sprout_mobile
+description: Sprout mobile client
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  hooks_riverpod: ^3.0.3
+  flutter_hooks: ^0.21.3
+  lucide_icons_flutter: ^3.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  custom_lint: ^0.8.0
+  riverpod_lint: ^3.1.0
+  mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true

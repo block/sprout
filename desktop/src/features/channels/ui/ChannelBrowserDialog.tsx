@@ -110,7 +110,7 @@ export function ChannelBrowserDialog({
         channel.channelType !== "dm" &&
         (channel.archivedAt
           ? channel.isMember
-          : channel.visibility === "open") &&
+          : channel.visibility === "open" || channel.isMember) &&
         (channelTypeFilter ? channel.channelType === channelTypeFilter : true),
     );
 

@@ -448,7 +448,7 @@ export function TeamDialog({
                 {canImportTeamUpdate ? (
                   <>
                     <input
-                      accept=".json"
+                      accept=".json,.zip"
                       className="hidden"
                       onChange={handleImportFileChange}
                       ref={importFileInputRef}

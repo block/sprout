@@ -260,6 +260,143 @@ pub fn encode_persona_json(
 }
 
 // ---------------------------------------------------------------------------
+// .persona.md parsing
+// ---------------------------------------------------------------------------
+
+/// Parse a `.persona.md` file into a `ParsedPersonaPreview`.
+pub fn parse_md_persona(md_bytes: &[u8]) -> Result<ParsedPersonaPreview, String> {
+    let content =
+        std::str::from_utf8(md_bytes).map_err(|e| format!("Invalid UTF-8 in .persona.md: {e}"))?;
+    let config = sprout_persona::persona::parse_persona_md(content)
+        .map_err(|e| format!("Failed to parse .persona.md: {e}"))?;
+
+    // Split "provider:model" into separate fields for the preview.
+    let (provider, model) = match config.model.as_deref() {
+        Some(s) if !s.is_empty() => {
+            let (prov, id) = sprout_persona::persona::split_model(s);
+            (prov.map(str::to_owned), Some(id.to_owned()))
+        }
+        _ => (None, None),
+    };
+
+    Ok(ParsedPersonaPreview {
+        display_name: config.display_name,
+        system_prompt: config.prompt,
+        avatar_data_url: None, // .persona.md avatars are paths, not data URIs
+        provider,
+        model,
+        name_pool: Vec::new(),
+        source_file: String::new(),
+    })
+}
+
+/// Detect whether a ZIP archive is a persona pack (has `.plugin/plugin.json`).
+/// If so, resolve it and return previews for all personas in the pack.
+/// Find `.plugin/plugin.json` in a directory. Returns the parent of `.plugin/`.
+/// Checks root and root/* only (matches pack detection scope in parse_zip_personas).
+pub fn find_plugin_json(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    // Root level: .plugin/plugin.json
+    if root.join(".plugin").join("plugin.json").exists() {
+        return Some(root.to_path_buf());
+    }
+    // One folder deep: <folder>/.plugin/plugin.json (common zip layout)
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        if entry.file_type().ok()?.is_dir() {
+            let child = entry.path();
+            if child.join(".plugin").join("plugin.json").exists() {
+                return Some(child);
+            }
+        }
+    }
+    None
+}
+
+pub fn parse_zip_pack(zip_bytes: &[u8]) -> Result<ParsePersonaFilesResult, String> {
+    // Extract to a temp directory, resolve the pack, convert to previews.
+    let tmp = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {e}"))?;
+    let cursor = Cursor::new(zip_bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| format!("Invalid ZIP archive: {e}"))?;
+
+    // Extract all files with safe path handling.
+    let mut total_decompressed: usize = 0;
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read ZIP entry: {e}"))?;
+
+        // enclosed_name() returns None for paths with traversal components
+        // (.., absolute paths, Windows drive prefixes). This is the canonical
+        // safe extraction check from the zip crate.
+        let safe_name = match entry.enclosed_name() {
+            Some(name) => name.to_path_buf(),
+            None => continue, // path traversal — skip
+        };
+        let name_str = safe_name.to_string_lossy();
+        if name_str.starts_with("__MACOSX/") || name_str.contains("/._") {
+            continue; // macOS metadata
+        }
+
+        let out_path = tmp.path().join(&safe_name);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out_path).map_err(|e| format!("Failed to create dir: {e}"))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent dir: {e}"))?;
+            }
+            let mut data = Vec::new();
+            loop {
+                let mut chunk = [0u8; 8192];
+                let n = entry
+                    .read(&mut chunk)
+                    .map_err(|e| format!("Read error: {e}"))?;
+                if n == 0 {
+                    break;
+                }
+                total_decompressed += n;
+                if total_decompressed > MAX_ZIP_DECOMPRESSED {
+                    return Err("ZIP decompressed content exceeds 100MB limit".to_string());
+                }
+                data.extend_from_slice(&chunk[..n]);
+            }
+            std::fs::write(&out_path, &data)
+                .map_err(|e| format!("Failed to write {}: {e}", name_str))?;
+        }
+    }
+
+    // Find the pack root by locating .plugin/plugin.json in the extracted tree.
+    // Handles: root-level (.plugin/plugin.json), single folder (my-pack/.plugin/...),
+    // or deeper nesting (foo/bar/.plugin/...).
+    let pack_root = find_plugin_json(tmp.path()).ok_or_else(|| {
+        "ZIP detected as pack but .plugin/plugin.json not found after extraction".to_string()
+    })?;
+
+    // Resolve the pack from the extracted directory.
+    let resolved = sprout_persona::resolve::resolve_pack(&pack_root)
+        .map_err(|e| format!("Pack validation failed: {e}"))?;
+
+    let personas: Vec<ParsedPersonaPreview> = resolved
+        .personas
+        .iter()
+        .map(|p| ParsedPersonaPreview {
+            display_name: p.display_name.clone(),
+            system_prompt: p.system_prompt.clone(),
+            avatar_data_url: None,
+            provider: p.provider.clone(),
+            model: p.model.clone(),
+            name_pool: Vec::new(),
+            source_file: format!("{} ({})", p.name, resolved.name),
+        })
+        .collect();
+
+    Ok(ParsePersonaFilesResult {
+        personas,
+        skipped: vec![],
+    })
+}
+
+// ---------------------------------------------------------------------------
 // ZIP parsing
 // ---------------------------------------------------------------------------
 
@@ -268,6 +405,29 @@ pub fn parse_zip_personas(zip_bytes: &[u8]) -> Result<ParsePersonaFilesResult, S
     let mut archive =
         zip::ZipArchive::new(cursor).map_err(|e| format!("Invalid ZIP archive: {e}"))?;
 
+    // Detect persona pack BEFORE entry limit — packs may have many files.
+    // Only match root-level or one-folder-deep (matches find_plugin_json scope).
+    let is_pack = (0..archive.len()).any(|i| {
+        archive
+            .by_index(i)
+            .ok()
+            .map(|e| {
+                let name = e.name().trim_start_matches('/');
+                // Root: ".plugin/plugin.json"
+                // One folder deep: "my-pack/.plugin/plugin.json"
+                name == ".plugin/plugin.json"
+                    || name
+                        .strip_suffix("/.plugin/plugin.json")
+                        .map(|prefix| !prefix.contains('/'))
+                        .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    });
+    if is_pack {
+        return parse_zip_pack(zip_bytes);
+    }
+
+    // Entry limit only applies to loose-persona zips (not packs).
     if archive.len() > MAX_ZIP_ENTRIES {
         return Err(format!(
             "ZIP contains too many entries ({}, max {MAX_ZIP_ENTRIES})",
@@ -305,11 +465,12 @@ pub fn parse_zip_personas(zip_bytes: &[u8]) -> Result<ParsePersonaFilesResult, S
         let lower = name.to_ascii_lowercase();
         let is_png = lower.ends_with(".png");
         let is_json = lower.ends_with(".json");
+        let is_md = lower.ends_with(".persona.md");
 
-        if !is_png && !is_json {
+        if !is_png && !is_json && !is_md {
             skipped.push(SkippedFile {
                 source_file: raw_name,
-                reason: "Not a PNG or JSON file".to_string(),
+                reason: "Not a .png, .json, or .persona.md file".to_string(),
             });
             continue;
         }
@@ -333,7 +494,9 @@ pub fn parse_zip_personas(zip_bytes: &[u8]) -> Result<ParsePersonaFilesResult, S
             data.extend_from_slice(&chunk[..n]);
         }
 
-        let parse_result = if is_json {
+        let parse_result = if is_md {
+            parse_md_persona(&data)
+        } else if is_json {
             parse_json_persona(&data)
         } else {
             parse_png_persona(&data)
@@ -354,7 +517,7 @@ pub fn parse_zip_personas(zip_bytes: &[u8]) -> Result<ParsePersonaFilesResult, S
     }
 
     if !has_valid_file {
-        return Err("No persona files found (expected .png or .json).".to_string());
+        return Err("No persona files found (expected .png, .json, or .persona.md).".to_string());
     }
 
     Ok(ParsePersonaFilesResult { personas, skipped })
@@ -775,7 +938,9 @@ mod tests {
         assert_eq!(result.personas.len(), 2);
         // readme.txt should be skipped
         assert_eq!(result.skipped.len(), 1);
-        assert!(result.skipped[0].reason.contains("Not a PNG or JSON file"));
+        assert!(result.skipped[0]
+            .reason
+            .contains("Not a .png, .json, or .persona.md file"));
     }
 
     #[test]

@@ -1046,13 +1046,22 @@ export async function getAgentModels(pubkey: string) {
   return invokeTauri<AgentModelsResponse>("get_agent_models", { pubkey });
 }
 
+type RawUpdateManagedAgentResponse = {
+  agent: RawManagedAgent;
+  profile_sync_error: string | null;
+};
+
 export async function updateManagedAgent(
   input: UpdateManagedAgentInput,
-): Promise<ManagedAgent> {
-  const response = await invokeTauri<RawManagedAgent>("update_managed_agent", {
-    input,
-  });
-  return fromRawManagedAgent(response);
+): Promise<{ agent: ManagedAgent; profileSyncError: string | null }> {
+  const response = await invokeTauri<RawUpdateManagedAgentResponse>(
+    "update_managed_agent",
+    { input },
+  );
+  return {
+    agent: fromRawManagedAgent(response.agent),
+    profileSyncError: response.profile_sync_error,
+  };
 }
 
 // ── Backend provider discovery ────────────────────────────────────────────────

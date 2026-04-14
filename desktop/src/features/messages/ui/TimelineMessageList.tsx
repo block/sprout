@@ -4,11 +4,13 @@ import {
   formatDayHeading,
   isSameDay,
 } from "@/features/messages/lib/dateFormatters";
+import { buildMainTimelineEntries } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { DayDivider } from "./DayDivider";
 import { MessageRow } from "./MessageRow";
+import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { SystemMessageRow } from "./SystemMessageRow";
 
 type TimelineMessageListProps = {
@@ -42,10 +44,14 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   profiles,
 }: TimelineMessageListProps) {
   const elements: React.ReactNode[] = [];
+  const entries = React.useMemo(
+    () => buildMainTimelineEntries(messages),
+    [messages],
+  );
 
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i];
-    const prev = i > 0 ? messages[i - 1] : null;
+  for (let i = 0; i < entries.length; i++) {
+    const { message, summary } = entries[i];
+    const prev = i > 0 ? entries[i - 1]?.message : null;
 
     if (!prev || !isSameDay(prev.createdAt, message.createdAt)) {
       elements.push(
@@ -90,6 +96,17 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           profiles={profiles}
         />,
       );
+
+      if (summary && onReply) {
+        elements.push(
+          <MessageThreadSummaryRow
+            key={`thread-summary-${message.id}`}
+            message={message}
+            onOpenThread={onReply}
+            summary={summary}
+          />,
+        );
+      }
     }
   }
 

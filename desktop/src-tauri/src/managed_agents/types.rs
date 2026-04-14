@@ -35,6 +35,15 @@ pub struct PersonaRecord {
     pub is_builtin: bool,
     #[serde(default = "default_record_active")]
     pub is_active: bool,
+    /// Pack ID if this persona was imported from a persona pack.
+    /// Pack personas are non-editable (system_prompt, model locked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_pack: Option<String>,
+    /// Internal persona slug within the pack (e.g., "lep", "pip").
+    /// Used by ACP's `resolve_persona_by_name()` to find the right persona.
+    /// Validated: `[a-zA-Z0-9_-]+`, max 64 chars (safe for env vars and paths).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_pack_persona_slug: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -93,6 +102,12 @@ pub struct ManagedAgentRecord {
     pub backend_agent_id: Option<String>,
     #[serde(default)]
     pub provider_binary_path: Option<String>,
+    /// Installed pack path (absolute). Set when agent was created from a pack persona.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona_pack_path: Option<PathBuf>,
+    /// Persona name within the pack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona_name_in_pack: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub last_started_at: Option<String>,
@@ -281,6 +296,26 @@ pub struct UpdateManagedAgentRequest {
     pub system_prompt: Option<Option<String>>,
     #[serde(default)]
     pub mcp_toolsets: Option<Option<String>>,
+    #[serde(default)]
+    pub parallelism: Option<u32>,
+    #[serde(default)]
+    pub turn_timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub relay_url: Option<String>,
+    #[serde(default)]
+    pub acp_command: Option<String>,
+    #[serde(default)]
+    pub agent_command: Option<String>,
+    #[serde(default)]
+    pub agent_args: Option<Vec<String>>,
+    #[serde(default)]
+    pub mcp_command: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateManagedAgentResponse {
+    pub agent: ManagedAgentSummary,
+    pub profile_sync_error: Option<String>,
 }
 
 /// Response from `get_agent_models` — normalized model info for the frontend.

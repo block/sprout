@@ -42,6 +42,7 @@ nostr = "0.37"
 reqwest = { version = "0.13", features = ["json", "query"] }
 url = "2"
 sprout-core = { path = "../../crates/sprout-core" }
+sprout-persona = { path = "../../crates/sprout-persona" }
 base64 = "0.22"
 sha2 = "0.11"
 tar = "0.4"
@@ -60,6 +61,6 @@ rodio = "0.22"
 earshot = "1.0"
 rubato = "2.0"
 audioadapter-buffers = "3.0"
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"

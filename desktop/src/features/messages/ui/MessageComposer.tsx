@@ -6,6 +6,7 @@ import { useDrafts } from "@/features/messages/lib/useDrafts";
 import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
 import { useMentions } from "@/features/messages/lib/useMentions";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
@@ -40,6 +41,9 @@ type MessageComposerProps = {
     body: string;
     id: string;
   } | null;
+  showTopBorder?: boolean;
+  typingParentEventId?: string | null;
+  typingRootEventId?: string | null;
 };
 
 const MAX_TEXTAREA_ROWS = 4;
@@ -56,6 +60,9 @@ export function MessageComposer({
   onSend,
   placeholder,
   replyTarget = null,
+  showTopBorder = true,
+  typingParentEventId = null,
+  typingRootEventId = null,
 }: MessageComposerProps) {
   const [content, setContent] = React.useState("");
   const contentRef = React.useRef(content);
@@ -74,7 +81,11 @@ export function MessageComposer({
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
-  const notifyTyping = useTypingBroadcast(channelId);
+  const notifyTyping = useTypingBroadcast(
+    channelId,
+    typingParentEventId,
+    typingRootEventId,
+  );
 
   const media = useMediaUpload(setContent);
 
@@ -495,8 +506,13 @@ export function MessageComposer({
   }, [media.handlePaperclip]);
 
   return (
-    <footer className="border-t border-border/80 bg-background p-4">
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
+    <footer
+      className={cn(
+        "bg-background p-4",
+        showTopBorder ? "border-t border-border/80" : "",
+      )}
+    >
+      <div className="flex w-full flex-col gap-3">
         <form
           className="relative rounded-2xl border border-input bg-card px-3 py-4 shadow-sm sm:px-4"
           data-testid="message-composer"

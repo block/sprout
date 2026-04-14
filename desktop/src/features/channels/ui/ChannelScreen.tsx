@@ -1,6 +1,4 @@
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
-
 import { useAppShell } from "@/app/AppShellContext";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
@@ -22,21 +20,17 @@ import {
   useSendMessageMutation,
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
-import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
 import {
   collectMessageAuthorPubkeys,
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
-import {
-  getChannelIdFromTags,
-  getThreadReference,
-} from "@/features/messages/lib/threading";
+import { buildThreadPanelData } from "@/features/messages/lib/threadPanel";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
+import { useLoadMissingAncestors } from "@/features/messages/useLoadMissingAncestors";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
-import { getEventById } from "@/shared/api/tauri";
 import type {
   Channel,
   Identity,
@@ -78,13 +72,16 @@ export function ChannelScreen({
   targetMessageEvent,
   targetMessageId,
 }: ChannelScreenProps) {
-  const queryClient = useQueryClient();
   const { markChannelRead, openChannelManagement } = useAppShell();
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
-  const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
+  const [threadHeadPath, setThreadHeadPath] = React.useState<string[]>([]);
+  const [threadReplyTargetId, setThreadReplyTargetId] = React.useState<
+    string | null
+  >(null);
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
   const currentPubkey = currentIdentity?.pubkey;
   const activeChannelId = activeChannel?.id ?? null;
+  const openThreadHeadId = threadHeadPath[threadHeadPath.length - 1] ?? null;
 
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
@@ -134,14 +131,33 @@ export function ChannelScreen({
     () => resolvedMessages[resolvedMessages.length - 1] ?? null,
     [resolvedMessages],
   );
-  const typingPubkeys = useChannelTyping(
+  const typingEntries = useChannelTyping(
     activeChannel,
     currentPubkey,
     latestMessageEvent,
   );
+  const mainTypingPubkeys = React.useMemo(
+    () =>
+      typingEntries
+        .filter((entry) => entry.threadHeadId === null)
+        .map((entry) => entry.pubkey),
+    [typingEntries],
+  );
+  const threadTypingPubkeys = React.useMemo(
+    () =>
+      typingEntries
+        .filter((entry) => entry.threadHeadId === openThreadHeadId)
+        .map((entry) => entry.pubkey),
+    [openThreadHeadId, typingEntries],
+  );
   const messageProfilePubkeys = React.useMemo(
-    () => [...new Set([...messageAuthorPubkeys, ...typingPubkeys])],
-    [messageAuthorPubkeys, typingPubkeys],
+    () => [
+      ...new Set([
+        ...messageAuthorPubkeys,
+        ...typingEntries.map((entry) => entry.pubkey),
+      ]),
+    ],
+    [messageAuthorPubkeys, typingEntries],
   );
   const messageProfilesQuery = useUsersBatchQuery(messageProfilePubkeys, {
     enabled: messageProfilePubkeys.length > 0,
@@ -213,11 +229,19 @@ export function ChannelScreen({
       resolvedMessages,
     ],
   );
-  const replyTargetMessage = React.useMemo(
+  const threadPanelData = React.useMemo(
     () =>
-      timelineMessages.find((message) => message.id === replyTargetId) ?? null,
-    [replyTargetId, timelineMessages],
+      buildThreadPanelData(
+        timelineMessages,
+        openThreadHeadId,
+        threadReplyTargetId,
+      ),
+    [openThreadHeadId, threadReplyTargetId, timelineMessages],
   );
+  const openThreadHeadMessage = threadPanelData.threadHead;
+  const threadMessages = threadPanelData.visibleReplies;
+  const threadReplyTargetMessage = threadPanelData.replyTargetMessage;
+  const threadTotalReplyCount = threadPanelData.totalReplyCount;
   const editTargetMessage = React.useMemo(
     () =>
       timelineMessages.find((message) => message.id === editTargetId) ?? null,
@@ -226,21 +250,27 @@ export function ChannelScreen({
 
   const {
     handleCancelEdit,
-    handleCancelReply,
+    handleCancelThreadReply,
+    handleBackThread,
+    handleCloseThread,
     handleDelete,
     handleEdit,
     handleEditSave,
-    handleReply,
-    handleSend,
+    handleOpenNestedThread,
+    handleOpenThread,
+    handleSendMessage,
+    handleSendThreadReply,
     handleToggleReaction,
   } = useChannelPaneHandlers({
     deleteMessageMutation,
     editMessageMutation,
     editTargetId,
-    replyTargetId,
+    openThreadHeadId,
     sendMessageMutation,
     setEditTargetId,
-    setReplyTargetId,
+    setThreadHeadPath,
+    setThreadReplyTargetId,
+    threadReplyTargetId,
     toggleReactionMutation,
   });
 
@@ -270,17 +300,11 @@ export function ChannelScreen({
     shouldLoadTimeline &&
     (messagesQuery.isPending ||
       (messagesQuery.isFetching && resolvedMessages.length === 0));
-  const requestedAncestorIdsRef = React.useRef<Set<string>>(new Set());
   const resetComposerTargets = React.useCallback(
     (_channelId: string | null) => {
-      setReplyTargetId(null);
+      setThreadHeadPath([]);
+      setThreadReplyTargetId(null);
       setEditTargetId(null);
-    },
-    [],
-  );
-  const resetRequestedAncestors = React.useCallback(
-    (_channelId: string | null) => {
-      requestedAncestorIdsRef.current.clear();
     },
     [],
   );
@@ -290,94 +314,32 @@ export function ChannelScreen({
   }, [activeChannelId, resetComposerTargets]);
 
   React.useEffect(() => {
-    if (replyTargetId && !replyTargetMessage) {
-      setReplyTargetId(null);
+    if (openThreadHeadId && !openThreadHeadMessage) {
+      setThreadHeadPath((current) => current.slice(0, -1));
+      return;
+    }
+
+    if (openThreadHeadMessage && !threadReplyTargetId) {
+      setThreadReplyTargetId(openThreadHeadMessage.id);
+      return;
+    }
+
+    if (threadReplyTargetId && !threadReplyTargetMessage) {
+      setThreadReplyTargetId(openThreadHeadMessage?.id ?? null);
     }
     if (editTargetId && !editTargetMessage) {
       setEditTargetId(null);
     }
-  }, [editTargetId, editTargetMessage, replyTargetId, replyTargetMessage]);
+  }, [
+    editTargetId,
+    editTargetMessage,
+    openThreadHeadId,
+    openThreadHeadMessage,
+    threadReplyTargetId,
+    threadReplyTargetMessage,
+  ]);
 
-  React.useEffect(() => {
-    resetRequestedAncestors(activeChannelId);
-  }, [activeChannelId, resetRequestedAncestors]);
-
-  React.useEffect(() => {
-    if (!activeChannel || activeChannel.channelType === "forum") {
-      return;
-    }
-
-    const knownEvents = new Map(
-      resolvedMessages.map((message) => [message.id, message]),
-    );
-    const missingAncestorIds = new Set<string>();
-
-    for (const message of resolvedMessages) {
-      const thread = getThreadReference(message.tags);
-
-      for (const eventId of [thread.parentId, thread.rootId]) {
-        if (
-          !eventId ||
-          knownEvents.has(eventId) ||
-          requestedAncestorIdsRef.current.has(eventId)
-        ) {
-          continue;
-        }
-
-        missingAncestorIds.add(eventId);
-      }
-    }
-
-    if (missingAncestorIds.size === 0) {
-      return;
-    }
-
-    for (const eventId of missingAncestorIds) {
-      requestedAncestorIdsRef.current.add(eventId);
-    }
-
-    const maxRequestedAncestors = 500;
-    if (requestedAncestorIdsRef.current.size > maxRequestedAncestors) {
-      const excess =
-        requestedAncestorIdsRef.current.size - maxRequestedAncestors;
-      let removed = 0;
-      for (const id of requestedAncestorIdsRef.current) {
-        if (removed >= excess) {
-          break;
-        }
-        requestedAncestorIdsRef.current.delete(id);
-        removed++;
-      }
-    }
-
-    let isCancelled = false;
-
-    void Promise.all(
-      [...missingAncestorIds].map(async (eventId) => {
-        try {
-          const event = await getEventById(eventId);
-
-          if (
-            isCancelled ||
-            getChannelIdFromTags(event.tags) !== activeChannel.id
-          ) {
-            return;
-          }
-
-          queryClient.setQueryData<RelayEvent[]>(
-            channelMessagesKey(activeChannel.id),
-            (current = []) => mergeMessages(current, event),
-          );
-        } catch (error) {
-          console.error("Failed to load ancestor event", eventId, error);
-        }
-      }),
-    );
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [activeChannel, queryClient, resolvedMessages]);
+  useLoadMissingAncestors(activeChannel, resolvedMessages);
 
   const activeChannelEphemeralBadge = activeChannelEphemeralDisplay ? (
     <EphemeralChannelBadge
@@ -454,19 +416,29 @@ export function ChannelScreen({
                 isTimelineLoading={isTimelineLoading}
                 messages={timelineMessages}
                 onCancelEdit={handleCancelEdit}
-                onCancelReply={handleCancelReply}
+                onCancelThreadReply={handleCancelThreadReply}
+                onBackThread={handleBackThread}
+                onCloseThread={handleCloseThread}
                 onDelete={handleDelete}
                 onEdit={handleEdit}
                 onEditSave={handleEditSave}
-                onReply={handleReply}
-                onSend={handleSend}
+                onOpenNestedThread={handleOpenNestedThread}
+                onOpenThread={handleOpenThread}
+                onSendMessage={handleSendMessage}
+                onSendThreadReply={handleSendThreadReply}
                 onToggleReaction={effectiveToggleReaction}
+                canGoBackThread={threadHeadPath.length > 1}
+                openThreadHeadId={openThreadHeadId}
                 personaLookup={personaLookup}
                 profiles={messageProfiles}
-                replyTargetId={replyTargetId}
-                replyTargetMessage={replyTargetMessage}
                 targetMessageId={targetMessageId}
-                typingPubkeys={typingPubkeys}
+                threadHeadMessage={openThreadHeadMessage}
+                threadMessages={threadMessages}
+                threadTypingPubkeys={threadTypingPubkeys}
+                threadTotalReplyCount={threadTotalReplyCount}
+                threadReplyTargetId={threadReplyTargetId}
+                threadReplyTargetMessage={threadReplyTargetMessage}
+                typingPubkeys={mainTypingPubkeys}
               />
             </React.Suspense>
           )
