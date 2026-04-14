@@ -74,7 +74,6 @@ export function MessageThreadPanel({
   threadHead,
   threadReplies,
   threadTypingPubkeys,
-  totalReplyCount,
 }: MessageThreadPanelProps) {
   if (!threadHead) {
     return null;
@@ -122,7 +121,10 @@ export function MessageThreadPanel({
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto" data-testid="message-thread-body">
+      <div
+        className="min-h-0 flex-1 overflow-y-auto"
+        data-testid="message-thread-body"
+      >
         <div className="px-3 py-3" data-testid="message-thread-head">
           <MessageRow
             activeReplyTargetId={replyTargetId}

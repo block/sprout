@@ -13,10 +13,7 @@ function ParticipantAvatar({
   index: number;
 }) {
   return (
-    <div
-      className={index > 0 ? "-ml-2" : ""}
-      style={{ zIndex: 10 - index }}
-    >
+    <div className={index > 0 ? "-ml-2" : ""} style={{ zIndex: 10 - index }}>
       <UserAvatar
         avatarUrl={participant.avatarUrl}
         className="rounded-full border-2 border-background"

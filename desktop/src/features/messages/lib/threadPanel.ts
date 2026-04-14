@@ -42,7 +42,10 @@ function normalizeBranchReply(message: TimelineMessage): TimelineMessage {
 function buildSummaryParticipants(
   replies: TimelineMessage[],
 ): TimelineThreadSummaryParticipant[] {
-  const recentUniqueParticipants = new Map<string, TimelineThreadSummaryParticipant>();
+  const recentUniqueParticipants = new Map<
+    string,
+    TimelineThreadSummaryParticipant
+  >();
 
   for (let index = replies.length - 1; index >= 0; index -= 1) {
     const reply = replies[index];
@@ -107,7 +110,10 @@ export function buildMainTimelineEntries(
     .map((message) => {
       return {
         message,
-        summary: buildSummaryForDirectReplies(message.id, directChildrenByParentId),
+        summary: buildSummaryForDirectReplies(
+          message.id,
+          directChildrenByParentId,
+        ),
       };
     });
 }
@@ -140,9 +146,9 @@ export function buildThreadPanelData(
 
   const directChildrenByParentId = buildDirectChildrenByParentId(messages);
   const normalizedThreadHead = normalizeHeadMessage(threadHead);
-  const directReplies = (directChildrenByParentId.get(openThreadHeadId) ?? []).map(
-    (message) => normalizeBranchReply(message),
-  );
+  const directReplies = (
+    directChildrenByParentId.get(openThreadHeadId) ?? []
+  ).map((message) => normalizeBranchReply(message));
   const visibleReplies = directReplies.map((message) => ({
     message,
     summary: buildSummaryForDirectReplies(message.id, directChildrenByParentId),
@@ -151,7 +157,7 @@ export function buildThreadPanelData(
   const replyTargetInBranch =
     threadReplyTargetId === threadHead.id
       ? normalizedThreadHead
-      : messageById.get(threadReplyTargetId ?? "") ?? null;
+      : (messageById.get(threadReplyTargetId ?? "") ?? null);
 
   return {
     threadHead: normalizedThreadHead,
