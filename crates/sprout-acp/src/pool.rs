@@ -1215,8 +1215,14 @@ async fn fetch_conversation_context(
     // because /api/channels/{id}/messages excludes thread replies.
     let last_event = batch.events.last()?;
     let tags = crate::queue::parse_thread_tags(&last_event.event);
-    if let Some(root_id) = tags.root_event_id {
-        return fetch_thread_context(batch.channel_id, &root_id, limit, &ctx.rest_client).await;
+    if let Some(context_event_id) = conversation_context_anchor_event_id(&tags) {
+        return fetch_thread_context(
+            batch.channel_id,
+            context_event_id,
+            limit,
+            &ctx.rest_client,
+        )
+        .await;
     }
 
     // DM non-reply: fetch recent conversation history.
@@ -1225,6 +1231,15 @@ async fn fetch_conversation_context(
     }
 
     None
+}
+
+fn conversation_context_anchor_event_id(
+    thread_tags: &crate::queue::ThreadTags,
+) -> Option<&str> {
+    thread_tags
+        .parent_event_id
+        .as_deref()
+        .or(thread_tags.root_event_id.as_deref())
 }
 
 /// Normalize AND validate a pubkey for the batch profile API request.
@@ -1336,26 +1351,26 @@ async fn fetch_prompt_profile_lookup(
 /// Fetch thread context via REST: `GET /api/channels/{id}/threads/{event_id}?limit=N`
 async fn fetch_thread_context(
     channel_id: Uuid,
-    root_event_id: &str,
+    context_event_id: &str,
     limit: u32,
     rest: &RestClient,
 ) -> Option<ConversationContext> {
     // Defense-in-depth: validate hex before interpolating into URL path.
     // Nostr event IDs are 32-byte SHA-256 hashes = 64 hex chars.
-    if root_event_id.is_empty()
-        || root_event_id.len() != 64
-        || !root_event_id.chars().all(|c| c.is_ascii_hexdigit())
+    if context_event_id.is_empty()
+        || context_event_id.len() != 64
+        || !context_event_id.chars().all(|c| c.is_ascii_hexdigit())
     {
         tracing::warn!(
             channel_id = %channel_id,
-            "invalid root_event_id (expected 64 hex chars) — skipping thread context fetch"
+            "invalid context_event_id (expected 64 hex chars) — skipping thread context fetch"
         );
         return None;
     }
 
     let path = format!(
         "/api/channels/{}/threads/{}?limit={}",
-        channel_id, root_event_id, limit
+        channel_id, context_event_id, limit
     );
 
     fetch_with_retry(|| async {
@@ -1364,7 +1379,7 @@ async fn fetch_thread_context(
             Ok(Err(e)) => {
                 tracing::warn!(
                     channel_id = %channel_id,
-                    root = root_event_id,
+                    event_id = context_event_id,
                     "thread context fetch failed: {e} — will retry"
                 );
                 None
@@ -1372,7 +1387,7 @@ async fn fetch_thread_context(
             Err(_) => {
                 tracing::warn!(
                     channel_id = %channel_id,
-                    root = root_event_id,
+                    event_id = context_event_id,
                     "thread context fetch timed out — will retry"
                 );
                 None
@@ -2095,6 +2110,42 @@ mod tests {
         expected.sort();
 
         assert_eq!(pubkeys, expected);
+    }
+
+    #[test]
+    fn test_conversation_context_anchor_event_id_prefers_parent_for_nested_scope() {
+        let root = "a".repeat(64);
+        let parent = "b".repeat(64);
+
+        let nested = crate::queue::ThreadTags {
+            root_event_id: Some(root.clone()),
+            parent_event_id: Some(parent.clone()),
+            mentioned_pubkeys: vec![],
+        };
+        assert_eq!(
+            conversation_context_anchor_event_id(&nested),
+            Some(parent.as_str())
+        );
+
+        let direct = crate::queue::ThreadTags {
+            root_event_id: Some(root.clone()),
+            parent_event_id: Some(root.clone()),
+            mentioned_pubkeys: vec![],
+        };
+        assert_eq!(
+            conversation_context_anchor_event_id(&direct),
+            Some(root.as_str())
+        );
+
+        let root_only = crate::queue::ThreadTags {
+            root_event_id: Some(root.clone()),
+            parent_event_id: None,
+            mentioned_pubkeys: vec![],
+        };
+        assert_eq!(
+            conversation_context_anchor_event_id(&root_only),
+            Some(root.as_str())
+        );
     }
 
     fn temp_reply_context_path(name: &str) -> PathBuf {
