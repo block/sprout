@@ -8,7 +8,6 @@ import Link from "@tiptap/extension-link";
 import { Extension } from "@tiptap/core";
 import { TextSelection } from "@tiptap/pm/state";
 
-import { ImageRefNode } from "./imageRefExtension";
 import {
   MentionHighlightExtension,
   mentionHighlightKey,
@@ -164,7 +163,6 @@ export function useRichTextEditor({
           transformCopiedText: true,
           breaks: true,
         }),
-        ImageRefNode,
       ],
       editorProps: {
         attributes: {
@@ -307,32 +305,9 @@ export function useRichTextEditor({
     return { text, cursor: offset };
   }, [editor]);
 
-  /** Insert an image reference chip at the current cursor position. */
-  const insertImageRef = React.useCallback(
-    (
-      url: string,
-      hash: string,
-      mediaType: string = "image",
-      thumb?: string,
-    ) => {
-      if (!editor) return;
-      editor
-        .chain()
-        .focus()
-        .insertContent({
-          type: "imageRef",
-          attrs: { url, hash, mediaType, thumb },
-        })
-        .insertContent(" ")
-        .run();
-    },
-    [editor],
-  );
-
   return {
     editor,
     getMarkdown,
-    insertImageRef,
     isEmpty,
     clearContent,
     setContent,

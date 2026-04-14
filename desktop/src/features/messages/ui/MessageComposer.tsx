@@ -321,30 +321,9 @@ export function MessageComposer({
           ])
         : undefined;
 
-    // Resolve imageRef nodes to markdown and collect referenced URLs.
-    // Then append any remaining unreferenced attachments.
-    const referencedUrls = new Set<string>();
+    // Append all attachments as markdown images at the end of the message.
     let finalContent = trimmed;
-
-    // Scan editor doc for imageRef nodes and replace their serialized
-    // output with proper markdown.
-    if (richText.editor) {
-      richText.editor.state.doc.descendants((node) => {
-        if (node.type.name === "imageRef" && node.attrs.url) {
-          referencedUrls.add(node.attrs.url as string);
-          const url = node.attrs.url as string;
-          const label = node.attrs.mediaType === "video" ? "video" : "image";
-          // Replace the chip placeholder text with real markdown
-          // Use split+join for global replace (avoids ES2021 replaceAll)
-          const chip = `![${node.attrs.hash as string}]`;
-          finalContent = finalContent.split(chip).join(`![${label}](${url})`);
-        }
-      });
-    }
-
-    // Append unreferenced attachments at the end
     for (const d of currentPendingImeta) {
-      if (referencedUrls.has(d.url)) continue;
       const isVideo = d.type.startsWith("video/");
       finalContent += isVideo ? `\n![video](${d.url})` : `\n![image](${d.url})`;
     }
@@ -380,7 +359,6 @@ export function MessageComposer({
     mentions.clearMentions,
     channelLinks.clearChannels,
     richText.clearContent,
-    richText.editor,
     richText.setContent,
   ]);
 
