@@ -32,6 +32,7 @@ pub mod relay_api;
 pub mod state;
 pub mod stt;
 pub mod tts;
+pub mod ws_proxy;
 
 // ── Shared utilities ──────────────────────────────────────────────────────────
 
@@ -980,4 +981,15 @@ pub async fn add_agent_to_huddle(
     }
 
     Ok(result)
+}
+
+/// Start a local WebSocket proxy for LiveKit traffic.
+///
+/// The webview can't reach external WebSocket servers through Cloudflare WARP
+/// (only the Rust process is covered). This proxy accepts connections on
+/// localhost and forwards them to the real LiveKit server through WARP.
+/// Idempotent — returns the existing port if already running.
+#[tauri::command]
+pub async fn start_livekit_proxy(upstream_url: String) -> Result<u16, String> {
+    ws_proxy::start_proxy(&upstream_url).await
 }

@@ -14,7 +14,7 @@ use huddle::{
     add_agent_to_huddle, check_pipeline_hotstart, confirm_huddle_active, download_voice_models,
     end_huddle, get_huddle_agent_pubkeys, get_huddle_state, get_model_status, get_voice_input_mode,
     join_huddle, leave_huddle, push_audio_pcm, set_tts_enabled, set_voice_input_mode,
-    speak_agent_message, start_huddle, start_stt_pipeline,
+    speak_agent_message, start_huddle, start_livekit_proxy, start_stt_pipeline,
 };
 use managed_agents::{
     ensure_nest, find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents,
@@ -640,6 +640,7 @@ pub fn run() {
             get_huddle_agent_pubkeys,
             set_voice_input_mode,
             get_voice_input_mode,
+            start_livekit_proxy,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

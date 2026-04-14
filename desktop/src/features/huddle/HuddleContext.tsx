@@ -8,22 +8,27 @@ import { connectToHuddle, type HuddleConnection } from "./lib/livekit";
 import { setupAudioWorklet, type AudioWorkletHandle } from "./lib/audioWorklet";
 
 /**
- * Rewrite a LiveKit URL that points to localhost/127.0.0.1 to use the same
- * host as the Sprout relay. In multi-machine dev setups the relay hands back
- * its configured LIVEKIT_URL verbatim, which is typically localhost. The
- * client already knows a reachable relay host — reuse it for LiveKit.
+ * Get a proxied LiveKit URL. In local dev (relay on localhost), no proxy
+ * needed — the webview can reach it directly. For remote relays (staging/prod),
+ * start a local WS proxy in Rust (which routes through Cloudflare WARP) and
+ * rewrite the URL to ws://localhost:{port}, keeping the path+query intact
+ * so the LiveKit SDK's /rtc/v1?access_token=... works transparently.
  */
-async function rewriteLocalhostLivekitUrl(livekitUrl: string): Promise<string> {
+async function getProxiedLivekitUrl(livekitUrl: string): Promise<string> {
   try {
-    const lk = new URL(livekitUrl);
-    if (lk.hostname !== "localhost" && lk.hostname !== "127.0.0.1")
-      return livekitUrl;
     const relayUrl = await getRelayWsUrl();
     const relay = new URL(relayUrl);
-    if (relay.hostname === "localhost" || relay.hostname === "127.0.0.1")
+    if (relay.hostname === "localhost" || relay.hostname === "127.0.0.1") {
       return livekitUrl;
-    lk.hostname = relay.hostname;
-    return lk.toString().replace(/\/$/, "");
+    }
+
+    // Start the local WS proxy (idempotent — returns existing port if running).
+    // Use 127.0.0.1 (not "localhost") to match the Rust bind address and avoid
+    // IPv6 ::1 resolution mismatches on some systems.
+    const port = await invoke<number>("start_livekit_proxy", {
+      upstreamUrl: livekitUrl,
+    });
+    return `ws://127.0.0.1:${port}`;
   } catch {
     return livekitUrl;
   }
@@ -338,7 +343,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Rewrite localhost LiveKit URLs for multi-machine dev setups.
-      const livekitUrl = await rewriteLocalhostLivekitUrl(joinInfo.livekit_url);
+      const livekitUrl = await getProxiedLivekitUrl(joinInfo.livekit_url);
 
       // Connect to LiveKit room with event callbacks
       const connection = await connectToHuddle(
