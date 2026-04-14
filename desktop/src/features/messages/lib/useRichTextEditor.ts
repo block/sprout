@@ -16,6 +16,7 @@ export type RichTextEditorOptions = {
   onUpdate?: (info: { markdown: string; text: string }) => void;
   editable?: boolean;
   mentionNames?: string[];
+  channelNames?: string[];
 };
 
 /**
@@ -32,6 +33,7 @@ export function useRichTextEditor({
   onUpdate,
   editable = true,
   mentionNames,
+  channelNames,
 }: RichTextEditorOptions) {
   const onUpdateRef = React.useRef(onUpdate);
   onUpdateRef.current = onUpdate;
@@ -180,7 +182,7 @@ export function useRichTextEditor({
     }
   }, [editor, editable]);
 
-  // Keep mention-highlight decorations in sync with the current member list.
+  // Keep mention/channel-highlight decorations in sync with known names.
   // NOTE: We use `editor.storage.mentionHighlight` (the mutable storage object
   // shared with the ProseMirror plugin closure) rather than finding the
   // extension instance via extensionManager — the instance's `.storage` getter
@@ -189,15 +191,16 @@ export function useRichTextEditor({
     if (!editor) return;
     // biome-ignore lint/suspicious/noExplicitAny: TipTap's Storage type doesn't include dynamic extension keys
     const storage = (editor.storage as any).mentionHighlight as
-      | { names: string[] }
+      | { names: string[]; channelNames: string[] }
       | undefined;
     if (storage) {
       storage.names = mentionNames ?? [];
+      storage.channelNames = channelNames ?? [];
       // Force the plugin to re-decorate by dispatching a metadata transaction.
       const { tr } = editor.state;
       editor.view.dispatch(tr.setMeta(mentionHighlightKey, true));
     }
-  }, [editor, mentionNames]);
+  }, [editor, mentionNames, channelNames]);
 
   const getMarkdown = React.useCallback((): string => {
     if (!editor) return "";

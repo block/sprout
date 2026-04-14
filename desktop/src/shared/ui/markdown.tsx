@@ -179,7 +179,30 @@ function createMarkdownComponents(
     ol: ({ children }) => (
       <ol className={cn("list-decimal", listClassName)}>{children}</ol>
     ),
-    p: ({ children }) => <p className={paragraphClassName}>{children}</p>,
+    p: ({ children }) => {
+      // Detect image-only paragraphs (images + <br> from remarkBreaks).
+      // Render them as a grid gallery instead of a <p>.
+      const childArray = React.Children.toArray(children);
+      const imageChildren = childArray.filter(
+        (child) => React.isValidElement(child) && typeof child.type !== "string",
+      );
+      const nonImageChildren = childArray.filter(
+        (child) =>
+          !(React.isValidElement(child) && typeof child.type !== "string") &&
+          !(typeof child === "string" && child.trim() === "") &&
+          !(React.isValidElement(child) && child.type === "br"),
+      );
+
+      if (imageChildren.length >= 2 && nonImageChildren.length === 0) {
+        return (
+          <div className="mt-3 grid max-w-lg grid-cols-2 gap-1.5 [&_br]:hidden [&_div]:mt-0 [&_div]:max-w-none">
+            {imageChildren}
+          </div>
+        );
+      }
+
+      return <p className={paragraphClassName}>{children}</p>;
+    },
     pre: ({ children }) => (
       <pre className="overflow-x-auto rounded-2xl border border-border/70 bg-muted/60 px-4 py-3 shadow-sm">
         {children}

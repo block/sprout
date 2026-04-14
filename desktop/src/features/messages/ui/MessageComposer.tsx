@@ -123,6 +123,7 @@ export function MessageComposer({
     placeholder: computedPlaceholder,
     editable: !disabled,
     mentionNames: mentions.knownNames,
+    channelNames: channelLinks.knownChannelNames,
     onUpdate: ({ markdown, text }) => {
       setContent(markdown);
       contentRef.current = markdown;
