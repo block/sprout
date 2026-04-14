@@ -96,11 +96,11 @@ export const MessageComposerToolbar = React.memo(
                   </Toggle>
                 </motion.div>
                 <motion.div
-                  className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ ...presenceSpring, delay: 0.08 }}
+                  className="flex items-center gap-1"
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ ...presenceSpring, delay: 0.15 }}
                 >
                   <Button
                     aria-label="Close formatting"
@@ -110,11 +110,19 @@ export const MessageComposerToolbar = React.memo(
                     title="Close formatting"
                     type="button"
                     variant="ghost"
-                    className="h-7 w-7"
+                    className="h-7 w-7 shrink-0"
                   >
                     <X className="h-3.5 w-3.5" />
                   </Button>
-                  <div className="mx-1 h-5 w-px bg-border/60" />
+                  <div className="mx-1 h-5 w-px shrink-0 bg-border/60" />
+                </motion.div>
+                <motion.div
+                  className="min-w-0 flex-1 overflow-x-auto"
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ ...presenceSpring, delay: 0.15 }}
+                >
                   <FormattingToolbar
                     editor={editor}
                     disabled={formattingDisabled}

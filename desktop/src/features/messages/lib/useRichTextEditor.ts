@@ -46,6 +46,10 @@ export function useRichTextEditor({
           hardBreak: {
             keepMarks: true,
           },
+          // Disable heading input rules — in a chat composer, typing "# "
+          // should keep the literal "#", not convert to a heading node.
+          // Users type #channel-name and the "#" would get eaten otherwise.
+          heading: false,
           // Disable the trailing-node plugin — it forces an empty paragraph
           // after block nodes (lists, blockquotes, code blocks) which creates
           // a phantom empty line in the compact message composer.
