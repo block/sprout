@@ -1109,7 +1109,10 @@ test("manage channel can archive and unarchive a stream", async ({ page }) => {
 
   await closeChannelManagement(page);
   await expect(page.getByTestId("stream-list")).not.toContainText("general");
-  await expect(page.getByTestId("message-input")).toBeDisabled();
+  await expect(page.getByTestId("message-input")).toHaveAttribute(
+    "contenteditable",
+    "false",
+  );
   await expect(page.getByTestId("send-message")).toBeDisabled();
 
   await page.getByTestId("browse-channels").click();
@@ -1128,7 +1131,10 @@ test("manage channel can archive and unarchive a stream", async ({ page }) => {
 
   await closeChannelManagement(page);
   await expect(page.getByTestId("stream-list")).toContainText("general");
-  await expect(page.getByTestId("message-input")).toBeEnabled();
+  await expect(page.getByTestId("message-input")).toHaveAttribute(
+    "contenteditable",
+    "true",
+  );
 });
 
 test("manage channel can delete an owned stream", async ({ page }) => {

@@ -58,11 +58,11 @@ test("message input clears after send", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 
   await input.fill(message);
-  await expect(input).toHaveValue(message);
+  await expect(input).toHaveText(message);
   await page.getByTestId("send-message").click();
 
   await expect(page.getByTestId("message-timeline")).toContainText(message);
-  await expect(input).toHaveValue("");
+  await expect(input).toHaveText("");
 });
 
 test("emoji picker inserts emoji into the draft and keeps focus in the composer", async ({
@@ -84,11 +84,11 @@ test("emoji picker inserts emoji into the draft and keeps focus in the composer"
   await searchInput.fill("rocket");
   await pickerEl.locator("button[aria-label='🚀']").first().click();
 
-  await expect(input).toHaveValue("Ship🚀");
+  await expect(input).toHaveText("Ship🚀");
   await expect(input).toBeFocused();
 
   await input.pressSequentially(" now");
-  await expect(input).toHaveValue("Ship🚀 now");
+  await expect(input).toHaveText("Ship🚀 now");
 });
 
 test("empty message cannot be sent", async ({ page }) => {
@@ -143,17 +143,17 @@ test("draft is preserved when switching channels", async ({ page }) => {
 
   // Type a draft but do not send it
   await input.fill(draft);
-  await expect(input).toHaveValue(draft);
+  await expect(input).toHaveText(draft);
 
   // Switch to another channel — composer should be empty
   await page.getByTestId("channel-random").click();
   await expect(page.getByTestId("chat-title")).toHaveText("random");
-  await expect(input).toHaveValue("");
+  await expect(input).toHaveText("");
 
   // Switch back — the draft should still be there
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
-  await expect(input).toHaveValue(draft);
+  await expect(input).toHaveText(draft);
 });
 
 test("sending a message clears the draft", async ({ page }) => {
@@ -174,7 +174,7 @@ test("sending a message clears the draft", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText("random");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
-  await expect(input).toHaveValue("");
+  await expect(input).toHaveText("");
 });
 
 test("different channels have independent messages", async ({ page }) => {

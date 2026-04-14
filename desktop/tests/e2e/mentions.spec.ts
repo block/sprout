@@ -53,7 +53,7 @@ test("selecting a mention inserts @Name into input", async ({ page }) => {
   const dropdown = autocomplete(page);
   await dropdown.getByText("alice").click();
 
-  await expect(input).toHaveValue("Hey @alice ");
+  await expect(input).toHaveText("Hey @alice ");
 });
 
 test("mention button opens autocomplete and inserts a selected member", async ({
@@ -71,7 +71,7 @@ test("mention button opens autocomplete and inserts a selected member", async ({
   await expect(dropdown).toBeVisible();
   await dropdown.getByText("alice").click();
 
-  await expect(input).toHaveValue("Hey @alice ");
+  await expect(input).toHaveText("Hey @alice ");
 });
 
 test("keyboard navigation selects mention with Enter", async ({ page }) => {
@@ -89,7 +89,7 @@ test("keyboard navigation selects mention with Enter", async ({ page }) => {
   await input.press("Enter");
 
   // Should insert @alice and NOT send the message
-  await expect(input).toHaveValue("@alice ");
+  await expect(input).toHaveText("@alice ");
 });
 
 test("Escape dismisses autocomplete dropdown", async ({ page }) => {
