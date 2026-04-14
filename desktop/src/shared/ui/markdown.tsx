@@ -9,9 +9,16 @@ import type { Channel } from "@/shared/api/types";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import rehypeImageGallery from "@/shared/lib/rehypeImageGallery";
 import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
-
 import remarkMentions from "@/shared/lib/remarkMentions";
+
+import {
+  classifyChildren,
+  hasBlockMedia,
+  isImageOnlyParagraph,
+  shallowArrayEqual,
+} from "./markdownUtils";
 
 type ImetaLookup = Map<string, { image?: string; thumb?: string }>;
 
@@ -199,25 +206,22 @@ function createMarkdownComponents(
     ),
     p: ({ children }) => {
       // Detect image-only paragraphs (images + <br> from remarkBreaks).
-      // Render them as a grid gallery instead of a <p>.
+      // Multi-image: render as a 2-column grid gallery.
+      // Single media: render as a plain <div> to avoid invalid <p><div> nesting
+      // (the img component returns block-level wrappers for lightbox/video).
       const childArray = React.Children.toArray(children);
-      const imageChildren = childArray.filter(
-        (child) =>
-          React.isValidElement(child) && typeof child.type !== "string",
-      );
-      const nonImageChildren = childArray.filter(
-        (child) =>
-          !(React.isValidElement(child) && typeof child.type !== "string") &&
-          !(typeof child === "string" && child.trim() === "") &&
-          !(React.isValidElement(child) && child.type === "br"),
-      );
+      const { imageChildren } = classifyChildren(childArray);
 
-      if (imageChildren.length >= 2 && nonImageChildren.length === 0) {
+      if (isImageOnlyParagraph(childArray)) {
         return (
           <div className="mt-3 grid max-w-lg grid-cols-2 gap-1.5 [&_br]:hidden [&_div]:mt-0 [&_div]:max-w-none">
             {imageChildren}
           </div>
         );
+      }
+
+      if (hasBlockMedia(childArray)) {
+        return <div>{children}</div>;
       }
 
       return <p className={paragraphClassName}>{children}</p>;
@@ -288,96 +292,6 @@ function createMarkdownComponents(
   } as Components;
 }
 
-function shallowArrayEqual(a?: string[], b?: string[]): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-
-/**
- * Post-processes ReactMarkdown output to group consecutive image-only
- * paragraphs into a 2-column grid. Works at the React element level
- * since custom remark node types don't map to ReactMarkdown components.
- */
-function ImageGalleryGrouper({ children }: { children: React.ReactNode }) {
-  const processed = React.useMemo(() => {
-    // ReactMarkdown renders into a single wrapper — get its children
-    const elements = React.Children.toArray(
-      // Unwrap the ReactMarkdown output (it's a single React element)
-      React.isValidElement(children) &&
-        (children.props as Record<string, unknown>).children
-        ? React.Children.toArray(
-            (children.props as Record<string, unknown>)
-              .children as React.ReactNode,
-          )
-        : [children],
-    );
-
-    const result: React.ReactNode[] = [];
-    let imageRun: React.ReactElement[] = [];
-
-    function flushRun() {
-      if (imageRun.length <= 1) {
-        result.push(...imageRun);
-      } else {
-        result.push(
-          <div
-            key={`gallery-${result.length}`}
-            className="mt-3 grid max-w-lg grid-cols-2 gap-1.5"
-          >
-            {imageRun.map((img) => (
-              <div
-                key={img.key}
-                className="[&>*]:mt-0 [&>*]:max-w-none [&_div]:mt-0 [&_div]:max-w-none"
-              >
-                {img}
-              </div>
-            ))}
-          </div>,
-        );
-      }
-      imageRun = [];
-    }
-
-    for (const el of elements) {
-      // Check if this element is an image-only paragraph
-      // (a <p> containing only a DialogPrimitive.Root or a single <div> with an <img>)
-      if (React.isValidElement(el) && el.type === "p") {
-        const pChildren = React.Children.toArray(
-          (el.props as Record<string, unknown>).children as React.ReactNode,
-        );
-        const hasOnlyImages =
-          pChildren.length >= 1 &&
-          pChildren.every(
-            (child) =>
-              React.isValidElement(child) &&
-              (child.type === "img" || // plain img
-                typeof child.type !== "string"), // React component (DialogPrimitive.Root wrapping img)
-          );
-        if (hasOnlyImages) {
-          imageRun.push(el as React.ReactElement);
-          continue;
-        }
-      }
-      flushRun();
-      result.push(el);
-    }
-    flushRun();
-
-    return result;
-  }, [children]);
-
-  // Clone the ReactMarkdown wrapper but replace its children
-  if (React.isValidElement(children)) {
-    return React.cloneElement(children, {}, ...processed);
-  }
-  return <>{processed}</>;
-}
-
 function MarkdownInner({
   channelNames,
   className,
@@ -419,6 +333,9 @@ function MarkdownInner({
     [mentionNames, channelNames],
   );
 
+  // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable
+  const rehypePlugins = React.useMemo<any[]>(() => [rehypeImageGallery], []);
+
   let processedContent = content;
 
   if (/^(?:\s{2}\n)+/.test(content)) {
@@ -440,11 +357,13 @@ function MarkdownInner({
         className,
       )}
     >
-      <ImageGalleryGrouper>
-        <ReactMarkdown components={components} remarkPlugins={remarkPlugins}>
-          {processedContent}
-        </ReactMarkdown>
-      </ImageGalleryGrouper>
+      <ReactMarkdown
+        components={components}
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
+      >
+        {processedContent}
+      </ReactMarkdown>
     </div>
   );
 }
