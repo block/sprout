@@ -216,11 +216,9 @@ export function useMediaUpload() {
   );
 
   const removeAttachment = React.useCallback((url: string) => {
-    setImetaSlots((prev) => {
-      const next = prev.filter((d) => d?.url !== url);
-      nextSlotRef.current = next.length;
-      return next;
-    });
+    setImetaSlots((prev) =>
+      prev.map((d) => (d?.url === url ? null : d)),
+    );
   }, []);
 
   /** Public setter — replaces all slots (used by MessageComposer to clear/restore). */

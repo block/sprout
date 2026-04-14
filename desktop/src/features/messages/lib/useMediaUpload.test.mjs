@@ -77,16 +77,52 @@ test("concurrent uploads filling out of order preserves slot positions", () => {
   assert.deepEqual(result, [a, b, c]);
 });
 
-test("removing an attachment filters by URL and resets slot count", () => {
+test("removing an attachment nulls the slot instead of compacting", () => {
   const a = { url: "a.png", sha256: "aaaa" };
   const b = { url: "b.png", sha256: "bbbb" };
   const c = { url: "c.png", sha256: "cccc" };
   const slots = [a, b, c];
 
-  // Remove b
-  const next = slots.filter((d) => d?.url !== "b.png");
-  assert.deepEqual(next, [a, c]);
-  assert.equal(next.length, 2);
+  // Remove b — null out, don't compact
+  const next = slots.map((d) => (d?.url === "b.png" ? null : d));
+  assert.deepEqual(next, [a, null, c]);
+  // Filtered view (what consumers see) drops nulls
+  const filtered = next.filter((d) => d !== null);
+  assert.deepEqual(filtered, [a, c]);
+});
+
+test("removing mid-upload does not corrupt in-flight slot indices", () => {
+  // Scenario: 3 images uploading, image 0 finishes, user removes image 0,
+  // then image 1 and 2 finish — they must land in their original slots.
+  const a = { url: "a.png", sha256: "aaaa" };
+  const b = { url: "b.png", sha256: "bbbb" };
+  const c = { url: "c.png", sha256: "cccc" };
+
+  // Start: 3 reserved slots
+  let slots = [null, null, null];
+
+  // Image 0 finishes
+  slots = [...slots];
+  slots[0] = a;
+  assert.deepEqual(slots, [a, null, null]);
+
+  // User removes image 0 — null out, don't compact
+  slots = slots.map((d) => (d?.url === "a.png" ? null : d));
+  assert.deepEqual(slots, [null, null, null]);
+
+  // Image 1 finishes — fillSlot(1) still works correctly
+  slots = [...slots];
+  slots[1] = b;
+  assert.deepEqual(slots, [null, b, null]);
+
+  // Image 2 finishes — fillSlot(2) still works correctly
+  slots = [...slots];
+  slots[2] = c;
+  assert.deepEqual(slots, [null, b, c]);
+
+  // Consumer view filters nulls
+  const result = slots.filter((d) => d !== null);
+  assert.deepEqual(result, [b, c]);
 });
 
 test("reserveSlots pads if slots array is shorter than expected start index", () => {
