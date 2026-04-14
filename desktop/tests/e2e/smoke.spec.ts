@@ -224,7 +224,10 @@ test("opens accessible unjoined channels from search in read-only mode", async (
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Design critique notes for the browse flow.",
   );
-  await expect(page.getByTestId("message-input")).toBeDisabled();
+  await expect(page.getByTestId("message-input")).toHaveAttribute(
+    "contenteditable",
+    "false",
+  );
 
   await page.getByTestId("channel-management-trigger").click();
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
@@ -285,17 +288,19 @@ test("supports multiline drafts with Ctrl+Enter and sends with Enter", async ({
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await expect(page.getByTestId("send-message")).toContainText("Send");
   const initialInputHeight = await input.evaluate(
-    (element) => (element as HTMLTextAreaElement).clientHeight,
+    (element) => (element as HTMLElement).clientHeight,
   );
   expect(initialInputHeight).toBeLessThan(40);
   await input.fill(firstLine);
   for (const line of restOfLines) {
-    await input.press("Control+Enter");
-    await input.type(line);
+    await input.press("Shift+Enter");
+    await input.pressSequentially(line);
   }
-  await expect(input).toHaveValue([firstLine, ...restOfLines].join("\n"));
+  for (const line of [firstLine, ...restOfLines]) {
+    await expect(input).toContainText(line);
+  }
   const expandedInputHeight = await input.evaluate(
-    (element) => (element as HTMLTextAreaElement).clientHeight,
+    (element) => (element as HTMLElement).clientHeight,
   );
   expect(expandedInputHeight).toBeLessThanOrEqual(100);
   await expect(page.getByTestId("message-timeline")).not.toContainText(
@@ -332,12 +337,12 @@ test("does not shift the timeline when the composer grows", async ({
   const before = await getTimelineMetrics(page);
 
   await input.fill("Composer growth line one");
-  await input.press("Control+Enter");
-  await input.type("Composer growth line two");
-  await input.press("Control+Enter");
-  await input.type("Composer growth line three");
-  await input.press("Control+Enter");
-  await input.type("Composer growth line four");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Composer growth line two");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Composer growth line three");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Composer growth line four");
 
   await page.waitForTimeout(1200);
 

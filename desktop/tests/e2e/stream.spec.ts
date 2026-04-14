@@ -43,7 +43,7 @@ async function ensureTimelineScrollable(
 
     const message = `${prefix} seed ${index}`;
 
-    await expect(input).toBeEnabled();
+    await expect(input).toHaveAttribute("contenteditable", "true");
     await input.fill(message);
     await sendButton.click();
     await expectTimelineToContain(receiverPage, message);
