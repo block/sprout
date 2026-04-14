@@ -110,6 +110,10 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       });
   }, []);
 
+  // Persistent AudioContext for PTT audio cues — reused across all PTT presses
+  // to avoid exhausting the browser's ~6 concurrent AudioContext limit.
+  const pttAudioCtxRef = React.useRef<AudioContext | null>(null);
+
   // PTT state from Rust (Ctrl+Space). UI feedback + 50ms audio cue when mic active.
   // Actual audio gating is in audioWorklet.ts → worklet.js.
   React.useEffect(() => {
@@ -120,7 +124,13 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       setPttActive(event.payload);
       if (micConnected) {
         try {
-          const ac = new AudioContext();
+          if (
+            !pttAudioCtxRef.current ||
+            pttAudioCtxRef.current.state === "closed"
+          ) {
+            pttAudioCtxRef.current = new AudioContext();
+          }
+          const ac = pttAudioCtxRef.current;
           const osc = ac.createOscillator();
           const g = ac.createGain();
           osc.connect(g);
@@ -129,7 +139,6 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
           g.gain.value = 0.05;
           osc.start();
           osc.stop(ac.currentTime + 0.05);
-          osc.onended = () => void ac.close();
         } catch {
           /* best-effort */
         }
@@ -141,6 +150,11 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
       unlisten?.();
+      // Close the PTT AudioContext when the effect is cleaned up.
+      if (pttAudioCtxRef.current && pttAudioCtxRef.current.state !== "closed") {
+        void pttAudioCtxRef.current.close();
+        pttAudioCtxRef.current = null;
+      }
     };
   }, [micConnected]);
 
@@ -571,13 +585,18 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     const buf = new Uint8Array(analyser.frequencyBinCount);
 
     let raf = 0;
-    function tick() {
+    let lastUpdate = 0;
+    function tick(now: number) {
+      raf = requestAnimationFrame(tick);
+      // Throttle state updates to ~10fps — voice meters don't need 60fps
+      // visual fidelity, and setMicLevel re-renders the entire HuddleBar.
+      if (now - lastUpdate < 100) return;
+      lastUpdate = now;
       analyser.getByteFrequencyData(buf);
       // RMS-ish: average of frequency bins, normalized to 0–1
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i];
       setMicLevel(sum / (buf.length * 255));
-      raf = requestAnimationFrame(tick);
     }
     raf = requestAnimationFrame(tick);
 

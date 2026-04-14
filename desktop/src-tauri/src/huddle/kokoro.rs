@@ -4,7 +4,7 @@
 //!
 //!   load_text_to_speech(model_dir) → KokoroTTS
 //!   load_voice_style(path)         → VoiceStyle
-//!   tts.call(text, lang, &style)   → Vec<f32> @ 24 kHz
+//!   tts.synth_chunk(text, lang, &style, steps, speed) → Vec<f32> @ 24 kHz
 //!
 //!   ┌──────────┐   G2P    ┌──────────┐  tokenize  ┌──────────┐
 //!   │ raw text │ ──────→  │ IPA str  │ ─────────→ │ int64[]  │
@@ -25,8 +25,6 @@ use std::path::{Path, PathBuf};
 
 use ndarray::{Array1, Array2};
 use ort::{session::Session, value::Value};
-
-use super::preprocessing::split_sentences;
 
 // ── Public constants ──────────────────────────────────────────────────────────
 
@@ -639,40 +637,6 @@ pub fn load_text_to_speech(model_dir: &str) -> Result<KokoroTTS, String> {
 }
 
 impl KokoroTTS {
-    /// Synthesize `text` to 24 kHz mono PCM.
-    ///
-    /// - `_total_step` is ignored — Kokoro is not diffusion-based.
-    /// - `speed` controls speech rate (0.5–2.0; 1.0 = normal).
-    /// - `silence_secs` of silence is inserted between sentence chunks.
-    /// - `lang` is accepted for API compatibility but currently unused
-    ///   (Kokoro v1.0 language is selected by voice name prefix, e.g. `af_*`).
-    pub fn call(
-        &mut self,
-        text: &str,
-        _lang: &str,
-        style: &VoiceStyle,
-        _total_step: usize,
-        speed: f32,
-        silence_secs: f32,
-    ) -> Result<Vec<f32>, String> {
-        let silence_samples = (silence_secs * SAMPLE_RATE as f32) as usize;
-        let silence = vec![0.0f32; silence_samples];
-
-        let sentences = split_sentences(text);
-        let mut output: Vec<f32> = Vec::new();
-
-        for (i, sentence) in sentences.iter().enumerate() {
-            let chunk_audio = self.synth_chunk(sentence, _lang, style, _total_step, speed)?;
-
-            if i > 0 && !output.is_empty() {
-                output.extend_from_slice(&silence);
-            }
-            output.extend(chunk_audio);
-        }
-
-        Ok(output)
-    }
-
     /// Synthesize a single pre-split text chunk. Caller is responsible for sentence splitting.
     /// This avoids double-splitting when the TTS pipeline has already split the text.
     ///

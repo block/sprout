@@ -214,27 +214,11 @@ impl HuddleState {
 /// The frontend listens for `"huddle-state-changed"` and updates its UI
 /// immediately, replacing the previous 2-second polling loop.
 ///
-/// **Call sites** — call this in `huddle/mod.rs` after every state transition
-/// that the frontend needs to observe:
-/// - After `phase` changes (Creating → Connecting → Connected → Active → Leaving → Idle)
-/// - After `participants` is updated (join/leave)
-/// - After `tts_enabled` is toggled
-///
-/// **Usage in mod.rs:**
-/// ```rust
-/// // After mutating huddle state, while still holding the lock:
-/// let snapshot = hs.clone();
-/// drop(hs); // release lock before emitting
-/// if let Ok(guard) = state.app_handle.lock() {
-///     if let Some(app) = guard.as_ref() {
-///         emit_huddle_state(app, &snapshot);
-///     }
-/// }
-/// ```
+/// **Call sites** — called from `AppState::emit_huddle_state_changed()` in
+/// `app_state.rs` after every state transition the frontend needs to observe
+/// (phase changes, participant updates, tts_enabled toggle).
 ///
 /// Best-effort — silently ignores errors (e.g., no listeners attached yet).
-// Not yet called from mod.rs — suppress dead_code until that integration lands.
-#[allow(dead_code)]
 pub fn emit_huddle_state(app: &tauri::AppHandle, state: &HuddleState) {
     use tauri::Emitter;
     let _ = app.emit("huddle-state-changed", state);

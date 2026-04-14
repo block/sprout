@@ -42,6 +42,7 @@ const KOKORO_FILE_HASHES: &[(&str, &str)] = &[
     ("af_heart.bin",  "d583ccff3cdca2f7fae535cb998ac07e9fcb90f09737b9a41fa2734ec44a8f0b"),
     ("us_gold.json",   "dc414872a49a28ae6c141463d502fd945f3b2fde040484fdc47d00cc4612686f"),
     ("us_silver.json", "de8f67be911bb6c659187b4a65fd966b6a30e56350e0f790d763210b053ac475"),
+    ("cmudict.dict",   "81917843c7f44ce2b094ac63873c2c7a4cf802040792c455ba3ca406891c3d22"),
 ];
 
 // ── Model versioning ──────────────────────────────────────────────────────────
