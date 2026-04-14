@@ -1,13 +1,14 @@
 import * as React from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useAddChannelMembersMutation,
-  useChangeChannelMemberRoleMutation,
   useChannelMembersQuery,
 } from "@/features/channels/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import { formatMemberName } from "@/features/channels/lib/memberUtils";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
+import { changeChannelMemberRole } from "@/shared/api/tauri";
 import type { Channel, ChannelMember } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
@@ -36,9 +37,20 @@ export function MembersSidebar({
   onOpenChange,
 }: MembersSidebarProps) {
   const channelId = channel?.id ?? null;
+  const queryClient = useQueryClient();
   const membersQuery = useChannelMembersQuery(channelId, open);
   const addMembersMutation = useAddChannelMembersMutation(channelId);
-  const changeRoleMutation = useChangeChannelMemberRoleMutation(channelId);
+  const changeRoleMutation = useMutation({
+    mutationFn: async ({ pubkey, role }: { pubkey: string; role: string }) => {
+      if (!channelId) throw new Error("No channel selected.");
+      await changeChannelMemberRole(channelId, pubkey, role);
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["channels", channelId],
+      });
+    },
+  });
   const changeRoleError =
     changeRoleMutation.error instanceof Error
       ? changeRoleMutation.error.message
