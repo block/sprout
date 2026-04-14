@@ -244,11 +244,7 @@ class _EphemeralBadge extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              LucideIcons.clock,
-              size: 10,
-              color: _amberColor(context),
-            ),
+            Icon(LucideIcons.clock, size: 10, color: _amberColor(context)),
             if (label != null) ...[
               const SizedBox(width: 3),
               Text(
