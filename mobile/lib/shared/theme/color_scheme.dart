@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'accent_colors.dart';
+
 // Catppuccin Latte (mauve accent) — matches Sprout desktop light theme
 const lightColorScheme = ColorScheme(
   brightness: Brightness.light,
@@ -65,3 +67,34 @@ const darkColorScheme = ColorScheme(
   surfaceTint: Color(0xFFC6A0F6), // Macchiato Mauve
   surfaceContainerHighest: Color(0xFF1E2030), // Macchiato Mantle
 );
+
+/// Compute a contrast-safe onPrimary color for a given accent.
+/// Uses WCAG contrast ratio (higher ratio wins) instead of a simple luminance
+/// cutoff, so colors like Blue (#3B82F6) correctly get black text (5.7:1)
+/// rather than white (3.7:1).
+Color _contrastForeground(Color bg) {
+  final lum = bg.computeLuminance();
+  // WCAG contrast ratio: (L1 + 0.05) / (L2 + 0.05), L1 >= L2
+  final contrastWithBlack = (lum + 0.05) / 0.05; // black luminance = 0
+  final contrastWithWhite = 1.05 / (lum + 0.05); // white luminance = 1
+  return contrastWithBlack >= contrastWithWhite
+      ? const Color(0xFF000000)
+      : const Color(0xFFFFFFFF);
+}
+
+/// Returns a [ColorScheme] with the given accent applied as primary.
+/// If [accentIndex] is [defaultAccentIndex], returns the base scheme unchanged.
+ColorScheme applyAccent(ColorScheme base, int accentIndex) {
+  if (accentIndex == defaultAccentIndex ||
+      accentIndex < 0 ||
+      accentIndex >= accentColors.length) {
+    return base;
+  }
+  final accent = accentColors[accentIndex];
+  final color = base.brightness == Brightness.light
+      ? accent.light
+      : accent.dark;
+  final onColor = _contrastForeground(color);
+
+  return base.copyWith(primary: color, onPrimary: onColor, surfaceTint: color);
+}

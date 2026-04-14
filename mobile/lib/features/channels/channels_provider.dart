@@ -19,15 +19,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
         .map(Channel.fromJson)
         .where((c) => !c.isDm) // exclude DMs from channel list
         .toList();
-    // Sort: channels with recent activity first, then by name.
-    channels.sort((a, b) {
-      final aTime = a.lastMessageAt;
-      final bTime = b.lastMessageAt;
-      if (aTime != null && bTime != null) return bTime.compareTo(aTime);
-      if (aTime != null) return -1;
-      if (bTime != null) return 1;
-      return a.name.compareTo(b.name);
-    });
+    channels.sort((a, b) => a.name.compareTo(b.name));
     return channels;
   }
 

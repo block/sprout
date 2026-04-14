@@ -15,6 +15,7 @@ dependencies:
   http: ^1.4.0
   flutter_secure_storage: ^9.2.4
   mobile_scanner: ^6.0.2
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
@@ -26,3 +27,14 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  fonts:
+    - family: Geist
+      fonts:
+        - asset: assets/fonts/Geist-Variable.ttf
+        - asset: assets/fonts/Geist-Italic-Variable.ttf
+          style: italic
+    - family: GeistMono
+      fonts:
+        - asset: assets/fonts/GeistMono-Variable.ttf
+        - asset: assets/fonts/GeistMono-Italic-Variable.ttf
+          style: italic
