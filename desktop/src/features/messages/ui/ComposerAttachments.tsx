@@ -10,6 +10,7 @@ import { shortHash } from "@/features/messages/lib/useMediaUpload";
 type ComposerAttachmentsProps = {
   attachments: BlobDescriptor[];
   isUploading?: boolean;
+  uploadingCount?: number;
   onRemove: (url: string) => void;
 };
 
@@ -21,6 +22,7 @@ type ComposerAttachmentsProps = {
 export const ComposerAttachments = React.memo(function ComposerAttachments({
   attachments,
   isUploading = false,
+  uploadingCount = 0,
   onRemove,
 }: ComposerAttachmentsProps) {
   if (attachments.length === 0 && !isUploading) return null;
@@ -113,20 +115,21 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
               </motion.div>
             );
           })}
-          {isUploading && (
-            <motion.div
-              key="upload-placeholder"
-              layout
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.8 }}
-              transition={{ type: "spring", stiffness: 500, damping: 30 }}
-            >
-              <div className="relative h-5 w-10 overflow-hidden rounded border border-border/70">
-                <div className="h-full w-full animate-pulse bg-muted" />
-              </div>
-            </motion.div>
-          )}
+          {isUploading &&
+            Array.from({ length: uploadingCount || 1 }).map((_, i) => (
+              <motion.div
+                key={`upload-placeholder-${i}`}
+                layout
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                transition={{ type: "spring", stiffness: 500, damping: 30 }}
+              >
+                <div className="relative h-5 w-10 overflow-hidden rounded border border-border/70">
+                  <div className="h-full w-full animate-pulse bg-muted" />
+                </div>
+              </motion.div>
+            ))}
         </AnimatePresence>
       </motion.div>
     </LayoutGroup>

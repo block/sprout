@@ -591,6 +591,7 @@ export function MessageComposer({
               <ComposerAttachments
                 attachments={media.pendingImeta}
                 isUploading={media.isUploading}
+                uploadingCount={media.uploadingCount}
                 onRemove={media.removeAttachment}
               />
             </div>

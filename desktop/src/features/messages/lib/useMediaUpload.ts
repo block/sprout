@@ -37,6 +37,8 @@ export function useMediaUpload() {
   const [uploadState, setUploadState] = React.useState<UploadState>({
     status: "idle",
   });
+  /** Number of files currently in-flight. */
+  const [uploadingCount, setUploadingCount] = React.useState(0);
   const [pendingImeta, setPendingImeta] = React.useState<BlobDescriptor[]>([]);
 
   const pendingImetaRef = React.useRef(pendingImeta);
@@ -44,22 +46,27 @@ export function useMediaUpload() {
 
   const onUploaded = React.useCallback((descriptor: BlobDescriptor) => {
     setPendingImeta((prev) => [...prev, descriptor]);
-    setUploadState({ status: "idle" });
+    setUploadingCount((c) => Math.max(0, c - 1));
+  }, []);
+
+  const onUploadError = React.useCallback((err: unknown) => {
+    setUploadingCount((c) => Math.max(0, c - 1));
+    setUploadState({ status: "error", message: String(err) });
   }, []);
 
   const handlePaperclip = React.useCallback(async () => {
-    setUploadState({ status: "uploading" });
+    setUploadingCount((c) => c + 1);
     try {
       const descriptor = await pickAndUploadMedia();
       if (descriptor) {
         onUploaded(descriptor);
       } else {
-        setUploadState({ status: "idle" });
+        setUploadingCount((c) => Math.max(0, c - 1));
       }
     } catch (err) {
-      setUploadState({ status: "error", message: String(err) });
+      onUploadError(err);
     }
-  }, [onUploaded]);
+  }, [onUploaded, onUploadError]);
 
   const handleDrop = React.useCallback(
     async (event: React.DragEvent<HTMLFormElement>) => {
@@ -67,10 +74,11 @@ export function useMediaUpload() {
       const files = Array.from(event.dataTransfer.files);
       if (files.length === 0) return;
 
-      const file = files[0];
-      if (!file) return;
+      const validFiles = files.filter((f) =>
+        ALLOWED_MEDIA_TYPES.includes(f.type),
+      );
 
-      if (!ALLOWED_MEDIA_TYPES.includes(file.type)) {
+      if (validFiles.length === 0) {
         setUploadState({
           status: "error",
           message:
@@ -79,16 +87,24 @@ export function useMediaUpload() {
         return;
       }
 
-      setUploadState({ status: "uploading" });
-      try {
-        const buffer = await file.arrayBuffer();
-        const descriptor = await uploadMediaBytes([...new Uint8Array(buffer)]);
-        onUploaded(descriptor);
-      } catch (err) {
-        setUploadState({ status: "error", message: String(err) });
+      setUploadingCount((c) => c + validFiles.length);
+
+      for (const file of validFiles) {
+        // Fire-and-forget each upload concurrently
+        (async () => {
+          try {
+            const buffer = await file.arrayBuffer();
+            const descriptor = await uploadMediaBytes([
+              ...new Uint8Array(buffer),
+            ]);
+            onUploaded(descriptor);
+          } catch (err) {
+            onUploadError(err);
+          }
+        })();
       }
     },
-    [onUploaded],
+    [onUploaded, onUploadError],
   );
 
   const handleDragOver = React.useCallback(
@@ -113,39 +129,39 @@ export function useMediaUpload() {
       const file = mediaItem.getAsFile();
       if (!file) return;
 
-      setUploadState({ status: "uploading" });
+      setUploadingCount((c) => c + 1);
       try {
         const buffer = await file.arrayBuffer();
         const descriptor = await uploadMediaBytes([...new Uint8Array(buffer)]);
         onUploaded(descriptor);
       } catch (err) {
-        setUploadState({ status: "error", message: String(err) });
+        onUploadError(err);
       }
     },
-    [onUploaded],
+    [onUploaded, onUploadError],
   );
 
   /** Upload a File directly — used by Tiptap's editorProps.handlePaste. */
   const uploadFile = React.useCallback(
     async (file: File) => {
       if (!ALLOWED_MEDIA_TYPES.includes(file.type)) return;
-      setUploadState({ status: "uploading" });
+      setUploadingCount((c) => c + 1);
       try {
         const buffer = await file.arrayBuffer();
         const descriptor = await uploadMediaBytes([...new Uint8Array(buffer)]);
         onUploaded(descriptor);
       } catch (err) {
-        setUploadState({ status: "error", message: String(err) });
+        onUploadError(err);
       }
     },
-    [onUploaded],
+    [onUploaded, onUploadError],
   );
 
   const removeAttachment = React.useCallback((url: string) => {
     setPendingImeta((prev) => prev.filter((d) => d.url !== url));
   }, []);
 
-  const isUploading = uploadState.status === "uploading";
+  const isUploading = uploadingCount > 0;
 
   return {
     handleDragOver,
@@ -159,6 +175,7 @@ export function useMediaUpload() {
     setPendingImeta,
     setUploadState,
     uploadFile,
+    uploadingCount,
     uploadState,
   };
 }
