@@ -1,6 +1,4 @@
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
-
 import { useAppShell } from "@/app/AppShellContext";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
@@ -22,22 +20,17 @@ import {
   useSendMessageMutation,
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
-import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
 import {
   collectMessageAuthorPubkeys,
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
-import {
-  getChannelIdFromTags,
-  getThreadReference,
-} from "@/features/messages/lib/threading";
 import { buildThreadPanelData } from "@/features/messages/lib/threadPanel";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
+import { useLoadMissingAncestors } from "@/features/messages/useLoadMissingAncestors";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
-import { getEventById } from "@/shared/api/tauri";
 import type {
   Channel,
   Identity,
@@ -79,7 +72,6 @@ export function ChannelScreen({
   targetMessageEvent,
   targetMessageId,
 }: ChannelScreenProps) {
-  const queryClient = useQueryClient();
   const { markChannelRead, openChannelManagement } = useAppShell();
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
   const [threadHeadPath, setThreadHeadPath] = React.useState<string[]>([]);
@@ -159,13 +151,12 @@ export function ChannelScreen({
     [openThreadHeadId, typingEntries],
   );
   const messageProfilePubkeys = React.useMemo(
-    () =>
-      [
-        ...new Set([
-          ...messageAuthorPubkeys,
-          ...typingEntries.map((entry) => entry.pubkey),
-        ]),
-      ],
+    () => [
+      ...new Set([
+        ...messageAuthorPubkeys,
+        ...typingEntries.map((entry) => entry.pubkey),
+      ]),
+    ],
     [messageAuthorPubkeys, typingEntries],
   );
   const messageProfilesQuery = useUsersBatchQuery(messageProfilePubkeys, {
@@ -309,18 +300,11 @@ export function ChannelScreen({
     shouldLoadTimeline &&
     (messagesQuery.isPending ||
       (messagesQuery.isFetching && resolvedMessages.length === 0));
-  const requestedAncestorIdsRef = React.useRef<Set<string>>(new Set());
   const resetComposerTargets = React.useCallback(
     (_channelId: string | null) => {
       setThreadHeadPath([]);
       setThreadReplyTargetId(null);
       setEditTargetId(null);
-    },
-    [],
-  );
-  const resetRequestedAncestors = React.useCallback(
-    (_channelId: string | null) => {
-      requestedAncestorIdsRef.current.clear();
     },
     [],
   );
@@ -351,91 +335,11 @@ export function ChannelScreen({
     editTargetMessage,
     openThreadHeadId,
     openThreadHeadMessage,
-    threadHeadPath,
     threadReplyTargetId,
     threadReplyTargetMessage,
   ]);
 
-  React.useEffect(() => {
-    resetRequestedAncestors(activeChannelId);
-  }, [activeChannelId, resetRequestedAncestors]);
-
-  React.useEffect(() => {
-    if (!activeChannel || activeChannel.channelType === "forum") {
-      return;
-    }
-
-    const knownEvents = new Map(
-      resolvedMessages.map((message) => [message.id, message]),
-    );
-    const missingAncestorIds = new Set<string>();
-
-    for (const message of resolvedMessages) {
-      const thread = getThreadReference(message.tags);
-
-      for (const eventId of [thread.parentId, thread.rootId]) {
-        if (
-          !eventId ||
-          knownEvents.has(eventId) ||
-          requestedAncestorIdsRef.current.has(eventId)
-        ) {
-          continue;
-        }
-
-        missingAncestorIds.add(eventId);
-      }
-    }
-
-    if (missingAncestorIds.size === 0) {
-      return;
-    }
-
-    for (const eventId of missingAncestorIds) {
-      requestedAncestorIdsRef.current.add(eventId);
-    }
-
-    const maxRequestedAncestors = 500;
-    if (requestedAncestorIdsRef.current.size > maxRequestedAncestors) {
-      const excess =
-        requestedAncestorIdsRef.current.size - maxRequestedAncestors;
-      let removed = 0;
-      for (const id of requestedAncestorIdsRef.current) {
-        if (removed >= excess) {
-          break;
-        }
-        requestedAncestorIdsRef.current.delete(id);
-        removed++;
-      }
-    }
-
-    let isCancelled = false;
-
-    void Promise.all(
-      [...missingAncestorIds].map(async (eventId) => {
-        try {
-          const event = await getEventById(eventId);
-
-          if (
-            isCancelled ||
-            getChannelIdFromTags(event.tags) !== activeChannel.id
-          ) {
-            return;
-          }
-
-          queryClient.setQueryData<RelayEvent[]>(
-            channelMessagesKey(activeChannel.id),
-            (current = []) => mergeMessages(current, event),
-          );
-        } catch (error) {
-          console.error("Failed to load ancestor event", eventId, error);
-        }
-      }),
-    );
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [activeChannel, queryClient, resolvedMessages]);
+  useLoadMissingAncestors(activeChannel, resolvedMessages);
 
   const activeChannelEphemeralBadge = activeChannelEphemeralDisplay ? (
     <EphemeralChannelBadge

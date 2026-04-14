@@ -21,10 +21,10 @@ import {
 } from "@/shared/api/relayClientShared";
 import { buildThreadReferenceTags } from "@/features/messages/lib/threading";
 
-const RECONNECT_BASE_DELAY_MS = 1_000;
-const RECONNECT_MAX_DELAY_MS = 30_000;
-const RECONNECT_REPLAY_SKEW_SECS = 5;
-const EVENT_BATCH_MS = 16;
+const RECONNECT_BASE_DELAY_MS = 1_000,
+  RECONNECT_MAX_DELAY_MS = 30_000;
+const RECONNECT_REPLAY_SKEW_SECS = 5,
+  EVENT_BATCH_MS = 16;
 
 export class RelayClient {
   private wsId: number | null = null;

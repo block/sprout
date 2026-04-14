@@ -331,9 +331,9 @@ test("opens a branch-only thread panel from the reply action", async ({
   await expect(threadPanel.getByTestId("message-thread-head")).toContainText(
     firstReply,
   );
-  await expect(threadPanel.getByTestId("message-thread-head")).not.toContainText(
-    "Welcome to #general",
-  );
+  await expect(
+    threadPanel.getByTestId("message-thread-head"),
+  ).not.toContainText("Welcome to #general");
   await expect(threadReplies).not.toContainText(siblingReply);
 
   await threadComposer.fill(nestedReply);
