@@ -5,6 +5,6 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 void main() {
   testWidgets('App renders without crashing', (WidgetTester tester) async {
     await tester.pumpWidget(const ProviderScope(child: App()));
-    expect(find.text('Sprout'), findsWidgets);
+    expect(find.text('Channels'), findsWidgets);
   });
 }
