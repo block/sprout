@@ -3,8 +3,31 @@ import { listen } from "@tauri-apps/api/event";
 import * as React from "react";
 
 import { relayClient } from "@/shared/api/relayClient";
+import { getRelayWsUrl } from "@/shared/api/tauri";
 import { connectToHuddle, type HuddleConnection } from "./lib/livekit";
 import { setupAudioWorklet, type AudioWorkletHandle } from "./lib/audioWorklet";
+
+/**
+ * Rewrite a LiveKit URL that points to localhost/127.0.0.1 to use the same
+ * host as the Sprout relay. In multi-machine dev setups the relay hands back
+ * its configured LIVEKIT_URL verbatim, which is typically localhost. The
+ * client already knows a reachable relay host — reuse it for LiveKit.
+ */
+async function rewriteLocalhostLivekitUrl(livekitUrl: string): Promise<string> {
+  try {
+    const lk = new URL(livekitUrl);
+    if (lk.hostname !== "localhost" && lk.hostname !== "127.0.0.1")
+      return livekitUrl;
+    const relayUrl = await getRelayWsUrl();
+    const relay = new URL(relayUrl);
+    if (relay.hostname === "localhost" || relay.hostname === "127.0.0.1")
+      return livekitUrl;
+    lk.hostname = relay.hostname;
+    return lk.toString().replace(/\/$/, "");
+  } catch {
+    return livekitUrl;
+  }
+}
 
 /**
  * Huddle lifecycle (React context):
@@ -314,9 +337,12 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         throw new Error("superseded");
       }
 
+      // Rewrite localhost LiveKit URLs for multi-machine dev setups.
+      const livekitUrl = await rewriteLocalhostLivekitUrl(joinInfo.livekit_url);
+
       // Connect to LiveKit room with event callbacks
       const connection = await connectToHuddle(
-        joinInfo.livekit_url,
+        livekitUrl,
         joinInfo.livekit_token,
         {
           onActiveSpeakersChanged: (speakers) => {
