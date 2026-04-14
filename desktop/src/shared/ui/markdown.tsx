@@ -157,17 +157,35 @@ function createMarkdownComponents(
                 {alt || "Image preview"}
               </DialogPrimitive.Title>
               <DialogPrimitive.Description className="sr-only">
-                Full-size image preview. Press Escape or click outside the image to close.
+                Full-size image preview. Press Escape or click outside the image
+                to close.
               </DialogPrimitive.Description>
               {/* Close region: clicking anywhere except the image closes the dialog */}
-              <DialogPrimitive.Close className="absolute inset-0 cursor-default" aria-label="Close lightbox" />
+              <DialogPrimitive.Close
+                className="absolute inset-0 cursor-default"
+                aria-label="Close lightbox"
+              />
               <img
                 alt={alt}
                 className="relative max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
                 src={resolvedSrc}
               />
               <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                <svg
+                  aria-hidden="true"
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
                 <span className="sr-only">Close</span>
               </DialogPrimitive.Close>
             </DialogPrimitive.Content>
@@ -184,7 +202,8 @@ function createMarkdownComponents(
       // Render them as a grid gallery instead of a <p>.
       const childArray = React.Children.toArray(children);
       const imageChildren = childArray.filter(
-        (child) => React.isValidElement(child) && typeof child.type !== "string",
+        (child) =>
+          React.isValidElement(child) && typeof child.type !== "string",
       );
       const nonImageChildren = childArray.filter(
         (child) =>
@@ -289,8 +308,12 @@ function ImageGalleryGrouper({ children }: { children: React.ReactNode }) {
     // ReactMarkdown renders into a single wrapper — get its children
     const elements = React.Children.toArray(
       // Unwrap the ReactMarkdown output (it's a single React element)
-      React.isValidElement(children) && (children.props as Record<string, unknown>).children
-        ? React.Children.toArray((children.props as Record<string, unknown>).children as React.ReactNode)
+      React.isValidElement(children) &&
+        (children.props as Record<string, unknown>).children
+        ? React.Children.toArray(
+            (children.props as Record<string, unknown>)
+              .children as React.ReactNode,
+          )
         : [children],
     );
 
@@ -306,8 +329,11 @@ function ImageGalleryGrouper({ children }: { children: React.ReactNode }) {
             key={`gallery-${result.length}`}
             className="mt-3 grid max-w-lg grid-cols-2 gap-1.5"
           >
-            {imageRun.map((img, i) => (
-              <div key={i} className="[&>*]:mt-0 [&>*]:max-w-none [&_div]:mt-0 [&_div]:max-w-none">
+            {imageRun.map((img) => (
+              <div
+                key={img.key}
+                className="[&>*]:mt-0 [&>*]:max-w-none [&_div]:mt-0 [&_div]:max-w-none"
+              >
                 {img}
               </div>
             ))}
@@ -321,13 +347,17 @@ function ImageGalleryGrouper({ children }: { children: React.ReactNode }) {
       // Check if this element is an image-only paragraph
       // (a <p> containing only a DialogPrimitive.Root or a single <div> with an <img>)
       if (React.isValidElement(el) && el.type === "p") {
-        const pChildren = React.Children.toArray((el.props as Record<string, unknown>).children as React.ReactNode);
-        const hasOnlyImages = pChildren.length >= 1 && pChildren.every(
-          (child) =>
-            React.isValidElement(child) &&
-            (child.type === "img" || // plain img
-              (typeof child.type !== "string")), // React component (DialogPrimitive.Root wrapping img)
+        const pChildren = React.Children.toArray(
+          (el.props as Record<string, unknown>).children as React.ReactNode,
         );
+        const hasOnlyImages =
+          pChildren.length >= 1 &&
+          pChildren.every(
+            (child) =>
+              React.isValidElement(child) &&
+              (child.type === "img" || // plain img
+                typeof child.type !== "string"), // React component (DialogPrimitive.Root wrapping img)
+          );
         if (hasOnlyImages) {
           imageRun.push(el as React.ReactElement);
           continue;
