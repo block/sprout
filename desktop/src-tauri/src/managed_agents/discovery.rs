@@ -425,15 +425,16 @@ mod tests {
 
     #[test]
     fn login_shell_lookup_treats_command_as_data() {
-        let marker = std::env::temp_dir().join(format!(
-            "sprout-discovery-marker-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let marker =
+            std::env::temp_dir().join(format!("sprout-discovery-marker-{}", uuid::Uuid::new_v4()));
         let payload = format!("doesnotexist; touch {} #", marker.display());
 
         let resolved = find_via_login_shell(&payload);
 
-        assert!(resolved.is_none(), "payload should not resolve to a command");
+        assert!(
+            resolved.is_none(),
+            "payload should not resolve to a command"
+        );
         assert!(
             !marker.exists(),
             "shell lookup must not execute injected commands"
