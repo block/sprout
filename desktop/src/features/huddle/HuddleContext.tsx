@@ -8,29 +8,31 @@ import { connectToHuddle, type HuddleConnection } from "./lib/livekit";
 import { setupAudioWorklet, type AudioWorkletHandle } from "./lib/audioWorklet";
 
 /**
- * Get a proxied LiveKit URL. In local dev (relay on localhost), no proxy
- * needed — the webview can reach it directly. For remote relays (staging/prod),
- * start a local WS proxy in Rust (which routes through Cloudflare WARP) and
- * rewrite the URL to ws://localhost:{port}, keeping the path+query intact
- * so the LiveKit SDK's /rtc/v1?access_token=... works transparently.
+ * Resolve LiveKit connection params. In local dev (relay on localhost), connect
+ * directly. For remote relays (staging/prod behind WARP), start a local WS
+ * proxy and build a TURN URL so media also relays through the corporate VPN.
  */
-async function getProxiedLivekitUrl(livekitUrl: string): Promise<string> {
+async function getLivekitConnectParams(livekitUrl: string): Promise<{
+  url: string;
+  forceRelay: boolean;
+}> {
   try {
     const relayUrl = await getRelayWsUrl();
     const relay = new URL(relayUrl);
     if (relay.hostname === "localhost" || relay.hostname === "127.0.0.1") {
-      return livekitUrl;
+      return { url: livekitUrl, forceRelay: false };
     }
 
-    // Start the local WS proxy (idempotent — returns existing port if running).
-    // Use 127.0.0.1 (not "localhost") to match the Rust bind address and avoid
-    // IPv6 ::1 resolution mismatches on some systems.
+    // Remote relay — start local WS proxy and force TURN relay mode.
+    // The WS proxy handles signaling (goes through WARP). TURN handles
+    // media (LiveKit's join response includes TURN credentials).
     const port = await invoke<number>("start_livekit_proxy", {
       upstreamUrl: livekitUrl,
     });
-    return `ws://127.0.0.1:${port}`;
+
+    return { url: `ws://127.0.0.1:${port}`, forceRelay: true };
   } catch {
-    return livekitUrl;
+    return { url: livekitUrl, forceRelay: false };
   }
 }
 
@@ -342,12 +344,12 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         throw new Error("superseded");
       }
 
-      // Rewrite localhost LiveKit URLs for multi-machine dev setups.
-      const livekitUrl = await getProxiedLivekitUrl(joinInfo.livekit_url);
+      // Resolve proxied URL + TURN for corporate VPN environments.
+      const lkParams = await getLivekitConnectParams(joinInfo.livekit_url);
 
       // Connect to LiveKit room with event callbacks
       const connection = await connectToHuddle(
-        livekitUrl,
+        lkParams.url,
         joinInfo.livekit_token,
         {
           onActiveSpeakersChanged: (speakers) => {
@@ -360,6 +362,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
           onReconnecting: () => setIsReconnecting(true),
           onReconnected: () => setIsReconnecting(false),
         },
+        { forceRelay: lkParams.forceRelay },
       );
 
       if (tokenRef.current !== myToken) {

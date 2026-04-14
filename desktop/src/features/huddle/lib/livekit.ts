@@ -35,10 +35,16 @@ export type HuddleRoomCallbacks = {
  *
  *   Error handling: mic stream is always cleaned up, even on partial failure.
  */
+export interface HuddleConnectOptions {
+  /** Force relay mode — all media goes through TURN. Required behind corporate VPN. */
+  forceRelay?: boolean;
+}
+
 export async function connectToHuddle(
   url: string,
   token: string,
   callbacks?: HuddleRoomCallbacks,
+  options?: HuddleConnectOptions,
 ): Promise<HuddleConnection> {
   const room = new Room();
   let stream: MediaStream | null = null;
@@ -49,7 +55,15 @@ export async function connectToHuddle(
     });
     const audioTrack = stream.getAudioTracks()[0];
 
-    await room.connect(url, token);
+    // Force relay mode behind corporate VPN. Only set iceTransportPolicy —
+    // do NOT override iceServers. LiveKit's join response includes the TURN
+    // server URL with time-limited HMAC credentials. Overriding iceServers
+    // would strip those credentials and break TURN allocation.
+    const connectOptions = options?.forceRelay
+      ? { rtcConfig: { iceTransportPolicy: "relay" as const } }
+      : {};
+
+    await room.connect(url, token, connectOptions);
 
     // Register room event listeners before publishing track
     if (callbacks?.onActiveSpeakersChanged) {
