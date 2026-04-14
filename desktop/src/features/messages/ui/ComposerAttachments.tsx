@@ -8,6 +8,7 @@ import { shortHash } from "@/features/messages/lib/useMediaUpload";
 
 type ComposerAttachmentsProps = {
   attachments: BlobDescriptor[];
+  isUploading?: boolean;
   onRemove: (url: string) => void;
 };
 
@@ -18,9 +19,10 @@ type ComposerAttachmentsProps = {
  */
 export const ComposerAttachments = React.memo(function ComposerAttachments({
   attachments,
+  isUploading = false,
   onRemove,
 }: ComposerAttachmentsProps) {
-  if (attachments.length === 0) return null;
+  if (attachments.length === 0 && !isUploading) return null;
 
   return (
     <LayoutGroup>
@@ -47,18 +49,20 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
                 transition={{ type: "spring", stiffness: 500, damping: 30 }}
                 className="group relative"
               >
-                <div className="relative h-5 w-10 overflow-hidden rounded border border-border/70">
-                  {isVideo ? (
-                    <div className="flex h-full w-full items-center justify-center bg-muted text-[10px] text-muted-foreground">
-                      ▶
-                    </div>
-                  ) : (
-                    <img
-                      src={thumbUrl}
-                      alt={`Attachment ${hash}`}
-                      className="h-full w-full object-contain"
-                    />
-                  )}
+                <div className="relative h-5 w-10">
+                  <div className="h-full w-full overflow-hidden rounded border border-border/70">
+                    {isVideo ? (
+                      <div className="flex h-full w-full items-center justify-center bg-muted text-[10px] text-muted-foreground">
+                        ▶
+                      </div>
+                    ) : (
+                      <img
+                        src={thumbUrl}
+                        alt={`Attachment ${hash}`}
+                        className="h-full w-full object-contain"
+                      />
+                    )}
+                  </div>
                   <button
                     type="button"
                     onClick={() => onRemove(attachment.url)}
@@ -71,6 +75,20 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
               </motion.div>
             );
           })}
+          {isUploading && (
+            <motion.div
+              key="upload-placeholder"
+              layout
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              transition={{ type: "spring", stiffness: 500, damping: 30 }}
+            >
+              <div className="relative h-5 w-10 overflow-hidden rounded border border-border/70">
+                <div className="h-full w-full animate-pulse bg-muted" />
+              </div>
+            </motion.div>
+          )}
         </AnimatePresence>
       </motion.div>
     </LayoutGroup>

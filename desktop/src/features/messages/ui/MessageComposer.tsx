@@ -590,10 +590,11 @@ export function MessageComposer({
             </div>
           ) : null}
 
-          {media.pendingImeta.length > 0 && (
+          {(media.pendingImeta.length > 0 || media.isUploading) && (
             <div className="mb-1 flex items-center gap-2">
               <ComposerAttachments
                 attachments={media.pendingImeta}
+                isUploading={media.isUploading}
                 onRemove={media.removeAttachment}
               />
             </div>
