@@ -1,29 +1,44 @@
-import type { FeedItem } from "@/shared/api/types";
+import { RefreshCcw } from "lucide-react";
+
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import { useHomeFeedQuery } from "@/features/home/hooks";
 import { HomeView } from "@/features/home/ui/HomeView";
+import { Button } from "@/shared/ui/button";
 
 type HomeScreenProps = {
   availableChannelIds: ReadonlySet<string>;
   currentPubkey?: string;
-  onOpenFeedItem: (item: FeedItem) => void;
-  onOpenPulse: () => void;
+  onOpenChannel: (channelId: string) => void;
 };
 
 export function HomeScreen({
   availableChannelIds,
   currentPubkey,
-  onOpenFeedItem,
-  onOpenPulse,
+  onOpenChannel,
 }: HomeScreenProps) {
   const homeFeedQuery = useHomeFeedQuery();
 
   return (
     <>
       <ChatHeader
-        description="Personalized activity feed for mentions, reminders, channel activity, and agent work."
+        actions={
+          <Button
+            className="h-9 rounded-full px-3"
+            onClick={() => {
+              void homeFeedQuery.refetch();
+            }}
+            type="button"
+            variant="outline"
+          >
+            <RefreshCcw
+              className={`h-4 w-4 ${homeFeedQuery.isFetching ? "animate-spin" : ""}`}
+            />
+            Refresh
+          </Button>
+        }
+        description="Personalized inbox for mentions, reminders, and approvals."
         mode="home"
-        title="Home"
+        title="Inbox"
       />
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -37,8 +52,7 @@ export function HomeScreen({
           }
           feed={homeFeedQuery.data}
           isLoading={homeFeedQuery.isLoading}
-          onOpenFeedItem={onOpenFeedItem}
-          onOpenPulse={onOpenPulse}
+          onOpenChannel={onOpenChannel}
           onRefresh={() => {
             void homeFeedQuery.refetch();
           }}

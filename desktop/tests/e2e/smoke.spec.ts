@@ -133,19 +133,15 @@ test("create agent supports parallelism and system prompt overrides", async ({
 });
 
 test("opens a mocked channel from the home feed", async ({ page }) => {
-  const mentionsSection = page.locator("section").filter({
-    has: page.getByRole("heading", { name: "Mentions" }),
-  });
+  const inboxList = page.getByTestId("home-inbox-list");
 
   await page.goto("/");
 
-  await expect(page.getByTestId("chat-title")).toHaveText("Home");
-  await expect(page.getByRole("heading", { name: "Mentions" })).toBeVisible();
-  await expect(
-    page.getByText("Please review the release checklist."),
-  ).toBeVisible();
+  await expect(page.getByTestId("chat-title")).toHaveText("Inbox");
+  await expect(inboxList).toContainText("Please review the release checklist.");
 
-  await mentionsSection.getByRole("button", { name: "Open general" }).click();
+  await inboxList.getByText("Please review the release checklist.").first().click();
+  await page.getByRole("button", { name: "Open channel" }).click();
 
   await expect(page).toHaveURL(
     /#\/channels\/9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50\?messageId=mock-feed-mention$/,
@@ -236,14 +232,10 @@ test("opens a mocked forum activity item from the home feed", async ({
 });
 
 test("home feed renders resolved author labels", async ({ page }) => {
-  const mentionsSection = page.locator("section").filter({
-    has: page.getByRole("heading", { name: "Mentions" }),
-  });
-
   await page.goto("/");
 
-  await expect(mentionsSection).toContainText("alice");
-  await expect(mentionsSection).not.toContainText("You");
+  await expect(page.getByTestId("home-inbox-list")).toContainText("alice");
+  await expect(page.getByTestId("home-inbox-list")).not.toContainText("You");
 });
 
 test("opens relay-backed search from the sidebar and loads the exact result", async ({

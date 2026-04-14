@@ -4,7 +4,7 @@ import {
   CircleDot,
   FileText,
   Hash,
-  Home,
+  Inbox,
   Lock,
   Zap,
 } from "lucide-react";
@@ -32,7 +32,7 @@ function ChannelIcon({
   mode?: "home" | "channel" | "agents" | "workflows" | "pulse";
 }) {
   if (mode === "home") {
-    return <Home className="h-5 w-5 text-primary" />;
+    return <Inbox className="h-5 w-5 text-primary" />;
   }
 
   if (mode === "agents") {

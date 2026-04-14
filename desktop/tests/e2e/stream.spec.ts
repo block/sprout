@@ -43,7 +43,7 @@ async function ensureTimelineScrollable(
 
     const message = `${prefix} seed ${index}`;
 
-    await expect(input).toHaveAttribute("contenteditable", "true");
+    await expect(input).toBeEnabled();
     await input.fill(message);
     await sendButton.click();
     await expectTimelineToContain(receiverPage, message);
@@ -110,17 +110,34 @@ test("loads the home feed from the relay", async ({ page }) => {
   await installRelayBridge(page, "tyler");
   await page.goto("/");
 
-  await expect(page.getByTestId("chat-title")).toHaveText("Home");
-  await expect(page.getByRole("heading", { name: "Mentions" })).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Needs Action" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Channel Activity" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Agent Updates" }),
-  ).toBeVisible();
+  await expect(page.getByTestId("chat-title")).toHaveText("Inbox");
+  await expect(page.getByTestId("home-inbox")).toBeVisible();
+  await expect(page.getByTestId("home-inbox-list")).toContainText(
+    "Please review the release checklist.",
+  );
+  await expect(page.getByTestId("home-inbox-detail")).toBeVisible();
+});
+
+test("shows sent inbox replies immediately in the inbox detail pane", async ({
+  page,
+}) => {
+  const reply = `Inbox reply ${Date.now()}`;
+
+  await installRelayBridge(page, "tyler");
+  await page.goto("/");
+
+  await page
+    .getByTestId("home-inbox-list")
+    .getByText("Please review the release checklist.")
+    .first()
+    .click();
+  await expect(page.getByTestId("home-inbox-detail")).toBeVisible();
+  await expect(page.getByTestId("message-input")).toBeEnabled();
+
+  await page.getByTestId("message-input").fill(reply);
+  await page.getByTestId("send-message").click();
+
+  await expect(page.getByTestId("home-inbox-detail")).toContainText(reply);
 });
 
 test("creates a relay-backed stream", async ({ page }) => {

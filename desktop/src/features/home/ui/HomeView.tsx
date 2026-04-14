@@ -1,60 +1,52 @@
 import * as React from "react";
-import { Activity, AtSign, Bot, CircleAlert, RefreshCcw } from "lucide-react";
+import { RefreshCcw } from "lucide-react";
 
-import { useRelayAgentsQuery } from "@/features/agents/hooks";
+import {
+  type InboxFilter,
+  type InboxReply,
+  buildInboxItems,
+  formatInboxFullTimestamp,
+} from "@/features/home/lib/inbox";
 import { useFeedItemState } from "@/features/home/useFeedItemState";
+import { InboxDetailPane } from "@/features/home/ui/InboxDetailPane";
+import { InboxListPane } from "@/features/home/ui/InboxListPane";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
-import { useContactListQuery, useTimelineQuery } from "@/features/pulse/hooks";
-import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
-import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
+import { resolveUserLabel } from "@/features/profile/lib/identity";
+import { deleteMessage, sendChannelMessage } from "@/shared/api/tauri";
+import type { HomeFeedResponse } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
 
-const FeedSection = React.lazy(async () => {
-  const module = await import("./FeedSection");
-  return { default: module.FeedSection };
-});
-
-const RecentNotesSection = React.lazy(async () => {
-  const module = await import("./RecentNotesSection");
-  return { default: module.RecentNotesSection };
-});
-
-type FeedFilter =
-  | "all"
-  | "mention"
-  | "needs_action"
-  | "activity"
-  | "agent_activity";
-
 function HomeLoadingState() {
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 sm:px-6">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-        <div className="grid gap-4">
-          {["mentions", "actions"].map((section) => (
-            <div key={section}>
-              <Skeleton className="mb-2 h-4 w-24" />
-              <div className="space-y-0 rounded-md border border-border/60">
-                {["a", "b", "c"].map((row) => (
-                  <Skeleton className="h-16" key={row} />
-                ))}
-              </div>
-            </div>
-          ))}
+    <div className="flex-1 overflow-hidden">
+      <div className="grid h-full min-h-0 w-full lg:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="overflow-hidden border-r border-border/70 bg-background">
+          <div className="border-b border-border/70 px-4 py-4">
+            <Skeleton className="h-4 w-20" />
+            <Skeleton className="mt-2 h-4 w-28" />
+            <Skeleton className="mt-4 h-10 rounded-md" />
+          </div>
+          <div className="space-y-3 px-4 py-4">
+            {["a", "b", "c", "d"].map((row) => (
+              <Skeleton className="h-20 rounded-md" key={row} />
+            ))}
+          </div>
+        </div>
+
+        <div className="overflow-hidden bg-background">
+          <div className="border-b border-border/70 px-5 py-4">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="mt-3 h-8 w-72" />
+          </div>
+          <div className="px-5 py-5">
+            <Skeleton className="h-64 rounded-md" />
+          </div>
         </div>
       </div>
     </div>
   );
 }
-
-const FILTER_OPTIONS: { value: FeedFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "mention", label: "Mentions" },
-  { value: "needs_action", label: "Needs Action" },
-  { value: "activity", label: "Activity" },
-  { value: "agent_activity", label: "Agent Updates" },
-];
 
 type HomeViewProps = {
   feed?: HomeFeedResponse;
@@ -62,8 +54,7 @@ type HomeViewProps = {
   errorMessage?: string;
   currentPubkey?: string;
   availableChannelIds: ReadonlySet<string>;
-  onOpenFeedItem: (item: FeedItem) => void;
-  onOpenPulse: () => void;
+  onOpenChannel: (channelId: string) => void;
   onRefresh: () => void;
 };
 
@@ -73,64 +64,93 @@ export function HomeView({
   errorMessage,
   currentPubkey,
   availableChannelIds,
-  onOpenFeedItem,
-  onOpenPulse,
+  onOpenChannel,
   onRefresh,
 }: HomeViewProps) {
-  const [filter, setFilter] = React.useState<FeedFilter>("all");
+  const [filter, setFilter] = React.useState<InboxFilter>("all");
+  const [searchValue, setSearchValue] = React.useState("");
+  const [selectedItemId, setSelectedItemId] = React.useState<string | null>(null);
+  const [isDeletingMessage, setIsDeletingMessage] = React.useState(false);
+  const [isSendingReply, setIsSendingReply] = React.useState(false);
+  const [localRepliesByItemId, setLocalRepliesByItemId] = React.useState<
+    Record<string, InboxReply[]>
+  >({});
   const { doneSet, markDone, undoDone } = useFeedItemState(currentPubkey);
-
-  // Defer Pulse widget queries until the shell is interactive
-  const startupReady = useDeferredStartup();
-  const deferredPubkey = startupReady ? currentPubkey : undefined;
-
-  // Recent notes for the Pulse widget
-  const contactListQuery = useContactListQuery(deferredPubkey);
-  const contactPubkeys = React.useMemo(
-    () => (contactListQuery.data?.contacts ?? []).map((c) => c.pubkey),
-    [contactListQuery.data],
+  const feedItems = React.useMemo(
+    () => (feed ? [...feed.feed.mentions, ...feed.feed.needsAction] : []),
+    [feed],
   );
-  const notesPubkeys = React.useMemo(
+  const feedProfilePubkeys = React.useMemo(
     () =>
-      deferredPubkey
-        ? [...new Set([deferredPubkey, ...contactPubkeys])]
-        : contactPubkeys,
-    [deferredPubkey, contactPubkeys],
+      [
+        ...new Set([
+          ...feedItems.map((item) => item.pubkey),
+          ...(currentPubkey ? [currentPubkey] : []),
+        ]),
+      ],
+    [currentPubkey, feedItems],
   );
-  const notesTimelineQuery = useTimelineQuery(
-    notesPubkeys,
-    notesPubkeys.length > 0,
-  );
-  const recentNotes = notesTimelineQuery.data?.notes?.slice(0, 5) ?? [];
-  const noteAuthorPubkeys = React.useMemo(
-    () => [...new Set(recentNotes.map((n) => n.pubkey))],
-    [recentNotes],
-  );
-  const noteProfilesQuery = useUsersBatchQuery(noteAuthorPubkeys, {
-    enabled: noteAuthorPubkeys.length > 0,
-  });
-  const noteProfiles = noteProfilesQuery.data?.profiles ?? {};
-  const relayAgentsQuery = useRelayAgentsQuery({ enabled: startupReady });
-  const agentPubkeySet = React.useMemo(
-    () => new Set((relayAgentsQuery.data ?? []).map((a) => a.pubkey)),
-    [relayAgentsQuery.data],
-  );
-
-  const feedItems = feed
-    ? [
-        ...feed.feed.mentions,
-        ...feed.feed.needsAction,
-        ...(feed.feed.activity ?? []),
-        ...(feed.feed.agentActivity ?? []),
-      ]
-    : [];
   const feedProfilesQuery = useUsersBatchQuery(
-    feedItems.map((item) => item.pubkey),
+    feedProfilePubkeys,
     {
-      enabled: feedItems.length > 0,
+      enabled: feedProfilePubkeys.length > 0,
     },
   );
   const feedProfiles = feedProfilesQuery.data?.profiles;
+  const inboxItems = React.useMemo(
+    () =>
+      buildInboxItems({
+        currentPubkey,
+        feed,
+        profiles: feedProfiles,
+      }),
+    [currentPubkey, feed, feedProfiles],
+  );
+  const filteredItems = React.useMemo(() => {
+    const normalizedQuery = searchValue.trim().toLowerCase();
+
+    return inboxItems.filter((item) => {
+      const matchesFilter =
+        filter === "all" ? true : item.item.category === filter;
+      const matchesQuery =
+        normalizedQuery.length === 0 ||
+        item.searchableText.includes(normalizedQuery);
+
+      return matchesFilter && matchesQuery;
+    });
+  }, [filter, inboxItems, searchValue]);
+  const selectedItem =
+    filteredItems.find((item) => item.id === selectedItemId) ?? null;
+  const selectedItemReplies = selectedItem
+    ? localRepliesByItemId[selectedItem.id] ?? []
+    : [];
+  React.useEffect(() => {
+    if (filteredItems.length === 0) {
+      setSelectedItemId(null);
+      return;
+    }
+
+    if (!filteredItems.some((item) => item.id === selectedItemId)) {
+      setSelectedItemId(filteredItems[0]?.id ?? null);
+    }
+  }, [filteredItems, selectedItemId]);
+
+  React.useEffect(() => {
+    setIsDeletingMessage(false);
+    setIsSendingReply(false);
+  }, [selectedItemId]);
+
+  const handleToggleDone = React.useCallback(
+    (itemId: string) => {
+      if (doneSet.has(itemId)) {
+        undoDone(itemId);
+        return;
+      }
+
+      markDone(itemId);
+    },
+    [doneSet, markDone, undoDone],
+  );
 
   if (isLoading && !feed) {
     return <HomeLoadingState />;
@@ -138,9 +158,9 @@ export function HomeView({
 
   if (!feed) {
     return (
-      <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 sm:px-6">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-5">
+      <div className="flex-1 overflow-hidden px-4 py-3 sm:px-6">
+        <div className="flex w-full max-w-3xl flex-col gap-4">
+          <div className="border border-destructive/30 bg-destructive/5 px-5 py-6">
             <p className="text-base font-semibold tracking-tight">
               Home feed unavailable
             </p>
@@ -157,111 +177,124 @@ export function HomeView({
     );
   }
 
-  const showMentions = filter === "all" || filter === "mention";
-  const showNeedsAction = filter === "all" || filter === "needs_action";
-  const showActivity = filter === "all" || filter === "activity";
-  const showAgentActivity = filter === "all" || filter === "agent_activity";
+  const canReply =
+    selectedItem !== null &&
+    selectedItem.item.channelId !== null &&
+    availableChannelIds.has(selectedItem.item.channelId) &&
+    selectedItem.item.kind !== 45001 &&
+    selectedItem.item.kind !== 45003;
+  const disabledReplyReason =
+    canReply || !selectedItem
+      ? null
+      : selectedItem.item.channelId
+        ? availableChannelIds.has(selectedItem.item.channelId)
+          ? "This item does not support inline replies yet."
+          : "Open the linked channel to reply."
+        : "This inbox item does not have a reply target.";
+  const canDelete =
+    selectedItem !== null &&
+    currentPubkey?.trim().toLowerCase() ===
+      selectedItem.item.pubkey.trim().toLowerCase();
+
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 sm:px-6">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-        <div className="flex items-center gap-1.5">
-          {FILTER_OPTIONS.map((option) => (
-            <Button
-              key={option.value}
-              onClick={() => setFilter(option.value)}
-              size="sm"
-              type="button"
-              variant={filter === option.value ? "default" : "ghost"}
-              className="h-7 px-2.5 text-xs"
-            >
-              {option.label}
-            </Button>
-          ))}
-        </div>
+    <div className="flex-1 overflow-hidden">
+      <div
+        className="grid h-full min-h-0 w-full lg:grid-cols-[320px_minmax(0,1fr)]"
+        data-testid="home-inbox"
+      >
+        <InboxListPane
+          doneSet={doneSet}
+          filter={filter}
+          items={filteredItems}
+          onFilterChange={setFilter}
+          onSearchChange={setSearchValue}
+          onSelect={setSelectedItemId}
+          searchValue={searchValue}
+          selectedId={selectedItemId}
+        />
 
-        {recentNotes.length > 0 ? (
-          <React.Suspense fallback={null}>
-            <RecentNotesSection
-              agentPubkeys={agentPubkeySet}
-              notes={recentNotes}
-              onOpenPulse={onOpenPulse}
-              profiles={noteProfiles}
-            />
-          </React.Suspense>
-        ) : null}
+        <InboxDetailPane
+          canDelete={canDelete}
+          canOpenChannel={Boolean(
+            selectedItem?.item.channelId &&
+              availableChannelIds.has(selectedItem.item.channelId),
+          )}
+          canReply={canReply}
+          disabledReplyReason={disabledReplyReason}
+          isDone={selectedItem ? doneSet.has(selectedItem.id) : false}
+          isDeletingMessage={isDeletingMessage}
+          isSendingReply={isSendingReply}
+          item={selectedItem}
+          localReplies={selectedItemReplies}
+          onArchive={() => {
+            if (selectedItem) {
+              handleToggleDone(selectedItem.id);
+            }
+          }}
+          onDelete={() => {
+            if (!selectedItem || !canDelete) {
+              return;
+            }
 
-        <React.Suspense fallback={null}>
-          <div className="grid gap-5">
-            {showMentions ? (
-              <FeedSection
-                availableChannelIds={availableChannelIds}
-                currentPubkey={currentPubkey}
-                profiles={feedProfiles}
-                doneSet={doneSet}
-                emptyDescription="When someone mentions you, it will land here."
-                emptyTitle="No mentions right now"
-                icon={AtSign}
-                items={feed.feed.mentions}
-                onMarkDone={markDone}
-                onOpenItem={onOpenFeedItem}
-                onUndoDone={undoDone}
-                showDoneAction={false}
-                title="Mentions"
-              />
-            ) : null}
-            {showNeedsAction ? (
-              <FeedSection
-                availableChannelIds={availableChannelIds}
-                currentPubkey={currentPubkey}
-                profiles={feedProfiles}
-                doneSet={doneSet}
-                emptyDescription="Approval requests and reminders will appear here."
-                emptyTitle="Nothing needs action"
-                icon={CircleAlert}
-                items={feed.feed.needsAction}
-                onMarkDone={markDone}
-                onOpenItem={onOpenFeedItem}
-                onUndoDone={undoDone}
-                showDoneAction={true}
-                title="Needs Action"
-              />
-            ) : null}
-            {showActivity ? (
-              <FeedSection
-                availableChannelIds={availableChannelIds}
-                currentPubkey={currentPubkey}
-                profiles={feedProfiles}
-                doneSet={doneSet}
-                emptyDescription="Recent channel messages and forum posts will show up here."
-                emptyTitle="No channel activity yet"
-                icon={Activity}
-                items={feed.feed.activity ?? []}
-                onMarkDone={markDone}
-                onOpenItem={onOpenFeedItem}
-                onUndoDone={undoDone}
-                showDoneAction={false}
-                title="Channel Activity"
-              />
-            ) : null}
-            {showAgentActivity ? (
-              <FeedSection
-                availableChannelIds={availableChannelIds}
-                currentPubkey={currentPubkey}
-                profiles={feedProfiles}
-                doneSet={doneSet}
-                emptyDescription="Agent job requests, progress, and results will appear here."
-                emptyTitle="No agent updates yet"
-                icon={Bot}
-                items={feed.feed.agentActivity ?? []}
-                onMarkDone={markDone}
-                onOpenItem={onOpenFeedItem}
-                onUndoDone={undoDone}
-                showDoneAction={false}
-                title="Agent Updates"
-              />
-            ) : null}
-          </div>
-        </React.Suspense>
+            setIsDeletingMessage(true);
+            void deleteMessage(selectedItem.id)
+              .then(() => {
+                onRefresh();
+              })
+              .finally(() => {
+                setIsDeletingMessage(false);
+              });
+          }}
+          onOpenChannel={onOpenChannel}
+          onSendReply={async (content, mentionPubkeys, mediaTags) => {
+            const channelId = selectedItem?.item.channelId;
+            if (!selectedItem || !channelId || !canReply) {
+              throw new Error("Replies are not available for this item.");
+            }
+
+            const itemToReply = selectedItem;
+            setIsSendingReply(true);
+            try {
+              const result = await sendChannelMessage(
+                channelId,
+                content,
+                itemToReply.id,
+                mediaTags,
+                mentionPubkeys,
+              );
+              const authorPubkey = currentPubkey ?? itemToReply.item.pubkey;
+              const reply: InboxReply = {
+                authorLabel: currentPubkey
+                  ? resolveUserLabel({
+                      currentPubkey,
+                      profiles: feedProfiles,
+                      pubkey: authorPubkey,
+                    })
+                  : "You",
+                avatarUrl:
+                  currentPubkey && feedProfiles
+                    ? (feedProfiles[currentPubkey.trim().toLowerCase()]?.avatarUrl ??
+                      null)
+                    : null,
+                content,
+                fullTimestampLabel: formatInboxFullTimestamp(result.createdAt),
+                id: result.eventId,
+              };
+              setLocalRepliesByItemId((current) => ({
+                ...current,
+                [itemToReply.id]: [...(current[itemToReply.id] ?? []), reply],
+              }));
+              onRefresh();
+            } finally {
+              setIsSendingReply(false);
+            }
+          }}
+          onToggleDone={() => {
+            if (selectedItem) {
+              handleToggleDone(selectedItem.id);
+            }
+          }}
+        />
       </div>
     </div>
   );

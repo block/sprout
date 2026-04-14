@@ -1,5 +1,5 @@
 // biome-ignore format: keep compact to stay within file size limit
-import { Activity, Bot, Home, PenSquare, Plus, Search, Zap } from "lucide-react";
+import { Activity, Bot, Inbox, PenSquare, Plus, Search, Zap } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
@@ -335,11 +335,11 @@ export function AppSidebar({
             <SidebarMenuButton
               isActive={selectedView === "home"}
               onClick={onSelectHome}
-              tooltip="Home"
+              tooltip="Inbox"
               type="button"
             >
-              <Home className="h-4 w-4" />
-              <span>Home</span>
+              <Inbox className="h-4 w-4" />
+              <span>Inbox</span>
             </SidebarMenuButton>
             {homeBadgeCount > 0 ? (
               <SidebarMenuBadge

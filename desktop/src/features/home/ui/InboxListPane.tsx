@@ -1,0 +1,164 @@
+import { Search } from "lucide-react";
+
+import type { InboxFilter, InboxItem } from "@/features/home/lib/inbox";
+import { groupInboxItems } from "@/features/home/lib/inbox";
+import { cn } from "@/shared/lib/cn";
+import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
+
+const FILTER_OPTIONS: Array<{ label: string; value: InboxFilter }> = [
+  { value: "all", label: "All" },
+  { value: "mention", label: "Mentions" },
+  { value: "needs_action", label: "Needs Action" },
+];
+
+type InboxListPaneProps = {
+  doneSet: ReadonlySet<string>;
+  filter: InboxFilter;
+  items: InboxItem[];
+  onFilterChange: (filter: InboxFilter) => void;
+  onSearchChange: (value: string) => void;
+  onSelect: (itemId: string) => void;
+  searchValue: string;
+  selectedId: string | null;
+};
+
+export function InboxListPane({
+  doneSet,
+  filter,
+  items,
+  onFilterChange,
+  onSearchChange,
+  onSelect,
+  searchValue,
+  selectedId,
+}: InboxListPaneProps) {
+  const groups = groupInboxItems(items);
+
+  return (
+    <section className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border/70 bg-background">
+      <div className="border-b border-border/70 px-4 py-4">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="h-10 rounded-md border-border/70 bg-background pl-9 shadow-none"
+            data-testid="home-inbox-search"
+            onChange={(event) => onSearchChange(event.target.value)}
+            placeholder="Search mail"
+            value={searchValue}
+          />
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {FILTER_OPTIONS.map((option) => (
+            <Button
+              className="h-7 rounded-none px-1 text-[11px] font-medium text-muted-foreground data-[active=true]:text-foreground"
+              data-active={filter === option.value}
+              key={option.value}
+              onClick={() => onFilterChange(option.value)}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              {option.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      <div
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        data-testid="home-inbox-list"
+      >
+        {groups.length === 0 ? (
+          <div className="flex h-full min-h-64 items-center justify-center px-6 text-center">
+            <div>
+              <p className="text-sm font-medium text-foreground">No messages found</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Try a different search or switch back to all mail.
+              </p>
+            </div>
+          </div>
+        ) : (
+          groups.map((group) => (
+            <div className="border-b border-border/60 last:border-b-0" key={group.label}>
+              <div className="sticky top-0 z-10 bg-background px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/95">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  {group.label}
+                </p>
+              </div>
+
+              <div>
+                {group.items.map((item) => {
+                  const isSelected = item.id === selectedId;
+                  const isDone = doneSet.has(item.id);
+
+                  return (
+                    <button
+                      className={cn(
+                        "flex w-full items-start gap-2.5 border-l px-4 py-2 text-left transition-colors",
+                        isSelected
+                          ? "border-l-primary bg-muted/30"
+                          : "border-l-transparent hover:bg-muted/25 active:bg-muted/40",
+                        isDone ? "opacity-60" : "",
+                      )}
+                      data-testid={`home-inbox-item-${item.id}`}
+                      key={item.id}
+                      onClick={() => onSelect(item.id)}
+                      type="button"
+                    >
+                      <div className="relative">
+                        <UserAvatar
+                          avatarUrl={item.avatarUrl}
+                          className="h-8 w-8 rounded-md"
+                          displayName={item.senderLabel}
+                          size="md"
+                        />
+                        {!isDone ? (
+                          <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border-2 border-background bg-primary" />
+                        ) : null}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="truncate text-sm font-semibold text-foreground">
+                                {item.senderLabel}
+                              </p>
+                              {item.isActionRequired ? (
+                                <span className="inline-flex shrink-0 items-center text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-600 dark:text-amber-300">
+                                  Needs action
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {item.timestampLabel}
+                          </span>
+                        </div>
+
+                        <p className="mt-0.5 line-clamp-2 text-sm leading-5 text-muted-foreground">
+                          {item.preview}
+                        </p>
+
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          {item.channelLabel ? (
+                            <span className="text-[11px] font-medium text-muted-foreground">
+                              #{item.channelLabel}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}

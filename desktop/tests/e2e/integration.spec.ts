@@ -292,8 +292,8 @@ test("live mentions refetch the home feed without waiting for polling", async ({
       },
     ]);
 
-    await targetPage.getByRole("button", { name: "Home" }).click();
-    await expect(targetPage.getByTestId("chat-title")).toHaveText("Home");
+    await targetPage.getByRole("button", { name: "Inbox" }).click();
+    await expect(targetPage.getByTestId("chat-title")).toHaveText("Inbox");
     await expect(targetPage.getByTestId("sidebar-home-count")).toHaveCount(0);
     await expect
       .poll(() => getLoggedNotificationCount(targetPage), { timeout: 3_000 })
@@ -352,15 +352,10 @@ test("live forum mentions refetch the home feed without waiting for polling", as
       },
     ]);
 
-    await targetPage.getByRole("button", { name: "Home" }).click();
-    await expect(targetPage.getByTestId("chat-title")).toHaveText("Home");
-    await expect(
-      targetPage.getByRole("heading", { name: "Mentions" }),
-    ).toBeVisible();
-    const mentionsSection = targetPage.locator("section").filter({
-      has: targetPage.getByRole("heading", { name: "Mentions" }),
-    });
-    await expect(mentionsSection).toContainText(message);
+    await targetPage.getByRole("button", { name: "Inbox" }).click();
+    await expect(targetPage.getByTestId("chat-title")).toHaveText("Inbox");
+    await expect(targetPage.getByTestId("home-inbox-list")).toBeVisible();
+    await expect(targetPage.getByTestId("home-inbox-list")).toContainText(message);
     await expect(targetPage.getByTestId("sidebar-home-count")).toHaveCount(0);
     await expect
       .poll(() => getLoggedNotificationCount(targetPage), { timeout: 3_000 })
