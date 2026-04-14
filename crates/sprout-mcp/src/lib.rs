@@ -121,6 +121,8 @@
 
 /// WebSocket client for the Sprout relay (NIP-42 auth, subscriptions, reconnect).
 pub mod relay_client;
+/// ACP-owned reply context store used to force deterministic reply depth.
+pub mod reply_context;
 /// MCP tool implementations backed by the relay client.
 pub mod server;
 /// Toolset definitions and configuration for organizing MCP tools.

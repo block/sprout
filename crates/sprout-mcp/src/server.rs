@@ -7,6 +7,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 
 use crate::relay_client::RelayClient;
+use crate::reply_context::{ActiveReplyContext, ReplyContextStore};
 use sprout_core::PresenceStatus;
 
 /// Percent-encode a string for safe inclusion in a URL query parameter value.
@@ -78,6 +79,26 @@ fn find_root_from_tags(tags: &serde_json::Value) -> Option<String> {
         }
     }
     root.or(reply)
+}
+
+fn select_parent_event_id(
+    forced_context: Option<&ActiveReplyContext>,
+    requested_parent_event_id: Option<String>,
+) -> Option<String> {
+    forced_context
+        .map(|ctx| ctx.parent_event_id.clone())
+        .unwrap_or(requested_parent_event_id)
+}
+
+fn select_broadcast(
+    forced_context: Option<&ActiveReplyContext>,
+    requested_broadcast: Option<bool>,
+) -> bool {
+    if forced_context.is_some() {
+        false
+    } else {
+        requested_broadcast.unwrap_or(false)
+    }
 }
 
 /// Maximum allowed content size for a single message (64 KiB).
@@ -809,6 +830,7 @@ fn infer_language(file_path: &str) -> Option<String> {
 #[derive(Clone)]
 pub struct SproutMcpServer {
     client: RelayClient,
+    reply_context: ReplyContextStore,
     tool_router: ToolRouter<Self>,
 }
 
@@ -830,8 +852,20 @@ impl SproutMcpServer {
 
         Self {
             client,
+            reply_context: ReplyContextStore::from_env(),
             tool_router,
         }
+    }
+
+    fn effective_reply_context(
+        &self,
+        channel_id: &str,
+        requested_parent_event_id: Option<String>,
+    ) -> (Option<String>, Option<ActiveReplyContext>) {
+        let forced_context = self.reply_context.active_context_for_channel(channel_id);
+        let effective_parent_event_id =
+            select_parent_event_id(forced_context.as_ref(), requested_parent_event_id);
+        (effective_parent_event_id, forced_context)
     }
 
     /// Resolve a `ThreadRef` for SDK builders by fetching the parent event.
@@ -884,7 +918,9 @@ Default kind is 9 (stream message)."
                 p.content.len()
             );
         }
-        if let Some(ref parent_id) = p.parent_event_id {
+        let (effective_parent_event_id, forced_reply_context) =
+            self.effective_reply_context(&p.channel_id, p.parent_event_id.clone());
+        if let Some(ref parent_id) = effective_parent_event_id {
             if parent_id.len() != 64 || !parent_id.chars().all(|c| c.is_ascii_hexdigit()) {
                 return format!(
                     "Error: parent_event_id must be a 64-character hex string (got {:?})",
@@ -936,7 +972,7 @@ Default kind is 9 (stream message)."
         }
 
         let mention_refs: Vec<&str> = mentions.iter().map(String::as_str).collect();
-        let broadcast = p.broadcast_to_channel.unwrap_or(false);
+        let broadcast = select_broadcast(forced_reply_context.as_ref(), p.broadcast_to_channel);
 
         // Build the event builder via SDK, routing by kind.
         let builder = match kind_num as u32 {
@@ -949,7 +985,7 @@ Default kind is 9 (stream message)."
             }
             sprout_core::kind::KIND_FORUM_COMMENT => {
                 // kind 45003: forum comment — requires parent_event_id
-                let parent_id = match p.parent_event_id.as_deref() {
+                let parent_id = match effective_parent_event_id.as_deref() {
                     Some(id) => id,
                     None => return "Error: kind 45003 requires parent_event_id".to_string(),
                 };
@@ -975,7 +1011,7 @@ Default kind is 9 (stream message)."
             }
             _ => {
                 // kind 9 (default) and any other stream message kinds.
-                let thread_ref = if let Some(ref parent_id) = p.parent_event_id {
+                let thread_ref = if let Some(ref parent_id) = effective_parent_event_id {
                     let parent_eid = match EventId::from_hex(parent_id) {
                         Ok(id) => id,
                         Err(e) => return format!("Error: invalid parent_event_id: {e}"),
@@ -992,7 +1028,7 @@ Default kind is 9 (stream message)."
                     &p.content,
                     thread_ref.as_ref(),
                     &mention_refs,
-                    broadcast && p.parent_event_id.is_some(),
+                    broadcast && effective_parent_event_id.is_some(),
                     &[],
                 ) {
                     Ok(b) => b,
@@ -1048,6 +1084,8 @@ Default kind is 9 (stream message)."
             Ok(u) => u,
             Err(_) => return format!("Error: invalid UUID: {channel_id}"),
         };
+        let (effective_parent_event_id, _) =
+            self.effective_reply_context(&channel_id, parent_event_id);
 
         // 1. Truncate diff at 60KB (UTF-8 safe)
         let (diff_content, truncated) = truncate_diff(&diff, 60 * 1024);
@@ -1078,7 +1116,7 @@ Default kind is 9 (stream message)."
         };
 
         // 5. Resolve optional thread ref
-        let thread_ref = if let Some(ref parent_id) = parent_event_id {
+        let thread_ref = if let Some(ref parent_id) = effective_parent_event_id {
             let parent_eid = match EventId::from_hex(parent_id) {
                 Ok(id) => id,
                 Err(e) => return format!("Error: invalid parent_event_id: {e}"),
@@ -2789,6 +2827,38 @@ mod tests {
         assert!(extract_at_names("user@example.com").is_empty());
         assert!(extract_at_names("hello @ world").is_empty());
         assert!(extract_at_names("hello @").is_empty());
+    }
+
+    #[test]
+    fn select_parent_event_id_prefers_forced_context() {
+        let forced = ActiveReplyContext {
+            parent_event_id: Some("b".repeat(64)),
+        };
+        let selected = select_parent_event_id(Some(&forced), Some("a".repeat(64)));
+        assert_eq!(selected, Some("b".repeat(64)));
+    }
+
+    #[test]
+    fn select_parent_event_id_preserves_explicit_top_level_context() {
+        let forced = ActiveReplyContext {
+            parent_event_id: None,
+        };
+        let selected = select_parent_event_id(Some(&forced), Some("a".repeat(64)));
+        assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn select_parent_event_id_uses_requested_when_no_context() {
+        let selected = select_parent_event_id(None, Some("a".repeat(64)));
+        assert_eq!(selected, Some("a".repeat(64)));
+    }
+
+    #[test]
+    fn select_broadcast_disables_thread_broadcast_when_context_active() {
+        let forced = ActiveReplyContext {
+            parent_event_id: Some("a".repeat(64)),
+        };
+        assert!(!select_broadcast(Some(&forced), Some(true)));
     }
 }
 

@@ -38,6 +38,7 @@ use crate::queue::{
     PromptProfileLookup,
 };
 use crate::relay::{ChannelInfo, RestClient};
+use crate::reply_context::ReplyContextStore;
 
 // ── FlushBatch Clone note ─────────────────────────────────────────────────────
 // FlushBatch and BatchEvent derive Clone (added in queue.rs) so we can store
@@ -188,6 +189,8 @@ pub struct PromptContext {
     pub max_turns_per_session: u32,
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
+    /// Deterministic per-channel reply context for MCP sends during an active turn.
+    pub reply_context: ReplyContextStore,
 }
 
 // ── AgentPool impl ────────────────────────────────────────────────────────────
@@ -426,6 +429,55 @@ async fn create_session_and_apply_model(
     }
 
     Ok(resp.session_id)
+}
+
+struct ReplyContextGuard {
+    store: ReplyContextStore,
+    channel_id: Uuid,
+    armed: bool,
+}
+
+impl ReplyContextGuard {
+    fn install(ctx: &PromptContext, batch: Option<&FlushBatch>) -> Option<Self> {
+        let batch = batch?;
+        let parent_event_id = batch
+            .events
+            .last()
+            .map(|event| crate::queue::parse_thread_tags(&event.event))
+            .and_then(|thread_tags| thread_tags.parent_event_id);
+
+        if let Err(err) = ctx
+            .reply_context
+            .set_channel_parent(batch.channel_id, parent_event_id.as_deref())
+        {
+            tracing::warn!(
+                channel = %batch.channel_id,
+                "failed to persist reply context for active turn: {err}"
+            );
+            return None;
+        }
+
+        Some(Self {
+            store: ctx.reply_context.clone(),
+            channel_id: batch.channel_id,
+            armed: true,
+        })
+    }
+}
+
+impl Drop for ReplyContextGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        if let Err(err) = self.store.clear_channel(self.channel_id) {
+            tracing::warn!(
+                channel = %self.channel_id,
+                "failed to clear reply context for completed turn: {err}"
+            );
+        }
+    }
 }
 
 /// Send the appropriate ACP model-switch request with a timeout.
@@ -844,6 +896,10 @@ pub async fn run_prompt_task(
         });
         return;
     };
+
+    // Publish the current thread level for this channel turn so MCP sends can
+    // deterministically inherit the trigger's parent without asking the model.
+    let _reply_context_guard = ReplyContextGuard::install(&ctx, batch.as_ref());
 
     // 💬 — fire-and-forget so the prompt fires immediately.
     // The guard's cleanup (spawned on drop) removes 💬 after the turn completes.

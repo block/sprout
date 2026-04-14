@@ -6,6 +6,7 @@ mod filter;
 mod pool;
 mod queue;
 mod relay;
+mod reply_context;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -23,6 +24,7 @@ use pool::{
 };
 use queue::{EventQueue, QueuedEvent, ThreadTags};
 use relay::HarnessRelay;
+use reply_context::ReplyContextStore;
 use sprout_core::kind::{
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
     KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
@@ -753,8 +755,13 @@ async fn tokio_main() -> Result<()> {
     let dedup_mode = config.dedup_mode;
     let mut queue = EventQueue::new(dedup_mode);
 
+    let reply_context = ReplyContextStore::new(std::env::temp_dir().join(format!(
+        "sprout-acp-reply-context-{}.json",
+        std::process::id()
+    )));
+
     let ctx = Arc::new(PromptContext {
-        mcp_servers: build_mcp_servers(&config),
+        mcp_servers: build_mcp_servers(&config, reply_context.path()),
         initial_message: config.initial_message.clone(),
         idle_timeout: Duration::from_secs(config.idle_timeout_secs),
         max_turn_duration: Duration::from_secs(config.max_turn_duration_secs),
@@ -770,6 +777,7 @@ async fn tokio_main() -> Result<()> {
         context_message_limit: config.context_message_limit,
         max_turns_per_session: config.max_turns_per_session,
         permission_mode: config.permission_mode,
+        reply_context,
     });
 
     // ── Step 6: Heartbeat timer ───────────────────────────────────────────────
@@ -2207,7 +2215,7 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
     Ok(())
 }
 
-fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
+fn build_mcp_servers(config: &Config, reply_context_path: &std::path::Path) -> Vec<McpServer> {
     vec![McpServer {
         name: "sprout-mcp".to_string(),
         command: config.mcp_command.clone(),
@@ -2236,6 +2244,10 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                     value: token.clone(),
                 });
             }
+            env.push(EnvVar {
+                name: "SPROUT_REPLY_CONTEXT_FILE".into(),
+                value: reply_context_path.to_string_lossy().to_string(),
+            });
             // Forward SPROUT_TOOLSETS so the MCP server enables the
             // same toolsets the operator configured for this harness.
             if let Ok(ts) = std::env::var("SPROUT_TOOLSETS") {
