@@ -50,7 +50,7 @@ pub fn generate_token(
     ttl: Option<Duration>,
 ) -> Result<LiveKitToken, HuddleError> {
     let now = Utc::now();
-    let ttl = ttl.unwrap_or_else(|| Duration::hours(6));
+    let ttl = ttl.unwrap_or_else(|| Duration::hours(1));
     let expires_at = now + ttl;
 
     let claims = LiveKitClaims {

@@ -9,19 +9,24 @@
 /// Error types for the huddle layer.
 pub mod error;
 /// In-memory huddle session and participant tracking.
+#[cfg(feature = "webhook")]
 pub mod session;
 /// LiveKit access token generation.
 pub mod token;
 /// LiveKit webhook signature verification and event parsing.
+#[cfg(feature = "webhook")]
 pub mod webhook;
 
 pub use error::HuddleError;
+#[cfg(feature = "webhook")]
 pub use session::{HuddleParticipant, HuddleSession, TrackInfo, TrackKind};
 pub use token::LiveKitToken;
+#[cfg(feature = "webhook")]
 pub use webhook::WebhookEvent;
 
 use uuid::Uuid;
 
+#[cfg(feature = "webhook")]
 pub use sprout_core::kind::{
     KIND_HUDDLE_ENDED, KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT,
     KIND_HUDDLE_RECORDING_AVAILABLE, KIND_HUDDLE_STARTED, KIND_HUDDLE_TRACK_PUBLISHED,
@@ -74,6 +79,7 @@ impl HuddleService {
     }
 
     /// Verify the webhook signature and parse the LiveKit event payload.
+    #[cfg(feature = "webhook")]
     pub fn parse_webhook(
         &self,
         body: &[u8],
@@ -146,6 +152,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "webhook")]
     fn session_lifecycle() {
         let channel_id = Uuid::new_v4();
         let room_name = HuddleService::create_room_name(channel_id);

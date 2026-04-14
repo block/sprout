@@ -3904,6 +3904,7 @@ dependencies = [
  "sprout-auth",
  "sprout-core",
  "sprout-db",
+ "sprout-huddle",
  "sprout-media",
  "sprout-pubsub",
  "sprout-search",
