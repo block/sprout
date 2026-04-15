@@ -61,4 +61,21 @@ class Channel {
   bool get isForum => channelType == 'forum';
   bool get isDm => channelType == 'dm';
   bool get isPrivate => visibility == 'private';
+
+  Channel copyWith({DateTime? lastMessageAt}) => Channel(
+    id: id,
+    name: name,
+    channelType: channelType,
+    visibility: visibility,
+    description: description,
+    topic: topic,
+    purpose: purpose,
+    createdBy: createdBy,
+    createdAt: createdAt,
+    memberCount: memberCount,
+    lastMessageAt: lastMessageAt ?? this.lastMessageAt,
+    isMember: isMember,
+    ttlSeconds: ttlSeconds,
+    ttlDeadline: ttlDeadline,
+  );
 }

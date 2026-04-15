@@ -132,7 +132,7 @@ class SettingsPage extends HookConsumerWidget {
               ref.read(authProvider.notifier).signOut();
             },
             style: FilledButton.styleFrom(
-              backgroundColor: context.colors.error,
+              backgroundColor: Theme.of(ctx).colorScheme.error,
             ),
             child: const Text('Sign Out'),
           ),

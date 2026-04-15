@@ -1,45 +1,43 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import '../../shared/relay/relay_client.dart';
+import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../profile/profile_avatar.dart';
 import 'channel.dart';
+import 'channel_detail_page.dart';
 import 'channels_provider.dart';
 
-class ChannelsPage extends HookConsumerWidget {
+class ChannelsPage extends ConsumerWidget {
   const ChannelsPage({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final channelsAsync = ref.watch(channelsProvider);
-
-    // Poll every 30s while this page is mounted, matching desktop's pattern.
-    useEffect(() {
-      final timer = Timer.periodic(
-        const Duration(seconds: 30),
-        (_) => ref.read(channelsProvider.notifier).refresh(),
-      );
-      return timer.cancel;
-    }, const []);
+    final sessionState = ref.watch(relaySessionProvider);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Sprout'),
         actions: const [ProfileAvatar()],
       ),
-      body: channelsAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, _) => _ErrorView(
-          error: error,
-          onRetry: () => ref.read(channelsProvider.notifier).refresh(),
-        ),
-        data: (channels) => _ChannelsList(channels: channels),
+      body: Column(
+        children: [
+          _ConnectionBanner(status: sessionState.status),
+          Expanded(
+            child: channelsAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (error, _) => _ErrorView(
+                error: error,
+                onRetry: () => ref.read(channelsProvider.notifier).refresh(),
+              ),
+              data: (channels) => _ChannelsList(channels: channels),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -148,7 +146,11 @@ class _ChannelTile extends StatelessWidget {
     return InkWell(
       borderRadius: BorderRadius.circular(Radii.md),
       onTap: () {
-        // TODO: navigate to channel
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ChannelDetailPage(channel: channel),
+          ),
+        );
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(
@@ -276,6 +278,53 @@ class _EphemeralBadge extends StatelessWidget {
     if (diff.inMinutes < 60) return '${diff.inMinutes}m';
     if (diff.inHours < 24) return '${diff.inHours}h';
     return '${diff.inDays}d';
+  }
+}
+
+/// Slim banner shown when the websocket is reconnecting or disconnected.
+class _ConnectionBanner extends StatelessWidget {
+  final SessionStatus status;
+
+  const _ConnectionBanner({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    if (status == SessionStatus.connected ||
+        status == SessionStatus.disconnected) {
+      return const SizedBox.shrink();
+    }
+
+    final isConnecting = status == SessionStatus.connecting;
+    final message = isConnecting ? 'Connecting…' : 'Reconnecting…';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: Grid.xs,
+        vertical: Grid.quarter + 2,
+      ),
+      color: context.colors.surfaceContainerHighest,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: context.colors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(width: Grid.xxs),
+          Text(
+            message,
+            style: context.textTheme.labelSmall?.copyWith(
+              color: context.colors.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

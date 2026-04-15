@@ -4,11 +4,13 @@ class StoredCredentials {
   final String relayUrl;
   final String token;
   final String? pubkey;
+  final String? nsec;
 
   const StoredCredentials({
     required this.relayUrl,
     required this.token,
     this.pubkey,
+    this.nsec,
   });
 }
 
@@ -16,6 +18,7 @@ class CredentialStorage {
   static const _keyRelayUrl = 'sprout_relay_url';
   static const _keyToken = 'sprout_token';
   static const _keyPubkey = 'sprout_pubkey';
+  static const _keyNsec = 'sprout_nsec';
 
   final FlutterSecureStorage _storage;
 
@@ -28,7 +31,13 @@ class CredentialStorage {
     if (relayUrl == null || token == null) return null;
 
     final pubkey = await _storage.read(key: _keyPubkey);
-    return StoredCredentials(relayUrl: relayUrl, token: token, pubkey: pubkey);
+    final nsec = await _storage.read(key: _keyNsec);
+    return StoredCredentials(
+      relayUrl: relayUrl,
+      token: token,
+      pubkey: pubkey,
+      nsec: nsec,
+    );
   }
 
   Future<void> save(StoredCredentials credentials) async {
@@ -37,11 +46,15 @@ class CredentialStorage {
     if (credentials.pubkey != null) {
       await _storage.write(key: _keyPubkey, value: credentials.pubkey);
     }
+    if (credentials.nsec != null) {
+      await _storage.write(key: _keyNsec, value: credentials.nsec);
+    }
   }
 
   Future<void> clear() async {
     await _storage.delete(key: _keyRelayUrl);
     await _storage.delete(key: _keyToken);
     await _storage.delete(key: _keyPubkey);
+    await _storage.delete(key: _keyNsec);
   }
 }

@@ -3,7 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { Check, Copy, Loader2, Smartphone, TriangleAlert } from "lucide-react";
 
 import { useMintTokenMutation } from "@/features/tokens/hooks";
-import { getRelayHttpUrl } from "@/shared/api/tauri";
+import { getNsec, getRelayHttpUrl } from "@/shared/api/tauri";
 import type { TokenScope } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import {
@@ -31,6 +31,7 @@ type PairingPayload = {
   relayUrl: string;
   token: string;
   pubkey: string;
+  nsec: string;
 };
 
 function PairingDialog({
@@ -51,19 +52,21 @@ function PairingDialog({
   const [copied, setCopied] = useState(false);
 
   const generate = useCallback(async (pubkey: string) => {
-    const [tokenResult, relayUrl] = await Promise.all([
+    const [tokenResult, relayUrl, nsec] = await Promise.all([
       mintRef.current({
         name: `mobile-${Date.now()}`,
         scopes: [...MOBILE_SCOPES],
         expiresInDays: EXPIRES_IN_DAYS,
       }),
       getRelayHttpUrl(),
+      getNsec(),
     ]);
 
     const payload: PairingPayload = {
       relayUrl,
       token: tokenResult.token,
       pubkey,
+      nsec,
     };
     return `sprout://${toBase64Url(JSON.stringify(payload))}`;
   }, []);

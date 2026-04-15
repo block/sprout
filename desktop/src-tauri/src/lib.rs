@@ -530,6 +530,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_identity,
+            get_nsec,
             get_profile,
             update_profile,
             get_user_profile,

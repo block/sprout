@@ -451,6 +451,10 @@ export async function getIdentity(): Promise<Identity> {
   };
 }
 
+export async function getNsec(): Promise<string> {
+  return invokeTauri<string>("get_nsec");
+}
+
 export async function getProfile(): Promise<Profile> {
   const profile = await invokeTauri<RawProfile>("get_profile");
   return fromRawProfile(profile);

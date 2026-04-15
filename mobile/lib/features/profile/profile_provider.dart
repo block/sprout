@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../shared/relay/relay.dart';
@@ -33,12 +36,54 @@ final profileProvider = AsyncNotifierProvider<ProfileNotifier, UserProfile?>(
 );
 
 /// Presence status for the current user.
+///
+/// Sends a heartbeat every 60s while the app is active. Watches
+/// [appLifecycleProvider] to send "away" when backgrounded.
 class PresenceNotifier extends AsyncNotifier<String> {
+  static const _heartbeatInterval = Duration(seconds: 60);
+
+  Timer? _heartbeatTimer;
+
   @override
   Future<String> build() {
     ref.watch(relayClientProvider);
     ref.watch(profileProvider);
+
+    final lifecycle = ref.watch(appLifecycleProvider);
+
+    ref.onDispose(() {
+      _heartbeatTimer?.cancel();
+      _heartbeatTimer = null;
+    });
+
+    if (lifecycle == AppLifecycleState.resumed) {
+      _startHeartbeat();
+      return _setPresence('online');
+    } else if (lifecycle == AppLifecycleState.paused ||
+        lifecycle == AppLifecycleState.detached) {
+      _heartbeatTimer?.cancel();
+      _heartbeatTimer = null;
+      return _setPresence('away');
+    }
+
     return _fetch();
+  }
+
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) {
+      _setPresence('online');
+    });
+  }
+
+  Future<String> _setPresence(String status) async {
+    final client = ref.read(relayClientProvider);
+    try {
+      await client.post('/api/presence', body: {'status': status});
+      return status;
+    } catch (_) {
+      return state.value ?? 'offline';
+    }
   }
 
   Future<String> _fetch() async {
