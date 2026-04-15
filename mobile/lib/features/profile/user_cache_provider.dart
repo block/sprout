@@ -29,6 +29,17 @@ class UserCacheNotifier extends Notifier<Map<String, UserProfile>> {
     return null;
   }
 
+  /// Preload profiles for a list of pubkeys (e.g. channel members).
+  void preload(List<String> pubkeys) {
+    final uncached = pubkeys
+        .map((pk) => pk.toLowerCase())
+        .where((pk) => !state.containsKey(pk) && !_pending.contains(pk))
+        .toList();
+    if (uncached.isEmpty) return;
+    _pending.addAll(uncached);
+    _batchTimer ??= Timer(const Duration(milliseconds: 50), _flushPending);
+  }
+
   void _scheduleFetch(String pubkey) {
     if (_pending.contains(pubkey)) return;
     _pending.add(pubkey);

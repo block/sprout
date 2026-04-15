@@ -12,6 +12,25 @@ import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
 import 'send_message_provider.dart';
 
+/// Fetch channel members and preload their profiles into the user cache.
+Future<void> _preloadMembers(WidgetRef ref, String channelId) async {
+  try {
+    final client = ref.read(relayClientProvider);
+    final json =
+        await client.get('/api/channels/$channelId/members')
+            as Map<String, dynamic>;
+    final members = json['members'] as List<dynamic>? ?? [];
+    final pubkeys = members
+        .map((m) => (m as Map<String, dynamic>)['pubkey'] as String)
+        .toList();
+    if (pubkeys.isNotEmpty) {
+      ref.read(userCacheProvider.notifier).preload(pubkeys);
+    }
+  } catch (_) {
+    // Non-fatal — mentions will just fall back to cache from messages.
+  }
+}
+
 class ChannelDetailPage extends HookConsumerWidget {
   final Channel channel;
 
@@ -21,6 +40,12 @@ class ChannelDetailPage extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final messagesState = ref.watch(channelMessagesProvider(channel.id));
     final typingEntries = ref.watch(channelTypingProvider(channel.id));
+
+    // Preload channel member profiles so @mentions resolve correctly.
+    useEffect(() {
+      _preloadMembers(ref, channel.id);
+      return null;
+    }, [channel.id]);
 
     return Scaffold(
       appBar: AppBar(
@@ -101,23 +126,32 @@ class _MessageList extends ConsumerWidget {
       );
     }
 
+    // Filter to only renderable message events for display and grouping.
+    final displayMessages = messages
+        .where(
+          (e) =>
+              e.kind == EventKind.streamMessage ||
+              e.kind == EventKind.streamMessageV2,
+        )
+        .toList();
+
     return ListView.builder(
       reverse: true,
       padding: const EdgeInsets.symmetric(
         horizontal: Grid.xs,
         vertical: Grid.xxs,
       ),
-      itemCount: messages.length,
+      itemCount: displayMessages.length,
       itemBuilder: (context, index) {
         // Reversed list: index 0 = newest (bottom of screen).
-        final chronIdx = messages.length - 1 - index;
-        final message = messages[chronIdx];
+        final chronIdx = displayMessages.length - 1 - index;
+        final message = displayMessages[chronIdx];
         // The message visually above is the one earlier in time.
-        final prevMessage = chronIdx > 0 ? messages[chronIdx - 1] : null;
+        final prevMessage = chronIdx > 0 ? displayMessages[chronIdx - 1] : null;
 
         final showAuthor =
             prevMessage == null ||
-            prevMessage.pubkey != message.pubkey ||
+            prevMessage.pubkey.toLowerCase() != message.pubkey.toLowerCase() ||
             (message.createdAt - prevMessage.createdAt) > 300;
 
         return _MessageBubble(event: message, showAuthor: showAuthor);
@@ -134,12 +168,6 @@ class _MessageBubble extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Skip non-message events (reactions, deletions, system).
-    if (event.kind != EventKind.streamMessage &&
-        event.kind != EventKind.streamMessageV2) {
-      return const SizedBox.shrink();
-    }
-
     // Look up the user profile for display name.
     final userCache = ref.watch(userCacheProvider);
     final profile =
